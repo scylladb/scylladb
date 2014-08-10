@@ -17,6 +17,8 @@
 #include <netinet/ip.h>
 #include <cstring>
 #include <cassert>
+#include <stdexcept>
+#include <iostream>
 
 class socket_address;
 class reactor;
@@ -40,88 +42,212 @@ private:
     friend class reactor;
 };
 
-template <typename T>
+template <class T>
 class promise;
+
+template <class T>
+class future;
+
+class task {
+public:
+    virtual ~task() {}
+    virtual void run() = 0;
+};
+
+template <typename Func>
+class lambda_task : public task {
+    Func _func;
+public:
+    lambda_task(const Func& func) : _func(func) {}
+    lambda_task(Func&& func) : _func(std::move(func)) {}
+    virtual void run() { _func(); }
+};
+
+template <typename Func>
+std::unique_ptr<task>
+make_task(const Func& func) {
+    return std::unique_ptr<task>(new lambda_task<Func>(func));
+}
+
+template <typename Func>
+std::unique_ptr<task>
+make_task(Func&& func) {
+    return std::unique_ptr<task>(new lambda_task<Func>(std::move(func)));
+}
+
 
 template <typename T>
 struct future_state {
-    virtual ~future_state();
-    promise<T>* promise;
-    bool value_valid = false;
-    bool ex_valid = false;
-    union {
+    promise<T>* _promise = nullptr;
+    future<T>* _future = nullptr;
+    std::unique_ptr<task> _task;
+    enum class state {
+	 invalid,
+	 future,
+	 result,
+	 exception,
+    } _state = state::future;
+    union any {
+        any() {}
+        ~any() {}
         T value;
         std::exception_ptr ex;
-    } u;
-    void set(const T& value);
-    void set(T&& value);
-    void set_exception(std::exception_ptr ex);
-    T get() {
-        while (promise) {
-            promise->wait();
+    } _u;
+    ~future_state() noexcept {
+        switch (_state) {
+        case state::future:
+            break;
+        case state::result:
+            _u.value.~T();
+            break;
+        case state::exception:
+            _u.ex.~exception_ptr();
+            break;
+        default:
+            abort();
         }
-        if (ex) {
-            std::rethrow_exception(ex);
-        }
-        return std::move(u.value);
     }
+    bool has_promise() const { return _promise; }
+    bool has_future() const { return _future; }
+    void wait();
+    void set(const T& value) {
+        assert(_state == state::future);
+        _state = state::result;
+        new (&_u.value) T(value);
+        if (_task) {
+            _task->run();
+        }
+    }
+    void set(T&& value) {
+        assert(_state == state::future);
+        _state = state::result;
+        new (&_u.value) T(std::move(value));
+        if (_task) {
+            _task->run();
+        }
+    }
+    template <typename... A>
+    void set(A... a) {
+        assert(_state == state::future);
+        _state = state::result;
+        new (&_u.value) T(std::forward(a)...);
+        std::cout << "checking task at " << &_task << "\n";
+        if (_task) {
+            _task->run();
+        }
+    }
+    void set_exception(std::exception_ptr ex) {
+        assert(_state == state::future);
+        _state = state::exception;
+        new (&_u.ex) std::exception(ex);
+        if (_task) {
+            _task->run();
+        }
+    }
+    T get() {
+        while (_state == state::future) {
+            abort();
+        }
+        if (_state == state::exception) {
+            std::rethrow_exception(_u.ex);
+        }
+        return std::move(_u.value);
+    }
+    template <typename Func>
+    void schedule(Func&& func) {
+        std::cout << "scheduling task at " << &_task << "\n";
+        _task = make_task(std::forward<Func>(func));
+    }
+};
+
+template <typename T>
+class promise {
+    future_state<T>* _state;
+public:
+    promise() : _state(new future_state<T>()) { _state->_promise = this; }
+    promise(promise&& x) : _state(std::move(x._state)) { x._state = nullptr; }
+    promise(const promise&) = delete;
+    ~promise() {
+        if (_state) {
+            _state->_promise = nullptr;
+            if (!_state->has_future()) {
+                delete _state;
+            }
+        }
+    }
+    promise& operator=(promise&&);
+    void operator=(const T&) = delete;
+    future<T> get_future();
+    void set_value(const T& result) { _state->set(result); }
+    void set_value(T&& result)  { _state->set(std::move(result)); }
 };
 
 template <typename T>
 class future {
-    std::unique_ptr<future_state<T>> _state;
+    future_state<T>* _state;
+private:
+    future(future_state<T>* state) : _state(state) { _state->_future = this; }
 public:
+    future(future&& x) : _state(x._state) { x._state = nullptr; }
+    future(const future&) = delete;
+    future& operator=(future&& x);
+    void operator=(const future&) = delete;
+    ~future() {
+        if (_state) {
+            _state->_future = nullptr;
+            if (!_state->has_promise()) {
+                delete _state;
+            }
+        }
+    }
     T get() {
-        return _state.get();
+        return _state->get();
     }
     template <typename Func>
-    void then(Func func) {
-
+    void then(Func&& func) {
+        auto state = _state;
+        state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
+            std::cout << "running task\n";
+            func(std::move(fut));
+        });
     }
+    friend class promise<T>;
+};
+
+template <typename T>
+inline
+future<T>
+promise<T>::get_future()
+{
+    assert(!_state->_future);
+    return future<T>(_state);
+}
+
+using accept_result = std::tuple<std::unique_ptr<pollable_fd>, socket_address>;
+
+struct listen_options {
+    bool reuse_address = false;
 };
 
 class reactor {
-    class task;
 public:
     int _epollfd;
     io_context_t _io_context;
 private:
-    class task {
-    public:
-        virtual ~task() {}
-        virtual void run() = 0;
-    };
-    template <typename Func>
-    class lambda_task : public task {
-        Func _func;
-    public:
-        lambda_task(Func func) : _func(func) {}
-        virtual void run() { _func(); }
-    };
-
-    template <typename Func>
-    std::unique_ptr<task>
-    make_task(Func func) {
-        return std::make_unique<lambda_task<Func>>(func);
-    }
-
     void epoll_add_in(pollable_fd& fd, std::unique_ptr<task> t);
     void epoll_add_out(pollable_fd& fd, std::unique_ptr<task> t);
     void abort_on_error(int ret);
 public:
     reactor();
+    reactor(const reactor&) = delete;
+    void operator=(const reactor&) = delete;
     ~reactor();
 
-    std::unique_ptr<pollable_fd> listen(socket_address sa);
+    std::unique_ptr<pollable_fd> listen(socket_address sa, listen_options opts = {});
 
-    template <typename Func>
-    void accept(pollable_fd& listenfd, Func with_pfd_sockaddr);
-
-    future<std::unique_ptr<pollable_fd>> accept(pollable_fd& listen_fd)
+    future<accept_result> accept(pollable_fd& listen_fd);
 
     future<size_t> read_some(pollable_fd& fd, void* buffer, size_t size);
-    template <typename Func>
-    void read_some(pollable_fd& fd, void* buffer, size_t len, Func with_len);
 
     void run();
 
@@ -135,33 +261,37 @@ protected:
     void operator=(const pollable_fd&) = delete;
     int fd;
     int events = 0;
-    std::unique_ptr<reactor::task> pollin;
-    std::unique_ptr<reactor::task> pollout;
+    std::unique_ptr<task> pollin;
+    std::unique_ptr<task> pollout;
     friend class reactor;
 };
 
-template <typename Func>
 inline
-void reactor::accept(pollable_fd& listenfd, Func with_pfd_sockaddr) {
-    auto lfd = listenfd.fd;
-    epoll_add_in(listenfd, make_task([=] {
+future<accept_result>
+reactor::accept(pollable_fd& listenfd) {
+    promise<accept_result> pr;
+    future<accept_result> fut = pr.get_future();
+    epoll_add_in(listenfd, make_task([pr = std::move(pr), lfd = listenfd.fd] () mutable {
         socket_address sa;
         socklen_t sl = sizeof(&sa.u.sas);
         int fd = ::accept4(lfd, &sa.u.sa, &sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
         assert(fd != -1);
-        auto pfd = std::unique_ptr<pollable_fd>(new pollable_fd(fd));
-        with_pfd_sockaddr(std::move(pfd), sa);
+        pr.set_value(accept_result{std::unique_ptr<pollable_fd>(new pollable_fd(fd)), sa});
     }));
+    return fut;
 }
 
-template <typename Func>
-void reactor::read_some(pollable_fd& fd, void* buffer, size_t len, Func with_len) {
-    auto rfd = fd.fd;
-    epoll_add_in(fd, make_task([=] {
+inline
+future<size_t>
+reactor::read_some(pollable_fd& fd, void* buffer, size_t len) {
+    promise<size_t> pr;
+    auto fut = pr.get_future();
+    epoll_add_in(fd, make_task([pr = std::move(pr), rfd = fd.fd, buffer, len] () mutable {
         ssize_t r = ::recv(rfd, buffer, len, 0);
         assert(r != -1);
-        with_len(len);
+        pr.set_value(r);
     }));
+    return fut;
 }
 
 

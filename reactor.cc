@@ -21,7 +21,7 @@ reactor::~reactor() {
 
 void reactor::epoll_add_in(pollable_fd& pfd, std::unique_ptr<task> t) {
     auto ctl = pfd.events ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
-    pfd.events |= EPOLLIN;
+    pfd.events |= EPOLLIN | EPOLLONESHOT;
     assert(!pfd.pollin);
     pfd.pollin = std::move(t);
     ::epoll_event eevt;
@@ -33,7 +33,7 @@ void reactor::epoll_add_in(pollable_fd& pfd, std::unique_ptr<task> t) {
 
 void reactor::epoll_add_out(pollable_fd& pfd, std::unique_ptr<task> t) {
     auto ctl = pfd.events ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
-    pfd.events |= EPOLLOUT;
+    pfd.events |= EPOLLOUT | EPOLLONESHOT;
     assert(!pfd.pollout);
     pfd.pollout = std::move(t);
     ::epoll_event eevt;
@@ -44,10 +44,14 @@ void reactor::epoll_add_out(pollable_fd& pfd, std::unique_ptr<task> t) {
 }
 
 std::unique_ptr<pollable_fd>
-reactor::listen(socket_address sa)
+reactor::listen(socket_address sa, listen_options opts)
 {
-    int fd = ::socket(sa.u.sa.sa_family, SOCK_STREAM, SOCK_NONBLOCK | SOCK_CLOEXEC);
+    int fd = ::socket(sa.u.sa.sa_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     assert(fd != -1);
+    if (opts.reuse_address) {
+        int opt = 1;
+        ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    }
     int r = ::bind(fd, &sa.u.sa, sizeof(sa.u.sas));
     assert(r != -1);
     ::listen(fd, 100);
