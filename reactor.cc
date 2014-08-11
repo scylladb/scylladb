@@ -21,7 +21,7 @@ reactor::~reactor() {
 
 void reactor::epoll_add_in(pollable_fd& pfd, std::unique_ptr<task> t) {
     auto ctl = pfd.events ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
-    pfd.events |= EPOLLIN | EPOLLONESHOT;
+    pfd.events |= EPOLLIN;
     assert(!pfd.pollin);
     pfd.pollin = std::move(t);
     ::epoll_event eevt;
@@ -33,7 +33,7 @@ void reactor::epoll_add_in(pollable_fd& pfd, std::unique_ptr<task> t) {
 
 void reactor::epoll_add_out(pollable_fd& pfd, std::unique_ptr<task> t) {
     auto ctl = pfd.events ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
-    pfd.events |= EPOLLOUT | EPOLLONESHOT;
+    pfd.events |= EPOLLOUT;
     assert(!pfd.pollout);
     pfd.pollout = std::move(t);
     ::epoll_event eevt;
@@ -43,9 +43,14 @@ void reactor::epoll_add_out(pollable_fd& pfd, std::unique_ptr<task> t) {
     assert(r == 0);
 }
 
+void reactor::forget(pollable_fd& fd) {
+    if (fd.events) {
+        ::epoll_ctl(_epollfd, EPOLL_CTL_DEL, fd.fd, nullptr);
+    }
+}
+
 std::unique_ptr<pollable_fd>
-reactor::listen(socket_address sa, listen_options opts)
-{
+reactor::listen(socket_address sa, listen_options opts) {
     int fd = ::socket(sa.u.sa.sa_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     assert(fd != -1);
     if (opts.reuse_address) {
@@ -55,7 +60,7 @@ reactor::listen(socket_address sa, listen_options opts)
     int r = ::bind(fd, &sa.u.sa, sizeof(sa.u.sas));
     assert(r != -1);
     ::listen(fd, 100);
-    return std::unique_ptr<pollable_fd>(new pollable_fd(fd));
+    return std::unique_ptr<pollable_fd>(new pollable_fd(*this, fd));
 }
 
 void reactor::run() {
@@ -67,13 +72,20 @@ void reactor::run() {
             auto& evt = eevt[i];
             auto pfd = reinterpret_cast<pollable_fd*>(evt.data.ptr);
             auto events = evt.events;
+            pfd->events = 0;
+            ::epoll_ctl(_epollfd, EPOLL_CTL_DEL, pfd->fd, &evt);
+            std::unique_ptr<task> t_in, t_out;
             if (events & EPOLLIN) {
-                auto t = std::move(pfd->pollin);
-                t->run();
+                t_in = std::move(pfd->pollin);
             }
             if (events & EPOLLOUT) {
-                auto t = std::move(pfd->pollout);
-                t->run();
+                t_out = std::move(pfd->pollout);
+            }
+            if (t_in) {
+                t_in->run();
+            }
+            if (t_out) {
+                t_out->run();
             }
         }
     }

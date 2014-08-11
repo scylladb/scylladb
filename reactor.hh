@@ -19,6 +19,7 @@
 #include <cassert>
 #include <stdexcept>
 #include <iostream>
+#include <unistd.h>
 
 class socket_address;
 class reactor;
@@ -131,7 +132,6 @@ struct future_state {
         assert(_state == state::future);
         _state = state::result;
         new (&_u.value) T(std::forward(a)...);
-        std::cout << "checking task at " << &_task << "\n";
         if (_task) {
             _task->run();
         }
@@ -155,7 +155,6 @@ struct future_state {
     }
     template <typename Func>
     void schedule(Func&& func) {
-        std::cout << "scheduling task at " << &_task << "\n";
         _task = make_task(std::forward<Func>(func));
     }
 };
@@ -203,14 +202,26 @@ public:
     T get() {
         return _state->get();
     }
+
+    template <typename Func, typename Enable>
+    void then(Func, Enable);
+
     template <typename Func>
-    void then(Func&& func) {
+    void then(Func&& func, std::enable_if_t<std::is_same<std::result_of_t<Func(future&&)>, void>::value, void*> = nullptr) {
         auto state = _state;
         state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
-            std::cout << "running task\n";
             func(std::move(fut));
         });
     }
+#if 0
+    template <typename Func>
+    auto then(Func&& func) -> std::enable_if<is_future<decltype(func(*this)), void>::value, decltype(func(*this))>::type {
+        auto state = _state;
+        state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
+            func(std::move(fut));
+        });
+    }
+#endif
     friend class promise<T>;
 };
 
@@ -236,6 +247,7 @@ public:
 private:
     void epoll_add_in(pollable_fd& fd, std::unique_ptr<task> t);
     void epoll_add_out(pollable_fd& fd, std::unique_ptr<task> t);
+    void forget(pollable_fd& fd);
     void abort_on_error(int ret);
 public:
     reactor();
@@ -249,16 +261,27 @@ public:
 
     future<size_t> read_some(pollable_fd& fd, void* buffer, size_t size);
 
+    future<size_t> write_some(pollable_fd& fd, void* buffer, size_t size);
+
+    future<size_t> write_all(pollable_fd& fd, void* buffer, size_t size);
+
     void run();
+
+private:
+    void write_all_part(pollable_fd& fd, void* buffer, size_t size,
+            promise<size_t> result, size_t completed);
 
     friend class pollable_fd;
 };
 
 class pollable_fd {
+public:
+    ~pollable_fd() { r.forget(*this); ::close(fd); }
 protected:
-    explicit pollable_fd(int fd) : fd(fd) {}
+    explicit pollable_fd(reactor& r, int fd) : r(r), fd(fd) {}
     pollable_fd(const pollable_fd&) = delete;
     void operator=(const pollable_fd&) = delete;
+    reactor& r;
     int fd;
     int events = 0;
     std::unique_ptr<task> pollin;
@@ -271,12 +294,12 @@ future<accept_result>
 reactor::accept(pollable_fd& listenfd) {
     promise<accept_result> pr;
     future<accept_result> fut = pr.get_future();
-    epoll_add_in(listenfd, make_task([pr = std::move(pr), lfd = listenfd.fd] () mutable {
+    epoll_add_in(listenfd, make_task([this, pr = std::move(pr), lfd = listenfd.fd] () mutable {
         socket_address sa;
         socklen_t sl = sizeof(&sa.u.sas);
         int fd = ::accept4(lfd, &sa.u.sa, &sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
         assert(fd != -1);
-        pr.set_value(accept_result{std::unique_ptr<pollable_fd>(new pollable_fd(fd)), sa});
+        pr.set_value(accept_result{std::unique_ptr<pollable_fd>(new pollable_fd(*this, fd)), sa});
     }));
     return fut;
 }
@@ -293,6 +316,44 @@ reactor::read_some(pollable_fd& fd, void* buffer, size_t len) {
     }));
     return fut;
 }
+
+inline
+future<size_t>
+reactor::write_some(pollable_fd& fd, void* buffer, size_t len) {
+    promise<size_t> pr;
+    auto fut = pr.get_future();
+    epoll_add_out(fd, make_task([pr = std::move(pr), sfd = fd.fd, buffer, len] () mutable {
+        ssize_t r = ::send(sfd, buffer, len, 0);
+        assert(r != -1);
+        pr.set_value(r);
+    }));
+    return fut;
+}
+
+inline
+void
+reactor::write_all_part(pollable_fd& fd, void* buffer, size_t len,
+        promise<size_t> result, size_t completed) {
+    if (completed == len) {
+        result.set_value(completed);
+    } else {
+        write_some(fd, static_cast<char*>(buffer) + completed, len - completed).then(
+                [&fd, buffer, len, result = std::move(result), completed, this] (future<size_t> part) mutable {
+            write_all_part(fd, buffer, len, std::move(result), completed + part.get());
+        });
+    }
+}
+
+inline
+future<size_t>
+reactor::write_all(pollable_fd& fd, void* buffer, size_t len) {
+    assert(len);
+    promise<size_t> pr;
+    auto fut = pr.get_future();
+    write_all_part(fd, buffer, len, std::move(pr), 0);
+    return fut;
+}
+
 
 
 #endif /* REACTOR_HH_ */

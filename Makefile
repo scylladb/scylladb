@@ -1,7 +1,16 @@
 
+mode = release
 
-sanitize = -fsanitize=address -fsanitize=leak -fsanitize=undefined
-CXXFLAGS = -std=gnu++1y -g -Wall -O0 -MD -MT $@ -MP -flto $(sanitize)
+sanitize.debug = -fsanitize=address -fsanitize=leak -fsanitize=undefined
+sanitize.release =
+
+opt.debug = -O0
+opt.release = -O2 -flto
+
+sanitize = $(sanitize.$(mode))
+opt = $(opt.$(mode))
+
+CXXFLAGS = -std=gnu++1y -g -Wall $(opt) -MD -MT $@ -MP -flto $(sanitize) -fvisibility=hidden
 
 tests = test-reactor
 
