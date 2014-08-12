@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <initializer_list>
 #include <iostream>
+#include <functional>
 
 template <typename char_type, typename size_type, size_type max_size>
 class basic_sstring {
@@ -43,6 +44,7 @@ class basic_sstring {
     char* str() {
         return is_internal() ? u.internal.str : u.external.str;
     }
+    struct initialized_later {};
 public:
     basic_sstring() noexcept {
         u.internal.size = 0;
@@ -54,7 +56,7 @@ public:
         } else {
             u.internal.size = -1;
             u.external.str = new char[x.u.external.size + 1];
-            std::copy(x.u.str, x.u.str + x.u.extenal.size + 1, u.external.str);
+            std::copy(x.u.external.str, x.u.external.str + x.u.external.size + 1, u.external.str);
             u.external.size = x.u.external.size;
         }
     }
@@ -62,6 +64,20 @@ public:
         u = x.u;
         x.u.internal.size = 0;
         x.u.internal.str[0] = '\0';
+    }
+    basic_sstring(initialized_later, size_t size) {
+        if (size_type(size) != size) {
+            throw std::overflow_error("sstring overflow");
+        }
+        if (size + 1 <= sizeof(u.internal.str)) {
+            u.internal.str[size] = '\0';
+            u.internal.size = size;
+        } else {
+            u.internal.size = -1;
+            u.external.str = new char[size + 1];
+            u.external.size = size;
+            u.external.str[size] = '\0';
+        }
     }
     basic_sstring(const char_type* x, size_t size) {
         if (size_type(size) != size) {
@@ -93,8 +109,11 @@ public:
         swap(tmp);
     }
     basic_sstring& operator=(basic_sstring&& x) noexcept {
-        reset();
-        swap(x);
+        if (this != &x) {
+            swap(x);
+            x.reset();
+        }
+        return *this;
     }
     operator std::string() const {
         return str();
@@ -120,6 +139,25 @@ public:
     const char* c_str() const {
         return str();
     }
+    const char_type* begin() const { return str(); }
+    const char_type* end() const { return str() + size(); }
+    char_type* begin() { return str(); }
+    char_type* end() { return str() + size(); }
+    bool operator==(const basic_sstring& x) const {
+        return size() == x.size() && std::equal(begin(), end(), x.begin());
+    }
+    bool operator!=(const basic_sstring& x) const {
+        return !operator==(x);
+    }
+    basic_sstring operator+(const basic_sstring& x) const {
+        basic_sstring ret(initialized_later(), size() + x.size());
+        std::copy(begin(), end(), ret.begin());
+        std::copy(x.begin(), x.end(), ret.begin() + size());
+        return ret;
+    }
+    basic_sstring& operator+=(const basic_sstring& x) {
+        return *this = *this + x;
+    }
 };
 
 template <typename char_type, typename size_type, size_type max_size>
@@ -134,6 +172,22 @@ template <typename char_type, typename size_type, size_type max_size, typename c
 std::basic_ostream<char_type, char_traits>&
 operator<<(std::basic_ostream<char_type, char_traits>& os, const basic_sstring<char_type, size_type, max_size>& s) {
     return os << s.c_str();
+}
+
+namespace std {
+
+template <typename char_type, typename size_type, size_type max_size>
+struct hash<basic_sstring<char_type, size_type, max_size>> {
+    size_t operator()(const basic_sstring<char_type, size_type, max_size>& s) const {
+        size_t ret = 0;
+        for (auto c : s) {
+            ret = (ret << 6) | (ret >> (sizeof(ret) * 8 - 6));
+            ret ^= c;
+        }
+        return ret;
+    }
+};
+
 }
 
 using sstring = basic_sstring<char, uint32_t, 15>;

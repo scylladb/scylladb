@@ -7,13 +7,18 @@
 #include <iostream>
 #include <algorithm>
 #include <regex>
+#include <unordered_map>
 
 sstring to_sstring(const std::csub_match& sm) {
     return sstring(sm.first, sm.second);
 }
 
+static std::string tchar = "[-!#$%&'\\*\\+.^_`|~0-9A-Za-z]";
+static std::string token = tchar + "+";
 static constexpr auto re_opt = std::regex::ECMAScript | std::regex::optimize;
 static std::regex start_line_re { "([A-Z]+) (\\S+) HTTP/([0-9]\\.[0-9])\\r\\n", re_opt };
+static std::regex header_re { "(" + token + ")\\s*:\\s*([.*\\S])\\s*\\r\\n", re_opt };
+static std::regex header_cont_re { "\\s+(.*\\S)\\s*\\r\\n", re_opt };
 
 class http_server {
     std::vector<std::unique_ptr<pollable_fd>> _listeners;
@@ -40,6 +45,12 @@ public:
         input_stream_buffer<char> _read_buf;
         static constexpr size_t limit = 4096;
         using tmp_buf = temporary_buffer<char>;
+        sstring _method;
+        sstring _url;
+        sstring _version;
+        sstring _response;
+        sstring _last_header_name;
+        std::unordered_map<sstring, sstring> _headers;
     public:
         connection(http_server& server, std::unique_ptr<pollable_fd>&& fd, socket_address addr)
             : _server(server), _fd(std::move(fd)), _addr(addr), _read_buf(*_fd, 8192) {}
@@ -49,13 +60,46 @@ public:
                 std::cmatch match;
                 if (!std::regex_match(start_line.begin(), start_line.end(), match, start_line_re)) {
                     std::cout << "no match\n";
-                    delete this;
-                    return;
+                    return bad();
                 }
-                sstring method = to_sstring(match[1]);
-                sstring url = to_sstring(match[2]);
-                sstring version = to_sstring(match[3]);
-                std::cout << "start line: " << method << " | " << url << " | " << version << "\n";
+                _method = to_sstring(match[1]);
+                _url = to_sstring(match[2]);
+                _version = to_sstring(match[3]);
+                if (_method != "GET") {
+                    return bad();
+                }
+                std::cout << "start line: " << _method << " | " << _url << " | " << _version << "\n";
+                _read_buf.read_until(limit, '\n').then([this] (future<tmp_buf> header) {
+                    parse_header(std::move(header));
+                });
+            });
+        }
+        void parse_header(future<tmp_buf> f_header) {
+            auto header = f_header.get();
+            if (header.size() == 2 && header[0] == '\r' && header[1] == '\n') {
+                return;
+            }
+            std::cmatch match;
+            if (std::regex_match(header.begin(), header.end(), match, header_re)) {
+                sstring name = to_sstring(match[1]);
+                sstring value = to_sstring(match[2]);
+                std::cout << "found header: " << name << "=" << value << ".\n";
+                _headers[name] = std::move(value);
+                _last_header_name = std::move(name);
+            } else if (std::regex_match(header.begin(), header.end(), match, header_cont_re)) {
+                _headers[_last_header_name] += " ";
+                _headers[_last_header_name] += to_sstring(match[1]);
+            } else {
+                return bad();
+            }
+            _read_buf.read_until(limit, '\n').then([this] (future<tmp_buf> header) {
+                parse_header(std::move(header));
+            });
+        }
+        void bad() {
+            _response = "400 BAD REQUEST\r\n\r\n";
+            _fd->write_all(_response.begin(), _response.size()).then([this] (future<size_t> n) mutable {
+                delete this;
             });
         }
     };

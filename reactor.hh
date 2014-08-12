@@ -199,10 +199,10 @@ public:
     }
 
     template <typename Func, typename Enable>
-    void then(Func, Enable);
+    void then(Func, Enable) &&;
 
     template <typename Func>
-    void then(Func&& func, std::enable_if_t<std::is_same<std::result_of_t<Func(future&&)>, void>::value, void*> = nullptr) {
+    void then(Func&& func, std::enable_if_t<std::is_same<std::result_of_t<Func(future&&)>, void>::value, void*> = nullptr) && {
         auto state = _state;
         state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
             func(std::move(fut));
