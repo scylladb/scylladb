@@ -1,5 +1,5 @@
 
-mode = debug
+mode = release
 
 sanitize.debug = -fsanitize=address -fsanitize=leak -fsanitize=undefined
 sanitize.release =

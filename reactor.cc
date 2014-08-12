@@ -85,16 +85,10 @@ void reactor::run() {
             ::epoll_ctl(_epollfd, EPOLL_CTL_DEL, pfd->fd, &evt);
             std::unique_ptr<task> t_in, t_out;
             if (events & EPOLLIN) {
-                t_in = std::move(pfd->pollin);
+                add_task(std::move(pfd->pollin));
             }
             if (events & EPOLLOUT) {
-                t_out = std::move(pfd->pollout);
-            }
-            if (t_in) {
-                t_in->run();
-            }
-            if (t_out) {
-                t_out->run();
+                add_task(std::move(pfd->pollout));
             }
         }
     }

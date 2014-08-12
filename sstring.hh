@@ -14,19 +14,21 @@
 #include <cstring>
 #include <stdexcept>
 #include <initializer_list>
+#include <iostream>
 
 template <typename char_type, typename size_type, size_type max_size>
 class basic_sstring {
-    union {
+    union contents {
         struct external_type {
             char* str;
             size_type size;
+            int8_t pad;
         } external;
         struct internal_type {
-            char str[max_size - 1];
+            char str[max_size];
             int8_t size;
         } internal;
-        static_assert(sizeof(external_type) < sizeof(internal_type), "max_size too small");
+        static_assert(sizeof(external_type) <= sizeof(internal_type), "max_size too small");
         static_assert(max_size <= 127, "max_size too large");
     } u;
     bool is_internal() const noexcept {
@@ -50,6 +52,7 @@ public:
         if (x.is_internal()) {
             u.internal = x.u.internal;
         } else {
+            u.internal.size = -1;
             u.external.str = new char[x.u.external.size + 1];
             std::copy(x.u.str, x.u.str + x.u.extenal.size + 1, u.external.str);
             u.external.size = x.u.external.size;
@@ -60,25 +63,28 @@ public:
         x.u.internal.size = 0;
         x.u.internal.str[0] = '\0';
     }
-    basic_sstring(const char_type* x, size_t len) {
+    basic_sstring(const char_type* x, size_t size) {
         if (size_type(size) != size) {
             throw std::overflow_error("sstring overflow");
         }
         if (size + 1 <= sizeof(u.internal.str)) {
-            std::copy(x, x + size + 1, u.internal.str);
+            std::copy(x, x + size, u.internal.str);
+            u.internal.str[size] = '\0';
             u.internal.size = size;
         } else {
             u.internal.size = -1;
             u.external.str = new char[size + 1];
             u.external.size = size;
-            std::copy(x, x + size + 1, u.external.str);
+            std::copy(x, x + size, u.external.str);
+            u.external.str[size] = '\0';
         }
     }
     basic_sstring(const char_type* x) : basic_sstring(x, std::strlen(x)) {}
     basic_sstring(std::basic_string<char_type>& x) : basic_sstring(x.c_str(), x.size()) {}
     basic_sstring(std::initializer_list<char_type> x) : basic_sstring(x.begin(), x.end() - x.begin()) {}
+    basic_sstring(const char_type* b, const char_type* e) : basic_sstring(b, e - b) {}
     ~basic_sstring() noexcept {
-        if (!is_external()) {
+        if (is_external()) {
             delete[] u.external.str;
         }
     }
@@ -111,6 +117,9 @@ public:
         x.u = u;
         u = tmp.u;
     }
+    const char* c_str() const {
+        return str();
+    }
 };
 
 template <typename char_type, typename size_type, size_type max_size>
@@ -119,6 +128,12 @@ void swap(basic_sstring<char_type, size_type, max_size>& x,
           basic_sstring<char_type, size_type, max_size>& y) noexcept
 {
     return x.swap(y);
+}
+
+template <typename char_type, typename size_type, size_type max_size, typename char_traits>
+std::basic_ostream<char_type, char_traits>&
+operator<<(std::basic_ostream<char_type, char_traits>& os, const basic_sstring<char_type, size_type, max_size>& s) {
+    return os << s.c_str();
 }
 
 using sstring = basic_sstring<char, uint32_t, 15>;

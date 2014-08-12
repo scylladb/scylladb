@@ -334,6 +334,9 @@ public:
         ret._size = size;
         return ret;
     }
+    CharType operator[](size_t pos) const {
+        return _buffer[pos];
+    }
 };
 
 template <typename CharType>
@@ -503,6 +506,11 @@ void input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, 
     auto i = std::find(_buf.get() + _begin, _buf.get() + _begin + to_search, eol);
     auto nr_found = i - (_buf.get() + _begin);
     if (i != _buf.get() + _begin + to_search || completed + nr_found == limit) {
+        if (i != _buf.get() + _begin + to_search && completed + nr_found < limit) {
+            assert(*i == eol);
+            ++i; // include eol in result
+            ++nr_found;
+        }
         if (out.owning()) {
             std::copy(_buf.get() + _begin, i, out.get_write() + completed);
         }
