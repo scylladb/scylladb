@@ -129,12 +129,13 @@ public:
             delete u.external.str;
         }
         u.internal.size = 0;
+        u.internal.str[0] = '\0';
     }
     void swap(basic_sstring& x) noexcept {
-        basic_sstring tmp;
-        tmp.u = x.u;
+        contents tmp;
+        tmp = x.u;
         x.u = u;
-        u = tmp.u;
+        u = tmp;
     }
     const char* c_str() const {
         return str();

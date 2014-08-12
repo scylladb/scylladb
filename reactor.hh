@@ -199,10 +199,10 @@ public:
     }
 
     template <typename Func, typename Enable>
-    void then(Func, Enable) &&;
+    void then(Func, Enable);
 
     template <typename Func>
-    void then(Func&& func, std::enable_if_t<std::is_same<std::result_of_t<Func(future&&)>, void>::value, void*> = nullptr) && {
+    void then(Func&& func, std::enable_if_t<std::is_same<std::result_of_t<Func(future&&)>, void>::value, void*> = nullptr) {
         auto state = _state;
         state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
             func(std::move(fut));
@@ -373,6 +373,25 @@ public:
 private:
     void read_exactly_part(size_t n, promise<tmp_buf> pr, tmp_buf buf, size_t completed);
     void read_until_part(size_t n, CharType eol, promise<tmp_buf> pr, tmp_buf buf, size_t completed);
+};
+
+template <typename CharType>
+class output_stream_buffer {
+    static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
+    pollable_fd& _fd;
+    std::unique_ptr<CharType[]> _buf;
+    size_t _size;
+    size_t _begin = 0;
+    size_t _end = 0;
+private:
+    size_t available() const { return _end - _begin; }
+    size_t possibly_available() const { return _size - _begin; }
+public:
+    using char_type = CharType;
+    output_stream_buffer(pollable_fd& fd, size_t size) : _fd(fd), _buf(new char_type[size]), _size(size) {}
+    future<size_t> write(const char_type* buf, size_t n);
+    future<bool> flush();
+private:
 };
 
 
@@ -546,12 +565,61 @@ input_stream_buffer<CharType>::read_until(size_t limit, CharType eol) {
     return fut;
 }
 
+template <typename CharType>
+future<size_t>
+output_stream_buffer<CharType>::write(const char_type* buf, size_t n) {
+    promise<size_t> pr;
+    auto fut = pr.get_future();
+    if (n >= _size) {
+        flush().then([pr = std::move(pr), this, buf, n] (future<bool> done) mutable {
+            _fd.write_all(buf, n).then([pr = std::move(pr)] (future<size_t> done) mutable {
+                pr.set_value(done.get());
+            });
+        });
+        return fut;
+    }
+    auto now = std::min(n, _size - _end);
+    std::copy(buf, buf + now, _buf.get() + _end);
+    _end += now;
+    if (now == n) {
+        pr.set_value(n);
+    } else {
+        _fd.write_all(_buf.get(), _end).then(
+                [pr = std::move(pr), this, now, n, buf] (future<size_t> w) mutable {
+            std::copy(buf + now, buf + n, _buf.get());
+            _end = n - now;
+            pr.set_value(n);
+        });
+    }
+    return fut;
+}
+
+template <typename CharType>
+future<bool>
+output_stream_buffer<CharType>::flush() {
+    promise<bool> pr;
+    auto fut = pr.get_future();
+    if (!_end) {
+        pr.set_value(true);
+    } else {
+        _fd.write_all(_buf.get(), _end).then(
+                [this, pr = std::move(pr)] (future<size_t> done) mutable {
+            _end = 0;
+            pr.set_value(true);
+        });
+    }
+    return fut;
+}
+
+
 template <typename T>
 void future_state<T>::make_ready() {
     if (_task) {
         the_reactor.add_task(std::move(_task));
     }
 }
+
+
 
 #if 0
 future<temporary_buffer<CharType>> read_until(size_t limit, const CharType* eol, size_t eol_len);
