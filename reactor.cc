@@ -60,11 +60,20 @@ reactor::listen(socket_address sa, listen_options opts) {
     int r = ::bind(fd, &sa.u.sa, sizeof(sa.u.sas));
     assert(r != -1);
     ::listen(fd, 100);
-    return std::unique_ptr<pollable_fd>(new pollable_fd(*this, fd));
+    return std::unique_ptr<pollable_fd>(new pollable_fd(fd));
 }
 
 void reactor::run() {
+    std::vector<std::unique_ptr<task>> current_tasks;
     while (true) {
+        while (!_pending_tasks.empty()) {
+            std::swap(_pending_tasks, current_tasks);
+            for (auto&& tsk : current_tasks) {
+                tsk->run();
+                tsk.reset();
+            }
+            current_tasks.clear();
+        }
         std::array<epoll_event, 128> eevt;
         int nr = ::epoll_wait(_epollfd, eevt.data(), eevt.size(), -1);
         assert(nr != -1);
@@ -99,3 +108,4 @@ socket_address make_ipv4_address(ipv4_addr addr) {
     return sa;
 }
 
+reactor the_reactor;

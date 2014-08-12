@@ -13,6 +13,7 @@
 #include <string>
 #include <cstring>
 #include <stdexcept>
+#include <initializer_list>
 
 template <typename char_type, typename size_type, size_type max_size>
 class basic_sstring {
@@ -59,7 +60,7 @@ public:
         x.u.internal.size = 0;
         x.u.internal.str[0] = '\0';
     }
-    basic_sstring(const char* x, size_t len) {
+    basic_sstring(const char_type* x, size_t len) {
         if (size_type(size) != size) {
             throw std::overflow_error("sstring overflow");
         }
@@ -73,8 +74,9 @@ public:
             std::copy(x, x + size + 1, u.external.str);
         }
     }
-    basic_sstring(const char* x) : basic_sstring(x, std::strlen(x)) {}
-    basic_sstring(std::string& x) : basic_sstring(x.c_str(), x.size()) {}
+    basic_sstring(const char_type* x) : basic_sstring(x, std::strlen(x)) {}
+    basic_sstring(std::basic_string<char_type>& x) : basic_sstring(x.c_str(), x.size()) {}
+    basic_sstring(std::initializer_list<char_type> x) : basic_sstring(x.begin(), x.end() - x.begin()) {}
     ~basic_sstring() noexcept {
         if (!is_external()) {
             delete[] u.external.str;
