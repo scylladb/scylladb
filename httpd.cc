@@ -128,26 +128,22 @@ public:
             _resp->_headers["Content-Length"] = to_sstring(_resp->_body.size());
             _write_buf.write(_resp->_response_line.begin(), _resp->_response_line.size()).then(
                     [this] (size_t n) mutable {
-                write_response_headers(_resp->_headers.begin()).then(
-                        [this] (size_t done) {
-                    _write_buf.write("\r\n", 2).then(
-                            [this] (size_t done) mutable {
-                        write_body().then(
-                                [this] (size_t done) {
-                            _write_buf.flush().then(
-                                    [this] (bool done) {
-                                _resp.reset();
-                                if (!_pending_responses.empty()) {
-                                    _resp = std::move(_pending_responses.front());
-                                    _pending_responses.pop();
-                                    start_response();
-                                } else {
-                                    maybe_done();
-                                }
-                            });
-                        });
-                    });
-                });
+                return write_response_headers(_resp->_headers.begin());
+            }).then([this] (size_t done) {
+                return _write_buf.write("\r\n", 2);
+            }).then([this] (size_t done) mutable {
+                return write_body();
+            }).then([this] (size_t done) {
+                return _write_buf.flush();
+            }).then([this] (bool done) {
+                _resp.reset();
+                if (!_pending_responses.empty()) {
+                    _resp = std::move(_pending_responses.front());
+                    _pending_responses.pop();
+                    start_response();
+                } else {
+                    maybe_done();
+                }
             });
         }
         future<size_t> write_response_headers(std::unordered_map<sstring, sstring>::iterator hi) {
@@ -159,19 +155,15 @@ public:
             }
             _write_buf.write(hi->first.begin(), hi->first.size()).then(
                     [hi, this, pr = std::move(pr)] (size_t done) mutable {
-                _write_buf.write(": ", 2).then(
-                        [hi, this, pr = std::move(pr)] (size_t done) mutable {
-                    _write_buf.write(hi->second.begin(), hi->second.size()).then(
-                            [hi, this, pr = std::move(pr)] (size_t done) mutable {
-                        _write_buf.write("\r\n", 2).then(
-                                [hi, this, pr = std::move(pr)] (size_t done) mutable {
-                            write_response_headers(++hi).then(
-                                    [this, pr = std::move(pr)] (size_t done) mutable {
-                                pr.set_value(done);
-                            });
-                        });
-                    });
-                });
+                return _write_buf.write(": ", 2);
+            }).then([hi, this, pr = std::move(pr)] (size_t done) mutable {
+                return _write_buf.write(hi->second.begin(), hi->second.size());
+            }).then([hi, this, pr = std::move(pr)] (size_t done) mutable {
+                return _write_buf.write("\r\n", 2);
+            }).then([hi, this, pr = std::move(pr)] (size_t done) mutable {
+                return write_response_headers(++hi);
+            }).then([this, pr = std::move(pr)] (size_t done) mutable {
+                pr.set_value(done);
             });
             return fut;
         }
