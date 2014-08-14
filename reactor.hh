@@ -525,6 +525,7 @@ void input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, 
     auto i = std::find(_buf.get() + _begin, _buf.get() + _begin + to_search, eol);
     auto nr_found = i - (_buf.get() + _begin);
     if (i != _buf.get() + _begin + to_search || completed + nr_found == limit) {
+        std::cout << "read_until_part: found " << nr_found << "\n";
         if (i != _buf.get() + _begin + to_search && completed + nr_found < limit) {
             assert(*i == eol);
             ++i; // include eol in result
@@ -535,15 +536,16 @@ void input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, 
         }
         advance(nr_found);
         completed += nr_found;
+        std::cout << "fulfilling promise with '" << std::string(out.begin(), out.begin() + completed) << "'\n";
         pr.set_value(std::move(out).prefix(completed));
     } else {
+        std::cout << "not found, scheduling again\n";
         if (!out.owning() && _end == _size) {
             // wrapping around, must allocate
             auto new_out = tmp_buf(limit);
-            std::copy(out.begin(), out.end(), new_out.get_write());
             out = std::move(new_out);
         }
-        if (!out.owning()) {
+        if (out.owning()) {
             std::copy(_buf.get() + _begin, _buf.get() + _end, out.get_write() + completed);
             completed += _end - _begin;
             _begin = _end = 0;

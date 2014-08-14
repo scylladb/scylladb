@@ -80,7 +80,9 @@ public:
         }
         void parse_header(future<tmp_buf> f_header) {
             auto header = f_header.get();
+            std::cout << ">>>" << sstring(header.begin(), header.end()) << "<<<\n";
             if (header.size() == 2 && header[0] == '\r' && header[1] == '\n') {
+                std::cout << "req end\n";
                 return generate_response();
             }
             std::cmatch match;
@@ -106,6 +108,7 @@ public:
             respond();
         }
         void respond() {
+            std::cout << "responding\n";
             _write_buf.write(_response_line.begin(), _response_line.size()).then(
                     [this] (future<size_t> n) mutable {
                 write_response_headers(_response_headers.begin()).then(
