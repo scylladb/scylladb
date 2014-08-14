@@ -63,7 +63,6 @@ public:
                 auto start_line = fut_start_line.get();
                 std::cmatch match;
                 if (!std::regex_match(start_line.begin(), start_line.end(), match, start_line_re)) {
-                    std::cout << "no match\n";
                     return bad();
                 }
                 _method = to_sstring(match[1]);
@@ -72,7 +71,6 @@ public:
                 if (_method != "GET") {
                     return bad();
                 }
-                std::cout << "start line: " << _method << " | " << _url << " | " << _version << "\n";
                 _read_buf.read_until(limit, '\n').then([this] (future<tmp_buf> header) {
                     parse_header(std::move(header));
                 });
@@ -80,22 +78,18 @@ public:
         }
         void parse_header(future<tmp_buf> f_header) {
             auto header = f_header.get();
-            std::cout << ">>>" << sstring(header.begin(), header.end()) << "<<<\n";
             if (header.size() == 2 && header[0] == '\r' && header[1] == '\n') {
-                std::cout << "req end\n";
                 return generate_response();
             }
             std::cmatch match;
             if (std::regex_match(header.begin(), header.end(), match, header_re)) {
                 sstring name = to_sstring(match[1]);
                 sstring value = to_sstring(match[2]);
-                std::cout << "found header: " << name << "=" << value << ".\n";
                 _headers[name] = std::move(value);
                 _last_header_name = std::move(name);
             } else if (std::regex_match(header.begin(), header.end(), match, header_cont_re)) {
                 _headers[_last_header_name] += " ";
                 _headers[_last_header_name] += to_sstring(match[1]);
-                std::cout << "found header: " << _last_header_name << "=" << _headers[_last_header_name] << ".\n";
             } else {
                 return bad();
             }
@@ -108,16 +102,18 @@ public:
             respond();
         }
         void respond() {
-            std::cout << "responding\n";
             _write_buf.write(_response_line.begin(), _response_line.size()).then(
                     [this] (future<size_t> n) mutable {
                 write_response_headers(_response_headers.begin()).then(
                         [this] (future<size_t> done) {
-                    write_body().then(
-                            [this] (future<size_t> done) {
-                        _write_buf.flush().then(
-                                [this] (future<bool> done) {
-                            delete this;
+                    _write_buf.write("\r\n", 2).then(
+                            [this] (future<size_t> done) mutable {
+                        write_body().then(
+                                [this] (future<size_t> done) {
+                            _write_buf.flush().then(
+                                    [this] (future<bool> done) {
+                                delete this;
+                            });
                         });
                     });
                 });
@@ -148,7 +144,7 @@ public:
             return fut;
         }
         void generate_response() {
-            _response_line = "HTTP/1.1 200 OK\r\n\r\n";
+            _response_line = "HTTP/1.1 200 OK\r\n";
             _response_headers["Content-Type"] = "text/html";
             _response_body = "<html><head><title>this is the future</title></head><body><p>Future!!</p></body></html>";
             respond();

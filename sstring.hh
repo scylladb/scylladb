@@ -126,7 +126,7 @@ public:
     }
     void reset() noexcept {
         if (is_external()) {
-            delete u.external.str;
+            delete[] u.external.str;
         }
         u.internal.size = 0;
         u.internal.str[0] = '\0';

@@ -110,6 +110,7 @@ struct future_state {
             abort();
         }
     }
+    bool available() const { return _state == state::result || _state == state::exception; }
     bool has_promise() const { return _promise; }
     bool has_future() const { return _future; }
     void wait();
@@ -131,7 +132,7 @@ struct future_state {
         assert(_state == state::future);
         _state = state::result;
         new (&_u.value) T(std::forward(a)...);
-        schedule();
+        make_ready();
     }
     void set_exception(std::exception_ptr ex) {
         assert(_state == state::future);
@@ -151,6 +152,9 @@ struct future_state {
     template <typename Func>
     void schedule(Func&& func) {
         _task = make_task(std::forward<Func>(func));
+        if (available()) {
+            make_ready();
+        }
     }
 };
 
@@ -347,6 +351,7 @@ class input_stream_buffer {
     size_t _size;
     size_t _begin = 0;
     size_t _end = 0;
+    bool _eof = false;
 private:
     using tmp_buf = temporary_buffer<CharType>;
     size_t available() const { return _end - _begin; }
@@ -524,8 +529,9 @@ void input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, 
     auto to_search = std::min(limit - completed, available());
     auto i = std::find(_buf.get() + _begin, _buf.get() + _begin + to_search, eol);
     auto nr_found = i - (_buf.get() + _begin);
-    if (i != _buf.get() + _begin + to_search || completed + nr_found == limit) {
-        std::cout << "read_until_part: found " << nr_found << "\n";
+    if (i != _buf.get() + _begin + to_search
+            || completed + nr_found == limit
+            || (i == _buf.get() + _end && _eof)) {
         if (i != _buf.get() + _begin + to_search && completed + nr_found < limit) {
             assert(*i == eol);
             ++i; // include eol in result
@@ -536,10 +542,8 @@ void input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, 
         }
         advance(nr_found);
         completed += nr_found;
-        std::cout << "fulfilling promise with '" << std::string(out.begin(), out.begin() + completed) << "'\n";
         pr.set_value(std::move(out).prefix(completed));
     } else {
-        std::cout << "not found, scheduling again\n";
         if (!out.owning() && _end == _size) {
             // wrapping around, must allocate
             auto new_out = tmp_buf(limit);
@@ -552,7 +556,9 @@ void input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, 
         }
         _fd.read_some(_buf.get() + _end, _size - _end).then(
                 [this, limit, eol, pr = std::move(pr), out = std::move(out), completed] (future<size_t> now) mutable {
-            _end += now.get();
+            auto n = now.get();
+            _end += n;
+            _eof = n == 0;
             read_until_part(limit, eol, std::move(pr), std::move(out), completed);
         });
     }
