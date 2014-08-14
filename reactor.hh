@@ -180,12 +180,16 @@ public:
     void set_value(T&& result)  { _state->set(std::move(result)); }
 };
 
+template <typename T> struct is_future : std::false_type {};
+template <typename T> struct is_future<future<T>> : std::true_type {};
+
 template <typename T>
 class future {
     future_state<T>* _state;
 private:
     future(future_state<T>* state) : _state(state) { _state->_future = this; }
 public:
+    using value_type = T;
     future(future&& x) : _state(x._state) { x._state = nullptr; }
     future(const future&) = delete;
     future& operator=(future&& x);
@@ -206,21 +210,30 @@ public:
     void then(Func, Enable);
 
     template <typename Func>
-    void then(Func&& func, std::enable_if_t<std::is_same<std::result_of_t<Func(T&&)>, void>::value, void*> = nullptr) {
+    void then(Func&& func,
+            std::enable_if_t<std::is_same<std::result_of_t<Func(T&&)>, void>::value, void*> = nullptr) {
         auto state = _state;
         state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
             func(fut.get());
         });
     }
-#if 0
+
     template <typename Func>
-    auto then(Func&& func) -> std::enable_if<is_future<decltype(func(*this)), void>::value, decltype(func(*this))>::type {
+    std::result_of_t<Func(T&&)>
+    then(Func&& func,
+            std::enable_if_t<is_future<std::result_of_t<Func(T&&)>>::value, void*> = nullptr) {
         auto state = _state;
-        state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
-            func(std::move(fut));
+        using U = typename std::result_of_t<Func(T&&)>::value_type;
+        promise<U> pr;
+        auto next_fut = pr.get_future();
+        state->schedule([fut = std::move(*this), func = std::forward<Func>(func), pr = std::move(pr)] () mutable {
+            func(fut.get()).then([pr = std::move(pr)] (U next) mutable {
+                pr.set_value(std::move(next));
+            });
         });
+        return std::move(next_fut);
     }
-#endif
+
     friend class promise<T>;
 };
 
