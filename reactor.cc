@@ -81,15 +81,18 @@ void reactor::run() {
             auto& evt = eevt[i];
             auto pfd = reinterpret_cast<pollable_fd*>(evt.data.ptr);
             auto events = evt.events;
-            pfd->events = 0;
-            ::epoll_ctl(_epollfd, EPOLL_CTL_DEL, pfd->fd, &evt);
             std::unique_ptr<task> t_in, t_out;
             if (events & EPOLLIN) {
+                pfd->events &= ~EPOLLIN;
                 add_task(std::move(pfd->pollin));
             }
             if (events & EPOLLOUT) {
+                pfd->events &= ~EPOLLOUT;
                 add_task(std::move(pfd->pollout));
             }
+            evt.events = pfd->events;
+            auto op = evt.events ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+            ::epoll_ctl(_epollfd, op, pfd->fd, &evt);
         }
     }
 }

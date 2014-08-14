@@ -573,6 +573,9 @@ input_stream_buffer<CharType>::read_until(size_t limit, CharType eol) {
     return fut;
 }
 
+#include <iostream>
+#include "sstring.hh"
+
 template <typename CharType>
 future<size_t>
 output_stream_buffer<CharType>::write(const char_type* buf, size_t n) {

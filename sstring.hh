@@ -16,6 +16,7 @@
 #include <initializer_list>
 #include <iostream>
 #include <functional>
+#include <cstdio>
 
 template <typename char_type, typename size_type, size_type max_size>
 class basic_sstring {
@@ -170,9 +171,11 @@ void swap(basic_sstring<char_type, size_type, max_size>& x,
 }
 
 template <typename char_type, typename size_type, size_type max_size, typename char_traits>
+inline
 std::basic_ostream<char_type, char_traits>&
-operator<<(std::basic_ostream<char_type, char_traits>& os, const basic_sstring<char_type, size_type, max_size>& s) {
-    return os << s.c_str();
+operator<<(std::basic_ostream<char_type, char_traits>& os,
+        const basic_sstring<char_type, size_type, max_size>& s) {
+    return os.write(s.begin(), s.size());
 }
 
 namespace std {
@@ -192,5 +195,52 @@ struct hash<basic_sstring<char_type, size_type, max_size>> {
 }
 
 using sstring = basic_sstring<char, uint32_t, 15>;
+
+template <typename T, typename String = sstring, typename for_enable_if = void*>
+String to_sstring(T value, for_enable_if);
+
+template <typename T>
+inline
+sstring to_sstring_sprintf(T value, const char* fmt) {
+    char tmp[sizeof(value) / 3 + 3];
+    auto len = std::sprintf(tmp, fmt, value);
+    return sstring(tmp, len);
+}
+
+template <typename string_type = sstring>
+inline
+string_type to_sstring(int value, void* = nullptr) {
+    return to_sstring_sprintf(value, "%d");
+}
+
+template <typename string_type = sstring>
+inline
+string_type to_sstring(unsigned value, void* = nullptr) {
+    return to_sstring_sprintf(value, "%u");
+}
+
+template <typename string_type = sstring>
+inline
+string_type to_sstring(long value, void* = nullptr) {
+    return to_sstring_sprintf(value, "%ld");
+}
+
+template <typename string_type = sstring>
+inline
+string_type to_sstring(unsigned long value, void* = nullptr) {
+    return to_sstring_sprintf(value, "%lu");
+}
+
+template <typename string_type = sstring>
+inline
+string_type to_sstring(long long value, void* = nullptr) {
+    return to_sstring_sprintf(value, "%lld");
+}
+
+template <typename string_type = sstring>
+inline
+string_type to_sstring(unsigned long long value, void* = nullptr) {
+    return to_sstring_sprintf(value, "%llu");
+}
 
 #endif /* SSTRING_HH_ */

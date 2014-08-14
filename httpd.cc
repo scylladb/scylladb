@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <regex>
 #include <unordered_map>
+#include <queue>
 
 sstring to_sstring(const std::csub_match& sm) {
     return sstring(sm.first, sm.second);
@@ -43,17 +44,25 @@ public:
         std::unique_ptr<pollable_fd> _fd;
         socket_address _addr;
         input_stream_buffer<char> _read_buf;
+        output_stream_buffer<char> _write_buf;
+        bool _eof = false;
         static constexpr size_t limit = 4096;
         using tmp_buf = temporary_buffer<char>;
-        sstring _method;
-        sstring _url;
-        sstring _version;
-        sstring _response_line;
+        struct request {
+            sstring _method;
+            sstring _url;
+            sstring _version;
+            std::unordered_map<sstring, sstring> _headers;
+        };
         sstring _last_header_name;
-        sstring _response_body;
-        std::unordered_map<sstring, sstring> _headers;
-        std::unordered_map<sstring, sstring> _response_headers;
-        output_stream_buffer<char> _write_buf;
+        struct response {
+            sstring _response_line;
+            sstring _body;
+            std::unordered_map<sstring, sstring> _headers;
+        };
+        std::unique_ptr<request> _req;
+        std::unique_ptr<response> _resp;
+        std::queue<std::unique_ptr<response>> _pending_responses;
     public:
         connection(http_server& server, std::unique_ptr<pollable_fd>&& fd, socket_address addr)
             : _server(server), _fd(std::move(fd)), _addr(addr), _read_buf(*_fd, 8192)
@@ -61,15 +70,21 @@ public:
         void read() {
             _read_buf.read_until(limit, '\n').then([this] (future<tmp_buf> fut_start_line) {
                 auto start_line = fut_start_line.get();
+                if (!start_line.size()) {
+                    _eof = true;
+                    maybe_done();
+                    return;
+                }
                 std::cmatch match;
                 if (!std::regex_match(start_line.begin(), start_line.end(), match, start_line_re)) {
-                    return bad();
+                    return bad(std::move(_req));
                 }
-                _method = to_sstring(match[1]);
-                _url = to_sstring(match[2]);
-                _version = to_sstring(match[3]);
-                if (_method != "GET") {
-                    return bad();
+                _req = std::make_unique<request>();
+                _req->_method = to_sstring(match[1]);
+                _req->_url = to_sstring(match[2]);
+                _req->_version = to_sstring(match[3]);
+                if (_req->_method != "GET") {
+                    return bad(std::move(_req));
                 }
                 _read_buf.read_until(limit, '\n').then([this] (future<tmp_buf> header) {
                     parse_header(std::move(header));
@@ -79,32 +94,44 @@ public:
         void parse_header(future<tmp_buf> f_header) {
             auto header = f_header.get();
             if (header.size() == 2 && header[0] == '\r' && header[1] == '\n') {
-                return generate_response();
+                generate_response(std::move(_req));
+                read();
+                return;
             }
             std::cmatch match;
             if (std::regex_match(header.begin(), header.end(), match, header_re)) {
                 sstring name = to_sstring(match[1]);
                 sstring value = to_sstring(match[2]);
-                _headers[name] = std::move(value);
+                _req->_headers[name] = std::move(value);
                 _last_header_name = std::move(name);
             } else if (std::regex_match(header.begin(), header.end(), match, header_cont_re)) {
-                _headers[_last_header_name] += " ";
-                _headers[_last_header_name] += to_sstring(match[1]);
+                _req->_headers[_last_header_name] += " ";
+                _req->_headers[_last_header_name] += to_sstring(match[1]);
             } else {
-                return bad();
+                return bad(std::move(_req));
             }
             _read_buf.read_until(limit, '\n').then([this] (future<tmp_buf> header) {
                 parse_header(std::move(header));
             });
         }
-        void bad() {
-            _response_line = "HTTP/1.1 400 BAD REQUEST\r\n\r\n";
-            respond();
+        void bad(std::unique_ptr<request> req) {
+            auto resp = std::make_unique<response>();
+            resp->_response_line = "HTTP/1.1 400 BAD REQUEST\r\n\r\n";
+            respond(std::move(resp));
         }
-        void respond() {
-            _write_buf.write(_response_line.begin(), _response_line.size()).then(
+        void respond(std::unique_ptr<response> resp) {
+            if (!_resp) {
+                _resp = std::move(resp);
+                start_response();
+            } else {
+                _pending_responses.push(std::move(resp));
+            }
+        }
+        void start_response() {
+            _resp->_headers["Content-Length"] = to_sstring(_resp->_body.size());
+            _write_buf.write(_resp->_response_line.begin(), _resp->_response_line.size()).then(
                     [this] (future<size_t> n) mutable {
-                write_response_headers(_response_headers.begin()).then(
+                write_response_headers(_resp->_headers.begin()).then(
                         [this] (future<size_t> done) {
                     _write_buf.write("\r\n", 2).then(
                             [this] (future<size_t> done) mutable {
@@ -112,7 +139,14 @@ public:
                                 [this] (future<size_t> done) {
                             _write_buf.flush().then(
                                     [this] (future<bool> done) {
-                                delete this;
+                                _resp.reset();
+                                if (!_pending_responses.empty()) {
+                                    _resp = std::move(_pending_responses.front());
+                                    _pending_responses.pop();
+                                    start_response();
+                                } else {
+                                    maybe_done();
+                                }
                             });
                         });
                     });
@@ -120,11 +154,12 @@ public:
             });
         }
         future<size_t> write_response_headers(std::unordered_map<sstring, sstring>::iterator hi) {
-            if (hi == _response_headers.end()) {
-                return _write_buf.write("\r\n", 2);
-            }
             promise<size_t> pr;
             auto fut = pr.get_future();
+            if (hi == _resp->_headers.end()) {
+                pr.set_value(0);
+                return fut;
+            }
             _write_buf.write(hi->first.begin(), hi->first.size()).then(
                     [hi, this, pr = std::move(pr)] (future<size_t> done) mutable {
                 _write_buf.write(": ", 2).then(
@@ -143,14 +178,20 @@ public:
             });
             return fut;
         }
-        void generate_response() {
-            _response_line = "HTTP/1.1 200 OK\r\n";
-            _response_headers["Content-Type"] = "text/html";
-            _response_body = "<html><head><title>this is the future</title></head><body><p>Future!!</p></body></html>";
-            respond();
+        void generate_response(std::unique_ptr<request> req) {
+            auto resp = std::make_unique<response>();
+            resp->_response_line = "HTTP/1.1 200 OK\r\n";
+            resp->_headers["Content-Type"] = "text/html";
+            resp->_body = "<html><head><title>this is the future</title></head><body><p>Future!!</p></body></html>";
+            respond(std::move(resp));
         }
         future<size_t> write_body() {
-            return _write_buf.write(_response_body.begin(), _response_body.size());
+            return _write_buf.write(_resp->_body.begin(), _resp->_body.size());
+        }
+        void maybe_done() {
+            if (_eof && !_req && !_resp && _pending_responses.empty()) {
+                delete this;
+            }
         }
     };
 };
