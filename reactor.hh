@@ -213,6 +213,9 @@ public:
     void then(Func&& func,
             std::enable_if_t<std::is_same<std::result_of_t<Func(T&&)>, void>::value, void*> = nullptr) {
         auto state = _state;
+        if (state->available()) {
+            return func(std::move(_state->get()));
+        }
         state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
             func(fut.get());
         });
@@ -223,6 +226,9 @@ public:
     then(Func&& func,
             std::enable_if_t<is_future<std::result_of_t<Func(T&&)>>::value, void*> = nullptr) {
         auto state = _state;
+        if (state->available()) {
+            return func(std::move(_state->get()));
+        }
         using U = typename std::result_of_t<Func(T&&)>::value_type;
         promise<U> pr;
         auto next_fut = pr.get_future();
