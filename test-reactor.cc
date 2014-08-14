@@ -15,11 +15,10 @@ struct test {
         std::unique_ptr<pollable_fd> fd;
         char buffer[8192];
         void copy_data() {
-            fd->read_some(buffer, sizeof(buffer)).then([this] (future<size_t> fut) {
-                auto n = fut.get();
+            fd->read_some(buffer, sizeof(buffer)).then([this] (size_t n) {
                 if (n) {
-                    fd->write_all(buffer, n).then([this, n] (future<size_t> fut) {
-                        if (fut.get() == n) {
+                    fd->write_all(buffer, n).then([this, n] (size_t w) {
+                        if (w == n) {
                             copy_data();
                         }
                     });
@@ -34,8 +33,8 @@ struct test {
         c->copy_data();
     }
     void start_accept() {
-        the_reactor.accept(*listener).then([this] (future<accept_result> fut) {
-            new_connection(fut.get());
+        the_reactor.accept(*listener).then([this] (accept_result&& ar) {
+            new_connection(std::move(ar));
             start_accept();
         });
     }

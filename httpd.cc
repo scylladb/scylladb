@@ -31,8 +31,7 @@ public:
     }
     void do_accepts(std::unique_ptr<pollable_fd> lfd) {
         auto l = lfd.get();
-        l->accept().then([this, lfd = std::move(lfd)] (future<accept_result> res) mutable {
-            accept_result ar = res.get();
+        l->accept().then([this, lfd = std::move(lfd)] (accept_result&& ar) mutable {
             auto fd = std::move(std::get<0>(ar));
             auto addr = std::get<1>(ar);
             (new connection(*this, std::move(fd), addr))->read();
@@ -68,8 +67,7 @@ public:
             : _server(server), _fd(std::move(fd)), _addr(addr), _read_buf(*_fd, 8192)
             , _write_buf(*_fd, 8192) {}
         void read() {
-            _read_buf.read_until(limit, '\n').then([this] (future<tmp_buf> fut_start_line) {
-                auto start_line = fut_start_line.get();
+            _read_buf.read_until(limit, '\n').then([this] (tmp_buf start_line) {
                 if (!start_line.size()) {
                     _eof = true;
                     maybe_done();
@@ -86,13 +84,12 @@ public:
                 if (_req->_method != "GET") {
                     return bad(std::move(_req));
                 }
-                _read_buf.read_until(limit, '\n').then([this] (future<tmp_buf> header) {
+                _read_buf.read_until(limit, '\n').then([this] (tmp_buf header) {
                     parse_header(std::move(header));
                 });
             });
         }
-        void parse_header(future<tmp_buf> f_header) {
-            auto header = f_header.get();
+        void parse_header(tmp_buf header) {
             if (header.size() == 2 && header[0] == '\r' && header[1] == '\n') {
                 generate_response(std::move(_req));
                 read();
@@ -110,7 +107,7 @@ public:
             } else {
                 return bad(std::move(_req));
             }
-            _read_buf.read_until(limit, '\n').then([this] (future<tmp_buf> header) {
+            _read_buf.read_until(limit, '\n').then([this] (tmp_buf header) {
                 parse_header(std::move(header));
             });
         }
@@ -130,15 +127,15 @@ public:
         void start_response() {
             _resp->_headers["Content-Length"] = to_sstring(_resp->_body.size());
             _write_buf.write(_resp->_response_line.begin(), _resp->_response_line.size()).then(
-                    [this] (future<size_t> n) mutable {
+                    [this] (size_t n) mutable {
                 write_response_headers(_resp->_headers.begin()).then(
-                        [this] (future<size_t> done) {
+                        [this] (size_t done) {
                     _write_buf.write("\r\n", 2).then(
-                            [this] (future<size_t> done) mutable {
+                            [this] (size_t done) mutable {
                         write_body().then(
-                                [this] (future<size_t> done) {
+                                [this] (size_t done) {
                             _write_buf.flush().then(
-                                    [this] (future<bool> done) {
+                                    [this] (bool done) {
                                 _resp.reset();
                                 if (!_pending_responses.empty()) {
                                     _resp = std::move(_pending_responses.front());
@@ -161,16 +158,16 @@ public:
                 return fut;
             }
             _write_buf.write(hi->first.begin(), hi->first.size()).then(
-                    [hi, this, pr = std::move(pr)] (future<size_t> done) mutable {
+                    [hi, this, pr = std::move(pr)] (size_t done) mutable {
                 _write_buf.write(": ", 2).then(
-                        [hi, this, pr = std::move(pr)] (future<size_t> done) mutable {
+                        [hi, this, pr = std::move(pr)] (size_t done) mutable {
                     _write_buf.write(hi->second.begin(), hi->second.size()).then(
-                            [hi, this, pr = std::move(pr)] (future<size_t> done) mutable {
+                            [hi, this, pr = std::move(pr)] (size_t done) mutable {
                         _write_buf.write("\r\n", 2).then(
-                                [hi, this, pr = std::move(pr)] (future<size_t> done) mutable {
+                                [hi, this, pr = std::move(pr)] (size_t done) mutable {
                             write_response_headers(++hi).then(
-                                    [this, pr = std::move(pr)] (future<size_t> done) mutable {
-                                pr.set_value(done.get());
+                                    [this, pr = std::move(pr)] (size_t done) mutable {
+                                pr.set_value(done);
                             });
                         });
                     });

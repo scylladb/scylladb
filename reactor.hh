@@ -206,10 +206,10 @@ public:
     void then(Func, Enable);
 
     template <typename Func>
-    void then(Func&& func, std::enable_if_t<std::is_same<std::result_of_t<Func(future&&)>, void>::value, void*> = nullptr) {
+    void then(Func&& func, std::enable_if_t<std::is_same<std::result_of_t<Func(T&&)>, void>::value, void*> = nullptr) {
         auto state = _state;
         state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
-            func(std::move(fut));
+            func(fut.get());
         });
     }
 #if 0
@@ -465,8 +465,8 @@ reactor::write_all_part(pollable_fd& fd, const void* buffer, size_t len,
         result.set_value(completed);
     } else {
         write_some(fd, static_cast<const char*>(buffer) + completed, len - completed).then(
-                [&fd, buffer, len, result = std::move(result), completed, this] (future<size_t> part) mutable {
-            write_all_part(fd, buffer, len, std::move(result), completed + part.get());
+                [&fd, buffer, len, result = std::move(result), completed, this] (size_t part) mutable {
+            write_all_part(fd, buffer, len, std::move(result), completed + part);
         });
     }
 }
@@ -499,14 +499,14 @@ void input_stream_buffer<CharType>::read_exactly_part(size_t n, promise<tmp_buf>
     // _buf is now empty
     if (out.owned()) {
         _fd.read_some(out.get() + completed, n - completed).then(
-                [this, pr = std::move(pr), out = std::move(out), completed, n] (future<size_t> now) mutable {
-            completed += now.get();
+                [this, pr = std::move(pr), out = std::move(out), completed, n] (size_t now) mutable {
+            completed += now;
             read_exactly_part(n, std::move(pr), std::move(out), completed);
         });
     } else {
         _fd.read_some(_buf.get(), _size).then(
-                [this, pr = std::move(pr), out = std::move(out), completed, n] (future<size_t> now) mutable {
-            _end = now.get();
+                [this, pr = std::move(pr), out = std::move(out), completed, n] (size_t now) mutable {
+            _end = now;
             read_exactly_part(n, std::move(pr), std::move(out), completed);
         });
     }
@@ -555,8 +555,7 @@ void input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, 
             _begin = _end = 0;
         }
         _fd.read_some(_buf.get() + _end, _size - _end).then(
-                [this, limit, eol, pr = std::move(pr), out = std::move(out), completed] (future<size_t> now) mutable {
-            auto n = now.get();
+                [this, limit, eol, pr = std::move(pr), out = std::move(out), completed] (size_t n) mutable {
             _end += n;
             _eof = n == 0;
             read_until_part(limit, eol, std::move(pr), std::move(out), completed);
@@ -582,9 +581,9 @@ output_stream_buffer<CharType>::write(const char_type* buf, size_t n) {
     promise<size_t> pr;
     auto fut = pr.get_future();
     if (n >= _size) {
-        flush().then([pr = std::move(pr), this, buf, n] (future<bool> done) mutable {
-            _fd.write_all(buf, n).then([pr = std::move(pr)] (future<size_t> done) mutable {
-                pr.set_value(done.get());
+        flush().then([pr = std::move(pr), this, buf, n] (bool done) mutable {
+            _fd.write_all(buf, n).then([pr = std::move(pr)] (size_t done) mutable {
+                pr.set_value(done);
             });
         });
         return fut;
@@ -596,7 +595,7 @@ output_stream_buffer<CharType>::write(const char_type* buf, size_t n) {
         pr.set_value(n);
     } else {
         _fd.write_all(_buf.get(), _end).then(
-                [pr = std::move(pr), this, now, n, buf] (future<size_t> w) mutable {
+                [pr = std::move(pr), this, now, n, buf] (size_t w) mutable {
             std::copy(buf + now, buf + n, _buf.get());
             _end = n - now;
             pr.set_value(n);
@@ -614,7 +613,7 @@ output_stream_buffer<CharType>::flush() {
         pr.set_value(true);
     } else {
         _fd.write_all(_buf.get(), _end).then(
-                [this, pr = std::move(pr)] (future<size_t> done) mutable {
+                [this, pr = std::move(pr)] (size_t done) mutable {
             _end = 0;
             pr.set_value(true);
         });
