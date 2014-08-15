@@ -22,25 +22,25 @@ static std::regex header_re { "(" + token + ")\\s*:\\s*(.*\\S)\\s*\\r\\n", re_op
 static std::regex header_cont_re { "\\s+(.*\\S)\\s*\\r\\n", re_opt };
 
 class http_server {
-    std::vector<std::unique_ptr<pollable_fd>> _listeners;
+    std::vector<pollable_fd> _listeners;
 public:
     void listen(ipv4_addr addr) {
         listen_options lo;
         lo.reuse_address = true;
-        do_accepts(the_reactor.listen(make_ipv4_address(addr), lo));
+        _listeners.push_back(the_reactor.listen(make_ipv4_address(addr), lo));
+        do_accepts(_listeners.size() - 1);
     }
-    void do_accepts(std::unique_ptr<pollable_fd> lfd) {
-        auto l = lfd.get();
-        l->accept().then([this, lfd = std::move(lfd)] (accept_result&& ar) mutable {
+    void do_accepts(int which) {
+        _listeners[which].accept().then([this, which] (accept_result&& ar) mutable {
             auto fd = std::move(std::get<0>(ar));
             auto addr = std::get<1>(ar);
             (new connection(*this, std::move(fd), addr))->read();
-            do_accepts(std::move(lfd));
+            do_accepts(which);
         });
     }
     class connection {
         http_server& _server;
-        std::unique_ptr<pollable_fd> _fd;
+        pollable_fd _fd;
         socket_address _addr;
         input_stream_buffer<char> _read_buf;
         output_stream_buffer<char> _write_buf;
@@ -63,9 +63,9 @@ public:
         std::unique_ptr<response> _resp;
         std::queue<std::unique_ptr<response>> _pending_responses;
     public:
-        connection(http_server& server, std::unique_ptr<pollable_fd>&& fd, socket_address addr)
-            : _server(server), _fd(std::move(fd)), _addr(addr), _read_buf(*_fd, 8192)
-            , _write_buf(*_fd, 8192) {}
+        connection(http_server& server, pollable_fd&& fd, socket_address addr)
+            : _server(server), _fd(std::move(fd)), _addr(addr), _read_buf(_fd, 8192)
+            , _write_buf(_fd, 8192) {}
         void read() {
             _read_buf.read_until(limit, '\n').then([this] (tmp_buf start_line) {
                 if (!start_line.size()) {

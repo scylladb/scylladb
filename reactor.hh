@@ -26,6 +26,7 @@
 class socket_address;
 class reactor;
 class pollable_fd;
+class pollable_fd_state;
 
 struct ipv4_addr {
     uint8_t host[4];
@@ -252,7 +253,7 @@ promise<T>::get_future()
     return future<T>(_state);
 }
 
-using accept_result = std::tuple<std::unique_ptr<pollable_fd>, socket_address>;
+using accept_result = std::tuple<pollable_fd, socket_address>;
 
 struct listen_options {
     bool reuse_address = false;
@@ -264,9 +265,9 @@ public:
     io_context_t _io_context;
     std::vector<std::unique_ptr<task>> _pending_tasks;
 private:
-    void epoll_add_in(pollable_fd& fd, std::unique_ptr<task> t);
-    void epoll_add_out(pollable_fd& fd, std::unique_ptr<task> t);
-    void forget(pollable_fd& fd);
+    void epoll_add_in(pollable_fd_state& fd, std::unique_ptr<task> t);
+    void epoll_add_out(pollable_fd_state& fd, std::unique_ptr<task> t);
+    void forget(pollable_fd_state& fd);
     void abort_on_error(int ret);
 public:
     reactor();
@@ -274,46 +275,56 @@ public:
     void operator=(const reactor&) = delete;
     ~reactor();
 
-    std::unique_ptr<pollable_fd> listen(socket_address sa, listen_options opts = {});
+    pollable_fd listen(socket_address sa, listen_options opts = {});
 
-    future<accept_result> accept(pollable_fd& listen_fd);
+    future<accept_result> accept(pollable_fd_state& listen_fd);
 
-    future<size_t> read_some(pollable_fd& fd, void* buffer, size_t size);
-    future<size_t> read_some(pollable_fd& fd, const std::vector<iovec>& iov);
+    future<size_t> read_some(pollable_fd_state& fd, void* buffer, size_t size);
+    future<size_t> read_some(pollable_fd_state& fd, const std::vector<iovec>& iov);
 
-    future<size_t> write_some(pollable_fd& fd, const void* buffer, size_t size);
+    future<size_t> write_some(pollable_fd_state& fd, const void* buffer, size_t size);
 
-    future<size_t> write_all(pollable_fd& fd, const void* buffer, size_t size);
+    future<size_t> write_all(pollable_fd_state& fd, const void* buffer, size_t size);
 
     void run();
 
     void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
 private:
-    void write_all_part(pollable_fd& fd, const void* buffer, size_t size,
+    void write_all_part(pollable_fd_state& fd, const void* buffer, size_t size,
             promise<size_t> result, size_t completed);
 
     friend class pollable_fd;
+    friend class pollable_fd_state;
 };
 
 extern reactor the_reactor;
 
-class pollable_fd {
+class pollable_fd_state {
 public:
-    ~pollable_fd() { the_reactor.forget(*this); ::close(fd); }
-    future<size_t> read_some(char* buffer, size_t size) { return the_reactor.read_some(*this, buffer, size); }
-    future<size_t> read_some(uint8_t* buffer, size_t size) { return the_reactor.read_some(*this, buffer, size); }
-    future<size_t> read_some(const std::vector<iovec>& iov) { return the_reactor.read_some(*this, iov); }
-    future<size_t> write_all(const char* buffer, size_t size) { return the_reactor.write_all(*this, buffer, size); }
-    future<size_t> write_all(const uint8_t* buffer, size_t size) { return the_reactor.write_all(*this, buffer, size); }
-    future<accept_result> accept() { return the_reactor.accept(*this); }
-protected:
-    explicit pollable_fd(int fd) : fd(fd) {}
-    pollable_fd(const pollable_fd&) = delete;
-    void operator=(const pollable_fd&) = delete;
+    ~pollable_fd_state() { the_reactor.forget(*this); ::close(fd); }
+    explicit pollable_fd_state(int fd) : fd(fd) {}
+    pollable_fd_state(const pollable_fd_state&) = delete;
+    void operator=(const pollable_fd_state&) = delete;
     int fd;
     int events = 0;
     std::unique_ptr<task> pollin;
     std::unique_ptr<task> pollout;
+    friend class reactor;
+    friend class pollable_fd;
+};
+
+class pollable_fd {
+    std::unique_ptr<pollable_fd_state> _s;
+    pollable_fd(int fd) : _s(std::make_unique<pollable_fd_state>(fd)) {}
+public:
+    pollable_fd(pollable_fd&&) = default;
+    pollable_fd& operator=(pollable_fd&&) = default;
+    future<size_t> read_some(char* buffer, size_t size) { return the_reactor.read_some(*_s, buffer, size); }
+    future<size_t> read_some(uint8_t* buffer, size_t size) { return the_reactor.read_some(*_s, buffer, size); }
+    future<size_t> read_some(const std::vector<iovec>& iov) { return the_reactor.read_some(*_s, iov); }
+    future<size_t> write_all(const char* buffer, size_t size) { return the_reactor.write_all(*_s, buffer, size); }
+    future<size_t> write_all(const uint8_t* buffer, size_t size) { return the_reactor.write_all(*_s, buffer, size); }
+    future<accept_result> accept() { return the_reactor.accept(*_s); }
     friend class reactor;
 };
 
@@ -421,7 +432,7 @@ private:
 
 inline
 future<accept_result>
-reactor::accept(pollable_fd& listenfd) {
+reactor::accept(pollable_fd_state& listenfd) {
     promise<accept_result> pr;
     future<accept_result> fut = pr.get_future();
     epoll_add_in(listenfd, make_task([this, pr = std::move(pr), lfd = listenfd.fd] () mutable {
@@ -429,14 +440,14 @@ reactor::accept(pollable_fd& listenfd) {
         socklen_t sl = sizeof(&sa.u.sas);
         int fd = ::accept4(lfd, &sa.u.sa, &sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
         assert(fd != -1);
-        pr.set_value(accept_result{std::unique_ptr<pollable_fd>(new pollable_fd(fd)), sa});
+        pr.set_value(accept_result{pollable_fd(fd), sa});
     }));
     return fut;
 }
 
 inline
 future<size_t>
-reactor::read_some(pollable_fd& fd, void* buffer, size_t len) {
+reactor::read_some(pollable_fd_state& fd, void* buffer, size_t len) {
     promise<size_t> pr;
     auto fut = pr.get_future();
     epoll_add_in(fd, make_task([pr = std::move(pr), rfd = fd.fd, buffer, len] () mutable {
@@ -449,7 +460,7 @@ reactor::read_some(pollable_fd& fd, void* buffer, size_t len) {
 
 inline
 future<size_t>
-reactor::read_some(pollable_fd& fd, const std::vector<iovec>& iov) {
+reactor::read_some(pollable_fd_state& fd, const std::vector<iovec>& iov) {
     promise<size_t> pr;
     auto fut = pr.get_future();
     epoll_add_in(fd, make_task([pr = std::move(pr), rfd = fd.fd, iov = iov] () mutable {
@@ -465,7 +476,7 @@ reactor::read_some(pollable_fd& fd, const std::vector<iovec>& iov) {
 
 inline
 future<size_t>
-reactor::write_some(pollable_fd& fd, const void* buffer, size_t len) {
+reactor::write_some(pollable_fd_state& fd, const void* buffer, size_t len) {
     promise<size_t> pr;
     auto fut = pr.get_future();
     epoll_add_out(fd, make_task([pr = std::move(pr), sfd = fd.fd, buffer, len] () mutable {
@@ -478,7 +489,7 @@ reactor::write_some(pollable_fd& fd, const void* buffer, size_t len) {
 
 inline
 void
-reactor::write_all_part(pollable_fd& fd, const void* buffer, size_t len,
+reactor::write_all_part(pollable_fd_state& fd, const void* buffer, size_t len,
         promise<size_t> result, size_t completed) {
     if (completed == len) {
         result.set_value(completed);
@@ -492,7 +503,7 @@ reactor::write_all_part(pollable_fd& fd, const void* buffer, size_t len,
 
 inline
 future<size_t>
-reactor::write_all(pollable_fd& fd, const void* buffer, size_t len) {
+reactor::write_all(pollable_fd_state& fd, const void* buffer, size_t len) {
     assert(len);
     promise<size_t> pr;
     auto fut = pr.get_future();
