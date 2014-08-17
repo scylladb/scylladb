@@ -138,7 +138,7 @@ struct future_state {
     void set_exception(std::exception_ptr ex) {
         assert(_state == state::future);
         _state = state::exception;
-        new (&_u.ex) std::exception(ex);
+        new (&_u.ex) std::exception_ptr(ex);
         make_ready();
     }
     T get() {
