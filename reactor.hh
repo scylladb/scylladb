@@ -159,6 +159,68 @@ struct future_state {
     }
 };
 
+template <>
+struct future_state<void> {
+    promise<void>* _promise = nullptr;
+    future<void>* _future = nullptr;
+    std::unique_ptr<task> _task;
+    enum class state {
+         invalid,
+         future,
+         result,
+         exception,
+    } _state = state::future;
+    union any {
+        any() {}
+        ~any() {}
+        std::exception_ptr ex;
+    } _u;
+    ~future_state() noexcept {
+        switch (_state) {
+        case state::future:
+            break;
+        case state::result:
+            break;
+        case state::exception:
+            _u.ex.~exception_ptr();
+            break;
+        default:
+            abort();
+        }
+    }
+    bool available() const { return _state == state::result || _state == state::exception; }
+    bool has_promise() const { return _promise; }
+    bool has_future() const { return _future; }
+    void wait();
+    void make_ready();
+    void set() {
+        assert(_state == state::future);
+        _state = state::result;
+        make_ready();
+    }
+    void set_exception(std::exception_ptr ex) {
+        assert(_state == state::future);
+        _state = state::exception;
+        new (&_u.ex) std::exception_ptr(ex);
+        make_ready();
+    }
+    void get() {
+        while (_state == state::future) {
+            abort();
+        }
+        if (_state == state::exception) {
+            std::rethrow_exception(_u.ex);
+        }
+    }
+    template <typename Func>
+    void schedule(Func&& func) {
+        _task = make_task(std::forward<Func>(func));
+        if (available()) {
+            make_ready();
+        }
+    }
+};
+
 template <typename T>
 class promise {
     future_state<T>* _state;
@@ -179,6 +241,27 @@ public:
     future<T> get_future();
     void set_value(const T& result) { _state->set(result); }
     void set_value(T&& result)  { _state->set(std::move(result)); }
+};
+
+template <>
+class promise<void> {
+    future_state<void>* _state;
+public:
+    promise() : _state(new future_state<void>()) { _state->_promise = this; }
+    promise(promise&& x) : _state(std::move(x._state)) { x._state = nullptr; }
+    promise(const promise&) = delete;
+    ~promise() {
+        if (_state) {
+            _state->_promise = nullptr;
+            if (!_state->has_future()) {
+                delete _state;
+            }
+        }
+    }
+    promise& operator=(promise&&);
+    void operator=(const promise&) = delete;
+    future<void> get_future();
+    void set_value() { _state->set(); }
 };
 
 template <typename T> struct is_future : std::false_type {};
@@ -242,6 +325,69 @@ public:
     }
 
     friend class promise<T>;
+};
+
+template <>
+class future<void> {
+    future_state<void>* _state;
+private:
+    future(future_state<void>* state) : _state(state) { _state->_future = this; }
+public:
+    using value_type = void;
+    future(future&& x) : _state(x._state) { x._state = nullptr; }
+    future(const future&) = delete;
+    future& operator=(future&& x);
+    void operator=(const future&) = delete;
+    ~future() {
+        if (_state) {
+            _state->_future = nullptr;
+            if (!_state->has_promise()) {
+                delete _state;
+            }
+        }
+    }
+    void get() {
+    }
+
+    template <typename Func, typename Enable>
+    void then(Func, Enable);
+
+    template <typename Func>
+    void then(Func&& func,
+            std::enable_if_t<std::is_same<std::result_of_t<Func()>, void>::value, void*> = nullptr) {
+        auto state = _state;
+        if (state->available()) {
+            _state->get();
+            return func();
+        }
+        state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
+            fut.get();
+            func();
+        });
+    }
+
+    template <typename Func>
+    std::result_of_t<Func()>
+    then(Func&& func,
+            std::enable_if_t<is_future<std::result_of_t<Func()>>::value, void*> = nullptr) {
+        auto state = _state;
+        if (state->available()) {
+            _state->get();
+            return func();
+        }
+        using U = typename std::result_of_t<Func()>::value_type;
+        promise<U> pr;
+        auto next_fut = pr.get_future();
+        state->schedule([fut = std::move(*this), func = std::forward<Func>(func), pr = std::move(pr)] () mutable {
+            fut.get();
+            func().then([pr = std::move(pr)] (U next) mutable {
+                pr.set_value(std::move(next));
+            });
+        });
+        return std::move(next_fut);
+    }
+
+    friend class promise<void>;
 };
 
 template <typename T>
