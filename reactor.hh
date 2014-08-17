@@ -175,7 +175,7 @@ public:
         }
     }
     promise& operator=(promise&&);
-    void operator=(const T&) = delete;
+    void operator=(const promise&) = delete;
     future<T> get_future();
     void set_value(const T& result) { _state->set(result); }
     void set_value(T&& result)  { _state->set(std::move(result)); }
