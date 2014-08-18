@@ -23,9 +23,7 @@ future<void> reactor::get_epoll_future(pollable_fd_state& pfd,
         promise<void> pollable_fd_state::*pr, int event) {
     if (pfd.events_known & event) {
         pfd.events_known &= ~event;
-        promise<void> pr;
-        pr.set_value();
-        return pr.get_future();
+        return make_ready_future();
     }
     pfd.events_requested |= event;
     if (!(pfd.events_epoll & event)) {

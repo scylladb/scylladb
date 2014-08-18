@@ -147,12 +147,11 @@ public:
             });
         }
         future<size_t> write_response_headers(std::unordered_map<sstring, sstring>::iterator hi) {
+            if (hi == _resp->_headers.end()) {
+                return make_ready_future<size_t>(0);
+            }
             promise<size_t> pr;
             auto fut = pr.get_future();
-            if (hi == _resp->_headers.end()) {
-                pr.set_value(0);
-                return fut;
-            }
             _write_buf.write(hi->first.begin(), hi->first.size()).then(
                     [hi, this, pr = std::move(pr)] (size_t done) mutable {
                 return _write_buf.write(": ", 2);

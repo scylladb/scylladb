@@ -52,6 +52,11 @@ class promise;
 template <class T>
 class future;
 
+template <typename T>
+future<T> make_ready_future(T&& value);
+
+future<void> make_ready_future();
+
 class task {
 public:
     virtual ~task() {}
@@ -157,6 +162,7 @@ struct future_state {
             make_ready();
         }
     }
+    friend future<T> make_ready_future<T>(T&& value);
 };
 
 template <>
@@ -219,6 +225,7 @@ struct future_state<void> {
             make_ready();
         }
     }
+    friend future<void> make_ready_future();
 };
 
 template <typename T>
@@ -335,6 +342,7 @@ public:
     }
 
     friend class promise<T>;
+    friend future<T> make_ready_future<T>(T&& value);
 };
 
 template <>
@@ -398,6 +406,7 @@ public:
     }
 
     friend class promise<void>;
+    friend future<void> make_ready_future();
 };
 
 template <typename T>
@@ -415,6 +424,21 @@ promise<void>::get_future()
 {
     assert(!_state->_future);
     return future<void>(_state);
+}
+
+template <typename T>
+inline
+future<T> make_ready_future(T&& value) {
+    auto s = new future_state<T>();
+    s->set(std::move(value));
+    return future<T>(s);
+}
+
+inline
+future<void> make_ready_future() {
+    auto s = new future_state<void>();
+    s->set();
+    return future<void>(s);
 }
 
 using accept_result = std::tuple<pollable_fd, socket_address>;
@@ -850,17 +874,16 @@ output_stream_buffer<CharType>::write(const char_type* buf, size_t n) {
 template <typename CharType>
 future<bool>
 output_stream_buffer<CharType>::flush() {
+    if (!_end) {
+        return make_ready_future(true);
+    }
     promise<bool> pr;
     auto fut = pr.get_future();
-    if (!_end) {
+    _fd.write_all(_buf.get(), _end).then(
+            [this, pr = std::move(pr)] (size_t done) mutable {
+        _end = 0;
         pr.set_value(true);
-    } else {
-        _fd.write_all(_buf.get(), _end).then(
-                [this, pr = std::move(pr)] (size_t done) mutable {
-            _end = 0;
-            pr.set_value(true);
-        });
-    }
+    });
     return fut;
 }
 
