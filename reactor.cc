@@ -21,14 +21,23 @@ reactor::~reactor() {
 
 future<void> reactor::get_epoll_future(pollable_fd_state& pfd,
         promise<void> pollable_fd_state::*pr, int event) {
-    auto ctl = pfd.events ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
-    pfd.events |= event;
+    if (pfd.events_known & event) {
+        pfd.events_known &= ~event;
+        promise<void> pr;
+        pr.set_value();
+        return pr.get_future();
+    }
+    pfd.events_requested |= event;
+    if (!(pfd.events_epoll & event)) {
+        auto ctl = pfd.events_epoll ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
+        pfd.events_epoll |= event;
+        ::epoll_event eevt;
+        eevt.events = pfd.events_epoll;
+        eevt.data.ptr = &pfd;
+        int r = ::epoll_ctl(_epollfd, ctl, pfd.fd, &eevt);
+        assert(r == 0);
+    }
     pfd.*pr = promise<void>();
-    ::epoll_event eevt;
-    eevt.events = pfd.events;
-    eevt.data.ptr = &pfd;
-    int r = ::epoll_ctl(_epollfd, ctl, pfd.fd, &eevt);
-    assert(r == 0);
     return (pfd.*pr).get_future();
 }
 
@@ -41,7 +50,7 @@ future<void> reactor::writeable(pollable_fd_state& fd) {
 }
 
 void reactor::forget(pollable_fd_state& fd) {
-    if (fd.events) {
+    if (fd.events_epoll) {
         ::epoll_ctl(_epollfd, EPOLL_CTL_DEL, fd.fd, nullptr);
     }
 }
@@ -77,21 +86,28 @@ void reactor::run() {
         for (int i = 0; i < nr; ++i) {
             auto& evt = eevt[i];
             auto pfd = reinterpret_cast<pollable_fd_state*>(evt.data.ptr);
-            auto events = evt.events;
+            auto events = evt.events & (EPOLLIN | EPOLLOUT);
             std::unique_ptr<task> t_in, t_out;
-            if (events & EPOLLIN) {
-                pfd->events &= ~EPOLLIN;
+            pfd->events_known |= events;
+            auto events_to_remove = events & ~pfd->events_requested;
+            if (pfd->events_requested & events & EPOLLIN) {
+                pfd->events_requested &= ~EPOLLIN;
+                pfd->events_known &= ~EPOLLIN;
                 pfd->pollin.set_value();
                 pfd->pollin = promise<void>();
             }
-            if (events & EPOLLOUT) {
-                pfd->events &= ~EPOLLOUT;
+            if (pfd->events_requested & events & EPOLLOUT) {
+                pfd->events_requested &= ~EPOLLOUT;
+                pfd->events_known &= ~EPOLLOUT;
                 pfd->pollout.set_value();
                 pfd->pollout = promise<void>();
             }
-            evt.events = pfd->events;
-            auto op = evt.events ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
-            ::epoll_ctl(_epollfd, op, pfd->fd, &evt);
+            if (events_to_remove) {
+                pfd->events_epoll &= ~events_to_remove;
+                evt.events = pfd->events_epoll;
+                auto op = evt.events ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+                ::epoll_ctl(_epollfd, op, pfd->fd, &evt);
+            }
         }
     }
 }

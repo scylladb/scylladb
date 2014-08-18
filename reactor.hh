@@ -471,7 +471,9 @@ public:
     pollable_fd_state(const pollable_fd_state&) = delete;
     void operator=(const pollable_fd_state&) = delete;
     int fd;
-    int events = 0;
+    int events_requested = 0; // wanted by pollin/pollout promises
+    int events_epoll = 0;     // installed in epoll
+    int events_known = 0;     // returned from epoll
     promise<void> pollin;
     promise<void> pollout;
     friend class reactor;
