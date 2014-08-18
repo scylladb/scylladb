@@ -409,6 +409,14 @@ promise<T>::get_future()
     return future<T>(_state);
 }
 
+inline
+future<void>
+promise<void>::get_future()
+{
+    assert(!_state->_future);
+    return future<void>(_state);
+}
+
 using accept_result = std::tuple<pollable_fd, socket_address>;
 
 struct listen_options {
@@ -815,7 +823,12 @@ void future_state<T>::make_ready() {
     }
 }
 
-
+inline
+void future_state<void>::make_ready() {
+    if (_task) {
+        the_reactor.add_task(std::move(_task));
+    }
+}
 
 #if 0
 future<temporary_buffer<CharType>> read_until(size_t limit, const CharType* eol, size_t eol_len);
