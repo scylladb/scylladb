@@ -430,6 +430,7 @@ public:
     std::vector<std::unique_ptr<task>> _pending_tasks;
 private:
     future<void> get_epoll_future(pollable_fd_state& fd, promise<void> pollable_fd_state::* pr, int event);
+    void complete_epoll_event(pollable_fd_state& fd, promise<void> pollable_fd_state::* pr, int events, int event);
     future<void> readable(pollable_fd_state& fd);
     future<void> writeable(pollable_fd_state& fd);
     void forget(pollable_fd_state& fd);

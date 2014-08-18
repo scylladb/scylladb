@@ -69,6 +69,16 @@ reactor::listen(socket_address sa, listen_options opts) {
     return pollable_fd(fd);
 }
 
+void reactor::complete_epoll_event(pollable_fd_state& pfd, promise<void> pollable_fd_state::*pr,
+        int events, int event) {
+    if (pfd.events_requested & events & event) {
+        pfd.events_requested &= ~EPOLLIN;
+        pfd.events_known &= ~EPOLLIN;
+        (pfd.*pr).set_value();
+        pfd.*pr = promise<void>();
+    }
+}
+
 void reactor::run() {
     std::vector<std::unique_ptr<task>> current_tasks;
     while (true) {
@@ -90,18 +100,8 @@ void reactor::run() {
             std::unique_ptr<task> t_in, t_out;
             pfd->events_known |= events;
             auto events_to_remove = events & ~pfd->events_requested;
-            if (pfd->events_requested & events & EPOLLIN) {
-                pfd->events_requested &= ~EPOLLIN;
-                pfd->events_known &= ~EPOLLIN;
-                pfd->pollin.set_value();
-                pfd->pollin = promise<void>();
-            }
-            if (pfd->events_requested & events & EPOLLOUT) {
-                pfd->events_requested &= ~EPOLLOUT;
-                pfd->events_known &= ~EPOLLOUT;
-                pfd->pollout.set_value();
-                pfd->pollout = promise<void>();
-            }
+            complete_epoll_event(*pfd, &pollable_fd_state::pollin, events, EPOLLIN);
+            complete_epoll_event(*pfd, &pollable_fd_state::pollout, events, EPOLLOUT);
             if (events_to_remove) {
                 pfd->events_epoll &= ~events_to_remove;
                 evt.events = pfd->events_epoll;
