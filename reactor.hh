@@ -429,8 +429,8 @@ public:
     io_context_t _io_context;
     std::vector<std::unique_ptr<task>> _pending_tasks;
 private:
-    void epoll_add_in(pollable_fd_state& fd, std::unique_ptr<task> t);
-    void epoll_add_out(pollable_fd_state& fd, std::unique_ptr<task> t);
+    future<void> readable(pollable_fd_state& fd);
+    future<void> writeable(pollable_fd_state& fd);
     void forget(pollable_fd_state& fd);
     void abort_on_error(int ret);
 public:
@@ -471,8 +471,8 @@ public:
     void operator=(const pollable_fd_state&) = delete;
     int fd;
     int events = 0;
-    std::unique_ptr<task> pollin;
-    std::unique_ptr<task> pollout;
+    promise<void> pollin;
+    promise<void> pollout;
     friend class reactor;
     friend class pollable_fd;
 };
@@ -599,13 +599,13 @@ future<accept_result>
 reactor::accept(pollable_fd_state& listenfd) {
     promise<accept_result> pr;
     future<accept_result> fut = pr.get_future();
-    epoll_add_in(listenfd, make_task([this, pr = std::move(pr), lfd = listenfd.fd] () mutable {
+    readable(listenfd).then([this, pr = std::move(pr), lfd = listenfd.fd] () mutable {
         socket_address sa;
         socklen_t sl = sizeof(&sa.u.sas);
         int fd = ::accept4(lfd, &sa.u.sa, &sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
         assert(fd != -1);
         pr.set_value(accept_result{pollable_fd(fd), sa});
-    }));
+    });
     return fut;
 }
 
@@ -614,11 +614,11 @@ future<size_t>
 reactor::read_some(pollable_fd_state& fd, void* buffer, size_t len) {
     promise<size_t> pr;
     auto fut = pr.get_future();
-    epoll_add_in(fd, make_task([pr = std::move(pr), rfd = fd.fd, buffer, len] () mutable {
+    readable(fd).then([pr = std::move(pr), rfd = fd.fd, buffer, len] () mutable {
         ssize_t r = ::recv(rfd, buffer, len, 0);
         assert(r != -1);
         pr.set_value(r);
-    }));
+    });
     return fut;
 }
 
@@ -627,14 +627,14 @@ future<size_t>
 reactor::read_some(pollable_fd_state& fd, const std::vector<iovec>& iov) {
     promise<size_t> pr;
     auto fut = pr.get_future();
-    epoll_add_in(fd, make_task([pr = std::move(pr), rfd = fd.fd, iov = iov] () mutable {
+    readable(fd).then([pr = std::move(pr), rfd = fd.fd, iov = iov] () mutable {
         ::msghdr mh = {};
         mh.msg_iov = &iov[0];
         mh.msg_iovlen = iov.size();
         ssize_t r = ::recvmsg(rfd, &mh, 0);
         assert(r != -1);
         pr.set_value(r);
-    }));
+    });
     return fut;
 }
 
@@ -643,11 +643,11 @@ future<size_t>
 reactor::write_some(pollable_fd_state& fd, const void* buffer, size_t len) {
     promise<size_t> pr;
     auto fut = pr.get_future();
-    epoll_add_out(fd, make_task([pr = std::move(pr), sfd = fd.fd, buffer, len] () mutable {
+    writeable(fd).then([pr = std::move(pr), sfd = fd.fd, buffer, len] () mutable {
         ssize_t r = ::send(sfd, buffer, len, 0);
         assert(r != -1);
         pr.set_value(r);
-    }));
+    });
     return fut;
 }
 
