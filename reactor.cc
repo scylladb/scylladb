@@ -19,28 +19,25 @@ reactor::~reactor() {
     ::close(_epollfd);
 }
 
-future<void> reactor::readable(pollable_fd_state& pfd) {
+future<void> reactor::get_epoll_future(pollable_fd_state& pfd,
+        promise<void> pollable_fd_state::*pr, int event) {
     auto ctl = pfd.events ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
-    pfd.events |= EPOLLIN;
-    pfd.pollin = promise<void>();
+    pfd.events |= event;
+    pfd.*pr = promise<void>();
     ::epoll_event eevt;
     eevt.events = pfd.events;
     eevt.data.ptr = &pfd;
     int r = ::epoll_ctl(_epollfd, ctl, pfd.fd, &eevt);
     assert(r == 0);
-    return pfd.pollin.get_future();
+    return (pfd.*pr).get_future();
 }
 
-future<void> reactor::writeable(pollable_fd_state& pfd) {
-    auto ctl = pfd.events ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
-    pfd.events |= EPOLLOUT;
-    pfd.pollout = promise<void>();
-    ::epoll_event eevt;
-    eevt.events = pfd.events;
-    eevt.data.ptr = &pfd;
-    int r = ::epoll_ctl(_epollfd, ctl, pfd.fd, &eevt);
-    assert(r == 0);
-    return pfd.pollout.get_future();
+future<void> reactor::readable(pollable_fd_state& fd) {
+    return get_epoll_future(fd, &pollable_fd_state::pollin, EPOLLIN);
+}
+
+future<void> reactor::writeable(pollable_fd_state& fd) {
+    return get_epoll_future(fd, &pollable_fd_state::pollout, EPOLLOUT);
 }
 
 void reactor::forget(pollable_fd_state& fd) {
