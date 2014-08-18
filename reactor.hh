@@ -236,7 +236,12 @@ public:
             }
         }
     }
-    promise& operator=(promise&&);
+    promise& operator=(promise&& x) {
+        this->~promise();
+        _state = x._state;
+        x._state = nullptr;
+        return *this;
+    }
     void operator=(const promise&) = delete;
     future<T> get_future();
     void set_value(const T& result) { _state->set(result); }
@@ -258,7 +263,12 @@ public:
             }
         }
     }
-    promise& operator=(promise&&);
+    promise& operator=(promise&& x) {
+        this->~promise();
+        _state = x._state;
+        x._state = nullptr;
+        return *this;
+    }
     void operator=(const promise&) = delete;
     future<void> get_future();
     void set_value() { _state->set(); }
