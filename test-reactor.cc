@@ -29,13 +29,13 @@ struct test {
             });
         }
     };
-    void new_connection(accept_result&& accepted) {
-        auto c = new connection(std::move(std::get<0>(accepted)));
+    void new_connection(pollable_fd fd, socket_address sa) {
+        auto c = new connection(std::move(fd));
         c->copy_data();
     }
     void start_accept() {
-        listener.accept().then([this] (accept_result&& ar) {
-            new_connection(std::move(ar));
+        listener.accept().then([this] (pollable_fd fd, socket_address sa) {
+            new_connection(std::move(fd), std::move(sa));
             start_accept();
         });
     }

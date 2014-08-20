@@ -275,8 +275,6 @@ future<T...> make_ready_future(T&&... value) {
     return future<T...>(s);
 }
 
-using accept_result = std::tuple<pollable_fd, socket_address>;
-
 struct listen_options {
     bool reuse_address = false;
 };
@@ -301,7 +299,7 @@ public:
 
     pollable_fd listen(socket_address sa, listen_options opts = {});
 
-    future<accept_result> accept(pollable_fd_state& listen_fd);
+    future<pollable_fd, socket_address> accept(pollable_fd_state& listen_fd);
 
     future<size_t> read_some(pollable_fd_state& fd, void* buffer, size_t size);
     future<size_t> read_some(pollable_fd_state& fd, const std::vector<iovec>& iov);
@@ -359,7 +357,7 @@ public:
     future<size_t> read_some(const std::vector<iovec>& iov) { return the_reactor.read_some(*_s, iov); }
     future<size_t> write_all(const char* buffer, size_t size) { return the_reactor.write_all(*_s, buffer, size); }
     future<size_t> write_all(const uint8_t* buffer, size_t size) { return the_reactor.write_all(*_s, buffer, size); }
-    future<accept_result> accept() { return the_reactor.accept(*_s); }
+    future<pollable_fd, socket_address> accept() { return the_reactor.accept(*_s); }
     friend class reactor;
 };
 
@@ -475,16 +473,16 @@ size_t iovec_len(const std::vector<iovec>& iov)
 }
 
 inline
-future<accept_result>
+future<pollable_fd, socket_address>
 reactor::accept(pollable_fd_state& listenfd) {
-    promise<accept_result> pr;
-    future<accept_result> fut = pr.get_future();
+    promise<pollable_fd, socket_address> pr;
+    future<pollable_fd, socket_address> fut = pr.get_future();
     readable(listenfd).then([this, pr = std::move(pr), lfd = listenfd.fd] () mutable {
         socket_address sa;
         socklen_t sl = sizeof(&sa.u.sas);
         int fd = ::accept4(lfd, &sa.u.sa, &sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
         assert(fd != -1);
-        pr.set_value(accept_result{pollable_fd(fd, pollable_fd::speculation(EPOLLOUT)), sa});
+        pr.set_value(pollable_fd(fd, pollable_fd::speculation(EPOLLOUT)), sa);
     });
     return fut;
 }

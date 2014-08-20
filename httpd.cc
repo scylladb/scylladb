@@ -31,9 +31,7 @@ public:
         do_accepts(_listeners.size() - 1);
     }
     void do_accepts(int which) {
-        _listeners[which].accept().then([this, which] (accept_result&& ar) mutable {
-            auto fd = std::move(std::get<0>(ar));
-            auto addr = std::get<1>(ar);
+        _listeners[which].accept().then([this, which] (pollable_fd fd, socket_address addr) mutable {
             (new connection(*this, std::move(fd), addr))->read();
             do_accepts(which);
         });
