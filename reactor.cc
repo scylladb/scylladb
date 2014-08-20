@@ -19,8 +19,8 @@ reactor::~reactor() {
     ::close(_epollfd);
 }
 
-future<void> reactor::get_epoll_future(pollable_fd_state& pfd,
-        promise<void> pollable_fd_state::*pr, int event) {
+future<> reactor::get_epoll_future(pollable_fd_state& pfd,
+        promise<> pollable_fd_state::*pr, int event) {
     if (pfd.events_known & event) {
         pfd.events_known &= ~event;
         return make_ready_future();
@@ -35,15 +35,15 @@ future<void> reactor::get_epoll_future(pollable_fd_state& pfd,
         int r = ::epoll_ctl(_epollfd, ctl, pfd.fd, &eevt);
         assert(r == 0);
     }
-    pfd.*pr = promise<void>();
+    pfd.*pr = promise<>();
     return (pfd.*pr).get_future();
 }
 
-future<void> reactor::readable(pollable_fd_state& fd) {
+future<> reactor::readable(pollable_fd_state& fd) {
     return get_epoll_future(fd, &pollable_fd_state::pollin, EPOLLIN);
 }
 
-future<void> reactor::writeable(pollable_fd_state& fd) {
+future<> reactor::writeable(pollable_fd_state& fd) {
     return get_epoll_future(fd, &pollable_fd_state::pollout, EPOLLOUT);
 }
 
@@ -67,13 +67,13 @@ reactor::listen(socket_address sa, listen_options opts) {
     return pollable_fd(fd);
 }
 
-void reactor::complete_epoll_event(pollable_fd_state& pfd, promise<void> pollable_fd_state::*pr,
+void reactor::complete_epoll_event(pollable_fd_state& pfd, promise<> pollable_fd_state::*pr,
         int events, int event) {
     if (pfd.events_requested & events & event) {
         pfd.events_requested &= ~EPOLLIN;
         pfd.events_known &= ~EPOLLIN;
         (pfd.*pr).set_value();
-        pfd.*pr = promise<void>();
+        pfd.*pr = promise<>();
     }
 }
 

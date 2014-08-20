@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <vector>
 #include <algorithm>
+#include "apply.hh"
 
 class socket_address;
 class reactor;
@@ -46,16 +47,14 @@ private:
     friend class reactor;
 };
 
-template <class T>
+template <class... T>
 class promise;
 
-template <class T>
+template <class... T>
 class future;
 
-template <typename T>
-future<T> make_ready_future(T&& value);
-
-future<void> make_ready_future();
+template <typename... T>
+future<T...> make_ready_future(T&&... value);
 
 class task {
 public:
@@ -85,10 +84,10 @@ make_task(Func&& func) {
 }
 
 
-template <typename T>
+template <typename... T>
 struct future_state {
-    promise<T>* _promise = nullptr;
-    future<T>* _future = nullptr;
+    promise<T...>* _promise = nullptr;
+    future<T...>* _future = nullptr;
     std::unique_ptr<task> _task;
     enum class state {
 	 invalid,
@@ -99,7 +98,7 @@ struct future_state {
     union any {
         any() {}
         ~any() {}
-        T value;
+        std::tuple<T...> value;
         std::exception_ptr ex;
     } _u;
     ~future_state() noexcept {
@@ -107,7 +106,7 @@ struct future_state {
         case state::future:
             break;
         case state::result:
-            _u.value.~T();
+            _u.value.~tuple();
             break;
         case state::exception:
             _u.ex.~exception_ptr();
@@ -121,23 +120,23 @@ struct future_state {
     bool has_future() const { return _future; }
     void wait();
     void make_ready();
-    void set(const T& value) {
+    void set(const std::tuple<T...>& value) {
         assert(_state == state::future);
         _state = state::result;
-        new (&_u.value) T(value);
+        new (&_u.value) std::tuple<T...>(value);
         make_ready();
     }
-    void set(T&& value) {
+    void set(std::tuple<T...>&& value) {
         assert(_state == state::future);
         _state = state::result;
-        new (&_u.value) T(std::move(value));
+        new (&_u.value) std::tuple<T...>(std::move(value));
         make_ready();
     }
     template <typename... A>
-    void set(A... a) {
+    void set(A&&... a) {
         assert(_state == state::future);
         _state = state::result;
-        new (&_u.value) T(std::forward(a)...);
+        new (&_u.value) std::tuple<T...>(std::forward<A>(a)...);
         make_ready();
     }
     void set_exception(std::exception_ptr ex) {
@@ -146,7 +145,7 @@ struct future_state {
         new (&_u.ex) std::exception_ptr(ex);
         make_ready();
     }
-    T get() {
+    std::tuple<T...> get() {
         while (_state == state::future) {
             abort();
         }
@@ -162,77 +161,14 @@ struct future_state {
             make_ready();
         }
     }
-    friend future<T> make_ready_future<T>(T&& value);
+    friend future<T...> make_ready_future<T...>(T&&... value);
 };
 
-template <>
-struct future_state<void> {
-    promise<void>* _promise = nullptr;
-    future<void>* _future = nullptr;
-    std::unique_ptr<task> _task;
-    enum class state {
-         invalid,
-         future,
-         result,
-         exception,
-    } _state = state::future;
-    union any {
-        any() {}
-        ~any() {}
-        std::exception_ptr ex;
-    } _u;
-    ~future_state() noexcept {
-        switch (_state) {
-        case state::future:
-            break;
-        case state::result:
-            break;
-        case state::exception:
-            _u.ex.~exception_ptr();
-            break;
-        default:
-            abort();
-        }
-    }
-    bool available() const { return _state == state::result || _state == state::exception; }
-    bool has_promise() const { return _promise; }
-    bool has_future() const { return _future; }
-    void wait();
-    void make_ready();
-    void set() {
-        assert(_state == state::future);
-        _state = state::result;
-        make_ready();
-    }
-    void set_exception(std::exception_ptr ex) {
-        assert(_state == state::future);
-        _state = state::exception;
-        new (&_u.ex) std::exception_ptr(ex);
-        make_ready();
-    }
-    void get() {
-        while (_state == state::future) {
-            abort();
-        }
-        if (_state == state::exception) {
-            std::rethrow_exception(_u.ex);
-        }
-    }
-    template <typename Func>
-    void schedule(Func&& func) {
-        _task = make_task(std::forward<Func>(func));
-        if (available()) {
-            make_ready();
-        }
-    }
-    friend future<void> make_ready_future();
-};
-
-template <typename T>
+template <typename... T>
 class promise {
-    future_state<T>* _state;
+    future_state<T...>* _state;
 public:
-    promise() : _state(new future_state<T>()) { _state->_promise = this; }
+    promise() : _state(new future_state<T...>()) { _state->_promise = this; }
     promise(promise&& x) : _state(std::move(x._state)) { x._state = nullptr; }
     promise(const promise&) = delete;
     ~promise() {
@@ -250,47 +186,24 @@ public:
         return *this;
     }
     void operator=(const promise&) = delete;
-    future<T> get_future();
-    void set_value(const T& result) { _state->set(result); }
-    void set_value(T&& result)  { _state->set(std::move(result)); }
-};
-
-template <>
-class promise<void> {
-    future_state<void>* _state;
-public:
-    promise() : _state(new future_state<void>()) { _state->_promise = this; }
-    promise(promise&& x) : _state(std::move(x._state)) { x._state = nullptr; }
-    promise(const promise&) = delete;
-    ~promise() {
-        if (_state) {
-            _state->_promise = nullptr;
-            if (!_state->has_future()) {
-                delete _state;
-            }
-        }
-    }
-    promise& operator=(promise&& x) {
-        this->~promise();
-        _state = x._state;
-        x._state = nullptr;
-        return *this;
-    }
-    void operator=(const promise&) = delete;
-    future<void> get_future();
-    void set_value() { _state->set(); }
+    future<T...> get_future();
+    void set_value(const std::tuple<T...>& result) { _state->set(result); }
+    void set_value(std::tuple<T...>&& result)  { _state->set(std::move(result)); }
+    template <typename... A>
+    void set_value(A&&... a) { _state->set(std::forward<A>(a)...); }
 };
 
 template <typename T> struct is_future : std::false_type {};
 template <typename T> struct is_future<future<T>> : std::true_type {};
 
-template <typename T>
+template <typename... T>
 class future {
-    future_state<T>* _state;
+    future_state<T...>* _state;
 private:
-    future(future_state<T>* state) : _state(state) { _state->_future = this; }
+    future(future_state<T...>* state) : _state(state) { _state->_future = this; }
 public:
-    using value_type = T;
+    using value_type = std::tuple<T...>;
+    using promise_type = promise<T...>;
     future(future&& x) : _state(x._state) { x._state = nullptr; }
     future(const future&) = delete;
     future& operator=(future&& x);
@@ -303,7 +216,7 @@ public:
             }
         }
     }
-    T get() {
+    std::tuple<T...> get() {
         return _state->get();
     }
 
@@ -312,133 +225,54 @@ public:
 
     template <typename Func>
     void then(Func&& func,
-            std::enable_if_t<std::is_same<std::result_of_t<Func(T&&)>, void>::value, void*> = nullptr) {
+            std::enable_if_t<std::is_same<std::result_of_t<Func(T&&...)>, void>::value, void*> = nullptr) {
         auto state = _state;
         if (state->available()) {
-            return func(std::move(_state->get()));
+            return apply(std::move(func), std::move(_state->get()));
         }
         state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
-            func(fut.get());
+            apply(std::move(func), fut.get());
         });
     }
 
     template <typename Func>
-    std::result_of_t<Func(T&&)>
+    std::result_of_t<Func(T&&...)>
     then(Func&& func,
-            std::enable_if_t<is_future<std::result_of_t<Func(T&&)>>::value, void*> = nullptr) {
+            std::enable_if_t<is_future<std::result_of_t<Func(T&&...)>>::value, void*> = nullptr) {
         auto state = _state;
         if (state->available()) {
-            return func(std::move(_state->get()));
+            return apply(std::move(func), std::move(_state->get()));
         }
-        using U = typename std::result_of_t<Func(T&&)>::value_type;
-        promise<U> pr;
+        using P = typename std::result_of_t<Func(T&&...)>::promise_type;
+        P pr;
         auto next_fut = pr.get_future();
         state->schedule([fut = std::move(*this), func = std::forward<Func>(func), pr = std::move(pr)] () mutable {
-            func(fut.get()).then([pr = std::move(pr)] (U next) mutable {
-                pr.set_value(std::move(next));
+            apply(std::move(func), fut.get()).then([pr = std::move(pr)] (auto... next) mutable {
+                pr.set_value(std::move(next...));
             });
         });
         return next_fut;
     }
 
-    friend class promise<T>;
-    friend future<T> make_ready_future<T>(T&& value);
+    friend class promise<T...>;
+    friend future<T...> make_ready_future<T...>(T&&... value);
 };
 
-template <>
-class future<void> {
-    future_state<void>* _state;
-private:
-    future(future_state<void>* state) : _state(state) { _state->_future = this; }
-public:
-    using value_type = void;
-    future(future&& x) : _state(x._state) { x._state = nullptr; }
-    future(const future&) = delete;
-    future& operator=(future&& x);
-    void operator=(const future&) = delete;
-    ~future() {
-        if (_state) {
-            _state->_future = nullptr;
-            if (!_state->has_promise()) {
-                delete _state;
-            }
-        }
-    }
-    void get() {
-    }
-
-    template <typename Func, typename Enable>
-    void then(Func, Enable);
-
-    template <typename Func>
-    void then(Func&& func,
-            std::enable_if_t<std::is_same<std::result_of_t<Func()>, void>::value, void*> = nullptr) {
-        auto state = _state;
-        if (state->available()) {
-            _state->get();
-            return func();
-        }
-        state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
-            fut.get();
-            func();
-        });
-    }
-
-    template <typename Func>
-    std::result_of_t<Func()>
-    then(Func&& func,
-            std::enable_if_t<is_future<std::result_of_t<Func()>>::value, void*> = nullptr) {
-        auto state = _state;
-        if (state->available()) {
-            _state->get();
-            return func();
-        }
-        using U = typename std::result_of_t<Func()>::value_type;
-        promise<U> pr;
-        auto next_fut = pr.get_future();
-        state->schedule([fut = std::move(*this), func = std::forward<Func>(func), pr = std::move(pr)] () mutable {
-            fut.get();
-            func().then([pr = std::move(pr)] (U next) mutable {
-                pr.set_value(std::move(next));
-            });
-        });
-        return std::move(next_fut);
-    }
-
-    friend class promise<void>;
-    friend future<void> make_ready_future();
-};
-
-template <typename T>
+template <typename... T>
 inline
-future<T>
-promise<T>::get_future()
+future<T...>
+promise<T...>::get_future()
 {
     assert(!_state->_future);
-    return future<T>(_state);
+    return future<T...>(_state);
 }
 
+template <typename... T>
 inline
-future<void>
-promise<void>::get_future()
-{
-    assert(!_state->_future);
-    return future<void>(_state);
-}
-
-template <typename T>
-inline
-future<T> make_ready_future(T&& value) {
-    auto s = new future_state<T>();
-    s->set(std::move(value));
-    return future<T>(s);
-}
-
-inline
-future<void> make_ready_future() {
-    auto s = new future_state<void>();
-    s->set();
-    return future<void>(s);
+future<T...> make_ready_future(T&&... value) {
+    auto s = new future_state<T...>();
+    s->set(std::move(value)...);
+    return future<T...>(s);
 }
 
 using accept_result = std::tuple<pollable_fd, socket_address>;
@@ -453,10 +287,10 @@ public:
     io_context_t _io_context;
     std::vector<std::unique_ptr<task>> _pending_tasks;
 private:
-    future<void> get_epoll_future(pollable_fd_state& fd, promise<void> pollable_fd_state::* pr, int event);
-    void complete_epoll_event(pollable_fd_state& fd, promise<void> pollable_fd_state::* pr, int events, int event);
-    future<void> readable(pollable_fd_state& fd);
-    future<void> writeable(pollable_fd_state& fd);
+    future<> get_epoll_future(pollable_fd_state& fd, promise<> pollable_fd_state::* pr, int event);
+    void complete_epoll_event(pollable_fd_state& fd, promise<> pollable_fd_state::* pr, int events, int event);
+    future<> readable(pollable_fd_state& fd);
+    future<> writeable(pollable_fd_state& fd);
     void forget(pollable_fd_state& fd);
     void abort_on_error(int ret);
 public:
@@ -505,8 +339,8 @@ public:
     int events_requested = 0; // wanted by pollin/pollout promises
     int events_epoll = 0;     // installed in epoll
     int events_known = 0;     // returned from epoll
-    promise<void> pollin;
-    promise<void> pollout;
+    promise<> pollin;
+    promise<> pollout;
     friend class reactor;
     friend class pollable_fd;
 };
@@ -888,15 +722,8 @@ output_stream_buffer<CharType>::flush() {
 }
 
 
-template <typename T>
-void future_state<T>::make_ready() {
-    if (_task) {
-        the_reactor.add_task(std::move(_task));
-    }
-}
-
-inline
-void future_state<void>::make_ready() {
+template <typename... T>
+void future_state<T...>::make_ready() {
     if (_task) {
         the_reactor.add_task(std::move(_task));
     }
