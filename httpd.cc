@@ -6,20 +6,33 @@
 #include "sstring.hh"
 #include <iostream>
 #include <algorithm>
-#include <regex>
 #include <unordered_map>
 #include <queue>
+#include <bitset>
+#include <limits>
+#include <cctype>
 
-sstring to_sstring(const std::csub_match& sm) {
-    return sstring(sm.first, sm.second);
-}
+class char_filter {
+    using uchar = unsigned char;
+public:
+    template <typename Pred>
+    explicit char_filter(Pred pred) {
+        for (unsigned i = 0; i <= std::numeric_limits<uchar>::max(); ++i) {
+            _filter.set(i, pred(i));
+        }
+    }
+    bool operator()(char v) const { return _filter.test(uchar(v)); }
+private:
+    std::bitset<1 << std::numeric_limits<uchar>::digits> _filter;
+};
 
-static std::string tchar = "[-!#$%&'\\*\\+.^_`|~0-9A-Za-z]";
-static std::string token = tchar + "+";
-static constexpr auto re_opt = std::regex::ECMAScript | std::regex::optimize;
-static std::regex start_line_re { "([A-Z]+) (\\S+) HTTP/([0-9]\\.[0-9])\\r\\n", re_opt };
-static std::regex header_re { "(" + token + ")\\s*:\\s*(.*\\S)\\s*\\r\\n", re_opt };
-static std::regex header_cont_re { "\\s+(.*\\S)\\s*\\r\\n", re_opt };
+char_filter tchar([](char c) {
+    return std::isalnum(c) || std::string("-!#$%&'\\*\\+.^_`|~").find_first_of(c) != std::string::npos;
+});
+char_filter op_char([](char c) { return std::isupper(c); });
+char_filter sp_char([](char c) { return std::isspace(c); });
+char_filter nsp_char([](char c) { return !std::isspace(c); });
+char_filter digit_char([](char c) { return std::isdigit(c); });
 
 class http_server {
     std::vector<pollable_fd> _listeners;
@@ -71,14 +84,62 @@ public:
                     maybe_done();
                     return;
                 }
-                std::cmatch match;
-                if (!std::regex_match(start_line.begin(), start_line.end(), match, start_line_re)) {
+                _req = std::make_unique<request>();
+                size_t pos = 0;
+                size_t end = start_line.size();
+                while (pos < end && op_char(start_line[pos])) {
+                    ++pos;
+                }
+                if (pos == 0) {
                     return bad(std::move(_req));
                 }
-                _req = std::make_unique<request>();
-                _req->_method = to_sstring(match[1]);
-                _req->_url = to_sstring(match[2]);
-                _req->_version = to_sstring(match[3]);
+                _req->_method = sstring(start_line.begin(), pos);
+                if (pos == end || start_line[pos++] != ' ') {
+                    return bad(std::move(_req));
+                }
+                auto url = pos;
+                while (pos < end && nsp_char(start_line[pos])) {
+                    ++pos;
+                }
+                _req->_url = sstring(start_line.begin() + url, pos - url);
+                if (pos == end || start_line[pos++] != ' ') {
+                    return bad(std::move(_req));
+                }
+                if (pos == end || start_line[pos++] != 'H') {
+                    return bad(std::move(_req));
+                }
+                if (pos == end || start_line[pos++] != 'T') {
+                    return bad(std::move(_req));
+                }
+                if (pos == end || start_line[pos++] != 'T') {
+                    return bad(std::move(_req));
+                }
+                if (pos == end || start_line[pos++] != 'P') {
+                    return bad(std::move(_req));
+                }
+                if (pos == end || start_line[pos++] != '/') {
+                    return bad(std::move(_req));
+                }
+                auto ver = pos;
+                if (pos == end || !digit_char(start_line[pos++])) {
+                    return bad(std::move(_req));
+                }
+                if (pos == end || start_line[pos++] != '.') {
+                    return bad(std::move(_req));
+                }
+                if (pos == end || !digit_char(start_line[pos++])) {
+                    return bad(std::move(_req));
+                }
+                _req->_version = sstring(start_line.begin() + ver, pos - ver);
+                if (pos == end || start_line[pos++] != '\r') {
+                    return bad(std::move(_req));
+                }
+                if (pos == end || start_line[pos++] != '\n') {
+                    return bad(std::move(_req));
+                }
+                if (pos != end) {
+                    return bad(std::move(_req));
+                }
                 if (_req->_method != "GET") {
                     return bad(std::move(_req));
                 }
@@ -93,17 +154,43 @@ public:
                 read();
                 return;
             }
-            std::cmatch match;
-            if (std::regex_match(header.begin(), header.end(), match, header_re)) {
-                sstring name = to_sstring(match[1]);
-                sstring value = to_sstring(match[2]);
+            size_t pos = 0;
+            size_t end = header.size();
+            if (end < 2 || header[end-2] != '\r' || header[end-1] != '\n') {
+                return bad(std::move(_req));
+            }
+            while (tchar(header[pos])) {
+                ++pos;
+            }
+            if (pos) {
+                sstring name = sstring(header.begin(), pos);
+                while (pos != end && sp_char(header[pos])) {
+                    ++pos;
+                }
+                if (pos == end || header[pos++] != ':') {
+                    return bad(std::move(_req));
+                }
+                while (pos != end && sp_char(header[pos])) {
+                    ++pos;
+                }
+                while (pos != end && sp_char(header[end-1])) {
+                    --end;
+                }
+                sstring value = sstring(header.begin() + pos, end - pos);
                 _req->_headers[name] = std::move(value);
                 _last_header_name = std::move(name);
-            } else if (std::regex_match(header.begin(), header.end(), match, header_cont_re)) {
-                _req->_headers[_last_header_name] += " ";
-                _req->_headers[_last_header_name] += to_sstring(match[1]);
             } else {
-                return bad(std::move(_req));
+                while (sp_char(header[pos])) {
+                    ++pos;
+                }
+                while (pos != end && sp_char(header[end-1])) {
+                    --end;
+                }
+                if (!pos || end == pos) {
+                    return bad(std::move(_req));
+                }
+                _req->_headers[_last_header_name] += " ";
+                _req->_headers[_last_header_name] += sstring(header.begin() + pos, end - pos);
             }
             _read_buf.read_until(limit, '\n').then([this] (tmp_buf header) {
                 parse_header(std::move(header));
