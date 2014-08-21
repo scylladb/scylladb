@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <vector>
 #include <algorithm>
+#include <list>
 #include "apply.hh"
 
 class socket_address;
@@ -275,8 +276,49 @@ future<T...> make_ready_future(T&&... value) {
     return future<T...>(s);
 }
 
+struct free_deleter {
+    void operator()(void* p) { ::free(p); }
+};
+
+template <typename CharType>
+inline
+std::unique_ptr<CharType[], free_deleter> allocate_aligned_buffer(size_t size, size_t align) {
+    static_assert(sizeof(CharType) == 1, "must allocate byte type");
+    void* ret;
+    auto r = posix_memalign(&ret, align, size);
+    assert(r == 0);
+    return std::unique_ptr<CharType[], free_deleter>(reinterpret_cast<CharType*>(ret));
+}
+
 struct listen_options {
     bool reuse_address = false;
+};
+
+class semaphore {
+private:
+    size_t _count;
+    std::list<std::pair<promise<>, size_t>> _wait_list;
+public:
+    semaphore(size_t count = 1) : _count(count) {}
+    future<> wait(size_t nr = 1) {
+        if (_count >= nr && _wait_list.empty()) {
+            _count -= nr;
+            return make_ready_future<>();
+        }
+        promise<> pr;
+        auto fut = pr.get_future();
+        _wait_list.push_back({ std::move(pr), nr });
+        return fut;
+    }
+    void signal(size_t nr = 1) {
+        _count += nr;
+        while (!_wait_list.empty() && _wait_list.front().second <= _count) {
+            auto& x = _wait_list.front();
+            _count -= x.second;
+            x.first.set_value();
+            _wait_list.pop_front();
+        }
+    }
 };
 
 class pollable_fd_state {
