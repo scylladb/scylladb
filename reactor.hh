@@ -279,6 +279,28 @@ struct listen_options {
     bool reuse_address = false;
 };
 
+class pollable_fd_state {
+public:
+    struct speculation {
+        int events = 0;
+        explicit speculation(int epoll_events_guessed = 0) : events(epoll_events_guessed) {}
+    };
+    ~pollable_fd_state();
+    explicit pollable_fd_state(int fd, speculation speculate = speculation())
+        : fd(fd), events_known(speculate.events) {}
+    pollable_fd_state(const pollable_fd_state&) = delete;
+    void operator=(const pollable_fd_state&) = delete;
+    void speculate_epoll(int events) { events_known |= events; }
+    int fd;
+    int events_requested = 0; // wanted by pollin/pollout promises
+    int events_epoll = 0;     // installed in epoll
+    int events_known = 0;     // returned from epoll
+    promise<> pollin;
+    promise<> pollout;
+    friend class reactor;
+    friend class pollable_fd;
+};
+
 class reactor {
 public:
     int _epollfd;
@@ -321,27 +343,11 @@ private:
 
 extern reactor the_reactor;
 
-class pollable_fd_state {
-public:
-    struct speculation {
-        int events = 0;
-        explicit speculation(int epoll_events_guessed = 0) : events(epoll_events_guessed) {}
-    };
-    ~pollable_fd_state() { the_reactor.forget(*this); ::close(fd); }
-    explicit pollable_fd_state(int fd, speculation speculate = speculation())
-        : fd(fd), events_known(speculate.events) {}
-    pollable_fd_state(const pollable_fd_state&) = delete;
-    void operator=(const pollable_fd_state&) = delete;
-    void speculate_epoll(int events) { events_known |= events; }
-    int fd;
-    int events_requested = 0; // wanted by pollin/pollout promises
-    int events_epoll = 0;     // installed in epoll
-    int events_known = 0;     // returned from epoll
-    promise<> pollin;
-    promise<> pollout;
-    friend class reactor;
-    friend class pollable_fd;
-};
+inline
+pollable_fd_state::~pollable_fd_state() {
+    the_reactor.forget(*this);
+    ::close(fd);
+}
 
 class pollable_fd {
 public:
