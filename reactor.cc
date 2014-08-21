@@ -124,6 +124,55 @@ void reactor::process_io()
     });
 }
 
+future<size_t>
+reactor::write_dma(file& f, uint64_t pos, const void* buffer, size_t len) {
+    return submit_io([&f, pos, buffer, len] (iocb& io) {
+        io_prep_pwrite(&io, f._fd, const_cast<void*>(buffer), len, pos);
+    }).then([] (io_event ev) {
+        assert(ev.res >= 0);
+        return make_ready_future(size_t(ev.res));
+    });
+}
+
+future<size_t>
+reactor::write_dma(file& f, uint64_t pos, std::vector<iovec> iov) {
+    return submit_io([&f, pos, iov = std::move(iov)] (iocb& io) {
+        io_prep_pwritev(&io, f._fd, iov.data(), iov.size(), pos);
+    }).then([] (io_event ev) {
+        assert(ev.res >= 0);
+        return make_ready_future(size_t(ev.res));
+    });
+}
+
+future<size_t>
+reactor::read_dma(file& f, uint64_t pos, void* buffer, size_t len) {
+    return submit_io([&f, pos, buffer, len] (iocb& io) {
+        io_prep_pread(&io, f._fd, buffer, len, pos);
+    }).then([] (io_event ev) {
+        assert(ev.res >= 0);
+        return make_ready_future(size_t(ev.res));
+    });
+}
+
+future<size_t>
+reactor::read_dma(file& f, uint64_t pos, std::vector<iovec> iov) {
+    return submit_io([&f, pos, iov = std::move(iov)] (iocb& io) {
+        io_prep_preadv(&io, f._fd, iov.data(), iov.size(), pos);
+    }).then([] (io_event ev) {
+        assert(ev.res >= 0);
+        return make_ready_future(size_t(ev.res));
+    });
+}
+
+future<file>
+reactor::open_file_dma(sstring name) {
+    auto fd = ::open(name.c_str(), O_DIRECT | O_CLOEXEC | O_CREAT | O_RDWR, S_IRWXU);
+    assert(fd != -1);
+    // FIXME: make async
+    return make_ready_future<file>(file(fd));
+}
+
+
 void reactor::run() {
     std::vector<std::unique_ptr<task>> current_tasks;
     while (true) {

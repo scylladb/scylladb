@@ -24,11 +24,13 @@
 #include <algorithm>
 #include <list>
 #include "apply.hh"
+#include "sstring.hh"
 
 class socket_address;
 class reactor;
 class pollable_fd;
 class pollable_fd_state;
+class file;
 
 struct ipv4_addr {
     uint8_t host[4];
@@ -376,12 +378,19 @@ public:
 
     future<size_t> write_all(pollable_fd_state& fd, const void* buffer, size_t size);
 
+    future<file> open_file_dma(sstring name);
+
     void run();
 
     void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
 private:
     void write_all_part(pollable_fd_state& fd, const void* buffer, size_t size,
             promise<size_t> result, size_t completed);
+
+    future<size_t> read_dma(file& f, uint64_t pos, void* buffer, size_t len);
+    future<size_t> read_dma(file& f, uint64_t pos, std::vector<iovec> iov);
+    future<size_t> write_dma(file& f, uint64_t pos, const void* buffer, size_t len);
+    future<size_t> write_dma(file& f, uint64_t pos, std::vector<iovec> iov);
 
     template <typename Func>
     future<io_event> submit_io(Func prepare_io);
@@ -390,6 +399,7 @@ private:
 
     friend class pollable_fd;
     friend class pollable_fd_state;
+    friend class file;
 };
 
 extern reactor the_reactor;
@@ -517,6 +527,40 @@ public:
     future<size_t> write(const char_type* buf, size_t n);
     future<bool> flush();
 private:
+};
+
+class file {
+    int _fd;
+private:
+    explicit file(int fd) : _fd(fd) {}
+public:
+    ~file() {
+        if (_fd != -1) {
+            ::close(_fd);
+        }
+    }
+    file(file&& x) : _fd(x._fd) { x._fd = -1; }
+    template <typename CharType>
+    future<size_t> dma_read(uint64_t pos, CharType* buffer, size_t len) {
+        return the_reactor.read_dma(*this, pos, buffer, len);
+    }
+
+    future<size_t> dma_read(uint64_t pos, std::vector<iovec> iov) {
+        return the_reactor.read_dma(*this, pos, std::move(iov));
+    }
+
+    template <typename CharType>
+    future<size_t> dma_write(uint64_t pos, const CharType* buffer, size_t len) {
+        return the_reactor.write_dma(*this, pos, buffer, len);
+    }
+
+    future<size_t> dma_write(uint64_t pos, std::vector<iovec> iov) {
+        return the_reactor.write_dma(*this, pos, std::move(iov));
+    }
+
+    future<> flush();
+
+    friend class reactor;
 };
 
 inline
