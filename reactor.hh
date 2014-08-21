@@ -344,9 +344,13 @@ public:
 };
 
 class reactor {
+    static constexpr size_t max_aio = 128;
 public:
     int _epollfd;
+    int _io_eventfd;
+    pollable_fd_state _io_eventfd_state;
     io_context_t _io_context;
+    semaphore _io_context_available;
     std::vector<std::unique_ptr<task>> _pending_tasks;
 private:
     future<> get_epoll_future(pollable_fd_state& fd, promise<> pollable_fd_state::* pr, int event);
@@ -378,6 +382,11 @@ public:
 private:
     void write_all_part(pollable_fd_state& fd, const void* buffer, size_t size,
             promise<size_t> result, size_t completed);
+
+    template <typename Func>
+    future<io_event> submit_io(Func prepare_io);
+
+    void process_io();
 
     friend class pollable_fd;
     friend class pollable_fd_state;

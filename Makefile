@@ -10,7 +10,9 @@ opt.release = -O2 -flto
 sanitize = $(sanitize.$(mode))
 opt = $(opt.$(mode))
 
-CXXFLAGS = -std=gnu++1y -g -Wall -Werror $(opt) -MD -MT $@ -MP -flto $(sanitize) -fvisibility=hidden
+libs = -laio
+
+CXXFLAGS = -std=gnu++1y -g -Wall -Werror $(opt) -MD -MT $@ -MP -flto $(sanitize) -fvisibility=hidden $(libs)
 
 tests = test-reactor
 
