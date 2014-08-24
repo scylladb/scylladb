@@ -254,7 +254,7 @@ public:
         auto next_fut = pr.get_future();
         state->schedule([fut = std::move(*this), func = std::forward<Func>(func), pr = std::move(pr)] () mutable {
             apply(std::move(func), fut.get()).then([pr = std::move(pr)] (auto... next) mutable {
-                pr.set_value(std::move(next...));
+                pr.set_value(std::move(next)...);
             });
         });
         return next_fut;
