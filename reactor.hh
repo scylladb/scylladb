@@ -199,8 +199,8 @@ public:
     void set_value(A&&... a) { _state->set(std::forward<A>(a)...); }
 };
 
-template <typename T> struct is_future : std::false_type {};
-template <typename T> struct is_future<future<T>> : std::true_type {};
+template <typename... T> struct is_future : std::false_type {};
+template <typename... T> struct is_future<future<T...>> : std::true_type {};
 
 template <typename... T>
 class future {
