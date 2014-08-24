@@ -45,8 +45,20 @@ public:
     }
     void do_accepts(int which) {
         _listeners[which].accept().then([this, which] (pollable_fd fd, socket_address addr) mutable {
-            (new connection(*this, std::move(fd), addr))->read();
+            (new connection(*this, std::move(fd), addr))->read().rescue([this] (auto get_ex) {
+                try {
+                    get_ex();
+                } catch (std::exception& ex) {
+                    std::cout << "request error " << ex.what() << "\n";
+                }
+            });
             do_accepts(which);
+        }).rescue([] (auto get_ex) {
+            try {
+                get_ex();
+            } catch (std::exception& ex) {
+                std::cout << "accept failed: " << ex.what() << "\n";
+            }
         });
     }
     class connection {
@@ -77,12 +89,12 @@ public:
         connection(http_server& server, pollable_fd&& fd, socket_address addr)
             : _server(server), _fd(std::move(fd)), _addr(addr), _read_buf(_fd, 8192)
             , _write_buf(_fd, 8192) {}
-        void read() {
-            _read_buf.read_until(limit, '\n').then([this] (tmp_buf start_line) {
+        future<> read() {
+            return _read_buf.read_until(limit, '\n').then([this] (tmp_buf start_line) {
                 if (!start_line.size()) {
                     _eof = true;
                     maybe_done();
-                    return;
+                    return make_ready_future<>();
                 }
                 _req = std::make_unique<request>();
                 size_t pos = 0;
@@ -143,16 +155,23 @@ public:
                 if (_req->_method != "GET") {
                     return bad(std::move(_req));
                 }
-                _read_buf.read_until(limit, '\n').then([this] (tmp_buf header) {
-                    parse_header(std::move(header));
+                return _read_buf.read_until(limit, '\n').then([this] (tmp_buf header) {
+                    return parse_header(std::move(header));
                 });
             });
         }
-        void parse_header(tmp_buf header) {
+        future<> parse_header(tmp_buf header) {
             if (header.size() == 2 && header[0] == '\r' && header[1] == '\n') {
                 generate_response(std::move(_req));
-                read();
-                return;
+                read().rescue([zis = this] (auto get_ex) mutable {
+                    try {
+                        get_ex();
+                    } catch (std::exception& ex) {
+                        std::cout << "read failed with " << ex.what() << "\n";
+                        zis->maybe_done();
+                    }
+                });
+                return make_ready_future<>();
             }
             size_t pos = 0;
             size_t end = header.size();
@@ -192,14 +211,16 @@ public:
                 _req->_headers[_last_header_name] += " ";
                 _req->_headers[_last_header_name] += sstring(header.begin() + pos, end - pos);
             }
-            _read_buf.read_until(limit, '\n').then([this] (tmp_buf header) {
-                parse_header(std::move(header));
+            return _read_buf.read_until(limit, '\n').then([this] (tmp_buf header) {
+                return parse_header(std::move(header));
             });
         }
-        void bad(std::unique_ptr<request> req) {
+        future<> bad(std::unique_ptr<request> req) {
             auto resp = std::make_unique<response>();
             resp->_response_line = "HTTP/1.1 400 BAD REQUEST\r\n\r\n";
             respond(std::move(resp));
+            _eof = true;
+            throw std::runtime_error("failed to parse request");
         }
         void respond(std::unique_ptr<response> resp) {
             if (!_resp) {
