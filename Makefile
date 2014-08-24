@@ -13,6 +13,7 @@ opt = $(opt.$(mode))
 libs = -laio
 
 CXXFLAGS = -std=gnu++1y -g -Wall -Werror $(opt) -MD -MT $@ -MP -flto $(sanitize) -fvisibility=hidden $(libs)
+CXXFLAGS += -pthread
 
 tests = test-reactor fileiotest
 

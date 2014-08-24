@@ -23,6 +23,9 @@
 #include <vector>
 #include <algorithm>
 #include <list>
+#include <thread>
+#include <boost/lockfree/queue.hpp>
+#include <boost/optional.hpp>
 #include "apply.hh"
 #include "sstring.hh"
 
@@ -345,6 +348,46 @@ public:
     friend class pollable_fd;
 };
 
+class thread_pool {
+    static constexpr size_t queue_length = 128;
+    struct work_item;
+    boost::lockfree::queue<work_item*> _pending;
+    boost::lockfree::queue<work_item*> _completed;
+    int _start_eventfd;
+    int _complete_eventfd;
+    pollable_fd_state _completion;
+    semaphore _queue_has_room = { queue_length };
+    std::thread _worker_thread;
+    struct work_item {
+        virtual ~work_item() {}
+        virtual void process() = 0;
+        virtual void complete() = 0;
+    };
+    template <typename T, typename Func>
+    struct work_item_returning : work_item {
+        promise<T> _promise;
+        boost::optional<T> _result;
+        Func _func;
+        work_item_returning(Func&& func) : _func(std::move(func)) {}
+        virtual void process() override { _result = _func(); }
+        virtual void complete() override { _promise.set_value(std::move(*_result)); }
+        future<T> get_future() { return _promise.get_future(); }
+    };
+public:
+    thread_pool();
+    template <typename T, typename Func>
+    future<T> submit(Func func) {
+        auto wi = new work_item_returning<T, Func>(std::move(func));
+        auto fut = wi->get_future();
+        submit_item(wi);
+        return fut;
+    }
+private:
+    void work();
+    void complete();
+    void submit_item(work_item* wi);
+};
+
 class reactor {
     static constexpr size_t max_aio = 128;
 public:
@@ -354,6 +397,7 @@ public:
     io_context_t _io_context;
     semaphore _io_context_available;
     std::vector<std::unique_ptr<task>> _pending_tasks;
+    thread_pool _thread_pool;
 private:
     future<> get_epoll_future(pollable_fd_state& fd, promise<> pollable_fd_state::* pr, int event);
     void complete_epoll_event(pollable_fd_state& fd, promise<> pollable_fd_state::* pr, int events, int event);
@@ -400,6 +444,7 @@ private:
     friend class pollable_fd;
     friend class pollable_fd_state;
     friend class file;
+    friend class thread_pool;
 };
 
 extern reactor the_reactor;

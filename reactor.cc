@@ -206,6 +206,55 @@ void reactor::run() {
     }
 }
 
+thread_pool::thread_pool()
+    : _pending(queue_length)
+    , _completed(queue_length)
+    , _start_eventfd(::eventfd(0, EFD_CLOEXEC))
+    , _complete_eventfd(::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK))
+    , _completion(_complete_eventfd)
+    , _worker_thread([this] { work(); }) {
+    _worker_thread.detach();
+    complete();
+}
+
+void thread_pool::work() {
+    while (true) {
+        uint64_t count;
+        auto r = ::read(_start_eventfd, &count, sizeof(count));
+        assert(r == sizeof(count));
+        auto nr = _pending.consume_all([this] (work_item* wi) {
+            wi->process();
+            _completed.push(wi);
+        });
+        count = nr;
+        r = ::write(_complete_eventfd, &count, sizeof(count));
+        assert(r == sizeof(count));
+    }
+}
+
+void thread_pool::submit_item(thread_pool::work_item* item) {
+    _queue_has_room.wait().then([this, item] {
+        _pending.push(item);
+        uint64_t one = 1;
+        auto r = ::write(_start_eventfd, &one, sizeof(one));
+        assert(r == sizeof(one));
+    });
+}
+
+void thread_pool::complete() {
+    the_reactor.readable(_completion).then([this] {
+        uint64_t count;
+        auto r = ::read(_complete_eventfd, &count, sizeof(count));
+        assert(r == sizeof(count));
+        auto nr = _completed.consume_all([this] (work_item* wi) {
+            wi->complete();
+            delete wi;
+        });
+        _queue_has_room.signal(nr);
+        complete();
+    });
+}
+
 socket_address make_ipv4_address(ipv4_addr addr) {
     socket_address sa;
     sa.u.in.sin_family = AF_INET;
