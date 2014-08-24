@@ -36,7 +36,9 @@ int main(int ac, char** av) {
                 });
             });
         }
-        ft->sem.wait(max).then([ft] {
+        ft->sem.wait(max).then([ft] () mutable {
+            return ft->f.flush();
+        }).then([ft] () mutable {
             std::cout << "done\n";
             delete ft;
             ::exit(0);
