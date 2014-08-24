@@ -11,6 +11,21 @@
 #include <fcntl.h>
 #include <sys/eventfd.h>
 
+template <typename T>
+struct syscall_result {
+    T result;
+    int error;
+};
+
+template <typename T>
+syscall_result<T>
+wrap_syscall(T result) {
+    syscall_result<T> sr;
+    sr.result = result;
+    sr.error = errno;
+    return sr;
+}
+
 reactor::reactor()
     : _epollfd(epoll_create1(EPOLL_CLOEXEC))
     , _io_eventfd(eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK))
@@ -166,10 +181,12 @@ reactor::read_dma(file& f, uint64_t pos, std::vector<iovec> iov) {
 
 future<file>
 reactor::open_file_dma(sstring name) {
-    auto fd = ::open(name.c_str(), O_DIRECT | O_CLOEXEC | O_CREAT | O_RDWR, S_IRWXU);
-    assert(fd != -1);
-    // FIXME: make async
-    return make_ready_future<file>(file(fd));
+    return _thread_pool.submit<syscall_result<int>>([name] {
+        return wrap_syscall<int>(::open(name.c_str(), O_DIRECT | O_CLOEXEC | O_CREAT | O_RDWR, S_IRWXU));
+    }).then([] (syscall_result<int> sr) {
+        assert(sr.result != -1);
+        return make_ready_future<file>(file(sr.result));
+    });
 }
 
 
