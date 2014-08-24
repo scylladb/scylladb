@@ -439,14 +439,33 @@ protected:
     friend class readable_eventfd;
 };
 
+class readable_eventfd {
+    pollable_fd _fd;
+public:
+    explicit readable_eventfd(size_t initial = 0) : _fd(try_create_eventfd(initial)) {}
+    future<size_t> wait();
+    int get_write_fd() { return _fd.get_fd(); }
+private:
+    static int try_create_eventfd(size_t initial);
+};
+
+class writeable_eventfd {
+    int _fd;
+public:
+    explicit writeable_eventfd(size_t initial = 0) : _fd(try_create_eventfd(initial)) {}
+    void signal(size_t nr);
+    int get_read_fd() { return _fd; }
+private:
+    static int try_create_eventfd(size_t initial);
+};
+
 class thread_pool {
     static constexpr size_t queue_length = 128;
     struct work_item;
     boost::lockfree::queue<work_item*> _pending;
     boost::lockfree::queue<work_item*> _completed;
-    int _start_eventfd;
-    int _complete_eventfd;
-    pollable_fd_state _completion;
+    writeable_eventfd _start_eventfd;
+    readable_eventfd _complete_eventfd;
     semaphore _queue_has_room = { queue_length };
     std::thread _worker_thread;
     struct work_item {
@@ -536,6 +555,7 @@ private:
     friend class pollable_fd_state;
     friend class file;
     friend class thread_pool;
+    friend class readable_eventfd;
 };
 
 extern reactor the_reactor;

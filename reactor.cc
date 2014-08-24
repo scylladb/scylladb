@@ -239,9 +239,8 @@ void reactor::run() {
 thread_pool::thread_pool()
     : _pending(queue_length)
     , _completed(queue_length)
-    , _start_eventfd(::eventfd(0, EFD_CLOEXEC))
-    , _complete_eventfd(::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK))
-    , _completion(_complete_eventfd)
+    , _start_eventfd(0)
+    , _complete_eventfd(0)
     , _worker_thread([this] { work(); }) {
     _worker_thread.detach();
     complete();
@@ -250,14 +249,14 @@ thread_pool::thread_pool()
 void thread_pool::work() {
     while (true) {
         uint64_t count;
-        auto r = ::read(_start_eventfd, &count, sizeof(count));
+        auto r = ::read(_start_eventfd.get_read_fd(), &count, sizeof(count));
         assert(r == sizeof(count));
         auto nr = _pending.consume_all([this] (work_item* wi) {
             wi->process();
             _completed.push(wi);
         });
         count = nr;
-        r = ::write(_complete_eventfd, &count, sizeof(count));
+        r = ::write(_complete_eventfd.get_write_fd(), &count, sizeof(count));
         assert(r == sizeof(count));
     }
 }
@@ -265,23 +264,47 @@ void thread_pool::work() {
 void thread_pool::submit_item(thread_pool::work_item* item) {
     _queue_has_room.wait().then([this, item] {
         _pending.push(item);
-        uint64_t one = 1;
-        auto r = ::write(_start_eventfd, &one, sizeof(one));
-        assert(r == sizeof(one));
+        _start_eventfd.signal(1);
     });
 }
 
 void thread_pool::complete() {
-    the_reactor.readable(_completion).then([this] {
-        uint64_t count;
-        auto r = ::read(_complete_eventfd, &count, sizeof(count));
-        assert(r == sizeof(count));
+    _complete_eventfd.wait().then([this] (size_t count) {
         auto nr = _completed.consume_all([this] (work_item* wi) {
             wi->complete();
             delete wi;
         });
         _queue_has_room.signal(nr);
         complete();
+    });
+}
+
+int writeable_eventfd::try_create_eventfd(size_t initial) {
+    assert(size_t(int(initial)) == initial);
+    int r = ::eventfd(initial, EFD_CLOEXEC);
+    throw_system_error_on(r == -1);
+    return r;
+}
+
+void writeable_eventfd::signal(size_t count) {
+    uint64_t c = count;
+    auto r = ::write(_fd, &c, sizeof(c));
+    assert(r == sizeof(c));
+}
+
+int readable_eventfd::try_create_eventfd(size_t initial) {
+    assert(size_t(int(initial)) == initial);
+    int r = ::eventfd(initial, EFD_CLOEXEC | EFD_NONBLOCK);
+    throw_system_error_on(r == -1);
+    return r;
+}
+
+future<size_t> readable_eventfd::wait() {
+    return the_reactor.readable(*_fd._s).then([this] {
+        uint64_t count;
+        int r = ::read(_fd.get_fd(), &count, sizeof(count));
+        assert(r == sizeof(count));
+        return make_ready_future<size_t>(count);
     });
 }
 
