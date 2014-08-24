@@ -15,6 +15,11 @@ template <typename T>
 struct syscall_result {
     T result;
     int error;
+    void throw_if_error() {
+        if (long(result) == -1) {
+            throw std::system_error(error, std::system_category());
+        }
+    }
 };
 
 template <typename T>
@@ -87,7 +92,7 @@ reactor::listen(socket_address sa, listen_options opts) {
         ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     }
     int r = ::bind(fd, &sa.u.sa, sizeof(sa.u.sas));
-    assert(r != -1);
+    throw_system_error_on(r == -1);
     ::listen(fd, 100);
     return pollable_fd(fd);
 }
@@ -105,18 +110,17 @@ void reactor::complete_epoll_event(pollable_fd_state& pfd, promise<> pollable_fd
 template <typename Func>
 future<io_event>
 reactor::submit_io(Func prepare_io) {
-    auto pr = new promise<io_event>;
-    auto fut = pr->get_future();
-    _io_context_available.wait(1).then([this, pr, prepare_io = std::move(prepare_io)] () mutable {
+    return _io_context_available.wait(1).then([this, prepare_io = std::move(prepare_io)] () mutable {
+        auto pr = std::make_unique<promise<io_event>>();
         iocb io;
         prepare_io(io);
-        io.data = pr;
+        io.data = pr.get();
         io_set_eventfd(&io, _io_eventfd);
         iocb* p = &io;
         auto r = ::io_submit(_io_context, 1, &p);
-        assert(r == 1);
+        throw_kernel_error(r);
+        return pr.release()->get_future();
     });
-    return fut;
 }
 
 void reactor::process_io()
@@ -144,8 +148,8 @@ reactor::write_dma(file& f, uint64_t pos, const void* buffer, size_t len) {
     return submit_io([&f, pos, buffer, len] (iocb& io) {
         io_prep_pwrite(&io, f._fd, const_cast<void*>(buffer), len, pos);
     }).then([] (io_event ev) {
-        assert(ev.res >= 0);
-        return make_ready_future(size_t(ev.res));
+        throw_kernel_error(long(ev.res));
+        return make_ready_future<size_t>(size_t(ev.res));
     });
 }
 
@@ -154,8 +158,8 @@ reactor::write_dma(file& f, uint64_t pos, std::vector<iovec> iov) {
     return submit_io([&f, pos, iov = std::move(iov)] (iocb& io) {
         io_prep_pwritev(&io, f._fd, iov.data(), iov.size(), pos);
     }).then([] (io_event ev) {
-        assert(ev.res >= 0);
-        return make_ready_future(size_t(ev.res));
+        throw_kernel_error(long(ev.res));
+        return make_ready_future<size_t>(size_t(ev.res));
     });
 }
 
@@ -164,8 +168,8 @@ reactor::read_dma(file& f, uint64_t pos, void* buffer, size_t len) {
     return submit_io([&f, pos, buffer, len] (iocb& io) {
         io_prep_pread(&io, f._fd, buffer, len, pos);
     }).then([] (io_event ev) {
-        assert(ev.res >= 0);
-        return make_ready_future(size_t(ev.res));
+        throw_kernel_error(long(ev.res));
+        return make_ready_future<size_t>(size_t(ev.res));
     });
 }
 
@@ -174,8 +178,8 @@ reactor::read_dma(file& f, uint64_t pos, std::vector<iovec> iov) {
     return submit_io([&f, pos, iov = std::move(iov)] (iocb& io) {
         io_prep_preadv(&io, f._fd, iov.data(), iov.size(), pos);
     }).then([] (io_event ev) {
-        assert(ev.res >= 0);
-        return make_ready_future(size_t(ev.res));
+        throw_kernel_error(long(ev.res));
+        return make_ready_future<size_t>(size_t(ev.res));
     });
 }
 
@@ -184,7 +188,7 @@ reactor::open_file_dma(sstring name) {
     return _thread_pool.submit<syscall_result<int>>([name] {
         return wrap_syscall<int>(::open(name.c_str(), O_DIRECT | O_CLOEXEC | O_CREAT | O_RDWR, S_IRWXU));
     }).then([] (syscall_result<int> sr) {
-        assert(sr.result != -1);
+        sr.throw_if_error();
         return make_ready_future<file>(file(sr.result));
     });
 }
@@ -194,7 +198,7 @@ reactor::flush(file& f) {
     return _thread_pool.submit<syscall_result<int>>([&f] {
         return wrap_syscall<int>(::fsync(f._fd));
     }).then([] (syscall_result<int> sr) {
-        assert(sr.result != -1);
+        sr.throw_if_error();
         return make_ready_future<>();
     });
 }

@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <list>
 #include <thread>
+#include <system_error>
 #include <boost/lockfree/queue.hpp>
 #include <boost/optional.hpp>
 #include "apply.hh"
@@ -59,8 +60,11 @@ class promise;
 template <class... T>
 class future;
 
+template <typename... T, typename... A>
+future<T...> make_ready_future(A&&... value);
+
 template <typename... T>
-future<T...> make_ready_future(T&&... value);
+future<T...> make_exception_future(std::exception_ptr value);
 
 class task {
 public:
@@ -197,6 +201,7 @@ public:
     void set_value(std::tuple<T...>&& result)  { _state->set(std::move(result)); }
     template <typename... A>
     void set_value(A&&... a) { _state->set(std::forward<A>(a)...); }
+    void set_exception(std::exception_ptr ex) { _state->set_exception(std::move(ex)); }
 };
 
 template <typename... T> struct is_future : std::false_type {};
@@ -230,15 +235,28 @@ public:
     void then(Func, Enable);
 
     template <typename Func>
-    void then(Func&& func,
+    future<> then(Func&& func,
             std::enable_if_t<std::is_same<std::result_of_t<Func(T&&...)>, void>::value, void*> = nullptr) {
         auto state = _state;
         if (state->available()) {
-            return apply(std::move(func), std::move(_state->get()));
+            try {
+                apply(std::move(func), std::move(_state->get()));
+                return make_ready_future<>();
+            } catch (...) {
+                return make_exception_future(std::current_exception());
+            }
         }
-        state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
-            apply(std::move(func), fut.get());
+        promise<> pr;
+        auto fut = pr.get_future();
+        state->schedule([fut = std::move(*this), pr = std::move(pr), func = std::forward<Func>(func)] () mutable {
+            try {
+                apply(std::move(func), fut.get());
+                pr.set_value();
+            } catch (...) {
+                pr.set_exception(std::current_exception());
+            }
         });
+        return fut;
     }
 
     template <typename Func>
@@ -246,22 +264,54 @@ public:
     then(Func&& func,
             std::enable_if_t<is_future<std::result_of_t<Func(T&&...)>>::value, void*> = nullptr) {
         auto state = _state;
-        if (state->available()) {
-            return apply(std::move(func), std::move(_state->get()));
-        }
         using P = typename std::result_of_t<Func(T&&...)>::promise_type;
+        if (state->available()) {
+            try {
+                return apply(std::move(func), std::move(_state->get()));
+            } catch (...) {
+                P pr;
+                pr.set_exception(std::current_exception());
+                return pr.get_future();
+            }
+        }
         P pr;
         auto next_fut = pr.get_future();
         state->schedule([fut = std::move(*this), func = std::forward<Func>(func), pr = std::move(pr)] () mutable {
-            apply(std::move(func), fut.get()).then([pr = std::move(pr)] (auto... next) mutable {
-                pr.set_value(std::move(next)...);
-            });
+            try {
+                auto result = fut.get();
+                auto next_fut = apply(std::move(func), std::move(result));
+                next_fut.then([pr = std::move(pr)] (auto... next) mutable {
+                    pr.set_value(std::move(next)...);
+                });
+            } catch (...) {
+                pr.set_exception(std::current_exception());
+            }
         });
         return next_fut;
     }
 
+    template <typename Func>
+    void rescue(Func&& func) {
+        auto state = _state;
+        state->schedule([fut = std::move(*this), func = std::forward<Func>(func)] () mutable {
+            func([fut = std::move(fut)] () mutable { fut.get(); });
+        });
+    }
+
+    template <typename... A>
+    static future do_make_ready_future(A&&... value) {
+        auto s = std::make_unique<future_state<T...>>();
+        s->set(std::forward<A>(value)...);
+        return future(s.release());
+    }
+
+    static future do_make_exception_future(std::exception_ptr ex) {
+        auto s = std::make_unique<future_state<T...>>();
+        s->set_exception(std::move(ex));
+        return future(s.release());
+    }
+
     friend class promise<T...>;
-    friend future<T...> make_ready_future<T...>(T&&... value);
 };
 
 template <typename... T>
@@ -273,12 +323,32 @@ promise<T...>::get_future()
     return future<T...>(_state);
 }
 
+template <typename... T, typename... A>
+inline
+future<T...> make_ready_future(A&&... value) {
+    return future<T...>::do_make_ready_future(std::forward<A>(value)...);
+}
+
 template <typename... T>
 inline
-future<T...> make_ready_future(T&&... value) {
-    auto s = new future_state<T...>();
-    s->set(std::move(value)...);
-    return future<T...>(s);
+future<T...> make_exception_future(std::exception_ptr ex) {
+    return future<T...>::do_make_exception_future(std::move(ex));
+}
+
+inline
+void throw_system_error_on(bool condition) {
+    if (condition) {
+        throw std::system_error(errno, std::system_category());
+    }
+}
+
+template <typename T>
+inline
+void throw_kernel_error(T r) {
+    static_assert(std::is_signed<T>::value, "kernel error variables must be signed");
+    if (r < 0) {
+        throw std::system_error(-r, std::system_category());
+    }
 }
 
 struct free_deleter {
@@ -429,8 +499,7 @@ public:
 
     void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
 private:
-    void write_all_part(pollable_fd_state& fd, const void* buffer, size_t size,
-            promise<size_t> result, size_t completed);
+    future<size_t> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
 
     future<size_t> read_dma(file& f, uint64_t pos, void* buffer, size_t len);
     future<size_t> read_dma(file& f, uint64_t pos, std::vector<iovec> iov);
@@ -552,8 +621,8 @@ public:
     future<temporary_buffer<CharType>> read_until(size_t limit, CharType eol);
     future<temporary_buffer<CharType>> read_until(size_t limit, const CharType* eol, size_t eol_len);
 private:
-    void read_exactly_part(size_t n, promise<tmp_buf> pr, tmp_buf buf, size_t completed);
-    void read_until_part(size_t n, CharType eol, promise<tmp_buf> pr, tmp_buf buf, size_t completed);
+    future<temporary_buffer<CharType>> read_exactly_part(size_t n, tmp_buf buf, size_t completed);
+    future<temporary_buffer<CharType>> read_until_part(size_t n, CharType eol, tmp_buf buf, size_t completed);
 };
 
 template <typename CharType>
@@ -624,97 +693,76 @@ size_t iovec_len(const std::vector<iovec>& iov)
 inline
 future<pollable_fd, socket_address>
 reactor::accept(pollable_fd_state& listenfd) {
-    promise<pollable_fd, socket_address> pr;
-    future<pollable_fd, socket_address> fut = pr.get_future();
-    readable(listenfd).then([this, pr = std::move(pr), lfd = listenfd.fd] () mutable {
+    return readable(listenfd).then([this, lfd = listenfd.fd] () mutable {
         socket_address sa;
         socklen_t sl = sizeof(&sa.u.sas);
         int fd = ::accept4(lfd, &sa.u.sa, &sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
-        assert(fd != -1);
-        pr.set_value(pollable_fd(fd, pollable_fd::speculation(EPOLLOUT)), sa);
+        throw_system_error_on(fd == -1);
+        pollable_fd pfd(fd, pollable_fd::speculation(EPOLLOUT));
+        return make_ready_future<pollable_fd, socket_address>(std::move(pfd), std::move(sa));
     });
-    return fut;
 }
 
 inline
 future<size_t>
 reactor::read_some(pollable_fd_state& fd, void* buffer, size_t len) {
-    promise<size_t> pr;
-    auto fut = pr.get_future();
-    readable(fd).then([this, pr = std::move(pr), &fd, buffer, len] () mutable {
+    return readable(fd).then([this, &fd, buffer, len] () mutable {
         ssize_t r = ::recv(fd.fd, buffer, len, 0);
         if (r == -1 && errno == EAGAIN) {
-            read_some(fd, buffer, len).then([pr = std::move(pr)] (size_t r) mutable {
-                pr.set_value(r);
-            });
-            return;
+            return read_some(fd, buffer, len);
         }
-        assert(r != -1);
+        throw_system_error_on(r == -1);
         if (size_t(r) == len) {
             fd.speculate_epoll(EPOLLIN);
         }
-        pr.set_value(r);
+        return make_ready_future<size_t>(r);
     });
-    return fut;
 }
 
 inline
 future<size_t>
 reactor::read_some(pollable_fd_state& fd, const std::vector<iovec>& iov) {
-    promise<size_t> pr;
-    auto fut = pr.get_future();
-    readable(fd).then([this, pr = std::move(pr), &fd, iov = iov] () mutable {
+    return readable(fd).then([this, &fd, iov = iov] () mutable {
         ::msghdr mh = {};
         mh.msg_iov = &iov[0];
         mh.msg_iovlen = iov.size();
         ssize_t r = ::recvmsg(fd.fd, &mh, 0);
         if (r == -1 && errno == EAGAIN) {
-            read_some(fd, iov).then([pr = std::move(pr)] (size_t r) mutable {
-                pr.set_value(r);
-            });
-            return;
+            return read_some(fd, iov);
         }
-        assert(r != -1);
+        throw_system_error_on(r == -1);
         if (size_t(r) == iovec_len(iov)) {
             fd.speculate_epoll(EPOLLIN);
         }
-        pr.set_value(r);
+        return make_ready_future<size_t>(r);
     });
-    return fut;
 }
 
 inline
 future<size_t>
 reactor::write_some(pollable_fd_state& fd, const void* buffer, size_t len) {
-    promise<size_t> pr;
-    auto fut = pr.get_future();
-    writeable(fd).then([this, pr = std::move(pr), &fd, buffer, len] () mutable {
+    return writeable(fd).then([this, &fd, buffer, len] () mutable {
         ssize_t r = ::send(fd.fd, buffer, len, 0);
         if (r == -1 && errno == EAGAIN) {
-            write_some(fd, buffer, len).then([pr = std::move(pr)] (size_t r) mutable {
-                pr.set_value(r);
-            });
-            return;
+            return write_some(fd, buffer, len);
         }
-        assert(r != -1);
+        throw_system_error_on(r == -1);
         if (size_t(r) == len) {
             fd.speculate_epoll(EPOLLOUT);
         }
-        pr.set_value(r);
+        return make_ready_future<size_t>(r);
     });
-    return fut;
 }
 
 inline
-void
-reactor::write_all_part(pollable_fd_state& fd, const void* buffer, size_t len,
-        promise<size_t> result, size_t completed) {
+future<size_t>
+reactor::write_all_part(pollable_fd_state& fd, const void* buffer, size_t len, size_t completed) {
     if (completed == len) {
-        result.set_value(completed);
+        return make_ready_future<size_t>(completed);
     } else {
-        write_some(fd, static_cast<const char*>(buffer) + completed, len - completed).then(
-                [&fd, buffer, len, result = std::move(result), completed, this] (size_t part) mutable {
-            write_all_part(fd, buffer, len, std::move(result), completed + part);
+        return write_some(fd, static_cast<const char*>(buffer) + completed, len - completed).then(
+                [&fd, buffer, len, completed, this] (size_t part) mutable {
+            return write_all_part(fd, buffer, len, completed + part);
         });
     }
 }
@@ -723,14 +771,12 @@ inline
 future<size_t>
 reactor::write_all(pollable_fd_state& fd, const void* buffer, size_t len) {
     assert(len);
-    promise<size_t> pr;
-    auto fut = pr.get_future();
-    write_all_part(fd, buffer, len, std::move(pr), 0);
-    return fut;
+    return write_all_part(fd, buffer, len, 0);
 }
 
 template <typename CharType>
-void input_stream_buffer<CharType>::read_exactly_part(size_t n, promise<tmp_buf> pr, tmp_buf out, size_t completed) {
+future<temporary_buffer<CharType>>
+input_stream_buffer<CharType>::read_exactly_part(size_t n, tmp_buf out, size_t completed) {
     if (available()) {
         auto now = std::min(n - completed, available());
         if (out.owned()) {
@@ -740,22 +786,21 @@ void input_stream_buffer<CharType>::read_exactly_part(size_t n, promise<tmp_buf>
         completed += now;
     }
     if (completed == n) {
-        pr.set_value(out);
-        return;
+        return make_ready_future<tmp_buf>(out);
     }
 
     // _buf is now empty
     if (out.owned()) {
-        _fd.read_some(out.get() + completed, n - completed).then(
-                [this, pr = std::move(pr), out = std::move(out), completed, n] (size_t now) mutable {
+        return _fd.read_some(out.get() + completed, n - completed).then(
+                [this, out = std::move(out), completed, n] (size_t now) mutable {
             completed += now;
-            read_exactly_part(n, std::move(pr), std::move(out), completed);
+            return read_exactly_part(n, std::move(out), completed);
         });
     } else {
         _fd.read_some(_buf.get(), _size).then(
-                [this, pr = std::move(pr), out = std::move(out), completed, n] (size_t now) mutable {
+                [this, out = std::move(out), completed, n] (size_t now) mutable {
             _end = now;
-            read_exactly_part(n, std::move(pr), std::move(out), completed);
+            return read_exactly_part(n, std::move(out), completed);
         });
     }
 }
@@ -763,16 +808,14 @@ void input_stream_buffer<CharType>::read_exactly_part(size_t n, promise<tmp_buf>
 template <typename CharType>
 future<temporary_buffer<CharType>>
 input_stream_buffer<CharType>::read_exactly(size_t n) {
-    promise<tmp_buf> pr;
-    auto fut = pr.get_future();
     auto buf = allocate(n);
-    read_exactly_part(n, std::move(pr), buf, 0);
-    return fut;
+    return read_exactly_part(n, buf, 0);
 }
 
 
 template <typename CharType>
-void input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, promise<tmp_buf> pr, tmp_buf out,
+future<temporary_buffer<CharType>>
+input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, tmp_buf out,
         size_t completed) {
     auto to_search = std::min(limit - completed, available());
     auto i = std::find(_buf.get() + _begin, _buf.get() + _begin + to_search, eol);
@@ -790,7 +833,7 @@ void input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, 
         }
         advance(nr_found);
         completed += nr_found;
-        pr.set_value(std::move(out).prefix(completed));
+        return make_ready_future<tmp_buf>(std::move(out).prefix(completed));
     } else {
         if (!out.owning() && _end == _size) {
             // wrapping around, must allocate
@@ -802,11 +845,11 @@ void input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, 
             completed += _end - _begin;
             _begin = _end = 0;
         }
-        _fd.read_some(_buf.get() + _end, _size - _end).then(
-                [this, limit, eol, pr = std::move(pr), out = std::move(out), completed] (size_t n) mutable {
+        return _fd.read_some(_buf.get() + _end, _size - _end).then(
+                [this, limit, eol, out = std::move(out), completed] (size_t n) mutable {
             _end += n;
             _eof = n == 0;
-            read_until_part(limit, eol, std::move(pr), std::move(out), completed);
+            return read_until_part(limit, eol, std::move(out), completed);
         });
     }
 }
@@ -814,10 +857,7 @@ void input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, 
 template <typename CharType>
 future<temporary_buffer<CharType>>
 input_stream_buffer<CharType>::read_until(size_t limit, CharType eol) {
-    promise<tmp_buf> pr;
-    auto fut = pr.get_future();
-    read_until_part(limit, eol, std::move(pr), allocate(possibly_available()), 0);
-    return fut;
+    return read_until_part(limit, eol, allocate(possibly_available()), 0);
 }
 
 #include <iostream>
@@ -826,46 +866,37 @@ input_stream_buffer<CharType>::read_until(size_t limit, CharType eol) {
 template <typename CharType>
 future<size_t>
 output_stream_buffer<CharType>::write(const char_type* buf, size_t n) {
-    promise<size_t> pr;
-    auto fut = pr.get_future();
     if (n >= _size) {
-        flush().then([pr = std::move(pr), this, buf, n] (bool done) mutable {
-            _fd.write_all(buf, n).then([pr = std::move(pr)] (size_t done) mutable {
-                pr.set_value(done);
-            });
+        return flush().then([this, buf, n] (bool done) mutable {
+            return _fd.write_all(buf, n);
         });
-        return fut;
     }
     auto now = std::min(n, _size - _end);
     std::copy(buf, buf + now, _buf.get() + _end);
     _end += now;
     if (now == n) {
-        pr.set_value(n);
+        return make_ready_future<size_t>(n);
     } else {
-        _fd.write_all(_buf.get(), _end).then(
-                [pr = std::move(pr), this, now, n, buf] (size_t w) mutable {
+        return _fd.write_all(_buf.get(), _end).then(
+                [this, now, n, buf] (size_t w) mutable {
             std::copy(buf + now, buf + n, _buf.get());
             _end = n - now;
-            pr.set_value(n);
+            return make_ready_future<size_t>(n);
         });
     }
-    return fut;
 }
 
 template <typename CharType>
 future<bool>
 output_stream_buffer<CharType>::flush() {
     if (!_end) {
-        return make_ready_future(true);
+        return make_ready_future<bool>(true);
     }
-    promise<bool> pr;
-    auto fut = pr.get_future();
-    _fd.write_all(_buf.get(), _end).then(
-            [this, pr = std::move(pr)] (size_t done) mutable {
+    return _fd.write_all(_buf.get(), _end).then(
+            [this] (size_t done) mutable {
         _end = 0;
-        pr.set_value(true);
+        return make_ready_future<bool>(true);
     });
-    return fut;
 }
 
 
