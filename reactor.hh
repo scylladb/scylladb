@@ -423,6 +423,7 @@ public:
     future<size_t> write_all(pollable_fd_state& fd, const void* buffer, size_t size);
 
     future<file> open_file_dma(sstring name);
+    future<> flush(file& f);
 
     void run();
 
@@ -603,7 +604,9 @@ public:
         return the_reactor.write_dma(*this, pos, std::move(iov));
     }
 
-    future<> flush();
+    future<> flush() {
+        return the_reactor.flush(*this);
+    }
 
     friend class reactor;
 };

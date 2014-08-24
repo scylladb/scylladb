@@ -189,6 +189,15 @@ reactor::open_file_dma(sstring name) {
     });
 }
 
+future<>
+reactor::flush(file& f) {
+    return _thread_pool.submit<syscall_result<int>>([&f] {
+        return wrap_syscall<int>(::fsync(f._fd));
+    }).then([] (syscall_result<int> sr) {
+        assert(sr.result != -1);
+        return make_ready_future<>();
+    });
+}
 
 void reactor::run() {
     std::vector<std::unique_ptr<task>> current_tasks;
