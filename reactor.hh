@@ -418,6 +418,27 @@ public:
     friend class pollable_fd;
 };
 
+class pollable_fd {
+public:
+    using speculation = pollable_fd_state::speculation;
+    std::unique_ptr<pollable_fd_state> _s;
+    pollable_fd(int fd, speculation speculate = speculation())
+        : _s(std::make_unique<pollable_fd_state>(fd, speculate)) {}
+public:
+    pollable_fd(pollable_fd&&) = default;
+    pollable_fd& operator=(pollable_fd&&) = default;
+    future<size_t> read_some(char* buffer, size_t size);
+    future<size_t> read_some(uint8_t* buffer, size_t size);
+    future<size_t> read_some(const std::vector<iovec>& iov);
+    future<size_t> write_all(const char* buffer, size_t size);
+    future<size_t> write_all(const uint8_t* buffer, size_t size);
+    future<pollable_fd, socket_address> accept();
+protected:
+    int get_fd() const { return _s->fd; }
+    friend class reactor;
+    friend class readable_eventfd;
+};
+
 class thread_pool {
     static constexpr size_t queue_length = 128;
     struct work_item;
@@ -524,24 +545,6 @@ pollable_fd_state::~pollable_fd_state() {
     the_reactor.forget(*this);
     ::close(fd);
 }
-
-class pollable_fd {
-public:
-    using speculation = pollable_fd_state::speculation;
-    std::unique_ptr<pollable_fd_state> _s;
-    pollable_fd(int fd, speculation speculate = speculation())
-        : _s(std::make_unique<pollable_fd_state>(fd, speculate)) {}
-public:
-    pollable_fd(pollable_fd&&) = default;
-    pollable_fd& operator=(pollable_fd&&) = default;
-    future<size_t> read_some(char* buffer, size_t size) { return the_reactor.read_some(*_s, buffer, size); }
-    future<size_t> read_some(uint8_t* buffer, size_t size) { return the_reactor.read_some(*_s, buffer, size); }
-    future<size_t> read_some(const std::vector<iovec>& iov) { return the_reactor.read_some(*_s, iov); }
-    future<size_t> write_all(const char* buffer, size_t size) { return the_reactor.write_all(*_s, buffer, size); }
-    future<size_t> write_all(const uint8_t* buffer, size_t size) { return the_reactor.write_all(*_s, buffer, size); }
-    future<pollable_fd, socket_address> accept() { return the_reactor.accept(*_s); }
-    friend class reactor;
-};
 
 // A temporary_buffer either points inside a larger buffer, or, if the requested size
 // is too large, or if the larger buffer is scattered, contains its own storage.
@@ -906,6 +909,37 @@ void future_state<T...>::make_ready() {
         the_reactor.add_task(std::move(_task));
     }
 }
+
+inline
+future<size_t> pollable_fd::read_some(char* buffer, size_t size) {
+    return the_reactor.read_some(*_s, buffer, size);
+}
+
+inline
+future<size_t> pollable_fd::read_some(uint8_t* buffer, size_t size) {
+    return the_reactor.read_some(*_s, buffer, size);
+}
+
+inline
+future<size_t> pollable_fd::read_some(const std::vector<iovec>& iov) {
+    return the_reactor.read_some(*_s, iov);
+}
+
+inline
+future<size_t> pollable_fd::write_all(const char* buffer, size_t size) {
+    return the_reactor.write_all(*_s, buffer, size);
+}
+
+inline
+future<size_t> pollable_fd::write_all(const uint8_t* buffer, size_t size) {
+    return the_reactor.write_all(*_s, buffer, size);
+}
+
+inline
+future<pollable_fd, socket_address> pollable_fd::accept() {
+    return the_reactor.accept(*_s);
+}
+
 
 #if 0
 future<temporary_buffer<CharType>> read_until(size_t limit, const CharType* eol, size_t eol_len);
