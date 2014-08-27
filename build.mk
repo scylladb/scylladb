@@ -11,7 +11,7 @@ opt.release = -O2 -flto
 sanitize = $(sanitize.$(mode))
 opt = $(opt.$(mode))
 
-libs = -laio
+libs = -laio -ltcmalloc
 
 CXXFLAGS = -std=gnu++1y -g -Wall -Werror $(opt) -MD -MT $@ -MP $(sanitize) -fvisibility=hidden $(libs)
 CXXFLAGS += -pthread
