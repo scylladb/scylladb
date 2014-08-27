@@ -35,6 +35,7 @@ reactor::reactor()
     : _epollfd(epoll_create1(EPOLL_CLOEXEC))
     , _io_eventfd(eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK))
     , _io_eventfd_state(_io_eventfd)
+    , _io_context(0)
     , _io_context_available(max_aio) {
     assert(_epollfd != -1);
     assert(_io_eventfd != -1);
