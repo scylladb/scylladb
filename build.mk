@@ -16,7 +16,7 @@ libs = -laio
 CXXFLAGS = -std=gnu++1y -g -Wall -Werror $(opt) -MD -MT $@ -MP $(sanitize) -fvisibility=hidden $(libs)
 CXXFLAGS += -pthread
 
-tests = test-reactor fileiotest
+tests = test-reactor fileiotest virtiotest
 
 all: seastar $(tests) httpd
 
@@ -33,6 +33,9 @@ httpd: httpd.o reactor.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 fileiotest: fileiotest.o reactor.o
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+virtiotest: virtiotest.o virtio.o reactor.o ip.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 -include *.d
