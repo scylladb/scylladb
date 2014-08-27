@@ -18,24 +18,25 @@ CXXFLAGS += -pthread
 
 tests = test-reactor fileiotest virtiotest
 
+link = $(CXX) $(CXXFLAGS) -o $@ $^
+
+%: %.o
+	$(link)
+
 all: seastar $(tests) httpd
 
 clean:
 	rm seastar $(tests) *.o
 
 seastar: main.o reactor.o
-	$(CXX) $(CXXFLAGS) -o $@ $^
+	$(link)
 
 test-reactor: test-reactor.o reactor.o
-	$(CXX) $(CXXFLAGS) -o $@ $^
 
 httpd: httpd.o reactor.o
-	$(CXX) $(CXXFLAGS) -o $@ $^
 
 fileiotest: fileiotest.o reactor.o
-	$(CXX) $(CXXFLAGS) -o $@ $^
 
 virtiotest: virtiotest.o virtio.o reactor.o ip.o
-	$(CXX) $(CXXFLAGS) -o $@ $^
 
 -include *.d
