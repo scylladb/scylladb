@@ -16,6 +16,9 @@ libs = -laio
 CXXFLAGS = -std=gnu++1y -g -Wall -Werror $(opt) -MD -MT $@ -MP $(sanitize) -fvisibility=hidden $(libs)
 CXXFLAGS += -pthread
 
+# Ubuntu fails without this, see https://bugs.launchpad.net/ubuntu/+source/gcc-defaults/+bug/1228201
+CXXFLAGS += -Wl,--no-as-needed 
+
 tests = test-reactor fileiotest virtiotest
 
 link = $(CXX) $(CXXFLAGS) -o $@ $^
