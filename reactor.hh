@@ -27,6 +27,7 @@
 #include <system_error>
 #include <boost/lockfree/queue.hpp>
 #include <boost/optional.hpp>
+#include "posix.hh"
 #include "apply.hh"
 #include "sstring.hh"
 
@@ -333,22 +334,6 @@ template <typename... T>
 inline
 future<T...> make_exception_future(std::exception_ptr ex) {
     return future<T...>::do_make_exception_future(std::move(ex));
-}
-
-inline
-void throw_system_error_on(bool condition) {
-    if (condition) {
-        throw std::system_error(errno, std::system_category());
-    }
-}
-
-template <typename T>
-inline
-void throw_kernel_error(T r) {
-    static_assert(std::is_signed<T>::value, "kernel error variables must be signed");
-    if (r < 0) {
-        throw std::system_error(-r, std::system_category());
-    }
 }
 
 struct free_deleter {

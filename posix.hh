@@ -5,13 +5,18 @@
 #ifndef FILE_DESC_HH_
 #define FILE_DESC_HH_
 
-#include "reactor.hh"
 #include "sstring.hh"
 #include <unistd.h>
 #include <assert.h>
 #include <utility>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+
+inline void throw_system_error_on(bool condition);
+
+template <typename T>
+inline void throw_kernel_error(T r);
+
 
 class file_desc {
     int _fd;
@@ -82,6 +87,20 @@ private:
     file_desc(int fd) : _fd(fd) {}
  };
 
+inline
+void throw_system_error_on(bool condition) {
+    if (condition) {
+        throw std::system_error(errno, std::system_category());
+    }
+}
 
+template <typename T>
+inline
+void throw_kernel_error(T r) {
+    static_assert(std::is_signed<T>::value, "kernel error variables must be signed");
+    if (r < 0) {
+        throw std::system_error(-r, std::system_category());
+    }
+}
 
 #endif /* FILE_DESC_HH_ */
