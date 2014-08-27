@@ -394,6 +394,15 @@ public:
             _wait_list.pop_front();
         }
     }
+    bool try_wait(size_t nr = 1) {
+        if (_count >= nr && _wait_list.empty()) {
+            _count -= nr;
+            return true;
+        } else {
+            return false;
+        }
+    }
+    size_t current() const { return _count; }
 };
 
 class pollable_fd_state {
