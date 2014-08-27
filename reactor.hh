@@ -397,12 +397,12 @@ public:
         explicit speculation(int epoll_events_guessed = 0) : events(epoll_events_guessed) {}
     };
     ~pollable_fd_state();
-    explicit pollable_fd_state(int fd, speculation speculate = speculation())
-        : fd(fd), events_known(speculate.events) {}
+    explicit pollable_fd_state(file_desc fd, speculation speculate = speculation())
+        : fd(std::move(fd)), events_known(speculate.events) {}
     pollable_fd_state(const pollable_fd_state&) = delete;
     void operator=(const pollable_fd_state&) = delete;
     void speculate_epoll(int events) { events_known |= events; }
-    int fd;
+    file_desc fd;
     int events_requested = 0; // wanted by pollin/pollout promises
     int events_epoll = 0;     // installed in epoll
     int events_known = 0;     // returned from epoll
@@ -416,8 +416,8 @@ class pollable_fd {
 public:
     using speculation = pollable_fd_state::speculation;
     std::unique_ptr<pollable_fd_state> _s;
-    pollable_fd(int fd, speculation speculate = speculation())
-        : _s(std::make_unique<pollable_fd_state>(fd, speculate)) {}
+    pollable_fd(file_desc fd, speculation speculate = speculation())
+        : _s(std::make_unique<pollable_fd_state>(std::move(fd), speculate)) {}
 public:
     pollable_fd(pollable_fd&&) = default;
     pollable_fd& operator=(pollable_fd&&) = default;
@@ -428,7 +428,7 @@ public:
     future<size_t> write_all(const uint8_t* buffer, size_t size);
     future<pollable_fd, socket_address> accept();
 protected:
-    int get_fd() const { return _s->fd; }
+    int get_fd() const { return _s->fd.get(); }
     friend class reactor;
     friend class readable_eventfd;
 };
@@ -440,17 +440,17 @@ public:
     future<size_t> wait();
     int get_write_fd() { return _fd.get_fd(); }
 private:
-    static int try_create_eventfd(size_t initial);
+    static file_desc try_create_eventfd(size_t initial);
 };
 
 class writeable_eventfd {
-    int _fd;
+    file_desc _fd;
 public:
     explicit writeable_eventfd(size_t initial = 0) : _fd(try_create_eventfd(initial)) {}
     void signal(size_t nr);
-    int get_read_fd() { return _fd; }
+    int get_read_fd() { return _fd.get(); }
 private:
-    static int try_create_eventfd(size_t initial);
+    static file_desc try_create_eventfd(size_t initial);
 };
 
 class thread_pool {
@@ -495,9 +495,8 @@ private:
 class reactor {
     static constexpr size_t max_aio = 128;
 public:
-    int _epollfd;
-    int _io_eventfd;
-    pollable_fd_state _io_eventfd_state;
+    file_desc _epollfd;
+    readable_eventfd _io_eventfd;
     io_context_t _io_context;
     semaphore _io_context_available;
     std::vector<std::unique_ptr<task>> _pending_tasks;
@@ -513,7 +512,6 @@ public:
     reactor();
     reactor(const reactor&) = delete;
     void operator=(const reactor&) = delete;
-    ~reactor();
 
     pollable_fd listen(socket_address sa, listen_options opts = {});
 
@@ -543,7 +541,7 @@ private:
     template <typename Func>
     future<io_event> submit_io(Func prepare_io);
 
-    void process_io();
+    void process_io(size_t count);
 
     friend class pollable_fd;
     friend class pollable_fd_state;
@@ -557,7 +555,6 @@ extern reactor the_reactor;
 inline
 pollable_fd_state::~pollable_fd_state() {
     the_reactor.forget(*this);
-    ::close(fd);
 }
 
 // A temporary_buffer either points inside a larger buffer, or, if the requested size
@@ -710,12 +707,11 @@ size_t iovec_len(const std::vector<iovec>& iov)
 inline
 future<pollable_fd, socket_address>
 reactor::accept(pollable_fd_state& listenfd) {
-    return readable(listenfd).then([this, lfd = listenfd.fd] () mutable {
+    return readable(listenfd).then([this, &listenfd] () mutable {
         socket_address sa;
         socklen_t sl = sizeof(&sa.u.sas);
-        int fd = ::accept4(lfd, &sa.u.sa, &sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
-        throw_system_error_on(fd == -1);
-        pollable_fd pfd(fd, pollable_fd::speculation(EPOLLOUT));
+        file_desc fd = listenfd.fd.accept(sa.u.sa, sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        pollable_fd pfd(std::move(fd), pollable_fd::speculation(EPOLLOUT));
         return make_ready_future<pollable_fd, socket_address>(std::move(pfd), std::move(sa));
     });
 }
@@ -724,15 +720,14 @@ inline
 future<size_t>
 reactor::read_some(pollable_fd_state& fd, void* buffer, size_t len) {
     return readable(fd).then([this, &fd, buffer, len] () mutable {
-        ssize_t r = ::recv(fd.fd, buffer, len, 0);
-        if (r == -1 && errno == EAGAIN) {
+        auto r = fd.fd.recv(buffer, len, 0);
+        if (!r) {
             return read_some(fd, buffer, len);
         }
-        throw_system_error_on(r == -1);
-        if (size_t(r) == len) {
+        if (size_t(*r) == len) {
             fd.speculate_epoll(EPOLLIN);
         }
-        return make_ready_future<size_t>(r);
+        return make_ready_future<size_t>(*r);
     });
 }
 
@@ -743,15 +738,14 @@ reactor::read_some(pollable_fd_state& fd, const std::vector<iovec>& iov) {
         ::msghdr mh = {};
         mh.msg_iov = &iov[0];
         mh.msg_iovlen = iov.size();
-        ssize_t r = ::recvmsg(fd.fd, &mh, 0);
-        if (r == -1 && errno == EAGAIN) {
+        auto r = fd.fd.recvmsg(&mh, 0);
+        if (!r) {
             return read_some(fd, iov);
         }
-        throw_system_error_on(r == -1);
-        if (size_t(r) == iovec_len(iov)) {
+        if (size_t(*r) == iovec_len(iov)) {
             fd.speculate_epoll(EPOLLIN);
         }
-        return make_ready_future<size_t>(r);
+        return make_ready_future<size_t>(*r);
     });
 }
 
@@ -759,15 +753,14 @@ inline
 future<size_t>
 reactor::write_some(pollable_fd_state& fd, const void* buffer, size_t len) {
     return writeable(fd).then([this, &fd, buffer, len] () mutable {
-        ssize_t r = ::send(fd.fd, buffer, len, 0);
-        if (r == -1 && errno == EAGAIN) {
+        auto r = fd.fd.send(buffer, len, 0);
+        if (!r) {
             return write_some(fd, buffer, len);
         }
-        throw_system_error_on(r == -1);
-        if (size_t(r) == len) {
+        if (size_t(*r) == len) {
             fd.speculate_epoll(EPOLLOUT);
         }
-        return make_ready_future<size_t>(r);
+        return make_ready_future<size_t>(*r);
     });
 }
 

@@ -11,6 +11,8 @@
 #include <utility>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+#include <sys/eventfd.h>
+#include <boost/optional.hpp>
 
 inline void throw_system_error_on(bool condition);
 
@@ -52,6 +54,21 @@ public:
         throw_system_error_on(fd == -1);
         return file_desc(fd);
     }
+    static file_desc eventfd(unsigned initval, int flags) {
+        int fd = ::eventfd(initval, flags);
+        throw_system_error_on(fd == -1);
+        return file_desc(fd);
+    }
+    static file_desc epoll_create(int flags = 0) {
+        int fd = ::epoll_create1(flags);
+        throw_system_error_on(fd == -1);
+        return file_desc(fd);
+    }
+    file_desc accept(sockaddr& sa, socklen_t& sl, int flags = 0) {
+        auto ret = ::accept4(_fd, &sa, &sl, flags);
+        throw_system_error_on(ret == -1);
+        return file_desc(ret);
+    }
     int ioctl(int request) {
         return ioctl(request, 0);
     }
@@ -82,6 +99,46 @@ public:
         int r = ::setsockopt(_fd, level, optname, data, strlen(data) + 1);
         throw_system_error_on(r == -1);
         return r;
+    }
+    boost::optional<ssize_t> recv(void* buffer, size_t len, int flags) {
+        auto r = ::recv(_fd, buffer, len, flags);
+        if (r == -1 && errno == EAGAIN) {
+            return {};
+        }
+        throw_system_error_on(r == -1);
+        return { r };
+    }
+    boost::optional<size_t> recvmsg(msghdr* mh, int flags) {
+        auto r = ::recvmsg(_fd, mh, flags);
+        if (r == -1 && errno == EAGAIN) {
+            return {};
+        }
+        throw_system_error_on(r == -1);
+        return { size_t(r) };
+    }
+    boost::optional<size_t> send(const void* buffer, size_t len, int flags) {
+        auto r = ::send(_fd, buffer, len, flags);
+        if (r == -1 && errno == EAGAIN) {
+            return {};
+        }
+        throw_system_error_on(r == -1);
+        return { size_t(r) };
+    }
+    void bind(sockaddr& sa, socklen_t sl) {
+        auto r = ::bind(_fd, &sa, sl);
+        throw_system_error_on(r == -1);
+    }
+    void listen(int backlog) {
+        auto fd = ::listen(_fd, backlog);
+        throw_system_error_on(fd == -1);
+    }
+    boost::optional<size_t> write(const void* buf, size_t len) {
+        auto r = ::write(_fd, buf, len);
+        if (r == -1 && errno == EAGAIN) {
+            return {};
+        }
+        throw_system_error_on(r == -1);
+        return { size_t(r) };
     }
 private:
     file_desc(int fd) : _fd(fd) {}

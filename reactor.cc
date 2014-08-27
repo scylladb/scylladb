@@ -32,22 +32,15 @@ wrap_syscall(T result) {
 }
 
 reactor::reactor()
-    : _epollfd(epoll_create1(EPOLL_CLOEXEC))
-    , _io_eventfd(eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK))
-    , _io_eventfd_state(_io_eventfd)
+    : _epollfd(file_desc::epoll_create(EPOLL_CLOEXEC))
+    , _io_eventfd()
     , _io_context(0)
     , _io_context_available(max_aio) {
-    assert(_epollfd != -1);
-    assert(_io_eventfd != -1);
     auto r = ::io_setup(max_aio, &_io_context);
     assert(r >= 0);
-    readable(_io_eventfd_state).then([this] {
-        process_io();
+    _io_eventfd.wait().then([this] (size_t count) {
+        process_io(count);
     });
-}
-
-reactor::~reactor() {
-    ::close(_epollfd);
 }
 
 future<> reactor::get_epoll_future(pollable_fd_state& pfd,
@@ -63,7 +56,7 @@ future<> reactor::get_epoll_future(pollable_fd_state& pfd,
         ::epoll_event eevt;
         eevt.events = pfd.events_epoll;
         eevt.data.ptr = &pfd;
-        int r = ::epoll_ctl(_epollfd, ctl, pfd.fd, &eevt);
+        int r = ::epoll_ctl(_epollfd.get(), ctl, pfd.fd.get(), &eevt);
         assert(r == 0);
     }
     pfd.*pr = promise<>();
@@ -80,22 +73,21 @@ future<> reactor::writeable(pollable_fd_state& fd) {
 
 void reactor::forget(pollable_fd_state& fd) {
     if (fd.events_epoll) {
-        ::epoll_ctl(_epollfd, EPOLL_CTL_DEL, fd.fd, nullptr);
+        ::epoll_ctl(_epollfd.get(), EPOLL_CTL_DEL, fd.fd.get(), nullptr);
     }
 }
 
 pollable_fd
 reactor::listen(socket_address sa, listen_options opts) {
-    int fd = ::socket(sa.u.sa.sa_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-    assert(fd != -1);
+    file_desc fd = file_desc::socket(sa.u.sa.sa_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (opts.reuse_address) {
         int opt = 1;
-        ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        fd.setsockopt(SOL_SOCKET, SO_REUSEADDR, opt);
     }
-    int r = ::bind(fd, &sa.u.sa, sizeof(sa.u.sas));
-    throw_system_error_on(r == -1);
-    ::listen(fd, 100);
-    return pollable_fd(fd);
+
+    fd.bind(sa.u.sa, sizeof(sa.u.sas));
+    fd.listen(100);
+    return pollable_fd(std::move(fd));
 }
 
 void reactor::complete_epoll_event(pollable_fd_state& pfd, promise<> pollable_fd_state::*pr,
@@ -116,7 +108,7 @@ reactor::submit_io(Func prepare_io) {
         iocb io;
         prepare_io(io);
         io.data = pr.get();
-        io_set_eventfd(&io, _io_eventfd);
+        io_set_eventfd(&io, _io_eventfd.get_write_fd());
         iocb* p = &io;
         auto r = ::io_submit(_io_context, 1, &p);
         throw_kernel_error(r);
@@ -124,12 +116,8 @@ reactor::submit_io(Func prepare_io) {
     });
 }
 
-void reactor::process_io()
+void reactor::process_io(size_t count)
 {
-    uint64_t count;
-    auto r = ::read(_io_eventfd, &count, sizeof(count));
-    assert(r == 8);
-    assert(count);
     io_event ev[max_aio];
     auto n = ::io_getevents(_io_context, count, count, ev, NULL);
     assert(n >= 0 && size_t(n) == count);
@@ -139,8 +127,8 @@ void reactor::process_io()
         delete pr;
     }
     _io_context_available.signal(n);
-    readable(_io_eventfd_state).then([this] {
-        process_io();
+    _io_eventfd.wait().then([this] (size_t count) {
+        process_io(count);
     });
 }
 
@@ -216,7 +204,7 @@ void reactor::run() {
             current_tasks.clear();
         }
         std::array<epoll_event, 128> eevt;
-        int nr = ::epoll_wait(_epollfd, eevt.data(), eevt.size(), -1);
+        int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(), -1);
         assert(nr != -1);
         for (int i = 0; i < nr; ++i) {
             auto& evt = eevt[i];
@@ -231,7 +219,7 @@ void reactor::run() {
                 pfd->events_epoll &= ~events_to_remove;
                 evt.events = pfd->events_epoll;
                 auto op = evt.events ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
-                ::epoll_ctl(_epollfd, op, pfd->fd, &evt);
+                ::epoll_ctl(_epollfd.get(), op, pfd->fd.get(), &evt);
             }
         }
     }
@@ -280,24 +268,20 @@ void thread_pool::complete() {
     });
 }
 
-int writeable_eventfd::try_create_eventfd(size_t initial) {
+file_desc writeable_eventfd::try_create_eventfd(size_t initial) {
     assert(size_t(int(initial)) == initial);
-    int r = ::eventfd(initial, EFD_CLOEXEC);
-    throw_system_error_on(r == -1);
-    return r;
+    return file_desc::eventfd(initial, EFD_CLOEXEC);
 }
 
 void writeable_eventfd::signal(size_t count) {
     uint64_t c = count;
-    auto r = ::write(_fd, &c, sizeof(c));
+    auto r = _fd.write(&c, sizeof(c));
     assert(r == sizeof(c));
 }
 
-int readable_eventfd::try_create_eventfd(size_t initial) {
+file_desc readable_eventfd::try_create_eventfd(size_t initial) {
     assert(size_t(int(initial)) == initial);
-    int r = ::eventfd(initial, EFD_CLOEXEC | EFD_NONBLOCK);
-    throw_system_error_on(r == -1);
-    return r;
+    return file_desc::eventfd(initial, EFD_CLOEXEC | EFD_NONBLOCK);
 }
 
 future<size_t> readable_eventfd::wait() {
