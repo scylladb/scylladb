@@ -283,10 +283,25 @@ class virtio_net_device : public net::device {
             _rxq_kick_fd = _txq_kick.get_read_fd();
         }
     };
+    struct net_hdr {
+        uint8_t needs_csum : 1;
+        uint8_t flags_reserved : 7;
+        enum { gso_none = 0, gso_tcpv4 = 1, gso_udp = 3, gso_tcpv6 = 4, gso_ecn = 0x80 };
+        uint8_t gso_type;
+        uint16_t hdr_len;
+        uint16_t gso_size;
+        uint16_t csum_start;
+        uint16_t csum_offset;
+    };
+    struct net_hdr_mrg : net_hdr {
+        uint16_t num_buffers;
+    };
     class txq {
+        virtio_net_device& _dev;
         vring _ring;
     public:
-        txq(vring::config config, readable_eventfd notified, writeable_eventfd kicked);
+        txq(virtio_net_device& dev, vring::config config,
+                readable_eventfd notified, writeable_eventfd kicked);
         void run() { _ring.run(); }
         future<> post(packet p);
     private:
@@ -297,7 +312,6 @@ class virtio_net_device : public net::device {
     class rxq  {
         virtio_net_device& _dev;
         vring _ring;
-        size_t _header_len = 10; // adjust for mrg_buf
     public:
         rxq(virtio_net_device& _if,
                 vring::config config, readable_eventfd notified, writeable_eventfd kicked);
@@ -307,6 +321,7 @@ class virtio_net_device : public net::device {
         void received(char* buffer);
     };
 private:
+    size_t _header_len = sizeof(net_hdr); // adjust for mrg_buf
     file_desc _tap_fd;
     file_desc _vhost_fd;
     std::unique_ptr<char[], free_deleter> _txq_storage;
@@ -325,8 +340,9 @@ public:
     virtual future<> send(packet p) override;
 };
 
-virtio_net_device::txq::txq(vring::config config, readable_eventfd notified, writeable_eventfd kicked)
-    : _ring(config, std::move(notified), std::move(kicked),
+virtio_net_device::txq::txq(virtio_net_device& dev, vring::config config,
+        readable_eventfd notified, writeable_eventfd kicked)
+    : _dev(dev), _ring(config, std::move(notified), std::move(kicked),
             [this] (semaphore& available) { return transmit(available); }) {
 }
 
@@ -340,8 +356,8 @@ virtio_net_device::txq::transmit(semaphore& available) {
         vring::buffer b;
         // dirty hack: assume there is a header there instead of allocating
         // it ourself
-        b.addr = virt_to_phys(p.fragments[0].base - 10);
-        b.len = p.fragments[0].size + 10;
+        b.addr = virt_to_phys(p.fragments[0].base - _dev._header_len);
+        b.len = p.fragments[0].size + _dev._header_len;
         b.writeable = false;
         // schedule packet destruction
         b.completed.get_future().then([p = std::move(p)] (size_t) {});
@@ -382,7 +398,7 @@ virtio_net_device::rxq::prepare_buffers(semaphore& available) {
             b.len = 4096;
             b.writeable = true;
             b.completed.get_future().then([this, buf = buf.get()] (size_t len) {
-                packet p(fragment{buf + _header_len, len - _header_len},
+                packet p(fragment{buf + _dev._header_len, len - _dev._header_len},
                         [buf] { delete[] buf; });
                 _dev.queue_rx_packet(std::move(p));
             });
@@ -399,7 +415,7 @@ virtio_net_device::virtio_net_device(sstring tap_device, init x)
     , _vhost_fd(file_desc::open("/dev/vhost-net", O_RDWR))
     , _txq_storage(allocate_aligned_buffer<char>(3*4096, 4096))
     , _rxq_storage(allocate_aligned_buffer<char>(3*4096, 4096))
-    , _txq(txq_config(), std::move(x._txq_notify), std::move(x._txq_kick))
+    , _txq(*this, txq_config(), std::move(x._txq_notify), std::move(x._txq_kick))
     , _rxq(*this, rxq_config(), std::move(x._rxq_notify), std::move(x._rxq_kick)) {
     assert(tap_device.size() + 1 <= IFNAMSIZ);
     ifreq ifr = {};
