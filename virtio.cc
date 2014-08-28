@@ -382,11 +382,8 @@ virtio_net_device::rxq::prepare_buffers(semaphore& available) {
             b.len = 4096;
             b.writeable = true;
             b.completed.get_future().then([this, buf = buf.get()] (size_t len) {
-                packet p;
-                p.fragments.push_back(fragment{buf + _header_len, len - _header_len});
-                p.completed.get_future().then([buf] {
-                    delete[] buf;
-                });
+                packet p(fragment{buf + _header_len, len - _header_len},
+                        [buf] { delete[] buf; });
                 _dev.queue_rx_packet(std::move(p));
             });
             bc.push_back(std::move(b));

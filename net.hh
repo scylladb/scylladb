@@ -9,25 +9,94 @@
 
 namespace net {
 
+class packet;
+
 struct fragment {
     char* base;
     size_t size;
 };
 
-struct packet {
-    ~packet() {
-        if (len) {
-            completed.set_value();
-        }
+// Zero-copy friendly packet class
+//
+// For implementing zero-copy, we need a flexible destructor that can
+// destroy packet data in different ways: decrementing a reference count,
+// or calling a free()-like function.
+//
+// Moreover, we need different destructors for each set of fragments within
+// a single fragment. For example, a header and trailer might need delete[]
+// to be called, while the internal data needs a reference count to be
+// released.  Matters are complicated in that fragments can be split
+// (due to virtual/physical translation).
+//
+// To implement this, we associate each packet with a single destructor,
+// but allow composing a packet from another packet plus a fragment to
+// be added, with its own destructor, causing the destructors to be chained.
+//
+// The downside is that the data needed for the destructor is duplicated,
+// if it is already available in the fragment itself.
+//
+// As an optimization, when we allocate small fragments, we allocate some
+// extra space, so prepending to the packet does not require extra
+// allocations.  This is useful when adding headers.
+//
+class packet final {
+    // enough for lots of headers, not quite two cache lines:
+    static constexpr size_t internal_data_size = 128 - 16;
+    struct deleter {
+        std::unique_ptr<deleter> next;
+        deleter(std::unique_ptr<deleter> next) : next(std::move(next)) {}
+        virtual ~deleter() {};
+    };
+    struct internal_deleter final : deleter {
+        // FIXME: make buf an std::array<>?
+        char* buf;
+        unsigned free_head;
+        internal_deleter(std::unique_ptr<deleter> next, char* buf, unsigned free_head)
+            : deleter(std::move(next)), buf(buf), free_head(free_head) {}
+        virtual ~internal_deleter() override { delete[] buf; }
+    };
+    template <typename Deleter>
+    struct lambda_deleter final : deleter {
+        Deleter del;
+        lambda_deleter(std::unique_ptr<deleter> next, Deleter&& del)
+            : deleter(std::move(next)), del(std::move(del)) {}
+        virtual ~lambda_deleter() override { del(); }
+    };
+    template <typename Deleter>
+    std::unique_ptr<deleter>
+    make_deleter(std::unique_ptr<deleter> next, Deleter d) {
+        return std::unique_ptr<deleter>(new lambda_deleter<Deleter>(std::move(next), std::move(d)));
     }
-    packet() = default;
-    packet(packet&& x)
-        : fragments(std::move(x.fragments)), len(x.len), completed(std::move(x.completed)) {
-        x.len = 0;
-    }
+    // when destroyed, virtual destructor will reclaim resources
+    std::unique_ptr<deleter> _deleter;
+public:
     std::vector<fragment> fragments;
     unsigned len = 0;
-    promise<> completed;
+public:
+    // build empty packet
+    packet() = default;
+    // move existing packet
+    packet(packet&& x);
+    // copy data into packet
+    packet(char* data, size_t len);
+    // copy data into packet
+    packet(fragment frag);
+    // zero-copy single fragment
+    template <typename Deleter>
+    packet(fragment frag, Deleter deleter);
+    // zero-copy multiple fragment
+    template <typename Deleter>
+    packet(std::vector<fragment> frag, Deleter deleter);
+    // append fragment (copying new fragment)
+    packet(packet&& x, fragment frag);
+    // prepend fragment (copying new fragment, with header optimization)
+    packet(fragment frag, packet&& x);
+    // prepend fragment (zero-copy)
+    template <typename Deleter>
+    packet(fragment frag, Deleter deleter, packet&& x);
+    // append fragment (zero-copy)
+    template <typename Deleter>
+    packet(packet&& x, fragment frag, Deleter deleter);
 };
 
 class device {
@@ -36,6 +105,100 @@ public:
     virtual future<packet> receive() = 0;
     virtual future<> send(packet p) = 0;
 };
+
+inline
+packet::packet(packet&& x)
+    : _deleter(std::move(x._deleter)), fragments(std::move(x.fragments)), len(x.len) {
+    x.len = 0;
+}
+
+inline
+packet::packet(fragment frag) : len(frag.size) {
+    auto flen = std::max(frag.size, internal_data_size);
+    std::unique_ptr<char[]> buf{new char[flen]};
+    std::copy(frag.base, frag.base + frag.size, buf.get() + flen - frag.size);
+    fragments.push_back(frag);
+    _deleter.reset(new internal_deleter(std::unique_ptr<deleter>(),
+            buf.release(), flen - frag.size));
+}
+
+inline
+packet::packet(char* data, size_t size) : packet(fragment{data, size}) {
+}
+
+template <typename Deleter>
+inline
+packet::packet(fragment frag, Deleter d)
+    : _deleter(make_deleter(std::unique_ptr<deleter>(), std::move(d))) {
+    fragments.push_back(frag);
+    len = frag.size;
+}
+
+template <typename Deleter>
+inline
+packet::packet(std::vector<fragment> frag, Deleter d)
+    : _deleter(make_deleter(std::unique_ptr<deleter>(), std::move(d)))
+    , fragments(std::move(frag))
+    , len(0) {
+    for (auto&& f : fragments) {
+        len += f.size;
+    }
+}
+
+inline
+packet::packet(packet&& x, fragment frag)
+    : fragments(std::move(x.fragments))
+    , len(x.len + frag.size) {
+    std::unique_ptr<char[]> buf(new char[frag.size]);
+    std::copy(frag.base, frag.base + frag.size, buf.get());
+    _deleter = make_deleter(std::move(x._deleter), [buf = buf.release()] {
+        delete[] buf;
+    });
+    x.len = 0;
+}
+
+inline
+packet::packet(fragment frag, packet&& x)
+    : _deleter(std::move(x._deleter)), len(x.len + frag.size) {
+    // try to prepend into existing internal fragment
+    auto id = dynamic_cast<internal_deleter*>(x._deleter.get());
+    if (id && id->free_head >= frag.size) {
+        id->free_head -= frag.size;
+        fragments[0].base -= frag.size;
+        fragments[0].size += frag.size;
+        std::copy(frag.base, frag.base + frag.size, fragments[0].base);
+    } else {
+        // didn't work out, allocate and copy
+        auto size = std::max(frag.size, internal_data_size);
+        std::unique_ptr<char[]> buf(new char[size]);
+        fragments.reserve(x.fragments.size() + 1);
+        fragments.push_back({buf.get() + size - frag.size, frag.size});
+        std::copy(x.fragments.begin(), x.fragments.end(), std::back_inserter(fragments));
+        x.fragments.clear();
+        _deleter.reset(new internal_deleter(std::move(_deleter), buf.release(), size - frag.size));
+    }
+    x.len = 0;
+}
+
+template <typename Deleter>
+inline
+packet::packet(fragment frag, Deleter d, packet&& x) : len(x.len + frag.size) {
+    fragments.reserve(x.fragments.size() + 1);
+    fragments.push_back(frag);
+    std::copy(x.fragments.begin(), x.fragments.end(), std::back_inserter(fragments));
+    x.fragments.clear();
+    _deleter.reset(make_deleter(std::move(_deleter), d));
+    x.len = 0;
+}
+
+template <typename Deleter>
+inline
+packet::packet(packet&& x, fragment frag, Deleter d)
+    : fragments(std::move(x.fragments)), len(x.len + frag.size) {
+    fragments.push_back(frag);
+    _deleter.reset(make_deleter(std::move(_deleter), d));
+    x.len = 0;
+}
 
 }
 
