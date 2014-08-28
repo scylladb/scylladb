@@ -349,22 +349,32 @@ virtio_net_device::txq::txq(virtio_net_device& dev, vring::config config,
 
 future<std::vector<vring::buffer_chain>>
 virtio_net_device::txq::transmit(semaphore& available) {
-    return _tx_queue_length.wait().then([this] {
+    return _tx_queue_length.wait().then([this, &available] {
         auto p = std::move(_tx_queue.front());
         _tx_queue.pop();
-        std::vector<vring::buffer_chain> vbc;
-        vring::buffer_chain bc;
-        vring::buffer b;
-        // dirty hack: assume there is a header there instead of allocating
-        // it ourself
-        b.addr = virt_to_phys(p.fragments[0].base - _dev._header_len);
-        b.len = p.fragments[0].size + _dev._header_len;
-        b.writeable = false;
-        // schedule packet destruction
-        b.completed.get_future().then([p = std::move(p)] (size_t) {});
-        bc.push_back(std::move(b));
-        vbc.push_back(std::move(bc));
-        return make_ready_future<std::vector<vring::buffer_chain>>(std::move(vbc));
+        net_hdr_mrg vhdr;
+        vhdr.needs_csum = 0;
+        vhdr.flags_reserved = 0;
+        vhdr.gso_type = 0;
+        // prepend virtio-net header
+        packet q = packet(fragment{reinterpret_cast<char*>(&vhdr), _dev._header_len},
+                std::move(p));
+        auto nbufs = q.fragments.size();
+        return available.wait(nbufs).then([this, p = std::move(q)] () mutable {
+            std::vector<vring::buffer_chain> vbc;
+            vring::buffer_chain bc;
+            for (auto&& f : p.fragments) {
+                vring::buffer b;
+                b.addr = virt_to_phys(f.base);
+                b.len = f.size;
+                b.writeable = false;
+                bc.push_back(std::move(b));
+            }
+            // schedule packet destruction
+            bc[0].completed.get_future().then([p = std::move(p)] (size_t) {});
+            vbc.push_back(std::move(bc));
+            return make_ready_future<std::vector<vring::buffer_chain>>(std::move(vbc));
+        });
     });
 }
 
