@@ -236,6 +236,7 @@ void vring::run() {
                 d._flags = {};
                 d._flags.writeable = i->writeable;
                 d._flags.has_next = has_prev;
+                has_prev = true;
                 d._next = prev_desc_idx;
                 d._paddr = i->addr;
                 d._len = i->len;
