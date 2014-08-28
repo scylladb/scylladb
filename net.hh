@@ -171,6 +171,7 @@ packet::packet(fragment frag, packet&& x)
         // didn't work out, allocate and copy
         auto size = std::max(frag.size, internal_data_size);
         std::unique_ptr<char[]> buf(new char[size]);
+        std::copy(frag.base, frag.base + frag.size, buf.get() + size - frag.size);
         fragments.reserve(x.fragments.size() + 1);
         fragments.push_back({buf.get() + size - frag.size, frag.size});
         std::copy(x.fragments.begin(), x.fragments.end(), std::back_inserter(fragments));
