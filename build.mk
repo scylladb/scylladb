@@ -40,6 +40,6 @@ httpd: httpd.o reactor.o
 
 fileiotest: fileiotest.o reactor.o
 
-virtiotest: virtiotest.o virtio.o reactor.o ip.o
+virtiotest: virtiotest.o virtio.o reactor.o net.o ip.o
 
 -include *.d
