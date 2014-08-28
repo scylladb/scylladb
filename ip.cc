@@ -23,7 +23,7 @@ uint16_t ip_checksum(void* data, size_t len) {
         csum += (csum < old);
         len -= 2;
     }
-    auto p8 = reinterpret_cast<uint16_t*>(p16);
+    auto p8 = reinterpret_cast<uint8_t*>(p16);
     if (len) {
         auto old = csum;
         csum += *p8++;
