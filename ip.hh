@@ -26,48 +26,70 @@ inline void hton(uint16_t& x) { x = htons(x); }
 inline void ntoh(uint32_t& x) { x = ntohl(x); }
 inline void hton(uint32_t& x) { x = htonl(x); }
 
-// gcc (correctly) won't bind a packed uint16_t to a reference,
-// so bypass it by sending a pointer.
-// FIXME: this is broken on machines that don't support unaligned
-// loads with the normal instructions.
-inline void ntoh(uint16_t* x) { *x = ntohs(*x); }
-inline void hton(uint16_t* x) { *x = htons(*x); }
-inline void ntoh(uint32_t* x) { *x = ntohl(*x); }
-inline void hton(uint32_t* x) { *x = htonl(*x); }
+// Wrapper around a primitive type to provide an unaligned version.
+// This is because gcc (correctly) doesn't allow binding an unaligned
+// scalar variable to a reference, and (unfortunately) doesn't allow
+// specifying unaligned references.
+//
+// So, packed<uint32_t>& is our way of passing a reference (or pointer)
+// to a uint32_t around, without losing the knowledge about its alignment
+// or lack thereof.
+template <typename T>
+struct packed {
+    T raw;
+    packed() = default;
+    packed(T x) : raw(x) {}
+    packed& operator=(const T& x) { raw = x; return *this; }
+    operator T() const { return raw; }
+} __attribute__((packed));
 
-template <typename First, typename... Rest>
-inline
-void ntoh(First&& first, Rest&&... rest) {
-    ntoh(*(std::remove_reference_t<First>*)&first);
-    ntoh(std::forward<Rest>(rest)...);
+template <typename T>
+inline void ntoh(packed<T>& x) {
+    T v = x;
+    ntoh(v);
+    x = v;
+}
+
+template <typename T>
+inline void hton(packed<T>& x) {
+    T v = x;
+    hton(v);
+    x = v;
 }
 
 template <typename First, typename... Rest>
 inline
-void hton(First&& first, Rest... rest) {
-    hton(*(std::remove_reference_t<First>*)&first);
-    hton(std::forward<Rest>(rest)...);
+void ntoh(First& first, Rest&... rest) {
+    ntoh(first);
+    ntoh(std::forward<Rest&>(rest)...);
+}
+
+template <typename First, typename... Rest>
+inline
+void hton(First& first, Rest&... rest) {
+    hton(first);
+    hton(std::forward<Rest&>(rest)...);
 }
 
 template <class T>
 inline
 void ntoh(T& x) {
-    x.adjust_endianness([] (auto&&... what) { ntoh(std::forward<decltype(what)>(what)...); });
+    x.adjust_endianness([] (auto&... what) { ntoh(std::forward<decltype(what)&>(what)...); });
 }
 
 template <class T>
 inline
 void hton(T& x) {
-    x.adjust_endianness([] (auto&&... what) { hton(std::forward<decltype(what)>(what)...); });
+    x.adjust_endianness([] (auto&... what) { hton(std::forward<decltype(what)&>(what)...); });
 }
 
 struct eth_hdr {
     std::array<uint8_t, 6> dst_mac;
     std::array<uint8_t, 6>  src_mac;
-    uint16_t eth_proto;
+    packed<uint16_t> eth_proto;
     template <typename Adjuster>
     auto adjust_endianness(Adjuster a) {
-        return a(&eth_proto);
+        return a(eth_proto);
     }
 } __attribute__((packed));
 
@@ -76,26 +98,26 @@ struct ip_hdr {
     uint8_t ver : 4;
     uint8_t dscp : 6;
     uint8_t ecn : 2;
-    uint16_t len;
-    uint16_t id;
-    uint16_t frag;
+    packed<uint16_t> len;
+    packed<uint16_t> id;
+    packed<uint16_t> frag;
     uint8_t ttl;
     uint8_t ip_proto;
-    uint16_t csum;
-    uint32_t src_ip;
-    uint32_t dst_ip;
+    packed<uint16_t> csum;
+    packed<uint32_t> src_ip;
+    packed<uint32_t> dst_ip;
     uint8_t options[0];
     template <typename Adjuster>
     auto adjust_endianness(Adjuster a) {
-        return a(&len, &id, &frag, &csum, &src_ip, &dst_ip);
+        return a(len, id, frag, csum, src_ip, dst_ip);
     }
 } __attribute__((packed));
 
 struct icmp_hdr {
     uint8_t type;
     uint8_t code;
-    uint16_t csum;
-    uint32_t rest;
+    packed<uint16_t> csum;
+    packed<uint32_t> rest;
     template <typename Adjuster>
     auto adjust_endianness(Adjuster a) {
         return a(csum);
