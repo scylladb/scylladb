@@ -34,6 +34,10 @@ future<packet, ethernet_address> l3_protocol::receive() {
     return _netif->receive(_proto_num);
 };
 
+future<> l3_protocol::send(ethernet_address to, packet p) {
+    return _netif->send(_proto_num, to, std::move(p));
+}
+
 future<packet, ethernet_address> interface::receive(uint16_t proto_num) {
     auto& pr = _proto_map[proto_num] = promise<packet, ethernet_address>();
     return pr.get_future();
@@ -58,6 +62,15 @@ void interface::run() {
         }
         run();
     });
+}
+
+future<> interface::send(uint16_t proto_num, ethernet_address to, packet p) {
+    eth_hdr eh;
+    eh.dst_mac = to;
+    eh.src_mac = _hw_address;
+    eh.eth_proto = proto_num;
+    hton(eh);
+    return _dev->send(packet(fragment{reinterpret_cast<char*>(&eh), sizeof(eh)}, std::move(p)));
 }
 
 }
