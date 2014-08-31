@@ -39,6 +39,10 @@ future<packet, ethernet_address> interface::receive(uint16_t proto_num) {
     return pr.get_future();
 }
 
+interface::interface(std::unique_ptr<device> dev)
+    : _dev(std::move(dev)), _hw_address(_dev->hw_address()) {
+}
+
 void interface::run() {
     _dev->receive().then([this] (packet p) {
         auto eh = p.get_header<eth_hdr>(0);

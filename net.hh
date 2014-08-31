@@ -132,11 +132,13 @@ private:
 class interface {
     std::unique_ptr<device> _dev;
     std::unordered_map<uint16_t, promise<packet, ethernet_address>> _proto_map;
+    ethernet_address _hw_address;
 private:
     future<packet, ethernet_address> receive(uint16_t proto_num);
     future<> send(uint16_t proto_num, ethernet_address to, packet p);
 public:
-    explicit interface(std::unique_ptr<device> dev) : _dev(std::move(dev)) {}
+    explicit interface(std::unique_ptr<device> dev);
+    ethernet_address hw_address() { return _hw_address; }
     void run();
     friend class l3_protocol;
 };
@@ -146,6 +148,7 @@ public:
     virtual ~device() {}
     virtual future<packet> receive() = 0;
     virtual future<> send(packet p) = 0;
+    virtual ethernet_address hw_address() = 0;
 };
 
 inline

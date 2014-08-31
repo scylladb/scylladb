@@ -339,6 +339,7 @@ public:
     explicit virtio_net_device(sstring tap_device, init x = init());
     virtual future<packet> receive() override;
     virtual future<> send(packet p) override;
+    virtual ethernet_address hw_address() override;
 };
 
 virtio_net_device::txq::txq(virtio_net_device& dev, vring::config config,
@@ -512,6 +513,10 @@ virtio_net_device::send(packet p) {
 void virtio_net_device::queue_rx_packet(packet p) {
     _rx_queue.push(std::move(p));
     _rx_queue_length.signal(1);
+}
+
+ethernet_address virtio_net_device::hw_address() {
+    return { 0x12, 0x23, 0x34, 0x56, 0x67, 0x78 };
 }
 
 std::unique_ptr<net::device> create_virtio_net_device(sstring tap_device) {
