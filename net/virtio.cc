@@ -353,10 +353,8 @@ virtio_net_device::txq::transmit(semaphore& available) {
     return _tx_queue_length.wait().then([this, &available] {
         auto p = std::move(_tx_queue.front());
         _tx_queue.pop();
-        net_hdr_mrg vhdr;
-        vhdr.needs_csum = 0;
-        vhdr.flags_reserved = 0;
-        vhdr.gso_type = 0;
+        // Linux requires that hdr_len be sane even if gso is disabled.
+        net_hdr_mrg vhdr = {};
         // prepend virtio-net header
         packet q = packet(fragment{reinterpret_cast<char*>(&vhdr), _dev._header_len},
                 std::move(p));
