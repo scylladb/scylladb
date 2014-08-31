@@ -15,16 +15,21 @@ libs = -laio -ltcmalloc
 
 CXXFLAGS = -std=gnu++1y -g -Wall -Werror $(opt) -MD -MT $@ -MP $(sanitize) -fvisibility=hidden $(libs)
 CXXFLAGS += -pthread
+CXXFLAGS += -I $(src)
 
 # Ubuntu fails without this, see https://bugs.launchpad.net/ubuntu/+source/gcc-defaults/+bug/1228201
 CXXFLAGS += -Wl,--no-as-needed 
 
 tests = test-reactor fileiotest virtiotest l3_test ip_test
 
-link = $(CXX) $(CXXFLAGS) -o $@ $^
+link = mkdir -p $(@D) && $(CXX) $(CXXFLAGS) -o $@ $^
+compile = mkdir -p $(@D) && $(CXX) $(CXXFLAGS) -c -o $@ $<
 
 %: %.o
 	$(link)
+
+%.o: %.cc
+	$(compile)
 
 all: seastar $(tests) httpd
 
@@ -46,4 +51,4 @@ l3_test: l3_test.o virtio.o reactor.o net.o ip.o ethernet.o arp.o
 
 ip_test: ip_test.o virtio.o reactor.o net.o ip.o arp.o ethernet.o
 
--include *.d
+-include $(shell find -name '*.d')
