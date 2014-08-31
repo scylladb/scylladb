@@ -4,7 +4,7 @@
  */
 
 #include "ip.hh"
-#include "print.hh"
+#include "core/print.hh"
 
 namespace net {
 

@@ -7,7 +7,7 @@
 
 #include <memory>
 #include "net.hh"
-#include "sstring.hh"
+#include "core/sstring.hh"
 
 std::unique_ptr<net::device> create_virtio_net_device(sstring tap_device);
 

@@ -20,7 +20,7 @@ CXXFLAGS += -I $(src)
 # Ubuntu fails without this, see https://bugs.launchpad.net/ubuntu/+source/gcc-defaults/+bug/1228201
 CXXFLAGS += -Wl,--no-as-needed 
 
-tests = test-reactor fileiotest virtiotest l3_test ip_test
+tests = tests/test-reactor tests/fileiotest tests/virtiotest tests/l3_test tests/ip_test
 
 link = mkdir -p $(@D) && $(CXX) $(CXXFLAGS) -o $@ $^
 compile = mkdir -p $(@D) && $(CXX) $(CXXFLAGS) -c -o $@ $<
@@ -31,24 +31,24 @@ compile = mkdir -p $(@D) && $(CXX) $(CXXFLAGS) -c -o $@ $<
 %.o: %.cc
 	$(compile)
 
-all: seastar $(tests) httpd
+all: apps/seastar/seastar $(tests) apps/httpd/httpd
 
 clean:
 	rm seastar $(tests) *.o
 
-seastar: main.o reactor.o
+apps/seastar/seastar: apps/seastar/main.o core/reactor.o
 	$(link)
 
-test-reactor: test-reactor.o reactor.o
+tests/test-reactor: tests/test-reactor.o core/reactor.o
 
-httpd: httpd.o reactor.o
+apps/httpd/httpd: apps/httpd/httpd.o core/reactor.o
 
-fileiotest: fileiotest.o reactor.o
+tests/fileiotest: tests/fileiotest.o core/reactor.o
 
-virtiotest: virtiotest.o virtio.o reactor.o net.o ip.o ethernet.o arp.o
+tests/virtiotest: tests/virtiotest.o net/virtio.o core/reactor.o net/net.o net/ip.o net/ethernet.o net/arp.o
 
-l3_test: l3_test.o virtio.o reactor.o net.o ip.o ethernet.o arp.o
+tests/l3_test: tests/l3_test.o net/virtio.o core/reactor.o net/net.o net/ip.o net/ethernet.o net/arp.o
 
-ip_test: ip_test.o virtio.o reactor.o net.o ip.o arp.o ethernet.o
+tests/ip_test: tests/ip_test.o net/virtio.o core/reactor.o net/net.o net/ip.o net/arp.o net/ethernet.o
 
 -include $(shell find -name '*.d')

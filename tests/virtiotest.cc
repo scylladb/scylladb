@@ -3,9 +3,9 @@
  *
  */
 
-#include "virtio.hh"
-#include "reactor.hh"
-#include "ip.hh"
+#include "net/virtio.hh"
+#include "core/reactor.hh"
+#include "net/ip.hh"
 #include <iostream>
 #include <utility>
 #include <algorithm>

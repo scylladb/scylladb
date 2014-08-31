@@ -3,7 +3,7 @@
  */
 
 #include <algorithm>
-#include "reactor.hh"
+#include "core/reactor.hh"
 
 struct file_test {
     file_test(file&& f) : f(std::move(f)) {}

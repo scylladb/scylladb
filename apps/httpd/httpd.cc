@@ -2,8 +2,8 @@
  * Copyright 2014 Cloudius Systems
  */
 
-#include "reactor.hh"
-#include "sstring.hh"
+#include "core/reactor.hh"
+#include "core/sstring.hh"
 #include <iostream>
 #include <algorithm>
 #include <unordered_map>

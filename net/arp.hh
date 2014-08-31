@@ -7,10 +7,10 @@
 #define ARP_HH_
 
 #include "net.hh"
-#include "reactor.hh"
+#include "core/reactor.hh"
 #include "byteorder.hh"
 #include "ethernet.hh"
-#include "print.hh"
+#include "core/print.hh"
 #include <unordered_map>
 
 namespace net {

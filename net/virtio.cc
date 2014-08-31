@@ -3,10 +3,10 @@
  */
 
 #include "virtio.hh"
-#include "posix.hh"
-#include "vla.hh"
+#include "core/posix.hh"
+#include "core/vla.hh"
 #include "virtio-interface.hh"
-#include "reactor.hh"
+#include "core/reactor.hh"
 #include <atomic>
 #include <vector>
 #include <queue>

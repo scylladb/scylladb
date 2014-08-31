@@ -5,7 +5,7 @@
 #ifndef NET_HH_
 #define NET_HH_
 
-#include "reactor.hh"
+#include "core/reactor.hh"
 #include "ethernet.hh"
 #include <unordered_map>
 

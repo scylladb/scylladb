@@ -2,11 +2,11 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
-#include "arp.hh"
-#include "ip.hh"
-#include "net.hh"
-#include "reactor.hh"
-#include "virtio.hh"
+#include "net/arp.hh"
+#include "net/ip.hh"
+#include "net/net.hh"
+#include "core/reactor.hh"
+#include "net/virtio.hh"
 
 using namespace net;
 

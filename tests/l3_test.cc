@@ -2,9 +2,9 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
-#include "net.hh"
-#include "reactor.hh"
-#include "virtio.hh"
+#include "net/net.hh"
+#include "core/reactor.hh"
+#include "net/virtio.hh"
 
 using namespace net;
 
