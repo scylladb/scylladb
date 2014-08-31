@@ -4,6 +4,9 @@
  */
 
 #include "net.hh"
+#include <utility>
+
+using std::move;
 
 namespace net {
 
@@ -25,6 +28,32 @@ void packet::linearize(size_t at_frag, size_t desired_size) {
     fragments.erase(fragments.begin() + at_frag + 1, fragments.begin() + at_frag + nr_frags);
     fragments[at_frag] = fragment{new_frag.get(), accum_size};
     _deleter = make_deleter(std::move(_deleter), [buf = std::move(new_frag)] {});
+}
+
+future<packet, ethernet_address> l3_protocol::receive() {
+    return _netif->receive(_proto_num);
+};
+
+future<packet, ethernet_address> interface::receive(uint16_t proto_num) {
+    auto& pr = _proto_map[proto_num] = promise<packet, ethernet_address>();
+    return pr.get_future();
+}
+
+void interface::run() {
+    _dev->receive().then([this] (packet p) {
+        auto eh = p.get_header<eth_hdr>(0);
+        if (eh) {
+            ntoh(*eh);
+            auto i = _proto_map.find(eh->eth_proto);
+            if (i != _proto_map.end()) {
+                auto from = eh->src_mac;
+                p.trim_front(sizeof(*eh));
+                i->second.set_value(std::move(p), from);
+                _proto_map.erase(i);
+            }
+        }
+        run();
+    });
 }
 
 }

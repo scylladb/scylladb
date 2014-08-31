@@ -6,10 +6,15 @@
 #define NET_HH_
 
 #include "reactor.hh"
+#include "ip.hh"
+#include <unordered_map>
 
 namespace net {
 
 class packet;
+class interface;
+class device;
+class l3_protocol;
 
 struct fragment {
     char* base;
@@ -109,6 +114,30 @@ public:
 
 private:
     void linearize(size_t at_frag, size_t desired_size);
+};
+
+class l3_protocol {
+    interface* _netif;
+    uint16_t _proto_num;
+public:
+    explicit l3_protocol(interface* netif, uint16_t proto_num) : _netif(netif), _proto_num(proto_num) {}
+    future<> send(ethernet_address to, packet p);
+    future<packet, ethernet_address> receive();
+private:
+    void received(packet p);
+    friend class interface;
+};
+
+class interface {
+    std::unique_ptr<device> _dev;
+    std::unordered_map<uint16_t, promise<packet, ethernet_address>> _proto_map;
+private:
+    future<packet, ethernet_address> receive(uint16_t proto_num);
+    future<> send(uint16_t proto_num, ethernet_address to, packet p);
+public:
+    explicit interface(std::unique_ptr<device> dev) : _dev(std::move(dev)) {}
+    void run();
+    friend class l3_protocol;
 };
 
 class device {
