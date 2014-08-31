@@ -15,6 +15,38 @@ namespace net {
 
 uint16_t ip_checksum(void* data, size_t len);
 
+struct ipv4_address {
+    ipv4_address() : ip(0) {}
+    explicit ipv4_address(uint32_t ip) : ip(ip) {}
+
+    packed<uint32_t> ip;
+
+    template <typename Adjuster>
+    auto adjust_endianness(Adjuster a) { return a(ip); }
+
+    friend bool operator==(ipv4_address x, ipv4_address y) {
+        return x.ip == y.ip;
+    }
+    friend bool operator!=(ipv4_address x, ipv4_address y) {
+        return x.ip != y.ip;
+    }
+} __attribute__((packed));
+
+std::ostream& operator<<(std::ostream& os, ipv4_address a);
+
+}
+
+namespace std {
+
+template <>
+struct hash<net::ipv4_address> {
+    size_t operator()(net::ipv4_address a) const { return a.ip; }
+};
+
+}
+
+namespace net {
+
 struct ip_hdr {
     uint8_t ihl : 4;
     uint8_t ver : 4;
@@ -26,8 +58,8 @@ struct ip_hdr {
     uint8_t ttl;
     uint8_t ip_proto;
     packed<uint16_t> csum;
-    packed<uint32_t> src_ip;
-    packed<uint32_t> dst_ip;
+    ipv4_address src_ip;
+    ipv4_address dst_ip;
     uint8_t options[0];
     template <typename Adjuster>
     auto adjust_endianness(Adjuster a) {

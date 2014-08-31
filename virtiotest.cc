@@ -50,7 +50,7 @@ future<> echo_packet(net::device& netif, packet p) {
     std::swap(eh->src_mac, eh->dst_mac);
     eh->src_mac = { 0x12, 0x23, 0x45, 0x56, 0x67, 0x68 };
     auto x = iph->src_ip;
-    iph->src_ip = 0xc0a87a02; // 192.168.122.2
+    iph->src_ip = ipv4_address(0xc0a87a02); // 192.168.122.2
     iph->dst_ip = x;
     icmph->type = 0;
     icmph->csum = 0;

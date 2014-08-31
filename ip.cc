@@ -4,8 +4,18 @@
  */
 
 #include "ip.hh"
+#include "print.hh"
 
 namespace net {
+
+std::ostream& operator<<(std::ostream& os, ipv4_address a) {
+    auto ip = a.ip;
+    return fprint(os, "%d.%d.%d.%d",
+            (ip >> 24) & 0xff,
+            (ip >> 16) & 0xff,
+            (ip >> 8) & 0xff,
+            (ip >> 0) & 0xff);
+}
 
 uint16_t ip_checksum(void* data, size_t len) {
     uint64_t csum = 0;
