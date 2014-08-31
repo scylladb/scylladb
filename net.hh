@@ -97,6 +97,18 @@ public:
     // append fragment (zero-copy)
     template <typename Deleter>
     packet(packet&& x, fragment frag, Deleter deleter);
+
+    void trim_front(size_t how_much);
+
+    // get a header pointer, linearizing if necessary
+    template <typename Header>
+    Header* get_header(size_t offset);
+
+    // get a header pointer, linearizing if necessary
+    char* get_header(size_t offset, size_t size);
+
+private:
+    void linearize(size_t at_frag, size_t desired_size);
 };
 
 class device {
@@ -200,6 +212,44 @@ packet::packet(packet&& x, fragment frag, Deleter d)
     _deleter.reset(make_deleter(std::move(_deleter), d));
     x.len = 0;
 }
+
+inline
+char* packet::get_header(size_t offset, size_t size) {
+    if (offset + size > len) {
+        return nullptr;
+    }
+    size_t i = 0;
+    while (i != fragments.size() && offset >= fragments[i].size) {
+        offset -= fragments[i++].size;
+    }
+    if (i == fragments.size()) {
+        return nullptr;
+    }
+    if (offset + size > fragments[i].size) {
+        linearize(i, offset + size);
+    }
+    return fragments[i].base + offset;
+}
+
+template <typename Header>
+inline
+Header* packet::get_header(size_t offset) {
+    return reinterpret_cast<Header*>(get_header(offset, sizeof(Header)));
+}
+
+inline
+void packet::trim_front(size_t how_much) {
+    assert(how_much <= len);
+    len -= how_much;
+    size_t i = 0;
+    while (how_much >= fragments[i].size) {
+        how_much -= fragments[i++].size;
+    }
+    fragments.erase(fragments.begin(), fragments.begin() + i);
+    fragments[0].base += how_much;
+    fragments[0].size -= how_much;
+}
+
 
 }
 
