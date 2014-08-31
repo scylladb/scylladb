@@ -40,8 +40,8 @@ httpd: httpd.o reactor.o
 
 fileiotest: fileiotest.o reactor.o
 
-virtiotest: virtiotest.o virtio.o reactor.o net.o ip.o ethernet.o
+virtiotest: virtiotest.o virtio.o reactor.o net.o ip.o ethernet.o arp.o
 
-l3_test: l3_test.o virtio.o reactor.o net.o ip.o ethernet.o
+l3_test: l3_test.o virtio.o reactor.o net.o ip.o ethernet.o arp.o
 
 -include *.d
