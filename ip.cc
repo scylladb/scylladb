@@ -45,4 +45,15 @@ uint16_t ip_checksum(void* data, size_t len) {
     return htons(~csum);
 }
 
+ipv4::ipv4(interface* netif)
+    : _netif(netif)
+    , _global_arp(netif)
+    , _arp(_global_arp) {
+}
+
+void ipv4::set_host_address(ipv4_address ip) {
+    _host_address = ip;
+    _arp.set_self_addr(ip);
+}
+
 }

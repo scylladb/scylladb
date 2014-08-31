@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <array>
 #include "byteorder.hh"
+#include "arp.hh"
 
 namespace net {
 
@@ -46,6 +47,21 @@ struct hash<net::ipv4_address> {
 }
 
 namespace net {
+
+class ipv4 {
+public:
+    using address_type = ipv4_address;
+    static address_type broadcast_address() { return ipv4_address(0xffffffff); }
+    static uint16_t arp_protocol_type() { return 0x0800; }
+private:
+    interface* _netif;
+    arp _global_arp;
+    arp_for<ipv4> _arp;
+    ipv4_address _host_address;
+public:
+    explicit ipv4(interface* netif);
+    void set_host_address(ipv4_address ip);
+};
 
 struct ip_hdr {
     uint8_t ihl : 4;
