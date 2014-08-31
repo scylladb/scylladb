@@ -7,6 +7,7 @@
 
 #include "reactor.hh"
 #include "ip.hh"
+#include "ethernet.hh"
 #include <unordered_map>
 
 namespace net {

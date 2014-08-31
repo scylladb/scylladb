@@ -13,19 +13,7 @@
 
 namespace net {
 
-using ethernet_address = std::array<uint8_t, 6>;
-
 uint16_t ip_checksum(void* data, size_t len);
-
-struct eth_hdr {
-    ethernet_address dst_mac;
-    ethernet_address src_mac;
-    packed<uint16_t> eth_proto;
-    template <typename Adjuster>
-    auto adjust_endianness(Adjuster a) {
-        return a(eth_proto);
-    }
-} __attribute__((packed));
 
 struct ip_hdr {
     uint8_t ihl : 4;
