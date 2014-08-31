@@ -7,6 +7,7 @@
 
 #include <array>
 #include "byteorder.hh"
+#include "print.hh"
 
 namespace net {
 
@@ -17,6 +18,7 @@ struct ethernet_address {
     void adjust_endianness(Adjuster a) {}
 } __attribute__((packed));
 
+std::ostream& operator<<(std::ostream& os, ethernet_address ea);
 
 struct eth_hdr {
     ethernet_address dst_mac;
