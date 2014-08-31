@@ -10,7 +10,13 @@
 
 namespace net {
 
-using ethernet_address = std::array<uint8_t, 6>;
+struct ethernet_address {
+    std::array<uint8_t, 6> mac;
+
+    template <typename Adjuster>
+    void adjust_endianness(Adjuster a) {}
+} __attribute__((packed));
+
 
 struct eth_hdr {
     ethernet_address dst_mac;
