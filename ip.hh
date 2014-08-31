@@ -12,6 +12,8 @@
 
 namespace net {
 
+using ethernet_address = std::array<uint8_t, 6>;
+
 inline uint64_t ntohq(uint64_t v) {
     return __builtin_bswap64(v);
 }
@@ -84,8 +86,8 @@ void hton(T& x) {
 }
 
 struct eth_hdr {
-    std::array<uint8_t, 6> dst_mac;
-    std::array<uint8_t, 6>  src_mac;
+    ethernet_address dst_mac;
+    ethernet_address src_mac;
     packed<uint16_t> eth_proto;
     template <typename Adjuster>
     auto adjust_endianness(Adjuster a) {
