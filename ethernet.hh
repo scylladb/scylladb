@@ -20,6 +20,14 @@ struct ethernet_address {
 
 std::ostream& operator<<(std::ostream& os, ethernet_address ea);
 
+struct ethernet {
+    using address = ethernet_address;
+    static address broadcast_address() {
+        return { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    }
+    static constexpr uint16_t arp_hardware_type() { return 1; }
+};
+
 struct eth_hdr {
     ethernet_address dst_mac;
     ethernet_address src_mac;
