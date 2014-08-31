@@ -19,7 +19,7 @@ CXXFLAGS += -pthread
 # Ubuntu fails without this, see https://bugs.launchpad.net/ubuntu/+source/gcc-defaults/+bug/1228201
 CXXFLAGS += -Wl,--no-as-needed 
 
-tests = test-reactor fileiotest virtiotest
+tests = test-reactor fileiotest virtiotest l3_test
 
 link = $(CXX) $(CXXFLAGS) -o $@ $^
 
@@ -41,5 +41,7 @@ httpd: httpd.o reactor.o
 fileiotest: fileiotest.o reactor.o
 
 virtiotest: virtiotest.o virtio.o reactor.o net.o ip.o
+
+l3_test: l3_test.o virtio.o reactor.o net.o ip.o
 
 -include *.d
