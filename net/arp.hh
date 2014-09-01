@@ -128,8 +128,8 @@ arp_for<L3>::lookup(const l3addr& paddr) {
     auto fut = res._waiters.back().get_future();
     if (res._waiters.size() == 1) {
         return _arp._proto.send(ethernet::broadcast_address(), make_query_packet(paddr)).then(
-                [fut = std::move(fut)] {
-            return fut;
+                [fut = std::move(fut)] () mutable {
+            return std::move(fut);
         });
     } else {
         return fut;
