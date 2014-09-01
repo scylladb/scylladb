@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/eventfd.h>
+#include <sys/timerfd.h>
 #include <boost/optional.hpp>
 
 inline void throw_system_error_on(bool condition);
@@ -61,6 +62,11 @@ public:
     }
     static file_desc epoll_create(int flags = 0) {
         int fd = ::epoll_create1(flags);
+        throw_system_error_on(fd == -1);
+        return file_desc(fd);
+    }
+    static file_desc timerfd_create(int clockid, int flags) {
+        int fd = ::timerfd_create(clockid, flags);
         throw_system_error_on(fd == -1);
         return file_desc(fd);
     }
@@ -147,6 +153,10 @@ public:
         }
         throw_system_error_on(r == -1);
         return { size_t(r) };
+    }
+    void timerfd_settime(int flags, const itimerspec& its) {
+        auto r = ::timerfd_settime(_fd, flags, &its, NULL);
+        throw_system_error_on(r == -1);
     }
 private:
     file_desc(int fd) : _fd(fd) {}
