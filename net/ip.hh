@@ -14,7 +14,15 @@
 
 namespace net {
 
-uint16_t ip_checksum(void* data, size_t len);
+uint16_t ip_checksum(const void* data, size_t len);
+
+struct checksummer {
+    uint32_t partial = 0;
+    bool odd = false;
+    void sum(const char* data, size_t len);
+    void sum(const packet& p);
+    uint16_t get() const;
+};
 
 struct ipv4_address {
     ipv4_address() : ip(0) {}
