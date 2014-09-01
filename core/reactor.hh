@@ -722,7 +722,7 @@ inline
 future<size_t>
 reactor::read_some(pollable_fd_state& fd, void* buffer, size_t len) {
     return readable(fd).then([this, &fd, buffer, len] () mutable {
-        auto r = fd.fd.recv(buffer, len, 0);
+        auto r = fd.fd.read(buffer, len);
         if (!r) {
             return read_some(fd, buffer, len);
         }

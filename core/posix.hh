@@ -100,6 +100,14 @@ public:
         throw_system_error_on(r == -1);
         return r;
     }
+    boost::optional<size_t> read(void* buffer, size_t len) {
+        auto r = ::read(_fd, buffer, len);
+        if (r == -1 && errno == EAGAIN) {
+            return {};
+        }
+        throw_system_error_on(r == -1);
+        return { size_t(r) };
+    }
     boost::optional<ssize_t> recv(void* buffer, size_t len, int flags) {
         auto r = ::recv(_fd, buffer, len, flags);
         if (r == -1 && errno == EAGAIN) {
