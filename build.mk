@@ -20,7 +20,7 @@ CXXFLAGS += -I $(src)
 # Ubuntu fails without this, see https://bugs.launchpad.net/ubuntu/+source/gcc-defaults/+bug/1228201
 CXXFLAGS += -Wl,--no-as-needed 
 
-tests = tests/test-reactor tests/fileiotest tests/virtiotest tests/l3_test tests/ip_test
+tests = tests/test-reactor tests/fileiotest tests/virtiotest tests/l3_test tests/ip_test tests/timertest
 
 link = mkdir -p $(@D) && $(CXX) $(CXXFLAGS) -o $@ $^
 compile = mkdir -p $(@D) && $(CXX) $(CXXFLAGS) -c -o $@ $<
@@ -50,5 +50,7 @@ tests/virtiotest: tests/virtiotest.o net/virtio.o core/reactor.o net/net.o net/i
 tests/l3_test: tests/l3_test.o net/virtio.o core/reactor.o net/net.o net/ip.o net/ethernet.o net/arp.o
 
 tests/ip_test: tests/ip_test.o net/virtio.o core/reactor.o net/net.o net/ip.o net/arp.o net/ethernet.o
+
+tests/timertest: tests/timertest.o core/reactor.o
 
 -include $(shell find -name '*.d')
