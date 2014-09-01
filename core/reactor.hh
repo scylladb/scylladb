@@ -494,6 +494,7 @@ private:
 
 class reactor {
     static constexpr size_t max_aio = 128;
+    promise<> _start_promise;
 public:
     file_desc _epollfd;
     readable_eventfd _io_eventfd;
@@ -528,6 +529,7 @@ public:
     future<> flush(file& f);
 
     void run();
+    future<> start() { return _start_promise.get_future(); }
 
     void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
 private:

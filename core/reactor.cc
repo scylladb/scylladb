@@ -194,6 +194,7 @@ reactor::flush(file& f) {
 
 void reactor::run() {
     std::vector<std::unique_ptr<task>> current_tasks;
+    _start_promise.set_value();
     while (true) {
         while (!_pending_tasks.empty()) {
             std::swap(_pending_tasks, current_tasks);
