@@ -48,7 +48,77 @@ uint16_t ip_checksum(const void* data, size_t len) {
 ipv4::ipv4(interface* netif)
     : _netif(netif)
     , _global_arp(netif)
-    , _arp(_global_arp) {
+    , _arp(_global_arp)
+    , _l3(netif, 0x0800)
+    , _l4({}) {
+    run();
+}
+
+bool ipv4::in_my_netmask(ipv4_address a) const {
+    return !((a.ip ^ _host_address.ip) & ~_netmask.ip);
+}
+
+
+void ipv4::run() {
+    _l3.receive().then([this] (packet p, ethernet_address from) {
+        handle_received_packet(std::move(p), from);
+        run();
+    });
+}
+
+void ipv4::handle_received_packet(packet p, ethernet_address from) {
+    auto iph = p.get_header<ip_hdr>(0);
+    if (!iph) {
+        return;
+    }
+    ntoh(*iph);
+    // FIXME: process options
+    if (in_my_netmask(iph->src_ip) && iph->src_ip != _host_address) {
+        _arp.learn(from, iph->src_ip);
+    }
+    if (iph->frag & 0x3fff) {
+        // FIXME: defragment
+        return;
+    }
+    if (iph->dst_ip != _host_address) {
+        // FIXME: forward
+        return;
+    }
+    auto l4 = _l4[iph->ip_proto];
+    if (l4) {
+        p.trim_front(iph->ihl * 4);
+        l4->received(std::move(p), iph->src_ip, iph->dst_ip);
+    }
+}
+
+void ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
+    // FIXME: fragment
+    ip_hdr iph;
+    iph.ihl = sizeof(iph) / 4;
+    iph.ver = 4;
+    iph.dscp = 0;
+    iph.ecn = 0;
+    iph.len = p.len;
+    iph.id = 0;
+    iph.frag = 0;
+    iph.ttl = 64;
+    iph.ip_proto = proto_num;
+    iph.csum = 0;
+    iph.src_ip = _host_address;
+    // FIXME: routing
+    auto gw = to;
+    iph.dst_ip = to;
+    checksummer csum;
+    csum.sum(reinterpret_cast<char*>(&iph), sizeof(iph));
+    csum.sum(p);
+    auto q = packet(fragment{reinterpret_cast<char*>(&iph), sizeof(iph)}, std::move(p));
+    _arp.lookup(gw).then([this, p = std::move(q)] (ethernet_address e_dst) mutable {
+        _send_sem.wait().then([this, e_dst, p = std::move(p)] () mutable {
+            return _l3.send(e_dst, std::move(p));
+        }).then([this] {
+            _send_sem.signal();
+        });
+    });
 }
 
 void ipv4::set_host_address(ipv4_address ip) {

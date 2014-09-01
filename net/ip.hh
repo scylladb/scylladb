@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <cstdint>
 #include <array>
+#include "core/array_map.hh"
 #include "byteorder.hh"
 #include "arp.hh"
 
@@ -56,6 +57,12 @@ struct hash<net::ipv4_address> {
 
 namespace net {
 
+class ip_protocol {
+public:
+    virtual ~ip_protocol() {}
+    virtual void received(packet p, ipv4_address from, ipv4_address to);
+};
+
 class ipv4 {
 public:
     using address_type = ipv4_address;
@@ -66,9 +73,18 @@ private:
     arp _global_arp;
     arp_for<ipv4> _arp;
     ipv4_address _host_address;
+    ipv4_address _netmask = ipv4_address(0xffffff00);
+    l3_protocol _l3;
+    array_map<ip_protocol*, 256> _l4;
+    semaphore _send_sem;
+private:
+    void run();
+    void handle_received_packet(packet p, ethernet_address from);
+    bool in_my_netmask(ipv4_address a) const;
 public:
     explicit ipv4(interface* netif);
     void set_host_address(ipv4_address ip);
+    void send(ipv4_address to, uint8_t proto_num, packet p);
 };
 
 struct ip_hdr {
