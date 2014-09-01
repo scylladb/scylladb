@@ -11,6 +11,12 @@
 #include <fcntl.h>
 #include <sys/eventfd.h>
 
+timespec to_timespec(clock_type::time_point t) {
+    using ns = std::chrono::nanoseconds;
+    auto n = std::chrono::duration_cast<ns>(t.time_since_epoch()).count();
+    return { n / 1'000'000'000, n % 1'000'000'000 };
+}
+
 template <typename T>
 struct syscall_result {
     T result;
@@ -192,9 +198,42 @@ reactor::flush(file& f) {
     });
 }
 
+void reactor::add_timer(timer* tmr) {
+    if (_timers.insert(*tmr) && tmr->get_timeout() < _next_timeout) {
+        itimerspec its;
+        its.it_interval = {};
+        its.it_value = to_timespec(_timers.get_next_timeout());
+        _timerfd.get_file_desc().timerfd_settime(TFD_TIMER_ABSTIME, its);
+    }
+}
+
+void reactor::del_timer(timer* tmr) {
+    _timers.remove(*tmr);
+}
+
+void reactor::complete_timers() {
+    _timerfd.read_some(reinterpret_cast<char*>(&_timers_completed), sizeof(_timers_completed)).then(
+            [this] (size_t n) {
+        _timers.expire(clock_type::now());
+        while (auto t = _timers.pop_expired()) {
+            t->_pr.set_value();
+            t->_pr = promise<>();
+        }
+        if (!_timers.empty()) {
+            _next_timeout = _timers.get_next_timeout();
+            itimerspec its;
+            its.it_interval = {};
+            its.it_value = to_timespec(_next_timeout);
+            _timerfd.get_file_desc().timerfd_settime(TFD_TIMER_ABSTIME, its);
+        }
+        complete_timers();
+    });
+}
+
 void reactor::run() {
     std::vector<std::unique_ptr<task>> current_tasks;
     _start_promise.set_value();
+    complete_timers();
     while (true) {
         while (!_pending_tasks.empty()) {
             std::swap(_pending_tasks, current_tasks);

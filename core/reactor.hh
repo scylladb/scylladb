@@ -25,11 +25,13 @@
 #include <list>
 #include <thread>
 #include <system_error>
+#include <chrono>
 #include <boost/lockfree/queue.hpp>
 #include <boost/optional.hpp>
 #include "posix.hh"
 #include "apply.hh"
 #include "sstring.hh"
+#include "timer-set.hh"
 
 class socket_address;
 class reactor;
@@ -390,6 +392,24 @@ public:
     size_t current() const { return _count; }
 };
 
+using clock_type = std::chrono::high_resolution_clock;
+
+class timer {
+    boost::intrusive::list_member_hook<> _link;
+    promise<> _pr;
+    clock_type::time_point _expiry;
+    bool _armed = false;
+public:
+    ~timer();
+    future<> expired();
+    void arm(clock_type::time_point until);
+    void arm(clock_type::duration delta);
+    void suspend();
+    clock_type::time_point get_timeout();
+    friend class reactor;
+    friend class timer_set<timer, &timer::_link, clock_type>;
+};
+
 class pollable_fd_state {
 public:
     struct speculation {
@@ -429,6 +449,7 @@ public:
     future<pollable_fd, socket_address> accept();
 protected:
     int get_fd() const { return _s->fd.get(); }
+    file_desc& get_file_desc() const { return _s->fd; }
     friend class reactor;
     friend class readable_eventfd;
 };
@@ -495,6 +516,10 @@ private:
 class reactor {
     static constexpr size_t max_aio = 128;
     promise<> _start_promise;
+    uint64_t _timers_completed;
+    clock_type::time_point _next_timeout = clock_type::time_point::max();
+    timer_set<timer, &timer::_link, clock_type> _timers;
+    pollable_fd _timerfd = file_desc::timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC | TFD_NONBLOCK);
 public:
     file_desc _epollfd;
     readable_eventfd _io_eventfd;
@@ -509,6 +534,7 @@ private:
     future<> writeable(pollable_fd_state& fd);
     void forget(pollable_fd_state& fd);
     void abort_on_error(int ret);
+    void complete_timers();
 public:
     reactor();
     reactor(const reactor&) = delete;
@@ -545,11 +571,15 @@ private:
 
     void process_io(size_t count);
 
+    void add_timer(timer* tmr);
+    void del_timer(timer* tmr);
+
     friend class pollable_fd;
     friend class pollable_fd_state;
     friend class file;
     friend class thread_pool;
     friend class readable_eventfd;
+    friend class timer;
 };
 
 extern reactor the_reactor;
@@ -949,6 +979,45 @@ future<pollable_fd, socket_address> pollable_fd::accept() {
     return the_reactor.accept(*_s);
 }
 
+inline
+future<> timer::expired() {
+    return _pr.get_future().then([this] {
+        _pr = promise<>();  // prepare for next call
+        return make_ready_future<>();
+    });
+}
+
+inline
+timer::~timer() {
+    if (_armed) {
+        the_reactor.del_timer(this);
+    }
+}
+
+inline
+void timer::arm(clock_type::time_point until) {
+    assert(!_armed);
+    _armed = true;
+    _expiry = until;
+    the_reactor.add_timer(this);
+}
+
+inline
+void timer::arm(clock_type::duration delta) {
+    return arm(clock_type::now() + delta);
+}
+
+inline
+void timer::suspend() {
+    assert(_armed);
+    _armed = false;
+    the_reactor.del_timer(this);
+}
+
+inline
+clock_type::time_point timer::get_timeout() {
+    return _expiry;
+}
 
 #if 0
 future<temporary_buffer<CharType>> read_until(size_t limit, const CharType* eol, size_t eol_len);
