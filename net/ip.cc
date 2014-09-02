@@ -55,7 +55,7 @@ ipv4::ipv4(interface* netif)
 }
 
 bool ipv4::in_my_netmask(ipv4_address a) const {
-    return !((a.ip ^ _host_address.ip) & ~_netmask.ip);
+    return !((a.ip ^ _host_address.ip) & _netmask.ip);
 }
 
 
