@@ -98,7 +98,7 @@ void ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
     iph.ver = 4;
     iph.dscp = 0;
     iph.ecn = 0;
-    iph.len = p.len;
+    iph.len = sizeof(iph) + p.len;
     iph.id = 0;
     iph.frag = 0;
     iph.ttl = 64;
@@ -108,9 +108,10 @@ void ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
     // FIXME: routing
     auto gw = to;
     iph.dst_ip = to;
+    hton(iph);
     checksummer csum;
     csum.sum(reinterpret_cast<char*>(&iph), sizeof(iph));
-    csum.sum(p);
+    iph.csum = csum.get();
     auto q = packet(fragment{reinterpret_cast<char*>(&iph), sizeof(iph)}, std::move(p));
     _arp.lookup(gw).then([this, p = std::move(q)] (ethernet_address e_dst) mutable {
         _send_sem.wait().then([this, e_dst, p = std::move(p)] () mutable {
