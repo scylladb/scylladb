@@ -274,12 +274,14 @@ void packet::trim_front(size_t how_much) {
     assert(how_much <= len);
     len -= how_much;
     size_t i = 0;
-    while (how_much >= fragments[i].size) {
+    while (how_much && how_much >= fragments[i].size) {
         how_much -= fragments[i++].size;
     }
     fragments.erase(fragments.begin(), fragments.begin() + i);
-    fragments[0].base += how_much;
-    fragments[0].size -= how_much;
+    if (how_much) {
+        fragments[0].base += how_much;
+        fragments[0].size -= how_much;
+    }
 }
 
 
