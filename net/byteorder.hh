@@ -36,6 +36,9 @@ struct packed {
     packed(T x) : raw(x) {}
     packed& operator=(const T& x) { raw = x; return *this; }
     operator T() const { return raw; }
+
+    template <typename Adjuster>
+    void adjust_endianness(Adjuster a) { a(raw); }
 } __attribute__((packed));
 
 template <typename T>
