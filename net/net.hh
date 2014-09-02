@@ -112,6 +112,12 @@ public:
     // get a header pointer, linearizing if necessary
     char* get_header(size_t offset, size_t size);
 
+    // prepend a header (default-initializing it)
+    template <typename Header>
+    Header* prepend_header(size_t size = sizeof(Header));
+
+    // prepend a header (uninitialized!)
+    char* prepend_uninitialized_header(size_t size);
 private:
     void linearize(size_t at_frag, size_t desired_size);
 };
@@ -284,6 +290,31 @@ void packet::trim_front(size_t how_much) {
     }
 }
 
+template <typename Header>
+Header*
+packet::prepend_header(size_t size) {
+    auto h = prepend_uninitialized_header(size);
+    return new (h) Header{};
+}
+
+// prepend a header (uninitialized!)
+inline
+char* packet::prepend_uninitialized_header(size_t size) {
+    len += size;
+    auto id = dynamic_cast<internal_deleter*>(_deleter.get());
+    if (id && id->free_head >= size) {
+        id->free_head -= size;
+        fragments[0].base -= size;
+        fragments[0].size += size;
+    } else {
+        // didn't work out, allocate and copy
+        auto nsize = std::max(size, internal_data_size);
+        std::unique_ptr<char[]> buf(new char[nsize]);
+        fragments.insert(fragments.begin(), {buf.get() + nsize - size, size});
+        _deleter.reset(new internal_deleter(std::move(_deleter), buf.release(), nsize - size));
+    }
+    return fragments[0].base;
+}
 
 }
 

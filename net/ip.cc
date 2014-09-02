@@ -94,27 +94,26 @@ void ipv4::handle_received_packet(packet p, ethernet_address from) {
 
 void ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
     // FIXME: fragment
-    ip_hdr iph;
-    iph.ihl = sizeof(iph) / 4;
-    iph.ver = 4;
-    iph.dscp = 0;
-    iph.ecn = 0;
-    iph.len = sizeof(iph) + p.len;
-    iph.id = 0;
-    iph.frag = 0;
-    iph.ttl = 64;
-    iph.ip_proto = proto_num;
-    iph.csum = 0;
-    iph.src_ip = _host_address;
+    auto iph = p.prepend_header<ip_hdr>();
+    iph->ihl = sizeof(*iph) / 4;
+    iph->ver = 4;
+    iph->dscp = 0;
+    iph->ecn = 0;
+    iph->len = p.len;
+    iph->id = 0;
+    iph->frag = 0;
+    iph->ttl = 64;
+    iph->ip_proto = proto_num;
+    iph->csum = 0;
+    iph->src_ip = _host_address;
     // FIXME: routing
     auto gw = to;
-    iph.dst_ip = to;
-    hton(iph);
+    iph->dst_ip = to;
+    hton(*iph);
     checksummer csum;
-    csum.sum(reinterpret_cast<char*>(&iph), sizeof(iph));
-    iph.csum = csum.get();
-    auto q = packet(fragment{reinterpret_cast<char*>(&iph), sizeof(iph)}, std::move(p));
-    _arp.lookup(gw).then([this, p = std::move(q)] (ethernet_address e_dst) mutable {
+    csum.sum(reinterpret_cast<char*>(iph), sizeof(*iph));
+    iph->csum = csum.get();
+    _arp.lookup(gw).then([this, p = std::move(p)] (ethernet_address e_dst) mutable {
         _send_sem.wait().then([this, e_dst, p = std::move(p)] () mutable {
             return _l3.send(e_dst, std::move(p));
         }).then([this] {

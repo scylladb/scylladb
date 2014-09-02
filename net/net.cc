@@ -65,12 +65,12 @@ void interface::run() {
 }
 
 future<> interface::send(uint16_t proto_num, ethernet_address to, packet p) {
-    eth_hdr eh;
-    eh.dst_mac = to;
-    eh.src_mac = _hw_address;
-    eh.eth_proto = proto_num;
-    hton(eh);
-    return _dev->send(packet(fragment{reinterpret_cast<char*>(&eh), sizeof(eh)}, std::move(p)));
+    auto eh = p.prepend_header<eth_hdr>();
+    eh->dst_mac = to;
+    eh->src_mac = _hw_address;
+    eh->eth_proto = proto_num;
+    hton(*eh);
+    return _dev->send(std::move(p));
 }
 
 }
