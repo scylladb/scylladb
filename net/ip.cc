@@ -50,7 +50,8 @@ ipv4::ipv4(interface* netif)
     , _global_arp(netif)
     , _arp(_global_arp)
     , _l3(netif, 0x0800)
-    , _l4({}) {
+    , _tcp(*this)
+    , _l4({ { 6, &_tcp } }) {
     run();
 }
 
