@@ -223,6 +223,7 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
             tcbp = make_shared<tcb>(*this, id);
             listener->second.set_value(connection(tcbp));
             _listening.erase(listener);
+            _tcbs.insert({id, tcbp});
         }
     } else {
         tcbp = tcbi->second;
