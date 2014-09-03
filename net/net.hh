@@ -105,6 +105,8 @@ public:
     template <typename Deleter>
     packet(packet&& x, fragment frag, Deleter deleter);
 
+    void append(packet&& p);
+
     void trim_front(size_t how_much);
 
     // get a header pointer, linearizing if necessary
@@ -251,6 +253,27 @@ packet::packet(packet&& x, fragment frag, Deleter d)
     fragments.push_back(frag);
     _deleter.reset(make_deleter(std::move(_deleter), d));
     x.len = 0;
+}
+
+inline
+void packet::append(packet&& p) {
+    len += p.len;
+    fragments.reserve(fragments.size() + p.fragments.size());
+    fragments.insert(fragments.end(), p.fragments.begin(), p.fragments.end());
+    // preserve _deleter in front of chain in case it is an internal_deleter
+    if (!p._deleter) {
+        return;
+    } else if (!_deleter) {
+        _deleter = std::move(p._deleter);
+    } else if (!_deleter->next) {
+        _deleter->next = std::move(p._deleter);
+    } else {
+        auto chain = make_deleter(std::move(_deleter->next),
+                [d = std::move(p._deleter)] {});
+        _deleter->next = std::move(chain);
+    }
+    p.len = 0;
+    p.fragments.clear();
 }
 
 inline
