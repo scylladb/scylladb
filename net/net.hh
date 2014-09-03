@@ -74,6 +74,30 @@ class packet final {
     make_deleter(std::unique_ptr<deleter> next, Deleter d) {
         return std::unique_ptr<deleter>(new lambda_deleter<Deleter>(std::move(next), std::move(d)));
     }
+    struct shared_deleter : deleter {
+        long* _count;
+        deleter* _deleter;
+        shared_deleter(std::unique_ptr<deleter> d)
+            : deleter(nullptr), _count(new long(1)), _deleter(d.release()) {}
+        shared_deleter(const shared_deleter& x)
+            : deleter(nullptr), _count(x._count), _deleter(x._deleter) {
+            if (_count) {
+                ++*_count;
+            }
+        }
+        shared_deleter(shared_deleter&& x)
+            : deleter(nullptr), _count(x._count), _deleter(x._deleter) {
+            x._count = nullptr;
+            x._deleter = nullptr;
+        }
+        virtual ~shared_deleter() {
+            if (_count && --*_count == 0) {
+                delete _deleter;
+            }
+        }
+        bool owned() const { return *_count == 1; }
+    };
+
     // when destroyed, virtual destructor will reclaim resources
     std::unique_ptr<deleter> _deleter;
 public:
@@ -105,6 +129,10 @@ public:
     template <typename Deleter>
     packet(packet&& x, fragment frag, Deleter deleter);
 
+    // share packet data (reference counted, non COW)
+    packet share();
+    packet share(size_t offset, size_t len);
+
     void append(packet&& p);
 
     void trim_front(size_t how_much);
@@ -124,6 +152,7 @@ public:
     char* prepend_uninitialized_header(size_t size);
 private:
     void linearize(size_t at_frag, size_t desired_size);
+    std::unique_ptr<shared_deleter> do_share();
 };
 
 class l3_protocol {
@@ -345,6 +374,43 @@ char* packet::prepend_uninitialized_header(size_t size) {
         _deleter.reset(new internal_deleter(std::move(_deleter), buf.release(), nsize - size));
     }
     return fragments[0].base;
+}
+
+inline
+std::unique_ptr<packet::shared_deleter>
+packet::do_share() {
+    auto sd = dynamic_cast<shared_deleter*>(_deleter.get());
+    if (!sd) {
+        auto usd = std::make_unique<shared_deleter>(std::move(_deleter));
+        sd = usd.get();
+        _deleter = std::move(usd);
+    }
+    return std::make_unique<shared_deleter>(*sd);
+}
+
+inline
+packet packet::share() {
+    return share(0, len);
+}
+
+inline
+packet packet::share(size_t offset, size_t len) {
+    packet n;
+    n.fragments.reserve(fragments.size());
+    size_t idx = 0;
+    while (offset > 0 && offset >= fragments[idx].size) {
+        offset -= fragments[idx++].size;
+    }
+    while (n.len < len) {
+        auto& f = fragments[idx++];
+        auto fsize = std::min(len - n.len, f.size - offset);
+        n.fragments.push_back({ f.base + offset, fsize });
+        n.len += fsize;
+        offset = 0;
+    }
+    assert(!n._deleter);
+    n._deleter = do_share();
+    return n;
 }
 
 }
