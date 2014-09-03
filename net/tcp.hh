@@ -275,7 +275,8 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
         }
     } else {
         // data segment
-        if (seg_seq >= _rcv.next || seg_seq + seg_len <= _rcv.next + _rcv.window) {
+        if (seg_len
+                && (seg_seq >= _rcv.next || seg_seq + seg_len <= _rcv.next + _rcv.window)) {
             // FIXME: handle urgent data (not urgent)
             if (seg_seq < _rcv.next) {
                 p.trim_front(_rcv.next - seg_seq);
