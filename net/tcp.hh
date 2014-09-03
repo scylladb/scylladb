@@ -123,7 +123,7 @@ private:
         } _rcv;
     public:
         tcb(tcp& t, connid id);
-        void received(tcp_hdr* th, packet p);
+        void input(tcp_hdr* th, packet p);
         void output();
         future<packet> receive();
         future<> send(packet p);
@@ -223,7 +223,7 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
         tcbp = tcbi->second;
     }
     if (tcbp) {
-        tcbp->received(th, std::move(p));
+        tcbp->input(th, std::move(p));
     }
 }
 
@@ -251,7 +251,7 @@ tcp<InetTraits>::tcb::tcb(tcp& t, connid id)
 }
 
 template <typename InetTraits>
-void tcp<InetTraits>::tcb::received(tcp_hdr* th, packet p) {
+void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     auto seg_seq = th->seq;
     auto seg_len = p.len;
     if (th->f_syn) {
