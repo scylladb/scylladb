@@ -14,7 +14,9 @@ struct tcp_test {
         tcp::connection tcp_conn;
         explicit connection(tcp::connection tc) : tcp_conn(std::move(tc)) {}
         void run() {
-            tcp_conn.receive().then([this] (packet p) {
+            tcp_conn.wait_for_data().then([this] {
+                auto p = tcp_conn.read();
+                print("read %d bytes\n", p.len);
                 tcp_conn.send(std::move(p));
                 run();
             });

@@ -119,14 +119,16 @@ private:
             tcp_seq initial;
             std::deque<packet> data;
             std::map<tcp_seq, packet> out_of_order;
-            promise<packet> _data_received;
+            bool _user_waiting = false;
+            promise<> _data_received;
         } _rcv;
     public:
         tcb(tcp& t, connid id);
         void input(tcp_hdr* th, packet p);
         void output();
-        future<packet> receive();
+        future<> wait_for_data();
         future<> send(packet p);
+        packet read();
     private:
         void merge_out_of_order();
         void insert_out_of_order(tcp_seq seq, packet p);
@@ -157,8 +159,11 @@ public:
         future<> send(packet p) {
             return _tcb->send(std::move(p));
         }
-        future<packet> receive() {
-            return _tcb->receive();
+        future<> wait_for_data() {
+            return _tcb->wait_for_data();
+        }
+        packet read() {
+            return _tcb->read();
         }
         void close_read();
         void close_write();
@@ -280,6 +285,10 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 _rcv.data.push_back(std::move(p));
                 _rcv.next += seg_len;
                 merge_out_of_order();
+                if (_rcv._user_waiting) {
+                    _rcv._user_waiting = false;
+                    _rcv._data_received.set_value();
+                }
             } else {
                 insert_out_of_order(seg_seq, std::move(p));
             }
@@ -358,9 +367,20 @@ void tcp<InetTraits>::tcb::output() {
 }
 
 template <typename InetTraits>
-future<packet> tcp<InetTraits>::tcb::receive() {
-    _rcv._data_received = promise<packet>();
+future<> tcp<InetTraits>::tcb::wait_for_data() {
+    _rcv._user_waiting = true;
+    _rcv._data_received = promise<>();
     return _rcv._data_received.get_future();
+}
+
+template <typename InetTraits>
+packet tcp<InetTraits>::tcb::read() {
+    packet p;
+    for (auto&& q : _rcv.data) {
+        p.append(std::move(q));
+    }
+    _rcv.data.clear();
+    return p;
 }
 
 template <typename InetTraits>
