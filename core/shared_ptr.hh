@@ -14,6 +14,12 @@ template <typename T, typename... A>
 shared_ptr<T> make_shared(A&&... a);
 
 template <typename T>
+shared_ptr<T> make_shared(T&& a);
+
+template <typename T>
+shared_ptr<T> make_shared(T& a);
+
+template <typename T>
 class shared_ptr {
     struct data {
         long _count = 0;
@@ -78,13 +84,36 @@ public:
         return _p;
     }
 
+    bool owned() const {
+        return _p->_count == 1;
+    }
+
     template <typename X, typename... A>
     friend shared_ptr<X> make_shared(A&&...);
+
+    template <typename U>
+    friend shared_ptr<U> make_shared(U&&);
+
+    template <typename U>
+    friend shared_ptr<U> make_shared(U&);
 };
 
 template <typename T, typename... A>
+inline
 shared_ptr<T> make_shared(A&&... a) {
     return shared_ptr<T>::make(std::forward<A>(a)...);
+}
+
+template <typename T>
+inline
+shared_ptr<T> make_shared(T&& a) {
+    return shared_ptr<T>::make(std::move(a));
+}
+
+template <typename T>
+inline
+shared_ptr<T> make_shared(T& a) {
+    return shared_ptr<T>::make(a);
 }
 
 #endif /* SHARED_PTR_HH_ */
