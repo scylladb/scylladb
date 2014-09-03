@@ -397,6 +397,9 @@ void tcp<InetTraits>::connection_refused() {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::merge_out_of_order() {
+    if (_rcv.out_of_order.empty()) {
+        return;
+    }
     abort();
 }
 
