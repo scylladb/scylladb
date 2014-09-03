@@ -124,6 +124,7 @@ private:
     public:
         tcb(tcp& t, connid id);
         void received(tcp_hdr* th, packet p);
+        void output();
         future<packet> receive();
         future<> send(packet p);
     private:
@@ -318,7 +319,14 @@ void tcp<InetTraits>::tcb::received(tcp_hdr* th, packet p) {
         _snd.wl2 = th->ack;
     }
     // send some stuff
+    output();
+}
 
+template <typename InetTraits>
+void tcp<InetTraits>::tcb::output() {
+    packet p;
+
+    auto th = p.prepend_header<tcp_hdr>();
     th->src_port = _local_port;
     th->dst_port = _foreign_port;
 
@@ -342,9 +350,8 @@ void tcp<InetTraits>::tcb::received(tcp_hdr* th, packet p) {
     csum.sum(reinterpret_cast<char*>(&ph), sizeof(ph));
     csum.sum(reinterpret_cast<char*>(th), sizeof(*th));
     th->checksum = csum.get();
-    packet q(fragment{reinterpret_cast<char*>(th), sizeof(*th)});
 
-    _tcp.send(_local_ip, _foreign_ip, std::move(q));
+    _tcp.send(_local_ip, _foreign_ip, std::move(p));
 }
 
 template <typename InetTraits>
