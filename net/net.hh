@@ -58,6 +58,8 @@ class packet final {
         unsigned free_head;
         internal_deleter(std::unique_ptr<deleter> next, char* buf, unsigned free_head)
             : deleter(std::move(next)), buf(buf), free_head(free_head) {}
+        explicit internal_deleter(std::unique_ptr<deleter> next)
+            : internal_deleter(std::move(next), new char[internal_data_size], internal_data_size) {}
         virtual ~internal_deleter() override { delete[] buf; }
     };
     template <typename Deleter>
@@ -300,6 +302,12 @@ packet::prepend_header(size_t size) {
 // prepend a header (uninitialized!)
 inline
 char* packet::prepend_uninitialized_header(size_t size) {
+    if (len == 0) {
+        auto id = std::make_unique<internal_deleter>(nullptr);
+        fragments.clear();
+        fragments.push_back({id->buf + id->free_head, 0});
+        _deleter.reset(id.release());
+    }
     len += size;
     auto id = dynamic_cast<internal_deleter*>(_deleter.get());
     if (id && id->free_head >= size) {
