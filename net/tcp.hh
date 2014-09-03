@@ -114,7 +114,7 @@ private:
         } _snd;
         struct receive {
             tcp_seq next;
-            uint32_t window;
+            uint32_t window = 20000;
             tcp_seq urgent;
             tcp_seq initial;
             std::deque<packet> data;
@@ -341,6 +341,7 @@ void tcp<InetTraits>::tcb::output() {
     th->seq = _snd.unacknowledged;
     th->ack = _rcv.next;
     th->data_offset = sizeof(*th) / 4; // FIXME: options
+    th->window = _rcv.window;
     th->checksum = 0;
 
     ntoh(*th);
