@@ -222,7 +222,9 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
     } else {
         tcbp = tcbi->second;
     }
-    tcbp->received(th, std::move(p));
+    if (tcbp) {
+        tcbp->received(th, std::move(p));
+    }
 }
 
 template <typename InetTraits>
