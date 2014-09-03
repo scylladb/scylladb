@@ -245,6 +245,9 @@ void reactor::run() {
         }
         std::array<epoll_event, 128> eevt;
         int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(), -1);
+        if (nr == -1 && errno == EINTR) {
+            continue; // gdb can cause this
+        }
         assert(nr != -1);
         for (int i = 0; i < nr; ++i) {
             auto& evt = eevt[i];
