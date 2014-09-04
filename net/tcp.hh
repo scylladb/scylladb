@@ -27,6 +27,11 @@ inline void hton(tcp_seq& s) {
     hton(s.raw);
 }
 
+inline
+std::ostream& operator<<(std::ostream& os, tcp_seq s) {
+    return os << s.raw;
+}
+
 inline tcp_seq make_seq(uint32_t raw) { return tcp_seq{raw}; }
 inline tcp_seq& operator+=(tcp_seq& s, int32_t n) { s.raw += n; return s; }
 inline tcp_seq& operator-=(tcp_seq& s, int32_t n) { s.raw -= n; return s; }
