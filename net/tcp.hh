@@ -320,6 +320,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             return; // FIXME: reset too?
         }
         if (!_local_syn_acked && th->ack > _snd.initial) {
+            _snd.unacknowledged = _snd.next = _snd.initial + 1;
             _local_syn_acked = true;
             _snd.wl2 = th->ack;
         }
