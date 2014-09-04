@@ -6,6 +6,7 @@
 #define NET_HH_
 
 #include "core/reactor.hh"
+#include "core/deleter.hh"
 #include "ethernet.hh"
 #include <unordered_map>
 
@@ -47,56 +48,6 @@ struct fragment {
 class packet final {
     // enough for lots of headers, not quite two cache lines:
     static constexpr size_t internal_data_size = 128 - 16;
-    struct deleter {
-        std::unique_ptr<deleter> next;
-        deleter(std::unique_ptr<deleter> next) : next(std::move(next)) {}
-        virtual ~deleter() {};
-    };
-    struct internal_deleter final : deleter {
-        // FIXME: make buf an std::array<>?
-        char* buf;
-        unsigned free_head;
-        internal_deleter(std::unique_ptr<deleter> next, char* buf, unsigned free_head)
-            : deleter(std::move(next)), buf(buf), free_head(free_head) {}
-        explicit internal_deleter(std::unique_ptr<deleter> next)
-            : internal_deleter(std::move(next), new char[internal_data_size], internal_data_size) {}
-        virtual ~internal_deleter() override { delete[] buf; }
-    };
-    template <typename Deleter>
-    struct lambda_deleter final : deleter {
-        Deleter del;
-        lambda_deleter(std::unique_ptr<deleter> next, Deleter&& del)
-            : deleter(std::move(next)), del(std::move(del)) {}
-        virtual ~lambda_deleter() override { del(); }
-    };
-    template <typename Deleter>
-    std::unique_ptr<deleter>
-    make_deleter(std::unique_ptr<deleter> next, Deleter d) {
-        return std::unique_ptr<deleter>(new lambda_deleter<Deleter>(std::move(next), std::move(d)));
-    }
-    struct shared_deleter : deleter {
-        long* _count;
-        deleter* _deleter;
-        shared_deleter(std::unique_ptr<deleter> d)
-            : deleter(nullptr), _count(new long(1)), _deleter(d.release()) {}
-        shared_deleter(const shared_deleter& x)
-            : deleter(nullptr), _count(x._count), _deleter(x._deleter) {
-            if (_count) {
-                ++*_count;
-            }
-        }
-        shared_deleter(shared_deleter&& x)
-            : deleter(nullptr), _count(x._count), _deleter(x._deleter) {
-            x._count = nullptr;
-            x._deleter = nullptr;
-        }
-        virtual ~shared_deleter() {
-            if (_count && --*_count == 0) {
-                delete _deleter;
-            }
-        }
-        bool owned() const { return *_count == 1; }
-    };
 
     // when destroyed, virtual destructor will reclaim resources
     std::unique_ptr<deleter> _deleter;
@@ -355,7 +306,7 @@ packet::prepend_header(size_t size) {
 inline
 char* packet::prepend_uninitialized_header(size_t size) {
     if (len == 0) {
-        auto id = std::make_unique<internal_deleter>(nullptr);
+        auto id = std::make_unique<internal_deleter>(nullptr, internal_data_size);
         fragments.clear();
         fragments.push_back({id->buf + id->free_head, 0});
         _deleter.reset(id.release());
@@ -377,7 +328,7 @@ char* packet::prepend_uninitialized_header(size_t size) {
 }
 
 inline
-std::unique_ptr<packet::shared_deleter>
+std::unique_ptr<shared_deleter>
 packet::do_share() {
     auto sd = dynamic_cast<shared_deleter*>(_deleter.get());
     if (!sd) {
