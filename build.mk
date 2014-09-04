@@ -13,17 +13,19 @@ opt = $(opt.$(mode))
 
 libs = -laio -ltcmalloc
 
-CXXFLAGS = -std=gnu++1y -g -Wall -Werror $(opt) -MD -MT $@ -MP $(sanitize) -fvisibility=hidden $(libs)
+LDFLAGS = $(libs)
+
+CXXFLAGS = -std=gnu++1y -g -Wall -Werror $(opt) -MD -MT $@ -MP $(sanitize) -fvisibility=hidden
 CXXFLAGS += -pthread
 CXXFLAGS += -I $(src)
 
 # Ubuntu fails without this, see https://bugs.launchpad.net/ubuntu/+source/gcc-defaults/+bug/1228201
-CXXFLAGS += -Wl,--no-as-needed 
+LDFLAGS += -Wl,--no-as-needed
 
 tests = tests/test-reactor tests/fileiotest tests/virtiotest tests/l3_test tests/ip_test tests/timertest
 tests += tests/tcp_test
 
-link = mkdir -p $(@D) && $(CXX) $(CXXFLAGS) -o $@ $^
+link = mkdir -p $(@D) && $(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^
 compile = mkdir -p $(@D) && $(CXX) $(CXXFLAGS) -c -o $@ $<
 
 %: %.o
