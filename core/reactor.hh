@@ -383,11 +383,13 @@ public:
     }
     void operator=(const temporary_buffer&) = delete;
     temporary_buffer& operator=(temporary_buffer&& x) {
-        _buffer = x._buffer;
-        _size = x._size;
-        _deleter = std::move(x._deleter);
-        x._buffer = nullptr;
-        x._size = 0;
+        if (this != &x) {
+            _buffer = x._buffer;
+            _size = x._size;
+            _deleter = std::move(x._deleter);
+            x._buffer = nullptr;
+            x._size = 0;
+        }
         return *this;
     }
     const CharType* get() const { return _buffer; }
