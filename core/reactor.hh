@@ -1,8 +1,5 @@
 /*
- * reactor.hh
- *
- *  Created on: Aug 1, 2014
- *      Author: avi
+ * Copyright 2014 Cloudius Systems
  */
 
 #ifndef REACTOR_HH_

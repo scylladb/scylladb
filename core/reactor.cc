@@ -1,8 +1,5 @@
 /*
- * reactor.cc
- *
- *  Created on: Aug 1, 2014
- *      Author: avi
+ * Copyright 2014 Cloudius Systems
  */
 
 #include "reactor.hh"

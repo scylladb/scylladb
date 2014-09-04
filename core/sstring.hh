@@ -1,8 +1,5 @@
 /*
- * sstring.hh
- *
- *  Created on: Jul 31, 2014
- *      Author: avi
+ * Copyright 2014 Cloudius Systems
  */
 
 #ifndef SSTRING_HH_

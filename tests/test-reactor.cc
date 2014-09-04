@@ -1,8 +1,5 @@
 /*
- * test-reactor.cc
- *
- *  Created on: Aug 2, 2014
- *      Author: avi
+ * Copyright 2014 Cloudius Systems
  */
 
 #include "core/reactor.hh"
