@@ -115,6 +115,8 @@ private:
             tcp_seq wl2;
             tcp_seq initial;
             std::deque<packet> data;
+            std::deque<packet> unsent;
+            uint32_t unsent_len = 0;
             promise<> _window_opened;
         } _snd;
         struct receive {
@@ -138,6 +140,7 @@ private:
         void merge_out_of_order();
         void insert_out_of_order(tcp_seq seq, packet p);
         void trim_receive_data_after_window();
+        packet get_transmit_packet();
         friend class connection;
     };
     inet_type& _inet;
@@ -342,8 +345,32 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
 }
 
 template <typename InetTraits>
-void tcp<InetTraits>::tcb::output() {
+packet tcp<InetTraits>::tcb::get_transmit_packet() {
     packet p;
+    auto can_send = std::min(
+            uint32_t(_snd.unacknowledged + _snd.window - _snd.next),
+            _snd.unsent_len);
+    auto mss = 1400U;
+    can_send = std::min(can_send, mss);
+    while (can_send) {
+        auto& q = _snd.unsent.front();
+        auto now = std::min(can_send, q.len);
+        p.append(q.share(0, now));
+        q.trim_front(now);
+        if (!q.len) {
+            _snd.unsent.pop_front();
+        }
+        _snd.unsent_len -= now;
+        can_send -= now;
+    }
+    return p;
+}
+
+template <typename InetTraits>
+void tcp<InetTraits>::tcb::output() {
+    packet p = get_transmit_packet();
+    auto save = p.share();
+    auto len = p.len;
 
     auto th = p.prepend_header<tcp_hdr>();
     th->src_port = _local_port;
@@ -362,14 +389,16 @@ void tcp<InetTraits>::tcb::output() {
     th->window = _rcv.window;
     th->checksum = 0;
 
+    _snd.next += len;
+    _snd.data.push_back(std::move(save));
+
     ntoh(*th);
 
-    // FIXME: add data
     checksummer csum;
-    typename InetTraits::pseudo_header ph(_local_ip, _foreign_ip, sizeof(*th));
+    typename InetTraits::pseudo_header ph(_local_ip, _foreign_ip, sizeof(*th) + len);
     hton(ph);
     csum.sum(reinterpret_cast<char*>(&ph), sizeof(ph));
-    csum.sum(reinterpret_cast<char*>(th), sizeof(*th));
+    csum.sum(p);
     th->checksum = csum.get();
 
     _tcp.send(_local_ip, _foreign_ip, std::move(p));
@@ -394,7 +423,10 @@ packet tcp<InetTraits>::tcb::read() {
 
 template <typename InetTraits>
 future<> tcp<InetTraits>::tcb::send(packet p) {
-    abort();
+    _snd.unsent_len += p.len;
+    _snd.unsent.push_back(std::move(p));
+    output();
+    return make_ready_future<>();
 }
 
 template <typename InetTraits>
