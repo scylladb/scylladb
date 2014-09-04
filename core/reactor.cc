@@ -84,7 +84,7 @@ void reactor::forget(pollable_fd_state& fd) {
 }
 
 pollable_fd
-reactor::listen(socket_address sa, listen_options opts) {
+reactor::bsd_listen(socket_address sa, listen_options opts) {
     file_desc fd = file_desc::socket(sa.u.sa.sa_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (opts.reuse_address) {
         int opt = 1;
@@ -94,6 +94,11 @@ reactor::listen(socket_address sa, listen_options opts) {
     fd.bind(sa.u.sa, sizeof(sa.u.sas));
     fd.listen(100);
     return pollable_fd(std::move(fd));
+}
+
+server_socket
+reactor::listen(socket_address sa, listen_options opt) {
+    return server_socket(std::make_unique<bsd_server_socket_impl>(bsd_listen(sa, opt)));
 }
 
 void reactor::complete_epoll_event(pollable_fd_state& pfd, promise<> pollable_fd_state::*pr,

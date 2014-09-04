@@ -175,6 +175,33 @@ protected:
     friend class readable_eventfd;
 };
 
+class server_socket_impl {
+public:
+    virtual ~server_socket_impl() {}
+    virtual future<pollable_fd, socket_address> accept() = 0;
+};
+
+class bsd_server_socket_impl : public server_socket_impl {
+    pollable_fd _lfd;
+public:
+    explicit bsd_server_socket_impl(pollable_fd lfd) : _lfd(std::move(lfd)) {}
+    virtual future<pollable_fd, socket_address> accept() {
+        return _lfd.accept();
+    }
+};
+
+class server_socket {
+    std::unique_ptr<server_socket_impl> _ssi;
+private:
+    explicit server_socket(std::unique_ptr<server_socket_impl> ssi)
+        : _ssi(std::move(ssi)) {}
+public:
+    future<pollable_fd, socket_address> accept() {
+        return _ssi->accept();
+    }
+    friend class reactor;
+};
+
 class readable_eventfd {
     pollable_fd _fd;
 public:
@@ -261,7 +288,9 @@ public:
     reactor(const reactor&) = delete;
     void operator=(const reactor&) = delete;
 
-    pollable_fd listen(socket_address sa, listen_options opts = {});
+    server_socket listen(socket_address sa, listen_options opts = {});
+
+    pollable_fd bsd_listen(socket_address sa, listen_options opts = {});
 
     future<pollable_fd, socket_address> accept(pollable_fd_state& listen_fd);
 

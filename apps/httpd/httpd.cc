@@ -35,7 +35,7 @@ char_filter nsp_char([](char c) { return !std::isspace(c); });
 char_filter digit_char([](char c) { return std::isdigit(c); });
 
 class http_server {
-    std::vector<pollable_fd> _listeners;
+    std::vector<server_socket> _listeners;
 public:
     void listen(ipv4_addr addr) {
         listen_options lo;
