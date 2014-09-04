@@ -44,7 +44,7 @@ public:
         do_accepts(_listeners.size() - 1);
     }
     void do_accepts(int which) {
-        _listeners[which].accept().then([this, which] (pollable_fd fd, socket_address addr) mutable {
+        _listeners[which].accept().then([this, which] (connected_socket fd, socket_address addr) mutable {
             (new connection(*this, std::move(fd), addr))->read().rescue([this] (auto get_ex) {
                 try {
                     get_ex();
@@ -63,7 +63,7 @@ public:
     }
     class connection {
         http_server& _server;
-        pollable_fd _fd;
+        connected_socket _fd;
         socket_address _addr;
         input_stream<char> _read_buf;
         output_stream<char> _write_buf;
@@ -86,9 +86,9 @@ public:
         std::unique_ptr<response> _resp;
         std::queue<std::unique_ptr<response>> _pending_responses;
     public:
-        connection(http_server& server, pollable_fd&& fd, socket_address addr)
-            : _server(server), _fd(std::move(fd)), _addr(addr), _read_buf(_fd, 8192)
-            , _write_buf(_fd, 8192) {}
+        connection(http_server& server, connected_socket&& fd, socket_address addr)
+            : _server(server), _fd(std::move(fd)), _addr(addr), _read_buf(_fd.input())
+            , _write_buf(_fd.output()) {}
         future<> read() {
             return _read_buf.read_until(limit, '\n').then([this] (tmp_buf start_line) {
                 if (!start_line.size()) {

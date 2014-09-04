@@ -101,6 +101,25 @@ reactor::listen(socket_address sa, listen_options opt) {
     return server_socket(std::make_unique<bsd_server_socket_impl>(bsd_listen(sa, opt)));
 }
 
+class bsd_connected_socket_impl final : public connected_socket_impl {
+    pollable_fd _fd;
+private:
+    explicit bsd_connected_socket_impl(pollable_fd fd) : _fd(std::move(fd)) {}
+public:
+    virtual input_stream<char> input() override { return input_stream<char>(_fd, 8192); }
+    virtual output_stream<char> output() override { return output_stream<char>(_fd, 8192); }
+    friend class bsd_server_socket_impl;
+};
+
+future<connected_socket, socket_address>
+bsd_server_socket_impl::accept() {
+    return _lfd.accept().then([] (pollable_fd fd, socket_address sa) {
+        std::unique_ptr<connected_socket_impl> csi(new bsd_connected_socket_impl(std::move(fd)));
+        return make_ready_future<connected_socket, socket_address>(
+                connected_socket(std::move(csi)), sa);
+    });
+}
+
 void reactor::complete_epoll_event(pollable_fd_state& pfd, promise<> pollable_fd_state::*pr,
         int events, int event) {
     if (pfd.events_requested & events & event) {

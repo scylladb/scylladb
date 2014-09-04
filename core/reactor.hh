@@ -41,6 +41,12 @@ class pollable_fd;
 class pollable_fd_state;
 class file;
 
+template <typename CharType>
+class input_stream;
+
+template <typename CharType>
+class output_stream;
+
 struct ipv4_addr {
     uint8_t host[4];
     uint16_t port;
@@ -175,19 +181,33 @@ protected:
     friend class readable_eventfd;
 };
 
+class connected_socket_impl {
+public:
+    virtual ~connected_socket_impl() {}
+    virtual input_stream<char> input() = 0;
+    virtual output_stream<char> output() = 0;
+};
+
+class connected_socket {
+    std::unique_ptr<connected_socket_impl> _csi;
+public:
+    explicit connected_socket(std::unique_ptr<connected_socket_impl> csi)
+        : _csi(std::move(csi)) {}
+    input_stream<char> input();
+    output_stream<char> output();
+};
+
 class server_socket_impl {
 public:
     virtual ~server_socket_impl() {}
-    virtual future<pollable_fd, socket_address> accept() = 0;
+    virtual future<connected_socket, socket_address> accept() = 0;
 };
 
 class bsd_server_socket_impl : public server_socket_impl {
     pollable_fd _lfd;
 public:
     explicit bsd_server_socket_impl(pollable_fd lfd) : _lfd(std::move(lfd)) {}
-    virtual future<pollable_fd, socket_address> accept() {
-        return _lfd.accept();
-    }
+    virtual future<connected_socket, socket_address> accept();
 };
 
 class server_socket {
@@ -196,7 +216,7 @@ private:
     explicit server_socket(std::unique_ptr<server_socket_impl> ssi)
         : _ssi(std::move(ssi)) {}
 public:
-    future<pollable_fd, socket_address> accept() {
+    future<connected_socket, socket_address> accept() {
         return _ssi->accept();
     }
     friend class reactor;
@@ -759,6 +779,18 @@ void timer::suspend() {
 inline
 clock_type::time_point timer::get_timeout() {
     return _expiry;
+}
+
+inline
+input_stream<char>
+connected_socket::input() {
+    return _csi->input();
+}
+
+inline
+output_stream<char>
+connected_socket::output() {
+    return _csi->output();
 }
 
 #if 0
