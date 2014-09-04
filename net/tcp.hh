@@ -349,6 +349,7 @@ void tcp<InetTraits>::tcb::output() {
     th->dst_port = _foreign_port;
 
     th->f_syn = !_local_syn_acked;
+    _local_syn_sent |= th->f_syn;
     th->f_ack = _foreign_syn_received;
     th->f_urg = false;
     th->f_fin = false;
