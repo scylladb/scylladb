@@ -34,6 +34,7 @@
 #include "apply.hh"
 #include "sstring.hh"
 #include "timer-set.hh"
+#include "deleter.hh"
 
 class socket_address;
 class reactor;
@@ -367,23 +368,24 @@ pollable_fd_state::~pollable_fd_state() {
 template <typename CharType>
 class temporary_buffer {
     static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
-    std::unique_ptr<CharType[]> _own_buffer;
     CharType* _buffer;
     size_t _size;
+    std::unique_ptr<deleter> _deleter;
 public:
-    explicit temporary_buffer(size_t size) : _own_buffer(new CharType[size]), _buffer(_own_buffer.get()), _size(size) {}
-    explicit temporary_buffer(CharType* borrow, size_t size) : _own_buffer(), _buffer(borrow), _size(size) {}
+    explicit temporary_buffer(size_t size)
+        : _buffer(new CharType[size]), _size(size), _deleter(new internal_deleter(nullptr, _buffer, size)) {}
+    explicit temporary_buffer(CharType* borrow, size_t size) : _buffer(borrow), _size(size) {}
     temporary_buffer() = delete;
     temporary_buffer(const temporary_buffer&) = delete;
-    temporary_buffer(temporary_buffer&& x) : _own_buffer(std::move(x._own_buffer)), _buffer(x._buffer), _size(x._size) {
+    temporary_buffer(temporary_buffer&& x) : _buffer(x._buffer), _size(x._size), _deleter(std::move(x._deleter)) {
         x._buffer = nullptr;
         x._size = 0;
     }
     void operator=(const temporary_buffer&) = delete;
     temporary_buffer& operator=(temporary_buffer&& x) {
-        _own_buffer = std::move(x._own_buffer);
         _buffer = x._buffer;
         _size = x._size;
+        _deleter = std::move(x._deleter);
         x._buffer = nullptr;
         x._size = 0;
         return *this;
@@ -393,7 +395,9 @@ public:
     size_t size() const { return _size; }
     const CharType* begin() { return _buffer; }
     const CharType* end() { return _buffer + _size; }
-    bool owning() const { return bool(_own_buffer); }
+    bool owning() const {
+        return _deleter && dynamic_cast<internal_deleter*>(_deleter.get());
+    }
     temporary_buffer prefix(size_t size) RREF {
         auto ret = std::move(*this);
         ret._size = size;
