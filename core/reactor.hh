@@ -28,6 +28,7 @@
 #include <chrono>
 #include <boost/lockfree/queue.hpp>
 #include <boost/optional.hpp>
+#include "util/eclipse.hh"
 #include "future.hh"
 #include "posix.hh"
 #include "apply.hh"
@@ -344,7 +345,7 @@ public:
     const CharType* begin() { return _buffer; }
     const CharType* end() { return _buffer + _size; }
     bool owning() const { return bool(_own_buffer); }
-    temporary_buffer prefix(size_t size) && {
+    temporary_buffer prefix(size_t size) RREF {
         auto ret = std::move(*this);
         ret._size = size;
         return ret;
