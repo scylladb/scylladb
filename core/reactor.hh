@@ -356,7 +356,7 @@ public:
 };
 
 template <typename CharType>
-class input_stream_buffer {
+class input_stream {
     static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
     pollable_fd& _fd;
     std::unique_ptr<CharType[]> _buf;
@@ -383,7 +383,7 @@ private:
     }
 public:
     using char_type = CharType;
-    input_stream_buffer(pollable_fd& fd, size_t size) : _fd(fd), _buf(new char_type[size]), _size(size) {}
+    input_stream(pollable_fd& fd, size_t size) : _fd(fd), _buf(new char_type[size]), _size(size) {}
     future<temporary_buffer<CharType>> read_exactly(size_t n);
     future<temporary_buffer<CharType>> read_until(size_t limit, CharType eol);
     future<temporary_buffer<CharType>> read_until(size_t limit, const CharType* eol, size_t eol_len);
@@ -393,7 +393,7 @@ private:
 };
 
 template <typename CharType>
-class output_stream_buffer {
+class output_stream {
     static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
     pollable_fd& _fd;
     std::unique_ptr<CharType[]> _buf;
@@ -405,7 +405,7 @@ private:
     size_t possibly_available() const { return _size - _begin; }
 public:
     using char_type = CharType;
-    output_stream_buffer(pollable_fd& fd, size_t size) : _fd(fd), _buf(new char_type[size]), _size(size) {}
+    output_stream(pollable_fd& fd, size_t size) : _fd(fd), _buf(new char_type[size]), _size(size) {}
     future<size_t> write(const char_type* buf, size_t n);
     future<bool> flush();
 private:
@@ -539,7 +539,7 @@ reactor::write_all(pollable_fd_state& fd, const void* buffer, size_t len) {
 
 template <typename CharType>
 future<temporary_buffer<CharType>>
-input_stream_buffer<CharType>::read_exactly_part(size_t n, tmp_buf out, size_t completed) {
+input_stream<CharType>::read_exactly_part(size_t n, tmp_buf out, size_t completed) {
     if (available()) {
         auto now = std::min(n - completed, available());
         if (out.owned()) {
@@ -570,7 +570,7 @@ input_stream_buffer<CharType>::read_exactly_part(size_t n, tmp_buf out, size_t c
 
 template <typename CharType>
 future<temporary_buffer<CharType>>
-input_stream_buffer<CharType>::read_exactly(size_t n) {
+input_stream<CharType>::read_exactly(size_t n) {
     auto buf = allocate(n);
     return read_exactly_part(n, buf, 0);
 }
@@ -578,7 +578,7 @@ input_stream_buffer<CharType>::read_exactly(size_t n) {
 
 template <typename CharType>
 future<temporary_buffer<CharType>>
-input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, tmp_buf out,
+input_stream<CharType>::read_until_part(size_t limit, CharType eol, tmp_buf out,
         size_t completed) {
     auto to_search = std::min(limit - completed, available());
     auto i = std::find(_buf.get() + _begin, _buf.get() + _begin + to_search, eol);
@@ -619,7 +619,7 @@ input_stream_buffer<CharType>::read_until_part(size_t limit, CharType eol, tmp_b
 
 template <typename CharType>
 future<temporary_buffer<CharType>>
-input_stream_buffer<CharType>::read_until(size_t limit, CharType eol) {
+input_stream<CharType>::read_until(size_t limit, CharType eol) {
     return read_until_part(limit, eol, allocate(possibly_available()), 0);
 }
 
@@ -628,7 +628,7 @@ input_stream_buffer<CharType>::read_until(size_t limit, CharType eol) {
 
 template <typename CharType>
 future<size_t>
-output_stream_buffer<CharType>::write(const char_type* buf, size_t n) {
+output_stream<CharType>::write(const char_type* buf, size_t n) {
     if (n >= _size) {
         return flush().then([this, buf, n] (bool done) mutable {
             return _fd.write_all(buf, n);
@@ -651,7 +651,7 @@ output_stream_buffer<CharType>::write(const char_type* buf, size_t n) {
 
 template <typename CharType>
 future<bool>
-output_stream_buffer<CharType>::flush() {
+output_stream<CharType>::flush() {
     if (!_end) {
         return make_ready_future<bool>(true);
     }

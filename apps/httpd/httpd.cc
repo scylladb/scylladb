@@ -65,8 +65,8 @@ public:
         http_server& _server;
         pollable_fd _fd;
         socket_address _addr;
-        input_stream_buffer<char> _read_buf;
-        output_stream_buffer<char> _write_buf;
+        input_stream<char> _read_buf;
+        output_stream<char> _write_buf;
         bool _eof = false;
         static constexpr size_t limit = 4096;
         using tmp_buf = temporary_buffer<char>;
