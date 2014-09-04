@@ -55,6 +55,12 @@ inline void hton(packed<T>& x) {
     x = v;
 }
 
+template <typename T>
+inline std::ostream& operator<<(std::ostream& os, const packed<T>& v) {
+    auto x = v.raw;
+    return os << x;
+}
+
 template <typename First, typename... Rest>
 inline
 void ntoh(First& first, Rest&... rest) {
