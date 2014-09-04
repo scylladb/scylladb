@@ -344,4 +344,8 @@ socket_address make_ipv4_address(ipv4_addr addr) {
     return sa;
 }
 
+void schedule(std::unique_ptr<task> t) {
+    the_reactor.add_task(std::move(t));
+}
+
 reactor the_reactor;
