@@ -266,9 +266,12 @@ tcp<InetTraits>::tcb::tcb(tcp& t, connid id)
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
+    bool do_output = false;
+
     auto seg_seq = th->seq;
     auto seg_len = p.len;
     if (th->f_syn) {
+        do_output = true;
         if (!_foreign_syn_received) {
             _foreign_syn_received = true;
             _rcv.initial = seg_seq;
@@ -302,9 +305,11 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             } else {
                 insert_out_of_order(seg_seq, std::move(p));
             }
+            do_output = true;
         }
     }
     if (th->f_fin) {
+        do_output = true;
         if (!_local_syn_acked) {
             return;
         }
@@ -336,12 +341,17 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     }
 
     if (th->seq >= _snd.wl1 && th->ack >= _snd.wl2) {
+        if (!_snd.window && th->window && _snd.unsent_len) {
+            do_output = true;
+        }
         _snd.window = th->window;
         _snd.wl1 = th->seq;
         _snd.wl2 = th->ack;
     }
     // send some stuff
-    output();
+    if (do_output) {
+        output();
+    }
 }
 
 template <typename InetTraits>
