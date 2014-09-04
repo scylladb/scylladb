@@ -793,8 +793,4 @@ connected_socket::output() {
     return _csi->output();
 }
 
-#if 0
-future<temporary_buffer<CharType>> read_until(size_t limit, const CharType* eol, size_t eol_len);
-#endif
-
 #endif /* REACTOR_HH_ */
