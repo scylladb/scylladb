@@ -416,6 +416,7 @@ public:
     CharType operator[](size_t pos) const {
         return _buffer[pos];
     }
+    bool empty() const { return !size(); }
     temporary_buffer share() {
         auto d = ::share(_deleter);
         return temporary_buffer(_buffer, _size, std::move(d));
@@ -425,6 +426,13 @@ public:
         ret._buffer += pos;
         ret._size = len;
         return ret;
+    }
+    void trim_front(size_t pos) {
+        _buffer += pos;
+        _size -= pos;
+    }
+    void trim(size_t pos) {
+        _size = pos;
     }
 };
 
