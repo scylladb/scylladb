@@ -23,6 +23,7 @@
 #include <thread>
 #include <system_error>
 #include <chrono>
+#include <atomic>
 #include <boost/lockfree/queue.hpp>
 #include <boost/optional.hpp>
 #include "util/eclipse.hh"
@@ -243,6 +244,7 @@ private:
 class thread_pool {
     static constexpr size_t queue_length = 128;
     struct work_item;
+    std::atomic<bool> _stopped = { false };
     boost::lockfree::queue<work_item*> _pending;
     boost::lockfree::queue<work_item*> _completed;
     writeable_eventfd _start_eventfd;
@@ -266,6 +268,7 @@ class thread_pool {
     };
 public:
     thread_pool();
+    ~thread_pool();
     template <typename T, typename Func>
     future<T> submit(Func func) {
         auto wi = new work_item_returning<T, Func>(std::move(func));

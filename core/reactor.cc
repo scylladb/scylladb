@@ -295,8 +295,13 @@ thread_pool::thread_pool()
     , _start_eventfd(0)
     , _complete_eventfd(0)
     , _worker_thread([this] { work(); }) {
-    _worker_thread.detach();
     complete();
+}
+
+thread_pool::~thread_pool() {
+    _stopped.store(true, std::memory_order_relaxed);
+    _start_eventfd.signal(1);
+    _worker_thread.join();
 }
 
 void thread_pool::work() {
@@ -304,6 +309,9 @@ void thread_pool::work() {
         uint64_t count;
         auto r = ::read(_start_eventfd.get_read_fd(), &count, sizeof(count));
         assert(r == sizeof(count));
+        if (_stopped.load(std::memory_order_relaxed)) {
+            break;
+        }
         auto nr = _pending.consume_all([this] (work_item* wi) {
             wi->process();
             _completed.push(wi);
