@@ -265,10 +265,10 @@ void reactor::run() {
             }
             current_tasks.clear();
         }
-        std::array<epoll_event, 128> eevt;
         if (_stopped) {
             break;
         }
+        std::array<epoll_event, 128> eevt;
         int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(), -1);
         if (nr == -1 && errno == EINTR) {
             continue; // gdb can cause this
