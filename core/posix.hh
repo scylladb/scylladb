@@ -13,6 +13,8 @@
 #include <sys/ioctl.h>
 #include <sys/eventfd.h>
 #include <sys/timerfd.h>
+#include <sys/signalfd.h>
+#include <signal.h>
 #include <boost/optional.hpp>
 
 inline void throw_system_error_on(bool condition);
@@ -67,6 +69,11 @@ public:
     }
     static file_desc timerfd_create(int clockid, int flags) {
         int fd = ::timerfd_create(clockid, flags);
+        throw_system_error_on(fd == -1);
+        return file_desc(fd);
+    }
+    static file_desc signalfd(const sigset_t& mask, int flags) {
+        int fd = ::signalfd(-1, &mask, flags);
         throw_system_error_on(fd == -1);
         return file_desc(fd);
     }
@@ -176,6 +183,14 @@ void throw_kernel_error(T r) {
     if (r < 0) {
         throw std::system_error(-r, std::system_category());
     }
+}
+
+inline
+sigset_t make_sigset_mask(int signo) {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, signo);
+    return set;
 }
 
 #endif /* FILE_DESC_HH_ */
