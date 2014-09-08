@@ -44,7 +44,7 @@ reactor::reactor()
     _io_eventfd.wait().then([this] (size_t count) {
         process_io(count);
     });
-    receive_signal(SIGINT).then([] { ::exit(255); });
+    receive_signal(SIGINT).then([this] { _stopped = true; });
 }
 
 future<> reactor::get_epoll_future(pollable_fd_state& pfd,
@@ -266,6 +266,9 @@ void reactor::run() {
             current_tasks.clear();
         }
         std::array<epoll_event, 128> eevt;
+        if (_stopped) {
+            break;
+        }
         int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(), -1);
         if (nr == -1 && errno == EINTR) {
             continue; // gdb can cause this

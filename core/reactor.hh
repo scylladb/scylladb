@@ -296,6 +296,7 @@ class reactor {
         signalfd_siginfo _siginfo;
     };
     std::unordered_map<int, signal_handler> _signal_handlers;
+    bool _stopped = false;
 public:
     file_desc _epollfd;
     readable_eventfd _io_eventfd;
