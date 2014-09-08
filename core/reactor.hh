@@ -371,9 +371,6 @@ pollable_fd_state::~pollable_fd_state() {
 
 // A temporary_buffer either points inside a larger buffer, or, if the requested size
 // is too large, or if the larger buffer is scattered, contains its own storage.
-//
-// A temporary_buffer must be consumed before the next operation on the underlying
-// input_stream_buffer is initiated.
 template <typename CharType>
 class temporary_buffer {
     static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
@@ -390,6 +387,8 @@ public:
         x._buffer = nullptr;
         x._size = 0;
     }
+    temporary_buffer(CharType* buf, size_t size, std::unique_ptr<deleter> d)
+        : _buffer(buf), _size(size), _deleter(std::move(d)) {}
     void operator=(const temporary_buffer&) = delete;
     temporary_buffer& operator=(temporary_buffer&& x) {
         if (this != &x) {
@@ -416,6 +415,16 @@ public:
     }
     CharType operator[](size_t pos) const {
         return _buffer[pos];
+    }
+    temporary_buffer share() {
+        auto d = ::share(_deleter);
+        return temporary_buffer(_buffer, _size, std::move(d));
+    }
+    temporary_buffer share(size_t pos, size_t len) {
+        auto ret = share();
+        ret._buffer += pos;
+        ret._size = len;
+        return ret;
     }
 };
 
