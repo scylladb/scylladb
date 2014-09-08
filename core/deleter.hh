@@ -63,4 +63,14 @@ struct shared_deleter : deleter {
     bool owned() const { return *_count == 1; }
 };
 
+inline
+std::unique_ptr<deleter> share(std::unique_ptr<deleter>& d) {
+    auto sd = dynamic_cast<shared_deleter*>(d.get());
+    if (!sd) {
+        sd = new shared_deleter(std::move(d));
+        d.reset(sd);
+    }
+    return std::unique_ptr<deleter>(new shared_deleter(*sd));
+}
+
 #endif /* DELETER_HH_ */
