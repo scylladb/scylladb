@@ -289,6 +289,13 @@ class reactor {
     clock_type::time_point _next_timeout = clock_type::time_point::max();
     timer_set<timer, &timer::_link, clock_type> _timers;
     pollable_fd _timerfd = file_desc::timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC | TFD_NONBLOCK);
+    struct signal_handler {
+        signal_handler(int signo);
+        promise<> _promise;
+        pollable_fd _signalfd;
+        signalfd_siginfo _siginfo;
+    };
+    std::unordered_map<int, signal_handler> _signal_handlers;
 public:
     file_desc _epollfd;
     readable_eventfd _io_eventfd;
@@ -327,6 +334,7 @@ public:
 
     void run();
     future<> start() { return _start_promise.get_future(); }
+    future<> receive_signal(int signo);
 
     void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
 private:

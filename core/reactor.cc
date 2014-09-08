@@ -44,6 +44,7 @@ reactor::reactor()
     _io_eventfd.wait().then([this] (size_t count) {
         process_io(count);
     });
+    receive_signal(SIGINT).then([] { ::exit(255); });
 }
 
 future<> reactor::get_epoll_future(pollable_fd_state& pfd,
@@ -289,6 +290,24 @@ void reactor::run() {
     }
 }
 
+future<>
+reactor::receive_signal(int signo) {
+    auto i = _signal_handlers.emplace(signo, signo).first;
+    signal_handler& sh = i->second;
+    return sh._signalfd.read_some(reinterpret_cast<char*>(&sh._siginfo), sizeof(sh._siginfo)).then([&sh] (size_t ignore) {
+        sh._promise.set_value();
+        sh._promise = promise<>();
+        return make_ready_future<>();
+    });
+}
+
+reactor::signal_handler::signal_handler(int signo)
+    : _signalfd(file_desc::signalfd(make_sigset_mask(signo), SFD_CLOEXEC | SFD_NONBLOCK)) {
+    auto mask = make_sigset_mask(signo);
+    auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
+    throw_system_error_on(r == -1);
+}
+
 thread_pool::thread_pool()
     : _pending(queue_length)
     , _completed(queue_length)
@@ -305,6 +324,10 @@ thread_pool::~thread_pool() {
 }
 
 void thread_pool::work() {
+    sigset_t mask;
+    sigfillset(&mask);
+    auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
+    throw_system_error_on(r == -1);
     while (true) {
         uint64_t count;
         auto r = ::read(_start_eventfd.get_read_fd(), &count, sizeof(count));
