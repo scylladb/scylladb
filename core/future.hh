@@ -147,9 +147,10 @@ public:
         }
     }
     promise& operator=(promise&& x) {
-        this->~promise();
-        _state = x._state;
-        x._state = nullptr;
+        if (this != &x) {
+            this->~promise();
+            new (this) promise(std::move(x));
+        }
         return *this;
     }
     void operator=(const promise&) = delete;
