@@ -52,6 +52,8 @@ struct shared_deleter : deleter {
         x._count = nullptr;
         x._deleter = nullptr;
     }
+    void operator=(const shared_deleter&) = delete;
+    void operator=(shared_deleter&&) = delete;
     virtual ~shared_deleter() {
         if (_count && --*_count == 0) {
             delete _deleter;
