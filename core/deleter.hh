@@ -57,6 +57,7 @@ struct shared_deleter : deleter {
     virtual ~shared_deleter() {
         if (_count && --*_count == 0) {
             delete _deleter;
+            delete _count;
         }
     }
     bool owned() const { return *_count == 1; }
