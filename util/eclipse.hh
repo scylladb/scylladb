@@ -13,11 +13,13 @@
 #ifndef IN_ECLIPSE
 
 #define RREF &&
+#define LREF &
 
 #else
 
 // Eclipse doesn't grok && qualified member functions:
 #define RREF
+#define LREF
 // Eclipse doesn't grok alignof
 #define alignof sizeof
 
