@@ -403,4 +403,19 @@ void schedule(std::unique_ptr<task> t) {
     the_reactor.add_task(std::move(t));
 }
 
+data_source bsd_data_source(pollable_fd& fd) {
+    return data_source(std::make_unique<bsd_data_source_impl>(fd));
+}
+
+future<temporary_buffer<char>>
+bsd_data_source_impl::get() {
+    return _fd.read_some(_buf.get_write(), _buf_size).then([this] (size_t size) {
+        _buf.trim(size);
+        auto ret = std::move(_buf);
+        _buf = temporary_buffer<char>(_buf_size);
+        return make_ready_future<temporary_buffer<char>>(std::move(ret));
+    });
+}
+
+
 reactor the_reactor;

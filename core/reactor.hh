@@ -428,6 +428,32 @@ public:
     }
 };
 
+class data_source_impl {
+public:
+    virtual ~data_source_impl() {}
+    virtual future<temporary_buffer<char>> get() = 0;
+};
+
+class data_source {
+    std::unique_ptr<data_source_impl> _dsi;
+public:
+    explicit data_source(std::unique_ptr<data_source_impl> dsi) : _dsi(std::move(dsi)) {}
+    data_source(data_source&& x) = default;
+    future<temporary_buffer<char>> get() { return _dsi->get(); }
+};
+
+class bsd_data_source_impl final : public data_source_impl {
+    pollable_fd& _fd;
+    temporary_buffer<char> _buf;
+    size_t _buf_size;
+public:
+    explicit bsd_data_source_impl(pollable_fd& fd, size_t buf_size = 8192)
+        : _fd(fd), _buf(buf_size), _buf_size(buf_size) {}
+    virtual future<temporary_buffer<char>> get() override;
+};
+
+data_source bsd_data_source(pollable_fd& fd);
+
 template <typename CharType>
 class input_stream {
     static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
