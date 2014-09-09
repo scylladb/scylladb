@@ -450,6 +450,28 @@ public:
     future<temporary_buffer<char>> get() { return _dsi->get(); }
 };
 
+class data_sink_impl {
+public:
+    virtual ~data_sink_impl() {}
+    virtual future<> put(std::vector<temporary_buffer<char>> data) = 0;
+};
+
+class data_sink {
+    std::unique_ptr<data_sink_impl> _dsi;
+public:
+    explicit data_sink(std::unique_ptr<data_sink_impl> dsi) : _dsi(std::move(dsi)) {}
+    data_sink(data_sink&& x) = default;
+    future<> put(std::vector<temporary_buffer<char>> data) {
+        return _dsi->put(std::move(data));
+    }
+    future<> put(temporary_buffer<char> data) {
+        std::vector<temporary_buffer<char>> v;
+        v.reserve(1);
+        v.push_back(std::move(data));
+        return put(std::move(v));
+    }
+};
+
 class posix_data_source_impl final : public data_source_impl {
     pollable_fd& _fd;
     temporary_buffer<char> _buf;
