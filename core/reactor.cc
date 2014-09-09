@@ -82,7 +82,7 @@ void reactor::forget(pollable_fd_state& fd) {
 }
 
 pollable_fd
-reactor::bsd_listen(socket_address sa, listen_options opts) {
+reactor::posix_listen(socket_address sa, listen_options opts) {
     file_desc fd = file_desc::socket(sa.u.sa.sa_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (opts.reuse_address) {
         int opt = 1;
@@ -96,23 +96,23 @@ reactor::bsd_listen(socket_address sa, listen_options opts) {
 
 server_socket
 reactor::listen(socket_address sa, listen_options opt) {
-    return server_socket(std::make_unique<bsd_server_socket_impl>(bsd_listen(sa, opt)));
+    return server_socket(std::make_unique<posix_server_socket_impl>(posix_listen(sa, opt)));
 }
 
-class bsd_connected_socket_impl final : public connected_socket_impl {
+class posix_connected_socket_impl final : public connected_socket_impl {
     pollable_fd _fd;
 private:
-    explicit bsd_connected_socket_impl(pollable_fd fd) : _fd(std::move(fd)) {}
+    explicit posix_connected_socket_impl(pollable_fd fd) : _fd(std::move(fd)) {}
 public:
-    virtual input_stream<char> input() override { return input_stream<char>(bsd_data_source(_fd)); }
+    virtual input_stream<char> input() override { return input_stream<char>(posix_data_source(_fd)); }
     virtual output_stream<char> output() override { return output_stream<char>(_fd, 8192); }
-    friend class bsd_server_socket_impl;
+    friend class posix_server_socket_impl;
 };
 
 future<connected_socket, socket_address>
-bsd_server_socket_impl::accept() {
+posix_server_socket_impl::accept() {
     return _lfd.accept().then([] (pollable_fd fd, socket_address sa) {
-        std::unique_ptr<connected_socket_impl> csi(new bsd_connected_socket_impl(std::move(fd)));
+        std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(fd)));
         return make_ready_future<connected_socket, socket_address>(
                 connected_socket(std::move(csi)), sa);
     });
@@ -403,12 +403,12 @@ void schedule(std::unique_ptr<task> t) {
     the_reactor.add_task(std::move(t));
 }
 
-data_source bsd_data_source(pollable_fd& fd) {
-    return data_source(std::make_unique<bsd_data_source_impl>(fd));
+data_source posix_data_source(pollable_fd& fd) {
+    return data_source(std::make_unique<posix_data_source_impl>(fd));
 }
 
 future<temporary_buffer<char>>
-bsd_data_source_impl::get() {
+posix_data_source_impl::get() {
     return _fd.read_some(_buf.get_write(), _buf_size).then([this] (size_t size) {
         _buf.trim(size);
         auto ret = std::move(_buf);

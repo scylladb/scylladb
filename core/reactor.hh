@@ -202,10 +202,10 @@ public:
     virtual future<connected_socket, socket_address> accept() = 0;
 };
 
-class bsd_server_socket_impl : public server_socket_impl {
+class posix_server_socket_impl : public server_socket_impl {
     pollable_fd _lfd;
 public:
-    explicit bsd_server_socket_impl(pollable_fd lfd) : _lfd(std::move(lfd)) {}
+    explicit posix_server_socket_impl(pollable_fd lfd) : _lfd(std::move(lfd)) {}
     virtual future<connected_socket, socket_address> accept();
 };
 
@@ -319,7 +319,7 @@ public:
 
     server_socket listen(socket_address sa, listen_options opts = {});
 
-    pollable_fd bsd_listen(socket_address sa, listen_options opts = {});
+    pollable_fd posix_listen(socket_address sa, listen_options opts = {});
 
     future<pollable_fd, socket_address> accept(pollable_fd_state& listen_fd);
 
@@ -450,17 +450,17 @@ public:
     future<temporary_buffer<char>> get() { return _dsi->get(); }
 };
 
-class bsd_data_source_impl final : public data_source_impl {
+class posix_data_source_impl final : public data_source_impl {
     pollable_fd& _fd;
     temporary_buffer<char> _buf;
     size_t _buf_size;
 public:
-    explicit bsd_data_source_impl(pollable_fd& fd, size_t buf_size = 8192)
+    explicit posix_data_source_impl(pollable_fd& fd, size_t buf_size = 8192)
         : _fd(fd), _buf(buf_size), _buf_size(buf_size) {}
     virtual future<temporary_buffer<char>> get() override;
 };
 
-data_source bsd_data_source(pollable_fd& fd);
+data_source posix_data_source(pollable_fd& fd);
 
 template <typename CharType>
 class input_stream {
