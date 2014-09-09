@@ -96,7 +96,7 @@ reactor::posix_listen(socket_address sa, listen_options opts) {
 
 server_socket
 reactor::listen(socket_address sa, listen_options opt) {
-    return server_socket(std::make_unique<posix_server_socket_impl>(posix_listen(sa, opt)));
+    return _networking_stack->listen(sa, opt);
 }
 
 class posix_connected_socket_impl final : public connected_socket_impl {
@@ -438,6 +438,11 @@ posix_data_sink_impl::do_write(size_t idx) {
         }
         return do_write(idx);
     });
+}
+
+server_socket
+posix_networking_stack::listen(socket_address sa, listen_options opt) {
+    return server_socket(std::make_unique<posix_server_socket_impl>(the_reactor.posix_listen(sa, opt)));
 }
 
 reactor the_reactor;

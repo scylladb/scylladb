@@ -211,14 +211,23 @@ public:
 
 class server_socket {
     std::unique_ptr<server_socket_impl> _ssi;
-private:
+public:
     explicit server_socket(std::unique_ptr<server_socket_impl> ssi)
         : _ssi(std::move(ssi)) {}
-public:
     future<connected_socket, socket_address> accept() {
         return _ssi->accept();
     }
-    friend class reactor;
+};
+
+class networking_stack {
+public:
+    virtual ~networking_stack() {}
+    virtual server_socket listen(socket_address sa, listen_options opts) = 0;
+};
+
+class posix_networking_stack : public networking_stack {
+public:
+    virtual server_socket listen(socket_address sa, listen_options opts) override;
 };
 
 class readable_eventfd {
@@ -297,6 +306,8 @@ class reactor {
     };
     std::unordered_map<int, signal_handler> _signal_handlers;
     bool _stopped = false;
+    std::unique_ptr<networking_stack> _networking_stack
+        = std::make_unique<posix_networking_stack>();
 public:
     file_desc _epollfd;
     readable_eventfd _io_eventfd;
