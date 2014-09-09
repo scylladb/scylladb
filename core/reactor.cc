@@ -105,7 +105,7 @@ private:
     explicit posix_connected_socket_impl(pollable_fd fd) : _fd(std::move(fd)) {}
 public:
     virtual input_stream<char> input() override { return input_stream<char>(posix_data_source(_fd)); }
-    virtual output_stream<char> output() override { return output_stream<char>(_fd, 8192); }
+    virtual output_stream<char> output() override { return output_stream<char>(posix_data_sink(_fd), 8192); }
     friend class posix_server_socket_impl;
 };
 

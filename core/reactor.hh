@@ -519,8 +519,8 @@ private:
 template <typename CharType>
 class output_stream {
     static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
-    pollable_fd& _fd;
-    std::unique_ptr<CharType[]> _buf;
+    data_sink _fd;
+    temporary_buffer<CharType> _buf;
     size_t _size;
     size_t _begin = 0;
     size_t _end = 0;
@@ -529,7 +529,8 @@ private:
     size_t possibly_available() const { return _size - _begin; }
 public:
     using char_type = CharType;
-    output_stream(pollable_fd& fd, size_t size) : _fd(fd), _buf(new char_type[size]), _size(size) {}
+    output_stream(data_sink fd, size_t size)
+        : _fd(std::move(fd)), _buf(size), _size(size) {}
     future<size_t> write(const char_type* buf, size_t n);
     future<bool> flush();
 private:
@@ -767,20 +768,26 @@ template <typename CharType>
 future<size_t>
 output_stream<CharType>::write(const char_type* buf, size_t n) {
     if (n >= _size) {
-        return flush().then([this, buf, n] (bool done) mutable {
-            return _fd.write_all(buf, n);
+        temporary_buffer<char> tmp(n);
+        std::copy(buf, buf + n, tmp.get_write());
+        return flush().then([this, tmp = std::move(tmp)] (bool done) mutable {
+            return _fd.put(std::move(tmp));
+        }).then([n] {
+            return make_ready_future<size_t>(n);
         });
     }
     auto now = std::min(n, _size - _end);
-    std::copy(buf, buf + now, _buf.get() + _end);
+    std::copy(buf, buf + now, _buf.get_write() + _end);
     _end += now;
     if (now == n) {
         return make_ready_future<size_t>(n);
     } else {
-        return _fd.write_all(_buf.get(), _end).then(
-                [this, now, n, buf] (size_t w) mutable {
-            std::copy(buf + now, buf + n, _buf.get());
-            _end = n - now;
+        temporary_buffer<CharType> next(_size);
+        std::copy(buf + now, buf + n, next.get_write());
+        _end = n - now;
+        std::swap(next, _buf);
+        return _fd.put(std::move(next)).then(
+                [this, n] () mutable {
             return make_ready_future<size_t>(n);
         });
     }
@@ -792,8 +799,10 @@ output_stream<CharType>::flush() {
     if (!_end) {
         return make_ready_future<bool>(true);
     }
-    return _fd.write_all(_buf.get(), _end).then(
-            [this] (size_t done) mutable {
+    _buf.trim(_end);
+    temporary_buffer<CharType> next(_size);
+    std::swap(_buf, next);
+    return _fd.put(std::move(next)).then([this] {
         _end = 0;
         return make_ready_future<bool>(true);
     });
