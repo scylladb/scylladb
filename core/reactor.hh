@@ -482,7 +482,18 @@ public:
     virtual future<temporary_buffer<char>> get() override;
 };
 
+class posix_data_sink_impl : public data_sink_impl {
+    pollable_fd& _fd;
+    std::vector<temporary_buffer<char>> _data;
+private:
+    future<> do_write(size_t idx);
+public:
+    explicit posix_data_sink_impl(pollable_fd& fd) : _fd(fd) {}
+    future<> put(std::vector<temporary_buffer<char>> data) override;
+};
+
 data_source posix_data_source(pollable_fd& fd);
+data_sink posix_data_sink(pollable_fd& fd);
 
 template <typename CharType>
 class input_stream {

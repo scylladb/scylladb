@@ -417,5 +417,27 @@ posix_data_source_impl::get() {
     });
 }
 
+data_sink posix_data_sink(pollable_fd& fd) {
+    return data_sink(std::make_unique<posix_data_sink_impl>(fd));
+}
+
+future<>
+posix_data_sink_impl::put(std::vector<temporary_buffer<char>> data) {
+    std::swap(data, _data);
+    return do_write(0);
+}
+
+future<>
+posix_data_sink_impl::do_write(size_t idx) {
+    // FIXME: use writev
+    return _fd.write_all(_data[idx].get(), _data[idx].size()).then([this, idx] (size_t size) mutable {
+        assert(size == _data[idx].size()); // FIXME: exception? short write?
+        if (++idx == _data.size()) {
+            _data.clear();
+            return make_ready_future<>();
+        }
+        return do_write(idx);
+    });
+}
 
 reactor the_reactor;
