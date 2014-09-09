@@ -113,9 +113,7 @@ struct future_state {
         make_ready();
     }
     std::tuple<T...> get() {
-        while (_state == state::future) {
-            abort();
-        }
+        assert(_state != state::future);
         if (_state == state::exception) {
             std::rethrow_exception(_u.ex);
         }
