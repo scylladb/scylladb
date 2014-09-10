@@ -291,7 +291,7 @@ template <typename InetTraits>
 void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     bool do_output = false;
 
-    auto seg_seq = th->seq;
+    tcp_seq seg_seq = th->seq;
     auto seg_len = p.len;
     if (th->f_syn) {
         do_output = true;
@@ -313,20 +313,24 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 && (seg_seq >= _rcv.next || seg_seq + seg_len <= _rcv.next + _rcv.window)) {
             // FIXME: handle urgent data (not urgent)
             if (seg_seq < _rcv.next) {
-                p.trim_front(_rcv.next - seg_seq);
-                seg_len -= _rcv.next - seg_seq;
-                seg_seq = _rcv.next;
+                // ignore already acknowledged data
+                auto dup = std::min(uint32_t(_rcv.next - seg_seq), seg_len);
+                p.trim_front(dup);
+                seg_len -= dup;
+                seg_seq += dup;
             }
-            if (seg_seq == _rcv.next) {
-                _rcv.data.push_back(std::move(p));
-                _rcv.next += seg_len;
-                merge_out_of_order();
-                if (_rcv._user_waiting) {
-                    _rcv._user_waiting = false;
-                    _rcv._data_received.set_value();
+            if (seg_len) {
+                if (seg_seq == _rcv.next) {
+                    _rcv.data.push_back(std::move(p));
+                    _rcv.next += seg_len;
+                    merge_out_of_order();
+                    if (_rcv._user_waiting) {
+                        _rcv._user_waiting = false;
+                        _rcv._data_received.set_value();
+                    }
+                } else {
+                    insert_out_of_order(seg_seq, std::move(p));
                 }
-            } else {
-                insert_out_of_order(seg_seq, std::move(p));
             }
             do_output = true;
         }
