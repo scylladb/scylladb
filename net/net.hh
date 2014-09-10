@@ -80,6 +80,14 @@ public:
     template <typename Deleter>
     packet(packet&& x, fragment frag, Deleter deleter);
 
+    packet& operator=(packet&& x) {
+        if (this != &x) {
+            this->~packet();
+            new (this) packet(std::move(x));
+        }
+        return *this;
+    }
+
     // share packet data (reference counted, non COW)
     packet share();
     packet share(size_t offset, size_t len);
