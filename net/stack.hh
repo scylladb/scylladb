@@ -9,8 +9,8 @@
 
 namespace net {
 
-std::unique_ptr<networking_stack>
-create_native_networking_stack();
+std::unique_ptr<network_stack>
+create_native_network_stack();
 
 }
 

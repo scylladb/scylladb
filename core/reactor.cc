@@ -36,7 +36,7 @@ wrap_syscall(T result) {
 }
 
 reactor::reactor()
-    : _networking_stack(networking_stack_registry::create())
+    : _network_stack(network_stack_registry::create())
     , _epollfd(file_desc::epoll_create(EPOLL_CLOEXEC))
     , _io_eventfd()
     , _io_context(0)
@@ -50,9 +50,9 @@ reactor::reactor()
 }
 
 void reactor::configure(boost::program_options::variables_map vm) {
-    _networking_stack = vm.count("network-stack")
-        ? networking_stack_registry::create(sstring(vm["network-stack"].as<std::string>()))
-        : networking_stack_registry::create();
+    _network_stack = vm.count("network-stack")
+        ? network_stack_registry::create(sstring(vm["network-stack"].as<std::string>()))
+        : network_stack_registry::create();
 }
 
 future<> reactor::get_epoll_future(pollable_fd_state& pfd,
@@ -104,7 +104,7 @@ reactor::posix_listen(socket_address sa, listen_options opts) {
 
 server_socket
 reactor::listen(socket_address sa, listen_options opt) {
-    return _networking_stack->listen(sa, opt);
+    return _network_stack->listen(sa, opt);
 }
 
 class posix_connected_socket_impl final : public connected_socket_impl {
@@ -449,23 +449,23 @@ posix_data_sink_impl::do_write(size_t idx) {
 }
 
 server_socket
-posix_networking_stack::listen(socket_address sa, listen_options opt) {
+posix_network_stack::listen(socket_address sa, listen_options opt) {
     return server_socket(std::make_unique<posix_server_socket_impl>(the_reactor.posix_listen(sa, opt)));
 }
 
-void networking_stack_registry::register_stack(sstring name,
-        std::function<std::unique_ptr<networking_stack> ()> create, bool make_default) {
+void network_stack_registry::register_stack(sstring name,
+        std::function<std::unique_ptr<network_stack> ()> create, bool make_default) {
     _map()[name] = std::move(create);
     if (make_default) {
         _default() = name;
     }
 }
 
-sstring networking_stack_registry::default_stack() {
+sstring network_stack_registry::default_stack() {
     return _default();
 }
 
-std::vector<sstring> networking_stack_registry::list() {
+std::vector<sstring> network_stack_registry::list() {
     std::vector<sstring> ret;
     for (auto&& ns : _map()) {
         ret.push_back(ns.first);
@@ -473,13 +473,13 @@ std::vector<sstring> networking_stack_registry::list() {
     return ret;
 }
 
-std::unique_ptr<networking_stack>
-networking_stack_registry::create() {
+std::unique_ptr<network_stack>
+network_stack_registry::create() {
     return create(_default());
 }
 
-std::unique_ptr<networking_stack>
-networking_stack_registry::create(sstring name) {
+std::unique_ptr<network_stack>
+network_stack_registry::create(sstring name) {
     return _map()[name]();
 }
 
@@ -487,15 +487,15 @@ boost::program_options::options_description
 reactor::get_options_description() {
     namespace bpo = boost::program_options;
     bpo::options_description opts("Core options");
-    auto net_stack_names = networking_stack_registry::list();
+    auto net_stack_names = network_stack_registry::list();
     opts.add_options()
         ("network-stack", bpo::value<std::string>(),
-                sprint("select networking stack (valid values: %s)",
+                sprint("select network stack (valid values: %s)",
                         format_separated(net_stack_names.begin(), net_stack_names.end(), ", ")).c_str())
         ;
     return opts;
 }
 
-networking_stack_registrator<posix_networking_stack> nsr_posix{"posix", true};
+network_stack_registrator<posix_network_stack> nsr_posix{"posix", true};
 
 reactor the_reactor;

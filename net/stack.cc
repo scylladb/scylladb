@@ -12,7 +12,7 @@
 
 namespace net {
 
-class native_networking_stack;
+class native_network_stack;
 
 template <typename Protocol>
 class native_server_socket_impl;
@@ -41,19 +41,19 @@ public:
     virtual future<connected_socket, socket_address> accept() override;
 };
 
-class native_networking_stack : public networking_stack {
-    static std::unique_ptr<native_networking_stack> _s;
+class native_network_stack : public network_stack {
+    static std::unique_ptr<native_network_stack> _s;
     interface _netif;
     ipv4 _inet;
     using tcp4 = tcp<ipv4_traits>;
 public:
-    explicit native_networking_stack(std::unique_ptr<device> dev);
-    explicit native_networking_stack() : native_networking_stack(create_virtio_net_device("tap0")) {}
+    explicit native_network_stack(std::unique_ptr<device> dev);
+    explicit native_network_stack() : native_network_stack(create_virtio_net_device("tap0")) {}
     virtual server_socket listen(socket_address sa, listen_options opt) override;
     friend class native_server_socket_impl<tcp4>;
 };
 
-native_networking_stack::native_networking_stack(std::unique_ptr<device> dev)
+native_network_stack::native_network_stack(std::unique_ptr<device> dev)
     : _netif(std::move(dev))
     , _inet(&_netif) {
     _netif.run();
@@ -76,7 +76,7 @@ native_server_socket_impl<Protocol>::accept() {
 }
 
 server_socket
-native_networking_stack::listen(socket_address sa, listen_options opts) {
+native_network_stack::listen(socket_address sa, listen_options opts) {
     assert(sa.as_posix_sockaddr().sa_family == AF_INET);
     return server_socket(std::make_unique<native_server_socket_impl<tcp4>>(
             _inet.get_tcp(), ntohs(sa.as_posix_sockaddr_in().sin_port), opts));
@@ -138,8 +138,8 @@ native_connected_socket_impl<Protocol>::output() {
 }
 
 
-std::unique_ptr<native_networking_stack> native_networking_stack::_s;
+std::unique_ptr<native_network_stack> native_network_stack::_s;
 
-networking_stack_registrator<native_networking_stack> nns_registrator{"native"};
+network_stack_registrator<native_network_stack> nns_registrator{"native"};
 
 }
