@@ -105,6 +105,7 @@ public:
     basic_sstring& operator=(const basic_sstring& x) {
         basic_sstring tmp(x);
         swap(tmp);
+        return *this;
     }
     basic_sstring& operator=(basic_sstring&& x) noexcept {
         if (this != &x) {
