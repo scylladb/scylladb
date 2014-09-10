@@ -228,6 +228,34 @@ public:
     virtual server_socket listen(socket_address sa, listen_options opts) = 0;
 };
 
+class networking_stack_registry {
+    static std::unordered_map<sstring,
+            std::function<std::unique_ptr<networking_stack> ()>>& _map() {
+        static std::unordered_map<sstring,
+                std::function<std::unique_ptr<networking_stack> ()>> map;
+        return map;
+    }
+    static sstring& _default() {
+        static sstring def;
+        return def;
+    }
+public:
+    static void register_stack(sstring name,
+            std::function<std::unique_ptr<networking_stack> ()> create, bool make_default = false);
+    static sstring default_stack();
+    static std::vector<sstring> list();
+    static std::unique_ptr<networking_stack> create();
+    static std::unique_ptr<networking_stack> create(sstring name);
+};
+
+template <typename NetworkStack>
+class networking_stack_registrator {
+public:
+    explicit networking_stack_registrator(sstring name, bool make_default = false) {
+        networking_stack_registry::register_stack(name, std::make_unique<NetworkStack>, make_default);
+    }
+};
+
 class posix_networking_stack : public networking_stack {
 public:
     virtual server_socket listen(socket_address sa, listen_options opts) override;
@@ -309,8 +337,7 @@ class reactor {
     };
     std::unordered_map<int, signal_handler> _signal_handlers;
     bool _stopped = false;
-    std::unique_ptr<networking_stack> _networking_stack
-        = std::make_unique<posix_networking_stack>();
+    std::unique_ptr<networking_stack> _networking_stack;
 public:
     file_desc _epollfd;
     readable_eventfd _io_eventfd;

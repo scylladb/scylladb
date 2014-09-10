@@ -35,7 +35,8 @@ wrap_syscall(T result) {
 }
 
 reactor::reactor()
-    : _epollfd(file_desc::epoll_create(EPOLL_CLOEXEC))
+    : _networking_stack(networking_stack_registry::create())
+    , _epollfd(file_desc::epoll_create(EPOLL_CLOEXEC))
     , _io_eventfd()
     , _io_context(0)
     , _io_context_available(max_aio) {
@@ -444,5 +445,37 @@ server_socket
 posix_networking_stack::listen(socket_address sa, listen_options opt) {
     return server_socket(std::make_unique<posix_server_socket_impl>(the_reactor.posix_listen(sa, opt)));
 }
+
+void networking_stack_registry::register_stack(sstring name,
+        std::function<std::unique_ptr<networking_stack> ()> create, bool make_default) {
+    _map()[name] = std::move(create);
+    if (make_default) {
+        _default() = name;
+    }
+}
+
+sstring networking_stack_registry::default_stack() {
+    return _default();
+}
+
+std::vector<sstring> networking_stack_registry::list() {
+    std::vector<sstring> ret;
+    for (auto&& ns : _map()) {
+        ret.push_back(ns.first);
+    }
+    return ret;
+}
+
+std::unique_ptr<networking_stack>
+networking_stack_registry::create() {
+    return create(_default());
+}
+
+std::unique_ptr<networking_stack>
+networking_stack_registry::create(sstring name) {
+    return _map()[name]();
+}
+
+networking_stack_registrator<posix_networking_stack> nsr_posix{"posix", true};
 
 reactor the_reactor;

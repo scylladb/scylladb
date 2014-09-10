@@ -6,6 +6,7 @@
 #include "net.hh"
 #include "ip.hh"
 #include "tcp.hh"
+#include "virtio.hh"
 #include <memory>
 #include <queue>
 
@@ -47,6 +48,7 @@ class native_networking_stack : public networking_stack {
     using tcp4 = tcp<ipv4_traits>;
 public:
     explicit native_networking_stack(std::unique_ptr<device> dev);
+    explicit native_networking_stack() : native_networking_stack(create_virtio_net_device("tap0")) {}
     virtual server_socket listen(socket_address sa, listen_options opt) override;
     friend class native_server_socket_impl<tcp4>;
 };
@@ -135,5 +137,7 @@ native_connected_socket_impl<Protocol>::output() {
 
 
 std::unique_ptr<native_networking_stack> native_networking_stack::_s;
+
+networking_stack_registrator<native_networking_stack> nns_registrator{"native"};
 
 }
