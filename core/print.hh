@@ -53,4 +53,19 @@ sprint(const char* fmt, A&&... a) {
     return bfmt.str();
 }
 
+template <typename Iterator>
+std::string
+format_separated(Iterator b, Iterator e, const char* sep = ", ") {
+    std::string ret;
+    if (b == e) {
+        return ret;
+    }
+    ret += *b++;
+    while (b != e) {
+        ret += sep;
+        ret += *b++;
+    }
+    return ret;
+}
+
 #endif /* PRINT_HH_ */
