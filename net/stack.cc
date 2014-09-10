@@ -79,7 +79,7 @@ server_socket
 native_networking_stack::listen(socket_address sa, listen_options opts) {
     assert(sa.as_posix_sockaddr().sa_family == AF_INET);
     return server_socket(std::make_unique<native_server_socket_impl<tcp4>>(
-            _inet.get_tcp(), sa.as_posix_sockaddr_in().sin_port, opts));
+            _inet.get_tcp(), ntohs(sa.as_posix_sockaddr_in().sin_port), opts));
 }
 
 template <typename Protocol>
