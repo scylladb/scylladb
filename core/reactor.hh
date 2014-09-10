@@ -407,11 +407,11 @@ private:
     friend class timer;
 };
 
-extern reactor the_reactor;
+extern reactor engine;
 
 inline
 pollable_fd_state::~pollable_fd_state() {
-    the_reactor.forget(*this);
+    engine.forget(*this);
 }
 
 // A temporary_buffer either points inside a larger buffer, or, if the requested size
@@ -594,24 +594,24 @@ public:
     file(file&& x) : _fd(x._fd) { x._fd = -1; }
     template <typename CharType>
     future<size_t> dma_read(uint64_t pos, CharType* buffer, size_t len) {
-        return the_reactor.read_dma(*this, pos, buffer, len);
+        return engine.read_dma(*this, pos, buffer, len);
     }
 
     future<size_t> dma_read(uint64_t pos, std::vector<iovec> iov) {
-        return the_reactor.read_dma(*this, pos, std::move(iov));
+        return engine.read_dma(*this, pos, std::move(iov));
     }
 
     template <typename CharType>
     future<size_t> dma_write(uint64_t pos, const CharType* buffer, size_t len) {
-        return the_reactor.write_dma(*this, pos, buffer, len);
+        return engine.write_dma(*this, pos, buffer, len);
     }
 
     future<size_t> dma_write(uint64_t pos, std::vector<iovec> iov) {
-        return the_reactor.write_dma(*this, pos, std::move(iov));
+        return engine.write_dma(*this, pos, std::move(iov));
     }
 
     future<> flush() {
-        return the_reactor.flush(*this);
+        return engine.flush(*this);
     }
 
     friend class reactor;
@@ -855,32 +855,32 @@ output_stream<CharType>::flush() {
 
 inline
 future<size_t> pollable_fd::read_some(char* buffer, size_t size) {
-    return the_reactor.read_some(*_s, buffer, size);
+    return engine.read_some(*_s, buffer, size);
 }
 
 inline
 future<size_t> pollable_fd::read_some(uint8_t* buffer, size_t size) {
-    return the_reactor.read_some(*_s, buffer, size);
+    return engine.read_some(*_s, buffer, size);
 }
 
 inline
 future<size_t> pollable_fd::read_some(const std::vector<iovec>& iov) {
-    return the_reactor.read_some(*_s, iov);
+    return engine.read_some(*_s, iov);
 }
 
 inline
 future<size_t> pollable_fd::write_all(const char* buffer, size_t size) {
-    return the_reactor.write_all(*_s, buffer, size);
+    return engine.write_all(*_s, buffer, size);
 }
 
 inline
 future<size_t> pollable_fd::write_all(const uint8_t* buffer, size_t size) {
-    return the_reactor.write_all(*_s, buffer, size);
+    return engine.write_all(*_s, buffer, size);
 }
 
 inline
 future<pollable_fd, socket_address> pollable_fd::accept() {
-    return the_reactor.accept(*_s);
+    return engine.accept(*_s);
 }
 
 inline
@@ -894,7 +894,7 @@ future<> timer::expired() {
 inline
 timer::~timer() {
     if (_armed) {
-        the_reactor.del_timer(this);
+        engine.del_timer(this);
     }
 }
 
@@ -903,7 +903,7 @@ void timer::arm(clock_type::time_point until) {
     assert(!_armed);
     _armed = true;
     _expiry = until;
-    the_reactor.add_timer(this);
+    engine.add_timer(this);
 }
 
 inline
@@ -915,7 +915,7 @@ inline
 void timer::suspend() {
     assert(_armed);
     _armed = false;
-    the_reactor.del_timer(this);
+    engine.del_timer(this);
 }
 
 inline

@@ -391,7 +391,7 @@ file_desc readable_eventfd::try_create_eventfd(size_t initial) {
 }
 
 future<size_t> readable_eventfd::wait() {
-    return the_reactor.readable(*_fd._s).then([this] {
+    return engine.readable(*_fd._s).then([this] {
         uint64_t count;
         int r = ::read(_fd.get_fd(), &count, sizeof(count));
         assert(r == sizeof(count));
@@ -408,7 +408,7 @@ socket_address make_ipv4_address(ipv4_addr addr) {
 }
 
 void schedule(std::unique_ptr<task> t) {
-    the_reactor.add_task(std::move(t));
+    engine.add_task(std::move(t));
 }
 
 data_source posix_data_source(pollable_fd& fd) {
@@ -450,7 +450,7 @@ posix_data_sink_impl::do_write(size_t idx) {
 
 server_socket
 posix_network_stack::listen(socket_address sa, listen_options opt) {
-    return server_socket(std::make_unique<posix_server_socket_impl>(the_reactor.posix_listen(sa, opt)));
+    return server_socket(std::make_unique<posix_server_socket_impl>(engine.posix_listen(sa, opt)));
 }
 
 void network_stack_registry::register_stack(sstring name,
@@ -498,4 +498,4 @@ reactor::get_options_description() {
 
 network_stack_registrator<posix_network_stack> nsr_posix{"posix", true};
 
-reactor the_reactor;
+reactor engine;

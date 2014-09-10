@@ -74,7 +74,7 @@ void echo_packets(net::device& netif) {
 int main(int ac, char** av) {
     auto vnet = create_virtio_net_device("tap0");
     echo_packets(*vnet);
-    the_reactor.run();
+    engine.run();
     return 0;
 }
 

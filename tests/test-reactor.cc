@@ -43,9 +43,9 @@ int main(int ac, char** av)
     ipv4_addr addr{{}, 10000};
     listen_options lo;
     lo.reuse_address = true;
-    test t(the_reactor.posix_listen(make_ipv4_address(addr), lo));
+    test t(engine.posix_listen(make_ipv4_address(addr), lo));
     t.start_accept();
-    the_reactor.run();
+    engine.run();
     return 0;
 }
 

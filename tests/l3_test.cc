@@ -21,7 +21,7 @@ int main(int ac, char** av) {
     netif.run();
     l3_protocol arp(&netif, 0x0806);
     dump_arp_packets(arp);
-    the_reactor.run();
+    engine.run();
     return 0;
 }
 

@@ -40,7 +40,7 @@ public:
     void listen(ipv4_addr addr) {
         listen_options lo;
         lo.reuse_address = true;
-        _listeners.push_back(the_reactor.listen(make_ipv4_address(addr), lo));
+        _listeners.push_back(engine.listen(make_ipv4_address(addr), lo));
         do_accepts(_listeners.size() - 1);
     }
     void do_accepts(int which) {
@@ -305,11 +305,11 @@ int main(int ac, char** av) {
         std::cout << opts << "\n";
         return 1;
     }
-    the_reactor.configure(configuration);
-    the_reactor.start().then([&server] {
+    engine.configure(configuration);
+    engine.start().then([&server] {
         server.listen({{}, 10000});
     });
-    the_reactor.run();
+    engine.run();
     return 0;
 }
 
