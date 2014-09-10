@@ -3,6 +3,7 @@
  */
 
 #include "reactor.hh"
+#include "print.hh"
 #include <cassert>
 #include <unistd.h>
 #include <fcntl.h>
@@ -46,6 +47,12 @@ reactor::reactor()
         process_io(count);
     });
     receive_signal(SIGINT).then([this] { _stopped = true; });
+}
+
+void reactor::configure(boost::program_options::variables_map vm) {
+    _networking_stack = vm.count("network-stack")
+        ? networking_stack_registry::create(sstring(vm["network-stack"].as<std::string>()))
+        : networking_stack_registry::create();
 }
 
 future<> reactor::get_epoll_future(pollable_fd_state& pfd,
@@ -474,6 +481,19 @@ networking_stack_registry::create() {
 std::unique_ptr<networking_stack>
 networking_stack_registry::create(sstring name) {
     return _map()[name]();
+}
+
+boost::program_options::options_description
+reactor::get_options_description() {
+    namespace bpo = boost::program_options;
+    bpo::options_description opts("Core options");
+    auto net_stack_names = networking_stack_registry::list();
+    opts.add_options()
+        ("network-stack", bpo::value<std::string>(),
+                sprint("select networking stack (valid values: %s)",
+                        format_separated(net_stack_names.begin(), net_stack_names.end(), ", ")).c_str())
+        ;
+    return opts;
 }
 
 networking_stack_registrator<posix_networking_stack> nsr_posix{"posix", true};

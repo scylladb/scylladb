@@ -26,6 +26,7 @@
 #include <atomic>
 #include <boost/lockfree/queue.hpp>
 #include <boost/optional.hpp>
+#include <boost/program_options.hpp>
 #include "util/eclipse.hh"
 #include "future.hh"
 #include "posix.hh"
@@ -354,9 +355,12 @@ private:
     void abort_on_error(int ret);
     void complete_timers();
 public:
+    static boost::program_options::options_description get_options_description();
     reactor();
     reactor(const reactor&) = delete;
     void operator=(const reactor&) = delete;
+
+    void configure(boost::program_options::variables_map config);
 
     server_socket listen(socket_address sa, listen_options opts = {});
 
