@@ -334,15 +334,22 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     if (th->f_fin) {
         do_output = true;
         if (!_local_syn_acked) {
-            return;
+            return respond_with_reset(th);
         }
+        auto fin_seq = seg_seq + seg_len;
         if (!_foreign_fin_received) {
-            _foreign_fin_received = true;
-            _rcv.window = seg_seq + seg_len + 1 - _rcv.next;
-            trim_receive_data_after_window();
-        } else {
-            if (seg_seq + seg_len + 1 != _rcv.next + _rcv.window) {
+            if (fin_seq < _rcv.next || fin_seq > _rcv.next + _rcv.window) {
+                // FIXME: we did queue the data.  Do we care?
                 return respond_with_reset(th);
+            } else if (fin_seq == _rcv.next) {
+                // FIXME: we might queue an out-of-order FIN.  Is it worthwhile?
+                _foreign_fin_received = true;
+                _rcv.next = fin_seq + 1;
+                _rcv.window = 0;
+            }
+        } else {
+            if (fin_seq + 1 != _rcv.next) {
+                return;
             }
         }
     }
