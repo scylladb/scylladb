@@ -97,6 +97,8 @@ public:
     basic_sstring(std::basic_string<char_type>& x) : basic_sstring(x.c_str(), x.size()) {}
     basic_sstring(std::initializer_list<char_type> x) : basic_sstring(x.begin(), x.end() - x.begin()) {}
     basic_sstring(const char_type* b, const char_type* e) : basic_sstring(b, e - b) {}
+    basic_sstring(const std::basic_string<char_type>& s)
+        : basic_sstring(s.data(), s.size()) {}
     ~basic_sstring() noexcept {
         if (is_external()) {
             delete[] u.external.str;
