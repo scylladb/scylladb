@@ -62,6 +62,9 @@ private:
     } u;
     friend socket_address make_ipv4_address(ipv4_addr addr);
     friend class reactor;
+public:
+    ::sockaddr& as_posix_sockaddr() { return u.sa; }
+    ::sockaddr_in& as_posix_sockaddr_in() { return u.in; }
 };
 
 struct free_deleter {
