@@ -39,12 +39,14 @@ all: apps/seastar/seastar $(tests) apps/httpd/httpd
 clean:
 	rm seastar $(tests) *.o
 
+libnet = net/virtio.o net/net.o net/ip.o net/ethernet.o net/arp.o net/stack.o
+
 apps/seastar/seastar: apps/seastar/main.o core/reactor.o
 	$(link)
 
 tests/test-reactor: tests/test-reactor.o core/reactor.o
 
-apps/httpd/httpd: apps/httpd/httpd.o core/reactor.o
+apps/httpd/httpd: apps/httpd/httpd.o core/reactor.o $(libnet)
 
 tests/fileiotest: tests/fileiotest.o core/reactor.o
 

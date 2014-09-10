@@ -292,7 +292,23 @@ public:
 
 int main(int ac, char** av) {
     http_server server;
-    server.listen({{}, 10000});
+    namespace bpo = boost::program_options;
+    bpo::options_description opts;
+    opts.add_options()
+       ("help", "show help message")
+       ;
+    opts.add(reactor::get_options_description());
+    bpo::variables_map configuration;
+    bpo::store(bpo::command_line_parser(ac, av).options(opts).run(), configuration);
+    bpo::notify(configuration);
+    if (configuration.count("help")) {
+        std::cout << opts << "\n";
+        return 1;
+    }
+    the_reactor.configure(configuration);
+    the_reactor.start().then([&server] {
+        server.listen({{}, 10000});
+    });
     the_reactor.run();
     return 0;
 }
