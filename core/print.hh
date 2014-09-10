@@ -45,4 +45,12 @@ print(const char* fmt, A&&... a) {
     return print(bfmt, std::forward<A>(a)...);
 }
 
+template <typename... A>
+std::string
+sprint(const char* fmt, A&&... a) {
+    boost::format bfmt(fmt);
+    apply_format(bfmt, std::forward<A>(a)...);
+    return bfmt.str();
+}
+
 #endif /* PRINT_HH_ */
