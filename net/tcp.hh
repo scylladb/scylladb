@@ -137,6 +137,7 @@ private:
         future<> send(packet p);
         packet read();
     private:
+        void respond_with_reset(tcp_hdr* th);
         void merge_out_of_order();
         void insert_out_of_order(tcp_seq seq, packet p);
         void trim_receive_data_after_window();
@@ -265,6 +266,28 @@ tcp<InetTraits>::tcb::tcb(tcp& t, connid id)
 }
 
 template <typename InetTraits>
+void tcp<InetTraits>::tcb::respond_with_reset(tcp_hdr* rth) {
+    packet p;
+    auto th = p.prepend_header<tcp_hdr>();
+    th->src_port = _local_port;
+    th->dst_port = _foreign_port;
+    if (rth->f_ack) {
+        th->seq = rth->ack;
+    }
+    th->f_rst = true;
+    th->data_offset = sizeof(*th) / 4;
+
+    checksummer csum;
+    typename InetTraits::pseudo_header ph(_local_ip, _foreign_ip, sizeof(*th));
+    hton(ph);
+    csum.sum(reinterpret_cast<char*>(&ph), sizeof(ph));
+    csum.sum(p);
+    th->checksum = csum.get();
+
+    _tcp.send(_local_ip, _foreign_ip, std::move(p));
+}
+
+template <typename InetTraits>
 void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     bool do_output = false;
 
@@ -281,7 +304,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             _snd.wl1 = th->seq;
         } else {
             if (seg_seq != _rcv.initial) {
-                return; // FIXME: reset too?
+                return respond_with_reset(th);
             }
         }
     } else {
@@ -319,7 +342,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             trim_receive_data_after_window();
         } else {
             if (seg_seq + seg_len + 1 != _rcv.next + _rcv.window) {
-                return; // FIXME: reset too?
+                return respond_with_reset(th);
             }
         }
     }
