@@ -185,6 +185,7 @@ public:
     future<connection> listen(uint16_t port);
 private:
     void send(ipaddr from, ipaddr to, packet p);
+    void respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr foreign_ip);
     void connection_refused();
 };
 
@@ -241,6 +242,8 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
     }
     if (tcbp) {
         tcbp->input(th, std::move(p));
+    } else {
+        respond_with_reset(th, id.local_ip, id.foreign_ip);
     }
 }
 
@@ -269,10 +272,15 @@ tcp<InetTraits>::tcb::tcb(tcp& t, connid id)
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::respond_with_reset(tcp_hdr* rth) {
+    _tcp.respond_with_reset(rth, _local_ip, _foreign_ip);
+}
+
+template <typename InetTraits>
+void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr foreign_ip) {
     packet p;
     auto th = p.prepend_header<tcp_hdr>();
-    th->src_port = _local_port;
-    th->dst_port = _foreign_port;
+    th->src_port = rth->dst_port;
+    th->dst_port = rth->src_port;
     if (rth->f_ack) {
         th->seq = rth->ack;
     }
@@ -280,13 +288,13 @@ void tcp<InetTraits>::tcb::respond_with_reset(tcp_hdr* rth) {
     th->data_offset = sizeof(*th) / 4;
 
     checksummer csum;
-    typename InetTraits::pseudo_header ph(_local_ip, _foreign_ip, sizeof(*th));
+    typename InetTraits::pseudo_header ph(local_ip, foreign_ip, sizeof(*th));
     hton(ph);
     csum.sum(reinterpret_cast<char*>(&ph), sizeof(ph));
     csum.sum(p);
     th->checksum = csum.get();
 
-    _tcp.send(_local_ip, _foreign_ip, std::move(p));
+    send(local_ip, foreign_ip, std::move(p));
 }
 
 template <typename InetTraits>
