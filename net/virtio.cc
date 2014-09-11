@@ -257,10 +257,16 @@ void vring::complete() {
     auto used_head = _used._shared->_idx.load(std::memory_order_acquire);
     while (used_head != _used._tail) {
         auto ue = _used._shared->_used_elements[masked(_used._tail++)];
-        //auto& d = _descs[ue._id];
         _completions[ue._id].set_value(ue._len);
-        free_desc(ue._id);
-        // FIXME: free buffers? length? chains?
+        auto id = ue._id;
+        auto has_next = true;
+        while (has_next) {
+            auto& d = _descs[id];
+            auto next = d._next;
+            has_next = d._flags.has_next;
+            free_desc(id);
+            id = next;
+        }
     }
     _notified.wait().then([this] (size_t ignore) {
         complete();
