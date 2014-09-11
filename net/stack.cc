@@ -87,11 +87,15 @@ class native_connected_socket_impl<Protocol>::native_data_source_impl final
     : public data_source_impl {
     typename Protocol::connection& _conn;
     size_t _cur_frag = 0;
+    bool _eof = false;
     packet _buf;
 public:
     explicit native_data_source_impl(typename Protocol::connection& conn)
         : _conn(conn) {}
     virtual future<temporary_buffer<char>> get() override {
+        if (_eof) {
+            return make_ready_future<temporary_buffer<char>>(temporary_buffer<char>(0));
+        }
         if (_cur_frag != _buf.fragments.size()) {
             auto& f = _buf.fragments[_cur_frag++];
             return make_ready_future<temporary_buffer<char>>(
@@ -101,6 +105,7 @@ public:
         return _conn.wait_for_data().then([this] {
             _buf = _conn.read();
             _cur_frag = 0;
+            _eof = !_buf.len;
             return get();
         });
     }
