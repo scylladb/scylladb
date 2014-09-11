@@ -35,16 +35,18 @@ You consume a future by using its *then()* method, providing it with a
 callback (typically a lambda).  For example, consider the following
 operation:
 
-    future<int> get();   // promises an int will be produced eventually
-    future<> put(int)    // promises to store an int
+```
+future<int> get();   // promises an int will be produced eventually
+future<> put(int)    // promises to store an int
 
-    void f() {    
-        get().then([] (int value) {
-            put(value + 1).then([] {
-                std::cout << "value stored successfully\n";
-            });
+void f() {
+    get().then([] (int value) {
+        put(value + 1).then([] {
+            std::cout << "value stored successfully\n";
         });
-    }
+    });
+}
+'''
 
 Here, we initate a *get()* operation, requesting that when it completes, a
 *put()* operation will be scheduled with an incremented value.  We also
@@ -57,37 +59,41 @@ If a *then()* lambda returns a future (call it x), then that *then()*
 will return a future (call it y) that will receive the same value.  This
 removes the need for nesting lambda blocks; for example the code above
 could be rewritten as:
- 
-    future<int> get();   // promises an int will be produced eventually
-    future<> put(int)    // promises to store an int
 
-    void f() {    
-        get().then([] (int value) {
-            return put(value + 1);
-        }).then([] {
-            std::cout << "value stored successfully\n";
-        });
-    }
+``` 
+future<int> get();   // promises an int will be produced eventually
+future<> put(int)    // promises to store an int
+
+void f() {
+    get().then([] (int value) {
+        return put(value + 1);
+    }).then([] {
+        std::cout << "value stored successfully\n";
+    });
+}
+'''
 
 Loops
 -----
 
 Loops are achieved with a tail call; for example:
 
-    future<int> get();   // promises an int will be produced eventually
-    future<> put(int)    // promises to store an int
+```
+future<int> get();   // promises an int will be produced eventually
+future<> put(int)    // promises to store an int
 
-    future<> loop_to(int end) {    
-        get().then([end] (int value) {
-            if (value == end) {
-                return make_read_future<>();
-            }
-            return put(value + 1);
-        }).then([end] {
-            return loop_to(end);
-        });
-    }
+future<> loop_to(int end) {
+    get().then([end] (int value) {
+        if (value == end) {
+            return make_read_future<>();
+        }
+        return put(value + 1);
+    }).then([end] {
+        return loop_to(end);
+    });
+}
+'''
  
- The *make_ready_future()* function returns a future that is already 
- available --- corresponding to the loop termination condition, where
- no further I/O needs to take place. 
+The *make_ready_future()* function returns a future that is already
+available --- corresponding to the loop termination condition, where
+no further I/O needs to take place.
