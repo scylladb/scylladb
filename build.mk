@@ -11,7 +11,12 @@ opt.release = -O2 -flto
 sanitize = $(sanitize.$(mode))
 opt = $(opt.$(mode))
 
-libs = -laio -ltcmalloc -lboost_program_options
+libs.debug =
+libs.release = -ltcmalloc
+
+libs = -laio -lboost_program_options
+
+libs += $(libs.$(mode))
 
 LDFLAGS = $(libs)
 
