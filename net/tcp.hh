@@ -277,6 +277,9 @@ void tcp<InetTraits>::tcb::respond_with_reset(tcp_hdr* rth) {
 
 template <typename InetTraits>
 void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr foreign_ip) {
+    if (rth->f_rst) {
+        return;
+    }
     packet p;
     auto th = p.prepend_header<tcp_hdr>();
     th->src_port = rth->dst_port;
