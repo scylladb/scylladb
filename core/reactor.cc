@@ -49,6 +49,7 @@ void reactor::configure(boost::program_options::variables_map vm) {
     _network_stack = vm.count("network-stack")
         ? network_stack_registry::create(sstring(vm["network-stack"].as<std::string>()))
         : network_stack_registry::create();
+    _handle_sigint = !vm.count("no-handle-interrupt");
 }
 
 future<> reactor::get_epoll_future(pollable_fd_state& pfd,
@@ -260,7 +261,9 @@ void reactor::run() {
     _io_eventfd.wait().then([this] (size_t count) {
         process_io(count);
     });
-    receive_signal(SIGINT).then([this] { _stopped = true; });
+    if (_handle_sigint) {
+        receive_signal(SIGINT).then([this] { _stopped = true; });
+    }
     std::vector<std::unique_ptr<task>> current_tasks;
     _start_promise.set_value();
     complete_timers();
@@ -492,6 +495,7 @@ reactor::get_options_description() {
         ("network-stack", bpo::value<std::string>(),
                 sprint("select network stack (valid values: %s)",
                         format_separated(net_stack_names.begin(), net_stack_names.end(), ", ")).c_str())
+        ("no-handle-interrupt", "ignore SIGINT (for gdb)")
         ;
     return opts;
 }

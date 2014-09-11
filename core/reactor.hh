@@ -338,6 +338,7 @@ class reactor {
     };
     std::unordered_map<int, signal_handler> _signal_handlers;
     bool _stopped = false;
+    bool _handle_sigint = true;
     std::unique_ptr<network_stack> _network_stack;
 public:
     file_desc _epollfd;
