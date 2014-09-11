@@ -373,7 +373,15 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             _snd.wl2 = th->ack;
         }
         if (th->ack > _snd.unacknowledged && th->ack <= _snd.next) {
-            _snd.unacknowledged = th->ack;
+            while (!_snd.data.empty()
+                    && (_snd.unacknowledged + _snd.data.front().len <= th->ack)) {
+                _snd.unacknowledged += _snd.data.front().len;
+                _snd.data.pop_front();
+            }
+            if (_snd.unacknowledged < th->ack) {
+                _snd.data.front().trim_front(th->ack - _snd.unacknowledged);
+                _snd.unacknowledged = th->ack;
+            }
         }
         if (_local_fin_sent && th->ack == _snd.next + 1) {
             _local_fin_acked = true;
