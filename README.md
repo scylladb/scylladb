@@ -46,7 +46,7 @@ void f() {
         });
     });
 }
-'''
+```
 
 Here, we initate a *get()* operation, requesting that when it completes, a
 *put()* operation will be scheduled with an incremented value.  We also
@@ -71,7 +71,7 @@ void f() {
         std::cout << "value stored successfully\n";
     });
 }
-'''
+```
 
 Loops
 -----
@@ -92,7 +92,7 @@ future<> loop_to(int end) {
         return loop_to(end);
     });
 }
-'''
+```
  
 The *make_ready_future()* function returns a future that is already
 available --- corresponding to the loop termination condition, where
