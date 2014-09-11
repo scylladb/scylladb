@@ -174,6 +174,8 @@ public:
     void disable_interrupts();
     void enable_interrupts();
 private:
+    void produce();
+    void do_complete();
     size_t mask() { return size() - 1; }
     size_t masked(size_t idx) { return idx & mask(); }
     size_t available();
@@ -226,6 +228,11 @@ void vring::setup() {
 }
 
 void vring::run() {
+    produce();
+    complete();
+}
+
+void vring::produce() {
     _producer(_available_descriptors).then([this] (std::vector<buffer_chain> vbc) {
         for (auto&& bc: vbc) {
             bool has_prev = false;
@@ -248,12 +255,12 @@ void vring::run() {
         }
         _avail._shared->_idx.store(_avail._head, std::memory_order_release);
         _kick.signal(1);
-        complete();
-        run();
+        do_complete();
+        produce();
     });
 }
 
-void vring::complete() {
+void vring::do_complete() {
     auto used_head = _used._shared->_idx.load(std::memory_order_acquire);
     while (used_head != _used._tail) {
         auto ue = _used._shared->_used_elements[masked(_used._tail++)];
@@ -268,6 +275,10 @@ void vring::complete() {
             id = next;
         }
     }
+}
+
+void vring::complete() {
+    do_complete();
     _notified.wait().then([this] (size_t ignore) {
         complete();
     });
