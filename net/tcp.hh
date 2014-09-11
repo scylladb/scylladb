@@ -286,6 +286,7 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
     }
     th->f_rst = true;
     th->data_offset = sizeof(*th) / 4;
+    hton(*th);
 
     checksummer csum;
     typename InetTraits::pseudo_header ph(local_ip, foreign_ip, sizeof(*th));
