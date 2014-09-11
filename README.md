@@ -35,7 +35,7 @@ You consume a future by using its *then()* method, providing it with a
 callback (typically a lambda).  For example, consider the following
 operation:
 
-```
+```C++
 future<int> get();   // promises an int will be produced eventually
 future<> put(int)    // promises to store an int
 
@@ -60,7 +60,7 @@ will return a future (call it y) that will receive the same value.  This
 removes the need for nesting lambda blocks; for example the code above
 could be rewritten as:
 
-``` 
+```C++
 future<int> get();   // promises an int will be produced eventually
 future<> put(int)    // promises to store an int
 
@@ -78,7 +78,7 @@ Loops
 
 Loops are achieved with a tail call; for example:
 
-```
+```C++
 future<int> get();   // promises an int will be produced eventually
 future<> put(int)    // promises to store an int
 
