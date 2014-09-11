@@ -117,6 +117,7 @@ private:
             std::deque<packet> data;
             std::deque<packet> unsent;
             uint32_t unsent_len = 0;
+            bool closed = false;
             promise<> _window_opened;
         } _snd;
         struct receive {
@@ -136,6 +137,7 @@ private:
         future<> wait_for_data();
         future<> send(packet p);
         packet read();
+        void close();
     private:
         void respond_with_reset(tcp_hdr* th);
         void merge_out_of_order();
@@ -428,7 +430,6 @@ void tcp<InetTraits>::tcb::output() {
     _local_syn_sent |= th->f_syn;
     th->f_ack = _foreign_syn_received;
     th->f_urg = false;
-    th->f_fin = false;
     th->f_psh = false;
 
     th->seq = _snd.unacknowledged;
@@ -439,6 +440,10 @@ void tcp<InetTraits>::tcb::output() {
 
     _snd.next += len;
     _snd.data.push_back(std::move(save));
+
+    // FIXME: does the FIN have to fit in the window?
+    th->f_fin = _snd.closed && _snd.unsent_len == 0;
+    _local_fin_sent |= th->f_fin;
 
     ntoh(*th);
 
@@ -478,6 +483,14 @@ future<> tcp<InetTraits>::tcb::send(packet p) {
 }
 
 template <typename InetTraits>
+void tcp<InetTraits>::tcb::close() {
+    _snd.closed = true;
+    if (_snd.unsent_len == 0) {
+        output();
+    }
+}
+
+template <typename InetTraits>
 void tcp<InetTraits>::connection_refused() {
     abort();
 }
@@ -502,12 +515,11 @@ void tcp<InetTraits>::tcb::trim_receive_data_after_window() {
 
 template <typename InetTraits>
 void tcp<InetTraits>::connection::close_read() {
-    abort();
 }
 
 template <typename InetTraits>
 void tcp<InetTraits>::connection::close_write() {
-    abort();
+    _tcb->close();
 }
 
 }
