@@ -43,10 +43,6 @@ reactor::reactor()
     , _io_context_available(max_aio) {
     auto r = ::io_setup(max_aio, &_io_context);
     assert(r >= 0);
-    _io_eventfd.wait().then([this] (size_t count) {
-        process_io(count);
-    });
-    receive_signal(SIGINT).then([this] { _stopped = true; });
 }
 
 void reactor::configure(boost::program_options::variables_map vm) {
@@ -261,6 +257,10 @@ void reactor::complete_timers() {
 }
 
 void reactor::run() {
+    _io_eventfd.wait().then([this] (size_t count) {
+        process_io(count);
+    });
+    receive_signal(SIGINT).then([this] { _stopped = true; });
     std::vector<std::unique_ptr<task>> current_tasks;
     _start_promise.set_value();
     complete_timers();
