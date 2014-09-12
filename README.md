@@ -85,7 +85,7 @@ future<> put(int)    // promises to store an int
 future<> loop_to(int end) {
     get().then([end] (int value) {
         if (value == end) {
-            return make_read_future<>();
+            return make_ready_future<>();
         }
         return put(value + 1);
     }).then([end] {
