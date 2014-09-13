@@ -15,7 +15,7 @@ int main(int ac, char** av) {
     interface netif(std::move(vnet));
     netif.run();
     ipv4 inet(&netif);
-    inet.set_host_address(ipv4_address(0xc0a87a02));
+    inet.set_host_address(ipv4_address("192.168.122.2"));
     engine.run();
     return 0;
 }

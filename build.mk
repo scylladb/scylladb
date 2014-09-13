@@ -14,7 +14,7 @@ opt = $(opt.$(mode))
 libs.debug =
 libs.release = -ltcmalloc
 
-libs = -laio -lboost_program_options
+libs = -laio -lboost_program_options -lboost_system
 
 libs += $(libs.$(mode))
 

@@ -57,7 +57,7 @@ native_network_stack::native_network_stack(std::unique_ptr<device> dev)
     : _netif(std::move(dev))
     , _inet(&_netif) {
     _netif.run();
-    _inet.set_host_address(ipv4_address(0xc0a87a02));
+    _inet.set_host_address(ipv4_address("192.168.122.2"));
 }
 
 template <typename Protocol>

@@ -6,6 +6,7 @@
 #ifndef IP_HH_
 #define IP_HH_
 
+#include <boost/asio/ip/address_v4.hpp>
 #include <arpa/inet.h>
 #include <cstdint>
 #include <array>
@@ -27,6 +28,9 @@ struct ipv4_address;
 struct ipv4_address {
     ipv4_address() : ip(0) {}
     explicit ipv4_address(uint32_t ip) : ip(ip) {}
+    explicit ipv4_address(const std::string& addr) {
+        ip = static_cast<uint32_t>(boost::asio::ip::address_v4::from_string(addr).to_ulong());
+    }
 
     packed<uint32_t> ip;
 
