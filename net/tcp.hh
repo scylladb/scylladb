@@ -512,7 +512,8 @@ void tcp<InetTraits>::tcb::close() {
 
 template <typename InetTraits>
 void tcp<InetTraits>::connection_refused() {
-    abort();
+    // FIXME: send ICMP packet
+    print("tcp: refusing connection\n");
 }
 
 template <typename InetTraits>
