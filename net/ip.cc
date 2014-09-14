@@ -41,7 +41,8 @@ uint16_t ip_checksum(const void* data, size_t len) {
         len -= 1;
     }
     csum = (csum & 0xffff) + ((csum >> 16) & 0xffff) + ((csum >> 32) & 0xffff) + (csum >> 48);
-    csum += csum >> 16;
+    csum = (csum & 0xffff) + (csum >> 16);
+    csum = (csum & 0xffff) + (csum >> 16);
     return htons(~csum);
 }
 
@@ -144,7 +145,8 @@ void checksummer::sum(const packet& p) {
 }
 
 uint16_t checksummer::get() const {
-    return partial + (partial >> 16);
+    auto tmp = (partial & 0xffff) + (partial >> 16);
+    return tmp + (tmp >> 16);
 }
 
 }
