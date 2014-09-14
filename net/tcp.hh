@@ -403,10 +403,14 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
         if (!_local_syn_sent) {
             return; // FIXME: reset too?
         }
-        if (!_local_syn_acked && th->ack > _snd.initial) {
-            _snd.unacknowledged = _snd.next = _snd.initial + 1;
-            _local_syn_acked = true;
-            _snd.wl2 = th->ack;
+        if (!_local_syn_acked) {
+            if (th->ack == _snd.initial + 1) {
+                _snd.unacknowledged = _snd.next = _snd.initial + 1;
+                _local_syn_acked = true;
+                _snd.wl2 = th->ack;
+            } else {
+                return respond_with_reset(th);
+            }
         }
         if (th->ack > _snd.unacknowledged && th->ack <= _snd.next) {
             while (!_snd.data.empty()
