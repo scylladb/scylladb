@@ -10,6 +10,7 @@ using namespace net;
 struct tcp_test {
     ipv4& inet;
     using tcp = net::tcp<ipv4_traits>;
+    tcp::listener _listener;
     struct connection {
         tcp::connection tcp_conn;
         explicit connection(tcp::connection tc) : tcp_conn(std::move(tc)) {}
@@ -22,9 +23,9 @@ struct tcp_test {
             });
         }
     };
-    tcp_test(ipv4& inet) : inet(inet) {}
+    tcp_test(ipv4& inet) : inet(inet), _listener(inet.get_tcp().listen(10000)) {}
     void run() {
-        inet.get_tcp().listen(10000).then([this] (tcp::connection conn) {
+        _listener.accept().then([this] (tcp::connection conn) {
             (new connection(std::move(conn)))->run();
             run();
         });

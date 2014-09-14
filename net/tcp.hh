@@ -6,6 +6,7 @@
 #define TCP_HH_
 
 #include "core/shared_ptr.hh"
+#include "core/queue.hh"
 #include "net.hh"
 #include "ip_checksum.hh"
 #include <unordered_map>
@@ -73,6 +74,7 @@ public:
     using ipaddr = typename InetTraits::address_type;
     using inet_type = typename InetTraits::inet_type;
     class connection;
+    class listener;
 private:
     class connid;
     class tcb;
@@ -148,7 +150,7 @@ private:
     };
     inet_type& _inet;
     std::unordered_map<connid, shared_ptr<tcb>, connid_hash> _tcbs;
-    std::unordered_map<uint16_t, promise<connection>> _listening;
+    std::unordered_map<uint16_t, listener*> _listening;
 public:
     class connection {
         shared_ptr<tcb> _tcb;
@@ -179,14 +181,42 @@ public:
         void close_read();
         void close_write();
     };
+    class listener {
+        tcp& _tcp;
+        uint16_t _port;
+        queue<connection> _q;
+    private:
+        listener(tcp& t, uint16_t port, size_t queue_length)
+            : _tcp(t), _port(port), _q(queue_length) {
+            _tcp._listening.emplace(_port, this);
+        }
+    public:
+        listener(listener&& x)
+            : _tcp(x._tcp), _port(x._port), _q(std::move(x._q)) {
+            _tcp._listening[_port] = this;
+            _port = 0;
+        }
+        ~listener() {
+            if (_port) {
+                _tcp._listening.erase(_port);
+            }
+        }
+        future<connection> accept() {
+            return _q.not_empty().then([this] {
+                return make_ready_future<connection>(_q.pop());
+            });
+        }
+        friend class tcp;
+    };
 public:
     explicit tcp(inet_type& inet) : _inet(inet) {}
     void received(packet p, ipaddr from, ipaddr to);
-    future<connection> listen(uint16_t port);
+    listener listen(uint16_t port, size_t queue_length = 100);
 private:
     void send(ipaddr from, ipaddr to, packet p);
     void respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr foreign_ip);
     void connection_refused();
+    friend class listener;
 };
 
 template <typename InetTraits>
@@ -202,13 +232,8 @@ struct tcp<InetTraits>::connid_hash : private std::hash<ipaddr>, private std::ha
 };
 
 template <typename InetTraits>
-auto tcp<InetTraits>::listen(uint16_t port) -> future<connection> {
-    auto i = _listening.emplace(port, promise<connection>());
-    if (i.second) {
-        return i.first->second.get_future();
-    } else {
-        abort(); //return make_exception_future<>(nullptr); // FIXME
-    }
+auto tcp<InetTraits>::listen(uint16_t port, size_t queue_length) -> listener {
+    return listener(*this, port, queue_length);
 }
 
 template <typename InetTraits>
@@ -229,12 +254,11 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
     if (tcbi == _tcbs.end()) {
         if (th->f_syn && !th->f_ack) {
             auto listener = _listening.find(id.local_port);
-            if (listener == _listening.end()) {
+            if (listener == _listening.end() || listener->second->_q.full()) {
                 return connection_refused();
             }
             tcbp = make_shared<tcb>(*this, id);
-            listener->second.set_value(connection(tcbp));
-            _listening.erase(listener);
+            listener->second->_q.push(connection(tcbp));
             _tcbs.insert({id, tcbp});
         }
     } else {

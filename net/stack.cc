@@ -34,8 +34,7 @@ public:
 
 template <typename Protocol>
 class native_server_socket_impl : public server_socket_impl {
-    Protocol& _proto;
-    uint16_t _port;
+    typename Protocol::listener _listener;
 public:
     native_server_socket_impl(Protocol& proto, uint16_t port, listen_options opt);
     virtual future<connected_socket, socket_address> accept() override;
@@ -62,13 +61,13 @@ native_network_stack::native_network_stack(std::unique_ptr<device> dev)
 
 template <typename Protocol>
 native_server_socket_impl<Protocol>::native_server_socket_impl(Protocol& proto, uint16_t port, listen_options opt)
-    : _proto(proto), _port(port) {
+    : _listener(proto.listen(port)) {
 }
 
 template <typename Protocol>
 future<connected_socket, socket_address>
 native_server_socket_impl<Protocol>::accept() {
-    return _proto.listen(_port).then([this] (typename Protocol::connection conn) {
+    return _listener.accept().then([this] (typename Protocol::connection conn) {
         return make_ready_future<connected_socket, socket_address>(
                 connected_socket(std::make_unique<native_connected_socket_impl<Protocol>>(std::move(conn))),
                 socket_address()); // FIXME: don't fake it
