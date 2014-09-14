@@ -97,3 +97,30 @@ future<> loop_to(int end) {
 The *make_ready_future()* function returns a future that is already
 available --- corresponding to the loop termination condition, where
 no further I/O needs to take place.
+
+Under the hood
+--------------
+
+When the loop above runs, both *then* method calls execute immediately
+--- but without executing the bodies.  What happens is the following:
+
+1. `get()` is called, initiates the I/O operation, and allocates a
+   temporary structure (call it `f1`).
+2. The first `then()` call chains its body to `f1` and allocates
+   another temporary structure, `f2`.
+3. The second `then()` call chains its body to `f2`.
+
+Again, all this runs immediately without waiting for anything.
+
+After the I/O operation initiated by `get()` completes, it calls the
+continuation stored in `f1`, calls it, and frees `f1`.  The continuation
+calls `put()`, which initiates the I/O operation required to perform
+the store, and allocates a temporary object `f12`, and chains some glue
+code to it.
+
+After the I/O operation initiated by `put()` completes, it calls the
+continuation associated with `f12`, which simply tells it to call the
+continuation assoicated with `f3`.  This continuation simply calls
+`loop_to()`.  Both `f12` and `f3` are freed. `loop_to()` then calls
+`get()`, which starts the process all over again, allocating new versions
+of `f1` and `f2`.
