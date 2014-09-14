@@ -30,6 +30,11 @@ void packet::linearize(size_t at_frag, size_t desired_size) {
     _deleter = make_deleter(std::move(_deleter), [buf = std::move(new_frag)] {});
 }
 
+l3_protocol::l3_protocol(interface* netif, uint16_t proto_num)
+    : _netif(netif), _proto_num(proto_num) {
+    _netif->register_l3(proto_num, 100);
+}
+
 future<packet, ethernet_address> l3_protocol::receive() {
     return _netif->receive(_proto_num);
 };
@@ -39,12 +44,23 @@ future<> l3_protocol::send(ethernet_address to, packet p) {
 }
 
 future<packet, ethernet_address> interface::receive(uint16_t proto_num) {
-    auto& pr = _proto_map[proto_num] = promise<packet, ethernet_address>();
-    return pr.get_future();
+    auto i = _proto_map.find(proto_num);
+    assert(i != _proto_map.end());
+    auto& q = i->second;
+    return q.not_empty().then([&q] {
+        auto x = q.pop();
+        return make_ready_future<packet, ethernet_address>(std::move(std::get<0>(x)), std::move(std::get<1>(x)));
+    });
 }
 
 interface::interface(std::unique_ptr<device> dev)
     : _dev(std::move(dev)), _hw_address(_dev->hw_address()) {
+}
+
+void interface::register_l3(uint16_t proto_num, size_t queue_length) {
+    _proto_map.emplace(std::piecewise_construct,
+                std::make_tuple(proto_num),
+                std::make_tuple(queue_length));
 }
 
 void interface::run() {
@@ -53,11 +69,12 @@ void interface::run() {
         if (eh) {
             ntoh(*eh);
             auto i = _proto_map.find(eh->eth_proto);
-            if (i != _proto_map.end()) {
+            if (i != _proto_map.end() && !i->second.full()) {
                 auto from = eh->src_mac;
                 p.trim_front(sizeof(*eh));
-                i->second.set_value(std::move(p), from);
-                _proto_map.erase(i);
+                i->second.push(std::make_tuple(std::move(p), from));
+            } else {
+                print("dropping packet: no handler for protcol 0x%x\n", eh->eth_proto);
             }
         }
         run();
