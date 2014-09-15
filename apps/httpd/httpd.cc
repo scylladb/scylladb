@@ -256,21 +256,16 @@ public:
             if (hi == _resp->_headers.end()) {
                 return make_ready_future<size_t>(0);
             }
-            promise<size_t> pr;
-            auto fut = pr.get_future();
-            _write_buf.write(hi->first.begin(), hi->first.size()).then(
-                    [hi, this, pr = std::move(pr)] (size_t done) mutable {
+            return _write_buf.write(hi->first.begin(), hi->first.size()).then(
+                    [hi, this] (size_t done) mutable {
                 return _write_buf.write(": ", 2);
-            }).then([hi, this, pr = std::move(pr)] (size_t done) mutable {
+            }).then([hi, this] (size_t done) mutable {
                 return _write_buf.write(hi->second.begin(), hi->second.size());
-            }).then([hi, this, pr = std::move(pr)] (size_t done) mutable {
+            }).then([hi, this] (size_t done) mutable {
                 return _write_buf.write("\r\n", 2);
-            }).then([hi, this, pr = std::move(pr)] (size_t done) mutable {
+            }).then([hi, this] (size_t done) mutable {
                 return write_response_headers(++hi);
-            }).then([this, pr = std::move(pr)] (size_t done) mutable {
-                pr.set_value(done);
             });
-            return fut;
         }
         void generate_response(std::unique_ptr<request> req) {
             auto resp = std::make_unique<response>();
