@@ -243,6 +243,7 @@ void reactor::complete_timers() {
             [this] (size_t n) {
         _timers.expire(clock_type::now());
         while (auto t = _timers.pop_expired()) {
+            t->_armed = false;
             t->_pr.set_value();
             t->_pr = promise<>();
         }
