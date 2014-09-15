@@ -13,6 +13,9 @@
 #include <map>
 #include <functional>
 #include <deque>
+#include <chrono>
+
+using namespace std::chrono_literals;
 
 namespace net {
 
@@ -132,6 +135,7 @@ private:
             bool _user_waiting = false;
             promise<> _data_received;
         } _rcv;
+        timer _delayed_ack;
     public:
         tcb(tcp& t, connid id);
         void input(tcp_hdr* th, packet p);
@@ -145,6 +149,9 @@ private:
         void merge_out_of_order();
         void insert_out_of_order(tcp_seq seq, packet p);
         void trim_receive_data_after_window();
+        bool should_send_ack();
+        void clear_delayed_ack();
+        void process_delayed_ack();
         packet get_transmit_packet();
         friend class connection;
     };
@@ -292,6 +299,7 @@ tcp<InetTraits>::tcb::tcb(tcp& t, connid id)
     , _foreign_ip(id.foreign_ip)
     , _local_port(id.local_port)
     , _foreign_port(id.foreign_port) {
+    process_delayed_ack();
 }
 
 template <typename InetTraits>
@@ -370,8 +378,8 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                     insert_out_of_order(seg_seq, std::move(p));
                 }
             }
-            do_output = true;
         }
+        do_output = should_send_ack();
     }
     if (th->f_fin) {
         do_output = true;
@@ -477,6 +485,9 @@ void tcp<InetTraits>::tcb::output() {
     th->f_syn = !_local_syn_acked;
     _local_syn_sent |= th->f_syn;
     th->f_ack = _foreign_syn_received;
+    if (th->f_ack) {
+        clear_delayed_ack();
+    }
     th->f_urg = false;
     th->f_psh = false;
 
@@ -536,6 +547,32 @@ void tcp<InetTraits>::tcb::close() {
     if (_snd.unsent_len == 0) {
         output();
     }
+}
+
+template <typename InetTraits>
+bool tcp<InetTraits>::tcb::should_send_ack() {
+    if (_delayed_ack.armed()) {
+        _delayed_ack.suspend();
+        return true;
+    } else {
+        _delayed_ack.arm(400ms);
+        return false;
+    }
+}
+
+template <typename InetTraits>
+void tcp<InetTraits>::tcb::clear_delayed_ack() {
+    if (_delayed_ack.armed()) {
+        _delayed_ack.suspend();
+    }
+}
+
+template <typename InetTraits>
+void tcp<InetTraits>::tcb::process_delayed_ack() {
+    _delayed_ack.expired().then([this] {
+        output();
+        process_delayed_ack();
+    });
 }
 
 template <typename InetTraits>
