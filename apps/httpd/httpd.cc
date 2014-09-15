@@ -301,7 +301,7 @@ int main(int ac, char** av) {
         return 1;
     }
     engine.configure(configuration);
-    engine.start().then([&server] {
+    engine.when_started().then([&server] {
         uint16_t port = 10000;
         std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
         server.listen({{}, port});

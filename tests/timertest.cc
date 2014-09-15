@@ -36,7 +36,7 @@ struct timer_test {
 
 int main(int ac, char** av) {
     timer_test t;
-    engine.start().then([&t] { t.run(); });
+    engine.when_started().then([&t] { t.run(); });
     engine.run();
 }
 

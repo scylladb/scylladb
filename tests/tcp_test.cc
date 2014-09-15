@@ -39,7 +39,7 @@ int main(int ac, char** av) {
     ipv4 inet(&netif);
     inet.set_host_address(ipv4_address("192.168.122.2"));
     tcp_test tt(inet);
-    engine.start().then([&tt] { tt.run(); });
+    engine.when_started().then([&tt] { tt.run(); });
     engine.run();
 }
 

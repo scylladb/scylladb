@@ -381,7 +381,7 @@ public:
     future<> flush(file& f);
 
     void run();
-    future<> start() { return _start_promise.get_future(); }
+    future<> when_started() { return _start_promise.get_future(); }
     future<> receive_signal(int signo);
 
     void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
