@@ -32,7 +32,7 @@ void packet::linearize(size_t at_frag, size_t desired_size) {
 
 l3_protocol::l3_protocol(interface* netif, uint16_t proto_num)
     : _netif(netif), _proto_num(proto_num) {
-    _netif->register_l3(proto_num, 100);
+    _netif->register_l3(proto_num, 1000);
 }
 
 future<packet, ethernet_address> l3_protocol::receive() {
