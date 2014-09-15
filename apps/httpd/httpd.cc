@@ -163,12 +163,12 @@ public:
         future<> parse_header(tmp_buf header) {
             if (header.size() == 2 && header[0] == '\r' && header[1] == '\n') {
                 generate_response(std::move(_req));
-                read().rescue([zis = this] (auto get_ex) mutable {
+                read().rescue([this] (auto get_ex) mutable {
                     try {
                         get_ex();
                     } catch (std::exception& ex) {
                         std::cout << "read failed with " << ex.what() << "\n";
-                        zis->maybe_done();
+                        this->maybe_done();
                     }
                 });
                 return make_ready_future<>();
