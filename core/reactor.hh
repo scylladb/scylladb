@@ -134,6 +134,7 @@ public:
     future<> expired();
     void arm(clock_type::time_point until);
     void arm(clock_type::duration delta);
+    bool armed() const { return _armed; }
     void suspend();
     clock_type::time_point get_timeout();
     friend class reactor;
