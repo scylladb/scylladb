@@ -18,14 +18,14 @@ libs = -laio -lboost_program_options -lboost_system
 
 libs += $(libs.$(mode))
 
-LDFLAGS = $(libs)
+# Ubuntu fails without this, see https://bugs.launchpad.net/ubuntu/+source/gcc-defaults/+bug/1228201
+LDFLAGS = -Wl,--no-as-needed
+
+LDFLAGS += $(libs)
 
 CXXFLAGS = -std=gnu++1y -g -Wall -Werror $(opt) -MD -MT $@ -MP $(sanitize) -fvisibility=hidden
 CXXFLAGS += -pthread
 CXXFLAGS += -I $(src)
-
-# Ubuntu fails without this, see https://bugs.launchpad.net/ubuntu/+source/gcc-defaults/+bug/1228201
-LDFLAGS += -Wl,--no-as-needed
 
 tests = tests/test-reactor tests/fileiotest tests/virtiotest tests/l3_test tests/ip_test tests/timertest
 tests += tests/tcp_test
