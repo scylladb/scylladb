@@ -124,3 +124,56 @@ continuation assoicated with `f3`.  This continuation simply calls
 `loop_to()`.  Both `f12` and `f3` are freed. `loop_to()` then calls
 `get()`, which starts the process all over again, allocating new versions
 of `f1` and `f2`.
+
+Handling exceptions
+-------------------
+
+If a `.then()` clause throws an exception, the scheduler will catch it
+and cancel any dependent `.then()` clauses.  If you want to trap the
+exception, add a `.rescue()` clause at the end:
+
+```C++
+future<buffer> receive();
+request parse(buffer buf);
+future<response> process(request req);
+future<> send(response resp);
+
+void f() {
+    receive().then([] (buffer buf) {
+        return process(parse(std::move(buf));
+    }).then([] (response resp) {
+        return send(std::move(resp));
+    }).then([] {
+        f();
+    }).rescue([] (auto get_ex) {
+        try {
+            get_ex();
+        } (catch std::exception& e) {
+            // your handler goes here
+        }
+    });
+}
+```
+
+When the `get_ex` variable is called as a function, it will rethrow
+the exception that aborted processing, and you can then apply any
+needed error handling.  It is essentially a transformation of
+
+```C++
+buffer receive();
+request parse(buffer buf);
+response process(request req);
+void send(response resp);
+
+void f() {
+    try {
+        while (true) {
+            auto req = parse(receive());
+            auto resp = process(std::move(req));
+            send(std::move(resp));
+        }
+    } catch (std::exception& e) {
+        // your handler goes here
+    }
+}
+```
