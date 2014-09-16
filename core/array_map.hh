@@ -20,6 +20,13 @@ public:
     }
     Value& operator[](size_t key) { return _a[key]; }
     const Value& operator[](size_t key) const { return _a[key]; }
+
+    Value& at(size_t key) {
+        if (key >= Max) {
+            throw std::out_of_range(std::to_string(key) + " >= " + std::to_string(Max));
+        }
+        return _a[key];
+    }
 };
 
 
