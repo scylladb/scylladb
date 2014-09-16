@@ -5,6 +5,8 @@
 #ifndef DELETER_HH_
 #define DELETER_HH_
 
+#include <memory>
+
 struct deleter {
     std::unique_ptr<deleter> next;
     deleter(std::unique_ptr<deleter> next) : next(std::move(next)) {}
