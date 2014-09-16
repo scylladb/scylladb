@@ -11,7 +11,7 @@ It is based on [futures](http://en.wikipedia.org/wiki/Futures_and_promises).
 Building Seastar
 --------------------
 
-## Building seastar on Fedora20
+### Building seastar on Fedora 20
 
 Installing GCC 4.9 for gnu++1y:
 * Beware that this installation will replace your current GCC version.
