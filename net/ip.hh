@@ -43,6 +43,8 @@ struct ipv4_address {
     }
 } __attribute__((packed));
 
+static inline bool is_unspecified(ipv4_address addr) { return addr.ip == 0; }
+
 std::ostream& operator<<(std::ostream& os, ipv4_address a);
 
 }
