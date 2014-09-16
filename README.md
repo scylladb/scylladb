@@ -8,6 +8,28 @@ SeaStar is an event-driven framework allowing you to write non-blocking,
 asynchronous code in a relatively straightforward manner (once understood).
 It is based on [futures](http://en.wikipedia.org/wiki/Futures_and_promises).
 
+Building Seastar
+--------------------
+
+## Building seastar on Fedora20
+
+Installing GCC 4.9 for gnu++1y:
+* Beware that this installation will replace your current GCC version.
+```
+yum install fedora-release-rawhide
+yum --enablerepo rawhide update gcc-c++
+```
+
+Installing required packages (for libtcmalloc and libaio, respectively):
+```
+yum install gperftools-devel libaio-devel
+```
+
+Then finally:
+```
+make
+```
+
 Futures and promises
 --------------------
 
