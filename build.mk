@@ -45,6 +45,7 @@ clean:
 	rm seastar $(tests) *.o
 
 libnet = net/virtio.o net/net.o net/ip.o net/ethernet.o net/arp.o net/stack.o net/packet.o
+libnet += net/ip_checksum.o
 
 apps/seastar/seastar: apps/seastar/main.o core/reactor.o
 	$(link)
@@ -56,12 +57,16 @@ apps/httpd/httpd: apps/httpd/httpd.o core/reactor.o $(libnet)
 tests/fileiotest: tests/fileiotest.o core/reactor.o
 
 tests/virtiotest: tests/virtiotest.o net/virtio.o core/reactor.o net/net.o net/ip.o net/ethernet.o net/arp.o net/packet.o
+tests/virtiotest: net/ip_checksum.o
 
 tests/l3_test: tests/l3_test.o net/virtio.o core/reactor.o net/net.o net/ip.o net/ethernet.o net/arp.o net/packet.o
+tests/l3_test: net/ip_checksum.o
 
 tests/ip_test: tests/ip_test.o net/virtio.o core/reactor.o net/net.o net/ip.o net/arp.o net/ethernet.o net/packet.o
+tests/ip_test: net/ip_checksum.o
 
 tests/tcp_test: tests/tcp_test.o net/virtio.o core/reactor.o net/net.o net/ip.o net/arp.o net/ethernet.o net/packet.o
+tests/tcp_test: net/ip_checksum.o
 
 tests/timertest: tests/timertest.o core/reactor.o
 

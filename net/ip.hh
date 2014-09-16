@@ -18,8 +18,6 @@
 
 namespace net {
 
-uint16_t ip_checksum(const void* data, size_t len);
-
 class ipv4;
 template <uint8_t ProtoNum>
 class ipv4_l4;
