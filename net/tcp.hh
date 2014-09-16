@@ -338,7 +338,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     bool do_output = false;
 
     tcp_seq seg_seq = th->seq;
-    auto seg_len = p.len;
+    auto seg_len = p.len();
     if (th->f_syn) {
         do_output = true;
         if (!_foreign_syn_received) {
@@ -422,8 +422,8 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
         }
         if (th->ack > _snd.unacknowledged && th->ack <= _snd.next) {
             while (!_snd.data.empty()
-                    && (_snd.unacknowledged + _snd.data.front().len <= th->ack)) {
-                _snd.unacknowledged += _snd.data.front().len;
+                    && (_snd.unacknowledged + _snd.data.front().len() <= th->ack)) {
+                _snd.unacknowledged += _snd.data.front().len();
                 _snd.data.pop_front();
             }
             if (_snd.unacknowledged < th->ack) {
@@ -460,10 +460,10 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
     can_send = std::min(can_send, mss);
     while (can_send) {
         auto& q = _snd.unsent.front();
-        auto now = std::min(can_send, q.len);
+        auto now = std::min(can_send, q.len());
         p.append(q.share(0, now));
         q.trim_front(now);
-        if (!q.len) {
+        if (!q.len()) {
             _snd.unsent.pop_front();
         }
         _snd.unsent_len -= now;
@@ -476,7 +476,7 @@ template <typename InetTraits>
 void tcp<InetTraits>::tcb::output() {
     packet p = get_transmit_packet();
     auto save = p.share();
-    auto len = p.len;
+    auto len = p.len();
 
     auto th = p.prepend_header<tcp_hdr>();
     th->src_port = _local_port;
@@ -535,7 +535,7 @@ packet tcp<InetTraits>::tcb::read() {
 
 template <typename InetTraits>
 future<> tcp<InetTraits>::tcb::send(packet p) {
-    _snd.unsent_len += p.len;
+    _snd.unsent_len += p.len();
     _snd.unsent.push_back(std::move(p));
     output();
     return make_ready_future<>();

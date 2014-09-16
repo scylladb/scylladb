@@ -95,8 +95,8 @@ public:
         if (_eof) {
             return make_ready_future<temporary_buffer<char>>(temporary_buffer<char>(0));
         }
-        if (_cur_frag != _buf.fragments.size()) {
-            auto& f = _buf.fragments[_cur_frag++];
+        if (_cur_frag != _buf.nr_frags()) {
+            auto& f = _buf.fragments()[_cur_frag++];
             return make_ready_future<temporary_buffer<char>>(
                     temporary_buffer<char>(f.base, f.size,
                             make_deleter(nullptr, [p = _buf.share()] () mutable {})));
@@ -104,7 +104,7 @@ public:
         return _conn.wait_for_data().then([this] {
             _buf = _conn.read();
             _cur_frag = 0;
-            _eof = !_buf.len;
+            _eof = !_buf.len();
             return get();
         });
     }

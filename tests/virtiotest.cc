@@ -14,7 +14,7 @@ using namespace net;
 
 void dump_packet(const packet& p) {
     std::cout << "rx:";
-    auto& f = p.fragments[0];
+    auto f = p.frag(0);
     for (unsigned i = 0; i < std::min(f.size, size_t(30)); ++i) {
         char x[4];
         std::sprintf(x, " %02x", uint8_t(f.base[i]));
@@ -24,7 +24,7 @@ void dump_packet(const packet& p) {
 }
 
 future<> echo_packet(net::device& netif, packet p) {
-    auto& f = p.fragments[0];
+    auto f = p.frag(0);
     if (f.size < sizeof(eth_hdr)) {
         return make_ready_future<>();
     }

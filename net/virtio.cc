@@ -375,11 +375,11 @@ virtio_net_device::txq::transmit(semaphore& available) {
         // prepend virtio-net header
         packet q = packet(fragment{reinterpret_cast<char*>(&vhdr), _dev._header_len},
                 std::move(p));
-        auto nbufs = q.fragments.size();
+        auto nbufs = q.nr_frags();
         return available.wait(nbufs).then([this, p = std::move(q)] () mutable {
             std::vector<vring::buffer_chain> vbc;
             vring::buffer_chain bc;
-            for (auto&& f : p.fragments) {
+            for (auto&& f : p.fragments()) {
                 vring::buffer b;
                 b.addr = virt_to_phys(f.base);
                 b.len = f.size;

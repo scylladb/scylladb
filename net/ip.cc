@@ -71,7 +71,7 @@ void ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
     iph->ver = 4;
     iph->dscp = 0;
     iph->ecn = 0;
-    iph->len = p.len;
+    iph->len = p.len();
     iph->id = 0;
     iph->frag = 0;
     iph->ttl = 64;

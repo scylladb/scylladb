@@ -17,7 +17,7 @@ struct tcp_test {
         void run() {
             tcp_conn.wait_for_data().then([this] {
                 auto p = tcp_conn.read();
-                print("read %d bytes\n", p.len);
+                print("read %d bytes\n", p.len());
                 tcp_conn.send(std::move(p));
                 run();
             });

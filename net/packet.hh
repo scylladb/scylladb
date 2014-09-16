@@ -45,9 +45,8 @@ class packet final {
 
     // when destroyed, virtual destructor will reclaim resources
     std::unique_ptr<deleter> _deleter;
-public:
-    std::vector<fragment> fragments;
-    unsigned len = 0;
+    std::vector<fragment> _fragments;
+    unsigned _len = 0;
 public:
     // build empty packet
     packet() = default;
@@ -82,6 +81,15 @@ public:
         return *this;
     }
 
+    unsigned len() const { return _len; }
+
+    fragment frag(unsigned idx) const { return _fragments[idx]; }
+    fragment& frag(unsigned idx) { return _fragments[idx]; }
+
+    unsigned nr_frags() const { return _fragments.size(); }
+    std::vector<fragment>& fragments() { return _fragments; }
+    const std::vector<fragment>& fragments() const { return _fragments; }
+
     // share packet data (reference counted, non COW)
     packet share();
     packet share(size_t offset, size_t len);
@@ -111,16 +119,16 @@ private:
 
 inline
 packet::packet(packet&& x)
-    : _deleter(std::move(x._deleter)), fragments(std::move(x.fragments)), len(x.len) {
-    x.len = 0;
+    : _deleter(std::move(x._deleter)), _fragments(std::move(x._fragments)), _len(x._len) {
+    x._len = 0;
 }
 
 inline
-packet::packet(fragment frag) : len(frag.size) {
+packet::packet(fragment frag) : _len(frag.size) {
     auto flen = std::max(frag.size, internal_data_size);
     std::unique_ptr<char[]> buf{new char[flen]};
     std::copy(frag.base, frag.base + frag.size, buf.get() + flen - frag.size);
-    fragments.push_back(frag);
+    _fragments.push_back(frag);
     _deleter.reset(new internal_deleter(std::unique_ptr<deleter>(),
             buf.release(), flen - frag.size));
 }
@@ -133,82 +141,82 @@ template <typename Deleter>
 inline
 packet::packet(fragment frag, Deleter d)
     : _deleter(make_deleter(std::unique_ptr<deleter>(), std::move(d))) {
-    fragments.push_back(frag);
-    len = frag.size;
+    _fragments.push_back(frag);
+    _len = frag.size;
 }
 
 template <typename Deleter>
 inline
 packet::packet(std::vector<fragment> frag, Deleter d)
     : _deleter(make_deleter(std::unique_ptr<deleter>(), std::move(d)))
-    , fragments(std::move(frag))
-    , len(0) {
-    for (auto&& f : fragments) {
-        len += f.size;
+    , _fragments(std::move(frag))
+    , _len(0) {
+    for (auto&& f : _fragments) {
+        _len += f.size;
     }
 }
 
 inline
 packet::packet(packet&& x, fragment frag)
-    : fragments(std::move(x.fragments))
-    , len(x.len + frag.size) {
+    : _fragments(std::move(x._fragments))
+    , _len(x._len + frag.size) {
     std::unique_ptr<char[]> buf(new char[frag.size]);
     std::copy(frag.base, frag.base + frag.size, buf.get());
     _deleter = make_deleter(std::move(x._deleter), [buf = buf.release()] {
         delete[] buf;
     });
-    x.len = 0;
+    x._len = 0;
 }
 
 inline
 packet::packet(fragment frag, packet&& x)
-    : _deleter(std::move(x._deleter)), len(x.len + frag.size) {
+    : _deleter(std::move(x._deleter)), _len(x._len + frag.size) {
     // try to prepend into existing internal fragment
     auto id = dynamic_cast<internal_deleter*>(x._deleter.get());
     if (id && id->free_head >= frag.size) {
         id->free_head -= frag.size;
-        fragments[0].base -= frag.size;
-        fragments[0].size += frag.size;
-        std::copy(frag.base, frag.base + frag.size, fragments[0].base);
+        _fragments[0].base -= frag.size;
+        _fragments[0].size += frag.size;
+        std::copy(frag.base, frag.base + frag.size, _fragments[0].base);
     } else {
         // didn't work out, allocate and copy
         auto size = std::max(frag.size, internal_data_size);
         std::unique_ptr<char[]> buf(new char[size]);
         std::copy(frag.base, frag.base + frag.size, buf.get() + size - frag.size);
-        fragments.reserve(x.fragments.size() + 1);
-        fragments.push_back({buf.get() + size - frag.size, frag.size});
-        std::copy(x.fragments.begin(), x.fragments.end(), std::back_inserter(fragments));
-        x.fragments.clear();
+        _fragments.reserve(x._fragments.size() + 1);
+        _fragments.push_back({buf.get() + size - frag.size, frag.size});
+        std::copy(x._fragments.begin(), x._fragments.end(), std::back_inserter(_fragments));
+        x._fragments.clear();
         _deleter.reset(new internal_deleter(std::move(_deleter), buf.release(), size - frag.size));
     }
-    x.len = 0;
+    x._len = 0;
 }
 
 template <typename Deleter>
 inline
-packet::packet(fragment frag, Deleter d, packet&& x) : len(x.len + frag.size) {
-    fragments.reserve(x.fragments.size() + 1);
-    fragments.push_back(frag);
-    std::copy(x.fragments.begin(), x.fragments.end(), std::back_inserter(fragments));
-    x.fragments.clear();
+packet::packet(fragment frag, Deleter d, packet&& x) : _len(x._len + frag.size) {
+    _fragments.reserve(x._fragments.size() + 1);
+    _fragments.push_back(frag);
+    std::copy(x._fragments.begin(), x._fragments.end(), std::back_inserter(_fragments));
+    x._fragments.clear();
     _deleter.reset(make_deleter(std::move(_deleter), d));
-    x.len = 0;
+    x._len = 0;
 }
 
 template <typename Deleter>
 inline
 packet::packet(packet&& x, fragment frag, Deleter d)
-    : fragments(std::move(x.fragments)), len(x.len + frag.size) {
-    fragments.push_back(frag);
+    : _fragments(std::move(x._fragments)), _len(x._len + frag.size) {
+    _fragments.push_back(frag);
     _deleter.reset(make_deleter(std::move(_deleter), d));
-    x.len = 0;
+    x._len = 0;
 }
 
 inline
 void packet::append(packet&& p) {
-    len += p.len;
-    fragments.reserve(fragments.size() + p.fragments.size());
-    fragments.insert(fragments.end(), p.fragments.begin(), p.fragments.end());
+    _len += p._len;
+    _fragments.reserve(_fragments.size() + p._fragments.size());
+    _fragments.insert(_fragments.end(), p._fragments.begin(), p._fragments.end());
     // preserve _deleter in front of chain in case it is an internal_deleter
     if (!p._deleter) {
         return;
@@ -221,26 +229,26 @@ void packet::append(packet&& p) {
                 [d = std::move(p._deleter)] {});
         _deleter->next = std::move(chain);
     }
-    p.len = 0;
-    p.fragments.clear();
+    p._len = 0;
+    p._fragments.clear();
 }
 
 inline
 char* packet::get_header(size_t offset, size_t size) {
-    if (offset + size > len) {
+    if (offset + size > _len) {
         return nullptr;
     }
     size_t i = 0;
-    while (i != fragments.size() && offset >= fragments[i].size) {
-        offset -= fragments[i++].size;
+    while (i != _fragments.size() && offset >= _fragments[i].size) {
+        offset -= _fragments[i++].size;
     }
-    if (i == fragments.size()) {
+    if (i == _fragments.size()) {
         return nullptr;
     }
-    if (offset + size > fragments[i].size) {
+    if (offset + size > _fragments[i].size) {
         linearize(i, offset + size);
     }
-    return fragments[i].base + offset;
+    return _fragments[i].base + offset;
 }
 
 template <typename Header>
@@ -251,16 +259,16 @@ Header* packet::get_header(size_t offset) {
 
 inline
 void packet::trim_front(size_t how_much) {
-    assert(how_much <= len);
-    len -= how_much;
+    assert(how_much <= _len);
+    _len -= how_much;
     size_t i = 0;
-    while (how_much && how_much >= fragments[i].size) {
-        how_much -= fragments[i++].size;
+    while (how_much && how_much >= _fragments[i].size) {
+        how_much -= _fragments[i++].size;
     }
-    fragments.erase(fragments.begin(), fragments.begin() + i);
+    _fragments.erase(_fragments.begin(), _fragments.begin() + i);
     if (how_much) {
-        fragments[0].base += how_much;
-        fragments[0].size -= how_much;
+        _fragments[0].base += how_much;
+        _fragments[0].size -= how_much;
     }
 }
 
@@ -274,26 +282,26 @@ packet::prepend_header(size_t size) {
 // prepend a header (uninitialized!)
 inline
 char* packet::prepend_uninitialized_header(size_t size) {
-    if (len == 0) {
+    if (_len == 0) {
         auto id = std::make_unique<internal_deleter>(nullptr, internal_data_size);
-        fragments.clear();
-        fragments.push_back({id->buf + id->free_head, 0});
+        _fragments.clear();
+        _fragments.push_back({id->buf + id->free_head, 0});
         _deleter.reset(id.release());
     }
-    len += size;
+    _len += size;
     auto id = dynamic_cast<internal_deleter*>(_deleter.get());
     if (id && id->free_head >= size) {
         id->free_head -= size;
-        fragments[0].base -= size;
-        fragments[0].size += size;
+        _fragments[0].base -= size;
+        _fragments[0].size += size;
     } else {
         // didn't work out, allocate and copy
         auto nsize = std::max(size, internal_data_size);
         std::unique_ptr<char[]> buf(new char[nsize]);
-        fragments.insert(fragments.begin(), {buf.get() + nsize - size, size});
+        _fragments.insert(_fragments.begin(), {buf.get() + nsize - size, size});
         _deleter.reset(new internal_deleter(std::move(_deleter), buf.release(), nsize - size));
     }
-    return fragments[0].base;
+    return _fragments[0].base;
 }
 
 inline
@@ -310,22 +318,22 @@ packet::do_share() {
 
 inline
 packet packet::share() {
-    return share(0, len);
+    return share(0, _len);
 }
 
 inline
 packet packet::share(size_t offset, size_t len) {
     packet n;
-    n.fragments.reserve(fragments.size());
+    n._fragments.reserve(_fragments.size());
     size_t idx = 0;
-    while (offset > 0 && offset >= fragments[idx].size) {
-        offset -= fragments[idx++].size;
+    while (offset > 0 && offset >= _fragments[idx].size) {
+        offset -= _fragments[idx++].size;
     }
-    while (n.len < len) {
-        auto& f = fragments[idx++];
-        auto fsize = std::min(len - n.len, f.size - offset);
-        n.fragments.push_back({ f.base + offset, fsize });
-        n.len += fsize;
+    while (n._len < len) {
+        auto& f = _fragments[idx++];
+        auto fsize = std::min(len - n._len, f.size - offset);
+        n._fragments.push_back({ f.base + offset, fsize });
+        n._len += fsize;
         offset = 0;
     }
     assert(!n._deleter);

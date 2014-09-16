@@ -48,7 +48,7 @@ void checksummer::sum(const char* data, size_t len) {
 }
 
 void checksummer::sum(const packet& p) {
-    for (auto&& f : p.fragments) {
+    for (auto&& f : p.fragments()) {
         sum(f.base, f.size);
     }
 }
