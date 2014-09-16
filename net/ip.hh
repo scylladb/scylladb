@@ -104,8 +104,9 @@ public:
 class ipv4 {
 public:
     using address_type = ipv4_address;
+    using proto_type = uint16_t;
     static address_type broadcast_address() { return ipv4_address(0xffffffff); }
-    static uint16_t arp_protocol_type() { return 0x0800; }
+    static proto_type arp_protocol_type() { return 0x0800; }
 private:
     interface* _netif;
     arp _global_arp;
@@ -125,6 +126,7 @@ public:
     void set_host_address(ipv4_address ip);
     void send(ipv4_address to, uint8_t proto_num, packet p);
     tcp<ipv4_traits>& get_tcp() { return _tcp._tcp; }
+    void register_l4(proto_type id, ip_protocol* handler);
 };
 
 template <uint8_t ProtoNum>

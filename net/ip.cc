@@ -99,4 +99,8 @@ void ipv4::set_host_address(ipv4_address ip) {
     _arp.set_self_addr(ip);
 }
 
+void ipv4::register_l4(ipv4::proto_type id, ip_protocol *protocol) {
+    _l4.at(id) = protocol;
+}
+
 }
