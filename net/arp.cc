@@ -29,7 +29,7 @@ void arp::del(uint16_t proto_num) {
 
 void arp::run() {
     _proto.receive().then([this] (packet p, ethernet_address from) {
-        auto ah = p.get_header<arp_hdr>(0);
+        auto ah = p.get_header<arp_hdr>();
         ntoh(*ah);
         auto i = _arp_for_protocol.find(ah->ptype);
         hton(*ah); // return to raw state for further processing

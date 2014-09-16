@@ -152,7 +152,7 @@ arp_for<L3>::learn(l2addr hwaddr, l3addr paddr) {
 template <typename L3>
 future<>
 arp_for<L3>::received(packet p) {
-    auto ah = p.get_header<arp_hdr>(0);
+    auto ah = p.get_header<arp_hdr>();
     if (!ah) {
         return make_ready_future<>();
     }

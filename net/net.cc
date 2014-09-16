@@ -45,7 +45,7 @@ void interface::register_l3(uint16_t proto_num, size_t queue_length) {
 
 void interface::run() {
     _dev->receive().then([this] (packet p) {
-        auto eh = p.get_header<eth_hdr>(0);
+        auto eh = p.get_header<eth_hdr>();
         if (eh) {
             ntoh(*eh);
             auto i = _proto_map.find(eh->eth_proto);

@@ -107,7 +107,7 @@ public:
 
     // get a header pointer, linearizing if necessary
     template <typename Header>
-    Header* get_header(size_t offset);
+    Header* get_header(size_t offset = 0);
 
     // get a header pointer, linearizing if necessary
     char* get_header(size_t offset, size_t size);
