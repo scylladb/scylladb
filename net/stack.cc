@@ -46,14 +46,16 @@ class native_network_stack : public network_stack {
     ipv4 _inet;
     using tcp4 = tcp<ipv4_traits>;
 public:
-    explicit native_network_stack(std::unique_ptr<device> dev);
-    explicit native_network_stack() : native_network_stack(create_virtio_net_device("tap0")) {}
+    explicit native_network_stack(boost::program_options::variables_map opts);
     virtual server_socket listen(socket_address sa, listen_options opt) override;
+    static std::unique_ptr<network_stack> create(boost::program_options::variables_map opts) {
+        return std::make_unique<native_network_stack>(opts);
+    }
     friend class native_server_socket_impl<tcp4>;
 };
 
-native_network_stack::native_network_stack(std::unique_ptr<device> dev)
-    : _netif(std::move(dev))
+native_network_stack::native_network_stack(boost::program_options::variables_map opts)
+    : _netif(create_virtio_net_device(opts["tap-device"].as<std::string>()))
     , _inet(&_netif) {
     _netif.run();
     _inet.set_host_address(ipv4_address("192.168.122.2"));
@@ -144,6 +146,19 @@ native_connected_socket_impl<Protocol>::output() {
 
 std::unique_ptr<native_network_stack> native_network_stack::_s;
 
-network_stack_registrator<native_network_stack> nns_registrator{"native"};
+boost::program_options::options_description nns_options() {
+    boost::program_options::options_description opts(
+            "Native networking stack options");
+    opts.add_options()
+        ("tap-device",
+                boost::program_options::value<std::string>()->default_value("tap0"),
+                "tap device to connect to")
+        ;
+    return opts;
+}
+
+network_stack_registrator nns_registrator{
+    "native", nns_options(), native_network_stack::create
+};
 
 }

@@ -232,10 +232,13 @@ public:
 };
 
 class network_stack_registry {
+public:
+    using options = boost::program_options::variables_map;
+private:
     static std::unordered_map<sstring,
-            std::function<std::unique_ptr<network_stack> ()>>& _map() {
+            std::function<std::unique_ptr<network_stack> (options opts)>>& _map() {
         static std::unordered_map<sstring,
-                std::function<std::unique_ptr<network_stack> ()>> map;
+                std::function<std::unique_ptr<network_stack> (options opts)>> map;
         return map;
     }
     static sstring& _default() {
@@ -243,25 +246,38 @@ class network_stack_registry {
         return def;
     }
 public:
+    static boost::program_options::options_description& options_description() {
+        static boost::program_options::options_description opts;
+        return opts;
+    }
     static void register_stack(sstring name,
-            std::function<std::unique_ptr<network_stack> ()> create, bool make_default = false);
+            boost::program_options::options_description opts,
+            std::function<std::unique_ptr<network_stack> (options opts)> create,
+            bool make_default = false);
     static sstring default_stack();
     static std::vector<sstring> list();
-    static std::unique_ptr<network_stack> create();
-    static std::unique_ptr<network_stack> create(sstring name);
+    static std::unique_ptr<network_stack> create(options opts);
+    static std::unique_ptr<network_stack> create(sstring name, options opts);
 };
 
-template <typename NetworkStack>
 class network_stack_registrator {
 public:
-    explicit network_stack_registrator(sstring name, bool make_default = false) {
-        network_stack_registry::register_stack(name, std::make_unique<NetworkStack>, make_default);
+    using options = boost::program_options::variables_map;
+    explicit network_stack_registrator(sstring name,
+            boost::program_options::options_description opts,
+            std::function<std::unique_ptr<network_stack> (options opts)> factory,
+            bool make_default = false) {
+        network_stack_registry::register_stack(name, opts, factory, make_default);
     }
 };
 
 class posix_network_stack : public network_stack {
 public:
+    posix_network_stack(boost::program_options::variables_map opts) {}
     virtual server_socket listen(socket_address sa, listen_options opts) override;
+    static std::unique_ptr<network_stack> create(boost::program_options::variables_map opts) {
+        return std::unique_ptr<network_stack>(new posix_network_stack(opts));
+    }
 };
 
 class readable_eventfd {

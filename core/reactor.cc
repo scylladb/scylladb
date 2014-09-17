@@ -36,7 +36,7 @@ wrap_syscall(T result) {
 }
 
 reactor::reactor()
-    : _network_stack(network_stack_registry::create())
+    : _network_stack(network_stack_registry::create({}))
     , _epollfd(file_desc::epoll_create(EPOLL_CLOEXEC))
     , _io_eventfd()
     , _io_context(0)
@@ -47,8 +47,8 @@ reactor::reactor()
 
 void reactor::configure(boost::program_options::variables_map vm) {
     _network_stack = vm.count("network-stack")
-        ? network_stack_registry::create(sstring(vm["network-stack"].as<std::string>()))
-        : network_stack_registry::create();
+        ? network_stack_registry::create(sstring(vm["network-stack"].as<std::string>()), vm)
+        : network_stack_registry::create(vm);
     _handle_sigint = !vm.count("no-handle-interrupt");
 }
 
@@ -458,8 +458,10 @@ posix_network_stack::listen(socket_address sa, listen_options opt) {
 }
 
 void network_stack_registry::register_stack(sstring name,
-        std::function<std::unique_ptr<network_stack> ()> create, bool make_default) {
+        boost::program_options::options_description opts,
+        std::function<std::unique_ptr<network_stack> (options opts)> create, bool make_default) {
     _map()[name] = std::move(create);
+    options_description().add(opts);
     if (make_default) {
         _default() = name;
     }
@@ -478,13 +480,13 @@ std::vector<sstring> network_stack_registry::list() {
 }
 
 std::unique_ptr<network_stack>
-network_stack_registry::create() {
-    return create(_default());
+network_stack_registry::create(options opts) {
+    return create(_default(), opts);
 }
 
 std::unique_ptr<network_stack>
-network_stack_registry::create(sstring name) {
-    return _map()[name]();
+network_stack_registry::create(sstring name, options opts) {
+    return _map()[name](opts);
 }
 
 boost::program_options::options_description
@@ -498,9 +500,14 @@ reactor::get_options_description() {
                         format_separated(net_stack_names.begin(), net_stack_names.end(), ", ")).c_str())
         ("no-handle-interrupt", "ignore SIGINT (for gdb)")
         ;
+    opts.add(network_stack_registry::options_description());
     return opts;
 }
 
-network_stack_registrator<posix_network_stack> nsr_posix{"posix", true};
+network_stack_registrator nsr_posix{"posix",
+    boost::program_options::options_description(),
+    posix_network_stack::create,
+    true
+};
 
 reactor engine;
