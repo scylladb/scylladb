@@ -58,7 +58,7 @@ native_network_stack::native_network_stack(boost::program_options::variables_map
     : _netif(create_virtio_net_device(opts["tap-device"].as<std::string>()))
     , _inet(&_netif) {
     _netif.run();
-    _inet.set_host_address(ipv4_address("192.168.122.2"));
+    _inet.set_host_address(ipv4_address(opts["host-ipv4-addr"].as<std::string>()));
 }
 
 template <typename Protocol>
@@ -153,6 +153,9 @@ boost::program_options::options_description nns_options() {
         ("tap-device",
                 boost::program_options::value<std::string>()->default_value("tap0"),
                 "tap device to connect to")
+        ("host-ipv4-addr",
+                boost::program_options::value<std::string>()->default_value("192.168.122.2"),
+                "static IPv4 address to use")
         ;
     return opts;
 }
