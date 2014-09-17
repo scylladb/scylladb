@@ -182,6 +182,7 @@ packet::packet(packet&& x, fragment frag)
     _impl->_len += frag.size;
     std::unique_ptr<char[]> buf(new char[frag.size]);
     std::copy(frag.base, frag.base + frag.size, buf.get());
+    _impl->_fragments.push_back({buf.get(), frag.size});
     _impl->_deleter = make_deleter(std::move(_impl->_deleter), [buf = buf.release()] {
         delete[] buf;
     });
