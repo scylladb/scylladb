@@ -63,19 +63,9 @@ namespace net {
 struct ipv4_traits {
     using address_type = ipv4_address;
     using inet_type = ipv4_l4<6>;
-    struct pseudo_header {
-        packed<address_type> src;
-        packed<address_type> dst;
-        uint8_t zeros = 0;
-        uint8_t protocol = 6;
-        packed<uint16_t> len;
-
-        pseudo_header(ipv4_address src, ipv4_address dst, uint16_t len)
-            : src(src), dst(dst), len(len) {}
-
-        template <typename Adjuster>
-        void adjust_endianness(Adjuster a) { a(src, dst, len); }
-    };
+    static void pseudo_header_checksum(checksummer& csum, ipv4_address src, ipv4_address dst, uint16_t len) {
+        csum.sum_many(src.ip.raw, dst.ip.raw, uint8_t(0), uint8_t(6), len);
+    }
 };
 
 template <uint8_t ProtoNum>

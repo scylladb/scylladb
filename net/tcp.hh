@@ -324,9 +324,7 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
     hton(*th);
 
     checksummer csum;
-    typename InetTraits::pseudo_header ph(local_ip, foreign_ip, sizeof(*th));
-    hton(ph);
-    csum.sum(reinterpret_cast<char*>(&ph), sizeof(ph));
+    InetTraits::pseudo_header_checksum(csum, local_ip, foreign_ip, sizeof(*th));
     csum.sum(p);
     th->checksum = csum.get();
 
@@ -507,9 +505,7 @@ void tcp<InetTraits>::tcb::output() {
     ntoh(*th);
 
     checksummer csum;
-    typename InetTraits::pseudo_header ph(_local_ip, _foreign_ip, sizeof(*th) + len);
-    hton(ph);
-    csum.sum(reinterpret_cast<char*>(&ph), sizeof(ph));
+    InetTraits::pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + len);
     csum.sum(p);
     th->checksum = csum.get();
 
