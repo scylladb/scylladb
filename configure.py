@@ -43,28 +43,32 @@ modes = {
 
 libs = '-laio -lboost_program_options -lboost_system'
 
-import os, os.path
+import os, os.path, textwrap
 
 outdir = 'build'
 buildfile = outdir + '/build.ninja'
 os.makedirs(outdir, exist_ok = True)
 with open(buildfile, 'w') as f:
-    f.write('builddir = {}\n'.format(outdir))
-    f.write('cxx = g++\n')
-    f.write('cxxflags = -std=gnu++1y -g -Wall -Werror -fvisibility=hidden -pthread -I.\n')
-    f.write('ldflags = -Wl,--no-as-needed\n')
-    f.write('libs = {}\n'.format(libs))
+    f.write(textwrap.dedent('''\
+        builddir = {outdir}
+        cxx = g++
+        cxxflags = -std=gnu++1y -g -Wall -Werror -fvisibility=hidden -pthread -I.
+        ldflags = -Wl,--no-as-needed
+        libs = {libs}
+        ''').format(**globals()))
     for mode in ['debug', 'release']:
         modeval = modes[mode]
-        f.write('cxxflags_{} = {} {}\n'.format(mode, modeval['sanitize'], modeval['opt']))
-        f.write('libs_{} = {}\n'.format(mode, modeval['libs']))
-        f.write('rule cxx.{}\n'.format(mode))
-        f.write('  command = $cxx -MMD -MT $out -MF $out.d $cxxflags $cxxflags_{} -c -o $out $in\n'.format(mode))
-        f.write('  description = CXX $out\n')
-        f.write('  depfile = $out.d\n')
-        f.write('rule link.{}\n'.format(mode))
-        f.write('  command = $cxx $cxxflags $cxxflags_{} $ldflags -o $out $in $libs $libs_{}\n'.format(mode, mode))
-        f.write('  description = LINK $out\n')
+        f.write(textwrap.dedent('''\
+            cxxflags_{mode} = {sanitize} {opt}
+            libs_{mode} = {libs}
+            rule cxx.{mode}
+              command = $cxx -MMD -MT $out -MF $out.d $cxxflags $cxxflags_{mode} -c -o $out $in
+              description = CXX $out
+              depfile = $out.d)
+            rule link.{mode}
+              command = $cxx $cxxflags $cxxflags_{mode} $ldflags -o $out $in $libs $libs_{mode}
+              description = LINK $out
+            ''').format(mode = mode, **modeval))
         compiles = {}
         for binary in apps.split() + tests.split():
             srcs = deps[binary].split()
@@ -76,7 +80,9 @@ with open(buildfile, 'w') as f:
         for obj in compiles:
             src = compiles[obj]
             f.write('build {}: cxx.{} {}\n'.format(obj, mode, src))
-    f.write('rule configure\n')
-    f.write('  command = python3 configure.py\n')
-    f.write('  generator = 1\n')
-    f.write('build $builddir/build.ninja: configure | configure.py\n')
+    f.write(textwrap.dedent('''\
+        rule configure
+          command = python3 configure.py
+          generator = 1
+        build $builddir/build.ninja: configure | configure.py
+        '''))
