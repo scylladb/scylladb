@@ -105,10 +105,10 @@ future<int> get();   // promises an int will be produced eventually
 future<> put(int)    // promises to store an int
 
 future<> loop_to(int end) {
+    if (value == end) {
+        return make_ready_future<>();
+    }
     get().then([end] (int value) {
-        if (value == end) {
-            return make_ready_future<>();
-        }
         return put(value + 1);
     }).then([end] {
         return loop_to(end);
