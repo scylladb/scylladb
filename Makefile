@@ -1,6 +1,4 @@
-mode = release
-
-out = build/$(mode)
+out = build
 
 all: $(out)/build.ninja
 	@ninja-build -f $<
