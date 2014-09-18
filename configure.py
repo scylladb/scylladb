@@ -64,7 +64,7 @@ with open(buildfile, 'w') as f:
             rule cxx.{mode}
               command = $cxx -MMD -MT $out -MF $out.d $cxxflags $cxxflags_{mode} -c -o $out $in
               description = CXX $out
-              depfile = $out.d)
+              depfile = $out.d
             rule link.{mode}
               command = $cxx $cxxflags $cxxflags_{mode} $ldflags -o $out $in $libs $libs_{mode}
               description = LINK $out
