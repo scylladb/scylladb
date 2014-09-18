@@ -8,8 +8,14 @@
 
 namespace net {
 
-uint16_t ip_checksum(const void* data, size_t len) {
-    uint64_t csum = 0;
+void checksummer::sum(const char* data, size_t len) {
+    auto orig_len = len;
+    if (odd) {
+        auto old = csum;
+        csum += uint8_t(*data++);
+        csum += (csum < old);
+        --len;
+    }
     auto p64 = reinterpret_cast<const packed<uint64_t>*>(data);
     while (len >= 8) {
         auto old = csum;
@@ -31,20 +37,15 @@ uint16_t ip_checksum(const void* data, size_t len) {
         csum += (csum < old);
         len -= 1;
     }
+    odd ^= orig_len & 1;
+}
+
+uint16_t checksummer::get() const {
+    auto csum = this->csum;
     csum = (csum & 0xffff) + ((csum >> 16) & 0xffff) + ((csum >> 32) & 0xffff) + (csum >> 48);
     csum = (csum & 0xffff) + (csum >> 16);
     csum = (csum & 0xffff) + (csum >> 16);
     return htons(~csum);
-}
-
-void checksummer::sum(const char* data, size_t len) {
-    auto orig_len = len;
-    if (odd) {
-        partial += uint8_t(*data++);
-        --len;
-    }
-    partial += ip_checksum(data, len);
-    odd ^= orig_len & 1;
 }
 
 void checksummer::sum(const packet& p) {
@@ -53,9 +54,11 @@ void checksummer::sum(const packet& p) {
     }
 }
 
-uint16_t checksummer::get() const {
-    auto tmp = (partial & 0xffff) + (partial >> 16);
-    return tmp + (tmp >> 16);
+uint16_t ip_checksum(const void* data, size_t len) {
+    checksummer cksum;
+    cksum.sum(reinterpret_cast<const char*>(data), len);
+    return cksum.get();
 }
+
 
 }
