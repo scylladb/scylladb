@@ -22,7 +22,7 @@ yum --enablerepo rawhide update gcc-c++
 
 Installing required packages (for libtcmalloc and libaio, respectively):
 ```
-yum install gperftools-devel libaio-devel
+yum install gperftools-devel libaio-devel ninja-build
 ```
 
 Then finally:

@@ -2,9 +2,11 @@ mode = release
 
 out = build/$(mode)
 
-all:
-	@mkdir -p $(out)
-	$(MAKE)  -C $(out) src=../.. -f ../../build.mk $(MAKEFLAGS) mode=$(mode)
+all: $(out)/build.ninja
+	@ninja-build -f $<
+
+$(out)/build.ninja:
+	python3 configure.py
 
 clean:
 	rm -rf $(out)
