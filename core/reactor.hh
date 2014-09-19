@@ -433,6 +433,8 @@ public:
     future<> receive_signal(int signo);
 
     void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
+
+    network_stack& net() { return *_network_stack; }
 private:
     future<size_t> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
 
