@@ -43,17 +43,27 @@ modes = {
 
 libs = '-laio -lboost_program_options -lboost_system'
 
-import os, os.path, textwrap
+import os, os.path, textwrap, argparse, sys
+
+configure_args = str.join(' ', sys.argv[1:])
+
+arg_parser = argparse.ArgumentParser('Configure seastar')
+arg_parser.add_argument('--static', dest = 'libstdcxx', action = 'store_const', default = '',
+                        const = '-static-libstdc++',
+                        help = 'Use static libstdc++ (useful for running on hosts outside the build environment')
+args = arg_parser.parse_args()
+globals().update(vars(args))
 
 outdir = 'build'
 buildfile = outdir + '/build.ninja'
 os.makedirs(outdir, exist_ok = True)
 with open(buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
+        configure_args = {configure_args}
         builddir = {outdir}
         cxx = g++
         cxxflags = -std=gnu++1y -g -Wall -Werror -fvisibility=hidden -pthread -I.
-        ldflags = -Wl,--no-as-needed
+        ldflags = -Wl,--no-as-needed {libstdcxx}
         libs = {libs}
         ''').format(**globals()))
     for mode in ['debug', 'release']:
@@ -82,7 +92,7 @@ with open(buildfile, 'w') as f:
             f.write('build {}: cxx.{} {}\n'.format(obj, mode, src))
     f.write(textwrap.dedent('''\
         rule configure
-          command = python3 configure.py
+          command = python3 configure.py $configure_args
           generator = 1
         build $builddir/build.ninja: configure | configure.py
         '''))
