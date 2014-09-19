@@ -2,3 +2,4 @@
 .project
 .settings
 build
+build.ninja

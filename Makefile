@@ -1,9 +1,9 @@
 out = build
 
-all: $(out)/build.ninja
+all: build.ninja
 	@ninja-build -f $<
 
-$(out)/build.ninja:
+build.ninja:
 	python3 configure.py
 
 clean:

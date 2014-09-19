@@ -55,7 +55,7 @@ args = arg_parser.parse_args()
 globals().update(vars(args))
 
 outdir = 'build'
-buildfile = outdir + '/build.ninja'
+buildfile = 'build.ninja'
 os.makedirs(outdir, exist_ok = True)
 with open(buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
@@ -94,5 +94,5 @@ with open(buildfile, 'w') as f:
         rule configure
           command = python3 configure.py $configure_args
           generator = 1
-        build $builddir/build.ninja: configure | configure.py
+        build build.ninja: configure | configure.py
         '''))
