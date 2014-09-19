@@ -50,11 +50,27 @@ template <typename CharType>
 class output_stream;
 
 struct ipv4_addr {
-    uint8_t host[4];
+    uint32_t ip;
     uint16_t port;
+
+    ipv4_addr(uint32_t ip, uint16_t port) : ip(ip), port(port) {}
+    ipv4_addr(uint16_t port) : ip(0), port(port) {}
+    ipv4_addr(socket_address& sa) {
+        ip = sa.u.in.sin_addr.s_addr;
+        ntoh(ip);
+        port = sa.u.in.sin_port;
+        ntoh(port);
+    }
 };
 
-socket_address make_ipv4_address(ipv4_addr addr);
+static inline
+socket_address make_ipv4_address(ipv4_addr addr) {
+    socket_address sa;
+    sa.u.in.sin_family = AF_INET;
+    sa.u.in.sin_port = htons(addr.port);
+    sa.u.in.sin_addr.s_addr = htonl(addr.ip);
+    return sa;
+}
 
 class socket_address {
 private:

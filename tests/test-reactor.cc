@@ -40,7 +40,7 @@ struct test {
 
 int main(int ac, char** av)
 {
-    ipv4_addr addr{{}, 10000};
+    ipv4_addr addr{10000};
     listen_options lo;
     lo.reuse_address = true;
     test t(engine.posix_listen(make_ipv4_address(addr), lo));

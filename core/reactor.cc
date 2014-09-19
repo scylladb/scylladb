@@ -428,14 +428,6 @@ future<size_t> readable_eventfd::wait() {
     });
 }
 
-socket_address make_ipv4_address(ipv4_addr addr) {
-    socket_address sa;
-    sa.u.in.sin_family = AF_INET;
-    sa.u.in.sin_port = htons(addr.port);
-    std::memcpy(&sa.u.in.sin_addr, addr.host, 4);
-    return sa;
-}
-
 void schedule(std::unique_ptr<task> t) {
     engine.add_task(std::move(t));
 }
