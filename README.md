@@ -31,6 +31,27 @@ Then finally:
 make
 ```
 
+### Building seastar in Docker container
+
+To build a Docker image:
+
+```
+docker build -t seastar-dev .
+```
+
+To launch a container:
+
+```    
+$ docker run -v $HOME/seastar/:/seastar -i -t seastar-dev /bin/bash
+```
+
+Finally, to build seastar inside the container:
+
+```    
+cd /seastar
+make
+```
+
 Futures and promises
 --------------------
 
