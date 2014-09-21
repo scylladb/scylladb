@@ -57,7 +57,6 @@ public:
 native_network_stack::native_network_stack(boost::program_options::variables_map opts)
     : _netif(create_virtio_net_device(opts["tap-device"].as<std::string>(), opts))
     , _inet(&_netif) {
-    _netif.run();
     _inet.set_host_address(ipv4_address(opts["host-ipv4-addr"].as<std::string>()));
 }
 

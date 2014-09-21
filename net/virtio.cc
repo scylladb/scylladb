@@ -7,6 +7,7 @@
 #include "core/vla.hh"
 #include "virtio-interface.hh"
 #include "core/reactor.hh"
+#include "core/stream.hh"
 #include <atomic>
 #include <vector>
 #include <queue>
@@ -402,15 +403,17 @@ private:
     rxq _rxq;
     semaphore _rx_queue_length = { 0 };
     std::queue<packet> _rx_queue;
+    stream<packet> _rx_stream;
 private:
     uint64_t setup_features();
     vring::config txq_config();
     vring::config rxq_config();
     void common_config(vring::config& r);
     void queue_rx_packet(packet p);
+    void run();
 public:
     explicit virtio_net_device(sstring tap_device, boost::program_options::variables_map opts, init x = init());
-    virtual future<packet> receive() override;
+    virtual subscription<packet> receive(std::function<future<> (packet)> next) override;
     virtual future<> send(packet p) override;
     virtual ethernet_address hw_address() override;
 };
@@ -535,7 +538,6 @@ virtio_net_device::virtio_net_device(sstring tap_device, boost::program_options:
     _vhost_fd.ioctl(VHOST_NET_SET_BACKEND, vhost_vring_file{0, _tap_fd.get()});
     _vhost_fd.ioctl(VHOST_NET_SET_BACKEND, vhost_vring_file{1, _tap_fd.get()});
     _txq.run();
-    _rxq.run();
 }
 
 uint64_t virtio_net_device::setup_features() {
@@ -578,12 +580,23 @@ vring::config virtio_net_device::rxq_config() {
     return r;
 }
 
-future<packet>
-virtio_net_device::receive() {
-    return _rx_queue_length.wait().then([this] {
+subscription<packet>
+virtio_net_device::receive(std::function<future<> (packet)> next) {
+    _rx_stream.started().then([this] {
+        _rxq.run();
+        run();
+    });
+    return _rx_stream.listen(std::move(next));
+}
+
+void
+virtio_net_device::run() {
+    _rx_queue_length.wait().then([this] {
         auto p = std::move(_rx_queue.front());
         _rx_queue.pop();
-        return make_ready_future<packet>(std::move(p));
+        _rx_stream.produce(std::move(p)).then([this] {
+            run();
+        });
     });
 }
 

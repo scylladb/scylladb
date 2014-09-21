@@ -34,7 +34,9 @@ future<packet, ethernet_address> interface::receive(uint16_t proto_num) {
 }
 
 interface::interface(std::unique_ptr<device> dev)
-    : _dev(std::move(dev)), _hw_address(_dev->hw_address()) {
+    : _dev(std::move(dev))
+    , _rx(_dev->receive([this] (packet p) { return dispatch_packet(std::move(p)); }))
+    , _hw_address(_dev->hw_address()) {
 }
 
 void interface::register_l3(uint16_t proto_num, size_t queue_length) {
@@ -43,22 +45,20 @@ void interface::register_l3(uint16_t proto_num, size_t queue_length) {
                 std::make_tuple(queue_length));
 }
 
-void interface::run() {
-    _dev->receive().then([this] (packet p) {
-        auto eh = p.get_header<eth_hdr>();
-        if (eh) {
-            ntoh(*eh);
-            auto i = _proto_map.find(eh->eth_proto);
-            if (i != _proto_map.end() && !i->second.full()) {
-                auto from = eh->src_mac;
-                p.trim_front(sizeof(*eh));
-                i->second.push(std::make_tuple(std::move(p), from));
-            } else {
-                print("dropping packet: no handler for protcol 0x%x\n", eh->eth_proto);
-            }
+future<> interface::dispatch_packet(packet p) {
+    auto eh = p.get_header<eth_hdr>();
+    if (eh) {
+        ntoh(*eh);
+        auto i = _proto_map.find(eh->eth_proto);
+        if (i != _proto_map.end() && !i->second.full()) {
+            auto from = eh->src_mac;
+            p.trim_front(sizeof(*eh));
+            i->second.push(std::make_tuple(std::move(p), from));
+        } else {
+            print("dropping packet: no handler for protcol 0x%x\n", eh->eth_proto);
         }
-        run();
-    });
+    }
+    return make_ready_future<>();
 }
 
 future<> interface::send(uint16_t proto_num, ethernet_address to, packet p) {

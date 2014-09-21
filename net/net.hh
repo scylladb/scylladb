@@ -8,6 +8,7 @@
 #include "core/reactor.hh"
 #include "core/deleter.hh"
 #include "core/queue.hh"
+#include "core/stream.hh"
 #include "ethernet.hh"
 #include "packet.hh"
 #include <unordered_map>
@@ -33,15 +34,16 @@ private:
 
 class interface {
     std::unique_ptr<device> _dev;
+    subscription<packet> _rx;
     std::unordered_map<uint16_t, queue<std::tuple<packet, ethernet_address>>> _proto_map;
     ethernet_address _hw_address;
 private:
+    future<> dispatch_packet(packet p);
     future<packet, ethernet_address> receive(uint16_t proto_num);
     future<> send(uint16_t proto_num, ethernet_address to, packet p);
 public:
     explicit interface(std::unique_ptr<device> dev);
     ethernet_address hw_address() { return _hw_address; }
-    void run();
     void register_l3(uint16_t proto_num, size_t queue_length = 100);
     friend class l3_protocol;
 };
@@ -49,7 +51,7 @@ public:
 class device {
 public:
     virtual ~device() {}
-    virtual future<packet> receive() = 0;
+    virtual subscription<packet> receive(std::function<future<> (packet)> next_packet) = 0;
     virtual future<> send(packet p) = 0;
     virtual ethernet_address hw_address() = 0;
 };

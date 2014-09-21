@@ -62,18 +62,12 @@ future<> echo_packet(net::device& netif, packet p) {
     return netif.send(std::move(p));
 }
 
-void echo_packets(net::device& netif) {
-    netif.receive().then([&netif] (packet p) {
-        dump_packet(p);
-        return echo_packet(netif, std::move(p));
-    }).then([&netif] () {
-        echo_packets(netif);
-    });
-}
-
 int main(int ac, char** av) {
     auto vnet = create_virtio_net_device("tap0");
-    echo_packets(*vnet);
+    subscription<packet> rx = vnet->receive([netif = vnet.get(), &rx] (packet p) {
+        dump_packet(p);
+        return echo_packet(*netif, std::move(p));
+    });
     engine.run();
     return 0;
 }
