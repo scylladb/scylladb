@@ -265,7 +265,9 @@ public:
             _local_state = std::move(x._local_state);
         }
         x._promise = nullptr;
-        _promise->_future = this;
+        if (_promise) {
+            _promise->_future = this;
+        }
     }
     future(const future&) = delete;
     future& operator=(future&& x);
