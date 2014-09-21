@@ -401,16 +401,14 @@ private:
     uint64_t _features;
     txq _txq;
     rxq _rxq;
-    semaphore _rx_queue_length = { 0 };
-    std::queue<packet> _rx_queue;
     stream<packet> _rx_stream;
+    future<> _rx_ready;
 private:
     uint64_t setup_features();
     vring::config txq_config();
     vring::config rxq_config();
     void common_config(vring::config& r);
-    void queue_rx_packet(packet p);
-    void run();
+    future<> queue_rx_packet(packet p);
 public:
     explicit virtio_net_device(sstring tap_device, boost::program_options::variables_map opts, init x = init());
     virtual subscription<packet> receive(std::function<future<> (packet)> next) override;
@@ -486,7 +484,9 @@ virtio_net_device::rxq::prepare_buffers(semaphore& available) {
             b.completed.get_future().then([this, buf = buf.get()] (size_t len) {
                 packet p(fragment{buf + _dev._header_len, len - _dev._header_len},
                         [buf] { delete[] buf; });
-                _dev.queue_rx_packet(std::move(p));
+                _dev._rx_ready = _dev._rx_ready.then([this, p = std::move(p)] () mutable {
+                    return _dev.queue_rx_packet(std::move(p));
+                });
             });
             bc.push_back(std::move(b));
             buf.release();
@@ -504,7 +504,9 @@ virtio_net_device::virtio_net_device(sstring tap_device, boost::program_options:
     , _opts(opts)
     , _features(setup_features())
     , _txq(*this, txq_config(), std::move(x._txq_notify), std::move(x._txq_kick))
-    , _rxq(*this, rxq_config(), std::move(x._rxq_notify), std::move(x._rxq_kick)) {
+    , _rxq(*this, rxq_config(), std::move(x._rxq_notify), std::move(x._rxq_kick))
+    , _rx_stream()
+    , _rx_ready(_rx_stream.started()) {
     assert(tap_device.size() + 1 <= IFNAMSIZ);
     ifreq ifr = {};
     ifr.ifr_flags = IFF_TAP | IFF_NO_PI | IFF_ONE_QUEUE | IFF_VNET_HDR;
@@ -582,22 +584,8 @@ vring::config virtio_net_device::rxq_config() {
 
 subscription<packet>
 virtio_net_device::receive(std::function<future<> (packet)> next) {
-    _rx_stream.started().then([this] {
-        _rxq.run();
-        run();
-    });
+    _rxq.run();
     return _rx_stream.listen(std::move(next));
-}
-
-void
-virtio_net_device::run() {
-    _rx_queue_length.wait().then([this] {
-        auto p = std::move(_rx_queue.front());
-        _rx_queue.pop();
-        _rx_stream.produce(std::move(p)).then([this] {
-            run();
-        });
-    });
 }
 
 future<>
@@ -605,9 +593,8 @@ virtio_net_device::send(packet p) {
     return _txq.post(std::move(p));
 }
 
-void virtio_net_device::queue_rx_packet(packet p) {
-    _rx_queue.push(std::move(p));
-    _rx_queue_length.signal(1);
+future<> virtio_net_device::queue_rx_packet(packet p) {
+    return _rx_stream.produce(std::move(p));
 }
 
 ethernet_address virtio_net_device::hw_address() {
