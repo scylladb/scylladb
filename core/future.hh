@@ -270,7 +270,13 @@ public:
         }
     }
     future(const future&) = delete;
-    future& operator=(future&& x);
+    future& operator=(future&& x) {
+        if (this != &x) {
+            this->~future();
+            new (this) future(std::move(x));
+        }
+        return *this;
+    }
     void operator=(const future&) = delete;
     ~future() {
         if (_promise) {
