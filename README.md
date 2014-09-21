@@ -18,7 +18,7 @@ Installing GCC 4.9 for gnu++1y:
 ```
 yum install fedora-release-rawhide
 yum --enablerepo rawhide update gcc-c++
-yum --enablerepo rawhide install libubsan
+yum --enablerepo rawhide install libubsan libasan
 ```
 
 Installing required packages (for libtcmalloc and libaio, respectively):
