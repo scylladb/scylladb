@@ -77,7 +77,9 @@ class packet final {
             if (old->_allocated_frags >= old->_nr_frags + extra_frags) {
                 return std::move(old);
             }
-            auto n = allocate(old->_nr_frags + extra_frags);
+            auto nr = std::max<size_t>(old->_nr_frags + extra_frags,
+                                       2 * old->_nr_frags);
+            auto n = allocate(nr);
             n->_deleter = std::move(old->_deleter);
             n->_len = old->_len;
             n->_nr_frags = old->_nr_frags;
