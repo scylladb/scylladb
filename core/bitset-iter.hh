@@ -57,12 +57,14 @@ inline size_t count_leading_zeros<long>(long value)
 }
 
 template<>
+inline
 size_t count_trailing_zeros<unsigned long>(unsigned long value)
 {
     return __builtin_ctzl(value);
 }
 
 template<>
+inline
 size_t count_trailing_zeros<long>(long value)
 {
     return __builtin_ctzl((unsigned long)value);
