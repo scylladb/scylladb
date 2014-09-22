@@ -405,6 +405,9 @@ template <typename... T>
 inline
 void promise<T...>::abandoned() {
     if (_future) {
+        assert(_state);
+        assert(_state->available());
+        _future->_local_state = std::move(*_state);
         _future->_promise = nullptr;
     }
 }
