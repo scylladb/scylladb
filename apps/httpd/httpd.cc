@@ -62,9 +62,7 @@ public:
         });
     }
     class connection {
-        http_server& _server;
         connected_socket _fd;
-        socket_address _addr;
         input_stream<char> _read_buf;
         output_stream<char> _write_buf;
         bool _eof = false;
@@ -87,7 +85,7 @@ public:
         std::queue<std::unique_ptr<response>> _pending_responses;
     public:
         connection(http_server& server, connected_socket&& fd, socket_address addr)
-            : _server(server), _fd(std::move(fd)), _addr(addr), _read_buf(_fd.input())
+            : _fd(std::move(fd)), _read_buf(_fd.input())
             , _write_buf(_fd.output()) {}
         future<> read() {
             return _read_buf.read_until(limit, '\n').then([this] (tmp_buf start_line) {
