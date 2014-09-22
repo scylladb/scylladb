@@ -52,8 +52,6 @@ future<> interface::dispatch_packet(packet p) {
             if (l3.ready.available()) {
                 l3.ready = l3.packet_stream.produce(std::move(p), from);
             }
-        } else {
-            print("dropping packet: no handler for protcol 0x%x\n", eh->eth_proto);
         }
     }
     return make_ready_future<>();
