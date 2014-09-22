@@ -514,6 +514,9 @@ void tcp<InetTraits>::tcb::output() {
 
 template <typename InetTraits>
 future<> tcp<InetTraits>::tcb::wait_for_data() {
+    if (!_rcv.data.empty() || _foreign_fin_received) {
+        return make_ready_future<>();
+    }
     _rcv._user_waiting = true;
     _rcv._data_received = promise<>();
     return _rcv._data_received.get_future();
