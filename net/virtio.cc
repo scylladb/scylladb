@@ -598,7 +598,7 @@ future<> virtio_net_device::queue_rx_packet(packet p) {
 }
 
 ethernet_address virtio_net_device::hw_address() {
-    return { 0x12, 0x23, 0x34, 0x56, 0x67, 0x78 };
+    return {{{ 0x12, 0x23, 0x34, 0x56, 0x67, 0x78 }}};
 }
 
 boost::program_options::options_description

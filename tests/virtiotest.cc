@@ -48,7 +48,7 @@ future<> echo_packet(net::device& netif, packet p) {
     }
     auto icmp_len = ip_len - iph->ihl * 4;
     std::swap(eh->src_mac, eh->dst_mac);
-    eh->src_mac = { 0x12, 0x23, 0x45, 0x56, 0x67, 0x68 };
+    eh->src_mac = {{{ 0x12, 0x23, 0x45, 0x56, 0x67, 0x68 }}};
     auto x = iph->src_ip;
     iph->src_ip = ipv4_address("192.168.122.2");
     iph->dst_ip = x;
