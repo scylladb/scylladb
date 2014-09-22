@@ -36,7 +36,7 @@ modes = {
     },
     'release': {
         'sanitize': '',
-        'opt': '-O2 -flto',
+        'opt': '-O2',
         'libs': '-ltcmalloc',
     },
 }
