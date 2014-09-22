@@ -31,7 +31,7 @@ static constexpr int ulong_bits = std::numeric_limits<unsigned long>::digits;
  * which is returned when value == 1.
  */
 template<typename T>
-static inline size_t count_leading_zeros(T value);
+inline size_t count_leading_zeros(T value);
 
 /**
  * Returns the number of trailing zeros in value's binary representation.
@@ -45,13 +45,13 @@ template<typename T>
 static inline size_t count_trailing_zeros(T value);
 
 template<>
-size_t count_leading_zeros<unsigned long>(unsigned long value)
+inline size_t count_leading_zeros<unsigned long>(unsigned long value)
 {
     return __builtin_clzl(value);
 }
 
 template<>
-size_t count_leading_zeros<long>(long value)
+inline size_t count_leading_zeros<long>(long value)
 {
     return __builtin_clzl((unsigned long)value) - 1;
 }
