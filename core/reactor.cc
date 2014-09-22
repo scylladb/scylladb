@@ -126,8 +126,8 @@ posix_server_socket_impl::accept() {
 void reactor::complete_epoll_event(pollable_fd_state& pfd, promise<> pollable_fd_state::*pr,
         int events, int event) {
     if (pfd.events_requested & events & event) {
-        pfd.events_requested &= ~EPOLLIN;
-        pfd.events_known &= ~EPOLLIN;
+        pfd.events_requested &= ~event;
+        pfd.events_known &= ~event;
         (pfd.*pr).set_value();
         pfd.*pr = promise<>();
     }
