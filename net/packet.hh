@@ -90,6 +90,14 @@ class packet final {
             assert(nr_frags == uint16_t(nr_frags));
             return ::operator new(size + nr_frags * sizeof(fragment));
         }
+        // Matching the operator new above
+        void operator delete(void* ptr, size_t nr_frags) {
+            return ::operator delete(ptr);
+        }
+        // Since the above "placement delete" hides the global one, expose it
+        void operator delete(void* ptr) {
+            return ::operator delete(ptr);
+        }
     };
     std::unique_ptr<impl> _impl;
 public:
