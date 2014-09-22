@@ -78,6 +78,7 @@ class packet final {
                 return std::move(old);
             }
             auto n = allocate(old->_nr_frags + extra_frags);
+            n->_deleter = std::move(old->_deleter);
             n->_len = old->_len;
             n->_nr_frags = old->_nr_frags;
             std::copy(old->_frags, old->_frags + old->_nr_frags, n->_frags);
