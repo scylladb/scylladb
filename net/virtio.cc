@@ -396,16 +396,20 @@ private:
     file_desc _vhost_fd;
     std::unique_ptr<char[], free_deleter> _txq_storage;
     std::unique_ptr<char[], free_deleter> _rxq_storage;
+    boost::program_options::variables_map _opts;
+    uint64_t _features;
     txq _txq;
     rxq _rxq;
     semaphore _rx_queue_length = { 0 };
     std::queue<packet> _rx_queue;
 private:
+    uint64_t setup_features();
     vring::config txq_config();
     vring::config rxq_config();
+    void common_config(vring::config& r);
     void queue_rx_packet(packet p);
 public:
-    explicit virtio_net_device(sstring tap_device, init x = init());
+    explicit virtio_net_device(sstring tap_device, boost::program_options::variables_map opts, init x = init());
     virtual future<packet> receive() override;
     virtual future<> send(packet p) override;
     virtual ethernet_address hw_address() override;
@@ -489,11 +493,13 @@ virtio_net_device::rxq::prepare_buffers(semaphore& available) {
     });
 }
 
-virtio_net_device::virtio_net_device(sstring tap_device, init x)
+virtio_net_device::virtio_net_device(sstring tap_device, boost::program_options::variables_map opts, init x)
     : _tap_fd(file_desc::open("/dev/net/tun", O_RDWR | O_NONBLOCK))
     , _vhost_fd(file_desc::open("/dev/vhost-net", O_RDWR))
     , _txq_storage(allocate_aligned_buffer<char>(3*4096, 4096))
     , _rxq_storage(allocate_aligned_buffer<char>(3*4096, 4096))
+    , _opts(opts)
+    , _features(setup_features())
     , _txq(*this, txq_config(), std::move(x._txq_notify), std::move(x._txq_kick))
     , _rxq(*this, rxq_config(), std::move(x._rxq_notify), std::move(x._rxq_kick)) {
     assert(tap_device.size() + 1 <= IFNAMSIZ);
@@ -510,10 +516,6 @@ virtio_net_device::virtio_net_device(sstring tap_device, init x)
     region.userspace_addr = 0;
     region.flags_padding = 0;
     _vhost_fd.ioctl(VHOST_SET_MEM_TABLE, *mem_table);
-    uint64_t features = VIRTIO_RING_F_EVENT_IDX
-            |  VIRTIO_RING_F_INDIRECT_DESC
-            /* | VIRTIO_NET_F_MRG_RXBUF */;
-    _vhost_fd.ioctl(VHOST_SET_FEATURES, features);
     vhost_vring_state vvs0 = { 0, 256 };
     _vhost_fd.ioctl(VHOST_SET_VRING_NUM, vvs0);
     vhost_vring_state vvs1 = { 1, 256 };
@@ -536,29 +538,43 @@ virtio_net_device::virtio_net_device(sstring tap_device, init x)
     _rxq.run();
 }
 
-vring::config virtio_net_device::txq_config() {
-    vring::config r;
+uint64_t virtio_net_device::setup_features() {
+    int64_t seastar_supported_features = VIRTIO_RING_F_INDIRECT_DESC;
+    if (!(_opts.count("event-index") && _opts["event-index"].as<std::string>() == "off")) {
+        seastar_supported_features |= VIRTIO_RING_F_EVENT_IDX;
+    }
+
+    int64_t vhost_supported_features;
+    _vhost_fd.ioctl(VHOST_GET_FEATURES, vhost_supported_features);
+
+    seastar_supported_features &= vhost_supported_features;
+    _vhost_fd.ioctl(VHOST_SET_FEATURES, seastar_supported_features);
+
+    return seastar_supported_features;
+}
+
+void virtio_net_device::common_config(vring::config& r) {
     auto size = 256;
-    r.descs = _txq_storage.get();
+    r.size = size;
     r.avail = r.descs + 16 * size;
     r.used = align_up(r.avail + 2 * size + 6, 4096);
-    r.size = size;
-    r.event_index = true;
+    r.event_index = (_features & VIRTIO_RING_F_EVENT_IDX) != 0;
     r.indirect = false;
+}
+
+vring::config virtio_net_device::txq_config() {
+    vring::config r;
+    r.descs = _txq_storage.get();
     r.mergable_buffers = false;
+    common_config(r);
     return r;
 }
 
 vring::config virtio_net_device::rxq_config() {
     vring::config r;
-    auto size = 256;
     r.descs = _rxq_storage.get();
-    r.avail = r.descs + 16 * size;
-    r.used = align_up(r.avail + 2 * size + 6, 4096);
-    r.size = size;
-    r.event_index = true;
-    r.indirect = false;
     r.mergable_buffers = true;
+    common_config(r);
     return r;
 }
 
@@ -585,6 +601,19 @@ ethernet_address virtio_net_device::hw_address() {
     return { 0x12, 0x23, 0x34, 0x56, 0x67, 0x78 };
 }
 
-std::unique_ptr<net::device> create_virtio_net_device(sstring tap_device) {
-    return std::make_unique<virtio_net_device>(tap_device);
+boost::program_options::options_description
+get_virtio_net_options_description()
+{
+    boost::program_options::options_description opts(
+            "Virtio net options");
+    opts.add_options()
+        ("event-index",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable event-index feature (on / off)")
+        ;
+    return opts;
+}
+
+std::unique_ptr<net::device> create_virtio_net_device(sstring tap_device, boost::program_options::variables_map opts) {
+    return std::make_unique<virtio_net_device>(tap_device, opts);
 }

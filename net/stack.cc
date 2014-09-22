@@ -55,7 +55,7 @@ public:
 };
 
 native_network_stack::native_network_stack(boost::program_options::variables_map opts)
-    : _netif(create_virtio_net_device(opts["tap-device"].as<std::string>()))
+    : _netif(create_virtio_net_device(opts["tap-device"].as<std::string>(), opts))
     , _inet(&_netif) {
     _netif.run();
     _inet.set_host_address(ipv4_address(opts["host-ipv4-addr"].as<std::string>()));
@@ -157,6 +157,7 @@ boost::program_options::options_description nns_options() {
                 boost::program_options::value<std::string>()->default_value("192.168.122.2"),
                 "static IPv4 address to use")
         ;
+    opts.add(get_virtio_net_options_description());
     return opts;
 }
 
