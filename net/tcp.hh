@@ -249,12 +249,19 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
     if (!th) {
         return;
     }
-    ntoh(*th);
+    // th->data_offset is correct even before ntoh()
     if (unsigned(th->data_offset * 4) < sizeof(*th)) {
+        return;
+    }
+    checksummer csum;
+    InetTraits::pseudo_header_checksum(csum, from, to, p.len());
+    csum.sum(p);
+    if (csum.get() != 0) {
         return;
     }
     // FIXME: process options
     p.trim_front(th->data_offset * 4);
+    ntoh(*th);
     auto id = connid{to, from, th->dst_port, th->src_port};
     auto tcbi = _tcbs.find(id);
     shared_ptr<tcb> tcbp;
