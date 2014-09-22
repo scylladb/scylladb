@@ -287,6 +287,10 @@ public:
         return state()->get();
     }
 
+    bool available() {
+        return state()->available();
+    }
+
     template <typename Func, typename Enable>
     void then(Func, Enable);
 
