@@ -9,9 +9,9 @@
 using namespace net;
 
 void dump_arp_packets(l3_protocol& proto) {
-    proto.receive().then([&proto] (packet p, ethernet_address from) {
+    proto.receive([&proto] (packet p, ethernet_address from) {
         std::cout << "seen arp packet\n";
-        dump_arp_packets(proto);
+        return make_ready_future<>();
     });
 }
 

@@ -106,12 +106,12 @@ private:
     ipv4_address _host_address;
     ipv4_address _netmask = ipv4_address(0xffffff00);
     l3_protocol _l3;
+    subscription<packet, ethernet_address> _rx_packets;
     ipv4_tcp _tcp;
     array_map<ip_protocol*, 256> _l4;
     semaphore _send_sem;
 private:
-    void run();
-    void handle_received_packet(packet p, ethernet_address from);
+    future<> handle_received_packet(packet p, ethernet_address from);
     bool in_my_netmask(ipv4_address a) const;
 public:
     explicit ipv4(interface* netif);

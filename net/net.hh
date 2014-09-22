@@ -25,26 +25,31 @@ class l3_protocol {
     uint16_t _proto_num;
 public:
     explicit l3_protocol(interface* netif, uint16_t proto_num);
+    subscription<packet, ethernet_address> receive(
+            std::function<future<> (packet, ethernet_address)> rx_fn);
     future<> send(ethernet_address to, packet p);
-    future<packet, ethernet_address> receive();
 private:
-    void received(packet p);
     friend class interface;
 };
 
 class interface {
     std::unique_ptr<device> _dev;
     subscription<packet> _rx;
-    std::unordered_map<uint16_t, queue<std::tuple<packet, ethernet_address>>> _proto_map;
+    struct l3_rx_stream {
+        stream<packet, ethernet_address> packet_stream;
+        future<> ready;
+        l3_rx_stream() : ready(packet_stream.started()) {}
+    };
+    std::unordered_map<uint16_t, l3_rx_stream> _proto_map;
     ethernet_address _hw_address;
 private:
     future<> dispatch_packet(packet p);
-    future<packet, ethernet_address> receive(uint16_t proto_num);
     future<> send(uint16_t proto_num, ethernet_address to, packet p);
 public:
     explicit interface(std::unique_ptr<device> dev);
     ethernet_address hw_address() { return _hw_address; }
-    void register_l3(uint16_t proto_num, size_t queue_length = 100);
+    subscription<packet, ethernet_address> register_l3(uint16_t proto_num,
+            std::function<future<> (packet p, ethernet_address from)> next);
     friend class l3_protocol;
 };
 

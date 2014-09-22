@@ -12,25 +12,15 @@ namespace net {
 
 l3_protocol::l3_protocol(interface* netif, uint16_t proto_num)
     : _netif(netif), _proto_num(proto_num) {
-    _netif->register_l3(proto_num, 1000);
 }
 
-future<packet, ethernet_address> l3_protocol::receive() {
-    return _netif->receive(_proto_num);
+subscription<packet, ethernet_address> l3_protocol::receive(
+        std::function<future<> (packet p, ethernet_address from)> rx_fn) {
+    return _netif->register_l3(_proto_num, std::move(rx_fn));
 };
 
 future<> l3_protocol::send(ethernet_address to, packet p) {
     return _netif->send(_proto_num, to, std::move(p));
-}
-
-future<packet, ethernet_address> interface::receive(uint16_t proto_num) {
-    auto i = _proto_map.find(proto_num);
-    assert(i != _proto_map.end());
-    auto& q = i->second;
-    return q.not_empty().then([&q] {
-        auto x = q.pop();
-        return make_ready_future<packet, ethernet_address>(std::move(std::get<0>(x)), std::move(std::get<1>(x)));
-    });
 }
 
 interface::interface(std::unique_ptr<device> dev)
@@ -39,10 +29,13 @@ interface::interface(std::unique_ptr<device> dev)
     , _hw_address(_dev->hw_address()) {
 }
 
-void interface::register_l3(uint16_t proto_num, size_t queue_length) {
-    _proto_map.emplace(std::piecewise_construct,
-                std::make_tuple(proto_num),
-                std::make_tuple(queue_length));
+subscription<packet, ethernet_address>
+interface::register_l3(uint16_t proto_num,
+        std::function<future<> (packet p, ethernet_address from)> next) {
+    auto i = _proto_map.emplace(std::piecewise_construct, std::make_tuple(proto_num), std::make_tuple());
+    assert(i.second);
+    l3_rx_stream& l3_rx = i.first->second;
+    return l3_rx.packet_stream.listen(std::move(next));
 }
 
 future<> interface::dispatch_packet(packet p) {
@@ -50,10 +43,15 @@ future<> interface::dispatch_packet(packet p) {
     if (eh) {
         ntoh(*eh);
         auto i = _proto_map.find(eh->eth_proto);
-        if (i != _proto_map.end() && !i->second.full()) {
+        if (i != _proto_map.end()) {
+            l3_rx_stream& l3 = i->second;
             auto from = eh->src_mac;
             p.trim_front(sizeof(*eh));
-            i->second.push(std::make_tuple(std::move(p), from));
+            // avoid chaining, since queue lenth is unlimited
+            // drop instead.
+            if (l3.ready.available()) {
+                l3.ready = l3.packet_stream.produce(std::move(p), from);
+            }
         } else {
             print("dropping packet: no handler for protcol 0x%x\n", eh->eth_proto);
         }

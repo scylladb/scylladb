@@ -33,6 +33,7 @@ public:
 class arp {
     interface* _netif;
     l3_protocol _proto;
+    subscription<packet, ethernet_address> _rx_packets;
     std::unordered_map<uint16_t, arp_for_protocol*> _arp_for_protocol;
 private:
     struct arp_hdr {
@@ -48,7 +49,7 @@ public:
     void del(uint16_t proto_num);
 private:
     ethernet_address l2self() { return _netif->hw_address(); }
-    void run();
+    future<> process_packet(packet p, ethernet_address from);
     template <class l3_proto>
     friend class arp_for;
 };

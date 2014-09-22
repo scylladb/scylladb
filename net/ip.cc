@@ -22,9 +22,10 @@ ipv4::ipv4(interface* netif)
     , _global_arp(netif)
     , _arp(_global_arp)
     , _l3(netif, 0x0800)
+    , _rx_packets(_l3.receive([this] (packet p, ethernet_address ea) {
+        return handle_received_packet(std::move(p), ea); }))
     , _tcp(*this)
     , _l4({ { 6, &_tcp } }) {
-    run();
 }
 
 bool ipv4::in_my_netmask(ipv4_address a) const {
@@ -32,17 +33,11 @@ bool ipv4::in_my_netmask(ipv4_address a) const {
 }
 
 
-void ipv4::run() {
-    _l3.receive().then([this] (packet p, ethernet_address from) {
-        handle_received_packet(std::move(p), from);
-        run();
-    });
-}
-
-void ipv4::handle_received_packet(packet p, ethernet_address from) {
+future<>
+ipv4::handle_received_packet(packet p, ethernet_address from) {
     auto iph = p.get_header<ip_hdr>(0);
     if (!iph) {
-        return;
+        return make_ready_future<>();
     }
     ntoh(*iph);
     // FIXME: process options
@@ -51,17 +46,18 @@ void ipv4::handle_received_packet(packet p, ethernet_address from) {
     }
     if (iph->frag & 0x3fff) {
         // FIXME: defragment
-        return;
+        return make_ready_future<>();
     }
     if (iph->dst_ip != _host_address) {
         // FIXME: forward
-        return;
+        return make_ready_future<>();
     }
     auto l4 = _l4[iph->ip_proto];
     if (l4) {
         p.trim_front(iph->ihl * 4);
         l4->received(std::move(p), iph->src_ip, iph->dst_ip);
     }
+    return make_ready_future<>();
 }
 
 void ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
