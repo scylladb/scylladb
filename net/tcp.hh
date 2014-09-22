@@ -79,7 +79,7 @@ public:
     class connection;
     class listener;
 private:
-    class connid;
+    struct connid;
     class tcb;
 
     struct connid {
