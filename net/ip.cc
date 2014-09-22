@@ -18,8 +18,7 @@ std::ostream& operator<<(std::ostream& os, ipv4_address a) {
 }
 
 ipv4::ipv4(interface* netif)
-    : _netif(netif)
-    , _global_arp(netif)
+    : _global_arp(netif)
     , _arp(_global_arp)
     , _l3(netif, 0x0800)
     , _rx_packets(_l3.receive([this] (packet p, ethernet_address ea) {

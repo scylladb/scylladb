@@ -100,7 +100,6 @@ public:
     static address_type broadcast_address() { return ipv4_address(0xffffffff); }
     static proto_type arp_protocol_type() { return 0x0800; }
 private:
-    interface* _netif;
     arp _global_arp;
     arp_for<ipv4> _arp;
     ipv4_address _host_address;
