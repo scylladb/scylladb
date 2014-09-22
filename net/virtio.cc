@@ -116,10 +116,6 @@ private:
             no_notify = 1
         };
 
-        bool notifications_disabled() {
-            return (_flags.load(std::memory_order_relaxed) & VRING_USED_F_NO_NOTIFY) != 0;
-        }
-
         // Using std::atomic since it being changed by the host
         std::atomic<uint16_t> _flags;
         // Using std::atomic in order to have memory barriers for it
@@ -134,13 +130,12 @@ private:
     struct avail {
         explicit avail(config conf);
         avail_layout* _shared;
-        std::atomic<uint16_t>* _host_notify_on_index = nullptr;
         uint16_t _head = 0;
+        uint16_t _avail_added_since_kick = 0;
     };
     struct used {
         explicit used(config conf);
         used_layout* _shared;
-        std::atomic<uint16_t>* _notify_on_index = nullptr;
         uint16_t _tail = 0;
     };
 private:
@@ -152,6 +147,8 @@ private:
     desc* _descs;
     avail _avail;
     used _used;
+    std::atomic<uint16_t>* _avail_event;
+    std::atomic<uint16_t>* _used_event;
     semaphore _available_descriptors = { 0 };
     int _free_desc = -1;
 public:
@@ -170,10 +167,59 @@ public:
     // Total number of descriptors in ring
     int size() { return _config.size; }
 
-    // Let host know about interrupt delivery
-    void disable_interrupts();
-    void enable_interrupts();
 private:
+    // Let host know about interrupt delivery
+    void disable_interrupts() {
+        if (!_config.event_index) {
+            _avail._shared->_flags.store(VRING_AVAIL_F_NO_INTERRUPT, std::memory_order_relaxed);
+        }
+    }
+
+    // Return "true" if there are pending buffers in the queue
+    bool enable_interrupts() {
+        auto tail = _used._tail;
+        if (!_config.event_index) {
+            _avail._shared->_flags.store(0, std::memory_order_relaxed);
+        } else {
+            _used_event->store(tail, std::memory_order_relaxed);
+        }
+
+        // We need to set the host notification flag then check if the queue is
+        // empty. The order is important. Use memory fence to make sure other
+        // cores see the same order.
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+
+        // Any pending buffers
+        auto used_head = _used._shared->_idx.load(std::memory_order_relaxed);
+        return used_head != tail;
+    }
+
+    bool interrupts_disabled() {
+        return (_avail._shared->_flags.load(std::memory_order_relaxed) & VRING_AVAIL_F_NO_INTERRUPT) != 0;
+    }
+
+    bool notifications_disabled() {
+        return (_used._shared->_flags.load(std::memory_order_relaxed) & VRING_USED_F_NO_NOTIFY) != 0;
+    }
+
+    void kick() {
+        bool need_kick = true;
+        // Make sure we see the fresh _idx value writen before kick.
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (_config.event_index) {
+            uint16_t avail_idx = _avail._shared->_idx.load(std::memory_order_relaxed);
+            uint16_t avail_event = _avail_event->load(std::memory_order_relaxed);
+            need_kick = (uint16_t)(avail_idx - avail_event - 1) < _avail._avail_added_since_kick;
+        } else {
+            if (notifications_disabled())
+                return;
+        }
+        if (need_kick || (_avail._avail_added_since_kick >= (uint16_t)(~0) / 2)) {
+            _kick.signal(1);
+            _avail._avail_added_since_kick = 0;
+        }
+    }
+
     void produce();
     void do_complete();
     size_t mask() { return size() - 1; }
@@ -217,6 +263,8 @@ vring::vring(config conf, readable_eventfd notified, writeable_eventfd kick,
     , _descs(reinterpret_cast<desc*>(conf.descs))
     , _avail(conf)
     , _used(conf)
+    , _avail_event(reinterpret_cast<std::atomic<uint16_t>*>(&_used._shared->_used_elements[conf.size]))
+    , _used_event(reinterpret_cast<std::atomic<uint16_t>*>(&_avail._shared->_ring[conf.size]))
 {
     setup();
 }
@@ -252,29 +300,33 @@ void vring::produce() {
             }
             auto desc_head = prev_desc_idx;
             _avail._shared->_ring[masked(_avail._head++)] = desc_head;
+            _avail._avail_added_since_kick++;
         }
         _avail._shared->_idx.store(_avail._head, std::memory_order_release);
-        _kick.signal(1);
+        kick();
         do_complete();
         produce();
     });
 }
 
 void vring::do_complete() {
-    auto used_head = _used._shared->_idx.load(std::memory_order_acquire);
-    while (used_head != _used._tail) {
-        auto ue = _used._shared->_used_elements[masked(_used._tail++)];
-        _completions[ue._id].set_value(ue._len);
-        auto id = ue._id;
-        auto has_next = true;
-        while (has_next) {
-            auto& d = _descs[id];
-            auto next = d._next;
-            has_next = d._flags.has_next;
-            free_desc(id);
-            id = next;
+    do {
+        disable_interrupts();
+        auto used_head = _used._shared->_idx.load(std::memory_order_acquire);
+        while (used_head != _used._tail) {
+            auto ue = _used._shared->_used_elements[masked(_used._tail++)];
+            _completions[ue._id].set_value(ue._len);
+            auto id = ue._id;
+            auto has_next = true;
+            while (has_next) {
+                auto& d = _descs[id];
+                auto next = d._next;
+                has_next = d._flags.has_next;
+                free_desc(id);
+                id = next;
+            }
         }
-    }
+    } while (enable_interrupts());
 }
 
 void vring::complete() {
@@ -458,9 +510,8 @@ virtio_net_device::virtio_net_device(sstring tap_device, init x)
     region.userspace_addr = 0;
     region.flags_padding = 0;
     _vhost_fd.ioctl(VHOST_SET_MEM_TABLE, *mem_table);
-    uint64_t features =
-            /* VIRTIO_RING_F_EVENT_IDX
-            | */ VIRTIO_RING_F_INDIRECT_DESC
+    uint64_t features = VIRTIO_RING_F_EVENT_IDX
+            |  VIRTIO_RING_F_INDIRECT_DESC
             /* | VIRTIO_NET_F_MRG_RXBUF */;
     _vhost_fd.ioctl(VHOST_SET_FEATURES, features);
     vhost_vring_state vvs0 = { 0, 256 };
@@ -492,7 +543,7 @@ vring::config virtio_net_device::txq_config() {
     r.avail = r.descs + 16 * size;
     r.used = align_up(r.avail + 2 * size + 6, 4096);
     r.size = size;
-    r.event_index = !true;
+    r.event_index = true;
     r.indirect = false;
     r.mergable_buffers = false;
     return r;
@@ -505,7 +556,7 @@ vring::config virtio_net_device::rxq_config() {
     r.avail = r.descs + 16 * size;
     r.used = align_up(r.avail + 2 * size + 6, 4096);
     r.size = size;
-    r.event_index = !true;
+    r.event_index = true;
     r.indirect = false;
     r.mergable_buffers = true;
     return r;
