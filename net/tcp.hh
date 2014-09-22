@@ -489,7 +489,7 @@ void tcp<InetTraits>::tcb::output() {
     th->f_urg = false;
     th->f_psh = false;
 
-    th->seq = _snd.unacknowledged;
+    th->seq = _snd.next;
     th->ack = _rcv.next;
     th->data_offset = sizeof(*th) / 4; // FIXME: options
     th->window = _rcv.window;
