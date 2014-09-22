@@ -290,6 +290,10 @@ packet::packet(packet&& x, fragment frag, Deleter d)
 
 inline
 void packet::append(packet&& p) {
+    if (!_impl->_len) {
+        *this = std::move(p);
+        return;
+    }
     _impl = impl::allocate_if_needed(std::move(_impl), p._impl->_nr_frags);
     _impl->_len += p._impl->_len;
     std::copy(p._impl->_frags, p._impl->_frags + p._impl->_nr_frags,
