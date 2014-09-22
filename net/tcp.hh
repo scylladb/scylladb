@@ -502,7 +502,7 @@ void tcp<InetTraits>::tcb::output() {
     th->f_fin = _snd.closed && _snd.unsent_len == 0;
     _local_fin_sent |= th->f_fin;
 
-    ntoh(*th);
+    hton(*th);
 
     checksummer csum;
     InetTraits::pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + len);
