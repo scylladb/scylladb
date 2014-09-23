@@ -112,6 +112,8 @@ public:
     // zero-copy single fragment
     template <typename Deleter>
     packet(fragment frag, Deleter deleter);
+    // zero-copy single fragment
+    packet(fragment frag, std::unique_ptr<deleter> del);
     // zero-copy multiple fragment
     template <typename Deleter>
     packet(std::vector<fragment> frag, Deleter deleter);
@@ -209,6 +211,14 @@ inline
 packet::packet(fragment frag, Deleter d)
     : _impl(impl::allocate(1)) {
     _impl->_deleter = make_deleter(std::unique_ptr<deleter>(), std::move(d));
+    _impl->_frags[_impl->_nr_frags++] = frag;
+    _impl->_len = frag.size;
+}
+
+inline
+packet::packet(fragment frag, std::unique_ptr<deleter> d)
+    : _impl(impl::allocate(1)) {
+    _impl->_deleter = std::move(d);
     _impl->_frags[_impl->_nr_frags++] = frag;
     _impl->_len = frag.size;
 }
