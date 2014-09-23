@@ -10,6 +10,7 @@ constexpr size_t packet::internal_data_size;
 constexpr size_t packet::default_nr_frags;
 
 void packet::linearize(size_t at_frag, size_t desired_size) {
+    _impl->unuse_internal_data();
     size_t nr_frags = 0;
     size_t accum_size = 0;
     while (accum_size < desired_size) {
