@@ -31,17 +31,6 @@ struct deleter::impl {
     virtual ~impl() {}
 };
 
-struct internal_deleter final : deleter::impl {
-    // FIXME: make buf an std::array<>?
-    char* buf;
-    unsigned free_head;
-    internal_deleter(deleter next, char* buf, unsigned free_head)
-        : impl(std::move(next)), buf(buf), free_head(free_head) {}
-    explicit internal_deleter(deleter next, size_t internal_data_size)
-        : internal_deleter(std::move(next), new char[internal_data_size], internal_data_size) {}
-    virtual ~internal_deleter() override { delete[] buf; }
-};
-
 template <typename Deleter>
 struct lambda_deleter_impl final : deleter::impl {
     Deleter del;
