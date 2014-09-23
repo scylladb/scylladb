@@ -198,7 +198,6 @@ public:
     char* prepend_uninitialized_header(size_t size);
 private:
     void linearize(size_t at_frag, size_t desired_size);
-    std::unique_ptr<shared_deleter_impl> do_share();
     bool allocate_headroom(size_t size);
 };
 
@@ -448,18 +447,6 @@ char* packet::prepend_uninitialized_header(size_t size) {
 }
 
 inline
-std::unique_ptr<shared_deleter_impl>
-packet::do_share() {
-    auto sd = dynamic_cast<shared_deleter_impl*>(_impl->_deleter.get());
-    if (!sd) {
-        auto usd = std::make_unique<shared_deleter_impl>(std::move(_impl->_deleter));
-        sd = usd.get();
-        _impl->_deleter.reset(usd.release());
-    }
-    return std::make_unique<shared_deleter_impl>(*sd);
-}
-
-inline
 packet packet::share() {
     return share(0, _impl->_len);
 }
@@ -481,7 +468,7 @@ packet packet::share(size_t offset, size_t len) {
         offset = 0;
     }
     assert(!n._impl->_deleter);
-    n._impl->_deleter.reset(do_share().release());
+    n._impl->_deleter = _impl->_deleter.share();
     return n;
 }
 

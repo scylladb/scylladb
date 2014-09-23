@@ -11,25 +11,49 @@ class deleter {
 public:
     struct impl;
 private:
-    std::unique_ptr<impl> _impl;
+    impl* _impl = nullptr;
 public:
     deleter() = default;
-    deleter(deleter&&) = default;
+    deleter(const deleter&) = delete;
+    deleter(deleter&& x) : _impl(x._impl) { x._impl = nullptr; }
     explicit deleter(impl* i) : _impl(i) {}
-    deleter& operator=(deleter&&) = default;
+    ~deleter();
+    deleter& operator=(deleter&& x);
+    deleter& operator=(deleter&) = delete;
     impl& operator*() const { return *_impl; }
-    impl* operator->() const { return _impl.get(); }
-    impl* get() const { return _impl.get(); }
-    void reset(impl* n) { _impl.reset(n); }
-    impl* release() { return _impl.release(); }
+    impl* operator->() const { return _impl; }
+    impl* get() const { return _impl; }
+    void unshare();
+    deleter share();
     explicit operator bool() const { return bool(_impl); }
+    void reset(impl* i) {
+        this->~deleter();
+        new (this) deleter(i);
+    }
 };
 
 struct deleter::impl {
+    unsigned refs = 1;
     deleter next;
     impl(deleter next) : next(std::move(next)) {}
     virtual ~impl() {}
 };
+
+inline
+deleter::~deleter() {
+    if (_impl && --_impl->refs == 0) {
+        delete _impl;
+    }
+}
+
+inline
+deleter& deleter::operator=(deleter&& x) {
+    if (this != &x) {
+        this->~deleter();
+        new (this) deleter(std::move(x));
+    }
+    return *this;
+}
 
 template <typename Deleter>
 struct lambda_deleter_impl final : deleter::impl {
@@ -45,41 +69,14 @@ make_deleter(deleter next, Deleter d) {
     return deleter(new lambda_deleter_impl<Deleter>(std::move(next), std::move(d)));
 }
 
-struct shared_deleter_impl : deleter::impl {
-    long* _count;
-    deleter::impl* _deleter;
-    shared_deleter_impl(deleter d)
-        : impl(deleter()), _count(new long(1)), _deleter(d.release()) {}
-    shared_deleter_impl(const shared_deleter_impl& x)
-        : impl(deleter()), _count(x._count), _deleter(x._deleter) {
-        if (_count) {
-            ++*_count;
-        }
-    }
-    shared_deleter_impl(shared_deleter_impl&& x)
-        : impl(deleter()), _count(x._count), _deleter(x._deleter) {
-        x._count = nullptr;
-        x._deleter = nullptr;
-    }
-    void operator=(const shared_deleter_impl&) = delete;
-    void operator=(shared_deleter_impl&&) = delete;
-    virtual ~shared_deleter_impl() {
-        if (_count && --*_count == 0) {
-            delete _deleter;
-            delete _count;
-        }
-    }
-    bool owned() const { return *_count == 1; }
-};
-
 inline
-deleter share(deleter& d) {
-    auto sd = dynamic_cast<shared_deleter_impl*>(d.get());
-    if (!sd) {
-        sd = new shared_deleter_impl(std::move(d));
-        d.reset(sd);
+deleter
+deleter::share() {
+    if (!_impl) {
+        return deleter();
     }
-    return deleter(new shared_deleter_impl(*sd));
+    ++_impl->refs;
+    return deleter(_impl);
 }
 
 #endif /* DELETER_HH_ */

@@ -55,8 +55,7 @@ public:
     }
     bool empty() const { return !size(); }
     temporary_buffer share() {
-        auto d = ::share(_deleter);
-        return temporary_buffer(_buffer, _size, std::move(d));
+        return temporary_buffer(_buffer, _size, _deleter.share());
     }
     temporary_buffer share(size_t pos, size_t len) {
         auto ret = share();
