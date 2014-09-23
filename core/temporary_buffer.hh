@@ -73,6 +73,9 @@ public:
     void trim(size_t pos) {
         _size = pos;
     }
+    std::unique_ptr<deleter> release() {
+        return std::move(_deleter);
+    }
 };
 
 #endif /* TEMPORARY_BUFFER_HH_ */
