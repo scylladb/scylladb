@@ -126,6 +126,9 @@ public:
         }
         return _conn.send(packet(std::move(frags), [tmp = std::move(data)] () mutable {}));
     }
+    virtual future<> put(temporary_buffer<char> data) override {
+        return _conn.send(packet({data.get_write(), data.size()}, data.release()));
+    }
 };
 
 template <typename Protocol>
