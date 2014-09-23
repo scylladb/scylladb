@@ -451,6 +451,12 @@ class data_sink_impl {
 public:
     virtual ~data_sink_impl() {}
     virtual future<> put(std::vector<temporary_buffer<char>> data) = 0;
+    virtual future<> put(temporary_buffer<char> data) {
+        std::vector<temporary_buffer<char>> v;
+        v.reserve(1);
+        v.push_back(std::move(data));
+        return put(std::move(v));
+    }
 };
 
 class data_sink {
@@ -462,10 +468,7 @@ public:
         return _dsi->put(std::move(data));
     }
     future<> put(temporary_buffer<char> data) {
-        std::vector<temporary_buffer<char>> v;
-        v.reserve(1);
-        v.push_back(std::move(data));
-        return put(std::move(v));
+        return _dsi->put(std::move(data));
     }
 };
 
