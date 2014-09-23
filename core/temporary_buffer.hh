@@ -15,10 +15,10 @@ class temporary_buffer {
     static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
     CharType* _buffer;
     size_t _size;
-    std::unique_ptr<deleter> _deleter;
+    deleter _deleter;
 public:
     explicit temporary_buffer(size_t size)
-        : _buffer(new CharType[size]), _size(size), _deleter(new internal_deleter(nullptr, _buffer, size)) {}
+        : _buffer(new CharType[size]), _size(size), _deleter(new internal_deleter(deleter(), _buffer, size)) {}
     //explicit temporary_buffer(CharType* borrow, size_t size) : _buffer(borrow), _size(size) {}
     temporary_buffer() = delete;
     temporary_buffer(const temporary_buffer&) = delete;
@@ -26,7 +26,7 @@ public:
         x._buffer = nullptr;
         x._size = 0;
     }
-    temporary_buffer(CharType* buf, size_t size, std::unique_ptr<deleter> d)
+    temporary_buffer(CharType* buf, size_t size, deleter d)
         : _buffer(buf), _size(size), _deleter(std::move(d)) {}
     void operator=(const temporary_buffer&) = delete;
     temporary_buffer& operator=(temporary_buffer&& x) {
@@ -73,7 +73,7 @@ public:
     void trim(size_t pos) {
         _size = pos;
     }
-    std::unique_ptr<deleter> release() {
+    deleter release() {
         return std::move(_deleter);
     }
 };

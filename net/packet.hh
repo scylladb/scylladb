@@ -56,7 +56,7 @@ class packet final {
 
     struct impl {
         // when destroyed, virtual destructor will reclaim resources
-        std::unique_ptr<deleter> _deleter;
+        deleter _deleter;
         unsigned _len = 0;
         uint16_t _nr_frags = 0;
         uint16_t _allocated_frags;
@@ -113,7 +113,7 @@ public:
     template <typename Deleter>
     packet(fragment frag, Deleter deleter);
     // zero-copy single fragment
-    packet(fragment frag, std::unique_ptr<deleter> del);
+    packet(fragment frag, deleter del);
     // zero-copy multiple fragment
     template <typename Deleter>
     packet(std::vector<fragment> frag, Deleter deleter);
@@ -168,7 +168,7 @@ public:
     char* prepend_uninitialized_header(size_t size);
 private:
     void linearize(size_t at_frag, size_t desired_size);
-    std::unique_ptr<shared_deleter> do_share();
+    std::unique_ptr<shared_deleter_impl> do_share();
 };
 
 inline
@@ -189,7 +189,7 @@ packet::impl::impl(fragment frag, size_t nr_frags)
     std::copy(frag.base, frag.base + frag.size, buf.get() + flen - frag.size);
     assert(_allocated_frags > _nr_frags);
     _frags[_nr_frags++] = {buf.get() + flen - frag.size, frag.size};
-    _deleter.reset(new internal_deleter(std::unique_ptr<deleter>(),
+    _deleter.reset(new internal_deleter(deleter(),
             buf.release(), flen - frag.size));
 }
 
@@ -210,13 +210,13 @@ template <typename Deleter>
 inline
 packet::packet(fragment frag, Deleter d)
     : _impl(impl::allocate(1)) {
-    _impl->_deleter = make_deleter(std::unique_ptr<deleter>(), std::move(d));
+    _impl->_deleter = make_deleter(deleter(), std::move(d));
     _impl->_frags[_impl->_nr_frags++] = frag;
     _impl->_len = frag.size;
 }
 
 inline
-packet::packet(fragment frag, std::unique_ptr<deleter> d)
+packet::packet(fragment frag, deleter d)
     : _impl(impl::allocate(1)) {
     _impl->_deleter = std::move(d);
     _impl->_frags[_impl->_nr_frags++] = frag;
@@ -227,7 +227,7 @@ template <typename Deleter>
 inline
 packet::packet(std::vector<fragment> frag, Deleter d)
     : _impl(impl::allocate(frag.size())) {
-    _impl->_deleter = make_deleter(std::unique_ptr<deleter>(), std::move(d));
+    _impl->_deleter = make_deleter(deleter(), std::move(d));
     std::copy(frag.begin(), frag.end(), _impl->_frags);
     _impl->_nr_frags = frag.size();
     _impl->_len = 0;
@@ -374,7 +374,7 @@ packet::prepend_header(size_t size) {
 inline
 char* packet::prepend_uninitialized_header(size_t size) {
     if (_impl->_len == 0) {
-        auto id = std::make_unique<internal_deleter>(nullptr, internal_data_size);
+        auto id = std::make_unique<internal_deleter>(deleter(), internal_data_size);
         _impl->_nr_frags = 1;
         _impl->_frags[0] = {id->buf + id->free_head, 0};
         _impl->_deleter.reset(id.release());
@@ -400,15 +400,15 @@ char* packet::prepend_uninitialized_header(size_t size) {
 }
 
 inline
-std::unique_ptr<shared_deleter>
+std::unique_ptr<shared_deleter_impl>
 packet::do_share() {
-    auto sd = dynamic_cast<shared_deleter*>(_impl->_deleter.get());
+    auto sd = dynamic_cast<shared_deleter_impl*>(_impl->_deleter.get());
     if (!sd) {
-        auto usd = std::make_unique<shared_deleter>(std::move(_impl->_deleter));
+        auto usd = std::make_unique<shared_deleter_impl>(std::move(_impl->_deleter));
         sd = usd.get();
-        _impl->_deleter = std::move(usd);
+        _impl->_deleter.reset(usd.release());
     }
-    return std::make_unique<shared_deleter>(*sd);
+    return std::make_unique<shared_deleter_impl>(*sd);
 }
 
 inline
@@ -432,7 +432,7 @@ packet packet::share(size_t offset, size_t len) {
         offset = 0;
     }
     assert(!n._impl->_deleter);
-    n._impl->_deleter = do_share();
+    n._impl->_deleter.reset(do_share().release());
     return n;
 }
 

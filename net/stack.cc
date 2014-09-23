@@ -100,7 +100,7 @@ public:
             auto& f = _buf.fragments()[_cur_frag++];
             return make_ready_future<temporary_buffer<char>>(
                     temporary_buffer<char>(f.base, f.size,
-                            make_deleter(nullptr, [p = _buf.share()] () mutable {})));
+                            make_deleter(deleter(), [p = _buf.share()] () mutable {})));
         }
         return _conn.wait_for_data().then([this] {
             _buf = _conn.read();
