@@ -18,7 +18,8 @@ class temporary_buffer {
     deleter _deleter;
 public:
     explicit temporary_buffer(size_t size)
-        : _buffer(new CharType[size]), _size(size), _deleter(new internal_deleter(deleter(), _buffer, size)) {}
+        : _buffer(new CharType[size]), _size(size)
+        , _deleter(make_deleter(deleter(), [b = _buffer] { delete[] b; })) {}
     //explicit temporary_buffer(CharType* borrow, size_t size) : _buffer(borrow), _size(size) {}
     temporary_buffer() = delete;
     temporary_buffer(const temporary_buffer&) = delete;
@@ -44,9 +45,6 @@ public:
     size_t size() const { return _size; }
     const CharType* begin() { return _buffer; }
     const CharType* end() { return _buffer + _size; }
-    bool owning() const {
-        return _deleter && dynamic_cast<internal_deleter*>(_deleter.get());
-    }
     temporary_buffer prefix(size_t size) RREF {
         auto ret = std::move(*this);
         ret._size = size;
