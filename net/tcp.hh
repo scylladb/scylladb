@@ -502,8 +502,10 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::output() {
     packet p = get_transmit_packet();
-    auto save = p.share();
     auto len = p.len();
+    if (len) {
+        _snd.data.push_back(p.share());
+    }
 
     auto th = p.prepend_header<tcp_hdr>();
     th->src_port = _local_port;
@@ -525,7 +527,6 @@ void tcp<InetTraits>::tcb::output() {
     th->checksum = 0;
 
     _snd.next += len;
-    _snd.data.push_back(std::move(save));
 
     // FIXME: does the FIN have to fit in the window?
     th->f_fin = _snd.closed && _snd.unsent_len == 0;
