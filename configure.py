@@ -69,6 +69,8 @@ arg_parser.add_argument('--static', dest = 'libstdcxx', action = 'store_const', 
                         help = 'Use static libstdc++ (useful for running on hosts outside the build environment')
 arg_parser.add_argument('--mode', action='store', choices=list(modes.keys()) + ['all'], default='all')
 arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
+arg_parser.add_argument('--cflags', action = 'store', dest = 'user_cflags', default = '',
+                        help = 'Extra flags for the C++ compiler')
 args = arg_parser.parse_args()
 globals().update(vars(args))
 
@@ -83,7 +85,7 @@ with open(buildfile, 'w') as f:
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = g++
-        cxxflags = -std=gnu++1y -g -Wall -Werror -fvisibility=hidden -pthread -I.
+        cxxflags = -std=gnu++1y -g -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags}
         ldflags = -Wl,--no-as-needed {libstdcxx}
         libs = {libs}
         ''').format(**globals()))
