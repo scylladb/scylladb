@@ -329,13 +329,21 @@ class inter_thread_work_queue {
         virtual void process() = 0;
         virtual void complete() = 0;
     };
+    template <typename Func>
+    struct work_item_void : public work_item {
+        promise<> _promise;
+        Func _func;
+        work_item_void(Func&& func) : _func(std::move(func)) {}
+        virtual void process() override { _func(); }
+        virtual void complete() override { _promise.set_value(); }
+        future<> get_future() { return _promise.get_future(); }
+    };
     template <typename T, typename Func>
-    struct work_item_returning : work_item {
+    struct work_item_returning : public work_item_void<Func> {
         promise<T> _promise;
         boost::optional<T> _result;
-        Func _func;
-        work_item_returning(Func&& func) : _func(std::move(func)) {}
-        virtual void process() override { _result = _func(); }
+        work_item_returning(Func&& func) : work_item_void<Func>(std::move(func)) {}
+        virtual void process() override { _result = this->_func(); }
         virtual void complete() override { _promise.set_value(std::move(*_result)); }
         future<T> get_future() { return _promise.get_future(); }
     };
@@ -344,6 +352,13 @@ public:
     template <typename T, typename Func>
     future<T> submit(Func func) {
         auto wi = new work_item_returning<T, Func>(std::move(func));
+        auto fut = wi->get_future();
+        submit_item(wi);
+        return fut;
+    }
+    template <typename Func>
+    future<> submit(Func func) {
+        auto wi = new work_item_void<Func>(std::move(func));
         auto fut = wi->get_future();
         submit_item(wi);
         return fut;
@@ -463,8 +478,8 @@ class smp {
 public:
 	static boost::program_options::options_description get_options_description();
 	static void configure(boost::program_options::variables_map vm);
-	template <typename T, typename Func>
-	static future<T> submit_to(int t, Func func) {return _qs[t][engine._id].submit<T>(std::move(func));}
+	template <typename... T, typename Func>
+	static future<T...> submit_to(int t, Func func) {return _qs[t][engine._id].submit<T...>(std::move(func));}
 private:
 	static void listen_all(inter_thread_work_queue* qs);
 	static void listen_one(inter_thread_work_queue& q, std::unique_ptr<readable_eventfd>&& rfd, std::unique_ptr<writeable_eventfd>&& wfd);
