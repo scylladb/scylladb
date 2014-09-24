@@ -15,6 +15,8 @@ apps = [
     'apps/seastar/seastar',
     ]
 
+all_artifacts = apps + tests
+
 libnet = [
     'net/virtio.cc',
     'net/net.cc',
@@ -66,10 +68,12 @@ arg_parser.add_argument('--static', dest = 'libstdcxx', action = 'store_const', 
                         const = '-static-libstdc++',
                         help = 'Use static libstdc++ (useful for running on hosts outside the build environment')
 arg_parser.add_argument('--mode', action='store', choices=list(modes.keys()) + ['all'], default='all')
+arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
 args = arg_parser.parse_args()
 globals().update(vars(args))
 
 build_modes = modes if args.mode == 'all' else [args.mode]
+build_artifacts = all_artifacts if not args.artifacts else args.artifacts
 
 outdir = 'build'
 buildfile = 'build.ninja'
@@ -97,7 +101,7 @@ with open(buildfile, 'w') as f:
               description = LINK $out
             ''').format(mode = mode, **modeval))
         compiles = {}
-        for binary in apps + tests:
+        for binary in build_artifacts:
             srcs = deps[binary]
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o') for src in srcs]
             f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
