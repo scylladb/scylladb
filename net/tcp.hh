@@ -457,23 +457,45 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
 
 template <typename InetTraits>
 packet tcp<InetTraits>::tcb::get_transmit_packet() {
-    packet p;
+    // easy case: empty queue
+    if (_snd.unsent.empty()) {
+        return packet();
+    }
     auto can_send = std::min(
             uint32_t(_snd.unacknowledged + _snd.window - _snd.next),
             _snd.unsent_len);
     auto mss = 1400U;
     can_send = std::min(can_send, mss);
-    while (can_send) {
-        auto& q = _snd.unsent.front();
-        auto now = std::min(can_send, q.len());
-        p.append(q.share(0, now));
-        q.trim_front(now);
-        if (!q.len()) {
-            _snd.unsent.pop_front();
-        }
-        _snd.unsent_len -= now;
-        can_send -= now;
+    // easy case: one small packet
+    if (_snd.unsent.size() == 1 && _snd.unsent.front().len() <= can_send) {
+        auto p = std::move(_snd.unsent.front());
+        _snd.unsent.pop_front();
+        _snd.unsent_len -= p.len();
+        return p;
     }
+    // moderate case: need to split one packet
+    if (_snd.unsent.front().len() > can_send) {
+        auto p = _snd.unsent.front().share(0, can_send);
+        _snd.unsent.front().trim_front(can_send);
+        _snd.unsent_len -= p.len();
+        return p;
+    }
+    // hard case: merge some packets, possibly split last
+    auto p = std::move(_snd.unsent.front());
+    _snd.unsent.pop_front();
+    can_send -= p.len();
+    while (!_snd.unsent.empty()
+            && _snd.unsent.front().len() <= can_send) {
+        can_send -= _snd.unsent.front().len();
+        p.append(std::move(_snd.unsent.front()));
+        _snd.unsent.pop_front();
+    }
+    if (!_snd.unsent.empty() && can_send) {
+        auto& q = _snd.unsent.front();
+        p.append(q.share(0, can_send));
+        q.trim_front(can_send);
+    }
+    _snd.unsent_len -= p.len();
     return p;
 }
 
