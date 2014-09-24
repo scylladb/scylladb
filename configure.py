@@ -1,31 +1,45 @@
 #!/usr/bin/python3
 
-tests = 'tests/test-reactor tests/fileiotest tests/virtiotest tests/l3_test'
-tests += ' tests/ip_test tests/timertest tests/tcp_test'
+tests = [
+    'tests/test-reactor',
+    'tests/fileiotest',
+    'tests/virtiotest',
+    'tests/l3_test',
+    'tests/ip_test',
+    'tests/timertest',
+    'tests/tcp_test',
+    ]
 
-apps = 'apps/httpd/httpd apps/seastar/seastar'
+apps = [
+    'apps/httpd/httpd',
+    'apps/seastar/seastar',
+    ]
 
-libnet = 'net/virtio.cc net/net.cc net/ip.cc net/ethernet.cc net/arp.cc'
-libnet += ' net/stack.cc net/packet.cc net/ip_checksum.cc'
+libnet = [
+    'net/virtio.cc',
+    'net/net.cc',
+    'net/ip.cc',
+    'net/ethernet.cc',
+    'net/arp.cc',
+    'net/stack.cc',
+    'net/packet.cc',
+    'net/ip_checksum.cc',
+    ]
+
+core = [
+    'core/reactor.cc'
+    ]
 
 deps = {
-    'apps/seastar/seastar': 'apps/seastar/main.cc core/reactor.cc',
-    'tests/test-reactor': 'tests/test-reactor.cc core/reactor.cc',
-    'apps/httpd/httpd': 'apps/httpd/httpd.cc core/reactor.cc ' + libnet,
-    'tests/fileiotest': 'tests/fileiotest.cc core/reactor.cc',
-    'tests/virtiotest': ('tests/virtiotest.cc net/virtio.cc core/reactor.cc'
-                        + ' net/net.cc net/ip.cc net/ethernet.cc net/arp.cc net/packet.cc'
-                        + ' net/ip_checksum.cc'),
-    'tests/l3_test': ('tests/l3_test.cc net/virtio.cc core/reactor.cc net/net.cc'
-                      + ' net/ip.cc net/ethernet.cc net/arp.cc'
-                      + ' net/packet.cc net/ip_checksum.cc'),
-    'tests/ip_test': ('tests/ip_test.cc net/virtio.cc core/reactor.cc net/net.cc'
-                      + ' net/ip.cc net/arp.cc net/ethernet.cc net/packet.cc'
-                      + ' net/ip_checksum.cc'),
-    'tests/tcp_test': ('tests/tcp_test.cc net/virtio.cc core/reactor.cc net/net.cc'
-                       + ' net/ip.cc net/arp.cc net/ethernet.cc net/packet.cc'
-                       + ' net/ip_checksum.cc'),
-    'tests/timertest': 'tests/timertest.cc core/reactor.cc',
+    'apps/seastar/seastar': ['apps/seastar/main.cc'] + core,
+    'tests/test-reactor': ['tests/test-reactor.cc'] + core,
+    'apps/httpd/httpd': ['apps/httpd/httpd.cc'] + libnet + core,
+    'tests/fileiotest': ['tests/fileiotest.cc'] + core,
+    'tests/virtiotest': ['tests/virtiotest.cc'] + core + libnet,
+    'tests/l3_test': ['tests/l3_test.cc'] + core + libnet,
+    'tests/ip_test': ['tests/ip_test.cc'] + core + libnet,
+    'tests/tcp_test': ['tests/tcp_test.cc'] + core + libnet,
+    'tests/timertest': ['tests/timertest.cc'] + core,
 }
 
 modes = {
@@ -83,8 +97,8 @@ with open(buildfile, 'w') as f:
               description = LINK $out
             ''').format(mode = mode, **modeval))
         compiles = {}
-        for binary in apps.split() + tests.split():
-            srcs = deps[binary].split()
+        for binary in apps + tests:
+            srcs = deps[binary]
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o') for src in srcs]
             f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             for src in srcs:
