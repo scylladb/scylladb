@@ -16,7 +16,6 @@
 #include <queue>
 #include <fcntl.h>
 #include <linux/vhost.h>
-#include <net/if.h>
 #include <linux/if_tun.h>
 #include "ip.hh"
 

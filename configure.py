@@ -25,14 +25,15 @@ libnet = [
     'net/ethernet.cc',
     'net/arp.cc',
     'net/stack.cc',
-    'net/packet.cc',
     'net/ip_checksum.cc',
+    'net/udp.cc',
     ]
 
 core = [
     'core/reactor.cc',
     'core/posix.cc',
     'core/memory.cc',
+    'net/packet.cc',
     ]
 
 deps = {
