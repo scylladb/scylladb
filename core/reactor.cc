@@ -262,8 +262,21 @@ void reactor::run() {
     _io_eventfd.wait().then([this] (size_t count) {
         process_io(count);
     });
-    if (_handle_sigint) {
-        receive_signal(SIGINT).then([this] { _stopped = true; });
+    if (_handle_sigint && _id == 0) {
+        receive_signal(SIGINT).then([this] {
+            auto sem = new semaphore(0);
+            for (unsigned i = 1; i < smp::count; i++) {
+                smp::submit_to<>(i, []() {
+                    engine._stopped = true;
+                }).then([sem, i]() {
+                    sem->signal();
+                });
+            }
+            sem->wait(smp::count - 1).then([sem, this](){
+                _stopped = true;
+                delete sem;
+            });
+        });
     }
     std::vector<std::unique_ptr<task>> current_tasks;
     _start_promise.set_value();
@@ -278,6 +291,9 @@ void reactor::run() {
             current_tasks.clear();
         }
         if (_stopped) {
+            if (_id == 0) {
+                smp::join_all();
+            }
             break;
         }
         std::array<epoll_event, 128> eevt;
@@ -581,6 +597,13 @@ void smp::configure(boost::program_options::variables_map configuration)
             }, i);
         }
         listen_all(_qs[0]);
+    }
+}
+
+void smp::join_all()
+{
+    for (auto&& t: smp::_threads) {
+        t.join();
     }
 }
 

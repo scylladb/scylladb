@@ -478,6 +478,7 @@ class smp {
 public:
 	static boost::program_options::options_description get_options_description();
 	static void configure(boost::program_options::variables_map vm);
+	static void join_all();
 	template <typename... T, typename Func>
 	static future<T...> submit_to(int t, Func func) {return _qs[t][engine._id].submit<T...>(std::move(func));}
 private:
