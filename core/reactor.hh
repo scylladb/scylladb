@@ -435,7 +435,6 @@ private:
     friend class pollable_fd;
     friend class pollable_fd_state;
     friend class file;
-    friend class thread_pool;
     friend class readable_eventfd;
     friend class timer;
 };
