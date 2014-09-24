@@ -8,6 +8,7 @@
 #include "apply.hh"
 #include <stdexcept>
 #include <memory>
+#include <assert.h>
 
 template <class... T>
 class promise;

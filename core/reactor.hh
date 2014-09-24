@@ -34,10 +34,10 @@
 #include "sstring.hh"
 #include "timer-set.hh"
 #include "deleter.hh"
+#include "net/api.hh"
 #include "temporary_buffer.hh"
 #include "circular_buffer.hh"
 
-class socket_address;
 class reactor;
 class pollable_fd;
 class pollable_fd_state;
@@ -48,43 +48,6 @@ class input_stream;
 
 template <typename CharType>
 class output_stream;
-
-struct ipv4_addr {
-    uint32_t ip;
-    uint16_t port;
-
-    ipv4_addr(uint32_t ip, uint16_t port) : ip(ip), port(port) {}
-    ipv4_addr(uint16_t port) : ip(0), port(port) {}
-    ipv4_addr(socket_address& sa) {
-        ip = sa.u.in.sin_addr.s_addr;
-        ntoh(ip);
-        port = sa.u.in.sin_port;
-        ntoh(port);
-    }
-};
-
-static inline
-socket_address make_ipv4_address(ipv4_addr addr) {
-    socket_address sa;
-    sa.u.in.sin_family = AF_INET;
-    sa.u.in.sin_port = htons(addr.port);
-    sa.u.in.sin_addr.s_addr = htonl(addr.ip);
-    return sa;
-}
-
-class socket_address {
-private:
-    union {
-        ::sockaddr_storage sas;
-        ::sockaddr sa;
-        ::sockaddr_in in;
-    } u;
-    friend socket_address make_ipv4_address(ipv4_addr addr);
-    friend class reactor;
-public:
-    ::sockaddr& as_posix_sockaddr() { return u.sa; }
-    ::sockaddr_in& as_posix_sockaddr_in() { return u.in; }
-};
 
 struct free_deleter {
     void operator()(void* p) { ::free(p); }
@@ -99,10 +62,6 @@ std::unique_ptr<CharType[], free_deleter> allocate_aligned_buffer(size_t size, s
     assert(r == 0);
     return std::unique_ptr<CharType[], free_deleter>(reinterpret_cast<CharType*>(ret));
 }
-
-struct listen_options {
-    bool reuse_address = false;
-};
 
 class semaphore {
 private:
