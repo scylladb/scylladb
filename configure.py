@@ -51,8 +51,11 @@ arg_parser = argparse.ArgumentParser('Configure seastar')
 arg_parser.add_argument('--static', dest = 'libstdcxx', action = 'store_const', default = '',
                         const = '-static-libstdc++',
                         help = 'Use static libstdc++ (useful for running on hosts outside the build environment')
+arg_parser.add_argument('--mode', action='store', choices=list(modes.keys()) + ['all'], default='all')
 args = arg_parser.parse_args()
 globals().update(vars(args))
+
+build_modes = modes if args.mode == 'all' else [args.mode]
 
 outdir = 'build'
 buildfile = 'build.ninja'
@@ -66,7 +69,7 @@ with open(buildfile, 'w') as f:
         ldflags = -Wl,--no-as-needed {libstdcxx}
         libs = {libs}
         ''').format(**globals()))
-    for mode in ['debug', 'release']:
+    for mode in build_modes:
         modeval = modes[mode]
         f.write(textwrap.dedent('''\
             cxxflags_{mode} = {sanitize} {opt}
