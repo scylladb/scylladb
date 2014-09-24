@@ -377,6 +377,10 @@ thread_pool::~thread_pool() {
     _worker_thread.join();
 }
 
+readable_eventfd writeable_eventfd::read_side() {
+    return readable_eventfd(_fd.dup());
+}
+
 file_desc writeable_eventfd::try_create_eventfd(size_t initial) {
     assert(size_t(int(initial)) == initial);
     return file_desc::eventfd(initial, EFD_CLOEXEC);
@@ -386,6 +390,10 @@ void writeable_eventfd::signal(size_t count) {
     uint64_t c = count;
     auto r = _fd.write(&c, sizeof(c));
     assert(r == sizeof(c));
+}
+
+writeable_eventfd readable_eventfd::write_side() {
+    return writeable_eventfd(_fd.get_file_desc().dup());
 }
 
 file_desc readable_eventfd::try_create_eventfd(size_t initial) {

@@ -184,6 +184,7 @@ protected:
     file_desc& get_file_desc() const { return _s->fd; }
     friend class reactor;
     friend class readable_eventfd;
+    friend class writeable_eventfd;
 };
 
 class connected_socket_impl {
@@ -280,24 +281,36 @@ public:
     }
 };
 
+class writeable_eventfd;
+
 class readable_eventfd {
     pollable_fd _fd;
 public:
     explicit readable_eventfd(size_t initial = 0) : _fd(try_create_eventfd(initial)) {}
+    readable_eventfd(readable_eventfd&&) = default;
+    writeable_eventfd write_side();
     future<size_t> wait();
     int get_write_fd() { return _fd.get_fd(); }
 private:
+    explicit readable_eventfd(file_desc&& fd) : _fd(std::move(fd)) {}
     static file_desc try_create_eventfd(size_t initial);
+
+    friend class writeable_eventfd;
 };
 
 class writeable_eventfd {
     file_desc _fd;
 public:
     explicit writeable_eventfd(size_t initial = 0) : _fd(try_create_eventfd(initial)) {}
+    writeable_eventfd(writeable_eventfd&&) = default;
+    readable_eventfd read_side();
     void signal(size_t nr);
     int get_read_fd() { return _fd.get(); }
 private:
+    explicit writeable_eventfd(file_desc&& fd) : _fd(std::move(fd)) {}
     static file_desc try_create_eventfd(size_t initial);
+
+    friend class readable_eventfd;
 };
 
 class thread_pool;

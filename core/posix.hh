@@ -46,7 +46,7 @@ public:
         throw_system_error_on(r == -1);
         _fd = -1;
     }
-    int get() { return _fd; }
+    int get() const { return _fd; }
     static file_desc open(sstring name, int flags, mode_t mode = 0) {
         int fd = ::open(name.c_str(), flags, mode);
         throw_system_error_on(fd == -1);
@@ -74,6 +74,11 @@ public:
     }
     static file_desc signalfd(const sigset_t& mask, int flags) {
         int fd = ::signalfd(-1, &mask, flags);
+        throw_system_error_on(fd == -1);
+        return file_desc(fd);
+    }
+    file_desc dup() const {
+        int fd = ::dup(get());
         throw_system_error_on(fd == -1);
         return file_desc(fd);
     }
