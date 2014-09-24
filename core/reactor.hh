@@ -314,6 +314,7 @@ private:
 };
 
 class thread_pool;
+class smp;
 
 class inter_thread_work_queue {
     static constexpr size_t queue_length = 128;
@@ -353,6 +354,7 @@ private:
     void submit_item(work_item* wi);
 
     friend class thread_pool;
+    friend class smp;
 };
 
 class thread_pool {
@@ -392,6 +394,7 @@ public:
     semaphore _io_context_available;
     std::vector<std::unique_ptr<task>> _pending_tasks;
     thread_pool _thread_pool;
+    unsigned _id = 0;
 private:
     future<> get_epoll_future(pollable_fd_state& fd, promise<> pollable_fd_state::* pr, int event);
     void complete_epoll_event(pollable_fd_state& fd, promise<> pollable_fd_state::* pr, int events, int event);
@@ -452,7 +455,22 @@ private:
     friend class timer;
 };
 
-extern reactor engine;
+extern thread_local reactor engine;
+
+class smp {
+	static std::vector<std::thread> _threads;
+	static inter_thread_work_queue** _qs;
+public:
+	static boost::program_options::options_description get_options_description();
+	static void configure(boost::program_options::variables_map vm);
+	template <typename T, typename Func>
+	static future<T> submit_to(int t, Func func) {return _qs[t][engine._id].submit<T>(std::move(func));}
+private:
+	static void listen_all(inter_thread_work_queue* qs);
+	static void listen_one(inter_thread_work_queue& q, std::unique_ptr<readable_eventfd>&& rfd, std::unique_ptr<writeable_eventfd>&& wfd);
+public:
+	static unsigned count;
+};
 
 inline
 pollable_fd_state::~pollable_fd_state() {

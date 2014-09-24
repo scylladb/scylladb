@@ -517,4 +517,72 @@ network_stack_registrator nsr_posix{"posix",
     true
 };
 
-reactor engine;
+boost::program_options::options_description
+smp::get_options_description()
+{
+    namespace bpo = boost::program_options;
+    bpo::options_description opts("SMP options");
+    opts.add_options()
+        ("smp,c", bpo::value<unsigned>(), "number of threads")
+        ;
+    return opts;
+}
+
+std::vector<std::thread> smp::_threads;
+inter_thread_work_queue** smp::_qs;
+unsigned smp::count = 1;
+
+void smp::listen_one(inter_thread_work_queue& q, std::unique_ptr<readable_eventfd>&& rfd, std::unique_ptr<writeable_eventfd>&& wfd) {
+    auto f = rfd->wait();
+    f.then([&q, rfd = std::move(rfd), wfd = std::move(wfd)](size_t count) mutable {
+        auto nr = q._pending.consume_all([&q, &rfd, &wfd] (inter_thread_work_queue::work_item* wi) {
+            wi->process();
+            q._completed.push(wi);
+        });
+        wfd->signal(nr);
+        smp::listen_one(q, std::move(rfd), std::move(wfd));
+    });
+}
+
+void smp::listen_all(inter_thread_work_queue* qs)
+{
+    for (unsigned i = 0; i < smp::count; i++) {
+        listen_one(qs[i],
+                std::make_unique<readable_eventfd>(qs[i]._start_eventfd.read_side()),
+                std::make_unique<writeable_eventfd>(qs[i]._complete_eventfd.write_side()));
+    }
+}
+
+void smp::configure(boost::program_options::variables_map configuration)
+{
+    smp::count = 1;
+    engine.configure(configuration);
+    if (configuration.count("smp")) {
+        smp::count = configuration["smp"].as<unsigned>();
+        printf("here smp=%u!\n", smp::count);
+
+        smp::_qs = new inter_thread_work_queue* [smp::count];
+        for(unsigned i = 0; i < smp::count; i++) {
+            smp::_qs[i] = new inter_thread_work_queue[smp::count];
+        }
+
+        for (unsigned i = 1; i < smp::count; i++) {
+            _threads.emplace_back([configuration](unsigned i) {
+                sigset_t mask;
+                sigfillset(&mask);
+                auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
+                throw_system_error_on(r == -1);
+                engine._id = i;
+                engine.configure(configuration);
+                engine.when_started().then([i] {
+                    listen_all(_qs[i]);
+                });
+                engine.run();
+            }, i);
+        }
+        listen_all(_qs[0]);
+    }
+}
+
+
+thread_local reactor engine;
