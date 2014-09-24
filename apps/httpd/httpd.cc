@@ -291,6 +291,7 @@ int main(int ac, char** av) {
        ("help", "show help message")
        ;
     opts.add(reactor::get_options_description());
+    opts.add(smp::get_options_description());
     bpo::variables_map configuration;
     bpo::store(bpo::command_line_parser(ac, av).options(opts).run(), configuration);
     bpo::notify(configuration);
@@ -298,7 +299,7 @@ int main(int ac, char** av) {
         std::cout << opts << "\n";
         return 1;
     }
-    engine.configure(configuration);
+    smp::configure(configuration);
     engine.when_started().then([&server] {
         uint16_t port = 10000;
         std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
