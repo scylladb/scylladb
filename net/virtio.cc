@@ -396,9 +396,9 @@ private:
     size_t _header_len = sizeof(net_hdr); // adjust for mrg_buf
     file_desc _tap_fd;
     file_desc _vhost_fd;
+    boost::program_options::variables_map _opts;
     std::unique_ptr<char[], free_deleter> _txq_storage;
     std::unique_ptr<char[], free_deleter> _rxq_storage;
-    boost::program_options::variables_map _opts;
     uint64_t _features;
     net::hw_features _hw_features;
     txq _txq;
@@ -412,6 +412,8 @@ private:
     vring::config rxq_config();
     void common_config(vring::config& r);
     future<> queue_rx_packet(packet p);
+    size_t vring_storage_size();
+    size_t ring_size();
 public:
     explicit virtio_net_device(sstring tap_device, boost::program_options::variables_map opts, init x = init());
     virtual subscription<packet> receive(std::function<future<> (packet)> next) override;
@@ -532,9 +534,9 @@ void virtio_net_device::setup_tap_device(sstring tap_device) {
 virtio_net_device::virtio_net_device(sstring tap_device, boost::program_options::variables_map opts, init x)
     : _tap_fd(file_desc::open("/dev/net/tun", O_RDWR | O_NONBLOCK))
     , _vhost_fd(file_desc::open("/dev/vhost-net", O_RDWR))
-    , _txq_storage(allocate_aligned_buffer<char>(3*4096, 4096))
-    , _rxq_storage(allocate_aligned_buffer<char>(3*4096, 4096))
     , _opts(opts)
+    , _txq_storage(allocate_aligned_buffer<char>(vring_storage_size(), 4096))
+    , _rxq_storage(allocate_aligned_buffer<char>(vring_storage_size(), 4096))
     , _features(setup_features())
     , _txq(*this, txq_config(), std::move(x._txq_notify), std::move(x._txq_kick))
     , _rxq(*this, rxq_config(), std::move(x._rxq_notify), std::move(x._rxq_kick))
@@ -550,9 +552,9 @@ virtio_net_device::virtio_net_device(sstring tap_device, boost::program_options:
     region.userspace_addr = 0;
     region.flags_padding = 0;
     _vhost_fd.ioctl(VHOST_SET_MEM_TABLE, *mem_table);
-    vhost_vring_state vvs0 = { 0, 256 };
+    vhost_vring_state vvs0 = { 0, rxq_config().size };
     _vhost_fd.ioctl(VHOST_SET_VRING_NUM, vvs0);
-    vhost_vring_state vvs1 = { 1, 256 };
+    vhost_vring_state vvs1 = { 1, txq_config().size };
     _vhost_fd.ioctl(VHOST_SET_VRING_NUM, vvs1);
     auto tov = [](char* x) { return reinterpret_cast<uintptr_t>(x); };
 
@@ -595,11 +597,19 @@ uint64_t virtio_net_device::setup_features() {
     return seastar_supported_features;
 }
 
+size_t virtio_net_device::ring_size() {
+    return _opts["virtio-ring-size"].as<unsigned>();
+}
+
+size_t virtio_net_device::vring_storage_size() {
+    // overestimate, but not by much.
+    return 3 * 4096 + ring_size() * (16 + 2 + 8);
+}
+
 void virtio_net_device::common_config(vring::config& r) {
-    auto size = 256;
-    r.size = size;
-    r.avail = r.descs + 16 * size;
-    r.used = align_up(r.avail + 2 * size + 6, 4096);
+    r.size = ring_size();
+    r.avail = r.descs + 16 * r.size;
+    r.used = align_up(r.avail + 2 * r.size + 6, 4096);
     r.event_index = (_features & VIRTIO_RING_F_EVENT_IDX) != 0;
     r.indirect = false;
 }
@@ -655,6 +665,9 @@ get_virtio_net_options_description()
         ("csum-offload",
                 boost::program_options::value<std::string>()->default_value("on"),
                 "Enable checksum offload feature (on / off)")
+        ("virtio-ring-size",
+                boost::program_options::value<unsigned>()->default_value(256),
+                "Virtio ring size (must be power-of-two)")
         ;
     return opts;
 }
