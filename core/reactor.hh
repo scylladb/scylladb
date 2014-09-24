@@ -300,16 +300,16 @@ private:
     static file_desc try_create_eventfd(size_t initial);
 };
 
-class thread_pool {
+class thread_pool;
+
+class inter_thread_work_queue {
     static constexpr size_t queue_length = 128;
     struct work_item;
-    std::atomic<bool> _stopped = { false };
     boost::lockfree::queue<work_item*> _pending;
     boost::lockfree::queue<work_item*> _completed;
     writeable_eventfd _start_eventfd;
     readable_eventfd _complete_eventfd;
     semaphore _queue_has_room = { queue_length };
-    std::thread _worker_thread;
     struct work_item {
         virtual ~work_item() {}
         virtual void process() = 0;
@@ -326,8 +326,7 @@ class thread_pool {
         future<T> get_future() { return _promise.get_future(); }
     };
 public:
-    thread_pool();
-    ~thread_pool();
+    inter_thread_work_queue();
     template <typename T, typename Func>
     future<T> submit(Func func) {
         auto wi = new work_item_returning<T, Func>(std::move(func));
@@ -339,6 +338,21 @@ private:
     void work();
     void complete();
     void submit_item(work_item* wi);
+
+    friend class thread_pool;
+};
+
+class thread_pool {
+    inter_thread_work_queue inter_thread_wq;
+    std::thread _worker_thread;
+    std::atomic<bool> _stopped = { false };
+public:
+    thread_pool() : _worker_thread([this] { work(); }) {}
+    ~thread_pool();
+    template <typename T, typename Func>
+    future<T> submit(Func func) {return inter_thread_wq.submit<T>(std::move(func));}
+private:
+    void work();
 };
 
 class reactor {
