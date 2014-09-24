@@ -219,6 +219,7 @@ public:
     explicit tcp(inet_type& inet) : _inet(inet) {}
     void received(packet p, ipaddr from, ipaddr to);
     listener listen(uint16_t port, size_t queue_length = 100);
+    net::hw_features hw_features() { return _inet._inet.hw_features(); }
 private:
     void send(ipaddr from, ipaddr to, packet p);
     void respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr foreign_ip);
@@ -253,11 +254,14 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
     if (unsigned(th->data_offset * 4) < sizeof(*th)) {
         return;
     }
-    checksummer csum;
-    InetTraits::pseudo_header_checksum(csum, from, to, p.len());
-    csum.sum(p);
-    if (csum.get() != 0) {
-        return;
+
+    if (!hw_features().rx_csum_offload) {
+        checksummer csum;
+        InetTraits::pseudo_header_checksum(csum, from, to, p.len());
+        csum.sum(p);
+        if (csum.get() != 0) {
+            return;
+        }
     }
     // FIXME: process options
     p.trim_front(th->data_offset * 4);
@@ -332,8 +336,12 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
 
     checksummer csum;
     InetTraits::pseudo_header_checksum(csum, local_ip, foreign_ip, sizeof(*th));
-    csum.sum(p);
-    th->checksum = csum.get();
+    if (hw_features().tx_csum_offload) {
+        th->checksum = ~csum.get();
+    } else {
+        csum.sum(p);
+        th->checksum = csum.get();
+    }
 
     send(local_ip, foreign_ip, std::move(p));
 }
@@ -536,8 +544,14 @@ void tcp<InetTraits>::tcb::output() {
 
     checksummer csum;
     InetTraits::pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + len);
-    csum.sum(p);
-    th->checksum = csum.get();
+    if (_tcp.hw_features().tx_csum_offload) {
+        // virtio-net's VIRTIO_NET_F_CSUM feature requires th->checksum to be
+        // initialized to ones' complement sum of the pseudo header.
+        th->checksum = ~csum.get();
+    } else {
+        csum.sum(p);
+        th->checksum = csum.get();
+    }
 
     _tcp.send(_local_ip, _foreign_ip, std::move(p));
 }

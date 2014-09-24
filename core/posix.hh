@@ -90,6 +90,11 @@ public:
         throw_system_error_on(r == -1);
         return r;
     }
+    int ioctl(int request, unsigned int value) {
+        int r = ::ioctl(_fd, request, value);
+        throw_system_error_on(r == -1);
+        return r;
+    }
     template <class X>
     int ioctl(int request, X& data) {
         int r = ::ioctl(_fd, request, &data);

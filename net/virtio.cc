@@ -15,6 +15,7 @@
 #include <linux/vhost.h>
 #include <linux/if.h>
 #include <linux/if_tun.h>
+#include "tcp.hh"
 
 using namespace net;
 
@@ -399,12 +400,14 @@ private:
     std::unique_ptr<char[], free_deleter> _rxq_storage;
     boost::program_options::variables_map _opts;
     uint64_t _features;
+    net::hw_features _hw_features;
     txq _txq;
     rxq _rxq;
     stream<packet> _rx_stream;
     future<> _rx_ready;
 private:
     uint64_t setup_features();
+    void setup_tap_device(sstring tap_device);
     vring::config txq_config();
     vring::config rxq_config();
     void common_config(vring::config& r);
@@ -414,6 +417,7 @@ public:
     virtual subscription<packet> receive(std::function<future<> (packet)> next) override;
     virtual future<> send(packet p) override;
     virtual ethernet_address hw_address() override;
+    virtual net::hw_features hw_features() override;
 };
 
 virtio_net_device::txq::txq(virtio_net_device& dev, vring::config config,
@@ -429,6 +433,20 @@ virtio_net_device::txq::transmit(semaphore& available) {
         _tx_queue.pop();
         // Linux requires that hdr_len be sane even if gso is disabled.
         net_hdr_mrg vhdr = {};
+
+        // Handle TCP checksum offload
+        if (_dev.hw_features().tx_csum_offload) {
+            // FIXME: No magic numbers
+            auto hdr = p.get_header<tcp_hdr>(14+ 20);
+            if (hdr) {
+                vhdr.needs_csum = 1;
+                // 14 bytes ethernet header and 20 bytes IP header
+                vhdr.csum_start = 14 + 20;
+                // TCP checksum filed's offset within the TCP header is 16 bytes
+                vhdr.csum_offset = 16;
+            }
+        }
+
         // prepend virtio-net header
         packet q = packet(fragment{reinterpret_cast<char*>(&vhdr), _dev._header_len},
                 std::move(p));
@@ -496,6 +514,21 @@ virtio_net_device::rxq::prepare_buffers(semaphore& available) {
     });
 }
 
+void virtio_net_device::setup_tap_device(sstring tap_device) {
+    assert(tap_device.size() + 1 <= IFNAMSIZ);
+
+    ifreq ifr = {};
+    ifr.ifr_flags = IFF_TAP | IFF_NO_PI | IFF_ONE_QUEUE | IFF_VNET_HDR;
+    strcpy(ifr.ifr_ifrn.ifrn_name, tap_device.c_str());
+    _tap_fd.ioctl(TUNSETIFF, ifr);
+
+    unsigned int offload = 0;
+    if (hw_features().tx_csum_offload && hw_features().rx_csum_offload) {
+        offload = TUN_F_CSUM;
+    }
+    _tap_fd.ioctl(TUNSETOFFLOAD, offload);
+}
+
 virtio_net_device::virtio_net_device(sstring tap_device, boost::program_options::variables_map opts, init x)
     : _tap_fd(file_desc::open("/dev/net/tun", O_RDWR | O_NONBLOCK))
     , _vhost_fd(file_desc::open("/dev/vhost-net", O_RDWR))
@@ -507,11 +540,7 @@ virtio_net_device::virtio_net_device(sstring tap_device, boost::program_options:
     , _rxq(*this, rxq_config(), std::move(x._rxq_notify), std::move(x._rxq_kick))
     , _rx_stream()
     , _rx_ready(_rx_stream.started()) {
-    assert(tap_device.size() + 1 <= IFNAMSIZ);
-    ifreq ifr = {};
-    ifr.ifr_flags = IFF_TAP | IFF_NO_PI | IFF_ONE_QUEUE | IFF_VNET_HDR;
-    strcpy(ifr.ifr_ifrn.ifrn_name, tap_device.c_str());
-    _tap_fd.ioctl(TUNSETIFF, ifr);
+    setup_tap_device(tap_device);
     _vhost_fd.ioctl(VHOST_SET_OWNER);
     auto mem_table = make_struct_with_vla(&vhost_memory::regions, 1);
     mem_table->nregions = 1;
@@ -544,8 +573,17 @@ virtio_net_device::virtio_net_device(sstring tap_device, boost::program_options:
 
 uint64_t virtio_net_device::setup_features() {
     int64_t seastar_supported_features = VIRTIO_RING_F_INDIRECT_DESC;
+
     if (!(_opts.count("event-index") && _opts["event-index"].as<std::string>() == "off")) {
         seastar_supported_features |= VIRTIO_RING_F_EVENT_IDX;
+    }
+    if (!(_opts.count("csum-offload") && _opts["csum-offload"].as<std::string>() == "off")) {
+        seastar_supported_features |= VIRTIO_NET_F_CSUM | VIRTIO_NET_F_GUEST_CSUM;
+        _hw_features.tx_csum_offload = true;
+        _hw_features.rx_csum_offload = true;
+    } else {
+        _hw_features.tx_csum_offload = false;
+        _hw_features.rx_csum_offload = false;
     }
 
     int64_t vhost_supported_features;
@@ -601,6 +639,10 @@ ethernet_address virtio_net_device::hw_address() {
     return {{{ 0x12, 0x23, 0x34, 0x56, 0x67, 0x78 }}};
 }
 
+net::hw_features virtio_net_device::hw_features() {
+    return _hw_features;
+}
+
 boost::program_options::options_description
 get_virtio_net_options_description()
 {
@@ -610,6 +652,9 @@ get_virtio_net_options_description()
         ("event-index",
                 boost::program_options::value<std::string>()->default_value("on"),
                 "Enable event-index feature (on / off)")
+        ("csum-offload",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable checksum offload feature (on / off)")
         ;
     return opts;
 }

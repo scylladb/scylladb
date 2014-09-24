@@ -26,7 +26,8 @@ future<> l3_protocol::send(ethernet_address to, packet p) {
 interface::interface(std::unique_ptr<device> dev)
     : _dev(std::move(dev))
     , _rx(_dev->receive([this] (packet p) { return dispatch_packet(std::move(p)); }))
-    , _hw_address(_dev->hw_address()) {
+    , _hw_address(_dev->hw_address())
+    , _hw_features(_dev->hw_features()) {
 }
 
 subscription<packet, ethernet_address>

@@ -70,6 +70,7 @@ struct ipv4_traits {
 
 template <uint8_t ProtoNum>
 class ipv4_l4 {
+public:
     ipv4& _inet;
 public:
     ipv4_l4(ipv4& inet) : _inet(inet) {}
@@ -100,6 +101,7 @@ public:
     static address_type broadcast_address() { return ipv4_address(0xffffffff); }
     static proto_type arp_protocol_type() { return 0x0800; }
 private:
+    interface* _netif;
     arp _global_arp;
     arp_for<ipv4> _arp;
     ipv4_address _host_address;
@@ -118,6 +120,7 @@ public:
     void send(ipv4_address to, uint8_t proto_num, packet p);
     tcp<ipv4_traits>& get_tcp() { return _tcp._tcp; }
     void register_l4(proto_type id, ip_protocol* handler);
+    net::hw_features hw_features() { return _netif->hw_features(); }
 };
 
 template <uint8_t ProtoNum>
