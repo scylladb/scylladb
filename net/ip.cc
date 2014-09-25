@@ -39,12 +39,10 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
     if (!iph) {
         return make_ready_future<>();
     }
-    if (!hw_features().rx_csum_offload) {
-        checksummer csum;
-        csum.sum(reinterpret_cast<char*>(iph), sizeof(*iph));
-        if (csum.get() != 0) {
-            return make_ready_future<>();
-        }
+    checksummer csum;
+    csum.sum(reinterpret_cast<char*>(iph), sizeof(*iph));
+    if (csum.get() != 0) {
+        return make_ready_future<>();
     }
     ntoh(*iph);
     // FIXME: process options
