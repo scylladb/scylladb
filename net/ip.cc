@@ -66,7 +66,7 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
     return make_ready_future<>();
 }
 
-void ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
+future<> ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
     // FIXME: fragment
     auto iph = p.prepend_header<ip_hdr>();
     iph->ihl = sizeof(*iph) / 4;
@@ -94,10 +94,10 @@ void ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
         dst = _gw_address;
     }
 
-    _arp.lookup(dst).then([this, p = std::move(p)] (ethernet_address e_dst) mutable {
+    return _arp.lookup(dst).then([this, p = std::move(p)] (ethernet_address e_dst) mutable {
         _send_sem.wait().then([this, e_dst, p = std::move(p)] () mutable {
             return _l3.send(e_dst, std::move(p));
-        }).then([this] {
+        }).finally([this] () {
             _send_sem.signal();
         });
     });
