@@ -389,7 +389,6 @@ class reactor {
     static constexpr size_t max_aio = 128;
     promise<> _start_promise;
     uint64_t _timers_completed;
-    clock_type::time_point _next_timeout = clock_type::time_point::max();
     timer_set<timer, &timer::_link, clock_type> _timers;
     pollable_fd _timerfd = file_desc::timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC | TFD_NONBLOCK);
     struct signal_handler {

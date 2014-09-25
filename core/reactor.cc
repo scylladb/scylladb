@@ -226,7 +226,7 @@ reactor::flush(file& f) {
 }
 
 void reactor::add_timer(timer* tmr) {
-    if (_timers.insert(*tmr) && tmr->get_timeout() < _next_timeout) {
+    if (_timers.insert(*tmr)) {
         itimerspec its;
         its.it_interval = {};
         its.it_value = to_timespec(_timers.get_next_timeout());
@@ -248,10 +248,9 @@ void reactor::complete_timers() {
             t->_pr = promise<>();
         }
         if (!_timers.empty()) {
-            _next_timeout = _timers.get_next_timeout();
             itimerspec its;
             its.it_interval = {};
-            its.it_value = to_timespec(_next_timeout);
+            its.it_value = to_timespec(_timers.get_next_timeout());
             _timerfd.get_file_desc().timerfd_settime(TFD_TIMER_ABSTIME, its);
         }
         complete_timers();
