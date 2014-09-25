@@ -94,6 +94,43 @@ public:
     friend class ipv4;
 };
 
+struct icmp_hdr {
+    enum class msg_type : uint8_t {
+        echo_reply = 0,
+        echo_request = 8,
+    };
+    msg_type type;
+    uint8_t code;
+    packed<uint16_t> csum;
+    packed<uint32_t> rest;
+    template <typename Adjuster>
+    auto adjust_endianness(Adjuster a) {
+        return a(csum);
+    }
+} __attribute__((packed));
+
+
+class icmp {
+public:
+    using ipaddr = ipv4_address;
+    using inet_type = ipv4_l4<1>;
+    explicit icmp(inet_type& inet) : _inet(inet) {}
+    void received(packet p, ipaddr from, ipaddr to);
+private:
+    inet_type& _inet;
+};
+
+class ipv4_icmp final : public ip_protocol {
+    ipv4_l4<1> _inet_l4;
+    icmp _icmp;
+public:
+    ipv4_icmp(ipv4& inet) : _inet_l4(inet), _icmp(_inet_l4) {}
+    virtual void received(packet p, ipv4_address from, ipv4_address to) {
+        _icmp.received(std::move(p), from, to);
+    }
+    friend class ipv4;
+};
+
 class ipv4 {
 public:
     using address_type = ipv4_address;
@@ -109,6 +146,7 @@ private:
     l3_protocol _l3;
     subscription<packet, ethernet_address> _rx_packets;
     ipv4_tcp _tcp;
+    ipv4_icmp _icmp;
     array_map<ip_protocol*, 256> _l4;
     semaphore _send_sem;
 private:
@@ -147,17 +185,6 @@ struct ip_hdr {
     template <typename Adjuster>
     auto adjust_endianness(Adjuster a) {
         return a(len, id, frag, csum, src_ip, dst_ip);
-    }
-} __attribute__((packed));
-
-struct icmp_hdr {
-    uint8_t type;
-    uint8_t code;
-    packed<uint16_t> csum;
-    packed<uint32_t> rest;
-    template <typename Adjuster>
-    auto adjust_endianness(Adjuster a) {
-        return a(csum);
     }
 } __attribute__((packed));
 

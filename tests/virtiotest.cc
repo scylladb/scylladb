@@ -43,7 +43,7 @@ future<> echo_packet(net::device& netif, packet p) {
     }
     auto ip_len = iph->len;
     auto icmph = reinterpret_cast<icmp_hdr*>(f.base + pos);
-    if (icmph->type != 8) {
+    if (icmph->type != icmp_hdr::msg_type::echo_request) {
         return make_ready_future<>();
     }
     auto icmp_len = ip_len - iph->ihl * 4;
@@ -52,7 +52,7 @@ future<> echo_packet(net::device& netif, packet p) {
     auto x = iph->src_ip;
     iph->src_ip = ipv4_address("192.168.122.2");
     iph->dst_ip = x;
-    icmph->type = 0;
+    icmph->type = icmp_hdr::msg_type::echo_reply;
     icmph->csum = 0;
     hton(*iph);
     hton(*eh);

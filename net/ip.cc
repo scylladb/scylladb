@@ -25,7 +25,8 @@ ipv4::ipv4(interface* netif)
     , _rx_packets(_l3.receive([this] (packet p, ethernet_address ea) {
         return handle_received_packet(std::move(p), ea); }))
     , _tcp(*this)
-    , _l4({ { 6, &_tcp } }) {
+    , _icmp(*this)
+    , _l4({ { 6, &_tcp }, { 1, &_icmp }}) {
 }
 
 bool ipv4::in_my_netmask(ipv4_address a) const {
@@ -102,6 +103,20 @@ void ipv4::set_host_address(ipv4_address ip) {
 
 void ipv4::register_l4(ipv4::proto_type id, ip_protocol *protocol) {
     _l4.at(id) = protocol;
+}
+
+void icmp::received(packet p, ipaddr from, ipaddr to) {
+    auto hdr = p.get_header<icmp_hdr>(0);
+    if (!hdr || hdr->type != icmp_hdr::msg_type::echo_request) {
+        return;
+    }
+    hdr->type = icmp_hdr::msg_type::echo_reply;
+    hdr->code = 0;
+    hdr->csum = 0;
+    checksummer csum;
+    csum.sum(reinterpret_cast<char*>(hdr), p.len());
+    hdr->csum = csum.get();
+    _inet.send(to, from, std::move(p));
 }
 
 }
