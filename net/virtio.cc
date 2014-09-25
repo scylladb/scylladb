@@ -13,9 +13,9 @@
 #include <queue>
 #include <fcntl.h>
 #include <linux/vhost.h>
-#include <linux/if.h>
+#include <net/if.h>
 #include <linux/if_tun.h>
-#include "tcp.hh"
+#include "ip.hh"
 
 using namespace net;
 
@@ -437,8 +437,8 @@ virtio_net_device::txq::transmit(semaphore& available) {
         // Handle TCP checksum offload
         if (_dev.hw_features().tx_csum_offload) {
             // FIXME: No magic numbers
-            auto hdr = p.get_header<tcp_hdr>(14+ 20);
-            if (hdr) {
+            auto iph = p.get_header<net::ip_hdr>(14);
+            if (iph && iph->ip_proto == 6) {
                 vhdr.needs_csum = 1;
                 // 14 bytes ethernet header and 20 bytes IP header
                 vhdr.csum_start = 14 + 20;
