@@ -102,6 +102,8 @@ with open(buildfile, 'w') as f:
               command = $cxx $cxxflags $cxxflags_{mode} $ldflags -o $out $in $libs $libs_{mode}
               description = LINK $out
             ''').format(mode = mode, **modeval))
+        f.write('build {mode}: phony {artifacts}\n'.format(mode = mode,
+            artifacts = str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))))
         compiles = {}
         for binary in build_artifacts:
             srcs = deps[binary]
