@@ -120,4 +120,9 @@ with open(buildfile, 'w') as f:
           command = python3 configure.py $configure_args
           generator = 1
         build build.ninja: configure | configure.py
-        '''))
+        rule cscope
+            command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
+            description = CSCOPE
+        build cscope: cscope
+        default {modes_list}
+        ''').format(modes_list = ' '.join(build_modes), **globals()))
