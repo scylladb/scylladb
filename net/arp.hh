@@ -114,6 +114,7 @@ arp_for<L3>::make_query_packet(l3addr paddr) {
     hdr.sender_paddr = _l3self;
     hdr.target_hwaddr = ethernet::broadcast_address();
     hdr.target_paddr = paddr;
+    hton(hdr);
     return packet(reinterpret_cast<char*>(&hdr), sizeof(hdr));
 }
 
