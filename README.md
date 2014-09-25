@@ -28,7 +28,7 @@ yum install gperftools-devel libaio-devel ninja-build
 
 Then finally:
 ```
-make
+ninja-build
 ```
 
 ### Building seastar in Docker container
@@ -49,7 +49,7 @@ Finally, to build seastar inside the container:
 
 ```    
 cd /seastar
-make
+ninja-build
 ```
 
 Futures and promises
