@@ -164,8 +164,8 @@ code to it.
 
 After the I/O operation initiated by `put()` completes, it calls the
 continuation associated with `f12`, which simply tells it to call the
-continuation assoicated with `f3`.  This continuation simply calls
-`loop_to()`.  Both `f12` and `f3` are freed. `loop_to()` then calls
+continuation assoicated with `f2`.  This continuation simply calls
+`loop_to()`.  Both `f12` and `f2` are freed. `loop_to()` then calls
 `get()`, which starts the process all over again, allocating new versions
 of `f1` and `f2`.
 
