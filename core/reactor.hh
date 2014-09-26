@@ -126,17 +126,19 @@ public:
 using clock_type = std::chrono::high_resolution_clock;
 
 class timer {
+    using callback_t = std::function<void()>;
     boost::intrusive::list_member_hook<> _link;
-    promise<> _pr;
+    callback_t _callback;
     clock_type::time_point _expiry;
     bool _armed = false;
+    bool _queued = false;
 public:
     ~timer();
     future<> expired();
-    void arm(clock_type::time_point until);
+    void set_callback(callback_t&& callback);
     void arm(clock_type::duration delta);
     bool armed() const { return _armed; }
-    void suspend();
+    bool cancel();
     clock_type::time_point get_timeout();
     friend class reactor;
     friend class timer_set<timer, &timer::_link, clock_type>;
@@ -882,18 +884,15 @@ future<pollable_fd, socket_address> pollable_fd::accept() {
 }
 
 inline
-future<> timer::expired() {
-    return _pr.get_future().then([this] {
-        _pr = promise<>();  // prepare for next call
-        return make_ready_future<>();
-    });
+timer::~timer() {
+    if (_queued) {
+        engine.del_timer(this);
+    }
 }
 
 inline
-timer::~timer() {
-    if (_armed) {
-        engine.del_timer(this);
-    }
+void timer::set_callback(callback_t&& callback) {
+    _callback = std::move(callback);
 }
 
 inline
@@ -902,6 +901,7 @@ void timer::arm(clock_type::time_point until) {
     _armed = true;
     _expiry = until;
     engine.add_timer(this);
+    _queued = true;
 }
 
 inline
@@ -910,10 +910,17 @@ void timer::arm(clock_type::duration delta) {
 }
 
 inline
-void timer::suspend() {
-    assert(_armed);
+inline
+bool timer::cancel() {
+    if (!_armed) {
+        return false;
+    }
     _armed = false;
-    engine.del_timer(this);
+    if (_queued) {
+        engine.del_timer(this);
+        _queued = false;
+    }
+    return true;
 }
 
 inline

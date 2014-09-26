@@ -242,10 +242,14 @@ void reactor::complete_timers() {
     _timerfd.read_some(reinterpret_cast<char*>(&_timers_completed), sizeof(_timers_completed)).then(
             [this] (size_t n) {
         _timers.expire(clock_type::now());
+        for (auto& t : _timers.expired_set()) {
+            t._queued = false;
+        }
         while (auto t = _timers.pop_expired()) {
-            t->_armed = false;
-            t->_pr.set_value();
-            t->_pr = promise<>();
+            if (t->_armed) {
+                t->_armed = false;
+                t->_callback();
+            }
         }
         if (!_timers.empty()) {
             itimerspec its;
