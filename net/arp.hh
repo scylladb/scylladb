@@ -82,6 +82,7 @@ private:
     };
     struct resolution {
         std::vector<promise<l2addr>> _waiters;
+        timer _timeout_timer;
     };
 private:
     l3addr _l3self = L3::broadcast_address();
@@ -125,10 +126,14 @@ arp_for<L3>::lookup(const l3addr& paddr) {
     if (i != _table.end()) {
         return make_ready_future<ethernet_address>(i->second);
     }
-    resolution& res = _in_progress[paddr];
+    auto& res = _in_progress[paddr];
     res._waiters.emplace_back();
     auto fut = res._waiters.back().get_future();
     if (res._waiters.size() == 1) {
+        res._timeout_timer.set_callback([paddr, this] {
+            _arp._proto.send(ethernet::broadcast_address(), make_query_packet(paddr));
+        });
+        res._timeout_timer.arm_periodic(std::chrono::seconds(1));
         return _arp._proto.send(ethernet::broadcast_address(), make_query_packet(paddr)).then(
                 [fut = std::move(fut)] () mutable {
             return std::move(fut);
@@ -144,7 +149,9 @@ arp_for<L3>::learn(l2addr hwaddr, l3addr paddr) {
     _table[paddr] = hwaddr;
     auto i = _in_progress.find(paddr);
     if (i != _in_progress.end()) {
-        for (auto&& pr : i->second._waiters) {
+        auto& res = i->second;
+        res._timeout_timer.cancel();
+        for (auto &&pr : res._waiters) {
             pr.set_value(hwaddr);
         }
         _in_progress.erase(i);
