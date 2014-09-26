@@ -123,6 +123,7 @@ struct future_state {
         return *this;
     }
     bool available() const { return _state == state::result || _state == state::exception; }
+    bool failed() const { return _state == state::exception; }
     void wait();
     void set(const std::tuple<T...>& value) {
         assert(_state == state::future);
@@ -301,6 +302,10 @@ public:
 
     bool available() {
         return state()->available();
+    }
+
+    bool failed() {
+        return state()->failed();
     }
 
     template <typename Func, typename Enable>
