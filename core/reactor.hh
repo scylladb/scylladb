@@ -478,8 +478,15 @@ public:
 	static boost::program_options::options_description get_options_description();
 	static void configure(boost::program_options::variables_map vm);
 	static void join_all();
-	template <typename... T, typename Func>
-	static future<T...> submit_to(int t, Func func) {return _qs[t][engine._id].submit<T...>(std::move(func));}
+
+	template <typename T, typename Func>
+	static future<T> submit_to(unsigned t, Func func) {
+	    return t == engine._id ? make_ready_future<T>(func()) :
+	            _qs[t][engine._id].submit<T>(std::move(func));}
+	template <typename Func>
+	static future<> submit_to(unsigned t, Func func) {
+	    return t == engine._id ? func(),  make_ready_future<>():
+	            _qs[t][engine._id].submit<>(std::move(func));}
 private:
 	static void listen_all(inter_thread_work_queue* qs);
 	static void listen_one(inter_thread_work_queue& q, std::unique_ptr<readable_eventfd>&& rfd, std::unique_ptr<writeable_eventfd>&& wfd);
