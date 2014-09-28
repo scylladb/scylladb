@@ -143,7 +143,7 @@ private:
     arp_for<ipv4> _arp;
     ipv4_address _host_address;
     ipv4_address _gw_address;
-    ipv4_address _netmask = ipv4_address(0xffffff00);
+    ipv4_address _netmask;
     l3_protocol _l3;
     subscription<packet, ethernet_address> _rx_packets;
     ipv4_tcp _tcp;
@@ -157,6 +157,7 @@ public:
     explicit ipv4(interface* netif);
     void set_host_address(ipv4_address ip);
     void set_gw_address(ipv4_address ip);
+    void set_netmask_address(ipv4_address ip);
     void send(ipv4_address to, uint8_t proto_num, packet p);
     tcp<ipv4_traits>& get_tcp() { return _tcp._tcp; }
     void register_l4(proto_type id, ip_protocol* handler);

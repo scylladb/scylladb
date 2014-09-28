@@ -112,6 +112,10 @@ void ipv4::set_gw_address(ipv4_address ip) {
     _gw_address = ip;
 }
 
+void ipv4::set_netmask_address(ipv4_address ip) {
+    _netmask = ip;
+}
+
 void ipv4::register_l4(ipv4::proto_type id, ip_protocol *protocol) {
     _l4.at(id) = protocol;
 }

@@ -59,6 +59,7 @@ native_network_stack::native_network_stack(boost::program_options::variables_map
     , _inet(&_netif) {
     _inet.set_host_address(ipv4_address(opts["host-ipv4-addr"].as<std::string>()));
     _inet.set_gw_address(ipv4_address(opts["gw-ipv4-addr"].as<std::string>()));
+    _inet.set_netmask_address(ipv4_address(opts["netmask-ipv4-addr"].as<std::string>()));
 }
 
 template <typename Protocol>
@@ -162,6 +163,9 @@ boost::program_options::options_description nns_options() {
         ("gw-ipv4-addr",
                 boost::program_options::value<std::string>()->default_value("192.168.122.1"),
                 "static IPv4 gateway to use")
+        ("netmask-ipv4-addr",
+                boost::program_options::value<std::string>()->default_value("255.255.255.0"),
+                "static IPv4 netmask to use")
         ;
     opts.add(get_virtio_net_options_description());
     return opts;
