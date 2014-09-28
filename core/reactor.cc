@@ -574,7 +574,6 @@ void smp::configure(boost::program_options::variables_map configuration)
     engine.configure(configuration);
     if (configuration.count("smp")) {
         smp::count = configuration["smp"].as<unsigned>();
-        printf("here smp=%u!\n", smp::count);
 
         smp::_qs = new inter_thread_work_queue* [smp::count];
         for(unsigned i = 0; i < smp::count; i++) {
