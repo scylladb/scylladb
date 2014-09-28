@@ -80,14 +80,21 @@ void ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
     iph->ip_proto = proto_num;
     iph->csum = 0;
     iph->src_ip = _host_address;
-    // FIXME: routing
-    auto gw = to;
+
     iph->dst_ip = to;
     hton(*iph);
     checksummer csum;
     csum.sum(reinterpret_cast<char*>(iph), sizeof(*iph));
     iph->csum = csum.get();
-    _arp.lookup(gw).then([this, p = std::move(p)] (ethernet_address e_dst) mutable {
+
+    ipv4_address dst;
+    if (in_my_netmask(to)) {
+        dst = to;
+    } else {
+        dst = _gw_address;
+    }
+
+    _arp.lookup(dst).then([this, p = std::move(p)] (ethernet_address e_dst) mutable {
         _send_sem.wait().then([this, e_dst, p = std::move(p)] () mutable {
             return _l3.send(e_dst, std::move(p));
         }).then([this] {
@@ -99,6 +106,10 @@ void ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
 void ipv4::set_host_address(ipv4_address ip) {
     _host_address = ip;
     _arp.set_self_addr(ip);
+}
+
+void ipv4::set_gw_address(ipv4_address ip) {
+    _gw_address = ip;
 }
 
 void ipv4::register_l4(ipv4::proto_type id, ip_protocol *protocol) {
