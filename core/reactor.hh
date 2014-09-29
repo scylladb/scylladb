@@ -572,11 +572,20 @@ private:
     using tmp_buf = temporary_buffer<CharType>;
     size_t available() const { return _buf.size(); }
 public:
+    // Consumer concept, for consume() method:
+    struct ConsumerConcept {
+        // call done(tmp_buf) to signal end of processing. tmp_buf parameter to
+        // done is unconsumed data
+        template <typename Done>
+        void operator()(tmp_buf data, Done done);
+    };
     using char_type = CharType;
     explicit input_stream(data_source fd, size_t buf_size = 8192) : _fd(std::move(fd)), _buf(0) {}
     future<temporary_buffer<CharType>> read_exactly(size_t n);
     future<temporary_buffer<CharType>> read_until(size_t limit, CharType eol);
     future<temporary_buffer<CharType>> read_until(size_t limit, const CharType* eol, size_t eol_len);
+    template <typename Consumer>
+    future<> consume(Consumer& c);
 private:
     future<temporary_buffer<CharType>> read_exactly_part(size_t n, tmp_buf buf, size_t completed);
     future<temporary_buffer<CharType>> read_until_part(size_t n, CharType eol, size_t completed);
@@ -825,6 +834,33 @@ input_stream<CharType>::read_until(size_t limit, CharType eol) {
         return make_ready_future<tmp_buf>(tmp_buf(0));
     }
     return read_until_part(limit, eol, 0);
+}
+
+template <typename CharType>
+template <typename Consumer>
+future<>
+input_stream<CharType>::consume(Consumer& consumer) {
+    if (_scanned.empty()) {
+        return _fd.get().then([this, &consumer] (tmp_buf buf) {
+            _scanned.push_back(std::move(buf));
+            return consume(consumer);
+        });
+    } else {
+        auto tmp = std::move(_scanned.back());
+        _scanned.pop_back();
+        bool done = tmp.empty();
+        consumer(std::move(tmp), [this, &done] (tmp_buf unconsumed) {
+            done = true;
+            if (!unconsumed.empty()) {
+                _scanned.push_back(std::move(unconsumed));
+            }
+        });
+        if (!done) {
+            return consume(consumer);
+        } else {
+            return make_ready_future<>();
+        }
+    }
 }
 
 #include <iostream>
