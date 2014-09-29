@@ -2,6 +2,7 @@
  * Copyright 2014 Cloudius Systems
  */
 
+#include "apps/httpd/request_parser.hh"
 #include "core/reactor.hh"
 #include "core/sstring.hh"
 #include "core/app-template.hh"
@@ -12,28 +13,6 @@
 #include <bitset>
 #include <limits>
 #include <cctype>
-
-class char_filter {
-    using uchar = unsigned char;
-public:
-    template <typename Pred>
-    explicit char_filter(Pred pred) {
-        for (unsigned i = 0; i <= std::numeric_limits<uchar>::max(); ++i) {
-            _filter.set(i, pred(i));
-        }
-    }
-    bool operator()(char v) const { return _filter.test(uchar(v)); }
-private:
-    std::bitset<1 << std::numeric_limits<uchar>::digits> _filter;
-};
-
-char_filter tchar([](char c) {
-    return std::isalnum(c) || std::string("-!#$%&'\\*\\+.^_`|~").find_first_of(c) != std::string::npos;
-});
-char_filter op_char([](char c) { return std::isupper(c); });
-char_filter sp_char([](char c) { return std::isspace(c); });
-char_filter nsp_char([](char c) { return !std::isspace(c); });
-char_filter digit_char([](char c) { return std::isdigit(c); });
 
 class http_server {
     std::vector<server_socket> _listeners;
@@ -69,18 +48,13 @@ public:
         bool _eof = false;
         static constexpr size_t limit = 4096;
         using tmp_buf = temporary_buffer<char>;
-        struct request {
-            sstring _method;
-            sstring _url;
-            sstring _version;
-            std::unordered_map<sstring, sstring> _headers;
-        };
-        sstring _last_header_name;
+        using request = http_request;
         struct response {
             sstring _response_line;
             sstring _body;
             std::unordered_map<sstring, sstring> _headers;
         };
+        http_request_parser _parser;
         std::unique_ptr<request> _req;
         std::unique_ptr<response> _resp;
         std::queue<std::unique_ptr<response>> _pending_responses;
@@ -89,78 +63,13 @@ public:
             : _fd(std::move(fd)), _read_buf(_fd.input())
             , _write_buf(_fd.output()) {}
         future<> read() {
-            return _read_buf.read_until(limit, '\n').then([this] (tmp_buf start_line) {
-                if (!start_line.size()) {
-                    _eof = true;
+            _parser.init();
+            return _read_buf.consume(_parser).then([this] {
+                if (_parser.eof()) {
                     maybe_done();
                     return make_ready_future<>();
                 }
-                _req = std::make_unique<request>();
-                size_t pos = 0;
-                size_t end = start_line.size();
-                while (pos < end && op_char(start_line[pos])) {
-                    ++pos;
-                }
-                if (pos == 0) {
-                    return bad(std::move(_req));
-                }
-                _req->_method = sstring(start_line.begin(), pos);
-                if (pos == end || start_line[pos++] != ' ') {
-                    return bad(std::move(_req));
-                }
-                auto url = pos;
-                while (pos < end && nsp_char(start_line[pos])) {
-                    ++pos;
-                }
-                _req->_url = sstring(start_line.begin() + url, pos - url);
-                if (pos == end || start_line[pos++] != ' ') {
-                    return bad(std::move(_req));
-                }
-                if (pos == end || start_line[pos++] != 'H') {
-                    return bad(std::move(_req));
-                }
-                if (pos == end || start_line[pos++] != 'T') {
-                    return bad(std::move(_req));
-                }
-                if (pos == end || start_line[pos++] != 'T') {
-                    return bad(std::move(_req));
-                }
-                if (pos == end || start_line[pos++] != 'P') {
-                    return bad(std::move(_req));
-                }
-                if (pos == end || start_line[pos++] != '/') {
-                    return bad(std::move(_req));
-                }
-                auto ver = pos;
-                if (pos == end || !digit_char(start_line[pos++])) {
-                    return bad(std::move(_req));
-                }
-                if (pos == end || start_line[pos++] != '.') {
-                    return bad(std::move(_req));
-                }
-                if (pos == end || !digit_char(start_line[pos++])) {
-                    return bad(std::move(_req));
-                }
-                _req->_version = sstring(start_line.begin() + ver, pos - ver);
-                if (pos == end || start_line[pos++] != '\r') {
-                    return bad(std::move(_req));
-                }
-                if (pos == end || start_line[pos++] != '\n') {
-                    return bad(std::move(_req));
-                }
-                if (pos != end) {
-                    return bad(std::move(_req));
-                }
-                if (_req->_method != "GET") {
-                    return bad(std::move(_req));
-                }
-                return _read_buf.read_until(limit, '\n').then([this] (tmp_buf header) {
-                    return parse_header(std::move(header));
-                });
-            });
-        }
-        future<> parse_header(tmp_buf header) {
-            if (header.size() == 2 && header[0] == '\r' && header[1] == '\n') {
+                _req = _parser.get_parsed_request();
                 generate_response(std::move(_req));
                 read().rescue([this] (auto get_ex) mutable {
                     try {
@@ -171,47 +80,6 @@ public:
                     }
                 });
                 return make_ready_future<>();
-            }
-            size_t pos = 0;
-            size_t end = header.size();
-            if (end < 2 || header[end-2] != '\r' || header[end-1] != '\n') {
-                return bad(std::move(_req));
-            }
-            while (tchar(header[pos])) {
-                ++pos;
-            }
-            if (pos) {
-                sstring name = sstring(header.begin(), pos);
-                while (pos != end && sp_char(header[pos])) {
-                    ++pos;
-                }
-                if (pos == end || header[pos++] != ':') {
-                    return bad(std::move(_req));
-                }
-                while (pos != end && sp_char(header[pos])) {
-                    ++pos;
-                }
-                while (pos != end && sp_char(header[end-1])) {
-                    --end;
-                }
-                sstring value = sstring(header.begin() + pos, end - pos);
-                _req->_headers[name] = std::move(value);
-                _last_header_name = std::move(name);
-            } else {
-                while (sp_char(header[pos])) {
-                    ++pos;
-                }
-                while (pos != end && sp_char(header[end-1])) {
-                    --end;
-                }
-                if (!pos || end == pos) {
-                    return bad(std::move(_req));
-                }
-                _req->_headers[_last_header_name] += " ";
-                _req->_headers[_last_header_name] += sstring(header.begin() + pos, end - pos);
-            }
-            return _read_buf.read_until(limit, '\n').then([this] (tmp_buf header) {
-                return parse_header(std::move(header));
             });
         }
         future<> bad(std::unique_ptr<request> req) {

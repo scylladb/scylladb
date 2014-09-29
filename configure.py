@@ -35,7 +35,7 @@ core = [
 deps = {
     'apps/seastar/seastar': ['apps/seastar/main.cc'] + core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
-    'apps/httpd/httpd': ['apps/httpd/httpd.cc'] + libnet + core,
+    'apps/httpd/httpd': ['apps/httpd/httpd.cc', 'apps/httpd/request_parser.rl'] + libnet + core,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
     'tests/virtiotest': ['tests/virtiotest.cc'] + core + libnet,
     'tests/l3_test': ['tests/l3_test.cc'] + core + libnet,
