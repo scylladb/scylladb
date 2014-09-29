@@ -64,9 +64,9 @@ import os, os.path, textwrap, argparse, sys
 configure_args = str.join(' ', sys.argv[1:])
 
 arg_parser = argparse.ArgumentParser('Configure seastar')
-arg_parser.add_argument('--static', dest = 'libstdcxx', action = 'store_const', default = '',
-                        const = '-static-libstdc++',
-                        help = 'Use static libstdc++ (useful for running on hosts outside the build environment')
+arg_parser.add_argument('--static', dest = 'static', action = 'store_const', default = '',
+                        const = '-static',
+                        help = 'Static link (useful for running on hosts outside the build environment')
 arg_parser.add_argument('--mode', action='store', choices=list(modes.keys()) + ['all'], default='all')
 arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
 arg_parser.add_argument('--cflags', action = 'store', dest = 'user_cflags', default = '',
@@ -86,7 +86,7 @@ with open(buildfile, 'w') as f:
         builddir = {outdir}
         cxx = g++
         cxxflags = -std=gnu++1y -g -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags}
-        ldflags = -Wl,--no-as-needed {libstdcxx}
+        ldflags = -Wl,--no-as-needed {static}
         libs = {libs}
         ''').format(**globals()))
     for mode in build_modes:
