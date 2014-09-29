@@ -94,6 +94,7 @@ private:
     future<> handle_request(arp_hdr* ah);
     l2addr l2self() { return _arp.l2self(); }
 public:
+    future<> send_query(const l3addr& paddr);
     explicit arp_for(arp& a) : arp_for_protocol(a, L3::arp_protocol_type()) {}
     future<ethernet_address> lookup(const l3addr& addr);
     void learn(l2addr l2, l3addr l3);
@@ -120,27 +121,41 @@ arp_for<L3>::make_query_packet(l3addr paddr) {
 }
 
 template <typename L3>
+future<>
+arp_for<L3>::send_query(const l3addr& paddr) {
+    return _arp._proto.send(ethernet::broadcast_address(), make_query_packet(paddr));
+}
+
+class arp_timeout_error : public std::runtime_error {
+public:
+    arp_timeout_error() : std::runtime_error("ARP timeout") {}
+};
+
+template <typename L3>
 future<ethernet_address>
 arp_for<L3>::lookup(const l3addr& paddr) {
     auto i = _table.find(paddr);
     if (i != _table.end()) {
         return make_ready_future<ethernet_address>(i->second);
     }
-    auto& res = _in_progress[paddr];
-    res._waiters.emplace_back();
-    auto fut = res._waiters.back().get_future();
-    if (res._waiters.size() == 1) {
-        res._timeout_timer.set_callback([paddr, this] {
-            _arp._proto.send(ethernet::broadcast_address(), make_query_packet(paddr));
+    auto j = _in_progress.find(paddr);
+    auto first_request = j == _in_progress.end();
+    auto& res = first_request ? _in_progress[paddr] : j->second;
+
+    if (first_request) {
+        res._timeout_timer.set_callback([paddr, this, &res] {
+            send_query(paddr);
+            for (auto& w : res._waiters) {
+                w.set_exception(arp_timeout_error());
+            }
+            res._waiters.clear();
         });
         res._timeout_timer.arm_periodic(std::chrono::seconds(1));
-        return _arp._proto.send(ethernet::broadcast_address(), make_query_packet(paddr)).then(
-                [fut = std::move(fut)] () mutable {
-            return std::move(fut);
-        });
-    } else {
-        return fut;
+        send_query(paddr);
     }
+
+    res._waiters.emplace_back();
+    return res._waiters.back().get_future();
 }
 
 template <typename L3>
