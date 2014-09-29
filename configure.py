@@ -88,11 +88,14 @@ with open(buildfile, 'w') as f:
         cxxflags = -std=gnu++1y -g -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags}
         ldflags = -Wl,--no-as-needed {static}
         libs = {libs}
+        rule ragel
+            command = ragel -G2 -o $out $in
+            description = RAGEL $out
         ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
         f.write(textwrap.dedent('''\
-            cxxflags_{mode} = {sanitize} {opt}
+            cxxflags_{mode} = {sanitize} {opt} -I $builddir/{mode}/gen
             libs_{mode} = {libs}
             rule cxx.{mode}
               command = $cxx -MMD -MT $out -MF $out.d $cxxflags $cxxflags_{mode} -c -o $out $in
@@ -105,16 +108,29 @@ with open(buildfile, 'w') as f:
         f.write('build {mode}: phony {artifacts}\n'.format(mode = mode,
             artifacts = str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))))
         compiles = {}
+        ragels = {}
         for binary in build_artifacts:
             srcs = deps[binary]
-            objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o') for src in srcs]
+            objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
+                    for src in srcs
+                    if src.endswith('.cc')]
             f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             for src in srcs:
-                obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
-                compiles[obj] = src
+                if src.endswith('.cc'):
+                    obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
+                    compiles[obj] = src
+                elif src.endswith('.rl'):
+                    hh = '$builddir/' + mode + '/gen/' + src.replace('.rl', '.hh')
+                    ragels[hh] = src
+                else:
+                    raise Exeception('No rule for ' + src)
         for obj in compiles:
             src = compiles[obj]
-            f.write('build {}: cxx.{} {}\n'.format(obj, mode, src))
+            gen_headers = ragels.keys()
+            f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
+        for hh in ragels:
+            src = ragels[hh]
+            f.write('build {}: ragel {}\n'.format(hh, src))
     f.write(textwrap.dedent('''\
         rule configure
           command = python3 configure.py $configure_args
