@@ -582,13 +582,10 @@ public:
     using char_type = CharType;
     explicit input_stream(data_source fd, size_t buf_size = 8192) : _fd(std::move(fd)), _buf(0) {}
     future<temporary_buffer<CharType>> read_exactly(size_t n);
-    future<temporary_buffer<CharType>> read_until(size_t limit, CharType eol);
-    future<temporary_buffer<CharType>> read_until(size_t limit, const CharType* eol, size_t eol_len);
     template <typename Consumer>
     future<> consume(Consumer& c);
 private:
     future<temporary_buffer<CharType>> read_exactly_part(size_t n, tmp_buf buf, size_t completed);
-    future<temporary_buffer<CharType>> read_until_part(size_t n, CharType eol, size_t completed);
 };
 
 template <typename CharType>
@@ -779,61 +776,6 @@ input_stream<CharType>::read_exactly(size_t n) {
         temporary_buffer<CharType> b(n);
         return read_exactly_part(n, std::move(b), 0);
     }
-}
-
-
-template <typename CharType>
-future<temporary_buffer<CharType>>
-input_stream<CharType>::read_until_part(size_t limit, CharType eol, size_t completed) {
-    if (_buf.empty() && !_eof) {
-        return _fd.get().then([this, limit, eol, completed] (tmp_buf buf) {
-            _buf = std::move(buf);
-            if (_buf.empty()) {
-                _eof = true;
-            }
-            return read_until_part(limit, eol, completed);
-        });
-    }
-    auto to_search = std::min(limit - completed, _buf.size());
-    auto i = std::find(_buf.get(), _buf.get() + to_search, eol);
-    auto nr_found = i - _buf.get();
-    if (i != _buf.get() + to_search
-            || completed + nr_found == limit
-            || (i == _buf.get() + _buf.size() && _eof)) {
-        if (i != _buf.get() + to_search && completed + nr_found < limit) {
-            assert(*i == eol);
-            ++i; // include eol in result
-            ++nr_found;
-        }
-        if (_scanned.empty()) {
-            auto ret = _buf.share(0, nr_found);
-            _buf.trim_front(nr_found);
-            return make_ready_future<tmp_buf>(std::move(ret));
-        } else {
-            tmp_buf out{completed + nr_found};
-            auto p = out.get_write();
-            for (auto&& b : _scanned) {
-                p = std::copy(b.get(), b.get() + b.size(), p);
-            }
-            std::copy(_buf.get(), _buf.get() + nr_found, p);
-            _buf.trim_front(nr_found);
-            _scanned.clear();
-            return make_ready_future<tmp_buf>(std::move(out));
-        }
-    } else {
-        _scanned.push_back(std::move(_buf));
-        completed += nr_found;
-        return read_until_part(limit, eol, completed);
-    }
-}
-
-template <typename CharType>
-future<temporary_buffer<CharType>>
-input_stream<CharType>::read_until(size_t limit, CharType eol) {
-    if (limit == 0) {
-        return make_ready_future<tmp_buf>(tmp_buf(0));
-    }
-    return read_until_part(limit, eol, 0);
 }
 
 template <typename CharType>
