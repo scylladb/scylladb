@@ -248,6 +248,9 @@ void reactor::complete_timers() {
         while (auto t = _timers.pop_expired()) {
             if (t->_armed) {
                 t->_armed = false;
+                if (t->_period) {
+                    t->arm_periodic(*t->_period);
+                }
                 t->_callback();
             }
         }
