@@ -566,7 +566,6 @@ class input_stream {
     static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
     data_source _fd;
     temporary_buffer<CharType> _buf;
-    std::vector<temporary_buffer<CharType>> _scanned;
     bool _eof = false;
 private:
     using tmp_buf = temporary_buffer<CharType>;
@@ -782,19 +781,19 @@ template <typename CharType>
 template <typename Consumer>
 future<>
 input_stream<CharType>::consume(Consumer& consumer) {
-    if (_scanned.empty()) {
+    if (_buf.empty() && !_eof) {
         return _fd.get().then([this, &consumer] (tmp_buf buf) {
-            _scanned.push_back(std::move(buf));
+            _buf = std::move(buf);
+            _eof = _buf.empty();
             return consume(consumer);
         });
     } else {
-        auto tmp = std::move(_scanned.back());
-        _scanned.pop_back();
+        auto tmp = std::move(_buf);
         bool done = tmp.empty();
         consumer(std::move(tmp), [this, &done] (tmp_buf unconsumed) {
             done = true;
             if (!unconsumed.empty()) {
-                _scanned.push_back(std::move(unconsumed));
+                _buf = std::move(unconsumed);
             }
         });
         if (!done) {
