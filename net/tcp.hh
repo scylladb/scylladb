@@ -446,6 +446,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
         }
         if (_local_fin_sent && th->ack == _snd.next + 1) {
             _local_fin_acked = true;
+            _snd.next += 1;
         }
     }
 
@@ -537,7 +538,7 @@ void tcp<InetTraits>::tcb::output() {
     _snd.next += len;
 
     // FIXME: does the FIN have to fit in the window?
-    th->f_fin = _snd.closed && _snd.unsent_len == 0;
+    th->f_fin = _snd.closed && _snd.unsent_len == 0 && !_local_fin_acked;
     _local_fin_sent |= th->f_fin;
 
     hton(*th);
