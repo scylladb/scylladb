@@ -40,11 +40,10 @@ public:
 
 class sstring_builder::guard {
     sstring_builder& _builder;
-    const char* _block_start;
     const char* _block_end;
 public:
     guard(sstring_builder& builder, const char* block_start, const char* block_end)
-        : _builder(builder), _block_start(block_start), _block_end(block_end) {
+        : _builder(builder), _block_end(block_end) {
         if (!_builder._value.empty()) {
             mark_start(block_start);
         }
