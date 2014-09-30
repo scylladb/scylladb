@@ -23,7 +23,7 @@ yum --enablerepo rawhide install libubsan libasan
 
 Installing required packages (for libtcmalloc and libaio, respectively):
 ```
-yum install gperftools-devel libaio-devel ninja-build
+yum install gperftools-devel libaio-devel ninja-build ragel
 ```
 
 Then finally:
