@@ -598,7 +598,11 @@ uint64_t virtio_net_device::setup_features() {
 }
 
 size_t virtio_net_device::ring_size() {
-    return _opts["virtio-ring-size"].as<unsigned>();
+    if (_opts.count("event-index")) {
+        return _opts["virtio-ring-size"].as<unsigned>();
+    } else {
+        return 256;
+    }
 }
 
 size_t virtio_net_device::vring_storage_size() {
