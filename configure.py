@@ -71,6 +71,8 @@ arg_parser.add_argument('--mode', action='store', choices=list(modes.keys()) + [
 arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
 arg_parser.add_argument('--cflags', action = 'store', dest = 'user_cflags', default = '',
                         help = 'Extra flags for the C++ compiler')
+arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 'g++',
+                        help = 'C++ compiler path')
 args = arg_parser.parse_args()
 globals().update(vars(args))
 
@@ -84,7 +86,7 @@ with open(buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
-        cxx = g++
+        cxx = {cxx}
         cxxflags = -std=gnu++1y -g -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags}
         ldflags = -Wl,--no-as-needed {static}
         libs = {libs}
