@@ -356,13 +356,13 @@ public:
     void rescue(Func&& func) {
         if (state()->available()) {
             try {
-                return func([&state = *state()] { state.get(); });
+                return func([&state = *state()] { return state.get(); });
             } catch (...) {
                 std::terminate();
             }
         }
         _promise->schedule([func = std::forward<Func>(func)] (auto& state) mutable {
-            func([&state] () mutable { state.get(); });
+            func([&state]() mutable { return state.get(); });
         });
         _promise->_future = nullptr;
         _promise = nullptr;
