@@ -8,6 +8,7 @@ tests = [
     'tests/ip_test',
     'tests/timertest',
     'tests/tcp_test',
+    'tests/futures_test',
     ]
 
 apps = [
@@ -42,6 +43,7 @@ deps = {
     'tests/ip_test': ['tests/ip_test.cc'] + core + libnet,
     'tests/tcp_test': ['tests/tcp_test.cc'] + core + libnet,
     'tests/timertest': ['tests/timertest.cc'] + core,
+    'tests/futures_test': ['tests/futures_test.cc'] + core,
 }
 
 modes = {
