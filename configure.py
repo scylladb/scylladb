@@ -9,6 +9,8 @@ tests = [
     'tests/timertest',
     'tests/tcp_test',
     'tests/futures_test',
+    'tests/udp_server',
+    'tests/udp_client',
     ]
 
 apps = [
@@ -47,6 +49,8 @@ deps = {
     'tests/tcp_test': ['tests/tcp_test.cc'] + core + libnet,
     'tests/timertest': ['tests/timertest.cc'] + core,
     'tests/futures_test': ['tests/futures_test.cc'] + core,
+    'tests/udp_server': ['tests/udp_server.cc'] + core + libnet,
+    'tests/udp_client': ['tests/udp_client.cc'] + core + libnet,
 }
 
 modes = {
