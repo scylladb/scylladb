@@ -401,6 +401,34 @@ public:
         return f;
     }
 
+    template <typename Func>
+    future<T...> finally(Func&& func) {
+        promise<T...> pr;
+        auto f = pr.get_future();
+        if (state()->available()) {
+            try {
+                func();
+            } catch (...) {
+                pr.set_exception(std::current_exception());
+                return f;
+            }
+            state()->forward_to(pr);
+            return f;
+        }
+        _promise->schedule([pr = std::move(pr), func = std::forward<Func>(func)] (auto& state) mutable {
+            try {
+                func();
+            } catch (...) {
+                pr.set_exception(std::current_exception());
+                return;
+            }
+            state.forward_to(pr);
+        });
+        _promise->_future = nullptr;
+        _promise = nullptr;
+        return f;
+    }
+
     template <typename... U>
     friend class promise;
     template <typename... U, typename... A>
