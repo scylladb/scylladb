@@ -35,6 +35,7 @@
 #include "timer-set.hh"
 #include "deleter.hh"
 #include "temporary_buffer.hh"
+#include "circular_buffer.hh"
 
 class socket_address;
 class reactor;
@@ -411,7 +412,7 @@ public:
     readable_eventfd _io_eventfd;
     io_context_t _io_context;
     semaphore _io_context_available;
-    std::vector<std::unique_ptr<task>> _pending_tasks;
+    circular_buffer<std::unique_ptr<task>> _pending_tasks;
     thread_pool _thread_pool;
     unsigned _id = 0;
 private:

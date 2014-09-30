@@ -284,17 +284,14 @@ void reactor::run() {
             });
         });
     }
-    std::vector<std::unique_ptr<task>> current_tasks;
     _start_promise.set_value();
     complete_timers();
     while (true) {
         while (!_pending_tasks.empty()) {
-            std::swap(_pending_tasks, current_tasks);
-            for (auto&& tsk : current_tasks) {
-                tsk->run();
-                tsk.reset();
-            }
-            current_tasks.clear();
+            auto tsk = std::move(_pending_tasks.front());
+            _pending_tasks.pop_front();
+            tsk->run();
+            tsk.reset();
         }
         if (_stopped) {
             if (_id == 0) {
