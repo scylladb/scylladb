@@ -5,12 +5,13 @@
 #ifndef QUEUE_HH_
 #define QUEUE_HH_
 
+#include "circular_buffer.hh"
 #include <queue>
 #include <experimental/optional>
 
 template <typename T>
 class queue {
-    std::queue<T> _q;
+    std::queue<T, circular_buffer<T>> _q;
     size_t _max;
     std::experimental::optional<promise<>> _not_empty;
     std::experimental::optional<promise<>> _not_full;
