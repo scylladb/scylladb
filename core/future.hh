@@ -152,6 +152,14 @@ struct future_state {
         }
         return std::move(_u.value);
     }
+    void forward_to(promise<T...>& pr) {
+        assert(_state != state::future);
+        if (_state == state::exception) {
+            pr.set_exception(_u.ex);
+        } else {
+            pr.set_value(std::move(get()));
+        }
+    }
 };
 
 template <typename Func, typename... T>
@@ -322,6 +330,18 @@ public:
         _promise->_future = nullptr;
         _promise = nullptr;
         return fut;
+    }
+
+    void forward_to(promise<T...>&& pr) {
+        if (state()->available()) {
+            state()->forward_to(pr);
+        } else {
+            _promise->schedule([pr = std::move(pr)] (auto& state) mutable {
+                state.forward_to(pr);
+            });
+            _promise->_future = nullptr;
+            _promise = nullptr;
+        }
     }
 
     template <typename Func>
