@@ -492,8 +492,8 @@ virtio_net_device::rxq::prepare_buffers(semaphore& available) {
         if (available.try_wait(opportunistic)) {
             count += opportunistic;
         }
-        std::vector<vring::buffer_chain> ret;
-        ret.reserve(count);
+        std::vector<vring::buffer_chain> vbc;
+        vbc.reserve(count);
         for (unsigned i = 0; i < count; ++i) {
             vring::buffer_chain bc;
             std::unique_ptr<char[]> buf(new char[4096]);
@@ -510,9 +510,9 @@ virtio_net_device::rxq::prepare_buffers(semaphore& available) {
             });
             bc.push_back(std::move(b));
             buf.release();
-            ret.push_back(std::move(bc));
+            vbc.push_back(std::move(bc));
         }
-        return make_ready_future<std::vector<vring::buffer_chain>>(std::move(ret));
+        return make_ready_future<std::vector<vring::buffer_chain>>(std::move(vbc));
     });
 }
 
