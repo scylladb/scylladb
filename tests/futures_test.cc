@@ -97,6 +97,30 @@ future<> test_exception_thrown_from_rescue_causes_future_to_fail__async_case()
     return f;
 }
 
+future<> test_failing_intermediate_promise_should_fail_the_master_future() {
+    promise<> p1;
+    promise<> p2;
+
+    auto f = p1.get_future().then([f = std::move(p2.get_future())] () mutable {
+        OK();
+        return std::move(f);
+    }).then([] {
+        BUG();
+    });
+
+    p1.set_value();
+    p2.set_exception(std::runtime_error("boom"));
+
+    return f.rescue([](auto get) {
+        try {
+            get();
+            BUG();
+        } catch (...) {
+            OK();
+        }
+    });
+}
+
 int main(int ac, char **av)
 {
     return app_template().run(ac, av, [] {
@@ -106,6 +130,7 @@ int main(int ac, char **av)
             .then(test_exception_from_finally_fails_the_target_on_already_resolved)
             .then(test_exception_thrown_from_rescue_causes_future_to_fail)
             .then(test_exception_thrown_from_rescue_causes_future_to_fail__async_case)
+            .then(test_failing_intermediate_promise_should_fail_the_master_future)
         );
     });
 }
