@@ -163,7 +163,7 @@ public:
     public:
         explicit connection(shared_ptr<tcb> tcbp) : _tcb(std::move(tcbp)) { _tcb->_conn = this; }
         connection(const connection&) = delete;
-        connection(connection&& x) : _tcb(std::move(x._tcb)) {
+        connection(connection&& x) noexcept : _tcb(std::move(x._tcb)) {
             _tcb->_conn = this;
         }
         ~connection();
