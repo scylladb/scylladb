@@ -210,6 +210,10 @@ public:
         _state->set_exception(std::move(ex));
         make_ready();
     }
+    template<typename Exception>
+    void set_exception(Exception&& e) {
+        set_exception(make_exception_ptr(std::forward<Exception>(e)));
+    }
 private:
     template <typename Func>
     void schedule(Func&& func) {
