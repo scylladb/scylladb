@@ -48,7 +48,7 @@ modes = {
     'debug': {
         'sanitize': '-fsanitize=address -fsanitize=leak -fsanitize=undefined',
         'opt': '-O0',
-        'libs': '',
+        'libs': '-lubsan -lasan',
     },
     'release': {
         'sanitize': '',
@@ -57,7 +57,7 @@ modes = {
     },
 }
 
-libs = '-laio -lboost_program_options -lboost_system'
+libs = '-laio -lboost_program_options -lboost_system -lstdc++'
 
 import os, os.path, textwrap, argparse, sys
 
