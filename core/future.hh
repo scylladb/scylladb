@@ -353,19 +353,28 @@ public:
     }
 
     template <typename Func>
-    void rescue(Func&& func) {
+    future<> rescue(Func&& func) {
         if (state()->available()) {
             try {
-                return func([&state = *state()] { return state.get(); });
+                func([&state = *state()] { return state.get(); });
+                return make_ready_future();
             } catch (...) {
-                std::terminate();
+                return make_exception_future(std::current_exception());
             }
         }
-        _promise->schedule([func = std::forward<Func>(func)] (auto& state) mutable {
-            func([&state]() mutable { return state.get(); });
+        promise<> pr;
+        auto f = pr.get_future();
+        _promise->schedule([pr = std::move(pr), func = std::forward<Func>(func)] (auto& state) mutable {
+            try {
+                func([&state]() mutable { return state.get(); });
+                pr.set_value();
+            } catch (...) {
+                pr.set_exception(std::current_exception());
+            }
         });
         _promise->_future = nullptr;
         _promise = nullptr;
+        return f;
     }
 
     template <typename... U>
