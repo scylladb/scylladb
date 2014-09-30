@@ -5,6 +5,8 @@
 #define _APP_TEMPLATE_HH
 
 #include <boost/program_options.hpp>
+#include <fstream>
+#include <cstdlib>
 #include "core/reactor.hh"
 
 namespace bpo = boost::program_options;
@@ -24,6 +26,13 @@ public:
     template<typename Func>
     int run(int ac, char ** av, Func&& func) {
         bpo::variables_map configuration;
+        auto home = std::getenv("HOME");
+        if (home) {
+            std::ifstream ifs(std::string(home) + "/.config/seastar/seastar.conf");
+            if (ifs) {
+                bpo::store(bpo::parse_config_file(ifs, _opts), configuration);
+            }
+        }
         bpo::store(bpo::command_line_parser(ac, av).options(_opts).run(), configuration);
         bpo::notify(configuration);
         if (configuration.count("help")) {
