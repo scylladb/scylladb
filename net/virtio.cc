@@ -8,6 +8,7 @@
 #include "virtio-interface.hh"
 #include "core/reactor.hh"
 #include "core/stream.hh"
+#include "core/circular_buffer.hh"
 #include <atomic>
 #include <vector>
 #include <queue>
@@ -378,7 +379,7 @@ class virtio_net_device : public net::device {
         future<> post(packet p);
     private:
         future<std::vector<vring::buffer_chain>> transmit(semaphore& available);
-        std::queue<packet> _tx_queue;
+        std::queue<packet, circular_buffer<packet>> _tx_queue;
         semaphore _tx_queue_length = { 0 };
     };
     class rxq  {
