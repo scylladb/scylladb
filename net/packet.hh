@@ -134,7 +134,7 @@ public:
     // build empty packet
     packet();
     // move existing packet
-    packet(packet&& x);
+    packet(packet&& x) noexcept;
     // copy data into packet
     packet(char* data, size_t len);
     // copy data into packet
@@ -202,7 +202,7 @@ private:
 };
 
 inline
-packet::packet(packet&& x)
+packet::packet(packet&& x) noexcept
     : _impl(std::move(x._impl)) {
 }
 
