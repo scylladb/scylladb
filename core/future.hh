@@ -364,9 +364,7 @@ public:
             try {
                 auto result = state.get();
                 auto next_fut = apply(std::move(func), std::move(result));
-                next_fut.then([pr = std::move(pr)] (auto... next) mutable {
-                    pr.set_value(std::move(next)...);
-                });
+                next_fut.forward_to(std::move(pr));
             } catch (...) {
                 pr.set_exception(std::current_exception());
             }
