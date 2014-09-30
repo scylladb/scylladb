@@ -6,6 +6,7 @@
 #include "core/reactor.hh"
 #include "core/sstring.hh"
 #include "core/app-template.hh"
+#include "core/circular_buffer.hh"
 #include <iostream>
 #include <algorithm>
 #include <unordered_map>
@@ -57,7 +58,8 @@ public:
         http_request_parser _parser;
         std::unique_ptr<request> _req;
         std::unique_ptr<response> _resp;
-        std::queue<std::unique_ptr<response>> _pending_responses;
+        std::queue<std::unique_ptr<response>,
+            circular_buffer<std::unique_ptr<response>>> _pending_responses;
     public:
         connection(http_server& server, connected_socket&& fd, socket_address addr)
             : _fd(std::move(fd)), _read_buf(_fd.input())
