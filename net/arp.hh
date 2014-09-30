@@ -60,6 +60,7 @@ public:
     using l2addr = ethernet_address;
     using l3addr = typename L3::address_type;
 private:
+    static constexpr auto max_waiters = 512;
     enum oper {
         op_request = 1,
         op_reply = 2,
@@ -126,9 +127,19 @@ arp_for<L3>::send_query(const l3addr& paddr) {
     return _arp._proto.send(ethernet::broadcast_address(), make_query_packet(paddr));
 }
 
-class arp_timeout_error : public std::runtime_error {
+class arp_error : public std::runtime_error {
 public:
-    arp_timeout_error() : std::runtime_error("ARP timeout") {}
+    arp_error(const std::string& msg) : std::runtime_error(msg) {}
+};
+
+class arp_timeout_error : public arp_error {
+public:
+    arp_timeout_error() : arp_error("ARP timeout") {}
+};
+
+class arp_queue_full_error : public arp_error {
+public:
+    arp_queue_full_error() : arp_error("ARP waiter's queue is full") {}
 };
 
 template <typename L3>
@@ -152,6 +163,10 @@ arp_for<L3>::lookup(const l3addr& paddr) {
         });
         res._timeout_timer.arm_periodic(std::chrono::seconds(1));
         send_query(paddr);
+    }
+
+    if (res._waiters.size() >= max_waiters) {
+        return make_exception_future<ethernet_address>(arp_queue_full_error());
     }
 
     res._waiters.emplace_back();
