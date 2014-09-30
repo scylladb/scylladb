@@ -387,6 +387,8 @@ public:
     friend future<U...> make_ready_future(A&&... value);
     template <typename... U>
     friend future<U...> make_exception_future(std::exception_ptr ex);
+    template <typename... U, typename Exception>
+    friend future<U...> make_exception_future(Exception&& ex);
 };
 
 template <typename... T>
@@ -435,6 +437,12 @@ template <typename... T>
 inline
 future<T...> make_exception_future(std::exception_ptr ex) {
     return future<T...>(exception_future_marker(), std::move(ex));
+}
+
+template <typename... T, typename Exception>
+inline
+future<T...> make_exception_future(Exception&& ex) {
+    return make_exception_future<T...>(make_exception_ptr(std::forward<Exception>(ex)));
 }
 
 #endif /* FUTURE_HH_ */
