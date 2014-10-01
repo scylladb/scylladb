@@ -4,6 +4,7 @@
 
 #include "virtio.hh"
 #include "core/posix.hh"
+#include "core/async-action.hh"
 #include "core/vla.hh"
 #include "virtio-interface.hh"
 #include "core/reactor.hh"
@@ -57,8 +58,6 @@ public:
         bool writeable;
     };
     using buffer_chain = std::vector<buffer>;
-    // provide buffers for the queue, wait on @available to gain buffer space
-    using producer_type = future<std::vector<buffer_chain>> (semaphore& available);
 private:
     class desc {
     public:
@@ -144,7 +143,6 @@ private:
     config _config;
     readable_eventfd _notified;
     writeable_eventfd _kick;
-    std::function<producer_type> _producer;
     std::unique_ptr<promise<size_t>[]> _completions;
     desc* _descs;
     avail _avail;
@@ -154,8 +152,8 @@ private:
     semaphore _available_descriptors = { 0 };
     int _free_desc = -1;
 public:
-    vring(config conf, readable_eventfd notified, writeable_eventfd kick,
-          std::function<producer_type> producer);
+
+    vring(config conf, readable_eventfd notified, writeable_eventfd kick);
 
     // start the queue
     void run();
@@ -169,6 +167,9 @@ public:
     // Total number of descriptors in ring
     int size() { return _config.size; }
 
+    void post(std::vector<buffer_chain> bc);
+
+    semaphore& available_descriptors() { return _available_descriptors; }
 private:
     // Let host know about interrupt delivery
     void disable_interrupts() {
@@ -222,7 +223,6 @@ private:
         }
     }
 
-    void produce();
     void do_complete();
     size_t mask() { return size() - 1; }
     size_t masked(size_t idx) { return idx & mask(); }
@@ -255,12 +255,10 @@ void vring::free_desc(unsigned id) {
     _available_descriptors.signal();
 }
 
-vring::vring(config conf, readable_eventfd notified, writeable_eventfd kick,
-      std::function<producer_type> producer)
+vring::vring(config conf, readable_eventfd notified, writeable_eventfd kick)
     : _config(conf)
     , _notified(std::move(notified))
     , _kick(std::move(kick))
-    , _producer(std::move(producer))
     , _completions(new promise<size_t>[_config.size])
     , _descs(reinterpret_cast<desc*>(conf.descs))
     , _avail(conf)
@@ -278,37 +276,33 @@ void vring::setup() {
 }
 
 void vring::run() {
-    produce();
     complete();
 }
 
-void vring::produce() {
-    _producer(_available_descriptors).then([this] (std::vector<buffer_chain> vbc) {
-        for (auto&& bc: vbc) {
-            bool has_prev = false;
-            unsigned prev_desc_idx = 0;
-            for (auto i = bc.rbegin(); i != bc.rend(); ++i) {
-                unsigned desc_idx = allocate_desc();
-                desc& d = _descs[desc_idx];
-                d._flags = {};
-                d._flags.writeable = i->writeable;
-                d._flags.has_next = has_prev;
-                has_prev = true;
-                d._next = prev_desc_idx;
-                d._paddr = i->addr;
-                d._len = i->len;
-                prev_desc_idx = desc_idx;
-                _completions[desc_idx] = std::move(i->completed);
-            }
-            auto desc_head = prev_desc_idx;
-            _avail._shared->_ring[masked(_avail._head++)] = desc_head;
-            _avail._avail_added_since_kick++;
+void vring::post(std::vector<buffer_chain> vbc) {
+    for (auto&& bc: vbc) {
+        bool has_prev = false;
+        unsigned prev_desc_idx = 0;
+        for (auto i = bc.rbegin(); i != bc.rend(); ++i) {
+            unsigned desc_idx = allocate_desc();
+            desc &d = _descs[desc_idx];
+            d._flags = {};
+            d._flags.writeable = i->writeable;
+            d._flags.has_next = has_prev;
+            has_prev = true;
+            d._next = prev_desc_idx;
+            d._paddr = i->addr;
+            d._len = i->len;
+            prev_desc_idx = desc_idx;
+            _completions[desc_idx] = std::move(i->completed);
         }
-        _avail._shared->_idx.store(_avail._head, std::memory_order_release);
-        kick();
-        do_complete();
-        produce();
-    });
+        auto desc_head = prev_desc_idx;
+        _avail._shared->_ring[masked(_avail._head++)] = desc_head;
+        _avail._avail_added_since_kick++;
+    }
+    _avail._shared->_idx.store(_avail._head, std::memory_order_release);
+    kick();
+    do_complete();
 }
 
 void vring::do_complete() {
@@ -376,10 +370,6 @@ class virtio_net_device : public net::device {
                 readable_eventfd notified, writeable_eventfd kicked);
         void run() { _ring.run(); }
         future<> post(packet p);
-    private:
-        future<std::vector<vring::buffer_chain>> transmit(semaphore& available);
-        std::queue<packet> _tx_queue;
-        semaphore _tx_queue_length = { 0 };
     };
     class rxq  {
         virtio_net_device& _dev;
@@ -390,7 +380,6 @@ class virtio_net_device : public net::device {
         void run() { _ring.run(); }
     private:
         future<std::vector<vring::buffer_chain>> prepare_buffers(semaphore& available);
-        void received(char* buffer);
     };
 private:
     size_t _header_len = sizeof(net_hdr); // adjust for mrg_buf
@@ -424,64 +413,57 @@ public:
 
 virtio_net_device::txq::txq(virtio_net_device& dev, vring::config config,
         readable_eventfd notified, writeable_eventfd kicked)
-    : _dev(dev), _ring(config, std::move(notified), std::move(kicked),
-            [this] (semaphore& available) { return transmit(available); }) {
-}
-
-future<std::vector<vring::buffer_chain>>
-virtio_net_device::txq::transmit(semaphore& available) {
-    return _tx_queue_length.wait().then([this, &available] {
-        auto p = std::move(_tx_queue.front());
-        _tx_queue.pop();
-        // Linux requires that hdr_len be sane even if gso is disabled.
-        net_hdr_mrg vhdr = {};
-
-        // Handle TCP checksum offload
-        if (_dev.hw_features().tx_csum_offload) {
-            // FIXME: No magic numbers
-            auto iph = p.get_header<net::ip_hdr>(14);
-            if (iph && iph->ip_proto == 6) {
-                vhdr.needs_csum = 1;
-                // 14 bytes ethernet header and 20 bytes IP header
-                vhdr.csum_start = 14 + 20;
-                // TCP checksum filed's offset within the TCP header is 16 bytes
-                vhdr.csum_offset = 16;
-            }
-        }
-
-        // prepend virtio-net header
-        packet q = packet(fragment{reinterpret_cast<char*>(&vhdr), _dev._header_len},
-                std::move(p));
-        auto nbufs = q.nr_frags();
-        return available.wait(nbufs).then([this, p = std::move(q)] () mutable {
-            std::vector<vring::buffer_chain> vbc;
-            vring::buffer_chain bc;
-            for (auto&& f : p.fragments()) {
-                vring::buffer b;
-                b.addr = virt_to_phys(f.base);
-                b.len = f.size;
-                b.writeable = false;
-                bc.push_back(std::move(b));
-            }
-            // schedule packet destruction
-            bc[0].completed.get_future().then([p = std::move(p)] (size_t) {});
-            vbc.push_back(std::move(bc));
-            return make_ready_future<std::vector<vring::buffer_chain>>(std::move(vbc));
-        });
-    });
+    : _dev(dev), _ring(config, std::move(notified), std::move(kicked)) {
 }
 
 future<>
 virtio_net_device::txq::post(packet p) {
-    _tx_queue.push(std::move(p));
-    _tx_queue_length.signal();
-    return make_ready_future<>(); // FIXME: queue bounds
+    net_hdr_mrg vhdr = {};
+
+    // Handle TCP checksum offload
+    if (_dev.hw_features().tx_csum_offload) {
+        // FIXME: No magic numbers
+        auto iph = p.get_header<net::ip_hdr>(14);
+        if (iph && iph->ip_proto == 6) {
+            vhdr.needs_csum = 1;
+            // 14 bytes ethernet header and 20 bytes IP header
+            vhdr.csum_start = 14 + 20;
+            // TCP checksum filed's offset within the TCP header is 16 bytes
+            vhdr.csum_offset = 16;
+        }
+    }
+
+    // prepend virtio-net header
+    packet q = packet(fragment{reinterpret_cast<char*>(&vhdr), _dev._header_len},
+            std::move(p));
+
+    auto nr_frags = q.nr_frags();
+    return _ring.available_descriptors().wait(nr_frags).then([this, p = std::move(q)] () mutable {
+        vring::buffer_chain bc;
+        for (auto&& f : p.fragments()) {
+            vring::buffer b;
+            b.addr = virt_to_phys(f.base);
+            b.len = f.size;
+            b.writeable = false;
+            bc.push_back(std::move(b));
+        }
+        // schedule packet destruction
+        bc[0].completed.get_future().then([p = std::move(p)] (size_t) {});
+        std::vector<vring::buffer_chain> vbc;
+        vbc.push_back(std::move(bc));
+        _ring.post(std::move(vbc));
+    });
 }
 
 virtio_net_device::rxq::rxq(virtio_net_device& netif,
         vring::config config, readable_eventfd notified, writeable_eventfd kicked)
-    : _dev(netif), _ring(config, std::move(notified), std::move(kicked),
-            [this] (semaphore& available) { return prepare_buffers(available); }) {
+    : _dev(netif), _ring(config, std::move(notified), std::move(kicked)) {
+    keep_doing([this] {
+        return prepare_buffers(_ring.available_descriptors())
+                .then([this] (std::vector<vring::buffer_chain> vbc) {
+                    _ring.post(std::move(vbc));
+                });
+    });
 }
 
 future<std::vector<vring::buffer_chain>>
