@@ -158,7 +158,7 @@ public:
     void set_host_address(ipv4_address ip);
     void set_gw_address(ipv4_address ip);
     void set_netmask_address(ipv4_address ip);
-    void send(ipv4_address to, uint8_t proto_num, packet p);
+    future<> send(ipv4_address to, uint8_t proto_num, packet p);
     tcp<ipv4_traits>& get_tcp() { return _tcp._tcp; }
     void register_l4(proto_type id, ip_protocol* handler);
     net::hw_features hw_features() { return _netif->hw_features(); }

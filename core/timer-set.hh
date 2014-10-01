@@ -222,6 +222,13 @@ public:
     }
 
     /**
+     * Returns an iterable collection over expired timers.
+     */
+    auto& expired_set() {
+        return _expired;
+    }
+
+    /**
      * Returns a time point at which expire() should be called
      * in order to ensure timers are expired in a timely manner.
      *

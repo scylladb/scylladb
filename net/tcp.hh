@@ -151,7 +151,6 @@ private:
         void trim_receive_data_after_window();
         bool should_send_ack();
         void clear_delayed_ack();
-        void process_delayed_ack();
         packet get_transmit_packet();
         friend class connection;
     };
@@ -310,7 +309,7 @@ tcp<InetTraits>::tcb::tcb(tcp& t, connid id)
     , _foreign_ip(id.foreign_ip)
     , _local_port(id.local_port)
     , _foreign_port(id.foreign_port) {
-    process_delayed_ack();
+        _delayed_ack.set_callback([this] { output(); });
 }
 
 template <typename InetTraits>
@@ -595,8 +594,7 @@ void tcp<InetTraits>::tcb::close() {
 
 template <typename InetTraits>
 bool tcp<InetTraits>::tcb::should_send_ack() {
-    if (_delayed_ack.armed()) {
-        _delayed_ack.suspend();
+    if (_delayed_ack.cancel()) {
         return true;
     } else {
         _delayed_ack.arm(400ms);
@@ -606,17 +604,7 @@ bool tcp<InetTraits>::tcb::should_send_ack() {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::clear_delayed_ack() {
-    if (_delayed_ack.armed()) {
-        _delayed_ack.suspend();
-    }
-}
-
-template <typename InetTraits>
-void tcp<InetTraits>::tcb::process_delayed_ack() {
-    _delayed_ack.expired().then([this] {
-        output();
-        process_delayed_ack();
-    });
+    _delayed_ack.cancel();
 }
 
 template <typename InetTraits>

@@ -152,6 +152,14 @@ struct future_state {
         }
         return std::move(_u.value);
     }
+    void forward_to(promise<T...>& pr) {
+        assert(_state != state::future);
+        if (_state == state::exception) {
+            pr.set_exception(_u.ex);
+        } else {
+            pr.set_value(std::move(get()));
+        }
+    }
 };
 
 template <typename Func, typename... T>
@@ -209,6 +217,10 @@ public:
     void set_exception(std::exception_ptr ex) {
         _state->set_exception(std::move(ex));
         make_ready();
+    }
+    template<typename Exception>
+    void set_exception(Exception&& e) {
+        set_exception(make_exception_ptr(std::forward<Exception>(e)));
     }
 private:
     template <typename Func>
@@ -320,6 +332,18 @@ public:
         return fut;
     }
 
+    void forward_to(promise<T...>&& pr) {
+        if (state()->available()) {
+            state()->forward_to(pr);
+        } else {
+            _promise->schedule([pr = std::move(pr)] (auto& state) mutable {
+                state.forward_to(pr);
+            });
+            _promise->_future = nullptr;
+            _promise = nullptr;
+        }
+    }
+
     template <typename Func>
     std::result_of_t<Func(T&&...)>
     then(Func&& func,
@@ -340,9 +364,7 @@ public:
             try {
                 auto result = state.get();
                 auto next_fut = apply(std::move(func), std::move(result));
-                next_fut.then([pr = std::move(pr)] (auto... next) mutable {
-                    pr.set_value(std::move(next)...);
-                });
+                next_fut.forward_to(std::move(pr));
             } catch (...) {
                 pr.set_exception(std::current_exception());
             }
@@ -353,19 +375,56 @@ public:
     }
 
     template <typename Func>
-    void rescue(Func&& func) {
+    future<> rescue(Func&& func) {
         if (state()->available()) {
             try {
-                return func([&state = *state()] { state.get(); });
+                func([&state = *state()] { return state.get(); });
+                return make_ready_future();
             } catch (...) {
-                std::terminate();
+                return make_exception_future(std::current_exception());
             }
         }
-        _promise->schedule([func = std::forward<Func>(func)] (auto& state) mutable {
-            func([&state] () mutable { state.get(); });
+        promise<> pr;
+        auto f = pr.get_future();
+        _promise->schedule([pr = std::move(pr), func = std::forward<Func>(func)] (auto& state) mutable {
+            try {
+                func([&state]() mutable { return state.get(); });
+                pr.set_value();
+            } catch (...) {
+                pr.set_exception(std::current_exception());
+            }
         });
         _promise->_future = nullptr;
         _promise = nullptr;
+        return f;
+    }
+
+    template <typename Func>
+    future<T...> finally(Func&& func) {
+        promise<T...> pr;
+        auto f = pr.get_future();
+        if (state()->available()) {
+            try {
+                func();
+            } catch (...) {
+                pr.set_exception(std::current_exception());
+                return f;
+            }
+            state()->forward_to(pr);
+            return f;
+        }
+        _promise->schedule([pr = std::move(pr), func = std::forward<Func>(func)] (auto& state) mutable {
+            try {
+                func();
+            } catch (...) {
+                pr.set_exception(std::current_exception());
+                return;
+            }
+            state.forward_to(pr);
+        });
+        _promise->_future = nullptr;
+        _promise = nullptr;
+        return f;
     }
 
     template <typename... U>
@@ -374,6 +433,8 @@ public:
     friend future<U...> make_ready_future(A&&... value);
     template <typename... U>
     friend future<U...> make_exception_future(std::exception_ptr ex);
+    template <typename... U, typename Exception>
+    friend future<U...> make_exception_future(Exception&& ex);
 };
 
 template <typename... T>
@@ -422,6 +483,12 @@ template <typename... T>
 inline
 future<T...> make_exception_future(std::exception_ptr ex) {
     return future<T...>(exception_future_marker(), std::move(ex));
+}
+
+template <typename... T, typename Exception>
+inline
+future<T...> make_exception_future(Exception&& ex) {
+    return make_exception_future<T...>(make_exception_ptr(std::forward<Exception>(ex)));
 }
 
 #endif /* FUTURE_HH_ */

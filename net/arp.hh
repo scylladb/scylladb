@@ -60,6 +60,7 @@ public:
     using l2addr = ethernet_address;
     using l3addr = typename L3::address_type;
 private:
+    static constexpr auto max_waiters = 512;
     enum oper {
         op_request = 1,
         op_reply = 2,
@@ -82,6 +83,7 @@ private:
     };
     struct resolution {
         std::vector<promise<l2addr>> _waiters;
+        timer _timeout_timer;
     };
 private:
     l3addr _l3self = L3::broadcast_address();
@@ -93,6 +95,7 @@ private:
     future<> handle_request(arp_hdr* ah);
     l2addr l2self() { return _arp.l2self(); }
 public:
+    future<> send_query(const l3addr& paddr);
     explicit arp_for(arp& a) : arp_for_protocol(a, L3::arp_protocol_type()) {}
     future<ethernet_address> lookup(const l3addr& addr);
     void learn(l2addr l2, l3addr l3);
@@ -119,23 +122,55 @@ arp_for<L3>::make_query_packet(l3addr paddr) {
 }
 
 template <typename L3>
+future<>
+arp_for<L3>::send_query(const l3addr& paddr) {
+    return _arp._proto.send(ethernet::broadcast_address(), make_query_packet(paddr));
+}
+
+class arp_error : public std::runtime_error {
+public:
+    arp_error(const std::string& msg) : std::runtime_error(msg) {}
+};
+
+class arp_timeout_error : public arp_error {
+public:
+    arp_timeout_error() : arp_error("ARP timeout") {}
+};
+
+class arp_queue_full_error : public arp_error {
+public:
+    arp_queue_full_error() : arp_error("ARP waiter's queue is full") {}
+};
+
+template <typename L3>
 future<ethernet_address>
 arp_for<L3>::lookup(const l3addr& paddr) {
     auto i = _table.find(paddr);
     if (i != _table.end()) {
         return make_ready_future<ethernet_address>(i->second);
     }
-    resolution& res = _in_progress[paddr];
-    res._waiters.emplace_back();
-    auto fut = res._waiters.back().get_future();
-    if (res._waiters.size() == 1) {
-        return _arp._proto.send(ethernet::broadcast_address(), make_query_packet(paddr)).then(
-                [fut = std::move(fut)] () mutable {
-            return std::move(fut);
+    auto j = _in_progress.find(paddr);
+    auto first_request = j == _in_progress.end();
+    auto& res = first_request ? _in_progress[paddr] : j->second;
+
+    if (first_request) {
+        res._timeout_timer.set_callback([paddr, this, &res] {
+            send_query(paddr);
+            for (auto& w : res._waiters) {
+                w.set_exception(arp_timeout_error());
+            }
+            res._waiters.clear();
         });
-    } else {
-        return fut;
+        res._timeout_timer.arm_periodic(std::chrono::seconds(1));
+        send_query(paddr);
     }
+
+    if (res._waiters.size() >= max_waiters) {
+        return make_exception_future<ethernet_address>(arp_queue_full_error());
+    }
+
+    res._waiters.emplace_back();
+    return res._waiters.back().get_future();
 }
 
 template <typename L3>
@@ -144,7 +179,9 @@ arp_for<L3>::learn(l2addr hwaddr, l3addr paddr) {
     _table[paddr] = hwaddr;
     auto i = _in_progress.find(paddr);
     if (i != _in_progress.end()) {
-        for (auto&& pr : i->second._waiters) {
+        auto& res = i->second;
+        res._timeout_timer.cancel();
+        for (auto &&pr : res._waiters) {
             pr.set_value(hwaddr);
         }
         _in_progress.erase(i);
