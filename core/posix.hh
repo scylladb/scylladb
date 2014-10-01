@@ -20,6 +20,7 @@
 #include <signal.h>
 #include <system_error>
 #include <boost/optional.hpp>
+#include <pthread.h>
 
 inline void throw_system_error_on(bool condition);
 
@@ -182,6 +183,29 @@ public:
 private:
     file_desc(int fd) : _fd(fd) {}
  };
+
+class posix_thread {
+    std::function<void ()> _func;
+    pthread_t _pthread;
+private:
+    static void* start_routine(void* arg) {
+        auto zis = reinterpret_cast<posix_thread*>(arg);
+        zis->_func();
+        return nullptr;
+    }
+public:
+    posix_thread(std::function<void ()> func) : _func(func) {
+        auto r = pthread_create(&_pthread, nullptr,
+                    &posix_thread::start_routine, this);
+        if (r) {
+            throw std::system_error(r, std::system_category());
+        }
+    }
+    void join() {
+        pthread_join(_pthread, NULL);
+    }
+};
+
 
 inline
 void throw_system_error_on(bool condition) {
