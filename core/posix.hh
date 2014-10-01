@@ -6,6 +6,7 @@
 #define FILE_DESC_HH_
 
 #include "sstring.hh"
+#include <sys/types.h>
 #include <unistd.h>
 #include <assert.h>
 #include <utility>
@@ -14,7 +15,10 @@
 #include <sys/eventfd.h>
 #include <sys/timerfd.h>
 #include <sys/signalfd.h>
+#include <sys/socket.h>
+#include <sys/epoll.h>
 #include <signal.h>
+#include <system_error>
 #include <boost/optional.hpp>
 
 inline void throw_system_error_on(bool condition);
