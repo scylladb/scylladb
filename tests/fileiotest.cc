@@ -27,7 +27,8 @@ int main(int ac, char** av) {
                     auto rbuf = allocate_aligned_buffer<unsigned char>(4096, 4096);
                     auto rb = rbuf.get();
                     ft->f.dma_read(i * 4096, rb, 4096).then(
-                            [ft, i, rbuf = std::move(rbuf), wbuf = std::move(wbuf)] (size_t) mutable {
+                            [ft, i, rbuf = std::move(rbuf), wbuf = std::move(wbuf)] (size_t ret) mutable {
+                        assert(ret == 4096);
                         bool eq = std::equal(rbuf.get(), rbuf.get() + 4096, wbuf.get());
                         assert(eq);
                         ft->sem.signal(1);
