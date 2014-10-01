@@ -49,7 +49,7 @@ deps = {
 modes = {
     'debug': {
         'sanitize': '-fsanitize=address -fsanitize=leak -fsanitize=undefined',
-        'opt': '-O0',
+        'opt': '-O0 -DDEBUG',
         'libs': '-lubsan -lasan',
     },
     'release': {
