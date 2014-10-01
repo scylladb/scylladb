@@ -63,6 +63,40 @@ future<> test_exception_from_finally_fails_the_target_on_already_resolved() {
     });
 }
 
+future<> test_exception_thrown_from_rescue_causes_future_to_fail()
+{
+    return make_ready_future().rescue([] (auto get) {
+        throw std::runtime_error("");
+    }).rescue([] (auto get) {
+        try {
+            get();
+            BUG();
+        } catch (...) {
+            OK();
+        }
+    });
+}
+
+future<> test_exception_thrown_from_rescue_causes_future_to_fail__async_case()
+{
+    promise<> p;
+
+    auto f = p.get_future().rescue([] (auto get) {
+        throw std::runtime_error("");
+    }).rescue([] (auto get) {
+        try {
+            get();
+            BUG();
+        } catch (...) {
+            OK();
+        }
+    });
+
+    p.set_value();
+
+    return f;
+}
+
 int main(int ac, char **av)
 {
     return app_template().run(ac, av, [] {
@@ -70,6 +104,8 @@ int main(int ac, char **av)
             test_finally_is_called_on_success_and_failure()
             .then(test_exception_from_finally_fails_the_target)
             .then(test_exception_from_finally_fails_the_target_on_already_resolved)
+            .then(test_exception_thrown_from_rescue_causes_future_to_fail)
+            .then(test_exception_thrown_from_rescue_causes_future_to_fail__async_case)
         );
     });
 }
