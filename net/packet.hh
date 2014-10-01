@@ -243,12 +243,7 @@ packet::packet(char* data, size_t size) : packet(fragment{data, size}) {
 
 template <typename Deleter>
 inline
-packet::packet(fragment frag, Deleter d)
-    : _impl(impl::allocate(1)) {
-    _impl->_deleter = make_deleter(deleter(), std::move(d));
-    _impl->_frags[_impl->_nr_frags++] = frag;
-    _impl->_len = frag.size;
-}
+packet::packet(fragment frag, Deleter d) : packet(frag, make_deleter(deleter(), std::move(d))) {}
 
 inline
 packet::packet(fragment frag, deleter d)
