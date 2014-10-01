@@ -52,6 +52,10 @@ public:
     // Pops element now or when ther is some. Returns a future that becomes
     // available when some element is available.
     future<T> pop_eventually();
+
+    // Pushes the element now or when there is room. Returns a future<> which
+    // resolves when data was pushed.
+    future<> push_eventually(T&& data);
 };
 
 template <typename T>
@@ -110,6 +114,21 @@ future<T> queue<T>::pop_eventually() {
         });
     } else {
         return make_ready_future<T>(pop());
+    }
+}
+
+template <typename T>
+inline
+future<> queue<T>::push_eventually(T&& data) {
+    if (full()) {
+        return not_full().then([this, data = std::move(data)] () mutable {
+            _q.push(std::move(data));
+            notify_not_empty();
+        });
+    } else {
+        _q.push(std::move(data));
+        notify_not_empty();
+        return make_ready_future<>();
     }
 }
 
