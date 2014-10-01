@@ -95,7 +95,7 @@ future<> ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
     }
 
     return _arp.lookup(dst).then([this, p = std::move(p)] (ethernet_address e_dst) mutable {
-        _send_sem.wait().then([this, e_dst, p = std::move(p)] () mutable {
+        return _send_sem.wait().then([this, e_dst, p = std::move(p)] () mutable {
             return _l3.send(e_dst, std::move(p));
         }).finally([this] () {
             _send_sem.signal();

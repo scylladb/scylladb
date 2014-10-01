@@ -167,8 +167,7 @@ public:
 template <uint8_t ProtoNum>
 inline
 future<> ipv4_l4<ProtoNum>::send(ipv4_address from, ipv4_address to, packet p) {
-    _inet.send(/* from, */ to, ProtoNum, std::move(p));
-    return make_ready_future<>(); // FIXME: ?
+    return _inet.send(/* from, */ to, ProtoNum, std::move(p));
 }
 
 struct ip_hdr {
