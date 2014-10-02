@@ -41,6 +41,7 @@
 #include <cassert>
 #include <atomic>
 #include <mutex>
+#include <cstring>
 #include <boost/intrusive/list.hpp>
 #include <sys/mman.h>
 
@@ -294,6 +295,173 @@ size_t object_size(void* ptr) {
     return cpu_mem.object_size(ptr);
 }
 
+}
+
+using namespace memory;
+
+extern "C"
+void* malloc(size_t n) throw () {
+    if (n == 0) {
+        return nullptr;
+    }
+    try {
+        return allocate_large(n);
+    } catch (std::bad_alloc& ba) {
+        return nullptr;
+    }
+}
+
+extern "C"
+[[gnu::alias("malloc")]]
+void* __libc_malloc(size_t n) throw ();
+
+extern "C"
+void free(void* ptr) {
+    if (ptr) {
+        free_large(ptr);
+    }
+}
+
+extern "C"
+[[gnu::alias("free")]]
+void* __libc_free(void* obj) throw ();
+
+extern "C"
+void* calloc(size_t nmemb, size_t size) {
+    auto s1 = __int128(nmemb) * __int128(size);
+    assert(s1 == size_t(s1));
+    size_t s = s1;
+    auto p = malloc(s);
+    if (p) {
+        std::memset(p, 0, s);
+    }
+    return p;
+}
+
+extern "C"
+[[gnu::alias("calloc")]]
+void* __libc_calloc(size_t n, size_t m) throw ();
+
+extern "C"
+void* realloc(void* ptr, size_t size) {
+    auto old_size = ptr ? object_size(ptr) : 0;
+    auto nptr = malloc(size);
+    if (!nptr) {
+        return nptr;
+    }
+    std::memcpy(nptr, ptr, std::min(size, old_size));
+    free(ptr);
+    return nptr;
+}
+
+extern "C"
+[[gnu::alias("realloc")]]
+void* __libc_realloc(void* obj, size_t size) throw ();
+
+extern "C"
+int posix_memalign(void** ptr, size_t align, size_t size) {
+    try {
+        *ptr = allocate_large_aligned(align, size);
+        return 0;
+    } catch (std::bad_alloc&) {
+        return ENOMEM;
+    }
+}
+
+extern "C"
+[[gnu::alias("posix_memalign")]]
+int __libc_posix_memalign(void** ptr, size_t align, size_t size) throw ();
+
+extern "C"
+void* memalign(size_t align, size_t size) {
+    try {
+        return allocate_large_aligned(align, size);
+    } catch (std::bad_alloc&) {
+        return NULL;
+    }
+}
+
+extern "C"
+[[gnu::alias("memalign")]]
+void* __libc_memalign(size_t align, size_t size);
+
+extern "C"
+void cfree(void* obj) {
+    return ::free(obj);
+}
+
+extern "C"
+[[gnu::alias("cfree")]]
+void __libc_cfree(void* obj);
+
+extern "C"
+size_t malloc_usable_size(void* obj) {
+    return object_size(obj);
+}
+
+extern "C"
+int malloc_trim(size_t pad) {
+    return 0;
+}
+
+void* operator new(size_t size) {
+    if (size == 0) {
+        size = 1;
+    }
+    return allocate_large(size);
+}
+
+void* operator new[](size_t size) {
+    if (size == 0) {
+        size = 1;
+    }
+    return allocate_large(size);
+}
+
+void operator delete(void* ptr) throw () {
+    if (ptr) {
+        free_large(ptr);
+    }
+}
+
+void operator delete[](void* ptr) throw () {
+    if (ptr) {
+        free_large(ptr);
+    }
+}
+
+void* operator new(size_t size, std::nothrow_t) throw () {
+    if (size == 0) {
+        size = 1;
+    }
+    try {
+        return allocate_large(size);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void* operator new[](size_t size, std::nothrow_t) throw () {
+    if (size == 0) {
+        size = 1;
+    }
+    try {
+        return allocate_large(size);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void operator delete(void* ptr, std::nothrow_t) throw () {
+    if (ptr) {
+        free_large(ptr);
+    }
+}
+
+void operator delete[](void* ptr, std::nothrow_t) throw () {
+    if (ptr) {
+        free_large(ptr);
+    }
 }
 
 #endif

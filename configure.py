@@ -57,7 +57,7 @@ modes = {
     'release': {
         'sanitize': '',
         'opt': '-O2',
-        'libs': '-ltcmalloc',
+        'libs': '',
     },
 }
 
