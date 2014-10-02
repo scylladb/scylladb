@@ -81,10 +81,20 @@ static char* mem_base() {
     return known;
 }
 
+class small_pool;
+
+struct free_object {
+    free_object* next;
+};
+
 struct page {
     bool free;
+    uint8_t offset_in_span;
+    uint16_t nr_small_alloc;
     uint32_t span_size; // in pages, if we're the head or the tail
     page_list_link link;
+    small_pool* pool;  // if used in a small_pool
+    free_object* freelist;
 };
 
 // FIXME: use 32-bit pointers to save space
@@ -92,6 +102,51 @@ using page_list
         = bi::list<page,
                    bi::member_hook<page, page_list_link, &page::link>,
                    bi::constant_time_size<false>>;
+
+class small_pool {
+    unsigned _object_size;
+    unsigned _span_size;
+    free_object* _free = nullptr;
+    size_t _free_count = 0;
+    unsigned _min_free;
+    unsigned _max_free;
+    page_list _span_list;
+private:
+    size_t span_bytes() const { return _span_size * page_size; }
+public:
+    explicit small_pool(unsigned object_size) noexcept;
+    ~small_pool();
+    void* allocate();
+    void deallocate(void* object);
+    unsigned object_size() const { return _object_size; }
+private:
+    void add_more_objects();
+    void trim_free_list();
+    float waste();
+};
+
+class small_pool_array {
+public:
+    static constexpr const unsigned nr_small_pools = page_bits + 1;
+private:
+    union u {
+        small_pool a[nr_small_pools];
+        u() {
+            for (unsigned i = 0; i < nr_small_pools; ++i) {
+                new (&a[i]) small_pool(1 << i);
+            }
+        }
+        ~u() {
+            // cannot really call destructor, since other
+            // objects may be freed after we are gone.
+        }
+    } _u;
+public:
+    small_pool& operator[](unsigned idx) { return _u.a[idx]; }
+};
+
+static constexpr const size_t max_small_allocation
+    = size_t(1) << (small_pool_array::nr_small_pools - 1);
 
 struct cpu_pages {
     page* pages;
@@ -110,6 +165,7 @@ struct cpu_pages {
         }
         page_list free_spans[nr_span_lists];  // contains spans with span_size >= 2^idx
     } fsu;
+    small_pool_array small_pools;
     static std::atomic<unsigned> cpu_id_gen;
     char* mem() { return reinterpret_cast<char*>(pages); }
 
@@ -126,7 +182,12 @@ struct cpu_pages {
     void free_large(void* ptr);
     void free_span(pageidx start, uint32_t nr_pages);
     void free_span_no_merge(pageidx start, uint32_t nr_pages);
+    void* allocate_small(unsigned size);
+    void free(void* ptr);
     size_t object_size(void* ptr);
+    page* to_page(void* p) {
+        return &pages[(reinterpret_cast<char*>(p) - mem()) / page_size];
+    }
 
     bool initialize();
 };
@@ -218,6 +279,7 @@ cpu_pages::allocate_large_and_trim(unsigned n_pages, Trimmer trimmer) {
     auto span_end = &pages[span_idx + n_pages - 1];
     span->free = span_end->free = false;
     span->span_size = span_end->span_size = n_pages;
+    span->pool = nullptr;
     return mem() + span_idx * page_size;
 }
 
@@ -235,6 +297,14 @@ cpu_pages::allocate_large_aligned(unsigned align_pages, unsigned n_pages) {
     });
 }
 
+void*
+cpu_pages::allocate_small(unsigned size) {
+    auto idx = std::numeric_limits<unsigned>::digits - count_leading_zeros(size - 1);
+    auto& pool = small_pools[idx];
+    assert(size <= pool.object_size());
+    return pool.allocate();
+}
+
 void cpu_pages::free_large(void* ptr) {
     pageidx idx = (reinterpret_cast<char*>(ptr) - mem()) / page_size;
     page* span = &pages[idx];
@@ -244,7 +314,21 @@ void cpu_pages::free_large(void* ptr) {
 size_t cpu_pages::object_size(void* ptr) {
     pageidx idx = (reinterpret_cast<char*>(ptr) - mem()) / page_size;
     page* span = &pages[idx];
-    return size_t(span->span_size) * page_size;
+    if (span->pool) {
+        return span->pool->object_size();
+    } else {
+        return size_t(span->span_size) * page_size;
+    }
+}
+
+void cpu_pages::free(void* ptr) {
+    assert(((reinterpret_cast<uintptr_t>(ptr) >> cpu_id_shift) & 0xff) == cpu_id);
+    page* span = to_page(ptr);
+    if (span->pool) {
+        span->pool->deallocate(ptr);
+    } else {
+        free_large(ptr);
+    }
 }
 
 bool cpu_pages::initialize() {
@@ -274,6 +358,104 @@ bool cpu_pages::initialize() {
     return true;
 }
 
+small_pool::small_pool(unsigned object_size) noexcept
+    : _object_size(object_size), _span_size(1) {
+    while (_object_size > span_bytes()
+            || (_span_size < 32 && waste() > 0.05)
+            || (span_bytes() / object_size < 32)) {
+        _span_size *= 2;
+    }
+    _max_free = std::max<unsigned>(100, span_bytes() * 2 / _object_size);
+    _min_free = _max_free / 2;
+}
+
+small_pool::~small_pool() {
+    _min_free = _max_free = 0;
+    trim_free_list();
+}
+
+void*
+small_pool::allocate() {
+    if (!_free) {
+        add_more_objects();
+    }
+    auto* obj = _free;
+    _free = _free->next;
+    --_free_count;
+    return obj;
+}
+
+void
+small_pool::deallocate(void* object) {
+    auto o = reinterpret_cast<free_object*>(object);
+    o->next = _free;
+    _free = o;
+    ++_free_count;
+    if (_free_count >= _max_free) {
+        trim_free_list();
+    }
+}
+
+void
+small_pool::add_more_objects() {
+    auto goal = (_min_free + _max_free) / 2;
+    while (!_span_list.empty() && _free_count < goal) {
+        page& span = _span_list.front();
+        _span_list.pop_front();
+        while (span.freelist) {
+            auto obj = span.freelist;
+            span.freelist = span.freelist->next;
+            obj->next = _free;
+            _free = obj;
+            ++_free_count;
+            ++span.nr_small_alloc;
+        }
+    }
+    while (_free_count < goal) {
+        auto data = reinterpret_cast<char*>(cpu_mem.allocate_large(_span_size));
+        auto span = cpu_mem.to_page(data);
+        for (unsigned i = 0; i < _span_size; ++i) {
+            span[i].offset_in_span = i;
+            span[i].pool = this;
+        }
+        span->nr_small_alloc = 0;
+        span->freelist = nullptr;
+        for (unsigned offset = 0; offset <= span_bytes() - _object_size; offset += _object_size) {
+            auto h = reinterpret_cast<free_object*>(data + offset);
+            h->next = _free;
+            _free = h;
+            ++_free_count;
+            ++span->nr_small_alloc;
+        }
+    }
+}
+
+void
+small_pool::trim_free_list() {
+    auto goal = (_min_free + _max_free) / 2;
+    while (_free && _free_count > goal) {
+        auto obj = _free;
+        _free = _free->next;
+        --_free_count;
+        page* span = cpu_mem.to_page(obj);
+        span -= span->offset_in_span;
+        if (!span->freelist) {
+            new (&span->link) page_list_link();
+            _span_list.push_front(*span);
+        }
+        obj->next = span->freelist;
+        span->freelist = obj;
+        if (--span->nr_small_alloc == 0) {
+            span->link.unlink();
+            cpu_mem.free_span(span - cpu_mem.pages, span->span_size);
+        }
+    }
+}
+
+float small_pool::waste() {
+    return (span_bytes() % _object_size) / (1.0 * span_bytes());
+}
+
 void* allocate_large(size_t size) {
     unsigned size_in_pages = (size + page_size - 1) >> page_bits;
     assert((size_t(size_in_pages) << page_bits) >= size);
@@ -295,6 +477,33 @@ size_t object_size(void* ptr) {
     return cpu_mem.object_size(ptr);
 }
 
+void* allocate(size_t size) {
+    if (size <= sizeof(free_object)) {
+        size = sizeof(free_object);
+    }
+    if (size <= max_small_allocation) {
+        return cpu_mem.allocate_small(size);
+    } else {
+        return allocate_large(size);
+    }
+}
+
+void* allocate_aligned(size_t align, size_t size) {
+    size = std::max(size, align);
+    if (size <= sizeof(free_object)) {
+        size = sizeof(free_object);
+    }
+    if (size <= max_small_allocation) {
+        return cpu_mem.allocate_small(size);
+    } else {
+        return allocate_large_aligned(align, size);
+    }
+}
+
+void free(void* obj) {
+    cpu_mem.free(obj);
+}
+
 }
 
 using namespace memory;
@@ -305,7 +514,7 @@ void* malloc(size_t n) throw () {
         return nullptr;
     }
     try {
-        return allocate_large(n);
+        return allocate(n);
     } catch (std::bad_alloc& ba) {
         return nullptr;
     }
@@ -318,7 +527,7 @@ void* __libc_malloc(size_t n) throw ();
 extern "C"
 void free(void* ptr) {
     if (ptr) {
-        free_large(ptr);
+        memory::free(ptr);
     }
 }
 
@@ -350,7 +559,7 @@ void* realloc(void* ptr, size_t size) {
         return nptr;
     }
     std::memcpy(nptr, ptr, std::min(size, old_size));
-    free(ptr);
+    ::free(ptr);
     return nptr;
 }
 
@@ -361,7 +570,7 @@ void* __libc_realloc(void* obj, size_t size) throw ();
 extern "C"
 int posix_memalign(void** ptr, size_t align, size_t size) {
     try {
-        *ptr = allocate_large_aligned(align, size);
+        *ptr = allocate_aligned(align, size);
         return 0;
     } catch (std::bad_alloc&) {
         return ENOMEM;
@@ -375,7 +584,7 @@ int __libc_posix_memalign(void** ptr, size_t align, size_t size) throw ();
 extern "C"
 void* memalign(size_t align, size_t size) {
     try {
-        return allocate_large_aligned(align, size);
+        return allocate_aligned(align, size);
     } catch (std::bad_alloc&) {
         return NULL;
     }
@@ -408,25 +617,25 @@ void* operator new(size_t size) {
     if (size == 0) {
         size = 1;
     }
-    return allocate_large(size);
+    return allocate(size);
 }
 
 void* operator new[](size_t size) {
     if (size == 0) {
         size = 1;
     }
-    return allocate_large(size);
+    return allocate(size);
 }
 
 void operator delete(void* ptr) throw () {
     if (ptr) {
-        free_large(ptr);
+        memory::free(ptr);
     }
 }
 
 void operator delete[](void* ptr) throw () {
     if (ptr) {
-        free_large(ptr);
+        memory::free(ptr);
     }
 }
 
@@ -435,7 +644,7 @@ void* operator new(size_t size, std::nothrow_t) throw () {
         size = 1;
     }
     try {
-        return allocate_large(size);
+        return allocate(size);
     } catch (...) {
         return nullptr;
     }
@@ -446,7 +655,7 @@ void* operator new[](size_t size, std::nothrow_t) throw () {
         size = 1;
     }
     try {
-        return allocate_large(size);
+        return allocate(size);
     } catch (...) {
         return nullptr;
     }
@@ -454,13 +663,13 @@ void* operator new[](size_t size, std::nothrow_t) throw () {
 
 void operator delete(void* ptr, std::nothrow_t) throw () {
     if (ptr) {
-        free_large(ptr);
+        memory::free(ptr);
     }
 }
 
 void operator delete[](void* ptr, std::nothrow_t) throw () {
     if (ptr) {
-        free_large(ptr);
+        memory::free(ptr);
     }
 }
 
