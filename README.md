@@ -26,6 +26,14 @@ Installing required packages (for libtcmalloc and libaio, respectively):
 yum install gperftools-devel libaio-devel ninja-build ragel
 ```
 
+You then need to run the following to create the "build.ninja" file:
+```
+./configure.py
+```
+Note it is enough to run this once, and you don't need to repeat it before
+every build. build.ninja includes a rule which will automatically re-run
+./configure.py if it changes.
+
 Then finally:
 ```
 ninja-build
