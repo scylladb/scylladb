@@ -28,6 +28,7 @@
 #include <boost/optional.hpp>
 #include <boost/program_options.hpp>
 #include "util/eclipse.hh"
+#include "linux_thread.hh"
 #include "future.hh"
 #include "posix.hh"
 #include "apply.hh"
@@ -381,7 +382,7 @@ private:
 
 class thread_pool {
     inter_thread_work_queue inter_thread_wq;
-    std::thread _worker_thread;
+    posix_thread _worker_thread;
     std::atomic<bool> _stopped = { false };
 public:
     thread_pool() : _worker_thread([this] { work(); }) { inter_thread_wq.start(); }
