@@ -114,7 +114,14 @@ struct cpu_pages {
 
     void link(page_list& list, page* span);
     void unlink(page* span);
+    struct trim {
+        unsigned offset;
+        unsigned nr_pages;
+    };
+    template <typename Trimmer>
+    void* allocate_large_and_trim(unsigned nr_pages, Trimmer trimmer);
     void* allocate_large(unsigned nr_pages);
+    void* allocate_large_aligned(unsigned align_pages, unsigned nr_pages);
     void free_large(void* ptr);
     void free_span(pageidx start, uint32_t nr_pages);
     void free_span_no_merge(pageidx start, uint32_t nr_pages);
@@ -173,8 +180,9 @@ void cpu_pages::free_span(uint32_t span_start, uint32_t nr_pages) {
     free_span_no_merge(span_start, nr_pages);
 }
 
+template <typename Trimmer>
 void*
-cpu_pages::allocate_large(unsigned n_pages) {
+cpu_pages::allocate_large_and_trim(unsigned n_pages, Trimmer trimmer) {
     auto idx = index_of(n_pages);
     assert(n_pages >= (1u << idx));
     assert(n_pages < (2u << idx));
@@ -183,23 +191,47 @@ cpu_pages::allocate_large(unsigned n_pages) {
     }
     if (idx == nr_span_lists) {
         if (initialize()) {
-            return allocate_large(n_pages);
+            return allocate_large_and_trim(n_pages, trimmer);
         }
         // FIXME: request application to free memory
         throw std::bad_alloc();
     }
     auto& list = fsu.free_spans[idx];
     page* span = &list.front();
-    auto span_end = span + n_pages - 1;
+    auto span_size = span->span_size;
     auto span_idx = span - pages;
     unlink(span);
     nr_free_pages -= span->span_size;
-    if (span->span_size > n_pages) {
-        free_span_no_merge(span_idx + n_pages, span->span_size - n_pages);
+    trim t = trimmer(span_idx, nr_pages);
+    if (t.offset) {
+        free_span_no_merge(span_idx, t.offset);
+        span_idx += t.offset;
+        span_size -= t.offset;
+        span = &pages[span_idx];
+
     }
+    if (t.nr_pages < span->span_size) {
+        free_span_no_merge(span_idx + t.nr_pages, span_size - t.nr_pages);
+        span_size = t.nr_pages;
+    }
+    auto span_end = &pages[span_idx + n_pages - 1];
     span->free = span_end->free = false;
     span->span_size = span_end->span_size = n_pages;
     return mem() + span_idx * page_size;
+}
+
+void*
+cpu_pages::allocate_large(unsigned n_pages) {
+    return allocate_large_and_trim(n_pages, [n_pages] (unsigned idx, unsigned n) {
+        return trim{0, std::min(n, n_pages)};
+    });
+}
+
+void*
+cpu_pages::allocate_large_aligned(unsigned align_pages, unsigned n_pages) {
+    return allocate_large_and_trim(n_pages + align_pages - 1, [=] (unsigned idx, unsigned n) {
+        return trim{align_up(idx, align_pages) - idx, n_pages};
+    });
 }
 
 void cpu_pages::free_large(void* ptr) {
@@ -246,6 +278,12 @@ void* allocate_large(size_t size) {
     assert((size_t(size_in_pages) << page_bits) >= size);
     return cpu_mem.allocate_large(size_in_pages);
 
+}
+
+void* allocate_large_aligned(size_t align, size_t size) {
+    unsigned size_in_pages = (size + page_size - 1) >> page_bits;
+    unsigned align_in_pages = std::max(align, page_size) >> page_bits;
+    return cpu_mem.allocate_large_aligned(align_in_pages, size_in_pages);
 }
 
 void free_large(void* ptr) {
