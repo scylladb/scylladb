@@ -369,6 +369,7 @@ public:
         submit_item(wi);
         return fut;
     }
+    void start() { complete(); }
 private:
     void work();
     void complete();
@@ -383,7 +384,7 @@ class thread_pool {
     std::thread _worker_thread;
     std::atomic<bool> _stopped = { false };
 public:
-    thread_pool() : _worker_thread([this] { work(); }) {}
+    thread_pool() : _worker_thread([this] { work(); }) { inter_thread_wq.start(); }
     ~thread_pool();
     template <typename T, typename Func>
     future<T> submit(Func func) {return inter_thread_wq.submit<T>(std::move(func));}
@@ -496,6 +497,7 @@ public:
 private:
 	static void listen_all(inter_thread_work_queue* qs);
 	static void listen_one(inter_thread_work_queue& q, std::unique_ptr<readable_eventfd>&& rfd, std::unique_ptr<writeable_eventfd>&& wfd);
+	static void start_all_queues();
 public:
 	static unsigned count;
 };
