@@ -111,6 +111,7 @@ class small_pool {
     unsigned _min_free;
     unsigned _max_free;
     page_list _span_list;
+    static constexpr unsigned idx_frac_bits = 2;
 private:
     size_t span_bytes() const { return _span_size * page_size; }
 public:
@@ -119,21 +120,42 @@ public:
     void* allocate();
     void deallocate(void* object);
     unsigned object_size() const { return _object_size; }
+    static constexpr unsigned size_to_idx(unsigned size);
+    static constexpr unsigned idx_to_size(unsigned idx);
 private:
     void add_more_objects();
     void trim_free_list();
     float waste();
 };
 
+// index 0b0001'1100 -> size (1 << 4) + 0b11 << (4 - 2)
+
+constexpr unsigned
+small_pool::idx_to_size(unsigned idx) {
+    return (((1 << idx_frac_bits) | (idx & ((1 << idx_frac_bits) - 1)))
+              << (idx >> idx_frac_bits))
+                  >> idx_frac_bits;
+}
+
+static constexpr unsigned log2(unsigned n) {
+    return std::numeric_limits<unsigned>::digits - count_leading_zeros(n - 1);
+}
+
+constexpr unsigned
+small_pool::size_to_idx(unsigned size) {
+    return ((log2(size) << idx_frac_bits) - ((1 << idx_frac_bits) - 1))
+            + ((size - 1) >> (log2(size) - idx_frac_bits));
+}
+
 class small_pool_array {
 public:
-    static constexpr const unsigned nr_small_pools = page_bits + 1;
+    static constexpr const unsigned nr_small_pools = small_pool::size_to_idx(4 * page_size) + 1;
 private:
     union u {
         small_pool a[nr_small_pools];
         u() {
             for (unsigned i = 0; i < nr_small_pools; ++i) {
-                new (&a[i]) small_pool(1 << i);
+                new (&a[i]) small_pool(small_pool::idx_to_size(i));
             }
         }
         ~u() {
@@ -146,7 +168,7 @@ public:
 };
 
 static constexpr const size_t max_small_allocation
-    = size_t(1) << (small_pool_array::nr_small_pools - 1);
+    = small_pool::idx_to_size(small_pool_array::nr_small_pools - 1);
 
 struct cpu_pages {
     page* pages;
@@ -299,7 +321,7 @@ cpu_pages::allocate_large_aligned(unsigned align_pages, unsigned n_pages) {
 
 void*
 cpu_pages::allocate_small(unsigned size) {
-    auto idx = std::numeric_limits<unsigned>::digits - count_leading_zeros(size - 1);
+    auto idx = small_pool::size_to_idx(size);
     auto& pool = small_pools[idx];
     assert(size <= pool.object_size());
     return pool.allocate();
