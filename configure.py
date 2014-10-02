@@ -71,6 +71,10 @@ arg_parser = argparse.ArgumentParser('Configure seastar')
 arg_parser.add_argument('--static', dest = 'static', action = 'store_const', default = '',
                         const = '-static',
                         help = 'Static link (useful for running on hosts outside the build environment')
+arg_parser.add_argument('--pie', dest = 'pie', action = 'store_true',
+                        help = 'Build position-independent executable (PIE)')
+arg_parser.add_argument('--so', dest = 'so', action = 'store_true',
+                        help = 'Build shared object (SO) instead of executable')
 arg_parser.add_argument('--mode', action='store', choices=list(modes.keys()) + ['all'], default='all')
 arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
 arg_parser.add_argument('--cflags', action = 'store', dest = 'user_cflags', default = '',
@@ -80,6 +84,17 @@ arg_parser.add_argument('--ldflags', action = 'store', dest = 'user_ldflags', de
 arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 'g++',
                         help = 'C++ compiler path')
 args = arg_parser.parse_args()
+
+if args.so:
+    args.pie = '-shared'
+    args.fpie = '-fpic'
+elif args.pie:
+    args.pie = '-pie'
+    args.fpie = '-fpie'
+else:
+    args.pie = ''
+    args.fpie = ''
+
 globals().update(vars(args))
 
 build_modes = modes if args.mode == 'all' else [args.mode]
@@ -93,8 +108,8 @@ with open(buildfile, 'w') as f:
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        cxxflags = -std=gnu++1y -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags}
-        ldflags = -Wl,--no-as-needed {static} -fvisibility=hidden -pthread {user_ldflags}
+        cxxflags = -std=gnu++1y {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags}
+        ldflags = -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags}
         libs = {libs}
         rule ragel
             command = ragel -G2 -o $out $in
