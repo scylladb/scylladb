@@ -6,32 +6,32 @@
 #define BITOPS_HH_
 
 inline
-unsigned count_leading_zeros(unsigned x) {
+constexpr unsigned count_leading_zeros(unsigned x) {
     return __builtin_clz(x);
 }
 
 inline
-unsigned count_leading_zeros(unsigned long x) {
+constexpr unsigned count_leading_zeros(unsigned long x) {
     return __builtin_clzl(x);
 }
 
 inline
-unsigned count_leading_zeros(unsigned long long x) {
+constexpr unsigned count_leading_zeros(unsigned long long x) {
     return __builtin_clzll(x);
 }
 
 inline
-unsigned count_trailing_zeros(unsigned x) {
+constexpr unsigned count_trailing_zeros(unsigned x) {
     return __builtin_ctz(x);
 }
 
 inline
-unsigned count_trailing_zeros(unsigned long x) {
+constexpr unsigned count_trailing_zeros(unsigned long x) {
     return __builtin_ctzl(x);
 }
 
 inline
-unsigned count_trailing_zeros(unsigned long long x) {
+constexpr unsigned count_trailing_zeros(unsigned long long x) {
     return __builtin_ctzll(x);
 }
 
