@@ -457,6 +457,7 @@ virtio_net_device::txq::transmit(semaphore& available) {
         return available.wait(nbufs).then([this, p = std::move(q)] () mutable {
             std::vector<vring::buffer_chain> vbc;
             vring::buffer_chain bc;
+            bc.reserve(p.nr_frags());
             for (auto&& f : p.fragments()) {
                 vring::buffer b;
                 b.addr = virt_to_phys(f.base);
