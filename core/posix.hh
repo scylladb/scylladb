@@ -195,17 +195,42 @@ using mmap_area = std::unique_ptr<char[], mmap_deleter>;
 mmap_area mmap_anonymous(void* addr, size_t length, int prot, int flags);
 
 class posix_thread {
+public:
+    class attr;
+private:
     // must allocate, since this class is moveable
     std::unique_ptr<std::function<void ()>> _func;
     pthread_t _pthread;
     bool _valid = true;
+    mmap_area _stack;
 private:
     static void* start_routine(void* arg);
 public:
     posix_thread(std::function<void ()> func);
+    posix_thread(attr a, std::function<void ()> func);
     posix_thread(posix_thread&& x);
     ~posix_thread();
     void join();
+public:
+    class attr {
+    public:
+        struct stack_size { size_t size = 0; };
+        attr() = default;
+        template <typename... A>
+        attr(A... a) {
+            set(std::forward<A>(a)...);
+        }
+        void set() {}
+        template <typename A, typename... Rest>
+        void set(A a, Rest... rest) {
+            set(std::forward<A>(a));
+            set(std::forward<Rest>(rest)...);
+        }
+        void set(stack_size ss) { _stack_size = ss; }
+    private:
+        stack_size _stack_size;
+        friend class posix_thread;
+    };
 };
 
 
