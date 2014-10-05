@@ -480,7 +480,7 @@ private:
 extern thread_local reactor engine;
 
 class smp {
-	static std::vector<std::thread> _threads;
+	static std::vector<posix_thread> _threads;
 	static inter_thread_work_queue** _qs;
 public:
 	static boost::program_options::options_description get_options_description();
