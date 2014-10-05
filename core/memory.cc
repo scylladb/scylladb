@@ -206,6 +206,7 @@ struct cpu_pages {
     void free_span_no_merge(pageidx start, uint32_t nr_pages);
     void* allocate_small(unsigned size);
     void free(void* ptr);
+    void free(void* ptr, size_t size);
     size_t object_size(void* ptr);
     page* to_page(void* p) {
         return &pages[(reinterpret_cast<char*>(p) - mem()) / page_size];
@@ -348,6 +349,16 @@ void cpu_pages::free(void* ptr) {
     page* span = to_page(ptr);
     if (span->pool) {
         span->pool->deallocate(ptr);
+    } else {
+        free_large(ptr);
+    }
+}
+
+void cpu_pages::free(void* ptr, size_t size) {
+    assert(((reinterpret_cast<uintptr_t>(ptr) >> cpu_id_shift) & 0xff) == cpu_id);
+    if (size <= max_small_allocation) {
+        auto pool = &small_pools[small_pool::size_to_idx(size)];
+        pool->deallocate(ptr);
     } else {
         free_large(ptr);
     }
@@ -526,6 +537,10 @@ void free(void* obj) {
     cpu_mem.free(obj);
 }
 
+void free(void* obj, size_t size) {
+    cpu_mem.free(obj, size);
+}
+
 }
 
 using namespace memory;
@@ -661,6 +676,18 @@ void operator delete[](void* ptr) throw () {
     }
 }
 
+void operator delete(void* ptr, size_t size) {
+    if (ptr) {
+        memory::free(ptr, size);
+    }
+}
+
+void operator delete[](void* ptr, size_t size) {
+    if (ptr) {
+        memory::free(ptr, size);
+    }
+}
+
 void* operator new(size_t size, std::nothrow_t) throw () {
     if (size == 0) {
         size = 1;
@@ -692,6 +719,18 @@ void operator delete(void* ptr, std::nothrow_t) throw () {
 void operator delete[](void* ptr, std::nothrow_t) throw () {
     if (ptr) {
         memory::free(ptr);
+    }
+}
+
+void operator delete(void* ptr, size_t size, std::nothrow_t) throw () {
+    if (ptr) {
+        memory::free(ptr, size);
+    }
+}
+
+void operator delete[](void* ptr, size_t size, std::nothrow_t) throw () {
+    if (ptr) {
+        memory::free(ptr, size);
     }
 }
 
