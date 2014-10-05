@@ -3,6 +3,17 @@
  */
 
 #include "posix.hh"
+#include <sys/mman.h>
+
+void mmap_deleter::operator()(void* ptr) const {
+    ::munmap(ptr, _size);
+}
+
+mmap_area mmap_anonymous(void* addr, size_t length, int prot, int flags) {
+    auto ret = ::mmap(addr, length, prot, flags | MAP_ANONYMOUS, -1, 0);
+    throw_system_error_on(ret == MAP_FAILED);
+    return mmap_area(reinterpret_cast<char*>(ret), mmap_deleter{length});
+}
 
 void* posix_thread::start_routine(void* arg) {
     auto pfunc = reinterpret_cast<std::function<void ()>*>(arg);

@@ -185,6 +185,15 @@ private:
     file_desc(int fd) : _fd(fd) {}
  };
 
+struct mmap_deleter {
+    size_t _size;
+    void operator()(void* ptr) const;
+};
+
+using mmap_area = std::unique_ptr<char[], mmap_deleter>;
+
+mmap_area mmap_anonymous(void* addr, size_t length, int prot, int flags);
+
 class posix_thread {
     // must allocate, since this class is moveable
     std::unique_ptr<std::function<void ()>> _func;
