@@ -21,9 +21,9 @@ yum --enablerepo rawhide update gcc-c++
 yum --enablerepo rawhide install libubsan libasan
 ```
 
-Installing required packages (for libtcmalloc and libaio, respectively):
+Installing required packages:
 ```
-yum install gperftools-devel libaio-devel ninja-build ragel
+yum install libaio-devel ninja-build ragel
 ```
 
 You then need to run the following to create the "build.ninja" file:
