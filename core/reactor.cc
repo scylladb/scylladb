@@ -546,7 +546,7 @@ smp::get_options_description()
     return opts;
 }
 
-std::vector<std::thread> smp::_threads;
+std::vector<posix_thread> smp::_threads;
 inter_thread_work_queue** smp::_qs;
 unsigned smp::count = 1;
 
@@ -592,7 +592,7 @@ void smp::configure(boost::program_options::variables_map configuration)
         }
 
         for (unsigned i = 1; i < smp::count; i++) {
-            _threads.emplace_back([configuration](unsigned i) {
+            _threads.emplace_back([configuration, i] {
                 sigset_t mask;
                 sigfillset(&mask);
                 auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
@@ -603,7 +603,7 @@ void smp::configure(boost::program_options::variables_map configuration)
                     start_all_queues();
                 });
                 engine.run();
-            }, i);
+            });
         }
         start_all_queues();
     }

@@ -10,6 +10,7 @@
 #include "core/reactor.hh"
 #include "core/stream.hh"
 #include "core/circular_buffer.hh"
+#include "core/align.hh"
 #include <atomic>
 #include <vector>
 #include <queue>
@@ -22,19 +23,6 @@
 using namespace net;
 
 using phys = uint64_t;
-
-template <typename T>
-inline
-T align_up(T v, T align) {
-    return (v + align - 1) & ~(align - 1);
-}
-
-template <typename T>
-inline
-T* align_up(T* v, size_t align) {
-    static_assert(sizeof(T) == 1, "align byte pointers only");
-    return reinterpret_cast<T*>(align_up(reinterpret_cast<uintptr_t>(v), align));
-}
 
 inline
 phys virt_to_phys(void* p) {

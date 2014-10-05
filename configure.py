@@ -30,7 +30,9 @@ libnet = [
     ]
 
 core = [
-    'core/reactor.cc'
+    'core/reactor.cc',
+    'core/posix.cc',
+    'core/memory.cc',
     ]
 
 deps = {
@@ -49,13 +51,13 @@ deps = {
 modes = {
     'debug': {
         'sanitize': '-fsanitize=address -fsanitize=leak -fsanitize=undefined',
-        'opt': '-O0',
+        'opt': '-O0 -DDEBUG',
         'libs': '-lubsan -lasan',
     },
     'release': {
         'sanitize': '',
         'opt': '-O2',
-        'libs': '-ltcmalloc',
+        'libs': '',
     },
 }
 
