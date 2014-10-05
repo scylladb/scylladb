@@ -30,7 +30,8 @@ libnet = [
     ]
 
 core = [
-    'core/reactor.cc'
+    'core/reactor.cc',
+    'core/posix.cc',
     ]
 
 deps = {
