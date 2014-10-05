@@ -21,6 +21,7 @@
 #include <system_error>
 #include <boost/optional.hpp>
 #include <pthread.h>
+#include <memory>
 
 inline void throw_system_error_on(bool condition);
 
@@ -185,24 +186,35 @@ private:
  };
 
 class posix_thread {
-    std::function<void ()> _func;
+    // must allocate, since this class is moveable
+    std::unique_ptr<std::function<void ()>> _func;
     pthread_t _pthread;
+    bool _valid = true;
 private:
     static void* start_routine(void* arg) {
-        auto zis = reinterpret_cast<posix_thread*>(arg);
-        zis->_func();
+        auto pfunc = reinterpret_cast<std::function<void ()>*>(arg);
+        (*pfunc)();
         return nullptr;
     }
 public:
-    posix_thread(std::function<void ()> func) : _func(func) {
+    posix_thread(std::function<void ()> func) : _func(std::make_unique<std::function<void ()>>(std::move(func))) {
         auto r = pthread_create(&_pthread, nullptr,
-                    &posix_thread::start_routine, this);
+                    &posix_thread::start_routine, _func.get());
         if (r) {
             throw std::system_error(r, std::system_category());
         }
     }
+    posix_thread(posix_thread&& x)
+        : _func(std::move(x._func)), _pthread(x._pthread), _valid(x._valid) {
+        x._valid = false;
+    }
+    ~posix_thread() {
+        assert(!_valid);
+    }
     void join() {
+        assert(_valid);
         pthread_join(_pthread, NULL);
+        _valid = false;
     }
 };
 
