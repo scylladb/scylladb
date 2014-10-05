@@ -28,7 +28,6 @@
 #include <boost/optional.hpp>
 #include <boost/program_options.hpp>
 #include "util/eclipse.hh"
-#include "linux_thread.hh"
 #include "future.hh"
 #include "posix.hh"
 #include "apply.hh"
