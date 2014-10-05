@@ -75,6 +75,8 @@ arg_parser.add_argument('--mode', action='store', choices=list(modes.keys()) + [
 arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
 arg_parser.add_argument('--cflags', action = 'store', dest = 'user_cflags', default = '',
                         help = 'Extra flags for the C++ compiler')
+arg_parser.add_argument('--ldflags', action = 'store', dest = 'user_ldflags', default = '',
+                        help = 'Extra flags for the linker')
 arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 'g++',
                         help = 'C++ compiler path')
 args = arg_parser.parse_args()
@@ -91,8 +93,8 @@ with open(buildfile, 'w') as f:
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        cxxflags = -std=gnu++1y -g -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags}
-        ldflags = -Wl,--no-as-needed {static}
+        cxxflags = -std=gnu++1y -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags}
+        ldflags = -Wl,--no-as-needed {static} -fvisibility=hidden -pthread {user_ldflags}
         libs = {libs}
         rule ragel
             command = ragel -G2 -o $out $in
@@ -108,7 +110,7 @@ with open(buildfile, 'w') as f:
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
-              command = $cxx $cxxflags $cxxflags_{mode} $ldflags -o $out $in $libs $libs_{mode}
+              command = $cxx  $cxxflags_{mode} $ldflags -o $out $in $libs $libs_{mode}
               description = LINK $out
             ''').format(mode = mode, **modeval))
         f.write('build {mode}: phony {artifacts}\n'.format(mode = mode,
