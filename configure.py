@@ -63,9 +63,9 @@ modes = {
 
 libs = '-laio -lboost_program_options -lboost_system -lstdc++'
 
-import os, os.path, textwrap, argparse, sys
+import os, os.path, textwrap, argparse, sys, shlex
 
-configure_args = str.join(' ', sys.argv[1:])
+configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
 
 arg_parser = argparse.ArgumentParser('Configure seastar')
 arg_parser.add_argument('--static', dest = 'static', action = 'store_const', default = '',
