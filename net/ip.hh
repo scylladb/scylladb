@@ -149,7 +149,6 @@ private:
     ipv4_tcp _tcp;
     ipv4_icmp _icmp;
     array_map<ip_protocol*, 256> _l4;
-    semaphore _send_sem;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
     bool in_my_netmask(ipv4_address a) const;
@@ -167,8 +166,7 @@ public:
 template <uint8_t ProtoNum>
 inline
 future<> ipv4_l4<ProtoNum>::send(ipv4_address from, ipv4_address to, packet p) {
-    _inet.send(/* from, */ to, ProtoNum, std::move(p));
-    return make_ready_future<>(); // FIXME: ?
+    return _inet.send(/* from, */ to, ProtoNum, std::move(p));
 }
 
 struct ip_hdr {
