@@ -368,7 +368,7 @@ class virtio_net_device : public net::device {
                 vring::config config, readable_eventfd notified, writeable_eventfd kicked);
         void run() { _ring.run(); }
     private:
-        future<std::vector<vring::buffer_chain>> prepare_buffers(semaphore& available);
+        future<> prepare_buffers();
     };
 private:
     size_t _header_len = sizeof(net_hdr); // adjust for mrg_buf
@@ -448,16 +448,12 @@ virtio_net_device::txq::post(packet p) {
 virtio_net_device::rxq::rxq(virtio_net_device& netif,
         vring::config config, readable_eventfd notified, writeable_eventfd kicked)
     : _dev(netif), _ring(config, std::move(notified), std::move(kicked)) {
-    keep_doing([this] {
-        return prepare_buffers(_ring.available_descriptors())
-                .then([this] (std::vector<vring::buffer_chain> vbc) {
-                    _ring.post(std::move(vbc));
-                });
-    });
+    keep_doing([this] { return prepare_buffers(); });
 }
 
-future<std::vector<vring::buffer_chain>>
-virtio_net_device::rxq::prepare_buffers(semaphore& available) {
+future<>
+virtio_net_device::rxq::prepare_buffers() {
+    auto& available = _ring.available_descriptors();
     return available.wait(1).then([this, &available] {
         unsigned count = 1;
         auto opportunistic = available.current();
@@ -484,7 +480,7 @@ virtio_net_device::rxq::prepare_buffers(semaphore& available) {
             buf.release();
             vbc.push_back(std::move(bc));
         }
-        return make_ready_future<std::vector<vring::buffer_chain>>(std::move(vbc));
+        _ring.post(std::move(vbc));
     });
 }
 
