@@ -34,10 +34,10 @@
 #include "sstring.hh"
 #include "timer-set.hh"
 #include "deleter.hh"
+#include "net/api.hh"
 #include "temporary_buffer.hh"
 #include "circular_buffer.hh"
 
-class socket_address;
 class reactor;
 class pollable_fd;
 class pollable_fd_state;
@@ -48,27 +48,6 @@ class input_stream;
 
 template <typename CharType>
 class output_stream;
-
-struct ipv4_addr {
-    uint8_t host[4];
-    uint16_t port;
-};
-
-socket_address make_ipv4_address(ipv4_addr addr);
-
-class socket_address {
-private:
-    union {
-        ::sockaddr_storage sas;
-        ::sockaddr sa;
-        ::sockaddr_in in;
-    } u;
-    friend socket_address make_ipv4_address(ipv4_addr addr);
-    friend class reactor;
-public:
-    ::sockaddr& as_posix_sockaddr() { return u.sa; }
-    ::sockaddr_in& as_posix_sockaddr_in() { return u.in; }
-};
 
 struct free_deleter {
     void operator()(void* p) { ::free(p); }
@@ -83,10 +62,6 @@ std::unique_ptr<CharType[], free_deleter> allocate_aligned_buffer(size_t size, s
     assert(r == 0);
     return std::unique_ptr<CharType[], free_deleter>(reinterpret_cast<CharType*>(ret));
 }
-
-struct listen_options {
-    bool reuse_address = false;
-};
 
 class semaphore {
 private:
@@ -185,6 +160,9 @@ public:
     future<size_t> write_all(const char* buffer, size_t size);
     future<size_t> write_all(const uint8_t* buffer, size_t size);
     future<pollable_fd, socket_address> accept();
+    future<size_t> sendmsg(struct msghdr *msg);
+    future<size_t> recvmsg(struct msghdr *msg);
+    future<size_t> sendto(socket_address addr, const void* buf, size_t len);
 protected:
     int get_fd() const { return _s->fd.get(); }
     file_desc& get_file_desc() const { return _s->fd; }
@@ -236,6 +214,7 @@ class network_stack {
 public:
     virtual ~network_stack() {}
     virtual server_socket listen(socket_address sa, listen_options opts) = 0;
+    virtual net::udp_channel make_udp_channel(ipv4_addr addr = {}) = 0;
 };
 
 class network_stack_registry {
@@ -282,6 +261,7 @@ class posix_network_stack : public network_stack {
 public:
     posix_network_stack(boost::program_options::variables_map opts) {}
     virtual server_socket listen(socket_address sa, listen_options opts) override;
+    virtual net::udp_channel make_udp_channel(ipv4_addr addr) override;
     static std::unique_ptr<network_stack> create(boost::program_options::variables_map opts) {
         return std::unique_ptr<network_stack>(new posix_network_stack(opts));
     }
@@ -453,6 +433,8 @@ public:
     future<> receive_signal(int signo);
 
     void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
+
+    network_stack& net() { return *_network_stack; }
 private:
     future<size_t> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
 
@@ -887,6 +869,39 @@ future<size_t> pollable_fd::write_all(const uint8_t* buffer, size_t size) {
 inline
 future<pollable_fd, socket_address> pollable_fd::accept() {
     return engine.accept(*_s);
+}
+
+inline
+future<size_t> pollable_fd::recvmsg(struct msghdr *msg) {
+    return engine.readable(*_s).then([this, msg] {
+        auto r = get_file_desc().recvmsg(msg, 0);
+        if (!r) {
+            return recvmsg(msg);
+        }
+        return make_ready_future<size_t>(*r);
+    });
+};
+
+inline
+future<size_t> pollable_fd::sendmsg(struct msghdr* msg) {
+    return engine.writeable(*_s).then([this, msg] () mutable {
+        auto r = get_file_desc().sendmsg(msg, 0);
+        if (!r) {
+            return sendmsg(msg);
+        }
+        return make_ready_future<size_t>(*r);
+    });
+}
+
+inline
+future<size_t> pollable_fd::sendto(socket_address addr, const void* buf, size_t len) {
+    return engine.writeable(*_s).then([this, buf, len, addr] () mutable {
+        auto r = get_file_desc().sendto(addr, buf, len, 0);
+        if (!r) {
+            return sendto(std::move(addr), buf, len);
+        }
+        return make_ready_future<size_t>(*r);
+    });
 }
 
 inline

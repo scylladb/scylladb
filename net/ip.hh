@@ -29,6 +29,9 @@ struct ipv4_address {
     explicit ipv4_address(const std::string& addr) {
         ip = static_cast<uint32_t>(boost::asio::ip::address_v4::from_string(addr).to_ulong());
     }
+    ipv4_address(ipv4_addr addr) {
+        ip = addr.ip;
+    }
 
     packed<uint32_t> ip;
 

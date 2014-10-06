@@ -131,6 +131,10 @@ class packet final {
     };
     std::unique_ptr<impl> _impl;
 public:
+    static packet from_static_data(const char* data, size_t len) {
+        return {fragment{(char*)data, len}, [] {}};
+    }
+
     // build empty packet
     packet();
     // move existing packet

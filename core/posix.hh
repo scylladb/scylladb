@@ -22,6 +22,7 @@
 #include <boost/optional.hpp>
 #include <pthread.h>
 #include <memory>
+#include "net/api.hh"
 
 inline void throw_system_error_on(bool condition);
 
@@ -161,9 +162,32 @@ public:
         throw_system_error_on(r == -1);
         return { size_t(r) };
     }
+    boost::optional<size_t> sendto(socket_address& addr, const void* buf, size_t len, int flags) {
+        auto r = ::sendto(_fd, buf, len, flags, &addr.u.sa, sizeof(addr.u.sas));
+        if (r == -1 && errno == EAGAIN) {
+            return {};
+        }
+        throw_system_error_on(r == -1);
+        return { size_t(r) };
+    }
+    boost::optional<size_t> sendmsg(const msghdr* msg, int flags) {
+        auto r = ::sendmsg(_fd, msg, flags);
+        if (r == -1 && errno == EAGAIN) {
+            return {};
+        }
+        throw_system_error_on(r == -1);
+        return { size_t(r) };
+    }
     void bind(sockaddr& sa, socklen_t sl) {
         auto r = ::bind(_fd, &sa, sl);
         throw_system_error_on(r == -1);
+    }
+    socket_address get_address() {
+        socket_address addr;
+        auto len = (socklen_t) sizeof(addr.u.sas);
+        auto r = ::getsockname(_fd, &addr.u.sa, &len);
+        throw_system_error_on(r == -1);
+        return addr;
     }
     void listen(int backlog) {
         auto fd = ::listen(_fd, backlog);

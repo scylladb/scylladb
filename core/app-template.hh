@@ -14,6 +14,7 @@ namespace bpo = boost::program_options;
 class app_template {
 private:
     bpo::options_description _opts;
+    boost::optional<bpo::variables_map> _configuration;
 public:
     app_template() {
         _opts.add_options()
@@ -22,6 +23,12 @@ public:
         _opts.add(reactor::get_options_description());
         _opts.add(smp::get_options_description());
     };
+
+    boost::program_options::options_description_easy_init add_options() {
+        return _opts.add_options();
+    }
+
+    bpo::variables_map& configuration() { return *_configuration; }
 
     template<typename Func>
     int run(int ac, char ** av, Func&& func) {
@@ -40,6 +47,7 @@ public:
             return 1;
         }
         smp::configure(configuration);
+        _configuration = {std::move(configuration)};
         engine.when_started().then(func);
         engine.run();
         return 0;

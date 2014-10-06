@@ -9,6 +9,8 @@ tests = [
     'tests/timertest',
     'tests/tcp_test',
     'tests/futures_test',
+    'tests/udp_server',
+    'tests/udp_client',
     ]
 
 apps = [
@@ -25,14 +27,15 @@ libnet = [
     'net/ethernet.cc',
     'net/arp.cc',
     'net/stack.cc',
-    'net/packet.cc',
     'net/ip_checksum.cc',
+    'net/udp.cc',
     ]
 
 core = [
     'core/reactor.cc',
     'core/posix.cc',
     'core/memory.cc',
+    'net/packet.cc',
     ]
 
 deps = {
@@ -46,6 +49,8 @@ deps = {
     'tests/tcp_test': ['tests/tcp_test.cc'] + core + libnet,
     'tests/timertest': ['tests/timertest.cc'] + core,
     'tests/futures_test': ['tests/futures_test.cc'] + core,
+    'tests/udp_server': ['tests/udp_server.cc'] + core + libnet,
+    'tests/udp_client': ['tests/udp_client.cc'] + core + libnet,
 }
 
 modes = {
