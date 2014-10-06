@@ -108,8 +108,8 @@ with open(buildfile, 'w') as f:
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        cxxflags = -std=gnu++1y {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags}
-        ldflags = -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags}
+        cxxflags = -std=gnu++1y -g {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags}
+        ldflags = -g -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags}
         libs = {libs}
         rule ragel
             command = ragel -G2 -o $out $in
