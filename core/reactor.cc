@@ -347,8 +347,8 @@ reactor::signal_handler::signal_handler(int signo)
 }
 
 inter_thread_work_queue::inter_thread_work_queue()
-    : _pending(queue_length)
-    , _completed(queue_length)
+    : _pending()
+    , _completed()
     , _start_eventfd(0)
     , _complete_eventfd(0) {
 }

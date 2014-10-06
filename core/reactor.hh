@@ -24,7 +24,7 @@
 #include <system_error>
 #include <chrono>
 #include <atomic>
-#include <boost/lockfree/queue.hpp>
+#include <boost/lockfree/spsc_queue.hpp>
 #include <boost/optional.hpp>
 #include <boost/program_options.hpp>
 #include "util/eclipse.hh"
@@ -305,8 +305,10 @@ class smp;
 class inter_thread_work_queue {
     static constexpr size_t queue_length = 128;
     struct work_item;
-    boost::lockfree::queue<work_item*> _pending;
-    boost::lockfree::queue<work_item*> _completed;
+    using lf_queue = boost::lockfree::spsc_queue<work_item*,
+                            boost::lockfree::capacity<queue_length>>;
+    lf_queue _pending;
+    lf_queue _completed;
     writeable_eventfd _start_eventfd;
     readable_eventfd _complete_eventfd;
     semaphore _queue_has_room = { queue_length };
