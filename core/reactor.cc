@@ -229,6 +229,16 @@ reactor::flush(file& f) {
     });
 }
 
+future<struct stat>
+reactor::stat(file& f) {
+    return _thread_pool.submit<struct stat>([&f] {
+        struct stat st;
+        auto ret = ::fstat(f._fd, &st);
+        throw_system_error_on(ret == -1);
+        return (st);
+    });
+}
+
 void reactor::add_timer(timer* tmr) {
     if (_timers.insert(*tmr)) {
         itimerspec its;

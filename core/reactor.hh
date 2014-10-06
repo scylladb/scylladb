@@ -10,6 +10,7 @@
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unordered_map>
 #include <netinet/ip.h>
 #include <cstring>
@@ -429,6 +430,7 @@ public:
 
     future<file> open_file_dma(sstring name);
     future<> flush(file& f);
+    future<struct stat> stat(file& f);
 
     void run();
     future<> when_started() { return _start_promise.get_future(); }
@@ -630,6 +632,10 @@ public:
 
     future<> flush() {
         return engine.flush(*this);
+    }
+
+    future<struct stat> stat() {
+        return engine.stat(*this);
     }
 
     friend class reactor;
