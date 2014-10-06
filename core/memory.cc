@@ -30,7 +30,7 @@
 // Runs of pages are organized into spans.  Free spans are organized into lists,
 // by size.  When spans are broken up or coalesced, they may move into new lists.
 
-#ifndef DEBUG
+#ifndef DEFAULT_ALLOCATOR
 
 #include "bitops.hh"
 #include "align.hh"

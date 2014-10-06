@@ -51,7 +51,7 @@ deps = {
 modes = {
     'debug': {
         'sanitize': '-fsanitize=address -fsanitize=leak -fsanitize=undefined',
-        'opt': '-O0 -DDEBUG',
+        'opt': '-O0 -DDEBUG -DDEFAULT_ALLOCATOR',
         'libs': '-lubsan -lasan',
     },
     'release': {
