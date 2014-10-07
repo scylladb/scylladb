@@ -2,6 +2,7 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
+#include "core/reactor.hh"
 #include "packet.hh"
 
 namespace net {
@@ -29,6 +30,22 @@ void packet::linearize(size_t at_frag, size_t desired_size) {
     _impl->_nr_frags -= nr_frags - 1;
     _impl->_frags[at_frag] = fragment{new_frag.get(), accum_size};
     _impl->_deleter = make_deleter(std::move(_impl->_deleter), [buf = std::move(new_frag)] {});
+}
+
+
+packet packet::free_on_cpu(unsigned cpu)
+{
+    // make new deleter that runs old deleter on an origin cpu
+    _impl->_deleter = make_deleter(deleter(), [d = std::move(_impl->_deleter), cpu] () mutable {
+        smp::submit_to(cpu, [d = std::move(d)] () mutable {
+            // deleter needs to be moved from lambda capture to be destroyed here
+            // otherwise deleter destructor will be called on a cpu that called smp::submit_to()
+            // when work_item is destroyed.
+            deleter xxx(std::move(d));
+        });
+    });
+
+    return packet(impl::copy(_impl.get()));
 }
 
 }

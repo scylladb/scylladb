@@ -76,12 +76,8 @@ class packet final {
             nr_frags = std::max(nr_frags, default_nr_frags);
             return std::unique_ptr<impl>(new (nr_frags) impl(nr_frags));
         }
-        static std::unique_ptr<impl> allocate_if_needed(std::unique_ptr<impl> old, size_t extra_frags) {
-            if (old->_allocated_frags >= old->_nr_frags + extra_frags) {
-                return std::move(old);
-            }
-            auto nr = std::max<size_t>(old->_nr_frags + extra_frags,
-                                       2 * old->_nr_frags);
+
+        static std::unique_ptr<impl> copy(impl* old, size_t nr) {
             auto n = allocate(nr);
             n->_deleter = std::move(old->_deleter);
             n->_len = old->_len;
@@ -90,6 +86,17 @@ class packet final {
             std::copy(old->_frags, old->_frags + old->_nr_frags, n->_frags);
             old->copy_internal_fragment_to(n.get());
             return std::move(n);
+        }
+
+        static std::unique_ptr<impl> copy(impl* old) {
+            return copy(old, old->_nr_frags);
+        }
+
+        static std::unique_ptr<impl> allocate_if_needed(std::unique_ptr<impl> old, size_t extra_frags) {
+            if (old->_allocated_frags >= old->_nr_frags + extra_frags) {
+                return std::move(old);
+            }
+            return copy(old.get(), std::max<size_t>(old->_nr_frags + extra_frags, 2 * old->_nr_frags));
         }
         void* operator new(size_t size, size_t nr_frags = default_nr_frags) {
             assert(nr_frags == uint16_t(nr_frags));
@@ -129,6 +136,7 @@ class packet final {
                     to->_frags[0].base);
         }
     };
+    packet(std::unique_ptr<impl>&& impl) : _impl(std::move(impl)) {}
     std::unique_ptr<impl> _impl;
 public:
     static packet from_static_data(const char* data, size_t len) {
@@ -200,6 +208,8 @@ public:
 
     // prepend a header (uninitialized!)
     char* prepend_uninitialized_header(size_t size);
+
+    packet free_on_cpu(unsigned cpu);
 private:
     void linearize(size_t at_frag, size_t desired_size);
     bool allocate_headroom(size_t size);
