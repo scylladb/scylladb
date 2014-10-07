@@ -46,16 +46,30 @@ interface::register_l3(uint16_t proto_num,
 future<> interface::dispatch_packet(packet p) {
     auto eh = p.get_header<eth_hdr>();
     if (eh) {
-        ntoh(*eh);
-        auto i = _proto_map.find(eh->eth_proto);
+        auto proto = eh->eth_proto;
+        ntoh(proto);
+        auto i = _proto_map.find(proto);
         if (i != _proto_map.end()) {
             l3_rx_stream& l3 = i->second;
-            auto from = eh->src_mac;
-            p.trim_front(sizeof(*eh));
-            // avoid chaining, since queue lenth is unlimited
-            // drop instead.
-            if (l3.ready.available()) {
-                l3.ready = l3.packet_stream.produce(std::move(p), from);
+            auto fw = (engine._id == 0) ? l3.forward(p, sizeof(eth_hdr)) : engine._id;
+            if (fw != engine._id && fw < smp::count) {
+                smp::submit_to(fw, [p = std::move(p), cpu = engine._id]() mutable { net::dev->l2inject(p.free_on_cpu(cpu)); });
+            } else {
+                if (fw != engine._id) { // broadcast to all cpus
+                    for (unsigned i = 0; i< smp::count; i++) {
+                        if (i != engine._id) {
+                            smp::submit_to(i, [n = p.share(), cpu = engine._id] () mutable { net::dev->l2inject(n.free_on_cpu(cpu)); });
+                        }
+                    }
+                }
+                ntoh(*eh);
+                auto from = eh->src_mac;
+                p.trim_front(sizeof(*eh));
+                // avoid chaining, since queue lenth is unlimited
+                // drop instead.
+                if (l3.ready.available()) {
+                    l3.ready = l3.packet_stream.produce(std::move(p), from);
+                }
             }
         }
     }
