@@ -644,5 +644,9 @@ get_virtio_net_options_description()
 }
 
 std::unique_ptr<net::device> create_virtio_net_device(sstring tap_device, boost::program_options::variables_map opts) {
-    return std::make_unique<virtio_net_device>(tap_device, opts);
+    auto ptr = std::make_unique<virtio_net_device>(tap_device, opts);
+    // This assumes only one device per cpu. Will need to be fixed when
+    // this assumption will no longer hold.
+    dev = ptr.get();
+    return std::move(ptr);
 }

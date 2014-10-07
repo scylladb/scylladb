@@ -33,7 +33,8 @@ class l3_protocol {
 public:
     explicit l3_protocol(interface* netif, uint16_t proto_num);
     subscription<packet, ethernet_address> receive(
-            std::function<future<> (packet, ethernet_address)> rx_fn);
+            std::function<future<> (packet, ethernet_address)> rx_fn,
+            std::function<unsigned (packet&, size_t)> forward);
     future<> send(ethernet_address to, packet p);
 private:
     friend class interface;
@@ -45,7 +46,8 @@ class interface {
     struct l3_rx_stream {
         stream<packet, ethernet_address> packet_stream;
         future<> ready;
-        l3_rx_stream() : ready(packet_stream.started()) {}
+        std::function<unsigned (packet&, size_t)> forward;
+        l3_rx_stream(std::function<unsigned (packet&, size_t)>&& fw) : ready(packet_stream.started()), forward(fw) {}
     };
     std::unordered_map<uint16_t, l3_rx_stream> _proto_map;
     ethernet_address _hw_address;
@@ -58,7 +60,8 @@ public:
     ethernet_address hw_address() { return _hw_address; }
     net::hw_features hw_features() { return _hw_features; }
     subscription<packet, ethernet_address> register_l3(uint16_t proto_num,
-            std::function<future<> (packet p, ethernet_address from)> next);
+            std::function<future<> (packet p, ethernet_address from)> next,
+            std::function<unsigned (packet&, size_t)> forward);
     friend class l3_protocol;
 };
 
@@ -67,10 +70,12 @@ public:
     virtual ~device() {}
     virtual subscription<packet> receive(std::function<future<> (packet)> next_packet) = 0;
     virtual future<> send(packet p) = 0;
+    virtual future<> l2inject(packet p) { assert(0); return make_ready_future(); }
     virtual ethernet_address hw_address() = 0;
     virtual net::hw_features hw_features() = 0;
 };
 
+extern __thread device *dev;
 }
 
 #endif /* NET_HH_ */

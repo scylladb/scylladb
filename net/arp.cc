@@ -18,7 +18,21 @@ arp_for_protocol::~arp_for_protocol() {
 arp::arp(interface* netif) : _netif(netif), _proto(netif, 0x0806)
     , _rx_packets(_proto.receive([this] (packet p, ethernet_address ea) {
         return process_packet(std::move(p), ea);
+    },
+    [this](packet& p, size_t off) {
+        return handle_on_cpu(p, off);
     })) {
+}
+
+unsigned arp::handle_on_cpu(packet& p, size_t off) {
+    auto ah = p.get_header<arp_hdr>(off);
+    auto ptype = ah->ptype;
+    ntoh(ptype);
+    auto i = _arp_for_protocol.find(ptype);
+    if (i != _arp_for_protocol.end()) {
+        return i->second->forward(p, off);
+    }
+    return engine._id;
 }
 
 void arp::add(uint16_t proto_num, arp_for_protocol* afp) {

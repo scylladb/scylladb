@@ -21,6 +21,7 @@ apps = [
 all_artifacts = apps + tests
 
 libnet = [
+    'net/proxy.cc',
     'net/virtio.cc',
     'net/net.cc',
     'net/ip.cc',

@@ -8,6 +8,7 @@
 #include "tcp.hh"
 #include "udp.hh"
 #include "virtio.hh"
+#include "proxy.hh"
 #include <memory>
 #include <queue>
 
@@ -65,7 +66,7 @@ native_network_stack::make_udp_channel(ipv4_addr addr) {
 }
 
 native_network_stack::native_network_stack(boost::program_options::variables_map opts)
-    : _netif(create_virtio_net_device(opts["tap-device"].as<std::string>(), opts))
+    : _netif(smp::main_thread() ? create_virtio_net_device(opts["tap-device"].as<std::string>(), opts) : create_proxy_net_device(opts))
     , _inet(&_netif)
     , _udp(_inet) {
     _inet.set_host_address(ipv4_address(opts["host-ipv4-addr"].as<std::string>()));
