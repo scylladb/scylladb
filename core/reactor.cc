@@ -116,15 +116,51 @@ public:
     virtual input_stream<char> input() override { return input_stream<char>(posix_data_source(_fd)); }
     virtual output_stream<char> output() override { return output_stream<char>(posix_data_sink(_fd), 8192); }
     friend class posix_server_socket_impl;
+    friend class posix_ap_server_socket_impl;
 };
 
 future<connected_socket, socket_address>
 posix_server_socket_impl::accept() {
-    return _lfd.accept().then([] (pollable_fd fd, socket_address sa) {
-        std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(fd)));
-        return make_ready_future<connected_socket, socket_address>(
-                connected_socket(std::move(csi)), sa);
+    return _lfd.accept().then([this] (pollable_fd fd, socket_address sa) {
+        static unsigned balance = 0;
+        auto cpu = balance++ % smp::count;
+
+        if (cpu == engine._id) {
+            std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(fd)));
+            return make_ready_future<connected_socket, socket_address>(
+                    connected_socket(std::move(csi)), sa);
+        } else {
+            smp::submit_to(cpu, [this, fd = std::move(fd.get_file_desc()), sa] () mutable {
+                posix_ap_server_socket_impl::move_connected_socket(_sa, pollable_fd(std::move(fd)), sa);
+            });
+            return accept();
+        }
     });
+}
+
+future<connected_socket, socket_address> posix_ap_server_socket_impl::accept() {
+    auto conni = conn_q.find(_sa.as_posix_sockaddr_in());
+    if (conni != conn_q.end()) {
+        connection c = std::move(conni->second);
+        conn_q.erase(conni);
+        std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(c.fd)));
+        return make_ready_future<connected_socket, socket_address>(connected_socket(std::move(csi)), std::move(c.addr));
+    } else {
+        auto i = sockets.emplace(std::piecewise_construct, std::make_tuple(_sa.as_posix_sockaddr_in()), std::make_tuple());
+        assert(i.second);
+        return i.first->second.get_future();
+    }
+}
+
+void  posix_ap_server_socket_impl::move_connected_socket(socket_address sa, pollable_fd fd, socket_address addr) {
+    auto i = sockets.find(sa.as_posix_sockaddr_in());
+    if (i != sockets.end()) {
+        std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(fd)));
+        i->second.set_value(connected_socket(std::move(csi)), std::move(addr));
+        sockets.erase(i);
+    } else {
+        conn_q.emplace(std::piecewise_construct, std::make_tuple(sa.as_posix_sockaddr_in()), std::make_tuple(std::move(fd), std::move(addr)));
+    }
 }
 
 void reactor::complete_epoll_event(pollable_fd_state& pfd, promise<> pollable_fd_state::*pr,
@@ -493,7 +529,21 @@ posix_data_sink_impl::do_write(size_t idx) {
 
 server_socket
 posix_network_stack::listen(socket_address sa, listen_options opt) {
-    return server_socket(std::make_unique<posix_server_socket_impl>(engine.posix_listen(sa, opt)));
+    return server_socket(std::make_unique<posix_server_socket_impl>(sa, engine.posix_listen(sa, opt)));
+}
+
+thread_local std::unordered_map<::sockaddr_in, promise<connected_socket, socket_address>> posix_ap_server_socket_impl::sockets;
+thread_local std::unordered_multimap<::sockaddr_in, posix_ap_server_socket_impl::connection> posix_ap_server_socket_impl::conn_q;
+
+namespace std {
+bool operator==(const ::sockaddr_in a, const ::sockaddr_in b) {
+    return (a.sin_addr.s_addr == b.sin_addr.s_addr) && (a.sin_port == b.sin_port);
+}
+};
+
+server_socket
+posix_ap_network_stack::listen(socket_address sa, listen_options opt) {
+    return server_socket(std::make_unique<posix_ap_server_socket_impl>(sa));
 }
 
 struct cmsg_with_pktinfo {
@@ -674,7 +724,9 @@ reactor::get_options_description() {
 
 network_stack_registrator nsr_posix{"posix",
     boost::program_options::options_description(),
-    posix_network_stack::create,
+    [](boost::program_options::variables_map ops) {
+        return smp::main_thread() ? posix_network_stack::create(ops) : posix_ap_network_stack::create(ops);
+    },
     true
 };
 

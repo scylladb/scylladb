@@ -170,6 +170,7 @@ protected:
     friend class reactor;
     friend class readable_eventfd;
     friend class writeable_eventfd;
+    friend class posix_server_socket_impl; // need to access get_file_desc
 };
 
 class connected_socket_impl {
@@ -195,10 +196,37 @@ public:
 };
 
 class posix_server_socket_impl : public server_socket_impl {
+    socket_address _sa;
     pollable_fd _lfd;
 public:
-    explicit posix_server_socket_impl(pollable_fd lfd) : _lfd(std::move(lfd)) {}
+    explicit posix_server_socket_impl(socket_address sa, pollable_fd lfd) : _sa(sa), _lfd(std::move(lfd)) {}
     virtual future<connected_socket, socket_address> accept();
+};
+
+namespace std {
+
+template <>
+struct hash<::sockaddr_in> {
+    size_t operator()(::sockaddr_in a) const {
+        return a.sin_port ^ a.sin_addr.s_addr;
+    }
+};
+bool operator==(const ::sockaddr_in a, const ::sockaddr_in b);
+}
+
+class posix_ap_server_socket_impl : public server_socket_impl {
+    struct connection {
+        pollable_fd fd;
+        socket_address addr;
+        connection(pollable_fd xfd, socket_address xaddr) : fd(std::move(xfd)), addr(xaddr) {}
+    };
+    static thread_local std::unordered_map<::sockaddr_in, promise<connected_socket, socket_address>> sockets;
+    static thread_local std::unordered_multimap<::sockaddr_in, connection> conn_q;
+    socket_address _sa;
+public:
+    explicit posix_ap_server_socket_impl(socket_address sa) : _sa(sa) {}
+    virtual future<connected_socket, socket_address> accept();
+    static void move_connected_socket(socket_address sa, pollable_fd fd, socket_address addr);
 };
 
 class server_socket {
@@ -265,6 +293,15 @@ public:
     virtual net::udp_channel make_udp_channel(ipv4_addr addr) override;
     static std::unique_ptr<network_stack> create(boost::program_options::variables_map opts) {
         return std::unique_ptr<network_stack>(new posix_network_stack(opts));
+    }
+};
+
+class posix_ap_network_stack : public posix_network_stack {
+public:
+    posix_ap_network_stack(boost::program_options::variables_map opts) : posix_network_stack(std::move(opts)) {}
+    virtual server_socket listen(socket_address sa, listen_options opts) override;
+    static std::unique_ptr<network_stack> create(boost::program_options::variables_map opts) {
+        return std::unique_ptr<network_stack>(new posix_ap_network_stack(opts));
     }
 };
 
