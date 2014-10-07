@@ -90,6 +90,19 @@ udp_v4::udp_v4(ipv4& inet)
     _inet.register_l4(protocol_number, this);
 }
 
+unsigned udp_v4::forward(packet& p, size_t off, ipv4_address from, ipv4_address to)
+{
+    auto uh = p.get_header<udp_hdr>(off);
+
+    if (!uh) {
+        return engine._id;
+    }
+
+    auto dst = ntohs(uint16_t(uh->dst_port));
+
+    return dst % smp::count;
+}
+
 void udp_v4::received(packet p, ipv4_address from, ipv4_address to)
 {
     udp_datagram dgram(std::make_unique<native_datagram>(from, to, std::move(p)));

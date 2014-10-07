@@ -17,8 +17,9 @@ l3_protocol::l3_protocol(interface* netif, uint16_t proto_num)
 }
 
 subscription<packet, ethernet_address> l3_protocol::receive(
-        std::function<future<> (packet p, ethernet_address from)> rx_fn) {
-    return _netif->register_l3(_proto_num, std::move(rx_fn));
+        std::function<future<> (packet p, ethernet_address from)> rx_fn,
+        std::function<unsigned (packet&, size_t)> forward) {
+    return _netif->register_l3(_proto_num, std::move(rx_fn), std::move(forward));
 };
 
 future<> l3_protocol::send(ethernet_address to, packet p) {
@@ -34,8 +35,9 @@ interface::interface(std::unique_ptr<device> dev)
 
 subscription<packet, ethernet_address>
 interface::register_l3(uint16_t proto_num,
-        std::function<future<> (packet p, ethernet_address from)> next) {
-    auto i = _proto_map.emplace(std::piecewise_construct, std::make_tuple(proto_num), std::make_tuple());
+        std::function<future<> (packet p, ethernet_address from)> next,
+        std::function<unsigned (packet&, size_t)> forward) {
+    auto i = _proto_map.emplace(std::piecewise_construct, std::make_tuple(proto_num), std::forward_as_tuple(std::move(forward)));
     assert(i.second);
     l3_rx_stream& l3_rx = i.first->second;
     return l3_rx.packet_stream.listen(std::move(next));

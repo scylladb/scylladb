@@ -84,6 +84,7 @@ class ip_protocol {
 public:
     virtual ~ip_protocol() {}
     virtual void received(packet p, ipv4_address from, ipv4_address to) = 0;
+    virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to) { return engine._id; }
 };
 
 class ipv4_tcp final : public ip_protocol {
@@ -93,6 +94,9 @@ public:
     ipv4_tcp(ipv4& inet) : _inet_l4(inet), _tcp(_inet_l4) {}
     virtual void received(packet p, ipv4_address from, ipv4_address to) {
         _tcp.received(std::move(p), from, to);
+    }
+    virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to) override {
+        return _tcp.forward(p, off, from, to);
     }
     friend class ipv4;
 };
@@ -154,6 +158,7 @@ private:
     array_map<ip_protocol*, 256> _l4;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
+    unsigned handle_on_cpu(packet& p, size_t off);
     bool in_my_netmask(ipv4_address a) const;
 public:
     explicit ipv4(interface* netif);

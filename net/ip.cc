@@ -23,16 +23,27 @@ ipv4::ipv4(interface* netif)
     , _arp(_global_arp)
     , _l3(netif, 0x0800)
     , _rx_packets(_l3.receive([this] (packet p, ethernet_address ea) {
-        return handle_received_packet(std::move(p), ea); }))
+        return handle_received_packet(std::move(p), ea); },
+      [this] (packet& p, size_t off) {
+        return handle_on_cpu(p, off);}))
     , _tcp(*this)
     , _icmp(*this)
     , _l4({ { 6, &_tcp }, { 1, &_icmp }}) {
 }
 
+unsigned ipv4::handle_on_cpu(packet& p, size_t off)
+{
+    auto iph = p.get_header<ip_hdr>(off);
+    auto l4 = _l4[iph->ip_proto];
+    if (!l4) {
+        return engine._id;
+    }
+    return l4->forward(p, off + sizeof(ip_hdr), iph->src_ip, iph->dst_ip);
+}
+
 bool ipv4::in_my_netmask(ipv4_address a) const {
     return !((a.ip ^ _host_address.ip) & _netmask.ip);
 }
-
 
 future<>
 ipv4::handle_received_packet(packet p, ethernet_address from) {
