@@ -30,6 +30,8 @@
 // Runs of pages are organized into spans.  Free spans are organized into lists,
 // by size.  When spans are broken up or coalesced, they may move into new lists.
 
+#include "memory.hh"
+
 #ifndef DEFAULT_ALLOCATOR
 
 #include "bitops.hh"
@@ -171,10 +173,14 @@ static constexpr const size_t max_small_allocation
     = small_pool::idx_to_size(small_pool_array::nr_small_pools - 1);
 
 struct cpu_pages {
+    static constexpr unsigned min_free_pages = 20000000 / page_size;
     page* pages;
     uint32_t nr_pages;
     uint32_t nr_free_pages;
+    uint32_t current_min_free_pages = 0;
     unsigned cpu_id = -1U;
+    std::function<void (std::function<void ()>)> reclaim_hook;
+    std::vector<reclaimer*> reclaimers;
     static constexpr const unsigned nr_span_lists = 32;
     union pla {
         pla() {
@@ -213,6 +219,8 @@ struct cpu_pages {
     }
 
     bool initialize();
+    void reclaim();
+    void set_reclaim_hook(std::function<void (std::function<void ()>)> hook);
 };
 
 static thread_local cpu_pages cpu_mem;
@@ -303,6 +311,9 @@ cpu_pages::allocate_large_and_trim(unsigned n_pages, Trimmer trimmer) {
     span->free = span_end->free = false;
     span->span_size = span_end->span_size = n_pages;
     span->pool = nullptr;
+    if (nr_free_pages < current_min_free_pages) {
+        reclaim();
+    }
     return mem() + span_idx * page_size;
 }
 
@@ -389,6 +400,21 @@ bool cpu_pages::initialize() {
     pages[nr_pages].free = false;
     free_span_no_merge(reserved, nr_pages - reserved);
     return true;
+}
+
+void cpu_pages::reclaim() {
+    current_min_free_pages = 0;
+    reclaim_hook([this] {
+        for (auto&& r : reclaimers) {
+            r->do_reclaim();
+        }
+        current_min_free_pages = min_free_pages;
+    });
+}
+
+void cpu_pages::set_reclaim_hook(std::function<void (std::function<void ()>)> hook) {
+    reclaim_hook = hook;
+    current_min_free_pages = min_free_pages;
 }
 
 small_pool::small_pool(unsigned object_size) noexcept
@@ -539,6 +565,20 @@ void free(void* obj) {
 
 void free(void* obj, size_t size) {
     cpu_mem.free(obj, size);
+}
+
+void set_reclaim_hook(std::function<void (std::function<void ()>)> hook) {
+    cpu_mem.set_reclaim_hook(hook);
+}
+
+reclaimer::reclaimer(std::function<void ()> reclaim)
+    : _reclaim(std::move(reclaim)) {
+    cpu_mem.reclaimers.push_back(this);
+}
+
+reclaimer::~reclaimer() {
+    auto& r = cpu_mem.reclaimers;
+    r.erase(std::find(r.begin(), r.end(), this));
 }
 
 }
@@ -732,6 +772,15 @@ void operator delete[](void* ptr, size_t size, std::nothrow_t) throw () {
     if (ptr) {
         memory::free(ptr, size);
     }
+}
+
+#else
+
+namespace memory {
+
+void set_reclaim_hook(std::function<void (std::function<void ()>)> hook) {
+}
+
 }
 
 #endif
