@@ -67,10 +67,12 @@ public:
     virtual ~device() {}
     virtual subscription<packet> receive(std::function<future<> (packet)> next_packet) = 0;
     virtual future<> send(packet p) = 0;
+    virtual future<> l2inject(packet p) { assert(0); return make_ready_future(); }
     virtual ethernet_address hw_address() = 0;
     virtual net::hw_features hw_features() = 0;
 };
 
+extern __thread device *dev;
 }
 
 #endif /* NET_HH_ */

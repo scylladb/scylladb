@@ -10,6 +10,8 @@ using std::move;
 
 namespace net {
 
+__thread device *dev;
+
 l3_protocol::l3_protocol(interface* netif, uint16_t proto_num)
     : _netif(netif), _proto_num(proto_num) {
 }
