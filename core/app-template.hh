@@ -48,9 +48,15 @@ public:
         }
         smp::configure(configuration);
         _configuration = {std::move(configuration)};
-        engine.when_started().then(func);
-        engine.run();
-        return 0;
+        engine.when_started().then(func).rescue([] (auto get_ex) {
+            try {
+                get_ex();
+            } catch (std::exception& ex) {
+                std::cout << "program failed with uncaught exception: " << ex.what() << "\n";
+            engine.exit(1);
+            }
+            });
+        return engine.run();
     };
 };
 
