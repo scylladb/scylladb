@@ -3,6 +3,7 @@
  */
 
 #include "reactor.hh"
+#include "memory.hh"
 #include "core/posix.hh"
 #include "net/packet.hh"
 #include "print.hh"
@@ -47,6 +48,12 @@ reactor::reactor()
     , _io_context_available(max_aio) {
     auto r = ::io_setup(max_aio, &_io_context);
     assert(r >= 0);
+    memory::set_reclaim_hook([this] (std::function<void ()> reclaim_fn) {
+        // push it in the front of the queue so we reclaim memory quickly
+        _pending_tasks.push_front(make_task([fn = std::move(reclaim_fn)] {
+            fn();
+        }));
+    });
 }
 
 void reactor::configure(boost::program_options::variables_map vm) {
