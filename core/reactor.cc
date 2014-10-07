@@ -691,6 +691,7 @@ smp::get_options_description()
 
 std::vector<posix_thread> smp::_threads;
 inter_thread_work_queue** smp::_qs;
+std::thread::id smp::_tmain;
 unsigned smp::count = 1;
 
 void smp::listen_one(inter_thread_work_queue& q, std::unique_ptr<readable_eventfd>&& rfd, std::unique_ptr<writeable_eventfd>&& wfd) {
@@ -725,6 +726,7 @@ void smp::start_all_queues()
 void smp::configure(boost::program_options::variables_map configuration)
 {
     smp::count = 1;
+    smp::_tmain = std::this_thread::get_id();
     engine.configure(configuration);
     if (configuration.count("smp")) {
         smp::count = configuration["smp"].as<unsigned>();

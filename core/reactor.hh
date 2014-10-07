@@ -470,10 +470,12 @@ extern thread_local reactor engine;
 class smp {
 	static std::vector<posix_thread> _threads;
 	static inter_thread_work_queue** _qs;
+	static std::thread::id _tmain;
 public:
 	static boost::program_options::options_description get_options_description();
 	static void configure(boost::program_options::variables_map vm);
 	static void join_all();
+	static bool main_thread() { return std::this_thread::get_id() == _tmain; }
 
 	template <typename T, typename Func>
 	static future<T> submit_to(unsigned t, Func func) {
