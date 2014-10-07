@@ -391,6 +391,7 @@ class reactor {
     bool _stopped = false;
     bool _handle_sigint = true;
     std::unique_ptr<network_stack> _network_stack;
+    int _return = 0;
 public:
     file_desc _epollfd;
     readable_eventfd _io_eventfd;
@@ -432,7 +433,8 @@ public:
     future<> flush(file& f);
     future<struct stat> stat(file& f);
 
-    void run();
+    int run();
+    void exit(int ret);
     future<> when_started() { return _start_promise.get_future(); }
     future<> receive_signal(int signo);
 
@@ -455,6 +457,7 @@ private:
     void add_timer(timer* tmr);
     void del_timer(timer* tmr);
 
+    void stop();
     friend class pollable_fd;
     friend class pollable_fd_state;
     friend class file;

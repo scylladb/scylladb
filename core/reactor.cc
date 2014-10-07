@@ -278,25 +278,32 @@ void reactor::complete_timers() {
     });
 }
 
-void reactor::run() {
+void reactor::stop() {
+    assert(engine._id == 0);
+    auto sem = new semaphore(0);
+    for (unsigned i = 1; i < smp::count; i++) {
+        smp::submit_to<>(i, []() {
+            engine._stopped = true;
+        }).then([sem, i]() {
+            sem->signal();
+        });
+    }
+    sem->wait(smp::count - 1).then([sem, this](){
+        _stopped = true;
+        delete sem;
+    });
+}
+
+void reactor::exit(int ret) {
+    smp::submit_to(0, [this, ret] { _return = ret; stop(); });
+}
+
+int reactor::run() {
     _io_eventfd.wait().then([this] (size_t count) {
         process_io(count);
     });
     if (_handle_sigint && _id == 0) {
-        receive_signal(SIGINT).then([this] {
-            auto sem = new semaphore(0);
-            for (unsigned i = 1; i < smp::count; i++) {
-                smp::submit_to<>(i, []() {
-                    engine._stopped = true;
-                }).then([sem, i]() {
-                    sem->signal();
-                });
-            }
-            sem->wait(smp::count - 1).then([sem, this](){
-                _stopped = true;
-                delete sem;
-            });
-        });
+        receive_signal(SIGINT).then([this] { stop(); });
     }
     _start_promise.set_value();
     complete_timers();
@@ -336,6 +343,7 @@ void reactor::run() {
             }
         }
     }
+    return _return;
 }
 
 future<>
