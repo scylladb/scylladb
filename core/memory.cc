@@ -389,6 +389,7 @@ bool cpu_pages::initialize() {
     if (r == MAP_FAILED) {
         abort();
     }
+    ::madvise(base, size, MADV_HUGEPAGE);
     pages = reinterpret_cast<page*>(base);
     nr_pages = size / page_size;
     // we reserve the end page so we don't have to special case
