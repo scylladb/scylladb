@@ -155,10 +155,11 @@ public:
 };
 
 int main(int ac, char** av) {
-    http_server server;
-    return app_template().run(ac, av, [&server] {
+    return app_template().run(ac, av, [] {
         uint16_t port = 10000;
         std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
-        server.listen({port});
+        for(unsigned c = 0; c < smp::count; c++) {
+            smp::submit_to(c, [port] () mutable {static thread_local http_server server; server.listen({port});});
+        }
     });
 }
