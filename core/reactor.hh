@@ -117,6 +117,7 @@ public:
     future<> expired();
     void set_callback(callback_t&& callback);
     void arm(clock_type::time_point until, boost::optional<clock_type::duration> period = {});
+    void rearm(clock_type::time_point until, boost::optional<clock_type::duration> period = {});
     void arm(clock_type::duration delta);
     void arm_periodic(clock_type::duration delta);
     bool armed() const { return _armed; }
@@ -980,6 +981,14 @@ void timer::arm(clock_type::time_point until, boost::optional<clock_type::durati
     _expiry = until;
     engine.add_timer(this);
     _queued = true;
+}
+
+inline
+void timer::rearm(clock_type::time_point until, boost::optional<clock_type::duration> period) {
+    if (_armed) {
+        cancel();
+    }
+    arm(until, period);
 }
 
 inline
