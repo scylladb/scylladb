@@ -4,10 +4,18 @@
 
 #include "core/reactor.hh"
 #include "core/print.hh"
-#include "test-utils.hh"
 #include <chrono>
 
 using namespace std::chrono_literals;
+
+#define BUG() do { \
+        std::cerr << "ERROR @ " << __FILE__ << ":" << __LINE__ << std::endl; \
+        throw std::runtime_error("test failed"); \
+    } while (0)
+
+#define OK() { \
+        std::cerr << "OK @ " << __FILE__ << ":" << __LINE__ << std::endl; \
+    } while (0)
 
 struct timer_test {
     timer t1;

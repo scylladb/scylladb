@@ -74,7 +74,7 @@ modes = {
     },
 }
 
-libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm'
+libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
 
 warnings = [
