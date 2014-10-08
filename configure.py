@@ -18,6 +18,7 @@ tests = [
 apps = [
     'apps/httpd/httpd',
     'apps/seastar/seastar',
+    'apps/memcache/memcache',
     ]
 
 all_artifacts = apps + tests
@@ -44,10 +45,15 @@ core = [
     'net/posix-stack.cc',
     ]
 
+memcache = [
+    'apps/memcache/ascii.rl'
+] + libnet + core
+
 deps = {
     'apps/seastar/seastar': ['apps/seastar/main.cc'] + core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['apps/httpd/httpd.cc', 'apps/httpd/request_parser.rl'] + libnet + core,
+    'apps/memcache/memcache': ['apps/memcache/memcache.cc'] + memcache,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
     'tests/virtiotest': ['tests/virtiotest.cc'] + core + libnet,
     'tests/l3_test': ['tests/l3_test.cc'] + core + libnet,
