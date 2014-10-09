@@ -362,6 +362,8 @@ class virtio_net_device : public net::device {
     class rxq  {
         virtio_net_device& _dev;
         vring _ring;
+        packet _building;
+        unsigned _remaining_buffers = 0;
     public:
         rxq(virtio_net_device& _if,
                 vring::config config, readable_eventfd notified, writeable_eventfd kicked);
@@ -370,7 +372,7 @@ class virtio_net_device : public net::device {
         future<> prepare_buffers();
     };
 private:
-    size_t _header_len = sizeof(net_hdr); // adjust for mrg_buf
+    size_t _header_len;
     file_desc _tap_fd;
     file_desc _vhost_fd;
     boost::program_options::variables_map _opts;
@@ -477,11 +479,29 @@ virtio_net_device::rxq::prepare_buffers() {
             b.len = 4096;
             b.writeable = true;
             b.completed.get_future().then([this, buf = buf.get()] (size_t len) {
-                packet p(fragment{buf + _dev._header_len, len - _dev._header_len},
-                        [buf] { delete[] buf; });
-                _dev._rx_ready = _dev._rx_ready.then([this, p = std::move(p)] () mutable {
-                    return _dev.queue_rx_packet(std::move(p));
-                });
+                auto frag_buf = buf;
+                auto frag_len = len;
+                // First buffer
+                if (_remaining_buffers == 0) {
+                    auto hdr = reinterpret_cast<net_hdr_mrg*>(buf);
+                    assert(hdr->num_buffers >= 1);
+                    _remaining_buffers = hdr->num_buffers;
+                    _building = std::move(packet(_remaining_buffers));
+                    frag_buf += _dev._header_len;
+                    frag_len -= _dev._header_len;
+                };
+
+                // Append current buffer
+                packet p(fragment{frag_buf, frag_len}, [buf] { delete[] buf; });
+                _building.append(std::move(p));
+                _remaining_buffers--;
+
+                // Last buffer
+                if (_remaining_buffers == 0) {
+                    _dev._rx_ready = _dev._rx_ready.then([this] () mutable {
+                        return _dev.queue_rx_packet(std::move(_building));
+                    });
+                }
             });
             bc.push_back(std::move(b));
             buf.release();
@@ -510,6 +530,7 @@ void virtio_net_device::setup_tap_device(sstring tap_device) {
         }
     }
     _tap_fd.ioctl(TUNSETOFFLOAD, offload);
+    _tap_fd.ioctl(TUNSETVNETHDRSZ, _header_len);
 }
 
 virtio_net_device::virtio_net_device(sstring tap_device, boost::program_options::variables_map opts, init x)
@@ -555,7 +576,7 @@ virtio_net_device::virtio_net_device(sstring tap_device, boost::program_options:
 }
 
 uint64_t virtio_net_device::setup_features() {
-    int64_t seastar_supported_features = VIRTIO_RING_F_INDIRECT_DESC;
+    int64_t seastar_supported_features = VIRTIO_RING_F_INDIRECT_DESC | VIRTIO_NET_F_MRG_RXBUF;
 
     if (!(_opts.count("event-index") && _opts["event-index"].as<std::string>() == "off")) {
         seastar_supported_features |= VIRTIO_RING_F_EVENT_IDX;
@@ -585,6 +606,12 @@ uint64_t virtio_net_device::setup_features() {
     _vhost_fd.ioctl(VHOST_GET_FEATURES, vhost_supported_features);
     vhost_supported_features &= seastar_supported_features;
     _vhost_fd.ioctl(VHOST_SET_FEATURES, vhost_supported_features);
+
+    if (vhost_supported_features & VIRTIO_NET_F_MRG_RXBUF) {
+        _header_len = sizeof(net_hdr_mrg);
+    } else {
+        _header_len = sizeof(net_hdr);
+    }
 
     return seastar_supported_features;
 }

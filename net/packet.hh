@@ -154,6 +154,8 @@ public:
 
     // build empty packet
     packet();
+    // build empty packet with nr_frags allocated
+    packet(size_t nr_frags);
     // move existing packet
     packet(packet&& x) noexcept;
     // copy data into packet
@@ -257,6 +259,11 @@ packet::impl::impl(fragment frag, size_t nr_frags)
 inline
 packet::packet()
     : _impl(impl::allocate(1)) {
+}
+
+inline
+packet::packet(size_t nr_frags)
+    : _impl(impl::allocate(nr_frags)) {
 }
 
 inline
