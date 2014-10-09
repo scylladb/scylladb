@@ -49,6 +49,11 @@ inline bool operator>(tcp_seq s, tcp_seq q) { return q < s; }
 inline bool operator<=(tcp_seq s, tcp_seq q) { return !(s > q); }
 inline bool operator>=(tcp_seq s, tcp_seq q) { return !(s < q); }
 
+inline tcp_seq get_tcp_isn() {
+    // FIXME: should increase every 4ms
+    return make_seq(1000000);
+}
+
 struct tcp_hdr {
     packed<uint16_t> src_port;
     packed<uint16_t> dst_port;
@@ -372,6 +377,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             _rcv.window = 4500; // FIXME: what?
             _rcv.urgent = _rcv.next;
             _snd.wl1 = th->seq;
+            _snd.next = _snd.initial = get_tcp_isn();
         } else {
             if (seg_seq != _rcv.initial) {
                 return respond_with_reset(th);
