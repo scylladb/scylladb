@@ -572,9 +572,23 @@ public:
     output_stream(data_sink fd, size_t size)
         : _fd(std::move(fd)), _buf(size), _size(size) {}
     future<> write(const char_type* buf, size_t n);
+    future<> write(const char_type* buf);
+    future<> write(const sstring& s);
     future<> flush();
 private:
 };
+
+template<typename CharType>
+inline
+future<> output_stream<CharType>::write(const char_type* buf) {
+    return write(buf, strlen(buf));
+}
+
+template<typename CharType>
+inline
+future<> output_stream<CharType>::write(const sstring& s) {
+    return write(s.c_str(), s.size());
+}
 
 class file_impl {
 public:
