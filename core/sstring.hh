@@ -202,7 +202,7 @@ String to_sstring(T value, for_enable_if);
 template <typename T>
 inline
 sstring to_sstring_sprintf(T value, const char* fmt) {
-    char tmp[sizeof(value) / 3 + 3];
+    char tmp[sizeof(value) * 3 + 3];
     auto len = std::sprintf(tmp, fmt, value);
     return sstring(tmp, len);
 }
