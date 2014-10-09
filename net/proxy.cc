@@ -9,7 +9,7 @@ private:
     boost::program_options::variables_map _opts;
     stream<packet> _rx_stream;
     future<> _rx_ready;
-    net::hw_features _hw_features = {false, false};
+    net::hw_features _hw_features;
 public:
     explicit proxy_net_device(boost::program_options::variables_map opts);
     virtual subscription<packet> receive(std::function<future<> (packet)> next) override;

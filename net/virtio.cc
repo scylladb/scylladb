@@ -376,8 +376,8 @@ private:
     boost::program_options::variables_map _opts;
     std::unique_ptr<char[], free_deleter> _txq_storage;
     std::unique_ptr<char[], free_deleter> _rxq_storage;
-    uint64_t _features;
     net::hw_features _hw_features;
+    uint64_t _features;
     txq _txq;
     rxq _rxq;
     stream<packet> _rx_stream;
@@ -409,15 +409,23 @@ virtio_net_device::txq::post(packet p) {
     net_hdr_mrg vhdr = {};
 
     // Handle TCP checksum offload
-    if (_dev.hw_features().tx_csum_offload) {
-        // FIXME: No magic numbers
-        auto iph = p.get_header<net::ip_hdr>(14);
-        if (iph && iph->ip_proto == 6) {
-            vhdr.needs_csum = 1;
-            // 14 bytes ethernet header and 20 bytes IP header
-            vhdr.csum_start = 14 + 20;
-            // TCP checksum filed's offset within the TCP header is 16 bytes
-            vhdr.csum_offset = 16;
+    auto oi = p.offload_info();
+    if (_dev.hw_features().tx_csum_offload && oi.protocol == offload_info::protocol_type::tcp) {
+        auto eth_hdr_len = sizeof(eth_hdr);
+        auto ip_hdr_len = oi.ip_hdr_len;
+        auto tcp_hdr_len = oi.tcp_hdr_len;
+        vhdr.needs_csum = 1;
+        vhdr.csum_start = eth_hdr_len + ip_hdr_len;
+        // TCP checksum filed's offset within the TCP header is 16 bytes
+        vhdr.csum_offset = 16;
+        auto mtu = _dev.hw_features().mtu;
+        if (_dev.hw_features().tx_tso && p.len() > mtu + eth_hdr_len) {
+            // IPv4 TCP TSO
+            vhdr.gso_type = net_hdr::gso_tcpv4;
+            // Sum of Ethernet, IP and TCP header size
+            vhdr.hdr_len = eth_hdr_len + ip_hdr_len + tcp_hdr_len;
+            // Maximum segment size of packet after the offload
+            vhdr.gso_size = mtu - ip_hdr_len - tcp_hdr_len;
         }
     }
 
@@ -494,6 +502,12 @@ void virtio_net_device::setup_tap_device(sstring tap_device) {
     unsigned int offload = 0;
     if (hw_features().tx_csum_offload && hw_features().rx_csum_offload) {
         offload = TUN_F_CSUM;
+        if (hw_features().tx_tso) {
+            offload |= TUN_F_TSO4;
+        }
+        if (hw_features().tx_ufo) {
+            offload |= TUN_F_UFO;
+        }
     }
     _tap_fd.ioctl(TUNSETOFFLOAD, offload);
 }
@@ -554,12 +568,23 @@ uint64_t virtio_net_device::setup_features() {
         _hw_features.tx_csum_offload = false;
         _hw_features.rx_csum_offload = false;
     }
+    if (!(_opts.count("tso") && _opts["tso"].as<std::string>() == "off")) {
+        seastar_supported_features |= VIRTIO_NET_F_HOST_TSO4;
+        _hw_features.tx_tso = true;
+    } else {
+        _hw_features.tx_tso = false;
+    }
+    if (!(_opts.count("ufo") && _opts["ufo"].as<std::string>() == "off")) {
+        seastar_supported_features |= VIRTIO_NET_F_HOST_UFO;
+        _hw_features.tx_ufo = true;
+    } else {
+        _hw_features.tx_ufo = false;
+    }
 
     int64_t vhost_supported_features;
     _vhost_fd.ioctl(VHOST_GET_FEATURES, vhost_supported_features);
-
-    seastar_supported_features &= vhost_supported_features;
-    _vhost_fd.ioctl(VHOST_SET_FEATURES, seastar_supported_features);
+    vhost_supported_features &= seastar_supported_features;
+    _vhost_fd.ioctl(VHOST_SET_FEATURES, vhost_supported_features);
 
     return seastar_supported_features;
 }
@@ -636,6 +661,12 @@ get_virtio_net_options_description()
         ("csum-offload",
                 boost::program_options::value<std::string>()->default_value("on"),
                 "Enable checksum offload feature (on / off)")
+        ("tso",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable TCP segment offload feature (on / off)")
+        ("ufo",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable UDP fragmentation offload feature (on / off)")
         ("virtio-ring-size",
                 boost::program_options::value<unsigned>()->default_value(256),
                 "Virtio ring size (must be power-of-two)")

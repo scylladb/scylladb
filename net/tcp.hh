@@ -484,8 +484,15 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
     auto can_send = std::min(
             uint32_t(_snd.unacknowledged + _snd.window - _snd.next),
             _snd.unsent_len);
-    auto mss = 1400U;
-    can_send = std::min(can_send, mss);
+    // Max number of TCP payloads we can pass to NIC
+    uint32_t len;
+    if (_tcp.hw_features().tx_tso) {
+        // FIXME: No magic numbers when adding IP and TCP option support
+        len = _tcp.hw_features().max_packet_len - 20 - 20;
+    } else {
+        len = _tcp.hw_features().mtu - 20 - 20;
+    }
+    can_send = std::min(can_send, len);
     // easy case: one small packet
     if (_snd.unsent.size() == 1 && _snd.unsent.front().len() <= can_send) {
         auto p = std::move(_snd.unsent.front());

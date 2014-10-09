@@ -22,9 +22,17 @@ class l3_protocol;
 
 struct hw_features {
     // Enable tx checksum offload
-    bool tx_csum_offload;
+    bool tx_csum_offload = false;
     // Enable rx checksum offload
-    bool rx_csum_offload;
+    bool rx_csum_offload = false;
+    // Enable tx TCP segment offload
+    bool tx_tso = false;
+    // Enable tx UDP fragmentation offload
+    bool tx_ufo = false;
+    // Maximum Transmission Unit
+    uint16_t mtu = 1500;
+    // Maximun packet len when TCP/UDP offload is enabled
+    uint16_t max_packet_len = 65535;
 };
 
 class l3_protocol {
