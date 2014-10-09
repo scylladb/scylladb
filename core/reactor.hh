@@ -638,8 +638,8 @@ public:
     using char_type = CharType;
     output_stream(data_sink fd, size_t size)
         : _fd(std::move(fd)), _buf(size), _size(size) {}
-    future<size_t> write(const char_type* buf, size_t n);
-    future<bool> flush();
+    future<> write(const char_type* buf, size_t n);
+    future<> flush();
 private:
 };
 
@@ -848,46 +848,40 @@ input_stream<CharType>::consume(Consumer& consumer) {
 #include "sstring.hh"
 
 template <typename CharType>
-future<size_t>
+future<>
 output_stream<CharType>::write(const char_type* buf, size_t n) {
     if (n >= _size) {
         temporary_buffer<char> tmp(n);
         std::copy(buf, buf + n, tmp.get_write());
-        return flush().then([this, tmp = std::move(tmp)] (bool done) mutable {
+        return flush().then([this, tmp = std::move(tmp)] () mutable {
             return _fd.put(std::move(tmp));
-        }).then([n] {
-            return make_ready_future<size_t>(n);
         });
     }
     auto now = std::min(n, _size - _end);
     std::copy(buf, buf + now, _buf.get_write() + _end);
     _end += now;
     if (now == n) {
-        return make_ready_future<size_t>(n);
+        return make_ready_future<>();
     } else {
         temporary_buffer<CharType> next(_size);
         std::copy(buf + now, buf + n, next.get_write());
         _end = n - now;
         std::swap(next, _buf);
-        return _fd.put(std::move(next)).then(
-                [this, n] () mutable {
-            return make_ready_future<size_t>(n);
-        });
+        return _fd.put(std::move(next));
     }
 }
 
 template <typename CharType>
-future<bool>
+future<>
 output_stream<CharType>::flush() {
     if (!_end) {
-        return make_ready_future<bool>(true);
+        return make_ready_future<>();
     }
     _buf.trim(_end);
     temporary_buffer<CharType> next(_size);
     std::swap(_buf, next);
     return _fd.put(std::move(next)).then([this] {
         _end = 0;
-        return make_ready_future<bool>(true);
     });
 }
 

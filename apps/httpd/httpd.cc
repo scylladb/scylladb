@@ -102,15 +102,15 @@ public:
         void start_response() {
             _resp->_headers["Content-Length"] = to_sstring(_resp->_body.size());
             _write_buf.write(_resp->_response_line.begin(), _resp->_response_line.size()).then(
-                    [this] (size_t n) mutable {
+                    [this] {
                 return write_response_headers(_resp->_headers.begin());
-            }).then([this] (size_t done) {
+            }).then([this] {
                 return _write_buf.write("\r\n", 2);
-            }).then([this] (size_t done) mutable {
+            }).then([this] {
                 return write_body();
-            }).then([this] (size_t done) {
+            }).then([this] {
                 return _write_buf.flush();
-            }).then([this] (bool done) {
+            }).then([this] {
                 _resp.reset();
                 if (!_pending_responses.empty()) {
                     _resp = std::move(_pending_responses.front());
@@ -121,18 +121,18 @@ public:
                 }
             });
         }
-        future<size_t> write_response_headers(std::unordered_map<sstring, sstring>::iterator hi) {
+        future<> write_response_headers(std::unordered_map<sstring, sstring>::iterator hi) {
             if (hi == _resp->_headers.end()) {
-                return make_ready_future<size_t>(0);
+                return make_ready_future<>();
             }
             return _write_buf.write(hi->first.begin(), hi->first.size()).then(
-                    [hi, this] (size_t done) mutable {
+                    [this] {
                 return _write_buf.write(": ", 2);
-            }).then([hi, this] (size_t done) mutable {
+            }).then([hi, this] {
                 return _write_buf.write(hi->second.begin(), hi->second.size());
-            }).then([hi, this] (size_t done) mutable {
+            }).then([this] {
                 return _write_buf.write("\r\n", 2);
-            }).then([hi, this] (size_t done) mutable {
+            }).then([hi, this] () mutable {
                 return write_response_headers(++hi);
             });
         }
@@ -143,7 +143,7 @@ public:
             resp->_body = "<html><head><title>this is the future</title></head><body><p>Future!!</p></body></html>";
             respond(std::move(resp));
         }
-        future<size_t> write_body() {
+        future<> write_body() {
             return _write_buf.write(_resp->_body.begin(), _resp->_body.size());
         }
         void maybe_done() {
