@@ -12,6 +12,7 @@ tests = [
     'tests/udp_server',
     'tests/udp_client',
     'tests/blkdiscard_test',
+    'tests/sstring_test',
     ]
 
 apps = [
@@ -57,6 +58,7 @@ deps = {
     'tests/udp_server': ['tests/udp_server.cc'] + core + libnet,
     'tests/udp_client': ['tests/udp_client.cc'] + core + libnet,
     'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
+    'tests/sstring_test': ['tests/sstring_test.cc'] + core,
 }
 
 modes = {
@@ -139,9 +141,9 @@ def debug_flag(compiler):
     src_with_auto = textwrap.dedent('''\
         template <typename T>
         struct x { auto f() {} };
-        
+
         x<int> a;
-        ''')      
+        ''')
     if try_compile(source = src_with_auto, flags = ['-g', '-std=gnu++1y'], compiler = compiler):
         return '-g'
     else:
