@@ -24,22 +24,19 @@ if __name__ == "__main__":
     for mode in ['debug', 'release']:
         for test in all_tests:
             test_to_run.append(os.path.join('build', mode, 'tests', test))
+        test_to_run.append('tests/memcache/test.py ' + os.path.join('build', mode, 'apps', 'memcache', 'memcache'))
 
     all_ok = True
 
     n_total = len(test_to_run)
     for n, path in enumerate(test_to_run):
         prefix = '[%d/%d]' % (n + 1, n_total)
-        if not os.path.exists(path):
-            print_status('MISSING: %s\n' % (path))
+        print_status('%s RUNNING %s' % (prefix, path))
+        if subprocess.call(path.split(' '), stdout=black_hole, stderr=black_hole):
+            print_status('FAILED: %s\n' % (path))
             all_ok = False
         else:
-            print_status('%s RUNNING %s' % (prefix, path))
-            if subprocess.call([path], stdout=black_hole, stderr=black_hole):
-                print_status('FAILED: %s\n' % (path))
-                all_ok = False
-            else:
-                print_status('%s PASSED %s' % (prefix, path))
+            print_status('%s PASSED %s' % (prefix, path))
 
     if all_ok:
         print('\nOK.')
