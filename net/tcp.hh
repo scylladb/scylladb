@@ -565,6 +565,13 @@ void tcp<InetTraits>::tcb::output() {
         th->checksum = csum.get();
     }
 
+    offload_info oi;
+    // TCP protocol
+    oi.protocol = offload_info::protocol_type::tcp;
+    // TCP hdr len
+    oi.tcp_hdr_len = 20;
+    p.set_offload_info(oi);
+
     _tcp.send(_local_ip, _foreign_ip, std::move(p));
 }
 

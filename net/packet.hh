@@ -16,6 +16,13 @@ struct fragment {
     size_t size;
 };
 
+struct offload_info {
+    enum class protocol_type : uint8_t { tcp = 6, udp = 17, unused = 255 };
+    protocol_type protocol = protocol_type::unused;
+    uint8_t ip_hdr_len = 20;
+    uint8_t tcp_hdr_len = 20;
+};
+
 // Zero-copy friendly packet class
 //
 // For implementing zero-copy, we need a flexible destructor that can
@@ -60,6 +67,7 @@ class packet final {
         unsigned _len = 0;
         uint16_t _nr_frags = 0;
         uint16_t _allocated_frags;
+        offload_info _offload_info;
         char _data[internal_data_size]; // only _frags[0] may use
         unsigned _headroom = internal_data_size; // in _data
         // FIXME: share _data/_frags space
@@ -83,6 +91,7 @@ class packet final {
             n->_len = old->_len;
             n->_nr_frags = old->_nr_frags;
             n->_headroom = old->_headroom;
+            n->_offload_info = old->_offload_info;
             std::copy(old->_frags, old->_frags + old->_nr_frags, n->_frags);
             old->copy_internal_fragment_to(n.get());
             return std::move(n);
@@ -213,6 +222,9 @@ public:
 private:
     void linearize(size_t at_frag, size_t desired_size);
     bool allocate_headroom(size_t size);
+public:
+    class offload_info offload_info() { return _impl->_offload_info; }
+    void set_offload_info(class offload_info oi) { _impl->_offload_info = oi; }
 };
 
 inline
@@ -476,6 +488,7 @@ packet packet::share(size_t offset, size_t len) {
         n._impl->_len += fsize;
         offset = 0;
     }
+    n._impl->_offload_info = _impl->_offload_info;
     assert(!n._impl->_deleter);
     n._impl->_deleter = _impl->_deleter.share();
     return n;
