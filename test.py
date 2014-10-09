@@ -5,6 +5,7 @@ import subprocess
 
 all_tests = [
     'futures_test',
+    'memcache/test_ascii_parser',
     'sstring_test',
 ]
 

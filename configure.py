@@ -13,6 +13,7 @@ tests = [
     'tests/udp_client',
     'tests/blkdiscard_test',
     'tests/sstring_test',
+    'tests/memcache/test_ascii_parser',
     ]
 
 apps = [
@@ -54,6 +55,7 @@ deps = {
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['apps/httpd/httpd.cc', 'apps/httpd/request_parser.rl'] + libnet + core,
     'apps/memcache/memcache': ['apps/memcache/memcache.cc'] + memcache,
+    'tests/memcache/test_ascii_parser': ['tests/memcache/test_ascii_parser.cc'] + memcache,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
     'tests/virtiotest': ['tests/virtiotest.cc'] + core + libnet,
     'tests/l3_test': ['tests/l3_test.cc'] + core + libnet,
