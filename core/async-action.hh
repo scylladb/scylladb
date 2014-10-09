@@ -60,4 +60,19 @@ void keep_doing(AsyncAction&& action) {
     }
 }
 
+template<typename Iterator, typename AsyncAction>
+static inline
+future<> do_for_each(Iterator begin, Iterator end, AsyncAction&& action) {
+    while (begin != end) {
+        auto f = action(*begin++);
+        if (!f.available()) {
+            return f.then([action = std::forward<AsyncAction>(action),
+                    begin = std::move(begin), end = std::move(end)] () mutable {
+                return do_for_each(std::move(begin), std::move(end), std::forward<AsyncAction>(action));
+            });
+        }
+    }
+    return make_ready_future<>();
+}
+
 #endif
