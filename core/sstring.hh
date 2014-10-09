@@ -243,4 +243,21 @@ string_type to_sstring(unsigned long long value, void* = nullptr) {
     return to_sstring_sprintf(value, "%llu");
 }
 
+template <typename T>
+inline
+std::ostream& operator<<(std::ostream& os, const std::vector<T>& v) {
+    bool first = true;
+    os << "{";
+    for (auto&& elem : v) {
+        if (!first) {
+            os << ", ";
+        } else {
+            first = false;
+        }
+        os << elem;
+    }
+    os << "}";
+    return os;
+}
+
 #endif /* SSTRING_HH_ */
