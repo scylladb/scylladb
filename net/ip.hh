@@ -69,6 +69,9 @@ struct ipv4_traits {
     static void pseudo_header_checksum(checksummer& csum, ipv4_address src, ipv4_address dst, uint16_t len) {
         csum.sum_many(src.ip.raw, dst.ip.raw, uint8_t(0), uint8_t(6), len);
     }
+    static void udp_pseudo_header_checksum(checksummer& csum, ipv4_address src, ipv4_address dst, uint16_t len) {
+        csum.sum_many(src.ip.raw, dst.ip.raw, uint8_t(0), uint8_t(17), len);
+    }
 };
 
 template <uint8_t ProtoNum>
@@ -163,6 +166,7 @@ private:
 public:
     explicit ipv4(interface* netif);
     void set_host_address(ipv4_address ip);
+    ipv4_address host_address();
     void set_gw_address(ipv4_address ip);
     void set_netmask_address(ipv4_address ip);
     future<> send(ipv4_address to, uint8_t proto_num, packet p);

@@ -412,22 +412,35 @@ virtio_net_device::txq::post(packet p) {
 
     // Handle TCP checksum offload
     auto oi = p.offload_info();
-    if (_dev.hw_features().tx_csum_offload && oi.protocol == offload_info::protocol_type::tcp) {
+    if (_dev.hw_features().tx_csum_offload) {
         auto eth_hdr_len = sizeof(eth_hdr);
         auto ip_hdr_len = oi.ip_hdr_len;
-        auto tcp_hdr_len = oi.tcp_hdr_len;
-        vhdr.needs_csum = 1;
-        vhdr.csum_start = eth_hdr_len + ip_hdr_len;
-        // TCP checksum filed's offset within the TCP header is 16 bytes
-        vhdr.csum_offset = 16;
         auto mtu = _dev.hw_features().mtu;
-        if (_dev.hw_features().tx_tso && p.len() > mtu + eth_hdr_len) {
-            // IPv4 TCP TSO
-            vhdr.gso_type = net_hdr::gso_tcpv4;
-            // Sum of Ethernet, IP and TCP header size
-            vhdr.hdr_len = eth_hdr_len + ip_hdr_len + tcp_hdr_len;
-            // Maximum segment size of packet after the offload
-            vhdr.gso_size = mtu - ip_hdr_len - tcp_hdr_len;
+        if (oi.protocol == offload_info::protocol_type::tcp) {
+            auto tcp_hdr_len = oi.tcp_hdr_len;
+            vhdr.needs_csum = 1;
+            vhdr.csum_start = eth_hdr_len + ip_hdr_len;
+            // TCP checksum filed's offset within the TCP header is 16 bytes
+            vhdr.csum_offset = 16;
+            if (_dev.hw_features().tx_tso && p.len() > mtu + eth_hdr_len) {
+                // IPv4 TCP TSO
+                vhdr.gso_type = net_hdr::gso_tcpv4;
+                // Sum of Ethernet, IP and TCP header size
+                vhdr.hdr_len = eth_hdr_len + ip_hdr_len + tcp_hdr_len;
+                // Maximum segment size of packet after the offload
+                vhdr.gso_size = mtu - ip_hdr_len - tcp_hdr_len;
+            }
+        } else if (oi.protocol == offload_info::protocol_type::udp) {
+            auto udp_hdr_len = oi.udp_hdr_len;
+            vhdr.needs_csum = 1;
+            vhdr.csum_start = eth_hdr_len + ip_hdr_len;
+            // UDP checksum filed's offset within the UDP header is 6 bytes
+            vhdr.csum_offset = 6;
+            if (_dev.hw_features().tx_ufo && p.len() > mtu + eth_hdr_len) {
+                vhdr.gso_type = net_hdr::gso_udp;
+                vhdr.hdr_len = eth_hdr_len + ip_hdr_len + udp_hdr_len;
+                vhdr.gso_size = mtu - ip_hdr_len - udp_hdr_len;
+            }
         }
     }
 

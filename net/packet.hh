@@ -21,6 +21,7 @@ struct offload_info {
     protocol_type protocol = protocol_type::unused;
     uint8_t ip_hdr_len = 20;
     uint8_t tcp_hdr_len = 20;
+    uint8_t udp_hdr_len = 8;
 };
 
 // Zero-copy friendly packet class

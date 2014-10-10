@@ -115,6 +115,10 @@ void ipv4::set_host_address(ipv4_address ip) {
     _arp.set_self_addr(ip);
 }
 
+ipv4_address ipv4::host_address() {
+    return _host_address;
+}
+
 void ipv4::set_gw_address(ipv4_address ip) {
     _gw_address = ip;
 }
