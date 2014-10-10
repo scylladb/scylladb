@@ -9,6 +9,7 @@
 #include "core/queue.hh"
 #include "net.hh"
 #include "ip_checksum.hh"
+#include "const.hh"
 #include <unordered_map>
 #include <map>
 #include <functional>
@@ -580,7 +581,7 @@ void tcp<InetTraits>::tcb::output() {
 
     offload_info oi;
     // TCP protocol
-    oi.protocol = offload_info::protocol_type::tcp;
+    oi.protocol = ip_protocol_num::tcp;
     // TCP hdr len
     oi.tcp_hdr_len = 20;
     p.set_offload_info(oi);

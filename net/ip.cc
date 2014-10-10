@@ -28,7 +28,7 @@ ipv4::ipv4(interface* netif)
         return handle_on_cpu(p, off);}))
     , _tcp(*this)
     , _icmp(*this)
-    , _l4({ { 6, &_tcp }, { 1, &_icmp }}) {
+    , _l4({ { uint8_t(ip_protocol_num::tcp), &_tcp }, { uint8_t(ip_protocol_num::icmp), &_icmp }}) {
 }
 
 unsigned ipv4::handle_on_cpu(packet& p, size_t off)
@@ -77,7 +77,7 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
     return make_ready_future<>();
 }
 
-future<> ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
+future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
     // FIXME: fragment
     auto iph = p.prepend_header<ip_hdr>();
     iph->ihl = sizeof(*iph) / 4;
@@ -88,7 +88,7 @@ future<> ipv4::send(ipv4_address to, uint8_t proto_num, packet p) {
     iph->id = 0;
     iph->frag = 0;
     iph->ttl = 64;
-    iph->ip_proto = proto_num;
+    iph->ip_proto = (uint8_t)proto_num;
     iph->csum = 0;
     iph->src_ip = _host_address;
 

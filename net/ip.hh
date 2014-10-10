@@ -15,11 +15,12 @@
 #include "arp.hh"
 #include "tcp.hh"
 #include "ip_checksum.hh"
+#include "const.hh"
 
 namespace net {
 
 class ipv4;
-template <uint8_t ProtoNum>
+template <ip_protocol_num ProtoNum>
 class ipv4_l4;
 struct ipv4_address;
 
@@ -65,16 +66,16 @@ namespace net {
 
 struct ipv4_traits {
     using address_type = ipv4_address;
-    using inet_type = ipv4_l4<6>;
+    using inet_type = ipv4_l4<ip_protocol_num::tcp>;
     static void pseudo_header_checksum(checksummer& csum, ipv4_address src, ipv4_address dst, uint16_t len) {
-        csum.sum_many(src.ip.raw, dst.ip.raw, uint8_t(0), uint8_t(6), len);
+        csum.sum_many(src.ip.raw, dst.ip.raw, uint8_t(0), uint8_t(ip_protocol_num::tcp), len);
     }
     static void udp_pseudo_header_checksum(checksummer& csum, ipv4_address src, ipv4_address dst, uint16_t len) {
-        csum.sum_many(src.ip.raw, dst.ip.raw, uint8_t(0), uint8_t(17), len);
+        csum.sum_many(src.ip.raw, dst.ip.raw, uint8_t(0), uint8_t(ip_protocol_num::udp), len);
     }
 };
 
-template <uint8_t ProtoNum>
+template <ip_protocol_num ProtoNum>
 class ipv4_l4 {
 public:
     ipv4& _inet;
@@ -91,7 +92,7 @@ public:
 };
 
 class ipv4_tcp final : public ip_protocol {
-    ipv4_l4<6> _inet_l4;
+    ipv4_l4<ip_protocol_num::tcp> _inet_l4;
     tcp<ipv4_traits> _tcp;
 public:
     ipv4_tcp(ipv4& inet) : _inet_l4(inet), _tcp(_inet_l4) {}
@@ -123,7 +124,7 @@ struct icmp_hdr {
 class icmp {
 public:
     using ipaddr = ipv4_address;
-    using inet_type = ipv4_l4<1>;
+    using inet_type = ipv4_l4<ip_protocol_num::icmp>;
     explicit icmp(inet_type& inet) : _inet(inet) {}
     void received(packet p, ipaddr from, ipaddr to);
 private:
@@ -131,7 +132,7 @@ private:
 };
 
 class ipv4_icmp final : public ip_protocol {
-    ipv4_l4<1> _inet_l4;
+    ipv4_l4<ip_protocol_num::icmp> _inet_l4;
     icmp _icmp;
 public:
     ipv4_icmp(ipv4& inet) : _inet_l4(inet), _icmp(_inet_l4) {}
@@ -169,13 +170,13 @@ public:
     ipv4_address host_address();
     void set_gw_address(ipv4_address ip);
     void set_netmask_address(ipv4_address ip);
-    future<> send(ipv4_address to, uint8_t proto_num, packet p);
+    future<> send(ipv4_address to, ip_protocol_num proto_num, packet p);
     tcp<ipv4_traits>& get_tcp() { return _tcp._tcp; }
     void register_l4(proto_type id, ip_protocol* handler);
     net::hw_features hw_features() { return _netif->hw_features(); }
 };
 
-template <uint8_t ProtoNum>
+template <ip_protocol_num ProtoNum>
 inline
 future<> ipv4_l4<ProtoNum>::send(ipv4_address from, ipv4_address to, packet p) {
     return _inet.send(/* from, */ to, ProtoNum, std::move(p));

@@ -6,6 +6,7 @@
 #define PACKET_HH_
 
 #include "core/deleter.hh"
+#include "const.hh"
 #include <vector>
 #include <cassert>
 
@@ -17,8 +18,7 @@ struct fragment {
 };
 
 struct offload_info {
-    enum class protocol_type : uint8_t { tcp = 6, udp = 17, unused = 255 };
-    protocol_type protocol = protocol_type::unused;
+    ip_protocol_num protocol = ip_protocol_num::unused;
     uint8_t ip_hdr_len = 20;
     uint8_t tcp_hdr_len = 20;
     uint8_t udp_hdr_len = 8;

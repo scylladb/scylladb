@@ -18,6 +18,7 @@
 #include <linux/vhost.h>
 #include <linux/if_tun.h>
 #include "ip.hh"
+#include "const.hh"
 
 using namespace net;
 
@@ -416,7 +417,7 @@ virtio_net_device::txq::post(packet p) {
         auto eth_hdr_len = sizeof(eth_hdr);
         auto ip_hdr_len = oi.ip_hdr_len;
         auto mtu = _dev.hw_features().mtu;
-        if (oi.protocol == offload_info::protocol_type::tcp) {
+        if (oi.protocol == ip_protocol_num::tcp) {
             auto tcp_hdr_len = oi.tcp_hdr_len;
             vhdr.needs_csum = 1;
             vhdr.csum_start = eth_hdr_len + ip_hdr_len;
@@ -430,7 +431,7 @@ virtio_net_device::txq::post(packet p) {
                 // Maximum segment size of packet after the offload
                 vhdr.gso_size = mtu - ip_hdr_len - tcp_hdr_len;
             }
-        } else if (oi.protocol == offload_info::protocol_type::udp) {
+        } else if (oi.protocol == ip_protocol_num::udp) {
             auto udp_hdr_len = oi.udp_hdr_len;
             vhdr.needs_csum = 1;
             vhdr.csum_start = eth_hdr_len + ip_hdr_len;
