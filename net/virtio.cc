@@ -363,8 +363,9 @@ class virtio_net_device : public net::device {
     class rxq  {
         virtio_net_device& _dev;
         vring _ring;
-        packet _building;
         unsigned _remaining_buffers = 0;
+        std::vector<fragment> _fragments;
+        std::vector<std::unique_ptr<char[]>> _deleters;
     public:
         rxq(virtio_net_device& _if,
                 vring::config config, readable_eventfd notified, writeable_eventfd kicked);
@@ -492,33 +493,35 @@ virtio_net_device::rxq::prepare_buffers() {
             b.addr = virt_to_phys(buf.get());
             b.len = 4096;
             b.writeable = true;
-            b.completed.get_future().then([this, buf = buf.get()] (size_t len) {
-                auto frag_buf = buf;
+            b.completed.get_future().then([this, buf = std::move(buf)] (size_t len) mutable {
+                auto frag_buf = buf.get();
                 auto frag_len = len;
                 // First buffer
                 if (_remaining_buffers == 0) {
-                    auto hdr = reinterpret_cast<net_hdr_mrg*>(buf);
+                    auto hdr = reinterpret_cast<net_hdr_mrg*>(frag_buf);
                     assert(hdr->num_buffers >= 1);
+                    // TODO: special-case for num_buffers == 1
                     _remaining_buffers = hdr->num_buffers;
-                    _building = std::move(packet(_remaining_buffers));
                     frag_buf += _dev._header_len;
                     frag_len -= _dev._header_len;
+                    _fragments.clear();
+                    _deleters.clear();
                 };
 
                 // Append current buffer
-                packet p(fragment{frag_buf, frag_len}, [buf] { delete[] buf; });
-                _building.append(std::move(p));
+                _fragments.emplace_back(fragment{frag_buf, frag_len});
+                _deleters.emplace_back(buf.release());
                 _remaining_buffers--;
 
                 // Last buffer
                 if (_remaining_buffers == 0) {
-                    _dev._rx_ready = _dev._rx_ready.then([this] () mutable {
-                        return _dev.queue_rx_packet(std::move(_building));
+                    packet p(_fragments.begin(), _fragments.end(), [deleters = std::move(_deleters)] () mutable { deleters.clear(); });
+                    _dev._rx_ready = _dev._rx_ready.then([this, p = std::move(p)] () mutable {
+                        return _dev.queue_rx_packet(std::move(p));
                     });
                 }
             });
             bc.push_back(std::move(b));
-            buf.release();
             vbc.push_back(std::move(bc));
         }
         _ring.post(std::move(vbc));

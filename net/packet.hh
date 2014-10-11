@@ -9,6 +9,7 @@
 #include "const.hh"
 #include <vector>
 #include <cassert>
+#include <algorithm>
 
 namespace net {
 
@@ -171,6 +172,9 @@ public:
     // zero-copy multiple fragment
     template <typename Deleter>
     packet(std::vector<fragment> frag, Deleter deleter);
+    // build packet with iterator
+    template <typename Iterator, typename Deleter>
+    packet(Iterator begin, Iterator end, Deleter del);
     // append fragment (copying new fragment)
     packet(packet&& x, fragment frag);
     // prepend fragment (copying new fragment, with header optimization)
@@ -299,6 +303,20 @@ packet::packet(std::vector<fragment> frag, Deleter d)
         _impl->_len += f.size;
     }
 }
+
+template <typename Iterator, typename Deleter>
+inline
+packet::packet(Iterator begin, Iterator end, Deleter del) {
+    unsigned nr_frags = 0, len = 0;
+    nr_frags = std::distance(begin, end);
+    std::for_each(begin, end, [&] (fragment& frag) { len += frag.size; });
+    _impl = impl::allocate(nr_frags);
+    _impl->_deleter = make_deleter(deleter(), std::move(del));
+    _impl->_len = len;
+    _impl->_nr_frags = nr_frags;
+    std::copy(begin, end, _impl->_frags);
+}
+
 
 inline
 packet::packet(packet&& x, fragment frag)
