@@ -53,9 +53,9 @@ public:
                 get_ex();
             } catch (std::exception& ex) {
                 std::cout << "program failed with uncaught exception: " << ex.what() << "\n";
-            engine.exit(1);
+                engine.exit(1);
             }
-            });
+        });
         return engine.run();
     };
 };
