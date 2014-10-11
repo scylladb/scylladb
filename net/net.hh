@@ -37,9 +37,9 @@ struct hw_features {
 
 class l3_protocol {
     interface* _netif;
-    uint16_t _proto_num;
+    eth_protocol_num _proto_num;
 public:
-    explicit l3_protocol(interface* netif, uint16_t proto_num);
+    explicit l3_protocol(interface* netif, eth_protocol_num proto_num);
     subscription<packet, ethernet_address> receive(
             std::function<future<> (packet, ethernet_address)> rx_fn,
             std::function<unsigned (packet&, size_t)> forward);
@@ -62,12 +62,12 @@ class interface {
     net::hw_features _hw_features;
 private:
     future<> dispatch_packet(packet p);
-    future<> send(uint16_t proto_num, ethernet_address to, packet p);
+    future<> send(eth_protocol_num proto_num, ethernet_address to, packet p);
 public:
     explicit interface(std::unique_ptr<device> dev);
     ethernet_address hw_address() { return _hw_address; }
     net::hw_features hw_features() { return _hw_features; }
-    subscription<packet, ethernet_address> register_l3(uint16_t proto_num,
+    subscription<packet, ethernet_address> register_l3(eth_protocol_num proto_num,
             std::function<future<> (packet p, ethernet_address from)> next,
             std::function<unsigned (packet&, size_t)> forward);
     friend class l3_protocol;

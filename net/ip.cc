@@ -21,7 +21,7 @@ ipv4::ipv4(interface* netif)
     : _netif(netif)
     , _global_arp(netif)
     , _arp(_global_arp)
-    , _l3(netif, 0x0800)
+    , _l3(netif, eth_protocol_num::ipv4)
     , _rx_packets(_l3.receive([this] (packet p, ethernet_address ea) {
         return handle_received_packet(std::move(p), ea); },
       [this] (packet& p, size_t off) {

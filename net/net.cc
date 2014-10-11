@@ -12,7 +12,7 @@ namespace net {
 
 __thread device *dev;
 
-l3_protocol::l3_protocol(interface* netif, uint16_t proto_num)
+l3_protocol::l3_protocol(interface* netif, eth_protocol_num proto_num)
     : _netif(netif), _proto_num(proto_num) {
 }
 
@@ -34,10 +34,10 @@ interface::interface(std::unique_ptr<device> dev)
 }
 
 subscription<packet, ethernet_address>
-interface::register_l3(uint16_t proto_num,
+interface::register_l3(eth_protocol_num proto_num,
         std::function<future<> (packet p, ethernet_address from)> next,
         std::function<unsigned (packet&, size_t)> forward) {
-    auto i = _proto_map.emplace(std::piecewise_construct, std::make_tuple(proto_num), std::forward_as_tuple(std::move(forward)));
+    auto i = _proto_map.emplace(std::piecewise_construct, std::make_tuple(uint16_t(proto_num)), std::forward_as_tuple(std::move(forward)));
     assert(i.second);
     l3_rx_stream& l3_rx = i.first->second;
     return l3_rx.packet_stream.listen(std::move(next));
@@ -76,11 +76,11 @@ future<> interface::dispatch_packet(packet p) {
     return make_ready_future<>();
 }
 
-future<> interface::send(uint16_t proto_num, ethernet_address to, packet p) {
+future<> interface::send(eth_protocol_num proto_num, ethernet_address to, packet p) {
     auto eh = p.prepend_header<eth_hdr>();
     eh->dst_mac = to;
     eh->src_mac = _hw_address;
-    eh->eth_proto = proto_num;
+    eh->eth_proto = uint16_t(proto_num);
     hton(*eh);
     return _dev->send(std::move(p));
 }

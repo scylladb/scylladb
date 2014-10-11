@@ -147,7 +147,7 @@ public:
     using address_type = ipv4_address;
     using proto_type = uint16_t;
     static address_type broadcast_address() { return ipv4_address(0xffffffff); }
-    static proto_type arp_protocol_type() { return 0x0800; }
+    static proto_type arp_protocol_type() { return proto_type(eth_protocol_num::ipv4); }
 private:
     interface* _netif;
     arp _global_arp;
