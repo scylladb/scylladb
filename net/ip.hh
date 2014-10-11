@@ -67,7 +67,7 @@ namespace net {
 struct ipv4_traits {
     using address_type = ipv4_address;
     using inet_type = ipv4_l4<ip_protocol_num::tcp>;
-    static void pseudo_header_checksum(checksummer& csum, ipv4_address src, ipv4_address dst, uint16_t len) {
+    static void tcp_pseudo_header_checksum(checksummer& csum, ipv4_address src, ipv4_address dst, uint16_t len) {
         csum.sum_many(src.ip.raw, dst.ip.raw, uint8_t(0), uint8_t(ip_protocol_num::tcp), len);
     }
     static void udp_pseudo_header_checksum(checksummer& csum, ipv4_address src, ipv4_address dst, uint16_t len) {
