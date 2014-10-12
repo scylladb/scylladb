@@ -57,11 +57,13 @@ deps = {
 modes = {
     'debug': {
         'sanitize': '-fsanitize=address -fsanitize=leak -fsanitize=undefined',
+        'sanitize_libs': '-lubsan -lasan',
         'opt': '-O0 -DDEBUG -DDEFAULT_ALLOCATOR',
-        'libs': '-lubsan -lasan',
+        'libs': '',
     },
     'release': {
         'sanitize': '',
+        'sanitize_libs': '',
         'opt': '-O2',
         'libs': '',
     },
@@ -109,6 +111,9 @@ build_artifacts = all_artifacts if not args.artifacts else args.artifacts
 outdir = 'build'
 buildfile = 'build.ninja'
 os.makedirs(outdir, exist_ok = True)
+do_sanitize = True
+if args.static:
+    do_sanitize = False
 with open(buildfile, 'w') as f:
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
@@ -123,9 +128,13 @@ with open(buildfile, 'w') as f:
         ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
+        if modeval['sanitize'] and not do_sanitize:
+            print('Note: --static disables debug mode sanitizers')
+            modeval['sanitize'] = ''
+            modeval['sanitize_libs'] = ''
         f.write(textwrap.dedent('''\
             cxxflags_{mode} = {sanitize} {opt} -I $builddir/{mode}/gen
-            libs_{mode} = {libs}
+            libs_{mode} = {libs} {sanitize_libs}
             rule cxx.{mode}
               command = $cxx -MMD -MT $out -MF $out.d $cxxflags $cxxflags_{mode} -c -o $out $in
               description = CXX $out
