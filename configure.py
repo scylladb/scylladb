@@ -36,6 +36,7 @@ core = [
     'core/reactor.cc',
     'core/posix.cc',
     'core/memory.cc',
+    'util/conversions.cc',
     'net/packet.cc',
     ]
 
