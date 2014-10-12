@@ -46,6 +46,7 @@
 #include <cstring>
 #include <boost/intrusive/list.hpp>
 #include <sys/mman.h>
+#include <numaif.h>
 
 namespace memory {
 
@@ -212,6 +213,7 @@ static constexpr const size_t max_small_allocation
 
 struct cpu_pages {
     static constexpr unsigned min_free_pages = 20000000 / page_size;
+    char* memory;
     page* pages;
     uint32_t nr_pages;
     uint32_t nr_free_pages;
@@ -233,7 +235,7 @@ struct cpu_pages {
     } fsu;
     small_pool_array small_pools;
     static std::atomic<unsigned> cpu_id_gen;
-    char* mem() { return reinterpret_cast<char*>(pages); }
+    char* mem() { return memory; }
 
     void link(page_list& list, page* span);
     void unlink(page_list& list, page* span);
@@ -259,6 +261,8 @@ struct cpu_pages {
     bool initialize();
     void reclaim();
     void set_reclaim_hook(std::function<void (std::function<void ()>)> hook);
+    void resize(size_t new_size);
+    void do_resize(size_t new_size);
 };
 
 static thread_local cpu_pages cpu_mem;
@@ -429,6 +433,7 @@ bool cpu_pages::initialize() {
     }
     ::madvise(base, size, MADV_HUGEPAGE);
     pages = reinterpret_cast<page*>(base);
+    memory = base;
     nr_pages = size / page_size;
     // we reserve the end page so we don't have to special case
     // the last span.
@@ -439,6 +444,57 @@ bool cpu_pages::initialize() {
     pages[nr_pages].free = false;
     free_span_no_merge(reserved, nr_pages - reserved);
     return true;
+}
+
+void cpu_pages::do_resize(size_t new_size) {
+    auto new_pages = new_size / page_size;
+    if (new_pages <= nr_pages) {
+        return;
+    }
+    auto old_size = nr_pages * page_size;
+    auto mmap_start = memory + old_size;
+    auto mmap_size = new_size - old_size;
+    auto r = ::mmap(mmap_start, mmap_size,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+            -1, 0);
+    if (r == MAP_FAILED) {
+        abort();
+    }
+    ::madvise(mmap_start, mmap_size, MADV_HUGEPAGE);
+    ::madvise(mmap_start, mmap_size, MADV_HUGEPAGE);
+    auto new_page_array_pages = align_up(sizeof(page[new_pages]), page_size) / page_size;
+    auto new_page_array
+        = reinterpret_cast<page*>(allocate_large(new_page_array_pages));
+    std::copy(pages, pages + nr_pages, new_page_array);
+    // mark new last page as taken to avoid boundary conditions
+    new_page_array[new_pages - 1].free = false;
+    auto old_pages = reinterpret_cast<char*>(pages);
+    auto old_nr_pages = nr_pages;
+    auto old_pages_size = align_up(sizeof(page[nr_pages]), page_size);
+    pages = new_page_array;
+    nr_pages = new_pages;
+    auto old_pages_start = (old_pages - memory) / page_size;
+    if (old_pages_start == 0) {
+        // keep page 0 allocated
+        old_pages_start = 1;
+        old_pages_size -= page_size;
+    }
+    free_span(old_pages_start, old_pages_size / page_size);
+    // keep new last page allocated
+    free_span(old_nr_pages, new_pages - old_nr_pages - 1);
+    // free old last page
+    free_span(old_nr_pages - 1, 1);
+}
+
+void cpu_pages::resize(size_t new_size) {
+    new_size = align_down(new_size, page_size);
+    while (nr_pages * page_size < new_size) {
+        // don't reallocate all at once, since there might not
+        // be enough free memory available to relocate the pages array
+        auto tmp_size = std::min(new_size, 4 * nr_pages * page_size);
+        do_resize(tmp_size);
+    }
 }
 
 void cpu_pages::reclaim() {
@@ -618,6 +674,24 @@ reclaimer::reclaimer(std::function<void ()> reclaim)
 reclaimer::~reclaimer() {
     auto& r = cpu_mem.reclaimers;
     r.erase(std::find(r.begin(), r.end(), this));
+}
+
+void configure(std::vector<resource::memory> m) {
+    size_t total = 0;
+    for (auto&& x : m) {
+        total += x.bytes;
+    }
+    cpu_mem.resize(total);
+    size_t pos = 0;
+    for (auto&& x : m) {
+        unsigned long nodemask = 1UL << x.nodeid;
+        auto r = ::mbind(cpu_mem.mem() + pos, x.bytes,
+                        MPOL_BIND,
+                        &nodemask, std::numeric_limits<unsigned long>::digits,
+                        MPOL_MF_MOVE);
+        assert(r == 0);
+        pos += x.bytes;
+    }
 }
 
 }
@@ -818,6 +892,9 @@ void operator delete[](void* ptr, size_t size, std::nothrow_t) throw () {
 namespace memory {
 
 void set_reclaim_hook(std::function<void (std::function<void ()>)> hook) {
+}
+
+void configure(std::vector<resource::memory> m) {
 }
 
 }

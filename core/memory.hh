@@ -5,10 +5,14 @@
 #ifndef MEMORY_HH_
 #define MEMORY_HH_
 
+#include "resource.hh"
 #include <new>
 #include <functional>
+#include <vector>
 
 namespace memory {
+
+void configure(std::vector<resource::memory> m);
 
 void* allocate_reclaimable(size_t size);
 
