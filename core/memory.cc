@@ -423,7 +423,7 @@ bool cpu_pages::initialize() {
     }
     cpu_id = cpu_id_gen.fetch_add(1, std::memory_order_relaxed);
     auto base = mem_base() + (size_t(cpu_id) << cpu_id_shift);
-    auto size = 1 << 30; // FIXME: determine dynamically
+    auto size = 32 << 20;  // Small size for bootstrap
     auto r = ::mmap(base, size,
             PROT_READ | PROT_WRITE,
             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,

@@ -6,7 +6,9 @@
 #include "memory.hh"
 #include "core/posix.hh"
 #include "net/packet.hh"
+#include "resource.hh"
 #include "print.hh"
+#include "util/conversions.hh"
 #include <cassert>
 #include <unistd.h>
 #include <fcntl.h>
@@ -742,8 +744,11 @@ smp::get_options_description()
 {
     namespace bpo = boost::program_options;
     bpo::options_description opts("SMP options");
+    auto cpus = resource::nr_processing_units();
     opts.add_options()
-        ("smp,c", bpo::value<unsigned>(), "number of threads")
+        ("smp,c", bpo::value<unsigned>()->default_value(cpus), "number of threads")
+        ("memory,m", bpo::value<std::string>(), "memory to use, in bytes (ex: 4G) (default: all)")
+        ("reserve-memory", bpo::value<std::string>()->default_value("512M"), "memory reserved to OS")
         ;
     return opts;
 }
@@ -789,14 +794,27 @@ void smp::configure(boost::program_options::variables_map configuration)
     engine.configure(configuration);
     if (configuration.count("smp")) {
         smp::count = configuration["smp"].as<unsigned>();
-
+        resource::configuration rc;
+        if (configuration.count("memory")) {
+            rc.total_memory = parse_memory_size(configuration["memory"].as<std::string>());
+        }
+        if (configuration.count("reserve-memory")) {
+            rc.reserve_memory = parse_memory_size(configuration["reserve-memory"].as<std::string>());
+        }
+        rc.cpus = smp::count;
+        std::vector<resource::cpu> allocations = resource::allocate(rc);
+        pin_this_thread(allocations[0].cpu_id);
+        memory::configure(allocations[0].mem);
         smp::_qs = new inter_thread_work_queue* [smp::count];
         for(unsigned i = 0; i < smp::count; i++) {
             smp::_qs[i] = new inter_thread_work_queue[smp::count];
         }
 
         for (unsigned i = 1; i < smp::count; i++) {
-            _threads.emplace_back([configuration, i] {
+            auto allocation = allocations[i];
+            _threads.emplace_back([configuration, i, allocation] {
+                pin_this_thread(allocation.cpu_id);
+                memory::configure(allocation.mem);
                 sigset_t mask;
                 sigfillset(&mask);
                 auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
