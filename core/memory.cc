@@ -56,11 +56,15 @@ static constexpr const unsigned cpu_id_shift = 36; // FIXME: make dynamic
 using pageidx = uint32_t;
 
 struct page;
+class page_list;
 
 namespace bi = boost::intrusive;
 
-using page_list_link = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
-
+class page_list_link {
+    uint32_t _prev;
+    uint32_t _next;
+    friend class page_list;
+};
 
 static char* mem_base() {
     static char* known;
@@ -99,11 +103,45 @@ struct page {
     free_object* freelist;
 };
 
-// FIXME: use 32-bit pointers to save space
-using page_list
-        = bi::list<page,
-                   bi::member_hook<page, page_list_link, &page::link>,
-                   bi::constant_time_size<false>>;
+class page_list {
+    uint32_t _front = 0;
+    uint32_t _back = 0;
+public:
+    page& front(page* ary) { return ary[_front]; }
+    page& back(page* ary) { return ary[_back]; }
+    bool empty() const { return !_front; }
+    void erase(page* ary, page& span) {
+        if (span.link._next) {
+            ary[span.link._next].link._prev = span.link._prev;
+        } else {
+            _back = span.link._prev;
+        }
+        if (span.link._prev) {
+            ary[span.link._prev].link._next = span.link._next;
+        } else {
+            _front = span.link._next;
+        }
+    }
+    void push_front(page* ary, page& span) {
+        auto idx = &span - ary;
+        if (_front) {
+            ary[_front].link._prev = idx;
+        } else {
+            _back = idx;
+        }
+        span.link._next = _front;
+        span.link._prev = 0;
+        _front = idx;
+    }
+    void pop_front(page* ary) {
+        if (ary[_front].link._next) {
+            ary[ary[_front].link._next].link._prev = 0;
+        } else {
+            _back = 0;
+        }
+        _front = ary[_front].link._next;
+    }
+};
 
 class small_pool {
     unsigned _object_size;
@@ -198,7 +236,7 @@ struct cpu_pages {
     char* mem() { return reinterpret_cast<char*>(pages); }
 
     void link(page_list& list, page* span);
-    void unlink(page* span);
+    void unlink(page_list& list, page* span);
     struct trim {
         unsigned offset;
         unsigned nr_pages;
@@ -232,13 +270,13 @@ unsigned index_of(unsigned pages) {
 }
 
 void
-cpu_pages::unlink(page* span) {
-    span->link.unlink();
+cpu_pages::unlink(page_list& list, page* span) {
+    list.erase(pages, *span);
 }
 
 void
 cpu_pages::link(page_list& list, page* span) {
-    list.push_front(*span);
+    list.push_front(pages, *span);
 }
 
 void cpu_pages::free_span_no_merge(uint32_t span_start, uint32_t nr_pages) {
@@ -260,7 +298,7 @@ void cpu_pages::free_span(uint32_t span_start, uint32_t nr_pages) {
         span_start -= b_size;
         nr_pages += b_size;
         nr_free_pages -= b_size;
-        unlink(before - (b_size - 1));
+        unlink(fsu.free_spans[index_of(b_size)], before - (b_size - 1));
     }
     page* after = &pages[span_start + nr_pages];
     if (after->free) {
@@ -268,7 +306,7 @@ void cpu_pages::free_span(uint32_t span_start, uint32_t nr_pages) {
         assert(a_size);
         nr_pages += a_size;
         nr_free_pages -= a_size;
-        unlink(after);
+        unlink(fsu.free_spans[index_of(a_size)], after);
     }
     free_span_no_merge(span_start, nr_pages);
 }
@@ -290,10 +328,10 @@ cpu_pages::allocate_large_and_trim(unsigned n_pages, Trimmer trimmer) {
         throw std::bad_alloc();
     }
     auto& list = fsu.free_spans[idx];
-    page* span = &list.front();
+    page* span = &list.front(pages);
     auto span_size = span->span_size;
     auto span_idx = span - pages;
-    unlink(span);
+    unlink(list, span);
     nr_free_pages -= span->span_size;
     trim t = trimmer(span_idx, nr_pages);
     if (t.offset) {
@@ -460,8 +498,8 @@ void
 small_pool::add_more_objects() {
     auto goal = (_min_free + _max_free) / 2;
     while (!_span_list.empty() && _free_count < goal) {
-        page& span = _span_list.front();
-        _span_list.pop_front();
+        page& span = _span_list.front(cpu_mem.pages);
+        _span_list.pop_front(cpu_mem.pages);
         while (span.freelist) {
             auto obj = span.freelist;
             span.freelist = span.freelist->next;
@@ -501,12 +539,12 @@ small_pool::trim_free_list() {
         span -= span->offset_in_span;
         if (!span->freelist) {
             new (&span->link) page_list_link();
-            _span_list.push_front(*span);
+            _span_list.push_front(cpu_mem.pages, *span);
         }
         obj->next = span->freelist;
         span->freelist = obj;
         if (--span->nr_small_alloc == 0) {
-            span->link.unlink();
+            _span_list.erase(cpu_mem.pages, *span);
             cpu_mem.free_span(span - cpu_mem.pages, span->span_size);
         }
     }
