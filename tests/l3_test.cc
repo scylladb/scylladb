@@ -18,7 +18,7 @@ void dump_arp_packets(l3_protocol& proto) {
 int main(int ac, char** av) {
     auto vnet = create_virtio_net_device("tap0");
     interface netif(std::move(vnet));
-    l3_protocol arp(&netif, 0x0806);
+    l3_protocol arp(&netif, eth_protocol_num::arp);
     dump_arp_packets(arp);
     engine.run();
     return 0;

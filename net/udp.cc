@@ -87,7 +87,7 @@ const int udp_v4::default_queue_size = 1024;
 udp_v4::udp_v4(ipv4& inet)
     : _inet(inet)
 {
-    _inet.register_l4(protocol_number, this);
+    _inet.register_l4(uint8_t(ip_protocol_num::udp), this);
 }
 
 unsigned udp_v4::forward(packet& p, size_t off, ipv4_address from, ipv4_address to)
@@ -116,13 +116,27 @@ void udp_v4::received(packet p, ipv4_address from, ipv4_address to)
 
 future<> udp_v4::send(uint16_t src_port, ipv4_addr dst, packet &&p)
 {
+    auto src = _inet.host_address();
     auto hdr = p.prepend_header<udp_hdr>();
     hdr->src_port = src_port;
     hdr->dst_port = dst.port;
     hdr->len = p.len();
-    hdr->cksum = 0; // TODO: calculate checksum
     hton(*hdr);
-    return _inet.send(dst, protocol_number, std::move(p));
+
+    checksummer csum;
+    ipv4_traits::udp_pseudo_header_checksum(csum, src, dst, p.len());
+    if (hw_features().tx_csum_offload) {
+        hdr->cksum = ~csum.get();
+    } else {
+        csum.sum(p);
+        hdr->cksum = csum.get();
+    }
+
+    offload_info oi;
+    oi.protocol = ip_protocol_num::udp;
+    p.set_offload_info(oi);
+
+    return _inet.send(dst, ip_protocol_num::udp, std::move(p));
 }
 
 uint16_t udp_v4::next_port(uint16_t port) {

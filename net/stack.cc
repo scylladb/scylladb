@@ -14,26 +14,15 @@
 
 namespace net {
 
-class native_network_stack;
-
 template <typename Protocol>
 class native_server_socket_impl;
 
 template <typename Protocol>
 class native_connected_socket_impl;
 
-template <typename Protocol>
-class native_connected_socket_impl : public connected_socket_impl {
-    typename Protocol::connection _conn;
-    class native_data_source_impl;
-    class native_data_sink_impl;
-public:
-    explicit native_connected_socket_impl(typename Protocol::connection conn)
-        : _conn(std::move(conn)) {}
-    virtual input_stream<char> input() override;
-    virtual output_stream<char> output() override;
-};
+class native_network_stack;
 
+// native_server_socket_impl
 template <typename Protocol>
 class native_server_socket_impl : public server_socket_impl {
     typename Protocol::listener _listener;
@@ -41,39 +30,6 @@ public:
     native_server_socket_impl(Protocol& proto, uint16_t port, listen_options opt);
     virtual future<connected_socket, socket_address> accept() override;
 };
-
-
-
-class native_network_stack : public network_stack {
-    static std::unique_ptr<native_network_stack> _s;
-    interface _netif;
-    ipv4 _inet;
-    udp_v4 _udp;
-    using tcp4 = tcp<ipv4_traits>;
-public:
-    explicit native_network_stack(boost::program_options::variables_map opts);
-    virtual server_socket listen(socket_address sa, listen_options opt) override;
-    virtual udp_channel make_udp_channel(ipv4_addr addr) override;
-    static std::unique_ptr<network_stack> create(boost::program_options::variables_map opts) {
-        return std::make_unique<native_network_stack>(opts);
-    }
-    friend class native_server_socket_impl<tcp4>;
-};
-
-udp_channel
-native_network_stack::make_udp_channel(ipv4_addr addr) {
-    return _udp.make_channel(addr);
-}
-
-native_network_stack::native_network_stack(boost::program_options::variables_map opts)
-    : _netif(smp::main_thread() ? create_virtio_net_device(opts["tap-device"].as<std::string>(), opts) : create_proxy_net_device(opts))
-    , _inet(&_netif)
-    , _udp(_inet) {
-    _inet.set_host_address(ipv4_address(opts["host-ipv4-addr"].as<std::string>()));
-    _inet.set_gw_address(ipv4_address(opts["gw-ipv4-addr"].as<std::string>()));
-    _inet.set_netmask_address(ipv4_address(opts["netmask-ipv4-addr"].as<std::string>()));
-    _udp.set_queue_size(opts["udpv4-queue-size"].as<int>());
-}
 
 template <typename Protocol>
 native_server_socket_impl<Protocol>::native_server_socket_impl(Protocol& proto, uint16_t port, listen_options opt)
@@ -90,12 +46,18 @@ native_server_socket_impl<Protocol>::accept() {
     });
 }
 
-server_socket
-native_network_stack::listen(socket_address sa, listen_options opts) {
-    assert(sa.as_posix_sockaddr().sa_family == AF_INET);
-    return server_socket(std::make_unique<native_server_socket_impl<tcp4>>(
-            _inet.get_tcp(), ntohs(sa.as_posix_sockaddr_in().sin_port), opts));
-}
+// native_connected_socket_impl
+template <typename Protocol>
+class native_connected_socket_impl : public connected_socket_impl {
+    typename Protocol::connection _conn;
+    class native_data_source_impl;
+    class native_data_sink_impl;
+public:
+    explicit native_connected_socket_impl(typename Protocol::connection conn)
+        : _conn(std::move(conn)) {}
+    virtual input_stream<char> input() override;
+    virtual output_stream<char> output() override;
+};
 
 template <typename Protocol>
 class native_connected_socket_impl<Protocol>::native_data_source_impl final
@@ -160,6 +122,44 @@ native_connected_socket_impl<Protocol>::output() {
     return output_stream<char>(std::move(ds), 8192);
 }
 
+// native_network_stack
+class native_network_stack : public network_stack {
+    static std::unique_ptr<native_network_stack> _s;
+    interface _netif;
+    ipv4 _inet;
+    udp_v4 _udp;
+    using tcp4 = tcp<ipv4_traits>;
+public:
+    explicit native_network_stack(boost::program_options::variables_map opts);
+    virtual server_socket listen(socket_address sa, listen_options opt) override;
+    virtual udp_channel make_udp_channel(ipv4_addr addr) override;
+    static std::unique_ptr<network_stack> create(boost::program_options::variables_map opts) {
+        return std::make_unique<native_network_stack>(opts);
+    }
+    friend class native_server_socket_impl<tcp4>;
+};
+
+udp_channel
+native_network_stack::make_udp_channel(ipv4_addr addr) {
+    return _udp.make_channel(addr);
+}
+
+native_network_stack::native_network_stack(boost::program_options::variables_map opts)
+    : _netif(smp::main_thread() ? create_virtio_net_device(opts["tap-device"].as<std::string>(), opts) : create_proxy_net_device(opts))
+    , _inet(&_netif)
+    , _udp(_inet) {
+    _inet.set_host_address(ipv4_address(opts["host-ipv4-addr"].as<std::string>()));
+    _inet.set_gw_address(ipv4_address(opts["gw-ipv4-addr"].as<std::string>()));
+    _inet.set_netmask_address(ipv4_address(opts["netmask-ipv4-addr"].as<std::string>()));
+    _udp.set_queue_size(opts["udpv4-queue-size"].as<int>());
+}
+
+server_socket
+native_network_stack::listen(socket_address sa, listen_options opts) {
+    assert(sa.as_posix_sockaddr().sa_family == AF_INET);
+    return server_socket(std::make_unique<native_server_socket_impl<tcp4>>(
+            _inet.get_tcp(), ntohs(sa.as_posix_sockaddr_in().sin_port), opts));
+}
 
 std::unique_ptr<native_network_stack> native_network_stack::_s;
 

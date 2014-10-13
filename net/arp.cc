@@ -15,7 +15,7 @@ arp_for_protocol::~arp_for_protocol() {
     _arp.del(_proto_num);
 }
 
-arp::arp(interface* netif) : _netif(netif), _proto(netif, 0x0806)
+arp::arp(interface* netif) : _netif(netif), _proto(netif, eth_protocol_num::arp)
     , _rx_packets(_proto.receive([this] (packet p, ethernet_address ea) {
         return process_packet(std::move(p), ea);
     },

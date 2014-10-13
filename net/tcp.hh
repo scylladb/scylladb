@@ -9,6 +9,7 @@
 #include "core/queue.hh"
 #include "net.hh"
 #include "ip_checksum.hh"
+#include "const.hh"
 #include <unordered_map>
 #include <map>
 #include <functional>
@@ -48,6 +49,11 @@ inline bool operator<(tcp_seq s, tcp_seq q) { return s - q < 0; }
 inline bool operator>(tcp_seq s, tcp_seq q) { return q < s; }
 inline bool operator<=(tcp_seq s, tcp_seq q) { return !(s > q); }
 inline bool operator>=(tcp_seq s, tcp_seq q) { return !(s < q); }
+
+inline tcp_seq get_tcp_isn() {
+    // FIXME: should increase every 4ms
+    return make_seq(1000000);
+}
 
 struct tcp_hdr {
     packed<uint16_t> src_port;
@@ -268,7 +274,7 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
 
     if (!hw_features().rx_csum_offload) {
         checksummer csum;
-        InetTraits::pseudo_header_checksum(csum, from, to, p.len());
+        InetTraits::tcp_pseudo_header_checksum(csum, from, to, p.len());
         csum.sum(p);
         if (csum.get() != 0) {
             return;
@@ -346,7 +352,7 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
     hton(*th);
 
     checksummer csum;
-    InetTraits::pseudo_header_checksum(csum, local_ip, foreign_ip, sizeof(*th));
+    InetTraits::tcp_pseudo_header_checksum(csum, local_ip, foreign_ip, sizeof(*th));
     if (hw_features().tx_csum_offload) {
         th->checksum = ~csum.get();
     } else {
@@ -372,6 +378,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             _rcv.window = 4500; // FIXME: what?
             _rcv.urgent = _rcv.next;
             _snd.wl1 = th->seq;
+            _snd.next = _snd.initial = get_tcp_isn();
         } else {
             if (seg_seq != _rcv.initial) {
                 return respond_with_reset(th);
@@ -562,7 +569,7 @@ void tcp<InetTraits>::tcb::output() {
     hton(*th);
 
     checksummer csum;
-    InetTraits::pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + len);
+    InetTraits::tcp_pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + len);
     if (_tcp.hw_features().tx_csum_offload) {
         // virtio-net's VIRTIO_NET_F_CSUM feature requires th->checksum to be
         // initialized to ones' complement sum of the pseudo header.
@@ -574,7 +581,7 @@ void tcp<InetTraits>::tcb::output() {
 
     offload_info oi;
     // TCP protocol
-    oi.protocol = offload_info::protocol_type::tcp;
+    oi.protocol = ip_protocol_num::tcp;
     // TCP hdr len
     oi.tcp_hdr_len = 20;
     p.set_offload_info(oi);

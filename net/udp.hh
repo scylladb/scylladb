@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <assert.h>
 #include "net/api.hh"
+#include "const.hh"
 
 namespace net {
 
@@ -42,7 +43,6 @@ class udp_v4 : ip_protocol {
 public:
     static const int default_queue_size;
 private:
-    static const int protocol_number = 17;
     static const uint16_t min_anonymous_port = 32768;
     ipv4 &_inet;
     std::unordered_map<uint16_t, shared_ptr<udp_channel_state>> _channels;
@@ -73,6 +73,7 @@ public:
     future<> send(uint16_t src_port, ipv4_addr dst, packet &&p);
     unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to) override;
     void set_queue_size(int size) { _queue_size = size; }
+    net::hw_features hw_features() { return _inet.hw_features(); }
 };
 
 }
