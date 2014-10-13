@@ -72,7 +72,8 @@ modes = {
     },
 }
 
-libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lhwloc -lnuma -lpciaccess -lxml2 -lz'
+libs = '-laio -lboost_program_options -lboost_system -lstdc++'
+hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
@@ -81,6 +82,24 @@ warnings = [
 import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
+
+def add_tristate(arg_parser, name, dest, help):
+    arg_parser.add_argument('--enable-' + name, dest = dest, action = 'store_true',
+                            help = 'Enable ' + help)
+    arg_parser.add_argument('--disable-' + name, dest = dest, action = 'store_false',
+                            help = 'Disable ' + help)
+
+def apply_tristate(var, test, note, missing):
+    if (var is None) or var:
+        if test():
+            return True
+        elif var == True:
+            print(missing)
+            sys.exit(1)
+        else:
+            print(note)
+            return False
+    return False
 
 arg_parser = argparse.ArgumentParser('Configure seastar')
 arg_parser.add_argument('--static', dest = 'static', action = 'store_const', default = '',
@@ -98,6 +117,7 @@ arg_parser.add_argument('--ldflags', action = 'store', dest = 'user_ldflags', de
                         help = 'Extra flags for the linker')
 arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 'g++',
                         help = 'C++ compiler path')
+add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
 args = arg_parser.parse_args()
 
 def try_compile(compiler, source = '', flags = []):
@@ -131,6 +151,17 @@ warnings = [w
 warnings = ' '.join(warnings)
 
 dbgflag = debug_flag(args.cxx)
+defines = []
+
+def have_hwloc():
+    return try_compile(compiler = args.cxx, source = '#include <hwloc.h>\n#include <numa.h>')
+
+if apply_tristate(args.hwloc, test = have_hwloc,
+                  note = 'Note: hwloc-devel/numactl-devel not installed.  No NUMA support.',
+                  missing = 'Error: required packages hwloc-devel/numactl-devel not installed.'):
+    libs += ' ' + hwloc_libs
+    defines.append('HAVE_HWLOC')
+    defines.append('HAVE_NUMA')
 
 if args.so:
     args.pie = '-shared'
@@ -141,6 +172,8 @@ elif args.pie:
 else:
     args.pie = ''
     args.fpie = ''
+
+defines = ' '.join(['-D' + d for d in defines])
 
 globals().update(vars(args))
 
@@ -158,7 +191,7 @@ with open(buildfile, 'w') as f:
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        cxxflags = -std=gnu++1y {dbgflag} {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags} {warnings}
+        cxxflags = -std=gnu++1y {dbgflag} {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags} {warnings} {defines}
         ldflags = {dbgflag} -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags}
         libs = {libs}
         rule ragel
