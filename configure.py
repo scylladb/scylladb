@@ -84,9 +84,9 @@ import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile, re
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
 
 def add_tristate(arg_parser, name, dest, help):
-    arg_parser.add_argument('--enable-' + name, dest = dest, action = 'store_true',
+    arg_parser.add_argument('--enable-' + name, dest = dest, action = 'store_true', default = None,
                             help = 'Enable ' + help)
-    arg_parser.add_argument('--disable-' + name, dest = dest, action = 'store_false',
+    arg_parser.add_argument('--disable-' + name, dest = dest, action = 'store_false', default = None,
                             help = 'Disable ' + help)
 
 def apply_tristate(var, test, note, missing):
