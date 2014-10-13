@@ -46,6 +46,7 @@
 #include <cstring>
 #include <boost/intrusive/list.hpp>
 #include <sys/mman.h>
+#include <numaif.h>
 
 namespace memory {
 
@@ -56,11 +57,15 @@ static constexpr const unsigned cpu_id_shift = 36; // FIXME: make dynamic
 using pageidx = uint32_t;
 
 struct page;
+class page_list;
 
 namespace bi = boost::intrusive;
 
-using page_list_link = bi::list_member_hook<bi::link_mode<bi::auto_unlink>>;
-
+class page_list_link {
+    uint32_t _prev;
+    uint32_t _next;
+    friend class page_list;
+};
 
 static char* mem_base() {
     static char* known;
@@ -99,11 +104,45 @@ struct page {
     free_object* freelist;
 };
 
-// FIXME: use 32-bit pointers to save space
-using page_list
-        = bi::list<page,
-                   bi::member_hook<page, page_list_link, &page::link>,
-                   bi::constant_time_size<false>>;
+class page_list {
+    uint32_t _front = 0;
+    uint32_t _back = 0;
+public:
+    page& front(page* ary) { return ary[_front]; }
+    page& back(page* ary) { return ary[_back]; }
+    bool empty() const { return !_front; }
+    void erase(page* ary, page& span) {
+        if (span.link._next) {
+            ary[span.link._next].link._prev = span.link._prev;
+        } else {
+            _back = span.link._prev;
+        }
+        if (span.link._prev) {
+            ary[span.link._prev].link._next = span.link._next;
+        } else {
+            _front = span.link._next;
+        }
+    }
+    void push_front(page* ary, page& span) {
+        auto idx = &span - ary;
+        if (_front) {
+            ary[_front].link._prev = idx;
+        } else {
+            _back = idx;
+        }
+        span.link._next = _front;
+        span.link._prev = 0;
+        _front = idx;
+    }
+    void pop_front(page* ary) {
+        if (ary[_front].link._next) {
+            ary[ary[_front].link._next].link._prev = 0;
+        } else {
+            _back = 0;
+        }
+        _front = ary[_front].link._next;
+    }
+};
 
 class small_pool {
     unsigned _object_size;
@@ -174,6 +213,7 @@ static constexpr const size_t max_small_allocation
 
 struct cpu_pages {
     static constexpr unsigned min_free_pages = 20000000 / page_size;
+    char* memory;
     page* pages;
     uint32_t nr_pages;
     uint32_t nr_free_pages;
@@ -195,10 +235,10 @@ struct cpu_pages {
     } fsu;
     small_pool_array small_pools;
     static std::atomic<unsigned> cpu_id_gen;
-    char* mem() { return reinterpret_cast<char*>(pages); }
+    char* mem() { return memory; }
 
     void link(page_list& list, page* span);
-    void unlink(page* span);
+    void unlink(page_list& list, page* span);
     struct trim {
         unsigned offset;
         unsigned nr_pages;
@@ -221,6 +261,8 @@ struct cpu_pages {
     bool initialize();
     void reclaim();
     void set_reclaim_hook(std::function<void (std::function<void ()>)> hook);
+    void resize(size_t new_size);
+    void do_resize(size_t new_size);
 };
 
 static thread_local cpu_pages cpu_mem;
@@ -232,13 +274,13 @@ unsigned index_of(unsigned pages) {
 }
 
 void
-cpu_pages::unlink(page* span) {
-    span->link.unlink();
+cpu_pages::unlink(page_list& list, page* span) {
+    list.erase(pages, *span);
 }
 
 void
 cpu_pages::link(page_list& list, page* span) {
-    list.push_front(*span);
+    list.push_front(pages, *span);
 }
 
 void cpu_pages::free_span_no_merge(uint32_t span_start, uint32_t nr_pages) {
@@ -260,7 +302,7 @@ void cpu_pages::free_span(uint32_t span_start, uint32_t nr_pages) {
         span_start -= b_size;
         nr_pages += b_size;
         nr_free_pages -= b_size;
-        unlink(before - (b_size - 1));
+        unlink(fsu.free_spans[index_of(b_size)], before - (b_size - 1));
     }
     page* after = &pages[span_start + nr_pages];
     if (after->free) {
@@ -268,7 +310,7 @@ void cpu_pages::free_span(uint32_t span_start, uint32_t nr_pages) {
         assert(a_size);
         nr_pages += a_size;
         nr_free_pages -= a_size;
-        unlink(after);
+        unlink(fsu.free_spans[index_of(a_size)], after);
     }
     free_span_no_merge(span_start, nr_pages);
 }
@@ -290,10 +332,10 @@ cpu_pages::allocate_large_and_trim(unsigned n_pages, Trimmer trimmer) {
         throw std::bad_alloc();
     }
     auto& list = fsu.free_spans[idx];
-    page* span = &list.front();
+    page* span = &list.front(pages);
     auto span_size = span->span_size;
     auto span_idx = span - pages;
-    unlink(span);
+    unlink(list, span);
     nr_free_pages -= span->span_size;
     trim t = trimmer(span_idx, nr_pages);
     if (t.offset) {
@@ -381,7 +423,7 @@ bool cpu_pages::initialize() {
     }
     cpu_id = cpu_id_gen.fetch_add(1, std::memory_order_relaxed);
     auto base = mem_base() + (size_t(cpu_id) << cpu_id_shift);
-    auto size = 1 << 30; // FIXME: determine dynamically
+    auto size = 32 << 20;  // Small size for bootstrap
     auto r = ::mmap(base, size,
             PROT_READ | PROT_WRITE,
             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
@@ -391,6 +433,7 @@ bool cpu_pages::initialize() {
     }
     ::madvise(base, size, MADV_HUGEPAGE);
     pages = reinterpret_cast<page*>(base);
+    memory = base;
     nr_pages = size / page_size;
     // we reserve the end page so we don't have to special case
     // the last span.
@@ -401,6 +444,57 @@ bool cpu_pages::initialize() {
     pages[nr_pages].free = false;
     free_span_no_merge(reserved, nr_pages - reserved);
     return true;
+}
+
+void cpu_pages::do_resize(size_t new_size) {
+    auto new_pages = new_size / page_size;
+    if (new_pages <= nr_pages) {
+        return;
+    }
+    auto old_size = nr_pages * page_size;
+    auto mmap_start = memory + old_size;
+    auto mmap_size = new_size - old_size;
+    auto r = ::mmap(mmap_start, mmap_size,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+            -1, 0);
+    if (r == MAP_FAILED) {
+        abort();
+    }
+    ::madvise(mmap_start, mmap_size, MADV_HUGEPAGE);
+    ::madvise(mmap_start, mmap_size, MADV_HUGEPAGE);
+    auto new_page_array_pages = align_up(sizeof(page[new_pages]), page_size) / page_size;
+    auto new_page_array
+        = reinterpret_cast<page*>(allocate_large(new_page_array_pages));
+    std::copy(pages, pages + nr_pages, new_page_array);
+    // mark new last page as taken to avoid boundary conditions
+    new_page_array[new_pages - 1].free = false;
+    auto old_pages = reinterpret_cast<char*>(pages);
+    auto old_nr_pages = nr_pages;
+    auto old_pages_size = align_up(sizeof(page[nr_pages]), page_size);
+    pages = new_page_array;
+    nr_pages = new_pages;
+    auto old_pages_start = (old_pages - memory) / page_size;
+    if (old_pages_start == 0) {
+        // keep page 0 allocated
+        old_pages_start = 1;
+        old_pages_size -= page_size;
+    }
+    free_span(old_pages_start, old_pages_size / page_size);
+    // keep new last page allocated
+    free_span(old_nr_pages, new_pages - old_nr_pages - 1);
+    // free old last page
+    free_span(old_nr_pages - 1, 1);
+}
+
+void cpu_pages::resize(size_t new_size) {
+    new_size = align_down(new_size, page_size);
+    while (nr_pages * page_size < new_size) {
+        // don't reallocate all at once, since there might not
+        // be enough free memory available to relocate the pages array
+        auto tmp_size = std::min(new_size, 4 * nr_pages * page_size);
+        do_resize(tmp_size);
+    }
 }
 
 void cpu_pages::reclaim() {
@@ -460,8 +554,8 @@ void
 small_pool::add_more_objects() {
     auto goal = (_min_free + _max_free) / 2;
     while (!_span_list.empty() && _free_count < goal) {
-        page& span = _span_list.front();
-        _span_list.pop_front();
+        page& span = _span_list.front(cpu_mem.pages);
+        _span_list.pop_front(cpu_mem.pages);
         while (span.freelist) {
             auto obj = span.freelist;
             span.freelist = span.freelist->next;
@@ -501,12 +595,12 @@ small_pool::trim_free_list() {
         span -= span->offset_in_span;
         if (!span->freelist) {
             new (&span->link) page_list_link();
-            _span_list.push_front(*span);
+            _span_list.push_front(cpu_mem.pages, *span);
         }
         obj->next = span->freelist;
         span->freelist = obj;
         if (--span->nr_small_alloc == 0) {
-            span->link.unlink();
+            _span_list.erase(cpu_mem.pages, *span);
             cpu_mem.free_span(span - cpu_mem.pages, span->span_size);
         }
     }
@@ -580,6 +674,24 @@ reclaimer::reclaimer(std::function<void ()> reclaim)
 reclaimer::~reclaimer() {
     auto& r = cpu_mem.reclaimers;
     r.erase(std::find(r.begin(), r.end(), this));
+}
+
+void configure(std::vector<resource::memory> m) {
+    size_t total = 0;
+    for (auto&& x : m) {
+        total += x.bytes;
+    }
+    cpu_mem.resize(total);
+    size_t pos = 0;
+    for (auto&& x : m) {
+        unsigned long nodemask = 1UL << x.nodeid;
+        auto r = ::mbind(cpu_mem.mem() + pos, x.bytes,
+                        MPOL_BIND,
+                        &nodemask, std::numeric_limits<unsigned long>::digits,
+                        MPOL_MF_MOVE);
+        assert(r == 0);
+        pos += x.bytes;
+    }
 }
 
 }
@@ -780,6 +892,9 @@ void operator delete[](void* ptr, size_t size, std::nothrow_t) throw () {
 namespace memory {
 
 void set_reclaim_hook(std::function<void (std::function<void ()>)> hook) {
+}
+
+void configure(std::vector<resource::memory> m) {
 }
 
 }

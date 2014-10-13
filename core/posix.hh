@@ -282,4 +282,6 @@ sigset_t make_sigset_mask(int signo) {
     return set;
 }
 
+void pin_this_thread(unsigned cpu_id);
+
 #endif /* FILE_DESC_HH_ */

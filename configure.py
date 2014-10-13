@@ -37,6 +37,8 @@ core = [
     'core/reactor.cc',
     'core/posix.cc',
     'core/memory.cc',
+    'core/resource.cc',
+    'util/conversions.cc',
     'net/packet.cc',
     ]
 
@@ -70,7 +72,7 @@ modes = {
     },
 }
 
-libs = '-laio -lboost_program_options -lboost_system -lstdc++'
+libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lhwloc -lnuma -lpciaccess -lxml2 -lz'
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
