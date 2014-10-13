@@ -1,3 +1,7 @@
+/*
+ * Copyright (C) 2014 Cloudius Systems, Ltd.
+ */
+
 #include "stack.hh"
 #include "net.hh"
 #include "packet.hh"
