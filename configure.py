@@ -72,7 +72,11 @@ modes = {
 
 libs = '-laio -lboost_program_options -lboost_system -lstdc++'
 
-import os, os.path, textwrap, argparse, sys, shlex
+warnings = [
+    '-Wno-mismatched-tags',  # clang-only
+    ]
+
+import os, os.path, textwrap, argparse, sys, shlex, subprocess
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
 
@@ -93,6 +97,15 @@ arg_parser.add_argument('--ldflags', action = 'store', dest = 'user_ldflags', de
 arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 'g++',
                         help = 'C++ compiler path')
 args = arg_parser.parse_args()
+
+def warning_supported(warning, compiler):
+    return subprocess.call([compiler, '-x', 'c++', '-o', '/dev/null', '-c', '/dev/null', warning]) == 0
+
+warnings = [w
+            for w in warnings
+            if warning_supported(warning = w, compiler = args.cxx)]
+
+warnings = ' '.join(warnings)
 
 if args.so:
     args.pie = '-shared'
@@ -120,7 +133,7 @@ with open(buildfile, 'w') as f:
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        cxxflags = -std=gnu++1y -g {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags}
+        cxxflags = -std=gnu++1y -g {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags} {warnings}
         ldflags = -g -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags}
         libs = {libs}
         rule ragel
