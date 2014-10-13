@@ -442,11 +442,9 @@ void schedule(std::unique_ptr<task> t) {
     engine.add_task(std::move(t));
 }
 
-namespace std {
 bool operator==(const ::sockaddr_in a, const ::sockaddr_in b) {
     return (a.sin_addr.s_addr == b.sin_addr.s_addr) && (a.sin_port == b.sin_port);
 }
-};
 
 void network_stack_registry::register_stack(sstring name,
         boost::program_options::options_description opts,

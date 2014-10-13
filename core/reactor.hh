@@ -203,8 +203,10 @@ struct hash<::sockaddr_in> {
         return a.sin_port ^ a.sin_addr.s_addr;
     }
 };
-bool operator==(const ::sockaddr_in a, const ::sockaddr_in b);
+
 }
+
+bool operator==(const ::sockaddr_in a, const ::sockaddr_in b);
 
 class server_socket {
     std::unique_ptr<server_socket_impl> _ssi;
