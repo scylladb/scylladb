@@ -17,6 +17,7 @@
 #include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
+#include <sys/mman.h>
 #include <signal.h>
 #include <system_error>
 #include <boost/optional.hpp>
@@ -205,6 +206,28 @@ public:
         auto r = ::timerfd_settime(_fd, flags, &its, NULL);
         throw_system_error_on(r == -1);
     }
+
+    void *map(size_t size, unsigned flags, bool shared, size_t offset) {
+        void *x = mmap(NULL, size, flags, shared ? MAP_SHARED : MAP_PRIVATE, _fd, offset);
+        throw_system_error_on(x == nullptr);
+        return x;
+    }
+
+    void *map_shared_rw(size_t size, size_t offset) {
+        return map(size, PROT_READ | PROT_WRITE, true, offset);
+    }
+
+    void *map_shared_ro(size_t size, size_t offset) {
+        return map(size, PROT_READ, true, offset);
+    }
+
+    void *map_private_rw(size_t size, size_t offset) {
+        return map(size, PROT_READ | PROT_WRITE, false, offset);
+    }
+    void *map_private_ro(size_t size, size_t offset) {
+        return map(size, PROT_READ, false, offset);
+    }
+
 private:
     file_desc(int fd) : _fd(fd) {}
  };
