@@ -156,7 +156,8 @@ public:
     // Total number of descriptors in ring
     int size() { return _config.size; }
 
-    void post(std::vector<buffer_chain> bc);
+    template <typename Iterator>
+    void post(Iterator begin, Iterator end);
 
     semaphore& available_descriptors() { return _available_descriptors; }
 private:
@@ -268,8 +269,9 @@ void vring::run() {
     complete();
 }
 
-void vring::post(std::vector<buffer_chain> vbc) {
-    for (auto&& bc: vbc) {
+template <typename Iterator>
+void vring::post(Iterator begin, Iterator end) {
+    std::for_each(begin, end, [&] (buffer_chain& bc) {
         bool has_prev = false;
         unsigned prev_desc_idx = 0;
         for (auto i = bc.rbegin(); i != bc.rend(); ++i) {
@@ -288,7 +290,7 @@ void vring::post(std::vector<buffer_chain> vbc) {
         auto desc_head = prev_desc_idx;
         _avail._shared->_ring[masked(_avail._head++)] = desc_head;
         _avail._avail_added_since_kick++;
-    }
+    });
     _avail._shared->_idx.store(_avail._head, std::memory_order_release);
     kick();
     do_complete();
@@ -452,7 +454,8 @@ virtio_net_device::txq::post(packet p) {
 
     auto nr_frags = q.nr_frags();
     return _ring.available_descriptors().wait(nr_frags).then([this, p = std::move(q)] () mutable {
-        vring::buffer_chain bc;
+        vring::buffer_chain vbc[1];
+        vring::buffer_chain& bc = vbc[0];
         bc.reserve(p.nr_frags());
         for (auto&& f : p.fragments()) {
             vring::buffer b;
@@ -463,9 +466,7 @@ virtio_net_device::txq::post(packet p) {
         }
         // schedule packet destruction
         bc[0].completed.get_future().then([p = std::move(p)] (size_t) {});
-        std::vector<vring::buffer_chain> vbc;
-        vbc.push_back(std::move(bc));
-        _ring.post(std::move(vbc));
+        _ring.post(std::begin(vbc), std::end(vbc));
     });
 }
 
@@ -524,7 +525,7 @@ virtio_net_device::rxq::prepare_buffers() {
             bc.push_back(std::move(b));
             vbc.push_back(std::move(bc));
         }
-        _ring.post(std::move(vbc));
+        _ring.post(vbc.begin(), vbc.end());
     });
 }
 
