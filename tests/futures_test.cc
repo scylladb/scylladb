@@ -2,8 +2,8 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
-#include <core/app-template.hh>
-#include <core/shared_ptr.hh>
+#include "core/app-template.hh"
+#include "core/shared_ptr.hh"
 #include "test-utils.hh"
 
 future<> test_finally_is_called_on_success_and_failure() {
