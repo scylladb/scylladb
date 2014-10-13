@@ -76,7 +76,7 @@ warnings = [
     '-Wno-mismatched-tags',  # clang-only
     ]
 
-import os, os.path, textwrap, argparse, sys, shlex, subprocess
+import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
 
@@ -98,14 +98,37 @@ arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 
                         help = 'C++ compiler path')
 args = arg_parser.parse_args()
 
+def try_compile(compiler, source = '', flags = []):
+    with tempfile.NamedTemporaryFile() as sfile:
+        sfile.file.write(bytes(source, 'utf-8'))
+        sfile.file.flush()
+        return subprocess.call([compiler, '-x', 'c++', '-o', '/dev/null', '-c', sfile.name] + flags,
+                               stdout = subprocess.DEVNULL,
+                               stderr = subprocess.DEVNULL) == 0
+
 def warning_supported(warning, compiler):
-    return subprocess.call([compiler, '-x', 'c++', '-o', '/dev/null', '-c', '/dev/null', warning]) == 0
+    return try_compile(flags = [warning], compiler = compiler)
+
+def debug_flag(compiler):
+    src_with_auto = textwrap.dedent('''\
+        template <typename T>
+        struct x { auto f() {} };
+        
+        x<int> a;
+        ''')      
+    if try_compile(source = src_with_auto, flags = ['-g', '-std=gnu++1y'], compiler = compiler):
+        return '-g'
+    else:
+        print('Note: debug information disabled; upgrade your compiler')
+        return ''
 
 warnings = [w
             for w in warnings
             if warning_supported(warning = w, compiler = args.cxx)]
 
 warnings = ' '.join(warnings)
+
+dbgflag = debug_flag(args.cxx)
 
 if args.so:
     args.pie = '-shared'
@@ -133,8 +156,8 @@ with open(buildfile, 'w') as f:
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        cxxflags = -std=gnu++1y -g {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags} {warnings}
-        ldflags = -g -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags}
+        cxxflags = -std=gnu++1y {dbgflag} {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags} {warnings}
+        ldflags = {dbgflag} -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags}
         libs = {libs}
         rule ragel
             command = ragel -G2 -o $out $in
