@@ -33,6 +33,7 @@ public:
     template<typename Func>
     int run(int ac, char ** av, Func&& func) {
         bpo::variables_map configuration;
+        bpo::store(bpo::command_line_parser(ac, av).options(_opts).run(), configuration);
         auto home = std::getenv("HOME");
         if (home) {
             std::ifstream ifs(std::string(home) + "/.config/seastar/seastar.conf");
@@ -40,7 +41,6 @@ public:
                 bpo::store(bpo::parse_config_file(ifs, _opts), configuration);
             }
         }
-        bpo::store(bpo::command_line_parser(ac, av).options(_opts).run(), configuration);
         bpo::notify(configuration);
         if (configuration.count("help")) {
             std::cout << _opts << "\n";
