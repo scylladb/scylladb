@@ -4,6 +4,9 @@
 
 #include "resource.hh"
 #include "core/align.hh"
+
+#ifdef HAVE_HWLOC
+
 #include <hwloc.h>
 #include <unordered_map>
 
@@ -79,3 +82,33 @@ unsigned nr_processing_units() {
 }
 
 }
+
+#else
+
+#include "resource.hh"
+#include <unistd.h>
+
+namespace resource {
+
+std::vector<cpu> allocate(configuration c) {
+    auto available_memory = ::sysconf(_SC_PAGESIZE) * size_t(::sysconf(_SC_PHYS_PAGES));
+    available_memory -= c.reserve_memory.value_or(256 << 20);
+    size_t mem = c.total_memory.value_or(available_memory);
+    if (mem > available_memory) {
+        throw std::runtime_error("insufficient physical memory");
+    }
+    auto procs = c.cpus.value_or(nr_processing_units());
+    std::vector<cpu> ret;
+    for (unsigned i = 0; i < procs; ++i) {
+        ret.push_back(cpu{i, {{mem / procs, 0}}});
+    }
+    return ret;
+}
+
+unsigned nr_processing_units() {
+    return ::sysconf(_SC_NPROCESSORS_ONLN);
+}
+
+}
+
+#endif

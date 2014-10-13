@@ -46,7 +46,9 @@
 #include <cstring>
 #include <boost/intrusive/list.hpp>
 #include <sys/mman.h>
+#ifdef HAVE_NUMA
 #include <numaif.h>
+#endif
 
 namespace memory {
 
@@ -684,12 +686,14 @@ void configure(std::vector<resource::memory> m) {
     cpu_mem.resize(total);
     size_t pos = 0;
     for (auto&& x : m) {
+#ifdef HAVE_NUMA
         unsigned long nodemask = 1UL << x.nodeid;
         auto r = ::mbind(cpu_mem.mem() + pos, x.bytes,
                         MPOL_BIND,
                         &nodemask, std::numeric_limits<unsigned long>::digits,
                         MPOL_MF_MOVE);
         assert(r == 0);
+#endif
         pos += x.bytes;
     }
 }
