@@ -79,7 +79,7 @@ warnings = [
     '-Wno-mismatched-tags',  # clang-only
     ]
 
-import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile
+import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile, re
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
 
@@ -129,7 +129,9 @@ def try_compile(compiler, source = '', flags = []):
                                stderr = subprocess.DEVNULL) == 0
 
 def warning_supported(warning, compiler):
-    return try_compile(flags = [warning], compiler = compiler)
+    # gcc ignores -Wno-x even if it is not supported
+    adjusted = re.sub('^-Wno-', '-W', warning)
+    return try_compile(flags = [adjusted], compiler = compiler)
 
 def debug_flag(compiler):
     src_with_auto = textwrap.dedent('''\
