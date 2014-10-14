@@ -30,7 +30,6 @@ libnet = [
     'net/stack.cc',
     'net/ip_checksum.cc',
     'net/udp.cc',
-    'net/posix-stack.cc',
     ]
 
 core = [
@@ -40,6 +39,7 @@ core = [
     'core/resource.cc',
     'util/conversions.cc',
     'net/packet.cc',
+    'net/posix-stack.cc',
     ]
 
 deps = {
