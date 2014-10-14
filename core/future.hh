@@ -433,6 +433,16 @@ public:
         return f;
     }
 
+    future<> or_terminate() {
+        return rescue([] (auto get) {
+            try {
+                get();
+            } catch (...) {
+                std::terminate();
+            }
+        });
+    }
+
     template <typename... U>
     friend class promise;
     template <typename... U, typename... A>
