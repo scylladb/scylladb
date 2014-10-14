@@ -427,8 +427,9 @@ public:
     future<size_t> write_all(pollable_fd_state& fd, const void* buffer, size_t size);
 
     future<file> open_file_dma(sstring name);
-    future<> flush(file& f);
-    future<struct stat> stat(file& f);
+
+    template <typename Func>
+    future<io_event> submit_io(Func prepare_io);
 
     int run();
     void exit(int ret);
@@ -440,14 +441,6 @@ public:
     network_stack& net() { return *_network_stack; }
 private:
     future<size_t> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
-
-    future<size_t> read_dma(file& f, uint64_t pos, void* buffer, size_t len);
-    future<size_t> read_dma(file& f, uint64_t pos, std::vector<iovec> iov);
-    future<size_t> write_dma(file& f, uint64_t pos, const void* buffer, size_t len);
-    future<size_t> write_dma(file& f, uint64_t pos, std::vector<iovec> iov);
-
-    template <typename Func>
-    future<io_event> submit_io(Func prepare_io);
 
     void process_io(size_t count);
 
@@ -580,41 +573,85 @@ public:
 private:
 };
 
-class file {
-    int _fd;
-private:
-    explicit file(int fd) : _fd(fd) {}
+class file_impl {
 public:
-    ~file() {
+    virtual ~file_impl() {}
+
+    virtual future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len) = 0;
+    virtual future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov) = 0;
+    virtual future<size_t> read_dma(uint64_t pos, void* buffer, size_t len) = 0;
+    virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov) = 0;
+    virtual future<> flush(void) = 0;
+    virtual future<struct stat> stat(void) = 0;
+
+    friend class reactor;
+};
+
+class posix_file_impl : public file_impl {
+public:
+    int _fd;
+    posix_file_impl(int fd) : _fd(fd) {}
+    ~posix_file_impl() {
         if (_fd != -1) {
             ::close(_fd);
         }
     }
-    file(file&& x) : _fd(x._fd) { x._fd = -1; }
+
+    future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len);
+    future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov);
+    future<size_t> read_dma(uint64_t pos, void* buffer, size_t len);
+    future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov);
+    future<> flush(void);
+    future<struct stat> stat(void);
+};
+
+class blockdev_file_impl : public posix_file_impl {
+public:
+    blockdev_file_impl(int fd) : posix_file_impl(fd) {}
+};
+
+inline
+std::unique_ptr<file_impl>
+make_file_impl(int fd) {
+    struct stat st;
+    ::fstat(fd, &st);
+    if (S_ISBLK(st.st_mode)) {
+        return std::unique_ptr<file_impl>(new blockdev_file_impl(fd));
+    } else {
+        return std::unique_ptr<file_impl>(new posix_file_impl(fd));
+    }
+}
+
+class file {
+    std::unique_ptr<file_impl> _file_impl;
+private:
+    explicit file(int fd) : _file_impl(make_file_impl(fd)) {}
+public:
+    file(file&& x) : _file_impl(std::move(x._file_impl)) {}
     template <typename CharType>
     future<size_t> dma_read(uint64_t pos, CharType* buffer, size_t len) {
-        return engine.read_dma(*this, pos, buffer, len);
+        return _file_impl->read_dma(pos, buffer, len);
     }
 
     future<size_t> dma_read(uint64_t pos, std::vector<iovec> iov) {
-        return engine.read_dma(*this, pos, std::move(iov));
+        return _file_impl->read_dma(pos, std::move(iov));
     }
 
     template <typename CharType>
     future<size_t> dma_write(uint64_t pos, const CharType* buffer, size_t len) {
-        return engine.write_dma(*this, pos, buffer, len);
+        return _file_impl->write_dma(pos, buffer, len);
     }
 
     future<size_t> dma_write(uint64_t pos, std::vector<iovec> iov) {
-        return engine.write_dma(*this, pos, std::move(iov));
+        return _file_impl->write_dma(pos, std::move(iov));
     }
 
     future<> flush() {
-        return engine.flush(*this);
+        return _file_impl->flush();
     }
 
     future<struct stat> stat() {
-        return engine.stat(*this);
+        return _file_impl->stat();
     }
 
     friend class reactor;

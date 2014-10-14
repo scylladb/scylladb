@@ -160,9 +160,9 @@ void reactor::process_io(size_t count)
 }
 
 future<size_t>
-reactor::write_dma(file& f, uint64_t pos, const void* buffer, size_t len) {
-    return submit_io([&f, pos, buffer, len] (iocb& io) {
-        io_prep_pwrite(&io, f._fd, const_cast<void*>(buffer), len, pos);
+posix_file_impl::write_dma(uint64_t pos, const void* buffer, size_t len) {
+    return engine.submit_io([this, pos, buffer, len] (iocb& io) {
+        io_prep_pwrite(&io, _fd, const_cast<void*>(buffer), len, pos);
     }).then([] (io_event ev) {
         throw_kernel_error(long(ev.res));
         return make_ready_future<size_t>(size_t(ev.res));
@@ -170,9 +170,9 @@ reactor::write_dma(file& f, uint64_t pos, const void* buffer, size_t len) {
 }
 
 future<size_t>
-reactor::write_dma(file& f, uint64_t pos, std::vector<iovec> iov) {
-    return submit_io([&f, pos, iov = std::move(iov)] (iocb& io) {
-        io_prep_pwritev(&io, f._fd, iov.data(), iov.size(), pos);
+posix_file_impl::write_dma(uint64_t pos, std::vector<iovec> iov) {
+    return engine.submit_io([this, pos, iov = std::move(iov)] (iocb& io) {
+        io_prep_pwritev(&io, _fd, iov.data(), iov.size(), pos);
     }).then([] (io_event ev) {
         throw_kernel_error(long(ev.res));
         return make_ready_future<size_t>(size_t(ev.res));
@@ -180,9 +180,9 @@ reactor::write_dma(file& f, uint64_t pos, std::vector<iovec> iov) {
 }
 
 future<size_t>
-reactor::read_dma(file& f, uint64_t pos, void* buffer, size_t len) {
-    return submit_io([&f, pos, buffer, len] (iocb& io) {
-        io_prep_pread(&io, f._fd, buffer, len, pos);
+posix_file_impl::read_dma(uint64_t pos, void* buffer, size_t len) {
+    return engine.submit_io([this, pos, buffer, len] (iocb& io) {
+        io_prep_pread(&io, _fd, buffer, len, pos);
     }).then([] (io_event ev) {
         throw_kernel_error(long(ev.res));
         return make_ready_future<size_t>(size_t(ev.res));
@@ -190,9 +190,9 @@ reactor::read_dma(file& f, uint64_t pos, void* buffer, size_t len) {
 }
 
 future<size_t>
-reactor::read_dma(file& f, uint64_t pos, std::vector<iovec> iov) {
-    return submit_io([&f, pos, iov = std::move(iov)] (iocb& io) {
-        io_prep_preadv(&io, f._fd, iov.data(), iov.size(), pos);
+posix_file_impl::read_dma(uint64_t pos, std::vector<iovec> iov) {
+    return engine.submit_io([this, pos, iov = std::move(iov)] (iocb& io) {
+        io_prep_preadv(&io, _fd, iov.data(), iov.size(), pos);
     }).then([] (io_event ev) {
         throw_kernel_error(long(ev.res));
         return make_ready_future<size_t>(size_t(ev.res));
@@ -210,9 +210,9 @@ reactor::open_file_dma(sstring name) {
 }
 
 future<>
-reactor::flush(file& f) {
-    return _thread_pool.submit<syscall_result<int>>([&f] {
-        return wrap_syscall<int>(::fsync(f._fd));
+posix_file_impl::flush(void) {
+    return engine._thread_pool.submit<syscall_result<int>>([this] {
+        return wrap_syscall<int>(::fsync(_fd));
     }).then([] (syscall_result<int> sr) {
         sr.throw_if_error();
         return make_ready_future<>();
@@ -220,10 +220,10 @@ reactor::flush(file& f) {
 }
 
 future<struct stat>
-reactor::stat(file& f) {
-    return _thread_pool.submit<struct stat>([&f] {
+posix_file_impl::stat(void) {
+    return engine._thread_pool.submit<struct stat>([this] {
         struct stat st;
-        auto ret = ::fstat(f._fd, &st);
+        auto ret = ::fstat(_fd, &st);
         throw_system_error_on(ret == -1);
         return (st);
     });
