@@ -751,7 +751,7 @@ inline
 future<size_t>
 reactor::write_some(pollable_fd_state& fd, const void* buffer, size_t len) {
     return writeable(fd).then([this, &fd, buffer, len] () mutable {
-        auto r = fd.fd.send(buffer, len, 0);
+        auto r = fd.fd.send(buffer, len, MSG_NOSIGNAL);
         if (!r) {
             return write_some(fd, buffer, len);
         }
