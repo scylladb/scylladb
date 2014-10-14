@@ -490,7 +490,6 @@ virtio_net_device::rxq::prepare_buffers() {
             count += opportunistic;
         }
         auto make_buffer_chain = [this] {
-            vring::buffer_chain bc;
             std::unique_ptr<char[]> buf(new char[4096]);
             vring::buffer b;
             b.addr = virt_to_phys(buf.get());
@@ -524,8 +523,7 @@ virtio_net_device::rxq::prepare_buffers() {
                     });
                 }
             });
-            bc.push_back(std::move(b));
-            return bc;
+            return std::array<vring::buffer, 1>{std::move(b)};
         };
         auto start = make_function_input_iterator(make_buffer_chain, 0U);
         auto finish = make_function_input_iterator(make_buffer_chain, count);
