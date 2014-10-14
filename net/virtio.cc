@@ -271,7 +271,10 @@ void vring::run() {
 
 template <typename Iterator>
 void vring::post(Iterator begin, Iterator end) {
-    std::for_each(begin, end, [&] (buffer_chain& bc) {
+    // Note: buffer_chain here is any container of buffer, not
+    //       necessarily vector<buffer>.
+    using buffer_chain = decltype(*begin);
+    std::for_each(begin, end, [this] (buffer_chain bc) {
         bool has_prev = false;
         unsigned prev_desc_idx = 0;
         for (auto i = bc.rbegin(); i != bc.rend(); ++i) {
