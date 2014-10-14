@@ -11,6 +11,7 @@ tests = [
     'tests/futures_test',
     'tests/udp_server',
     'tests/udp_client',
+    'tests/blkdiscard_test',
     ]
 
 apps = [
@@ -55,6 +56,7 @@ deps = {
     'tests/futures_test': ['tests/futures_test.cc'] + core,
     'tests/udp_server': ['tests/udp_server.cc'] + core + libnet,
     'tests/udp_client': ['tests/udp_client.cc'] + core + libnet,
+    'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
 }
 
 modes = {
