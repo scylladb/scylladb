@@ -11,6 +11,8 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <linux/fs.h>
 #include <unordered_map>
 #include <netinet/ip.h>
 #include <cstring>
@@ -583,6 +585,7 @@ public:
     virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov) = 0;
     virtual future<> flush(void) = 0;
     virtual future<struct stat> stat(void) = 0;
+    virtual future<> discard(uint64_t offset, uint64_t length) = 0;
 
     friend class reactor;
 };
@@ -603,11 +606,13 @@ public:
     future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov);
     future<> flush(void);
     future<struct stat> stat(void);
+    future<> discard(uint64_t offset, uint64_t length);
 };
 
 class blockdev_file_impl : public posix_file_impl {
 public:
     blockdev_file_impl(int fd) : posix_file_impl(fd) {}
+    future<> discard(uint64_t offset, uint64_t length) override;
 };
 
 inline
@@ -652,6 +657,10 @@ public:
 
     future<struct stat> stat() {
         return _file_impl->stat();
+    }
+
+    future<> discard(uint64_t offset, uint64_t length) {
+        return _file_impl->discard(offset, length);
     }
 
     friend class reactor;
