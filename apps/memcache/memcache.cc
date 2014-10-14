@@ -1,5 +1,6 @@
 #include <boost/intrusive/list.hpp>
 #include <boost/optional.hpp>
+#include <iomanip>
 #include "core/app-template.hh"
 #include "core/async-action.hh"
 #include "core/timer-set.hh"
@@ -57,6 +58,13 @@ public:
     }
 };
 
+struct cache_stats {
+    size_t _get_hits {};
+    size_t _get_misses {};
+    size_t _set_adds {};
+    size_t _set_replaces {};
+};
+
 class cache {
 private:
     using cache_type = std::unordered_map<item_key, shared_ptr<item>>;
@@ -65,6 +73,7 @@ private:
     timer_set<item, &item::_timer_link, clock_type> _alive;
     bi::list<item, bi::member_hook<item, bi::list_member_hook<>, &item::_expired_link>> _expired;
     timer _timer;
+    cache_stats _stats;
 private:
     void expire() {
         _alive.expire(clock_type::now());
@@ -117,9 +126,11 @@ public:
         auto i = find(key);
         if (i != _cache.end()) {
             add_overriding(i, std::move(data));
+            _stats._set_replaces++;
             return true;
         } else {
             add_new(std::move(key), std::move(data));
+            _stats._set_adds++;
             return false;
         }
     }
@@ -158,9 +169,19 @@ public:
     shared_ptr<item> get(const item_key& key) {
         auto i = find(key);
         if (i == _cache.end()) {
+            _stats._get_misses++;
             return {};
         }
+        _stats._get_hits++;
         return i->second;
+    }
+
+    size_t size() {
+        return _cache.size();
+    }
+
+    cache_stats& stats() {
+        return _stats;
     }
 };
 
@@ -340,6 +361,31 @@ public:
     };
 };
 
+class stats_printer {
+private:
+    timer _timer;
+    cache& _cache;
+public:
+    stats_printer(cache& cache)
+        : _cache(cache) {}
+
+    void start() {
+        _timer.set_callback([this] {
+            auto stats = _cache.stats();
+            auto gets_total = stats._get_hits + stats._get_misses;
+            auto get_hit_rate = gets_total ? ((double)stats._get_hits * 100 / gets_total) : 0;
+            auto sets_total = stats._set_adds + stats._set_replaces;
+            auto set_replace_rate = sets_total ? ((double)stats._set_replaces * 100/ sets_total) : 0;
+            std::cout << "items: " << _cache.size() << " "
+                << std::setprecision(2) << std::fixed
+                << "get: " << stats._get_hits << "/" << gets_total << " (" << get_hit_rate << "%) "
+                << "set: " << stats._set_replaces << "/" << sets_total << " (" <<  set_replace_rate << "%) "
+                << std::endl;
+        });
+        _timer.arm_periodic(std::chrono::seconds(1));
+    }
+};
+
 } /* namespace memcache */
 
 int main(int ac, char** av)
@@ -347,16 +393,22 @@ int main(int ac, char** av)
     memcache::cache cache;
     memcache::ascii_protocol ascii_protocol(cache);
     memcache::udp_server server(ascii_protocol);
+    memcache::stats_printer stats(cache);
 
     app_template app;
     app.add_options()
         ("max-datagram-size", bpo::value<int>()->default_value(memcache::udp_server::default_max_datagram_size),
              "Maximum size of UDP datagram")
+        ("stats",
+             "Print basic statistics periodically (every second)")
         ;
 
-    return app.run(ac, av, [&server, &app] {
+    return app.run(ac, av, [&server, &stats, &app] {
         auto&& config = app.configuration();
         server.set_max_datagram_size(config["max-datagram-size"].as<int>());
+        if (config.count("stats")) {
+            stats.start();
+        }
         server.start();
     });
 }
