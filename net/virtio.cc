@@ -11,6 +11,7 @@
 #include "core/stream.hh"
 #include "core/circular_buffer.hh"
 #include "core/align.hh"
+#include "util/function_input_iterator.hh"
 #include <atomic>
 #include <vector>
 #include <queue>
@@ -488,9 +489,7 @@ virtio_net_device::rxq::prepare_buffers() {
         if (available.try_wait(opportunistic)) {
             count += opportunistic;
         }
-        std::vector<vring::buffer_chain> vbc;
-        vbc.reserve(count);
-        for (unsigned i = 0; i < count; ++i) {
+        auto make_buffer_chain = [this] {
             vring::buffer_chain bc;
             std::unique_ptr<char[]> buf(new char[4096]);
             vring::buffer b;
@@ -526,9 +525,11 @@ virtio_net_device::rxq::prepare_buffers() {
                 }
             });
             bc.push_back(std::move(b));
-            vbc.push_back(std::move(bc));
-        }
-        _ring.post(vbc.begin(), vbc.end());
+            return bc;
+        };
+        auto start = make_function_input_iterator(make_buffer_chain, 0U);
+        auto finish = make_function_input_iterator(make_buffer_chain, count);
+        _ring.post(start, finish);
     });
 }
 
