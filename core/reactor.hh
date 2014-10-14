@@ -631,6 +631,17 @@ size_t iovec_len(const std::vector<iovec>& iov)
 }
 
 inline
+size_t iovec_len(const iovec* begin, size_t len)
+{
+    size_t ret = 0;
+    auto end = begin + len;
+    while (begin != end) {
+        ret += begin++->iov_len;
+    }
+    return ret;
+}
+
+inline
 future<pollable_fd, socket_address>
 reactor::accept(pollable_fd_state& listenfd) {
     return readable(listenfd).then([this, &listenfd] () mutable {
@@ -859,6 +870,14 @@ future<size_t> pollable_fd::recvmsg(struct msghdr *msg) {
         if (!r) {
             return recvmsg(msg);
         }
+        // We always speculate here to optimize for throughput in a workload
+        // with multiple outstanding requests. This way the caller can consume
+        // all messages without resorting to epoll. However this adds extra
+        // recvmsg() call when we hit the empty queue condition, so it may
+        // hurt request-response workload in which the queue is empty when we
+        // initially enter recvmsg(). If that turns out to be a problem, we can
+        // improve speculation by using recvmmsg().
+        _s->speculate_epoll(EPOLLIN);
         return make_ready_future<size_t>(*r);
     });
 };
@@ -870,6 +889,12 @@ future<size_t> pollable_fd::sendmsg(struct msghdr* msg) {
         if (!r) {
             return sendmsg(msg);
         }
+        // For UDP this will always speculate. We can't know if there's room
+        // or not, but most of the time there should be so the cost of mis-
+        // speculation is amortized.
+        if (size_t(*r) == iovec_len(msg->msg_iov, msg->msg_iovlen)) {
+            _s->speculate_epoll(EPOLLOUT);
+        }
         return make_ready_future<size_t>(*r);
     });
 }
@@ -880,6 +905,10 @@ future<size_t> pollable_fd::sendto(socket_address addr, const void* buf, size_t 
         auto r = get_file_desc().sendto(addr, buf, len, 0);
         if (!r) {
             return sendto(std::move(addr), buf, len);
+        }
+        // See the comment about speculation in sendmsg().
+        if (size_t(*r) == len) {
+            _s->speculate_epoll(EPOLLOUT);
         }
         return make_ready_future<size_t>(*r);
     });
