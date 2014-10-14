@@ -361,6 +361,44 @@ public:
     };
 };
 
+class tcp_server {
+private:
+    shared_ptr<server_socket> _listener;
+    cache& _cache;
+    uint16_t _port;
+    struct connection {
+        connected_socket _socket;
+        socket_address _addr;
+        input_stream<char> _in;
+        output_stream<char> _out;
+        ascii_protocol _proto;
+        connection(connected_socket&& socket, socket_address addr, cache& c)
+            : _socket(std::move(socket))
+            , _addr(addr)
+            , _in(_socket.input())
+            , _out(_socket.output())
+            , _proto(c)
+        {}
+    };
+public:
+    tcp_server(cache& cache, uint16_t port = 11211) : _cache(cache), _port(port) {}
+    void start() {
+        listen_options lo;
+        lo.reuse_address = true;
+        _listener = engine.listen(make_ipv4_address({_port}), lo);
+        keep_doing([this] {
+            return _listener->accept().then([this] (connected_socket fd, socket_address addr) mutable {
+                auto conn = make_shared<connection>(std::move(fd), addr, _cache);
+                keep_doing([this, conn] {
+                    return conn->_proto.handle(conn->_in, conn->_out).then([conn] {
+                        return conn->_out.flush();
+                    });
+                });
+            });
+        }).or_terminate();
+    }
+};
+
 class stats_printer {
 private:
     timer _timer;
@@ -392,7 +430,8 @@ int main(int ac, char** av)
 {
     memcache::cache cache;
     memcache::ascii_protocol ascii_protocol(cache);
-    memcache::udp_server server(ascii_protocol);
+    memcache::udp_server udp_server(ascii_protocol);
+    memcache::tcp_server tcp_server(cache);
     memcache::stats_printer stats(cache);
 
     app_template app;
@@ -403,12 +442,13 @@ int main(int ac, char** av)
              "Print basic statistics periodically (every second)")
         ;
 
-    return app.run(ac, av, [&server, &stats, &app] {
+    return app.run(ac, av, [&] {
         auto&& config = app.configuration();
-        server.set_max_datagram_size(config["max-datagram-size"].as<int>());
+        udp_server.set_max_datagram_size(config["max-datagram-size"].as<int>());
         if (config.count("stats")) {
             stats.start();
         }
-        server.start();
+        udp_server.start();
+        tcp_server.start();
     });
 }
