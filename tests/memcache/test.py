@@ -8,12 +8,17 @@ if len(sys.argv) < 2:
 
 memcache_path = sys.argv[1]
 
-mc = subprocess.Popen([memcache_path])
-print('Memcache started.')
-try:
-    time.sleep(0.1)
-    print('Starting tests...')
-    subprocess.check_call(['tests/memcache/test_memcache.py'])
-finally:
-    print('Killing memcache...')
-    mc.kill()
+def run(cmd):
+    mc = subprocess.Popen([memcache_path])
+    print('Memcache started.')
+    try:
+        time.sleep(0.1)
+        cmdline = ['tests/memcache/test_memcache.py'] + cmd
+        print('Running: ' + ' '.join(cmdline))
+        subprocess.check_call(cmdline)
+    finally:
+        print('Killing memcache...')
+        mc.kill()
+
+run([])
+run(['-U'])

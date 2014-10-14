@@ -2,10 +2,20 @@
 import socket
 import struct
 import random
+import argparse
 import time
 import unittest
 
-server_addr = ('127.0.0.1', 11211)
+server_addr = None
+call = None
+
+def tcp_call(server_addr, msg):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect(server_addr)
+    s.send(msg.encode())
+    data = s.recv(16*1024)
+    s.close()
+    return data
 
 def udp_call(server_addr, msg):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -42,15 +52,12 @@ def udp_call(server_addr, msg):
     sock.close()
     return msg
 
-def call(cmd):
-    return udp_call(server_addr, cmd)
+class TestCommands(unittest.TestCase):
+    def call_set(self, key, value, flags=0, expiry=0):
+        self.assertEqual(call('set %s %d %d %d\r\n%s\r\n' % (key, flags, expiry, len(value), value)), b'STORED\r\n')
 
-class TestUDPProtocol(unittest.TestCase):
-    def call_set(self, key, value, call_fn=call, flags=0, expiry=0):
-        self.assertEqual(call_fn('set %s %d %d %d\r\n%s\r\n' % (key, flags, expiry, len(value), value)), b'STORED\r\n')
-
-    def call_delete(self, key, call_fn=call):
-        self.assertEqual(call_fn('delete %s\r\n' % key), b'DELETED\r\n')
+    def call_delete(self, key):
+        self.assertEqual(call('delete %s\r\n' % key), b'DELETED\r\n')
 
     def test_basic_commands(self):
         self.assertEqual(call('get key\r\n'), b'END\r\n')
@@ -95,4 +102,19 @@ class TestUDPProtocol(unittest.TestCase):
         self.call_delete('key3')
 
 if __name__ == '__main__':
-    unittest.main()
+    parser = argparse.ArgumentParser(description="memcache protocol tests")
+    parser.add_argument('--server', '-s', action="store", help="server adddress in <host>:<port> format", default="localhost:11211")
+    parser.add_argument('--udp', '-U', action="store_true", help="Use UDP protocol")
+    args = parser.parse_args()
+
+    host, port = args.server.split(':')
+    server_addr = (host, int(port))
+
+    if args.udp:
+        call = lambda msg: udp_call(server_addr, msg)
+    else:
+        call = lambda msg: tcp_call(server_addr, msg)
+
+    runner = unittest.TextTestRunner()
+    itersuite = unittest.TestLoader().loadTestsFromTestCase(TestCommands)
+    runner.run(itersuite)
