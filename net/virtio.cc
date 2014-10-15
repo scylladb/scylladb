@@ -280,21 +280,20 @@ void vring::post(Iterator begin, Iterator end) {
     //       completes.
     using buffer_chain = decltype(*begin);
     std::for_each(begin, end, [this] (buffer_chain bc) {
-        bool has_prev = false;
-        unsigned prev_desc_idx = 0;
-        for (auto i = bc.rbegin(); i != bc.rend(); ++i) {
+        desc pseudo_head = {};
+        desc* prev = &pseudo_head;
+        for (auto i = bc.begin(); i != bc.end(); ++i) {
             unsigned desc_idx = allocate_desc();
+            prev->_flags.has_next = true;
+            prev->_next = desc_idx;
             desc &d = _descs[desc_idx];
             d._flags = {};
             d._flags.writeable = i->writeable;
-            d._flags.has_next = has_prev;
-            has_prev = true;
-            d._next = prev_desc_idx;
             d._paddr = i->addr;
             d._len = i->len;
-            prev_desc_idx = desc_idx;
+            prev = &d;
         }
-        auto desc_head = prev_desc_idx;
+        auto desc_head = pseudo_head._next;
         _completions[desc_head] = std::move(bc.completed);
         _avail._shared->_ring[masked(_avail._head++)] = desc_head;
         _avail._avail_added_since_kick++;
