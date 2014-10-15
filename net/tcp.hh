@@ -229,7 +229,6 @@ public:
 private:
     void send(ipaddr from, ipaddr to, packet p);
     void respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr foreign_ip);
-    void connection_refused();
     friend class listener;
 };
 
@@ -290,7 +289,7 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
         if (th->f_syn && !th->f_ack) {
             auto listener = _listening.find(id.local_port);
             if (listener == _listening.end() || listener->second->_q.full()) {
-                return connection_refused();
+                return respond_with_reset(th, id.local_ip, id.foreign_ip);
             }
             tcbp = make_shared<tcb>(*this, id);
             listener->second->_q.push(connection(tcbp));
@@ -347,8 +346,14 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
     if (rth->f_ack) {
         th->seq = rth->ack;
     }
+    // If this RST packet is in response to a SYN packet. We ACK the ISN.
+    if (rth->f_syn) {
+        th->ack = rth->seq + 1;
+        th->f_ack = true;
+    }
     th->f_rst = true;
     th->data_offset = sizeof(*th) / 4;
+    th->checksum = 0;
     hton(*th);
 
     checksummer csum;
@@ -359,6 +364,11 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
         csum.sum(p);
         th->checksum = csum.get();
     }
+
+    offload_info oi;
+    oi.protocol = ip_protocol_num::tcp;
+    oi.tcp_hdr_len = sizeof(tcp_hdr);
+    p.set_offload_info(oi);
 
     send(local_ip, foreign_ip, std::move(p));
 }
@@ -638,12 +648,6 @@ bool tcp<InetTraits>::tcb::should_send_ack() {
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::clear_delayed_ack() {
     _delayed_ack.cancel();
-}
-
-template <typename InetTraits>
-void tcp<InetTraits>::connection_refused() {
-    // FIXME: send ICMP packet
-    print("tcp: refusing connection\n");
 }
 
 template <typename InetTraits>
