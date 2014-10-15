@@ -12,6 +12,7 @@
 #include "core/circular_buffer.hh"
 #include "core/align.hh"
 #include "util/function_input_iterator.hh"
+#include "util/transform_iterator.hh"
 #include <atomic>
 #include <vector>
 #include <queue>
@@ -288,9 +289,10 @@ void vring::post(Iterator begin, Iterator end) {
             prev->_next = desc_idx;
             desc &d = _descs[desc_idx];
             d._flags = {};
-            d._flags.writeable = i->writeable;
-            d._paddr = i->addr;
-            d._len = i->len;
+            auto b = *i;
+            d._flags.writeable = b.writeable;
+            d._paddr = b.addr;
+            d._len = b.len;
             prev = &d;
         }
         auto desc_head = pseudo_head._next;
@@ -461,18 +463,26 @@ virtio_net_device::txq::post(packet p) {
 
     auto nr_frags = q.nr_frags();
     return _ring.available_descriptors().wait(nr_frags).then([this, p = std::move(q)] () mutable {
-        vring::buffer_chain vbc[1];
-        vring::buffer_chain& bc = vbc[0];
-        bc.reserve(p.nr_frags());
-        for (auto&& f : p.fragments()) {
+        static auto fragment_to_buffer = [] (fragment f) {
             vring::buffer b;
             b.addr = virt_to_phys(f.base);
             b.len = f.size;
             b.writeable = false;
-            bc.push_back(std::move(b));
-        }
+            return b;
+        };
+        struct packet_as_buffer_chain {
+            fragment* start;
+            fragment* finish;
+            promise<size_t> completed;
+            auto begin() {
+                return make_transform_iterator(start, fragment_to_buffer);
+            }
+            auto end() {
+                return make_transform_iterator(finish, fragment_to_buffer);
+            }
+        } vbc[1] { { p.fragments().begin(), p.fragments().end() } };
         // schedule packet destruction
-        bc.completed.get_future().then([p = std::move(p)] (size_t) {});
+        vbc[0].completed.get_future().then([p = std::move(p)] (size_t) {});
         _ring.post(std::begin(vbc), std::end(vbc));
     });
 }
