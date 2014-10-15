@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from contextlib import contextmanager
 import socket
 import struct
 import random
@@ -9,15 +10,35 @@ import unittest
 server_addr = None
 call = None
 
-def tcp_call(server_addr, msg):
+@contextmanager
+def tcp_connection():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect(server_addr)
+    def call(msg):
+        s.send(msg.encode())
+        return s.recv(16*1024)
+    yield call
+    s.close()
+
+def recv_all(s):
+    m = b''
+    while True:
+        data = s.recv(1024)
+        if not data:
+            break
+        m += data
+    return m
+
+def tcp_call(msg):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect(server_addr)
     s.send(msg.encode())
-    data = s.recv(16*1024)
+    s.shutdown(socket.SHUT_WR)
+    data = recv_all(s)
     s.close()
     return data
 
-def udp_call(server_addr, msg):
+def udp_call(msg):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     this_req_id = random.randint(-32768, 32767)
 
@@ -52,6 +73,12 @@ def udp_call(server_addr, msg):
     sock.close()
     return msg
 
+class TcpSpecificTests(unittest.TestCase):
+    def test_recovers_from_errors_in_the_stream(self):
+        with tcp_connection() as conn:
+            self.assertEqual(conn('get\r\n'), b'ERROR\r\n')
+            self.assertEqual(conn('get key\r\n'), b'END\r\n')
+
 class TestCommands(unittest.TestCase):
     def call_set(self, key, value, flags=0, expiry=0):
         self.assertEqual(call('set %s %d %d %d\r\n%s\r\n' % (key, flags, expiry, len(value), value)), b'STORED\r\n')
@@ -66,6 +93,9 @@ class TestCommands(unittest.TestCase):
         self.assertEqual(call('delete key\r\n'), b'DELETED\r\n')
         self.assertEqual(call('delete key\r\n'), b'NOT_FOUND\r\n')
         self.assertEqual(call('get key\r\n'), b'END\r\n')
+
+    def test_error_handling(self):
+        self.assertEqual(call('get\r\n'), b'ERROR\r\n')
 
     def test_expiry(self):
         self.assertEqual(call('set key 0 1 5\r\nhello\r\n'), b'STORED\r\n')
@@ -84,6 +114,8 @@ class TestCommands(unittest.TestCase):
         self.assertEqual(call('set key1 0 0 2\r\nv1\r\n'), b'STORED\r\n')
         self.assertEqual(call('set key 0 0 2\r\nv2\r\n'), b'STORED\r\n')
         self.assertEqual(call('get key1 key\r\n'), b'VALUE key1 0 2\r\nv1\r\nVALUE key 0 2\r\nv2\r\nEND\r\n')
+        self.call_delete("key")
+        self.call_delete("key1")
 
     def test_response_spanning_many_datagrams(self):
         key1_data = '1' * 1000
@@ -110,11 +142,12 @@ if __name__ == '__main__':
     host, port = args.server.split(':')
     server_addr = (host, int(port))
 
-    if args.udp:
-        call = lambda msg: udp_call(server_addr, msg)
-    else:
-        call = lambda msg: tcp_call(server_addr, msg)
+    call = udp_call if args.udp else tcp_call
 
     runner = unittest.TextTestRunner()
-    itersuite = unittest.TestLoader().loadTestsFromTestCase(TestCommands)
-    runner.run(itersuite)
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
+    suite.addTest(loader.loadTestsFromTestCase(TestCommands))
+    if not args.udp:
+        suite.addTest(loader.loadTestsFromTestCase(TcpSpecificTests))
+    runner.run(suite)

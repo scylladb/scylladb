@@ -207,6 +207,16 @@ SEASTAR_TEST_CASE(test_get_parsing) {
         });
 }
 
+SEASTAR_TEST_CASE(test_catches_errors_in_get) {
+    return make_ready_future<>()
+        .then([] {
+            return parse(make_packet({"get\r\n"}))
+                .then([] (auto p) {
+                    BOOST_REQUIRE(p->_state == parser_type::state::error);
+                });
+        });
+}
+
 SEASTAR_TEST_CASE(test_multiple_requests_in_one_stream) {
     auto p = make_shared<parser_type>();
     auto is = make_shared(make_input_stream(make_packet({"set key1 1 1 5\r\ndata1\r\nset key2 2 2 6\r\ndata2+\r\n"})));
