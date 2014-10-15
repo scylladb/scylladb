@@ -465,15 +465,16 @@ void cpu_pages::do_resize(size_t new_size) {
     }
     ::madvise(mmap_start, mmap_size, MADV_HUGEPAGE);
     ::madvise(mmap_start, mmap_size, MADV_HUGEPAGE);
-    auto new_page_array_pages = align_up(sizeof(page[new_pages]), page_size) / page_size;
+    // one past last page structure is a sentinel
+    auto new_page_array_pages = align_up(sizeof(page[new_pages + 1]), page_size) / page_size;
     auto new_page_array
         = reinterpret_cast<page*>(allocate_large(new_page_array_pages));
     std::copy(pages, pages + nr_pages, new_page_array);
-    // mark new last page as taken to avoid boundary conditions
-    new_page_array[new_pages - 1].free = false;
+    // mark new one-past-last page as taken to avoid boundary conditions
+    new_page_array[new_pages].free = false;
     auto old_pages = reinterpret_cast<char*>(pages);
     auto old_nr_pages = nr_pages;
-    auto old_pages_size = align_up(sizeof(page[nr_pages]), page_size);
+    auto old_pages_size = align_up(sizeof(page[nr_pages + 1]), page_size);
     pages = new_page_array;
     nr_pages = new_pages;
     auto old_pages_start = (old_pages - memory) / page_size;
@@ -483,10 +484,7 @@ void cpu_pages::do_resize(size_t new_size) {
         old_pages_size -= page_size;
     }
     free_span(old_pages_start, old_pages_size / page_size);
-    // keep new last page allocated
-    free_span(old_nr_pages, new_pages - old_nr_pages - 1);
-    // free old last page
-    free_span(old_nr_pages - 1, 1);
+    free_span(old_nr_pages, new_pages - old_nr_pages);
 }
 
 void cpu_pages::resize(size_t new_size) {
