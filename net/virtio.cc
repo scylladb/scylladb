@@ -44,10 +44,11 @@ public:
     struct buffer {
         phys addr;
         uint32_t len;
-        promise<size_t> completed;
         bool writeable;
     };
-    using buffer_chain = std::vector<buffer>;
+    struct buffer_chain : std::vector<buffer> {
+        promise<size_t> completed;
+    };
 private:
     class desc {
     public:
@@ -274,6 +275,9 @@ template <typename Iterator>
 void vring::post(Iterator begin, Iterator end) {
     // Note: buffer_chain here is any container of buffer, not
     //       necessarily vector<buffer>.
+    //       buffer_chain should also include a promise<size_t> completed
+    //       member, signifying the action to take when the request
+    //       completes.
     using buffer_chain = decltype(*begin);
     std::for_each(begin, end, [this] (buffer_chain bc) {
         bool has_prev = false;
@@ -289,9 +293,9 @@ void vring::post(Iterator begin, Iterator end) {
             d._paddr = i->addr;
             d._len = i->len;
             prev_desc_idx = desc_idx;
-            _completions[desc_idx] = std::move(i->completed);
         }
         auto desc_head = prev_desc_idx;
+        _completions[desc_head] = std::move(bc.completed);
         _avail._shared->_ring[masked(_avail._head++)] = desc_head;
         _avail._avail_added_since_kick++;
     });
@@ -469,7 +473,7 @@ virtio_net_device::txq::post(packet p) {
             bc.push_back(std::move(b));
         }
         // schedule packet destruction
-        bc[0].completed.get_future().then([p = std::move(p)] (size_t) {});
+        bc.completed.get_future().then([p = std::move(p)] (size_t) {});
         _ring.post(std::begin(vbc), std::end(vbc));
     });
 }
@@ -490,12 +494,15 @@ virtio_net_device::rxq::prepare_buffers() {
             count += opportunistic;
         }
         auto make_buffer_chain = [this] {
+            struct single_buffer_and_comletion : std::array<vring::buffer, 1> {
+                promise<size_t> completed;
+            } bc;
             std::unique_ptr<char[]> buf(new char[4096]);
-            vring::buffer b;
+            vring::buffer& b = bc[0];
             b.addr = virt_to_phys(buf.get());
             b.len = 4096;
             b.writeable = true;
-            b.completed.get_future().then([this, buf = std::move(buf)] (size_t len) mutable {
+            bc.completed.get_future().then([this, buf = std::move(buf)] (size_t len) mutable {
                 auto frag_buf = buf.get();
                 auto frag_len = len;
                 // First buffer
@@ -523,7 +530,7 @@ virtio_net_device::rxq::prepare_buffers() {
                     });
                 }
             });
-            return std::array<vring::buffer, 1>{std::move(b)};
+            return bc;
         };
         auto start = make_function_input_iterator(make_buffer_chain, 0U);
         auto finish = make_function_input_iterator(make_buffer_chain, count);
