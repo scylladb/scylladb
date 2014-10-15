@@ -6,6 +6,7 @@
 #define QUEUE_HH_
 
 #include "circular_buffer.hh"
+#include "future.hh"
 #include <queue>
 #include <experimental/optional>
 
