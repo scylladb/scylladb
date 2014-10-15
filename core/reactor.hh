@@ -117,6 +117,7 @@ public:
     future<> expired();
     void set_callback(callback_t&& callback);
     void arm(clock_type::time_point until, boost::optional<clock_type::duration> period = {});
+    void rearm(clock_type::time_point until, boost::optional<clock_type::duration> period = {});
     void arm(clock_type::duration delta);
     void arm_periodic(clock_type::duration delta);
     bool armed() const { return _armed; }
@@ -571,9 +572,23 @@ public:
     output_stream(data_sink fd, size_t size)
         : _fd(std::move(fd)), _buf(size), _size(size) {}
     future<> write(const char_type* buf, size_t n);
+    future<> write(const char_type* buf);
+    future<> write(const sstring& s);
     future<> flush();
 private:
 };
+
+template<typename CharType>
+inline
+future<> output_stream<CharType>::write(const char_type* buf) {
+    return write(buf, strlen(buf));
+}
+
+template<typename CharType>
+inline
+future<> output_stream<CharType>::write(const sstring& s) {
+    return write(s.c_str(), s.size());
+}
 
 class file_impl {
 public:
@@ -736,7 +751,7 @@ inline
 future<size_t>
 reactor::write_some(pollable_fd_state& fd, const void* buffer, size_t len) {
     return writeable(fd).then([this, &fd, buffer, len] () mutable {
-        auto r = fd.fd.send(buffer, len, 0);
+        auto r = fd.fd.send(buffer, len, MSG_NOSIGNAL);
         if (!r) {
             return write_some(fd, buffer, len);
         }
@@ -980,6 +995,14 @@ void timer::arm(clock_type::time_point until, boost::optional<clock_type::durati
     _expiry = until;
     engine.add_timer(this);
     _queued = true;
+}
+
+inline
+void timer::rearm(clock_type::time_point until, boost::optional<clock_type::duration> period) {
+    if (_armed) {
+        cancel();
+    }
+    arm(until, period);
 }
 
 inline

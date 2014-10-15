@@ -6,27 +6,58 @@
 #define _TEST_UTILS_HH
 
 #include <iostream>
-#include <core/future.hh>
+#include <boost/test/included/unit_test.hpp>
+#include "core/future.hh"
+#include "core/reactor.hh"
+#include "core/app-template.hh"
 
-#define BUG() do { \
-        std::cerr << "ERROR @ " << __FILE__ << ":" << __LINE__ << std::endl; \
-        throw std::runtime_error("test failed"); \
-    } while (0)
+using namespace boost::unit_test;
 
-#define OK() { \
-        std::cerr << "OK @ " << __FILE__ << ":" << __LINE__ << std::endl; \
-    } while (0)
+class seastar_test {
+public:
+    seastar_test();
+    virtual ~seastar_test() {}
+    virtual const char* get_name() = 0;
+    virtual future<> run_test_case() = 0;
 
-static inline
-void run_tests(future<> tests_done) {
-    tests_done.rescue([] (auto get) {
-        try {
-            get();
-            exit(0);
-        } catch(...) {
-            std::terminate();
-        }
-    });
+    void run() {
+        posix_thread t([this] {
+            engine.when_started().then([this] {
+                return run_test_case();
+            }).rescue([] (auto get) {
+                try {
+                    get();
+                    engine.exit(0);
+                } catch (...) {
+                    std::terminate();
+                }
+            });
+            engine.run();
+        });
+        t.join();
+    }
+};
+
+static std::vector<seastar_test*> tests;
+
+seastar_test::seastar_test() {
+    tests.push_back(this);
 }
+
+test_suite* init_unit_test_suite(int argc, char* argv[]) {
+    test_suite* ts = BOOST_TEST_SUITE("seastar-tests");
+    for (seastar_test* test : tests) {
+        ts->add(boost::unit_test::make_test_case([test] { test->run(); }, test->get_name()));
+    }
+    return ts;
+}
+
+#define SEASTAR_TEST_CASE(name) \
+    struct name : public seastar_test { \
+        const char* get_name() override { return #name; } \
+        future<> run_test_case() override; \
+    }; \
+    static name name ## _instance; \
+    future<> name::run_test_case()
 
 #endif

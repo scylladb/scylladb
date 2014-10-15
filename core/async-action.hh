@@ -45,19 +45,37 @@ future<> do_until(StopCondition&& stop_cond, AsyncAction&& action) {
     return f;
 }
 
-// Invoke given action undefinitely. Next invocation starts when previous completes or fails.
+// Invoke given action until it fails.
 template<typename AsyncAction>
 static inline
-void keep_doing(AsyncAction&& action) {
+future<> keep_doing(AsyncAction&& action) {
     while (true) {
         auto f = action();
         if (!f.available()) {
-            f.then([action = std::forward<AsyncAction>(action)] () mutable {
-                 keep_doing(std::forward<AsyncAction>(action));
+            return f.then([action = std::forward<AsyncAction>(action)] () mutable {
+                 return keep_doing(std::forward<AsyncAction>(action));
             });
-            return;
+        }
+
+        if (f.failed()) {
+            return std::move(f);
         }
     }
+}
+
+template<typename Iterator, typename AsyncAction>
+static inline
+future<> do_for_each(Iterator begin, Iterator end, AsyncAction&& action) {
+    while (begin != end) {
+        auto f = action(*begin++);
+        if (!f.available()) {
+            return f.then([action = std::forward<AsyncAction>(action),
+                    begin = std::move(begin), end = std::move(end)] () mutable {
+                return do_for_each(std::move(begin), std::move(end), std::forward<AsyncAction>(action));
+            });
+        }
+    }
+    return make_ready_future<>();
 }
 
 #endif

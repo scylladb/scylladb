@@ -12,11 +12,14 @@ tests = [
     'tests/udp_server',
     'tests/udp_client',
     'tests/blkdiscard_test',
+    'tests/sstring_test',
+    'tests/memcache/test_ascii_parser',
     ]
 
 apps = [
     'apps/httpd/httpd',
     'apps/seastar/seastar',
+    'apps/memcache/memcache',
     ]
 
 all_artifacts = apps + tests
@@ -43,10 +46,16 @@ core = [
     'net/posix-stack.cc',
     ]
 
+memcache = [
+    'apps/memcache/ascii.rl'
+] + libnet + core
+
 deps = {
     'apps/seastar/seastar': ['apps/seastar/main.cc'] + core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['apps/httpd/httpd.cc', 'apps/httpd/request_parser.rl'] + libnet + core,
+    'apps/memcache/memcache': ['apps/memcache/memcache.cc'] + memcache,
+    'tests/memcache/test_ascii_parser': ['tests/memcache/test_ascii_parser.cc'] + memcache,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
     'tests/virtiotest': ['tests/virtiotest.cc'] + core + libnet,
     'tests/l3_test': ['tests/l3_test.cc'] + core + libnet,
@@ -57,6 +66,7 @@ deps = {
     'tests/udp_server': ['tests/udp_server.cc'] + core + libnet,
     'tests/udp_client': ['tests/udp_client.cc'] + core + libnet,
     'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
+    'tests/sstring_test': ['tests/sstring_test.cc'] + core,
 }
 
 modes = {
@@ -74,7 +84,7 @@ modes = {
     },
 }
 
-libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm'
+libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
 
 warnings = [
@@ -139,9 +149,9 @@ def debug_flag(compiler):
     src_with_auto = textwrap.dedent('''\
         template <typename T>
         struct x { auto f() {} };
-        
+
         x<int> a;
-        ''')      
+        ''')
     if try_compile(source = src_with_auto, flags = ['-g', '-std=gnu++1y'], compiler = compiler):
         return '-g'
     else:

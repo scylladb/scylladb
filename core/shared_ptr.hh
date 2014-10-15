@@ -71,6 +71,11 @@ public:
         }
         return *this;
     }
+    shared_ptr& operator=(T&& x) {
+        this->~shared_ptr();
+        new (this) shared_ptr(new data(std::move(x)));
+        return *this;
+    }
 
     T& operator*() const { return _p->_value; }
     T* operator->() const { return &_p->_value; }
