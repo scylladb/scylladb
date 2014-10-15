@@ -92,6 +92,10 @@ public:
         if (_state != state::error) {
             return p;
         }
+        if (p != pe) {
+            p = pe;
+            return p;
+        }
         return nullptr;
     }
     bool eof() const {
