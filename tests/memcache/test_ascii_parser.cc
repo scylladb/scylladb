@@ -217,6 +217,34 @@ SEASTAR_TEST_CASE(test_catches_errors_in_get) {
         });
 }
 
+SEASTAR_TEST_CASE(test_parser_returns_eof_state_when_no_command_follows) {
+    auto p = make_shared<parser_type>();
+    auto is = make_shared(make_input_stream(make_packet({"get key\r\n"})));
+    p->init();
+    return is->consume(*p).then([p] {
+            BOOST_REQUIRE(p->_state == parser_type::state::cmd_get);
+        }).then([is, p] {
+            p->init();
+            return is->consume(*p).then([p] {
+                BOOST_REQUIRE(p->_state == parser_type::state::eof);
+            });
+        });
+}
+
+SEASTAR_TEST_CASE(test_incomplete_command_is_an_error) {
+    auto p = make_shared<parser_type>();
+    auto is = make_shared(make_input_stream(make_packet({"get"})));
+    p->init();
+    return is->consume(*p).then([p] {
+            BOOST_REQUIRE(p->_state == parser_type::state::error);
+        }).then([is, p] {
+            p->init();
+            return is->consume(*p).then([p] {
+                BOOST_REQUIRE(p->_state == parser_type::state::eof);
+            });
+        });
+}
+
 SEASTAR_TEST_CASE(test_multiple_requests_in_one_stream) {
     auto p = make_shared<parser_type>();
     auto is = make_shared(make_input_stream(make_packet({"set key1 1 1 5\r\ndata1\r\nset key2 2 2 6\r\ndata2+\r\n"})));

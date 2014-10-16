@@ -215,8 +215,10 @@ public:
         _parser.init();
         return in.consume(_parser).then([this, &out] () -> future<> {
             switch (_parser._state) {
-                case memcache_ascii_parser::state::error:
                 case memcache_ascii_parser::state::eof:
+                    return make_ready_future<>();
+
+                case memcache_ascii_parser::state::error:
                     return out.write(msg_error);
 
                 case memcache_ascii_parser::state::cmd_set:
@@ -389,7 +391,7 @@ public:
         keep_doing([this] {
             return _listener->accept().then([this] (connected_socket fd, socket_address addr) mutable {
                 auto conn = make_shared<connection>(std::move(fd), addr, _cache);
-                keep_doing([this, conn] {
+                do_until([conn] { return conn->_in.eof(); }, [this, conn] {
                     return conn->_proto.handle(conn->_in, conn->_out).then([conn] {
                         return conn->_out.flush();
                     });

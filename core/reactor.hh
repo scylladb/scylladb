@@ -552,6 +552,7 @@ public:
     future<temporary_buffer<CharType>> read_exactly(size_t n);
     template <typename Consumer>
     future<> consume(Consumer& c);
+    bool eof() { return _eof; }
 private:
     future<temporary_buffer<CharType>> read_exactly_part(size_t n, tmp_buf buf, size_t completed);
 };

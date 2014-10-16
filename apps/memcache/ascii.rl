@@ -47,7 +47,7 @@ set = "set" sp key sp flags sp expiration sp size (crlf @{ fcall blob; } ) crlf 
 get = "get" (sp key %{ _keys.push_back(std::move(_key)); })+ crlf @{ _state = state::cmd_get; };
 delete = "delete" sp key crlf @{ _state = state::cmd_delete; };
 
-main := set | get | delete;
+main := (set | get | delete) >eof{ _state = state::eof; };
 
 prepush {
     prepush();

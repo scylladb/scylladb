@@ -79,6 +79,21 @@ class TcpSpecificTests(unittest.TestCase):
             self.assertEqual(conn('get\r\n'), b'ERROR\r\n')
             self.assertEqual(conn('get key\r\n'), b'END\r\n')
 
+    def test_incomplete_command_results_in_error(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(server_addr)
+        s.send(b'get')
+        s.shutdown(socket.SHUT_WR)
+        self.assertEqual(recv_all(s), b'ERROR\r\n')
+        s.close()
+
+    def test_stream_closed_results_in_error(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(server_addr)
+        s.shutdown(socket.SHUT_WR)
+        self.assertEqual(recv_all(s), b'')
+        s.close()
+
 class TestCommands(unittest.TestCase):
     def call_set(self, key, value, flags=0, expiry=0):
         self.assertEqual(call('set %s %d %d %d\r\n%s\r\n' % (key, flags, expiry, len(value), value)), b'STORED\r\n')
