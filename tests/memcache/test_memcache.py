@@ -109,12 +109,28 @@ class TcpSpecificTests(unittest.TestCase):
             self.assertEqual(conn('get key\r\n'), b'VALUE key 0 5\r\nhello\r\nEND\r\n')
             self.assertEqual(conn('delete key\r\n'), b'DELETED\r\n')
 
+    def test_flush_all_no_reply(self):
+        self.assertEqual(call('flush_all noreply\r\n'), b'')
+
 class TestCommands(unittest.TestCase):
     def set(self, key, value, flags=0, expiry=0):
         self.assertEqual(call('set %s %d %d %d\r\n%s\r\n' % (key, flags, expiry, len(value), value)), b'STORED\r\n')
 
     def delete(self, key):
         self.assertEqual(call('delete %s\r\n' % key), b'DELETED\r\n')
+
+    def assertHasKey(self, key):
+        resp = call('get %s\r\n' % key)
+        if not resp.startswith(('VALUE %s' % key).encode()):
+            self.fail('Key \'%s\' should be present, but got: %s' % (key, resp.decode()))
+
+    def assertNoKey(self, key):
+        resp = call('get %s\r\n' % key)
+        if resp != b'END\r\n':
+            self.fail('Key \'%s\' should not be present, but got: %s' % (key, resp.decode()))
+
+    def setKey(self, key):
+        self.set(key, 'some value')
 
     def test_basic_commands(self):
         self.assertEqual(call('get key\r\n'), b'END\r\n')
@@ -148,6 +164,64 @@ class TestCommands(unittest.TestCase):
         self.assertEqual(call('get key1 key\r\n'), b'VALUE key1 0 2\r\nv1\r\nVALUE key 0 2\r\nv2\r\nEND\r\n')
         self.delete("key")
         self.delete("key1")
+
+    def test_flush_all(self):
+        self.set('key', 'value')
+        self.assertEqual(call('flush_all\r\n'), b'OK\r\n')
+        self.assertNoKey('key')
+
+    def test_keys_set_after_flush_remain(self):
+        self.assertEqual(call('flush_all\r\n'), b'OK\r\n')
+        self.setKey('key')
+        self.assertHasKey('key')
+        self.delete('key')
+
+    @slow
+    def test_flush_all_with_timeout_flushes_all_keys_even_those_set_after_flush(self):
+        self.setKey('key')
+        self.assertEqual(call('flush_all 2\r\n'), b'OK\r\n')
+        self.assertHasKey('key')
+        self.setKey('key2')
+        time.sleep(2)
+        self.assertNoKey('key')
+        self.assertNoKey('key2')
+
+    @slow
+    def test_subsequent_flush_is_merged(self):
+        self.setKey('key')
+        self.assertEqual(call('flush_all 2\r\n'), b'OK\r\n') # Can flush in anything between 1-2
+        self.assertEqual(call('flush_all 4\r\n'), b'OK\r\n') # Can flush in anything between 3-4
+        time.sleep(2)
+        self.assertHasKey('key')
+        self.setKey('key2')
+        time.sleep(4)
+        self.assertNoKey('key')
+        self.assertNoKey('key2')
+
+    @slow
+    def test_immediate_flush_cancels_delayed_flush(self):
+        self.assertEqual(call('flush_all 2\r\n'), b'OK\r\n')
+        self.assertEqual(call('flush_all\r\n'), b'OK\r\n')
+        self.setKey('key')
+        time.sleep(1)
+        self.assertHasKey('key')
+        self.delete('key')
+
+    @slow
+    def test_flushing_in_the_past(self):
+        self.setKey('key1')
+        time.sleep(1)
+        self.setKey('key2')
+        key2_time = int(time.time())
+        self.assertEqual(call('flush_all %d\r\n' % (key2_time - 1)), b'OK\r\n')
+        self.assertNoKey("key1")
+        self.assertNoKey("key2")
+
+    @slow
+    def test_memcache_does_not_crash_when_flushing_with_already_expred_items(self):
+        self.assertEqual(call('set key1 0 2 5\r\nhello\r\n'), b'STORED\r\n')
+        time.sleep(1)
+        self.assertEqual(call('flush_all\r\n'), b'OK\r\n')
 
     def test_response_spanning_many_datagrams(self):
         key1_data = '1' * 1000
