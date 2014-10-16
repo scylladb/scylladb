@@ -239,6 +239,9 @@ class TestCommands(unittest.TestCase):
         self.delete('key2')
         self.delete('key3')
 
+    def test_version(self):
+        self.assertRegexpMatches(call('version\r\n'), b'^VERSION .*\r\n$')
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="memcache protocol tests")
     parser.add_argument('--server', '-s', action="store", help="server adddress in <host>:<port> format", default="localhost:11211")
