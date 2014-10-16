@@ -9,6 +9,7 @@ import unittest
 
 server_addr = None
 call = None
+args = None
 
 @contextmanager
 def tcp_connection():
@@ -19,6 +20,13 @@ def tcp_connection():
         return s.recv(16*1024)
     yield call
     s.close()
+
+def slow(f):
+    def wrapper(self):
+        if args.fast:
+            raise unittest.SkipTest('Slow')
+        return f(self)
+    return wrapper
 
 def recv_all(s):
     m = b''
@@ -119,12 +127,14 @@ class TestCommands(unittest.TestCase):
     def test_error_handling(self):
         self.assertEqual(call('get\r\n'), b'ERROR\r\n')
 
+    @slow
     def test_expiry(self):
         self.assertEqual(call('set key 0 1 5\r\nhello\r\n'), b'STORED\r\n')
         self.assertEqual(call('get key\r\n'), b'VALUE key 0 5\r\nhello\r\nEND\r\n')
         time.sleep(1)
         self.assertEqual(call('get key\r\n'), b'END\r\n')
 
+    @slow
     def test_expiry_at_epoch_time(self):
         expiry = int(time.time()) + 1
         self.assertEqual(call('set key 0 %d 5\r\nhello\r\n' % expiry), b'STORED\r\n')
@@ -159,6 +169,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="memcache protocol tests")
     parser.add_argument('--server', '-s', action="store", help="server adddress in <host>:<port> format", default="localhost:11211")
     parser.add_argument('--udp', '-U', action="store_true", help="Use UDP protocol")
+    parser.add_argument('--fast',  action="store_true", help="Run only fast tests")
     args = parser.parse_args()
 
     host, port = args.server.split(':')

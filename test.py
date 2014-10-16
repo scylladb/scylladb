@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import argparse
 import subprocess
 
 all_tests = [
@@ -18,13 +19,17 @@ def print_status(msg):
     print('\r' + msg, end='')
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Seastar test runner")
+    parser.add_argument('--fast',  action="store_true", help="Run only fast tests")
+    args = parser.parse_args()
+
     black_hole = open('/dev/null', 'w')
 
     test_to_run = []
     for mode in ['debug', 'release']:
         for test in all_tests:
             test_to_run.append(os.path.join('build', mode, 'tests', test))
-        test_to_run.append('tests/memcache/test.py ' + os.path.join('build', mode, 'apps', 'memcache', 'memcache') + ' --smp 1')
+        test_to_run.append('tests/memcache/test.py --mode ' + mode + (' --fast' if args.fast else ''))
 
     all_ok = True
 
