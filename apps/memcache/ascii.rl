@@ -45,12 +45,15 @@ blob := any+ >start_blob $advance_blob;
 maybe_noreply = (sp "noreply" @{ _noreply = true; })? >{ _noreply = false; };
 maybe_expiration = (sp expiration)? >{ _expiration = 0; };
 
-set = "set" sp key sp flags sp expiration sp size maybe_noreply (crlf @{ fcall blob; } ) crlf @{ _state = state::cmd_set; };
+insertion_params = sp key sp flags sp expiration sp size maybe_noreply (crlf @{ fcall blob; } ) crlf;
+set = "set" insertion_params @{ _state = state::cmd_set; };
+add = "add" insertion_params @{ _state = state::cmd_add; };
+replace = "replace" insertion_params @{ _state = state::cmd_replace; };
 get = "get" (sp key %{ _keys.push_back(std::move(_key)); })+ crlf @{ _state = state::cmd_get; };
 delete = "delete" sp key maybe_noreply crlf @{ _state = state::cmd_delete; };
 flush = "flush_all" maybe_expiration maybe_noreply crlf @{ _state = state::cmd_flush_all; };
 version = "version" crlf @{ _state = state::cmd_version; };
-main := (set | get | delete | flush | version) >eof{ _state = state::eof; };
+main := (add | replace | set | get | delete | flush | version) >eof{ _state = state::eof; };
 
 prepush {
     prepush();
@@ -69,6 +72,8 @@ public:
         error,
         eof,
         cmd_set,
+        cmd_add,
+        cmd_replace,
         cmd_get,
         cmd_delete,
         cmd_flush_all,

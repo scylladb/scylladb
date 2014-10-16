@@ -218,6 +218,7 @@ private:
     static constexpr const char *msg_crlf = "\r\n";
     static constexpr const char *msg_error = "ERROR\r\n";
     static constexpr const char *msg_stored = "STORED\r\n";
+    static constexpr const char *msg_not_stored = "NOT_STORED\r\n";
     static constexpr const char *msg_end = "END\r\n";
     static constexpr const char *msg_value = "VALUE ";
     static constexpr const char *msg_deleted = "DELETED\r\n";
@@ -254,6 +255,26 @@ public:
                         return make_ready_future<>();
                     }
                     return out.write(msg_stored);
+
+                case memcache_ascii_parser::state::cmd_add:
+                {
+                    auto added = _cache.add(std::move(_parser._key),
+                            item_data{std::move(_parser._blob), _parser._flags, seconds_to_time_point(_parser._expiration)});
+                    if (_parser._noreply) {
+                        return make_ready_future<>();
+                    }
+                    return out.write(added ? msg_stored : msg_not_stored);
+                }
+
+                case memcache_ascii_parser::state::cmd_replace:
+                {
+                    auto replaced = _cache.replace(std::move(_parser._key),
+                            item_data{std::move(_parser._blob), _parser._flags, seconds_to_time_point(_parser._expiration)});
+                    if (_parser._noreply) {
+                        return make_ready_future<>();
+                    }
+                    return out.write(replaced ? msg_stored : msg_not_stored);
+                }
 
                 case memcache_ascii_parser::state::cmd_get:
                 {
