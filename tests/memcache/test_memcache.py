@@ -105,7 +105,7 @@ class TcpSpecificTests(unittest.TestCase):
     def test_unsuccesful_parsing_does_not_leave_data_behind(self):
         with tcp_connection() as conn:
             self.assertEqual(conn('set key 0 0 5\r\nhello\r\n'), b'STORED\r\n')
-            self.assertEqual(conn('delete a b c\r\n'), b'ERROR\r\n')
+            self.assertRegexpMatches(conn('delete a b c\r\n'), b'^(CLIENT_)?ERROR.*\r\n$')
             self.assertEqual(conn('get key\r\n'), b'VALUE key 0 5\r\nhello\r\nEND\r\n')
             self.assertEqual(conn('delete key\r\n'), b'DELETED\r\n')
 
