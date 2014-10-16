@@ -49,7 +49,8 @@ set = "set" sp key sp flags sp expiration sp size (crlf @{ fcall blob; } ) crlf 
 get = "get" (sp key %{ _keys.push_back(std::move(_key)); })+ crlf @{ _state = state::cmd_get; };
 delete = "delete" sp key crlf @{ _state = state::cmd_delete; };
 flush = "flush_all" maybe_expiration maybe_noreply crlf @{ _state = state::cmd_flush_all; };
-main := (set | get | delete | flush) >eof{ _state = state::eof; };
+version = "version" crlf @{ _state = state::cmd_version; };
+main := (set | get | delete | flush | version) >eof{ _state = state::eof; };
 
 prepush {
     prepush();
@@ -70,7 +71,8 @@ public:
         cmd_set,
         cmd_get,
         cmd_delete,
-        cmd_flush_all
+        cmd_flush_all,
+        cmd_version
     };
     state _state;
     uint32_t _u32;

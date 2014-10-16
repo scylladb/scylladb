@@ -223,6 +223,7 @@ private:
     static constexpr const char *msg_deleted = "DELETED\r\n";
     static constexpr const char *msg_not_found = "NOT_FOUND\r\n";
     static constexpr const char *msg_ok = "OK\r\n";
+    static constexpr const char *msg_version = "VERSION seastar v1.0\r\n";
 public:
     ascii_protocol(cache& cache) : _cache(cache) {}
 
@@ -298,6 +299,9 @@ public:
                         return make_ready_future<>();
                     }
                     return out.write(msg_ok);
+
+                case memcache_ascii_parser::state::cmd_version:
+                    return out.write(msg_version);
             };
             return make_ready_future<>();
         });
