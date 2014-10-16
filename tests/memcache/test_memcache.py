@@ -81,7 +81,27 @@ def udp_call(msg):
     sock.close()
     return msg
 
-class TcpSpecificTests(unittest.TestCase):
+class MemcacheTest(unittest.TestCase):
+    def set(self, key, value, flags=0, expiry=0):
+        self.assertEqual(call('set %s %d %d %d\r\n%s\r\n' % (key, flags, expiry, len(value), value)), b'STORED\r\n')
+
+    def delete(self, key):
+        self.assertEqual(call('delete %s\r\n' % key), b'DELETED\r\n')
+
+    def assertHasKey(self, key):
+        resp = call('get %s\r\n' % key)
+        if not resp.startswith(('VALUE %s' % key).encode()):
+            self.fail('Key \'%s\' should be present, but got: %s' % (key, resp.decode()))
+
+    def assertNoKey(self, key):
+        resp = call('get %s\r\n' % key)
+        if resp != b'END\r\n':
+            self.fail('Key \'%s\' should not be present, but got: %s' % (key, resp.decode()))
+
+    def setKey(self, key):
+        self.set(key, 'some value')
+
+class TcpSpecificTests(MemcacheTest):
     def test_recovers_from_errors_in_the_stream(self):
         with tcp_connection() as conn:
             self.assertEqual(conn('get\r\n'), b'ERROR\r\n')
@@ -112,26 +132,15 @@ class TcpSpecificTests(unittest.TestCase):
     def test_flush_all_no_reply(self):
         self.assertEqual(call('flush_all noreply\r\n'), b'')
 
-class TestCommands(unittest.TestCase):
-    def set(self, key, value, flags=0, expiry=0):
-        self.assertEqual(call('set %s %d %d %d\r\n%s\r\n' % (key, flags, expiry, len(value), value)), b'STORED\r\n')
+    def test_set_no_reply(self):
+        self.assertEqual(call('set key 0 0 5 noreply\r\nhello\r\nget key\r\n'), b'VALUE key 0 5\r\nhello\r\nEND\r\n')
+        self.delete('key')
 
-    def delete(self, key):
-        self.assertEqual(call('delete %s\r\n' % key), b'DELETED\r\n')
+    def test_delete_no_reply(self):
+        self.setKey('key')
+        self.assertEqual(call('delete key noreply\r\nget key\r\n'), b'END\r\n')
 
-    def assertHasKey(self, key):
-        resp = call('get %s\r\n' % key)
-        if not resp.startswith(('VALUE %s' % key).encode()):
-            self.fail('Key \'%s\' should be present, but got: %s' % (key, resp.decode()))
-
-    def assertNoKey(self, key):
-        resp = call('get %s\r\n' % key)
-        if resp != b'END\r\n':
-            self.fail('Key \'%s\' should not be present, but got: %s' % (key, resp.decode()))
-
-    def setKey(self, key):
-        self.set(key, 'some value')
-
+class TestCommands(MemcacheTest):
     def test_basic_commands(self):
         self.assertEqual(call('get key\r\n'), b'END\r\n')
         self.assertEqual(call('set key 0 0 5\r\nhello\r\n'), b'STORED\r\n')
