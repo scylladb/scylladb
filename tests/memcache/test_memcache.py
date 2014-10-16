@@ -140,6 +140,15 @@ class TcpSpecificTests(MemcacheTest):
         self.setKey('key')
         self.assertEqual(call('delete key noreply\r\nget key\r\n'), b'END\r\n')
 
+    def test_add_no_reply(self):
+        self.assertEqual(call('add key 0 0 1 noreply\r\na\r\nget key\r\n'), b'VALUE key 0 1\r\na\r\nEND\r\n')
+        self.delete('key')
+
+    def test_replace_no_reply(self):
+        self.assertEqual(call('set key 0 0 1\r\na\r\n'), b'STORED\r\n')
+        self.assertEqual(call('replace key 0 0 1 noreply\r\nb\r\nget key\r\n'), b'VALUE key 0 1\r\nb\r\nEND\r\n')
+        self.delete('key')
+
 class TestCommands(MemcacheTest):
     def test_basic_commands(self):
         self.assertEqual(call('get key\r\n'), b'END\r\n')
@@ -250,6 +259,17 @@ class TestCommands(MemcacheTest):
 
     def test_version(self):
         self.assertRegexpMatches(call('version\r\n'), b'^VERSION .*\r\n$')
+
+    def test_add(self):
+        self.assertEqual(call('add key 0 0 1\r\na\r\n'), b'STORED\r\n')
+        self.assertEqual(call('add key 0 0 1\r\na\r\n'), b'NOT_STORED\r\n')
+        self.delete('key')
+
+    def test_replace(self):
+        self.assertEqual(call('add key 0 0 1\r\na\r\n'), b'STORED\r\n')
+        self.assertEqual(call('replace key 0 0 1\r\na\r\n'), b'STORED\r\n')
+        self.delete('key')
+        self.assertEqual(call('replace key 0 0 1\r\na\r\n'), b'NOT_STORED\r\n')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="memcache protocol tests")
