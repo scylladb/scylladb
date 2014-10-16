@@ -4,12 +4,12 @@ import subprocess
 import sys
 
 if len(sys.argv) < 2:
-    print('Usage: %s <path-to-memcache>' % sys.argv[0])
+    print('Usage: %s <path-to-memcache> ...' % sys.argv[0])
 
 memcache_path = sys.argv[1]
 
 def run(cmd):
-    mc = subprocess.Popen([memcache_path])
+    mc = subprocess.Popen([memcache_path] + sys.argv[2:])
     print('Memcache started.')
     try:
         time.sleep(0.1)
