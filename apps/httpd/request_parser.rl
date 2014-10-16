@@ -95,6 +95,7 @@ public:
     state _state;
 public:
     void init() {
+        init_base();
         _req.reset(new http_request());
         _state = state::eof;
         %% write init;

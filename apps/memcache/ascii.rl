@@ -80,6 +80,7 @@ public:
     std::vector<sstring> _keys;
 public:
     void init() {
+        init_base();
         _state = state::error;
         _keys.clear();
         %% write init;

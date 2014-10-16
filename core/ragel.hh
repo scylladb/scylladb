@@ -35,6 +35,10 @@ public:
     sstring get() RREF {
         return std::move(_value);
     }
+    void reset() {
+        _value.reset();
+        _start = nullptr;
+    }
     friend class guard;
 };
 
@@ -81,6 +85,9 @@ protected:
     char* _fsm_te;
     sstring_builder _builder;
 protected:
+    void init_base() {
+        _builder.reset();
+    }
     void prepush() {
         if (_fsm_top == _fsm_stack_size) {
             auto old = _fsm_stack_size;
