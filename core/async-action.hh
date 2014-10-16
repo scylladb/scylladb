@@ -50,15 +50,19 @@ template<typename AsyncAction>
 static inline
 future<> keep_doing(AsyncAction&& action) {
     while (true) {
-        auto f = action();
-        if (!f.available()) {
-            return f.then([action = std::forward<AsyncAction>(action)] () mutable {
-                 return keep_doing(std::forward<AsyncAction>(action));
-            });
-        }
+        try{
+            auto f = action();
+            if (!f.available()) {
+                return f.then([action = std::forward<AsyncAction>(action)] () mutable {
+                     return keep_doing(std::forward<AsyncAction>(action));
+                });
+            }
 
-        if (f.failed()) {
-            return std::move(f);
+            if (f.failed()) {
+                return std::move(f);
+            }
+        } catch (...) {
+            return make_exception_future(std::current_exception());
         }
     }
 }
