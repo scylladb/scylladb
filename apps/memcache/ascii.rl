@@ -45,9 +45,9 @@ blob := any+ >start_blob $advance_blob;
 maybe_noreply = (sp "noreply" @{ _noreply = true; })? >{ _noreply = false; };
 maybe_expiration = (sp expiration)? >{ _expiration = 0; };
 
-set = "set" sp key sp flags sp expiration sp size (crlf @{ fcall blob; } ) crlf @{ _state = state::cmd_set; };
+set = "set" sp key sp flags sp expiration sp size maybe_noreply (crlf @{ fcall blob; } ) crlf @{ _state = state::cmd_set; };
 get = "get" (sp key %{ _keys.push_back(std::move(_key)); })+ crlf @{ _state = state::cmd_get; };
-delete = "delete" sp key crlf @{ _state = state::cmd_delete; };
+delete = "delete" sp key maybe_noreply crlf @{ _state = state::cmd_delete; };
 flush = "flush_all" maybe_expiration maybe_noreply crlf @{ _state = state::cmd_flush_all; };
 version = "version" crlf @{ _state = state::cmd_version; };
 main := (set | get | delete | flush | version) >eof{ _state = state::eof; };

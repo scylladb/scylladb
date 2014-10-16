@@ -250,6 +250,9 @@ public:
                 case memcache_ascii_parser::state::cmd_set:
                     _cache.set(std::move(_parser._key),
                             item_data{std::move(_parser._blob), _parser._flags, seconds_to_time_point(_parser._expiration)});
+                    if (_parser._noreply) {
+                        return make_ready_future<>();
+                    }
                     return out.write(msg_stored);
 
                 case memcache_ascii_parser::state::cmd_get:
@@ -284,10 +287,13 @@ public:
                 }
 
                 case memcache_ascii_parser::state::cmd_delete:
-                    if (_cache.remove(_parser._key)) {
-                        return out.write(msg_deleted);
+                {
+                    auto removed = _cache.remove(_parser._key);
+                    if (_parser._noreply) {
+                        return make_ready_future<>();
                     }
-                    return out.write(msg_not_found);
+                    return out.write(removed ? msg_deleted : msg_not_found);
+                }
 
                 case memcache_ascii_parser::state::cmd_flush_all:
                     if (_parser._expiration) {
