@@ -110,10 +110,10 @@ class TcpSpecificTests(unittest.TestCase):
             self.assertEqual(conn('delete key\r\n'), b'DELETED\r\n')
 
 class TestCommands(unittest.TestCase):
-    def call_set(self, key, value, flags=0, expiry=0):
+    def set(self, key, value, flags=0, expiry=0):
         self.assertEqual(call('set %s %d %d %d\r\n%s\r\n' % (key, flags, expiry, len(value), value)), b'STORED\r\n')
 
-    def call_delete(self, key):
+    def delete(self, key):
         self.assertEqual(call('delete %s\r\n' % key), b'DELETED\r\n')
 
     def test_basic_commands(self):
@@ -146,24 +146,24 @@ class TestCommands(unittest.TestCase):
         self.assertEqual(call('set key1 0 0 2\r\nv1\r\n'), b'STORED\r\n')
         self.assertEqual(call('set key 0 0 2\r\nv2\r\n'), b'STORED\r\n')
         self.assertEqual(call('get key1 key\r\n'), b'VALUE key1 0 2\r\nv1\r\nVALUE key 0 2\r\nv2\r\nEND\r\n')
-        self.call_delete("key")
-        self.call_delete("key1")
+        self.delete("key")
+        self.delete("key1")
 
     def test_response_spanning_many_datagrams(self):
         key1_data = '1' * 1000
         key2_data = '2' * 1000
         key3_data = '3' * 1000
-        self.call_set('key1', key1_data)
-        self.call_set('key2', key2_data)
-        self.call_set('key3', key3_data)
+        self.set('key1', key1_data)
+        self.set('key2', key2_data)
+        self.set('key3', key3_data)
         self.assertEqual(call('get key1 key2 key3\r\n').decode(),
             'VALUE key1 0 %d\r\n%s\r\n' \
             'VALUE key2 0 %d\r\n%s\r\n' \
             'VALUE key3 0 %d\r\n%s\r\n' \
             'END\r\n' % (len(key1_data), key1_data, len(key2_data), key2_data, len(key3_data), key3_data))
-        self.call_delete('key1')
-        self.call_delete('key2')
-        self.call_delete('key3')
+        self.delete('key1')
+        self.delete('key2')
+        self.delete('key3')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="memcache protocol tests")
