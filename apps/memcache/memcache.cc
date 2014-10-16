@@ -44,6 +44,9 @@ public:
     {
     }
 
+    item(const item&) = delete;
+    item(item&&) = delete;
+
     clock_type::time_point get_timeout() {
         return _data._expiry;
     }
@@ -74,12 +77,17 @@ private:
     bi::list<item, bi::member_hook<item, bi::list_member_hook<>, &item::_expired_link>> _expired;
     timer _timer;
     cache_stats _stats;
+    timer _flush_timer;
 private:
+    void expire_now(item& it) {
+        it._expired = true;
+        _expired.push_back(it);
+    }
+
     void expire() {
         _alive.expire(clock_type::now());
         while (auto item = _alive.pop_expired()) {
-            item->_expired = true;
-            _expired.push_back(*item);
+            expire_now(*item);
         }
         _timer.arm(_alive.get_next_timeout());
     }
@@ -120,6 +128,22 @@ private:
 public:
     cache() {
         _timer.set_callback([this] { expire(); });
+        _flush_timer.set_callback([this] { flush_all(); });
+    }
+
+    void flush_all() {
+        _flush_timer.cancel();
+        for (auto pair : _cache) {
+            auto& it = *pair.second;
+            if (!it._expired) {
+                _alive.remove(it);
+                expire_now(it);
+            }
+        }
+    }
+
+    void flush_at(clock_type::time_point time_point) {
+        _flush_timer.rearm(time_point);
     }
 
     bool set(item_key&& key, item_data data) {
@@ -198,6 +222,7 @@ private:
     static constexpr const char *msg_value = "VALUE ";
     static constexpr const char *msg_deleted = "DELETED\r\n";
     static constexpr const char *msg_not_found = "NOT_FOUND\r\n";
+    static constexpr const char *msg_ok = "OK\r\n";
 public:
     ascii_protocol(cache& cache) : _cache(cache) {}
 
@@ -262,6 +287,17 @@ public:
                         return out.write(msg_deleted);
                     }
                     return out.write(msg_not_found);
+
+                case memcache_ascii_parser::state::cmd_flush_all:
+                    if (_parser._expiration) {
+                        _cache.flush_at(seconds_to_time_point(_parser._expiration));
+                    } else {
+                        _cache.flush_all();
+                    }
+                    if (_parser._noreply) {
+                        return make_ready_future<>();
+                    }
+                    return out.write(msg_ok);
             };
             return make_ready_future<>();
         });

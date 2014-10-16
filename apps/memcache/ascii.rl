@@ -42,12 +42,14 @@ flags = u32 %{ _flags = _u32; };
 expiration = u32 %{ _expiration = _u32; };
 size = u32 %{ _size = _u32; };
 blob := any+ >start_blob $advance_blob;
+maybe_noreply = (sp "noreply" @{ _noreply = true; })? >{ _noreply = false; };
+maybe_expiration = (sp expiration)? >{ _expiration = 0; };
 
 set = "set" sp key sp flags sp expiration sp size (crlf @{ fcall blob; } ) crlf @{ _state = state::cmd_set; };
 get = "get" (sp key %{ _keys.push_back(std::move(_key)); })+ crlf @{ _state = state::cmd_get; };
 delete = "delete" sp key crlf @{ _state = state::cmd_delete; };
-
-main := (set | get | delete) >eof{ _state = state::eof; };
+flush = "flush_all" maybe_expiration maybe_noreply crlf @{ _state = state::cmd_flush_all; };
+main := (set | get | delete | flush) >eof{ _state = state::eof; };
 
 prepush {
     prepush();
@@ -67,7 +69,8 @@ public:
         eof,
         cmd_set,
         cmd_get,
-        cmd_delete
+        cmd_delete,
+        cmd_flush_all
     };
     state _state;
     uint32_t _u32;
@@ -77,6 +80,7 @@ public:
     uint32_t _size;
     uint32_t _size_left;
     sstring _blob;
+    bool _noreply;
     std::vector<sstring> _keys;
 public:
     void init() {
