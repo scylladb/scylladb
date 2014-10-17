@@ -354,6 +354,10 @@ class TestCommands(MemcacheTest):
         delete_misses = int(self.getStat('delete_misses'))
         delete_hits = int(self.getStat('delete_hits'))
         curr_connections = int(self.getStat('curr_connections'))
+        incr_hits = int(self.getStat('incr_hits'))
+        incr_misses = int(self.getStat('incr_misses'))
+        decr_hits = int(self.getStat('decr_hits'))
+        decr_misses = int(self.getStat('decr_misses'))
 
         call('get key\r\n')
         get_count += 1
@@ -408,6 +412,20 @@ class TestCommands(MemcacheTest):
         call('delete key1\r\n')
         delete_misses += 1
 
+        call('incr num 1\r\n')
+        incr_misses += 1
+        call('decr num 1\r\n')
+        decr_misses += 1
+
+        call('set num 0 0 1\r\n0\r\n')
+        set_count += 1
+        total_items += 1
+
+        call('incr num 1\r\n')
+        incr_hits += 1
+        call('decr num 1\r\n')
+        decr_hits += 1
+
         self.flush()
         flush_count += 1
 
@@ -424,6 +442,61 @@ class TestCommands(MemcacheTest):
         self.assertEquals(delete_hits, int(self.getStat('delete_hits')))
         self.assertEquals(0, int(self.getStat('curr_items')))
         self.assertEquals(curr_connections, int(self.getStat('curr_connections')))
+        self.assertEquals(incr_misses, int(self.getStat('incr_misses')))
+        self.assertEquals(incr_hits, int(self.getStat('incr_hits')))
+        self.assertEquals(decr_misses, int(self.getStat('decr_misses')))
+        self.assertEquals(decr_hits, int(self.getStat('decr_hits')))
+
+    def test_incr(self):
+        self.assertEqual(call('incr key 0\r\n'), b'NOT_FOUND\r\n')
+
+        self.assertEqual(call('set key 0 0 1\r\n0\r\n'), b'STORED\r\n')
+        self.assertEqual(call('incr key 0\r\n'), b'0\r\n')
+        self.assertEqual(call('get key\r\n'), b'VALUE key 0 1\r\n0\r\nEND\r\n')
+
+        self.assertEqual(call('incr key 1\r\n'), b'1\r\n')
+        self.assertEqual(call('incr key 2\r\n'), b'3\r\n')
+        self.assertEqual(call('incr key %d\r\n' % (pow(2, 64) - 1)), b'2\r\n')
+        self.assertEqual(call('incr key %d\r\n' % (pow(2, 64) - 3)), b'18446744073709551615\r\n')
+        self.assertRegexpMatches(call('incr key 1\r\n').decode(), r'0(\w*)?\r\n')
+
+        self.assertEqual(call('set key 0 0 2\r\n1 \r\n'), b'STORED\r\n')
+        self.assertEqual(call('incr key 1\r\n'), b'2\r\n')
+
+        self.assertEqual(call('set key 0 0 2\r\n09\r\n'), b'STORED\r\n')
+        self.assertEqual(call('incr key 1\r\n'), b'10\r\n')
+
+    def test_decr(self):
+        self.assertEqual(call('decr key 0\r\n'), b'NOT_FOUND\r\n')
+
+        self.assertEqual(call('set key 0 0 1\r\n7\r\n'), b'STORED\r\n')
+        self.assertEqual(call('decr key 1\r\n'), b'6\r\n')
+        self.assertEqual(call('get key\r\n'), b'VALUE key 0 1\r\n6\r\nEND\r\n')
+
+        self.assertEqual(call('decr key 6\r\n'), b'0\r\n')
+        self.assertEqual(call('decr key 2\r\n'), b'0\r\n')
+
+        self.assertEqual(call('set key 0 0 2\r\n20\r\n'), b'STORED\r\n')
+        self.assertRegexpMatches(call('decr key 11\r\n').decode(), r'^9( )?\r\n$')
+
+        self.assertEqual(call('set key 0 0 3\r\n100\r\n'), b'STORED\r\n')
+        self.assertRegexpMatches(call('decr key 91\r\n').decode(), r'^9(  )?\r\n$')
+
+        self.assertEqual(call('set key 0 0 2\r\n1 \r\n'), b'STORED\r\n')
+        self.assertEqual(call('decr key 1\r\n'), b'0\r\n')
+
+        self.assertEqual(call('set key 0 0 2\r\n09\r\n'), b'STORED\r\n')
+        self.assertEqual(call('decr key 1\r\n'), b'8\r\n')
+
+    def test_incr_and_decr_on_invalid_input(self):
+        error_msg = b'CLIENT_ERROR cannot increment or decrement non-numeric value\r\n'
+        for cmd in ['incr', 'decr']:
+            for value in ['', '-1', 'a', '0x1', '18446744073709551616']:
+                self.assertEqual(call('set key 0 0 %d\r\n%s\r\n' % (len(value), value)), b'STORED\r\n')
+                prev = call('get key\r\n')
+                self.assertEqual(call(cmd + ' key 1\r\n'), error_msg, "cmd=%s, value=%s" % (cmd, value))
+                self.assertEqual(call('get key\r\n'), prev)
+                self.delete('key')
 
 def wait_for_memcache_tcp(timeout=4):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
