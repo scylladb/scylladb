@@ -243,6 +243,12 @@ string_type to_sstring(unsigned long long value, void* = nullptr) {
     return to_sstring_sprintf(value, "%llu");
 }
 
+template <typename string_type = sstring>
+inline
+string_type to_sstring(const char* value, void* = nullptr) {
+    return string_type(value);
+}
+
 template <typename T>
 inline
 std::ostream& operator<<(std::ostream& os, const std::vector<T>& v) {
