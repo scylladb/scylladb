@@ -150,6 +150,7 @@ if apply_tristate(args.xen, test = have_xen,
                   note = 'Note: xen-devel not installed.  No Xen support.',
                   missing = 'Error: required package xen-devel not installed.'):
     libs += ' -lxenstore'
+    libnet += [ 'net/xenfront.cc' ]
     core += [
                 'core/xen/xenstore.cc',
                 'core/xen/gntalloc.cc',
