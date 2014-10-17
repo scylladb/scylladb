@@ -112,6 +112,15 @@ class MemcacheTest(unittest.TestCase):
         m = re.match(r'VALUE %s \d+ \d+ (?P<version>\d+)' % key, call('gets %s\r\n' % key).decode())
         return int(m.group('version'))
 
+    def getStat(self, name, call_fn=None):
+        if not call_fn: call_fn = call
+        resp = call_fn('stats\r\n').decode()
+        m = re.search(r'STAT %s (?P<value>.+)' % re.escape(name), resp, re.MULTILINE)
+        return m.group('value')
+
+    def flush(self):
+        self.assertEqual(call('flush_all\r\n'), b'OK\r\n')
+
 class TcpSpecificTests(MemcacheTest):
     def test_recovers_from_errors_in_the_stream(self):
         with tcp_connection() as conn:
@@ -176,6 +185,15 @@ class TcpSpecificTests(MemcacheTest):
 
         self.delete('key')
 
+    def test_connection_statistics(self):
+        with tcp_connection() as conn:
+            curr_connections = int(self.getStat('curr_connections', call_fn=conn))
+            total_connections = int(self.getStat('total_connections', call_fn=conn))
+            with tcp_connection() as conn2:
+                self.assertEquals(curr_connections + 1, int(self.getStat('curr_connections', call_fn=conn)))
+                self.assertEquals(total_connections + 1, int(self.getStat('total_connections', call_fn=conn)))
+            self.assertEquals(curr_connections, int(self.getStat('curr_connections', call_fn=conn)))
+            self.assertEquals(total_connections + 1, int(self.getStat('total_connections', call_fn=conn)))
 
 class TestCommands(MemcacheTest):
     def test_basic_commands(self):
@@ -312,6 +330,97 @@ class TestCommands(MemcacheTest):
         self.assertEqual(call('gets key\r\n').decode(), 'VALUE key 0 5 %d\r\naloha\r\nEND\r\n' % (version + 2))
 
         self.delete('key')
+
+    def test_curr_items_stat(self):
+        self.assertEquals(0, int(self.getStat('curr_items')))
+        self.setKey('key')
+        self.assertEquals(1, int(self.getStat('curr_items')))
+        self.delete('key')
+        self.assertEquals(0, int(self.getStat('curr_items')))
+
+    def test_how_stats_change_with_different_commands(self):
+        get_count = int(self.getStat('cmd_get'))
+        set_count = int(self.getStat('cmd_set'))
+        flush_count = int(self.getStat('cmd_flush'))
+        total_items = int(self.getStat('total_items'))
+        get_misses = int(self.getStat('get_misses'))
+        get_hits = int(self.getStat('get_hits'))
+        cas_hits = int(self.getStat('cas_hits'))
+        cas_badval = int(self.getStat('cas_badval'))
+        cas_misses = int(self.getStat('cas_misses'))
+        delete_misses = int(self.getStat('delete_misses'))
+        delete_hits = int(self.getStat('delete_hits'))
+        curr_connections = int(self.getStat('curr_connections'))
+
+        call('get key\r\n')
+        get_count += 1
+        get_misses += 1
+
+        call('gets key\r\n')
+        get_count += 1
+        get_misses += 1
+
+        call('set key1 0 0 1\r\na\r\n')
+        set_count += 1
+        total_items += 1
+
+        call('get key1\r\n')
+        get_count += 1
+        get_hits += 1
+
+        call('add key1 0 0 1\r\na\r\n')
+        set_count += 1
+
+        call('add key2 0 0 1\r\na\r\n')
+        set_count += 1
+        total_items += 1
+
+        call('replace key1 0 0 1\r\na\r\n')
+        set_count += 1
+        total_items += 1
+
+        call('replace key3 0 0 1\r\na\r\n')
+        set_count += 1
+
+        call('cas key4 0 0 1 1\r\na\r\n')
+        set_count += 1
+        cas_misses += 1
+
+        call('cas key1 0 0 1 %d\r\na\r\n' % self.getItemVersion('key1'))
+        set_count += 1
+        get_count += 1
+        get_hits += 1
+        cas_hits += 1
+        total_items += 1
+
+        call('cas key1 0 0 1 %d\r\na\r\n' % (self.getItemVersion('key1') + 1))
+        set_count += 1
+        get_count += 1
+        get_hits += 1
+        cas_badval += 1
+
+        call('delete key1\r\n')
+        delete_hits += 1
+
+        call('delete key1\r\n')
+        delete_misses += 1
+
+        self.flush()
+        flush_count += 1
+
+        self.assertEquals(get_count, int(self.getStat('cmd_get')))
+        self.assertEquals(set_count, int(self.getStat('cmd_set')))
+        self.assertEquals(flush_count, int(self.getStat('cmd_flush')))
+        self.assertEquals(total_items, int(self.getStat('total_items')))
+        self.assertEquals(get_hits, int(self.getStat('get_hits')))
+        self.assertEquals(get_misses, int(self.getStat('get_misses')))
+        self.assertEquals(cas_misses, int(self.getStat('cas_misses')))
+        self.assertEquals(cas_hits, int(self.getStat('cas_hits')))
+        self.assertEquals(cas_badval, int(self.getStat('cas_badval')))
+        self.assertEquals(delete_misses, int(self.getStat('delete_misses')))
+        self.assertEquals(delete_hits, int(self.getStat('delete_hits')))
+        self.assertEquals(0, int(self.getStat('curr_items')))
+        self.assertEquals(curr_connections, int(self.getStat('curr_connections')))
 
 def wait_for_memcache_tcp(timeout=4):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
