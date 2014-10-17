@@ -1,4 +1,5 @@
 #include <boost/intrusive/list.hpp>
+#include <boost/lexical_cast.hpp>
 #include <boost/optional.hpp>
 #include <iomanip>
 #include "core/app-template.hh"
@@ -29,6 +30,26 @@ struct item_data {
     sstring _data;
     uint32_t _flag;
     clock_type::time_point _expiry;
+
+    optional<uint64_t> as_integral() {
+        auto str = _data.c_str();
+        if (str[0] == '-') {
+            return {};
+        }
+
+        auto len = _data.size();
+
+        // Strip trailing space
+        while (len && str[len - 1] == ' ') {
+            len--;
+        }
+
+        try {
+            return {boost::lexical_cast<uint64_t>(str, len)};
+        } catch (const boost::bad_lexical_cast& e) {
+            return {};
+        }
+    }
 };
 
 class item {
@@ -73,6 +94,10 @@ struct cache_stats {
     size_t _cas_badval {};
     size_t _delete_misses {};
     size_t _delete_hits {};
+    size_t _incr_misses {};
+    size_t _incr_hits {};
+    size_t _decr_misses {};
+    size_t _decr_hits {};
 };
 
 enum class cas_result {
@@ -243,6 +268,38 @@ public:
     cache_stats& stats() {
         return _stats;
     }
+
+    std::pair<shared_ptr<item>, bool> incr(const item_key& key, uint64_t delta) {
+        auto i = find(key);
+        if (i == _cache.end()) {
+            _stats._incr_misses++;
+            return {{}, false};
+        }
+        auto& item_ref = *i->second;
+        _stats._incr_hits++;
+        auto value = item_ref._data.as_integral();
+        if (!value) {
+            return {i->second, false};
+        }
+        add_overriding(i, item_data{to_sstring(*value + delta), item_ref.data()._flag, item_ref.data()._expiry});
+        return {i->second, true};
+    }
+
+    std::pair<shared_ptr<item>, bool> decr(const item_key& key, uint64_t delta) {
+        auto i = find(key);
+        if (i == _cache.end()) {
+            _stats._decr_misses++;
+            return {{}, false};
+        }
+        auto& item_ref = *i->second;
+        _stats._decr_hits++;
+        auto value = item_ref._data.as_integral();
+        if (!value) {
+            return {i->second, false};
+        }
+        add_overriding(i, item_data{to_sstring(*value - std::min(*value, delta)), item_ref.data()._flag, item_ref.data()._expiry});
+        return {i->second, true};
+    }
 };
 
 struct system_stats {
@@ -273,6 +330,7 @@ private:
     static constexpr const char *msg_version = "VERSION " VERSION_STRING "\r\n";
     static constexpr const char *msg_exists = "EXISTS\r\n";
     static constexpr const char *msg_stat = "STAT ";
+    static constexpr const char *msg_error_non_numeric_value = "CLIENT_ERROR cannot increment or decrement non-numeric value\r\n";
 private:
     template <bool SendCasVersion>
     future<> handle_get(output_stream<char>& out) {
@@ -358,14 +416,14 @@ private:
                 return print_stat(out, "delete_misses", v);
             }).then([this, &out, v = _cache.stats()._delete_hits] {
                 return print_stat(out, "delete_hits", v);
-            }).then([this, &out] {
-                return print_stat(out, "incr_misses", 0);
-            }).then([this, &out] {
-                return print_stat(out, "incr_hits", 0);
-            }).then([this, &out] {
-                return print_stat(out, "decr_misses", 0);
-            }).then([this, &out] {
-                return print_stat(out, "decr_hits", 0);
+            }).then([this, &out, v = _cache.stats()._incr_misses] {
+                return print_stat(out, "incr_misses", v);
+            }).then([this, &out, v = _cache.stats()._incr_hits] {
+                return print_stat(out, "incr_hits", v);
+            }).then([this, &out, v = _cache.stats()._decr_misses] {
+                return print_stat(out, "decr_misses", v);
+            }).then([this, &out, v = _cache.stats()._decr_hits] {
+                return print_stat(out, "decr_hits", v);
             }).then([this, &out, v = _cache.stats()._cas_misses] {
                 return print_stat(out, "cas_misses", v);
             }).then([this, &out, v = _cache.stats()._cas_hits] {
@@ -497,6 +555,44 @@ public:
 
                 case memcache_ascii_parser::state::cmd_stats:
                     return print_stats(out);
+
+                case memcache_ascii_parser::state::cmd_incr:
+                {
+                    auto result = _cache.incr(_parser._key, _parser._u64);
+                    if (_parser._noreply) {
+                        return make_ready_future<>();
+                    }
+                    auto item = result.first;
+                    if (!item) {
+                        return out.write(msg_not_found);
+                    }
+                    auto incremented = result.second;
+                    if (!incremented) {
+                        return out.write(msg_error_non_numeric_value);
+                    }
+                    return out.write(item->data()._data).then([&out] {
+                        return out.write(msg_crlf);
+                    });
+                }
+
+                case memcache_ascii_parser::state::cmd_decr:
+                {
+                    auto result = _cache.decr(_parser._key, _parser._u64);
+                    if (_parser._noreply) {
+                        return make_ready_future<>();
+                    }
+                    auto item = result.first;
+                    if (!item) {
+                        return out.write(msg_not_found);
+                    }
+                    auto decremented = result.second;
+                    if (!decremented) {
+                        return out.write(msg_error_non_numeric_value);
+                    }
+                    return out.write(item->data()._data).then([&out] {
+                        return out.write(msg_crlf);
+                    });
+                }
             };
             return make_ready_future<>();
         });
