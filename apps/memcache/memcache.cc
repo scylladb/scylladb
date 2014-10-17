@@ -59,6 +59,10 @@ public:
     item_data& data() {
         return _data;
     }
+
+    uint64_t version() {
+        return _version;
+    }
 };
 
 struct cache_stats {
@@ -66,6 +70,10 @@ struct cache_stats {
     size_t _get_misses {};
     size_t _set_adds {};
     size_t _set_replaces {};
+};
+
+enum class cas_result {
+    not_found, stored, bad_version
 };
 
 class cache {
@@ -200,6 +208,19 @@ public:
         return i->second;
     }
 
+    cas_result cas(const item_key& key, uint64_t version, item_data&& data) {
+        auto i = find(key);
+        if (i == _cache.end()) {
+            return cas_result::not_found;
+        }
+        auto& item_ref = *i->second;
+        if (item_ref._version != version) {
+            return cas_result::bad_version;
+        }
+        add_overriding(i, std::move(data));
+        return cas_result::stored;
+    }
+
     size_t size() {
         return _cache.size();
     }
@@ -225,6 +246,46 @@ private:
     static constexpr const char *msg_not_found = "NOT_FOUND\r\n";
     static constexpr const char *msg_ok = "OK\r\n";
     static constexpr const char *msg_version = "VERSION seastar v1.0\r\n";
+    static constexpr const char *msg_exists = "EXISTS\r\n";
+private:
+    template <bool SendCasVersion>
+    future<> handle_get(output_stream<char>& out) {
+        auto keys_p = make_shared<std::vector<sstring>>(std::move(_parser._keys));
+        return do_for_each(keys_p->begin(), keys_p->end(), [this, &out, keys_p](auto&& key) mutable {
+            auto item = _cache.get(key);
+            if (!item) {
+                return make_ready_future<>();
+            }
+            return out.write(msg_value)
+                    .then([&out, &key] {
+                        return out.write(key);
+                    }).then([&out] {
+                        return out.write(" ");
+                    }).then([&out, item] {
+                        return out.write(to_sstring(item->data()._flag));
+                    }).then([&out] {
+                        return out.write(" ");
+                    }).then([&out, item] {
+                        return out.write(to_sstring(item->data()._data.size()));
+                    }).then([&out, item] {
+                        if (SendCasVersion) {
+                            return out.write(" ").then([&out, item] {
+                                return out.write(to_sstring(item->version())).then([&out] {
+                                    return out.write(msg_crlf);
+                                });
+                            });
+                        } else {
+                            return out.write(msg_crlf);
+                        }
+                    }).then([&out, item] {
+                        return out.write(item->data()._data);
+                    }).then([&out] {
+                        return out.write(msg_crlf);
+                    });
+        }).then([&out] {
+            return out.write(msg_end);
+        });
+    }
 public:
     ascii_protocol(cache& cache) : _cache(cache) {}
 
@@ -256,6 +317,23 @@ public:
                     }
                     return out.write(msg_stored);
 
+                case memcache_ascii_parser::state::cmd_cas:
+                {
+                    auto result = _cache.cas(_parser._key, _parser._version,
+                        item_data{std::move(_parser._blob), _parser._flags, seconds_to_time_point(_parser._expiration)});
+                    if (_parser._noreply) {
+                        return make_ready_future<>();
+                    }
+                    switch (result) {
+                        case cas_result::stored:
+                            return out.write(msg_stored);
+                        case cas_result::not_found:
+                            return out.write(msg_not_found);
+                        case cas_result::bad_version:
+                            return out.write(msg_exists);
+                    }
+                }
+
                 case memcache_ascii_parser::state::cmd_add:
                 {
                     auto added = _cache.add(std::move(_parser._key),
@@ -277,35 +355,10 @@ public:
                 }
 
                 case memcache_ascii_parser::state::cmd_get:
-                {
-                    auto keys_p = make_shared<std::vector<sstring>>(std::move(_parser._keys));
-                    return do_for_each(keys_p->begin(), keys_p->end(), [this, &out, keys_p](auto&& key) mutable {
-                        auto item = _cache.get(key);
-                        if (!item) {
-                            return make_ready_future<>();
-                        }
-                        return out.write(msg_value)
-                                .then([&out, &key] {
-                                    return out.write(key);
-                                }).then([&out] {
-                                    return out.write(" ");
-                                }).then([&out, item] {
-                                    return out.write(to_sstring(item->data()._flag));
-                                }).then([&out] {
-                                    return out.write(" ");
-                                }).then([&out, item] {
-                                    return out.write(to_sstring(item->data()._data.size()));
-                                }).then([&out] {
-                                    return out.write(msg_crlf);
-                                }).then([&out, item] {
-                                    return out.write(item->data()._data);
-                                }).then([&out] {
-                                    return out.write(msg_crlf);
-                                });
-                    }).then([&out] {
-                        return out.write(msg_end);
-                    });
-                }
+                    return handle_get<false>(out);
+
+                case memcache_ascii_parser::state::cmd_gets:
+                    return handle_get<true>(out);
 
                 case memcache_ascii_parser::state::cmd_delete:
                 {
