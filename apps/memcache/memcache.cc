@@ -82,7 +82,11 @@ private:
     using cache_iterator = typename cache_type::iterator;
     cache_type _cache;
     timer_set<item, &item::_timer_link, clock_type> _alive;
-    bi::list<item, bi::member_hook<item, bi::list_member_hook<>, &item::_expired_link>> _expired;
+
+    // Contains items which are present in _cache but have expired
+    bi::list<item, bi::member_hook<item, bi::list_member_hook<>, &item::_expired_link>,
+        bi::constant_time_size<true>> _expired;
+
     timer _timer;
     cache_stats _stats;
     timer _flush_timer;
@@ -222,7 +226,7 @@ public:
     }
 
     size_t size() {
-        return _cache.size();
+        return _cache.size() - _expired.size();
     }
 
     cache_stats& stats() {
