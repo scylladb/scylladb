@@ -121,6 +121,9 @@ class MemcacheTest(unittest.TestCase):
     def flush(self):
         self.assertEqual(call('flush_all\r\n'), b'OK\r\n')
 
+    def tearDown(self):
+        self.flush()
+
 class TcpSpecificTests(MemcacheTest):
     def test_recovers_from_errors_in_the_stream(self):
         with tcp_connection() as conn:
