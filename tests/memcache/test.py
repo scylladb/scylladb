@@ -5,12 +5,10 @@ import os
 import argparse
 import subprocess
 
-
 def run(args, cmd):
     mc = subprocess.Popen([os.path.join('build', args.mode, 'apps', 'memcache', 'memcache'), '--smp', '1'])
     print('Memcache started.')
     try:
-        time.sleep(0.1)
         cmdline = ['tests/memcache/test_memcache.py'] + cmd
         if args.fast:
             cmdline.append('--fast')

@@ -12,9 +12,13 @@ server_addr = None
 call = None
 args = None
 
+class TimeoutError(Exception):
+    pass
+
 @contextmanager
-def tcp_connection():
+def tcp_connection(timeout=1):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
     s.connect(server_addr)
     def call(msg):
         s.send(msg.encode())
@@ -38,8 +42,9 @@ def recv_all(s):
         m += data
     return m
 
-def tcp_call(msg):
+def tcp_call(msg, timeout=1):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
     s.connect(server_addr)
     s.send(msg.encode())
     s.shutdown(socket.SHUT_WR)
@@ -47,8 +52,9 @@ def tcp_call(msg):
     s.close()
     return data
 
-def udp_call(msg):
+def udp_call(msg, timeout=1):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
     this_req_id = random.randint(-32768, 32767)
 
     datagram = struct.pack(">hhhh", this_req_id, 0, 1, 0) + msg.encode()
@@ -307,6 +313,31 @@ class TestCommands(MemcacheTest):
 
         self.delete('key')
 
+def wait_for_memcache_tcp(timeout=4):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    timeout_at = time.time() + timeout
+    while True:
+        if time.time() >= timeout_at:
+            raise TimeoutError()
+        try:
+            s.connect(server_addr)
+            s.close()
+            break
+        except ConnectionRefusedError:
+            time.sleep(0.1)
+
+
+def wait_for_memcache_udp(timeout=4):
+    timeout_at = time.time() + timeout
+    while True:
+        if time.time() >= timeout_at:
+            raise TimeoutError()
+        try:
+            udp_call('version\r\n', timeout=0.2)
+            break
+        except socket.timeout:
+            pass
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="memcache protocol tests")
     parser.add_argument('--server', '-s', action="store", help="server adddress in <host>:<port> format", default="localhost:11211")
@@ -317,7 +348,12 @@ if __name__ == '__main__':
     host, port = args.server.split(':')
     server_addr = (host, int(port))
 
-    call = udp_call if args.udp else tcp_call
+    if args.udp:
+        call = udp_call
+        wait_for_memcache_udp()
+    else:
+        call = tcp_call
+        wait_for_memcache_tcp()
 
     runner = unittest.TextTestRunner()
     loader = unittest.TestLoader()
