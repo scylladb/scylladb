@@ -5,6 +5,7 @@ import struct
 import random
 import argparse
 import time
+import re
 import unittest
 
 server_addr = None
@@ -101,6 +102,10 @@ class MemcacheTest(unittest.TestCase):
     def setKey(self, key):
         self.set(key, 'some value')
 
+    def getItemVersion(self, key):
+        m = re.match(r'VALUE %s \d+ \d+ (?P<version>\d+)' % key, call('gets %s\r\n' % key).decode())
+        return int(m.group('version'))
+
 class TcpSpecificTests(MemcacheTest):
     def test_recovers_from_errors_in_the_stream(self):
         with tcp_connection() as conn:
@@ -148,6 +153,23 @@ class TcpSpecificTests(MemcacheTest):
         self.assertEqual(call('set key 0 0 1\r\na\r\n'), b'STORED\r\n')
         self.assertEqual(call('replace key 0 0 1 noreply\r\nb\r\nget key\r\n'), b'VALUE key 0 1\r\nb\r\nEND\r\n')
         self.delete('key')
+
+    def test_cas_noreply(self):
+        self.assertNoKey('key')
+        self.assertEqual(call('cas key 0 0 1 1 noreply\r\na\r\n'), b'')
+        self.assertNoKey('key')
+
+        self.assertEqual(call('add key 0 0 5\r\nhello\r\n'), b'STORED\r\n')
+        version = self.getItemVersion('key')
+
+        self.assertEqual(call('cas key 1 0 5 %d noreply\r\naloha\r\n' % (version + 1)), b'')
+        self.assertEqual(call('get key\r\n'), b'VALUE key 0 5\r\nhello\r\nEND\r\n')
+
+        self.assertEqual(call('cas key 1 0 5 %d noreply\r\naloha\r\n' % (version)), b'')
+        self.assertEqual(call('get key\r\n'), b'VALUE key 1 5\r\naloha\r\nEND\r\n')
+
+        self.delete('key')
+
 
 class TestCommands(MemcacheTest):
     def test_basic_commands(self):
@@ -270,6 +292,20 @@ class TestCommands(MemcacheTest):
         self.assertEqual(call('replace key 0 0 1\r\na\r\n'), b'STORED\r\n')
         self.delete('key')
         self.assertEqual(call('replace key 0 0 1\r\na\r\n'), b'NOT_STORED\r\n')
+
+    def test_cas_and_gets(self):
+        self.assertEqual(call('cas key 0 0 1 1\r\na\r\n'), b'NOT_FOUND\r\n')
+        self.assertEqual(call('add key 0 0 5\r\nhello\r\n'), b'STORED\r\n')
+        version = self.getItemVersion('key')
+
+        self.assertEqual(call('set key 1 0 5\r\nhello\r\n'), b'STORED\r\n')
+        self.assertEqual(call('gets key\r\n').decode(), 'VALUE key 1 5 %d\r\nhello\r\nEND\r\n' % (version + 1))
+
+        self.assertEqual(call('cas key 0 0 5 %d\r\nhello\r\n' % (version)), b'EXISTS\r\n')
+        self.assertEqual(call('cas key 0 0 5 %d\r\naloha\r\n' % (version + 1)), b'STORED\r\n')
+        self.assertEqual(call('gets key\r\n').decode(), 'VALUE key 0 5 %d\r\naloha\r\nEND\r\n' % (version + 2))
+
+        self.delete('key')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="memcache protocol tests")
