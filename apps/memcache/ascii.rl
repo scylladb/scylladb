@@ -57,7 +57,8 @@ gets = "gets" (sp key %{ _keys.push_back(std::move(_key)); })+ crlf @{ _state = 
 delete = "delete" sp key maybe_noreply crlf @{ _state = state::cmd_delete; };
 flush = "flush_all" maybe_expiration maybe_noreply crlf @{ _state = state::cmd_flush_all; };
 version = "version" crlf @{ _state = state::cmd_version; };
-main := (add | replace | set | get | gets | delete | flush | version | cas) >eof{ _state = state::eof; };
+stats = "stats" crlf @{ _state = state::cmd_stats; };
+main := (add | replace | set | get | gets | delete | flush | version | cas | stats) >eof{ _state = state::eof; };
 
 prepush {
     prepush();
@@ -83,7 +84,8 @@ public:
         cmd_gets,
         cmd_delete,
         cmd_flush_all,
-        cmd_version
+        cmd_version,
+        cmd_stats,
     };
     state _state;
     uint32_t _u32;

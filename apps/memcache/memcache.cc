@@ -10,6 +10,9 @@
 #include "net/api.hh"
 #include "net/packet-data-source.hh"
 #include "apps/memcache/ascii.hh"
+#include <unistd.h>
+
+#define VERSION_STRING "seastar v1.0"
 
 using namespace net;
 
@@ -70,6 +73,11 @@ struct cache_stats {
     size_t _get_misses {};
     size_t _set_adds {};
     size_t _set_replaces {};
+    size_t _cas_hits {};
+    size_t _cas_misses {};
+    size_t _cas_badval {};
+    size_t _delete_misses {};
+    size_t _delete_hits {};
 };
 
 enum class cas_result {
@@ -177,6 +185,7 @@ public:
             return false;
         }
 
+        _stats._set_adds++;
         add_new(std::move(key), std::move(data));
         return true;
     }
@@ -187,6 +196,7 @@ public:
             return false;
         }
 
+        _stats._set_replaces++;
         add_overriding(i, std::move(data));
         return true;
     }
@@ -194,8 +204,10 @@ public:
     bool remove(const item_key& key) {
         auto i = find(key);
         if (i == _cache.end()) {
+            _stats._delete_misses++;
             return false;
         }
+        _stats._delete_hits++;
         auto& item_ref = *i->second;
         _alive.remove(item_ref);
         _cache.erase(i);
@@ -215,12 +227,15 @@ public:
     cas_result cas(const item_key& key, uint64_t version, item_data&& data) {
         auto i = find(key);
         if (i == _cache.end()) {
+            _stats._cas_misses++;
             return cas_result::not_found;
         }
         auto& item_ref = *i->second;
         if (item_ref._version != version) {
+            _stats._cas_badval++;
             return cas_result::bad_version;
         }
+        _stats._cas_hits++;
         add_overriding(i, std::move(data));
         return cas_result::stored;
     }
@@ -234,9 +249,19 @@ public:
     }
 };
 
+struct system_stats {
+    uint32_t _curr_connections {};
+    uint32_t _total_connections {};
+    uint64_t _cmd_get {};
+    uint64_t _cmd_set {};
+    uint64_t _cmd_flush {};
+    clock_type::time_point _start_time;
+};
+
 class ascii_protocol {
 private:
     cache& _cache;
+    system_stats& _system_stats;
     memcache_ascii_parser _parser;
 private:
     static constexpr uint32_t seconds_in_a_month = 60 * 60 * 24 * 30;
@@ -249,11 +274,13 @@ private:
     static constexpr const char *msg_deleted = "DELETED\r\n";
     static constexpr const char *msg_not_found = "NOT_FOUND\r\n";
     static constexpr const char *msg_ok = "OK\r\n";
-    static constexpr const char *msg_version = "VERSION seastar v1.0\r\n";
+    static constexpr const char *msg_version = "VERSION " VERSION_STRING "\r\n";
     static constexpr const char *msg_exists = "EXISTS\r\n";
+    static constexpr const char *msg_stat = "STAT ";
 private:
     template <bool SendCasVersion>
     future<> handle_get(output_stream<char>& out) {
+        _system_stats._cmd_get++;
         auto keys_p = make_shared<std::vector<sstring>>(std::move(_parser._keys));
         return do_for_each(keys_p->begin(), keys_p->end(), [this, &out, keys_p](auto&& key) mutable {
             auto item = _cache.get(key);
@@ -290,8 +317,88 @@ private:
             return out.write(msg_end);
         });
     }
+
+    template <typename Value>
+    static future<> print_stat(output_stream<char>& out, const char* key, Value value) {
+        return out.write(msg_stat)
+                .then([&out, key] { return out.write(key); })
+                .then([&out] { return out.write(" "); })
+                .then([&out, value] { return out.write(to_sstring(value)); })
+                .then([&out] { return out.write(msg_crlf); });
+    }
+
+    future<> print_stats(output_stream<char>& out) {
+        auto now = clock_type::now();
+        return print_stat(out, "pid", getpid())
+            .then([this, now, &out] {
+                return print_stat(out, "uptime",
+                    std::chrono::duration_cast<std::chrono::seconds>(now - _system_stats._start_time).count());
+            }).then([this, now, &out] {
+                return print_stat(out, "time",
+                    std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count());
+            }).then([this, &out] {
+                return print_stat(out, "version", VERSION_STRING);
+            }).then([this, &out] {
+                return print_stat(out, "pointer_size", sizeof(void*)*8);
+            }).then([this, &out, v = _system_stats._curr_connections] {
+                return print_stat(out, "curr_connections", v);
+            }).then([this, &out, v = _system_stats._total_connections] {
+                return print_stat(out, "total_connections", v);
+            }).then([this, &out, v = _system_stats._curr_connections] {
+                return print_stat(out, "connection_structures", v);
+            }).then([this, &out, v = _system_stats._cmd_get] {
+                return print_stat(out, "cmd_get", v);
+            }).then([this, &out, v = _system_stats._cmd_set] {
+                return print_stat(out, "cmd_set", v);
+            }).then([this, &out, v = _system_stats._cmd_flush] {
+                return print_stat(out, "cmd_flush", v);
+            }).then([this, &out] {
+                return print_stat(out, "cmd_touch", 0);
+            }).then([this, &out, v = _cache.stats()._get_hits] {
+                return print_stat(out, "get_hits", v);
+            }).then([this, &out, v = _cache.stats()._get_misses] {
+                return print_stat(out, "get_misses", v);
+            }).then([this, &out, v = _cache.stats()._delete_misses] {
+                return print_stat(out, "delete_misses", v);
+            }).then([this, &out, v = _cache.stats()._delete_hits] {
+                return print_stat(out, "delete_hits", v);
+            }).then([this, &out] {
+                return print_stat(out, "incr_misses", 0);
+            }).then([this, &out] {
+                return print_stat(out, "incr_hits", 0);
+            }).then([this, &out] {
+                return print_stat(out, "decr_misses", 0);
+            }).then([this, &out] {
+                return print_stat(out, "decr_hits", 0);
+            }).then([this, &out, v = _cache.stats()._cas_misses] {
+                return print_stat(out, "cas_misses", v);
+            }).then([this, &out, v = _cache.stats()._cas_hits] {
+                return print_stat(out, "cas_hits", v);
+            }).then([this, &out, v = _cache.stats()._cas_badval] {
+                return print_stat(out, "cas_badval", v);
+            }).then([this, &out] {
+                return print_stat(out, "touch_hits", 0);
+            }).then([this, &out] {
+                return print_stat(out, "touch_misses", 0);
+            }).then([this, &out] {
+                return print_stat(out, "auth_cmds", 0);
+            }).then([this, &out] {
+                return print_stat(out, "auth_errors", 0);
+            }).then([this, &out] {
+                return print_stat(out, "threads", smp::count);
+            }).then([this, &out, v = _cache.size()] {
+                return print_stat(out, "curr_items", v);
+            }).then([this, &out, v = (_cache.stats()._set_replaces + _cache.stats()._set_adds + _cache.stats()._cas_hits)] {
+                return print_stat(out, "total_items", v);
+            }).then([&out] {
+                return out.write("END\r\n");
+            });
+    }
 public:
-    ascii_protocol(cache& cache) : _cache(cache) {}
+    ascii_protocol(cache& cache, system_stats& system_stats)
+        : _cache(cache)
+        , _system_stats(system_stats)
+    {}
 
     clock_type::time_point seconds_to_time_point(uint32_t seconds) {
         if (seconds == 0) {
@@ -314,6 +421,7 @@ public:
                     return out.write(msg_error);
 
                 case memcache_ascii_parser::state::cmd_set:
+                    _system_stats._cmd_set++;
                     _cache.set(std::move(_parser._key),
                             item_data{std::move(_parser._blob), _parser._flags, seconds_to_time_point(_parser._expiration)});
                     if (_parser._noreply) {
@@ -323,6 +431,7 @@ public:
 
                 case memcache_ascii_parser::state::cmd_cas:
                 {
+                    _system_stats._cmd_set++;
                     auto result = _cache.cas(_parser._key, _parser._version,
                         item_data{std::move(_parser._blob), _parser._flags, seconds_to_time_point(_parser._expiration)});
                     if (_parser._noreply) {
@@ -340,6 +449,7 @@ public:
 
                 case memcache_ascii_parser::state::cmd_add:
                 {
+                    _system_stats._cmd_set++;
                     auto added = _cache.add(std::move(_parser._key),
                             item_data{std::move(_parser._blob), _parser._flags, seconds_to_time_point(_parser._expiration)});
                     if (_parser._noreply) {
@@ -350,6 +460,7 @@ public:
 
                 case memcache_ascii_parser::state::cmd_replace:
                 {
+                    _system_stats._cmd_set++;
                     auto replaced = _cache.replace(std::move(_parser._key),
                             item_data{std::move(_parser._blob), _parser._flags, seconds_to_time_point(_parser._expiration)});
                     if (_parser._noreply) {
@@ -374,6 +485,7 @@ public:
                 }
 
                 case memcache_ascii_parser::state::cmd_flush_all:
+                    _system_stats._cmd_flush++;
                     if (_parser._expiration) {
                         _cache.flush_at(seconds_to_time_point(_parser._expiration));
                     } else {
@@ -386,6 +498,9 @@ public:
 
                 case memcache_ascii_parser::state::cmd_version:
                     return out.write(msg_version);
+
+                case memcache_ascii_parser::state::cmd_stats:
+                    return print_stats(out);
             };
             return make_ready_future<>();
         });
@@ -400,7 +515,7 @@ class udp_server {
 public:
     static const size_t default_max_datagram_size = 1400;
 private:
-    ascii_protocol& _proto;
+    ascii_protocol _proto;
     udp_channel _chan;
     uint16_t _port;
     size_t _max_datagram_size = default_max_datagram_size;
@@ -418,8 +533,8 @@ private:
     } __attribute__((packed));
 
 public:
-    udp_server(ascii_protocol& proto, uint16_t port = 11211)
-         : _proto(proto)
+    udp_server(cache& c, system_stats& system_stats, uint16_t port = 11211)
+         : _proto(c, system_stats)
          , _port(port)
     {}
 
@@ -491,6 +606,7 @@ class tcp_server {
 private:
     shared_ptr<server_socket> _listener;
     cache& _cache;
+    system_stats& _system_stats;
     uint16_t _port;
     struct connection {
         connected_socket _socket;
@@ -498,23 +614,36 @@ private:
         input_stream<char> _in;
         output_stream<char> _out;
         ascii_protocol _proto;
-        connection(connected_socket&& socket, socket_address addr, cache& c)
+        system_stats& _system_stats;
+        connection(connected_socket&& socket, socket_address addr, cache& c, system_stats& system_stats)
             : _socket(std::move(socket))
             , _addr(addr)
             , _in(_socket.input())
             , _out(_socket.output())
-            , _proto(c)
-        {}
+            , _proto(c, system_stats)
+            , _system_stats(system_stats)
+        {
+            _system_stats._curr_connections++;
+            _system_stats._total_connections++;
+        }
+        ~connection() {
+            _system_stats._curr_connections--;
+        }
     };
 public:
-    tcp_server(cache& cache, uint16_t port = 11211) : _cache(cache), _port(port) {}
+    tcp_server(cache& cache, system_stats& system_stats, uint16_t port = 11211)
+        : _cache(cache)
+        , _system_stats(system_stats)
+        , _port(port)
+    {}
+
     void start() {
         listen_options lo;
         lo.reuse_address = true;
         _listener = engine.listen(make_ipv4_address({_port}), lo);
         keep_doing([this] {
             return _listener->accept().then([this] (connected_socket fd, socket_address addr) mutable {
-                auto conn = make_shared<connection>(std::move(fd), addr, _cache);
+                auto conn = make_shared<connection>(std::move(fd), addr, _cache, _system_stats);
                 do_until([conn] { return conn->_in.eof(); }, [this, conn] {
                     return conn->_proto.handle(conn->_in, conn->_out).then([conn] {
                         return conn->_out.flush();
@@ -555,10 +684,12 @@ public:
 int main(int ac, char** av)
 {
     memcache::cache cache;
-    memcache::ascii_protocol ascii_protocol(cache);
-    memcache::udp_server udp_server(ascii_protocol);
-    memcache::tcp_server tcp_server(cache);
+    memcache::system_stats system_stats;
+    memcache::udp_server udp_server(cache, system_stats);
+    memcache::tcp_server tcp_server(cache, system_stats);
     memcache::stats_printer stats(cache);
+
+    system_stats._start_time = clock_type::now();
 
     app_template app;
     app.add_options()
