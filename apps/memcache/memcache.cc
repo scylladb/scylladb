@@ -40,9 +40,9 @@ private:
     bi::list_member_hook<> _expired_link;
     friend class cache;
 public:
-    item(item_data data)
+    item(item_data data, uint64_t version = 1)
         : _data(std::move(data))
-        , _version(1)
+        , _version(version)
         , _expired(false)
     {
     }
@@ -52,11 +52,6 @@ public:
 
     clock_type::time_point get_timeout() {
         return _data._expiry;
-    }
-
-    void update(item_data&& data) {
-        _data = std::move(data);
-        _version++;
     }
 
     item_data& data() {
@@ -130,9 +125,10 @@ private:
     void add_overriding(cache_iterator i, item_data&& data) {
         auto& item_ref = *i->second;
         _alive.remove(item_ref);
-        item_ref.update(std::move(data));
-        if (_alive.insert(item_ref)) {
-            _timer.rearm(item_ref.get_timeout());
+        i->second = make_shared<item>(std::move(data), item_ref._version + 1);
+        auto& new_ref = *i->second;
+        if (_alive.insert(new_ref)) {
+            _timer.rearm(new_ref.get_timeout());
         }
     }
 
