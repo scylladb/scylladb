@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
 import time
-import subprocess
 import sys
+import os
+import argparse
+import subprocess
 
-if len(sys.argv) < 2:
-    print('Usage: %s <path-to-memcache> ...' % sys.argv[0])
-
-memcache_path = sys.argv[1]
-
-def run(cmd):
-    mc = subprocess.Popen([memcache_path] + sys.argv[2:])
+def run(args, cmd):
+    mc = subprocess.Popen([os.path.join('build', args.mode, 'apps', 'memcache', 'memcache'), '--smp', '1'])
     print('Memcache started.')
     try:
-        time.sleep(0.1)
         cmdline = ['tests/memcache/test_memcache.py'] + cmd
+        if args.fast:
+            cmdline.append('--fast')
         print('Running: ' + ' '.join(cmdline))
         subprocess.check_call(cmdline)
     finally:
         print('Killing memcache...')
         mc.kill()
 
-run([])
-run(['-U'])
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Seastar test runner")
+    parser.add_argument('--fast',  action="store_true", help="Run only fast tests")
+    parser.add_argument('--mode', action="store", help="Test app in given mode", default='release')
+    args = parser.parse_args()
+
+    run(args, [])
+    run(args, ['-U'])
