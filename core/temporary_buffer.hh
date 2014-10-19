@@ -45,7 +45,7 @@ public:
     size_t size() const { return _size; }
     const CharType* begin() { return _buffer; }
     const CharType* end() { return _buffer + _size; }
-    temporary_buffer prefix(size_t size) RREF {
+    temporary_buffer prefix(size_t size) && {
         auto ret = std::move(*this);
         ret._size = size;
         return ret;

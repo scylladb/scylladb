@@ -32,7 +32,7 @@ class sstring_builder {
 public:
     class guard;
 public:
-    sstring get() RREF {
+    sstring get() && {
         return std::move(_value);
     }
     void reset() {
