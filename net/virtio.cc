@@ -11,6 +11,8 @@
 #include "core/stream.hh"
 #include "core/circular_buffer.hh"
 #include "core/align.hh"
+#include "util/function_input_iterator.hh"
+#include "util/transform_iterator.hh"
 #include <atomic>
 #include <vector>
 #include <queue>
@@ -43,10 +45,11 @@ public:
     struct buffer {
         phys addr;
         uint32_t len;
-        promise<size_t> completed;
         bool writeable;
     };
-    using buffer_chain = std::vector<buffer>;
+    struct buffer_chain : std::vector<buffer> {
+        promise<size_t> completed;
+    };
 private:
     class desc {
     public:
@@ -271,23 +274,29 @@ void vring::run() {
 
 template <typename Iterator>
 void vring::post(Iterator begin, Iterator end) {
-    std::for_each(begin, end, [&] (buffer_chain& bc) {
-        bool has_prev = false;
-        unsigned prev_desc_idx = 0;
-        for (auto i = bc.rbegin(); i != bc.rend(); ++i) {
+    // Note: buffer_chain here is any container of buffer, not
+    //       necessarily vector<buffer>.
+    //       buffer_chain should also include a promise<size_t> completed
+    //       member, signifying the action to take when the request
+    //       completes.
+    using buffer_chain = decltype(*begin);
+    std::for_each(begin, end, [this] (buffer_chain bc) {
+        desc pseudo_head = {};
+        desc* prev = &pseudo_head;
+        for (auto i = bc.begin(); i != bc.end(); ++i) {
             unsigned desc_idx = allocate_desc();
+            prev->_flags.has_next = true;
+            prev->_next = desc_idx;
             desc &d = _descs[desc_idx];
             d._flags = {};
-            d._flags.writeable = i->writeable;
-            d._flags.has_next = has_prev;
-            has_prev = true;
-            d._next = prev_desc_idx;
-            d._paddr = i->addr;
-            d._len = i->len;
-            prev_desc_idx = desc_idx;
-            _completions[desc_idx] = std::move(i->completed);
+            auto b = *i;
+            d._flags.writeable = b.writeable;
+            d._paddr = b.addr;
+            d._len = b.len;
+            prev = &d;
         }
-        auto desc_head = prev_desc_idx;
+        auto desc_head = pseudo_head._next;
+        _completions[desc_head] = std::move(bc.completed);
         _avail._shared->_ring[masked(_avail._head++)] = desc_head;
         _avail._avail_added_since_kick++;
     });
@@ -454,18 +463,26 @@ virtio_net_device::txq::post(packet p) {
 
     auto nr_frags = q.nr_frags();
     return _ring.available_descriptors().wait(nr_frags).then([this, p = std::move(q)] () mutable {
-        vring::buffer_chain vbc[1];
-        vring::buffer_chain& bc = vbc[0];
-        bc.reserve(p.nr_frags());
-        for (auto&& f : p.fragments()) {
+        static auto fragment_to_buffer = [] (fragment f) {
             vring::buffer b;
             b.addr = virt_to_phys(f.base);
             b.len = f.size;
             b.writeable = false;
-            bc.push_back(std::move(b));
-        }
+            return b;
+        };
+        struct packet_as_buffer_chain {
+            fragment* start;
+            fragment* finish;
+            promise<size_t> completed;
+            auto begin() {
+                return make_transform_iterator(start, fragment_to_buffer);
+            }
+            auto end() {
+                return make_transform_iterator(finish, fragment_to_buffer);
+            }
+        } vbc[1] { { p.fragments().begin(), p.fragments().end() } };
         // schedule packet destruction
-        bc[0].completed.get_future().then([p = std::move(p)] (size_t) {});
+        vbc[0].completed.get_future().then([p = std::move(p)] (size_t) {});
         _ring.post(std::begin(vbc), std::end(vbc));
     });
 }
@@ -485,16 +502,16 @@ virtio_net_device::rxq::prepare_buffers() {
         if (available.try_wait(opportunistic)) {
             count += opportunistic;
         }
-        std::vector<vring::buffer_chain> vbc;
-        vbc.reserve(count);
-        for (unsigned i = 0; i < count; ++i) {
-            vring::buffer_chain bc;
+        auto make_buffer_chain = [this] {
+            struct single_buffer_and_comletion : std::array<vring::buffer, 1> {
+                promise<size_t> completed;
+            } bc;
             std::unique_ptr<char[]> buf(new char[4096]);
-            vring::buffer b;
+            vring::buffer& b = bc[0];
             b.addr = virt_to_phys(buf.get());
             b.len = 4096;
             b.writeable = true;
-            b.completed.get_future().then([this, buf = std::move(buf)] (size_t len) mutable {
+            bc.completed.get_future().then([this, buf = std::move(buf)] (size_t len) mutable {
                 auto frag_buf = buf.get();
                 auto frag_len = len;
                 // First buffer
@@ -522,10 +539,11 @@ virtio_net_device::rxq::prepare_buffers() {
                     });
                 }
             });
-            bc.push_back(std::move(b));
-            vbc.push_back(std::move(bc));
-        }
-        _ring.post(vbc.begin(), vbc.end());
+            return bc;
+        };
+        auto start = make_function_input_iterator(make_buffer_chain, 0U);
+        auto finish = make_function_input_iterator(make_buffer_chain, count);
+        _ring.post(start, finish);
     });
 }
 
