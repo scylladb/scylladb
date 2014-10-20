@@ -160,6 +160,7 @@ private:
     cache_type::bucket_type* _buckets;
     cache_type _cache;
     timer_set<item, &item::_timer_link, clock_type> _alive;
+    bi::list<item, bi::member_hook<item, bi::list_member_hook<>, &item::_lru_link>> _lru;
     timer _timer;
     cache_stats _stats;
     timer _flush_timer;
@@ -168,6 +169,7 @@ private:
         _alive.expire(clock_type::now());
         while (auto item = _alive.pop_expired()) {
             _cache.erase(_cache.iterator_to(*item));
+            _lru.erase(_lru.iterator_to(*item));
             intrusive_ptr_release(item);
         }
         _timer.arm(_alive.get_next_timeout());
@@ -182,6 +184,7 @@ private:
     cache_iterator add_overriding(cache_iterator i, uint32_t flags, sstring&& data, clock_type::time_point expiry) {
         auto& old_item = *i;
         _alive.remove(old_item);
+        _lru.erase(_lru.iterator_to(old_item));
         _cache.erase(_cache.iterator_to(old_item));
 
         auto new_item = new item(std::move(old_item._key), flags, std::move(data), expiry, old_item._version + 1);
@@ -194,6 +197,7 @@ private:
         if (_alive.insert(*new_item)) {
             _timer.rearm(new_item->get_timeout());
         }
+        _lru.push_front(*new_item);
         return insert_result.first;
     }
 
@@ -206,6 +210,7 @@ private:
         if (_alive.insert(item_ref)) {
             _timer.rearm(item_ref.get_timeout());
         }
+        _lru.push_front(item_ref);
         maybe_rehash();
     }
 
@@ -232,6 +237,7 @@ public:
         _flush_timer.cancel();
         _cache.erase_and_dispose(_cache.begin(), _cache.end(), [this] (item* it) {
             _alive.remove(*it);
+            _lru.erase(_lru.iterator_to(*it));
             intrusive_ptr_release(it);
         });
     }
@@ -284,6 +290,7 @@ public:
         _stats._delete_hits++;
         auto& item_ref = *i;
         _alive.remove(item_ref);
+        _lru.erase(_lru.iterator_to(item_ref));
         _cache.erase(i);
         intrusive_ptr_release(&item_ref);
         return true;
@@ -297,6 +304,8 @@ public:
         }
         _stats._get_hits++;
         auto& item_ref = *i;
+        _lru.erase(_lru.iterator_to(item_ref));
+        _lru.push_front(item_ref);
         return boost::intrusive_ptr<item>(&item_ref);
     }
 
