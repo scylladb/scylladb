@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import socket
 import struct
+import sys
 import random
 import argparse
 import time
@@ -546,4 +547,6 @@ if __name__ == '__main__':
     suite.addTest(loader.loadTestsFromTestCase(TestCommands))
     if not args.udp:
         suite.addTest(loader.loadTestsFromTestCase(TcpSpecificTests))
-    runner.run(suite)
+    result = runner.run(suite)
+    if not result.wasSuccessful():
+        sys.exit(1)
