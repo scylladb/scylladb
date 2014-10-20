@@ -1,4 +1,6 @@
+#include <boost/intrusive/unordered_set.hpp>
 #include <boost/intrusive/list.hpp>
+#include <boost/intrusive_ptr.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/optional.hpp>
 #include <iomanip>
@@ -7,6 +9,7 @@
 #include "core/timer-set.hh"
 #include "core/shared_ptr.hh"
 #include "core/stream.hh"
+#include "core/memory.hh"
 #include "core/vector-data-sink.hh"
 #include "net/api.hh"
 #include "net/packet-data-source.hh"
@@ -26,12 +29,51 @@ using optional = boost::optional<T>;
 
 using item_key = sstring;
 
-struct item_data {
-    sstring _data;
-    uint32_t _flag;
+class item {
+public:
+    using version_type = uint64_t;
+private:
+    item_key _key;
+    const sstring _data;
+    const uint32_t _flags;
+    version_type _version;
+    int _ref_count;
+    bi::unordered_set_member_hook<> _cache_link;
+    bi::list_member_hook<> _lru_link;
+    bi::list_member_hook<> _timer_link;
     clock_type::time_point _expiry;
+    friend class cache;
+public:
+    item(item_key&& key, uint32_t flags, sstring&& data, clock_type::time_point expiry, version_type version = 1)
+        : _key(std::move(key))
+        , _data(data)
+        , _flags(flags)
+        , _version(version)
+        , _ref_count(0)
+        , _expiry(expiry)
+    {
+    }
 
-    optional<uint64_t> as_integral() {
+    item(const item&) = delete;
+    item(item&&) = delete;
+
+    clock_type::time_point get_timeout() {
+        return _expiry;
+    }
+
+    version_type version() {
+        return _version;
+    }
+
+    uint32_t flags() {
+        return _flags;
+    }
+
+    const sstring& data() {
+        return _data;
+    }
+
+    optional<uint64_t> data_as_integral() {
         auto str = _data.c_str();
         if (str[0] == '-') {
             return {};
@@ -50,39 +92,40 @@ struct item_data {
             return {};
         }
     }
+
+    friend bool operator==(const item &a, const item &b) {
+         return a._key == b._key;
+    }
+
+    friend std::size_t hash_value(const item &i) {
+        return std::hash<item_key>()(i._key);
+    }
+
+    friend inline void intrusive_ptr_add_ref(item* it) {
+        ++it->_ref_count;
+    }
+
+    friend inline void intrusive_ptr_release(item* it) {
+        if (--it->_ref_count == 0) {
+            delete it;
+        }
+    }
+
+    friend class item_key_cmp;
 };
 
-class item {
-private:
-    item_data _data;
-    uint64_t _version;
-    bool _expired;
-    bi::list_member_hook<> _timer_link;
-    bi::list_member_hook<> _expired_link;
-    friend class cache;
-public:
-    item(item_data data, uint64_t version = 1)
-        : _data(std::move(data))
-        , _version(version)
-        , _expired(false)
-    {
+struct item_key_cmp
+{
+    bool operator()(const sstring& key, const item &it) const {
+        return key == it._key;
     }
 
-    item(const item&) = delete;
-    item(item&&) = delete;
-
-    clock_type::time_point get_timeout() {
-        return _data._expiry;
-    }
-
-    item_data& data() {
-        return _data;
-    }
-
-    uint64_t version() {
-        return _version;
+    bool operator()(const item& it, const sstring& key) const {
+        return it._key == key;
     }
 };
+
+using item_ptr = boost::intrusive_ptr<item>;
 
 struct cache_stats {
     size_t _get_hits {};
@@ -106,119 +149,129 @@ enum class cas_result {
 
 class cache {
 private:
-    using cache_type = std::unordered_map<item_key, shared_ptr<item>>;
+    using cache_type = bi::unordered_set<item,
+        bi::member_hook<item, bi::unordered_set_member_hook<>, &item::_cache_link>,
+        bi::power_2_buckets<true>,
+        bi::constant_time_size<true>>;
     using cache_iterator = typename cache_type::iterator;
+    static constexpr size_t initial_bucket_count = 1 << 10;
+    static constexpr float load_factor = 0.75f;
+    size_t _resize_up_threshold = load_factor * initial_bucket_count;
+    cache_type::bucket_type* _buckets;
     cache_type _cache;
     timer_set<item, &item::_timer_link, clock_type> _alive;
-
-    // Contains items which are present in _cache but have expired
-    bi::list<item, bi::member_hook<item, bi::list_member_hook<>, &item::_expired_link>,
-        bi::constant_time_size<true>> _expired;
-
     timer _timer;
     cache_stats _stats;
     timer _flush_timer;
 private:
-    void expire_now(item& it) {
-        it._expired = true;
-        _expired.push_back(it);
-    }
-
     void expire() {
         _alive.expire(clock_type::now());
         while (auto item = _alive.pop_expired()) {
-            expire_now(*item);
+            _cache.erase(_cache.iterator_to(*item));
+            intrusive_ptr_release(item);
         }
         _timer.arm(_alive.get_next_timeout());
     }
 
     inline
     cache_iterator find(const item_key& key) {
-        auto i = _cache.find(key);
-        if (i != _cache.end()) {
-            auto& item_ref = *i->second;
-            if (item_ref._expired) {
-                _expired.erase(_expired.iterator_to(item_ref));
-                _cache.erase(i);
-                return _cache.end();
-            }
-        }
-        return i;
+        return _cache.find(key, std::hash<item_key>(), item_key_cmp());
     }
 
     inline
-    void add_overriding(cache_iterator i, item_data&& data) {
-        auto& item_ref = *i->second;
-        _alive.remove(item_ref);
-        i->second = make_shared<item>(std::move(data), item_ref._version + 1);
-        auto& new_ref = *i->second;
-        if (_alive.insert(new_ref)) {
-            _timer.rearm(new_ref.get_timeout());
+    cache_iterator add_overriding(cache_iterator i, uint32_t flags, sstring&& data, clock_type::time_point expiry) {
+        auto& old_item = *i;
+        _alive.remove(old_item);
+        _cache.erase(_cache.iterator_to(old_item));
+
+        auto new_item = new item(std::move(old_item._key), flags, std::move(data), expiry, old_item._version + 1);
+        intrusive_ptr_add_ref(new_item);
+        intrusive_ptr_release(&old_item);
+
+        auto insert_result = _cache.insert(*new_item);
+        assert(insert_result.second);
+
+        if (_alive.insert(*new_item)) {
+            _timer.rearm(new_item->get_timeout());
         }
+        return insert_result.first;
     }
 
     inline
-    void add_new(item_key&& key, item_data&& data) {
-        auto r = _cache.emplace(std::move(key), make_shared<item>(std::move(data)));
-        assert(r.second);
-        auto& item_ref = *r.first->second;
+    void add_new(item_key&& key, uint32_t flags, sstring&& data, clock_type::time_point expiry) {
+        auto new_item = new item(std::move(key), flags, std::move(data), expiry);
+        intrusive_ptr_add_ref(new_item);
+        auto& item_ref = *new_item;
+        _cache.insert(item_ref);
         if (_alive.insert(item_ref)) {
             _timer.rearm(item_ref.get_timeout());
         }
+        maybe_rehash();
+    }
+
+    void maybe_rehash() {
+        if (_cache.size() >= _resize_up_threshold) {
+            auto new_size = _cache.bucket_count() * 2;
+            auto old_buckets = _buckets;
+            _buckets = new cache_type::bucket_type[new_size];
+            _cache.rehash(cache_type::bucket_traits(_buckets, new_size));
+            delete[] old_buckets;
+            _resize_up_threshold = _cache.bucket_count() * load_factor;
+        }
     }
 public:
-    cache() {
+    cache()
+        : _buckets(new cache_type::bucket_type[initial_bucket_count])
+        , _cache(cache_type::bucket_traits(_buckets, initial_bucket_count))
+    {
         _timer.set_callback([this] { expire(); });
         _flush_timer.set_callback([this] { flush_all(); });
     }
 
     void flush_all() {
         _flush_timer.cancel();
-        for (auto pair : _cache) {
-            auto& it = *pair.second;
-            if (!it._expired) {
-                _alive.remove(it);
-                expire_now(it);
-            }
-        }
+        _cache.erase_and_dispose(_cache.begin(), _cache.end(), [this] (item* it) {
+            _alive.remove(*it);
+            intrusive_ptr_release(it);
+        });
     }
 
     void flush_at(clock_type::time_point time_point) {
         _flush_timer.rearm(time_point);
     }
 
-    bool set(item_key&& key, item_data data) {
+    bool set(item_key&& key, uint32_t flags, sstring&& data, clock_type::time_point expiry) {
         auto i = find(key);
         if (i != _cache.end()) {
-            add_overriding(i, std::move(data));
+            add_overriding(i, flags, std::move(data), std::move(expiry));
             _stats._set_replaces++;
             return true;
         } else {
-            add_new(std::move(key), std::move(data));
+            add_new(std::move(key), flags, std::move(data), std::move(expiry));
             _stats._set_adds++;
             return false;
         }
     }
 
-    bool add(item_key&& key, item_data data) {
+    bool add(item_key&& key, uint32_t flags, sstring&& data, clock_type::time_point expiry) {
         auto i = find(key);
         if (i != _cache.end()) {
             return false;
         }
 
         _stats._set_adds++;
-        add_new(std::move(key), std::move(data));
+        add_new(std::move(key), flags, std::move(data), expiry);
         return true;
     }
 
-    bool replace(const item_key& key, item_data data) {
+    bool replace(const item_key& key, uint32_t flags, sstring&& data, clock_type::time_point expiry) {
         auto i = find(key);
         if (i == _cache.end()) {
             return false;
         }
 
         _stats._set_replaces++;
-        add_overriding(i, std::move(data));
+        add_overriding(i, flags, std::move(data), expiry);
         return true;
     }
 
@@ -229,76 +282,84 @@ public:
             return false;
         }
         _stats._delete_hits++;
-        auto& item_ref = *i->second;
+        auto& item_ref = *i;
         _alive.remove(item_ref);
         _cache.erase(i);
+        intrusive_ptr_release(&item_ref);
         return true;
     }
 
-    shared_ptr<item> get(const item_key& key) {
+    boost::intrusive_ptr<item> get(const item_key& key) {
         auto i = find(key);
         if (i == _cache.end()) {
             _stats._get_misses++;
-            return {};
+            return nullptr;
         }
         _stats._get_hits++;
-        return i->second;
+        auto& item_ref = *i;
+        return boost::intrusive_ptr<item>(&item_ref);
     }
 
-    cas_result cas(const item_key& key, uint64_t version, item_data&& data) {
+    cas_result cas(const item_key& key, item::version_type version,
+            uint32_t flags, sstring&& data, clock_type::time_point expiry) {
         auto i = find(key);
         if (i == _cache.end()) {
             _stats._cas_misses++;
             return cas_result::not_found;
         }
-        auto& item_ref = *i->second;
+        auto& item_ref = *i;
         if (item_ref._version != version) {
             _stats._cas_badval++;
             return cas_result::bad_version;
         }
         _stats._cas_hits++;
-        add_overriding(i, std::move(data));
+        add_overriding(i, flags, std::move(data), expiry);
         return cas_result::stored;
     }
 
     size_t size() {
-        return _cache.size() - _expired.size();
+        return _cache.size();
+    }
+
+    size_t bucket_count() {
+        return _cache.bucket_count();
     }
 
     cache_stats& stats() {
         return _stats;
     }
 
-    std::pair<shared_ptr<item>, bool> incr(const item_key& key, uint64_t delta) {
+    std::pair<item_ptr, bool> incr(const item_key& key, uint64_t delta) {
         auto i = find(key);
         if (i == _cache.end()) {
             _stats._incr_misses++;
             return {{}, false};
         }
-        auto& item_ref = *i->second;
+        auto& item_ref = *i;
         _stats._incr_hits++;
-        auto value = item_ref._data.as_integral();
+        auto value = item_ref.data_as_integral();
         if (!value) {
-            return {i->second, false};
+            return {boost::intrusive_ptr<item>(&item_ref), false};
         }
-        add_overriding(i, item_data{to_sstring(*value + delta), item_ref.data()._flag, item_ref.data()._expiry});
-        return {i->second, true};
+
+        i = add_overriding(i, item_ref._flags, to_sstring(*value + delta), item_ref._expiry);
+        return {boost::intrusive_ptr<item>(&*i), true};
     }
 
-    std::pair<shared_ptr<item>, bool> decr(const item_key& key, uint64_t delta) {
+    std::pair<item_ptr, bool> decr(const item_key& key, uint64_t delta) {
         auto i = find(key);
         if (i == _cache.end()) {
             _stats._decr_misses++;
             return {{}, false};
         }
-        auto& item_ref = *i->second;
+        auto& item_ref = *i;
         _stats._decr_hits++;
-        auto value = item_ref._data.as_integral();
+        auto value = item_ref.data_as_integral();
         if (!value) {
-            return {i->second, false};
+            return {boost::intrusive_ptr<item>(&item_ref), false};
         }
-        add_overriding(i, item_data{to_sstring(*value - std::min(*value, delta)), item_ref.data()._flag, item_ref.data()._expiry});
-        return {i->second, true};
+        i = add_overriding(i, item_ref._flags, to_sstring(*value - std::min(*value, delta)), item_ref._expiry);
+        return {boost::intrusive_ptr<item>(&*i), true};
     }
 };
 
@@ -346,16 +407,16 @@ private:
                         return out.write(key);
                     }).then([&out] {
                         return out.write(" ");
-                    }).then([&out, item] {
-                        return out.write(to_sstring(item->data()._flag));
+                    }).then([&out, v = item->flags()] {
+                        return out.write(to_sstring(v));
                     }).then([&out] {
                         return out.write(" ");
-                    }).then([&out, item] {
-                        return out.write(to_sstring(item->data()._data.size()));
-                    }).then([&out, item] {
+                    }).then([&out, v = item->data().size()] {
+                        return out.write(to_sstring(v));
+                    }).then([&out, v = item->version()] {
                         if (SendCasVersion) {
-                            return out.write(" ").then([&out, item] {
-                                return out.write(to_sstring(item->version())).then([&out] {
+                            return out.write(" ").then([&out, v] {
+                                return out.write(to_sstring(v)).then([&out] {
                                     return out.write(msg_crlf);
                                 });
                             });
@@ -363,7 +424,7 @@ private:
                             return out.write(msg_crlf);
                         }
                     }).then([&out, item] {
-                        return out.write(item->data()._data);
+                        return out.write(item->data());
                     }).then([&out] {
                         return out.write(msg_crlf);
                     });
@@ -444,6 +505,10 @@ private:
                 return print_stat(out, "curr_items", v);
             }).then([this, &out, v = (_cache.stats()._set_replaces + _cache.stats()._set_adds + _cache.stats()._cas_hits)] {
                 return print_stat(out, "total_items", v);
+            }).then([this, &out, v = _cache.bucket_count()] {
+                return print_stat(out, "seastar.bucket_count", v);
+            }).then([this, &out, v = (double)_cache.size() / _cache.bucket_count()] {
+                return print_stat(out, "seastar.load", to_sstring_sprintf(v, "%.2lf"));
             }).then([&out] {
                 return out.write("END\r\n");
             });
@@ -476,8 +541,8 @@ public:
 
                 case memcache_ascii_parser::state::cmd_set:
                     _system_stats._cmd_set++;
-                    _cache.set(std::move(_parser._key),
-                            item_data{std::move(_parser._blob), _parser._flags, seconds_to_time_point(_parser._expiration)});
+                    _cache.set(std::move(_parser._key), _parser._flags,
+                        std::move(_parser._blob), seconds_to_time_point(_parser._expiration));
                     if (_parser._noreply) {
                         return make_ready_future<>();
                     }
@@ -486,8 +551,8 @@ public:
                 case memcache_ascii_parser::state::cmd_cas:
                 {
                     _system_stats._cmd_set++;
-                    auto result = _cache.cas(_parser._key, _parser._version,
-                        item_data{std::move(_parser._blob), _parser._flags, seconds_to_time_point(_parser._expiration)});
+                    auto result = _cache.cas(_parser._key, _parser._version, _parser._flags,
+                        std::move(_parser._blob), seconds_to_time_point(_parser._expiration));
                     if (_parser._noreply) {
                         return make_ready_future<>();
                     }
@@ -504,8 +569,8 @@ public:
                 case memcache_ascii_parser::state::cmd_add:
                 {
                     _system_stats._cmd_set++;
-                    auto added = _cache.add(std::move(_parser._key),
-                            item_data{std::move(_parser._blob), _parser._flags, seconds_to_time_point(_parser._expiration)});
+                    auto added = _cache.add(std::move(_parser._key), _parser._flags,
+                        std::move(_parser._blob), seconds_to_time_point(_parser._expiration));
                     if (_parser._noreply) {
                         return make_ready_future<>();
                     }
@@ -516,7 +581,7 @@ public:
                 {
                     _system_stats._cmd_set++;
                     auto replaced = _cache.replace(std::move(_parser._key),
-                            item_data{std::move(_parser._blob), _parser._flags, seconds_to_time_point(_parser._expiration)});
+                        _parser._flags, std::move(_parser._blob), seconds_to_time_point(_parser._expiration));
                     if (_parser._noreply) {
                         return make_ready_future<>();
                     }
@@ -570,7 +635,7 @@ public:
                     if (!incremented) {
                         return out.write(msg_error_non_numeric_value);
                     }
-                    return out.write(item->data()._data).then([&out] {
+                    return out.write(item->data()).then([&out] {
                         return out.write(msg_crlf);
                     });
                 }
@@ -589,7 +654,7 @@ public:
                     if (!decremented) {
                         return out.write(msg_error_non_numeric_value);
                     }
-                    return out.write(item->data()._data).then([&out] {
+                    return out.write(item->data()).then([&out] {
                         return out.write(msg_crlf);
                     });
                 }
