@@ -7,7 +7,7 @@
 #include "tests/test-utils.hh"
 #include "core/shared_ptr.hh"
 #include "net/packet-data-source.hh"
-#include "apps/memcache/ascii.hh"
+#include "apps/memcached/ascii.hh"
 
 using namespace net;
 

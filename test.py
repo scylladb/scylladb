@@ -6,7 +6,7 @@ import subprocess
 
 all_tests = [
     'futures_test',
-    'memcache/test_ascii_parser',
+    'memcached/test_ascii_parser',
     'sstring_test',
 ]
 
@@ -29,7 +29,7 @@ if __name__ == "__main__":
     for mode in ['debug', 'release']:
         for test in all_tests:
             test_to_run.append(os.path.join('build', mode, 'tests', test))
-        test_to_run.append('tests/memcache/test.py --mode ' + mode + (' --fast' if args.fast else ''))
+        test_to_run.append('tests/memcached/test.py --mode ' + mode + (' --fast' if args.fast else ''))
 
     all_ok = True
 

@@ -13,13 +13,13 @@ tests = [
     'tests/udp_client',
     'tests/blkdiscard_test',
     'tests/sstring_test',
-    'tests/memcache/test_ascii_parser',
+    'tests/memcached/test_ascii_parser',
     ]
 
 apps = [
     'apps/httpd/httpd',
     'apps/seastar/seastar',
-    'apps/memcache/memcache',
+    'apps/memcached/memcached',
     ]
 
 all_artifacts = apps + tests
@@ -46,16 +46,16 @@ core = [
     'net/posix-stack.cc',
     ]
 
-memcache = [
-    'apps/memcache/ascii.rl'
+memcached = [
+    'apps/memcached/ascii.rl'
 ] + libnet + core
 
 deps = {
     'apps/seastar/seastar': ['apps/seastar/main.cc'] + core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['apps/httpd/httpd.cc', 'apps/httpd/request_parser.rl'] + libnet + core,
-    'apps/memcache/memcache': ['apps/memcache/memcache.cc'] + memcache,
-    'tests/memcache/test_ascii_parser': ['tests/memcache/test_ascii_parser.cc'] + memcache,
+    'apps/memcached/memcached': ['apps/memcached/memcached.cc'] + memcached,
+    'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcached,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
     'tests/virtiotest': ['tests/virtiotest.cc'] + core + libnet,
     'tests/l3_test': ['tests/l3_test.cc'] + core + libnet,

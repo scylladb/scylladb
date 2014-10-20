@@ -6,16 +6,16 @@ import argparse
 import subprocess
 
 def run(args, cmd):
-    mc = subprocess.Popen([os.path.join('build', args.mode, 'apps', 'memcache', 'memcache'), '--smp', '1'])
-    print('Memcache started.')
+    mc = subprocess.Popen([os.path.join('build', args.mode, 'apps', 'memcached', 'memcached'), '--smp', '1'])
+    print('Memcached started.')
     try:
-        cmdline = ['tests/memcache/test_memcache.py'] + cmd
+        cmdline = ['tests/memcached/test_memcached.py'] + cmd
         if args.fast:
             cmdline.append('--fast')
         print('Running: ' + ' '.join(cmdline))
         subprocess.check_call(cmdline)
     finally:
-        print('Killing memcache...')
+        print('Killing memcached...')
         mc.kill()
 
 if __name__ == "__main__":

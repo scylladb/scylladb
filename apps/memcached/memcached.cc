@@ -10,7 +10,7 @@
 #include "core/vector-data-sink.hh"
 #include "net/api.hh"
 #include "net/packet-data-source.hh"
-#include "apps/memcache/ascii.hh"
+#include "apps/memcached/ascii.hh"
 #include <unistd.h>
 
 #define VERSION_STRING "seastar v1.0"
