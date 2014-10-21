@@ -81,7 +81,7 @@ static char* mem_base() {
         if (r == MAP_FAILED) {
             abort();
         }
-        ::madvise(r, alloc, MADV_DONTDUMP);
+        ::madvise(r, 2 * alloc, MADV_DONTDUMP);
         auto cr = reinterpret_cast<char*>(r);
         known = align_up(cr, alloc);
         ::munmap(cr, known - cr);
