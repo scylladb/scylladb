@@ -569,43 +569,41 @@ void smp::configure(boost::program_options::variables_map configuration)
 {
     smp::count = 1;
     smp::_tmain = std::this_thread::get_id();
-    if (configuration.count("smp")) {
-        smp::count = configuration["smp"].as<unsigned>();
-        resource::configuration rc;
-        if (configuration.count("memory")) {
-            rc.total_memory = parse_memory_size(configuration["memory"].as<std::string>());
-        }
-        if (configuration.count("reserve-memory")) {
-            rc.reserve_memory = parse_memory_size(configuration["reserve-memory"].as<std::string>());
-        }
-        rc.cpus = smp::count;
-        std::vector<resource::cpu> allocations = resource::allocate(rc);
-        pin_this_thread(allocations[0].cpu_id);
-        memory::configure(allocations[0].mem);
-        smp::_qs = new inter_thread_work_queue* [smp::count];
-        for(unsigned i = 0; i < smp::count; i++) {
-            smp::_qs[i] = new inter_thread_work_queue[smp::count];
-        }
-
-        for (unsigned i = 1; i < smp::count; i++) {
-            auto allocation = allocations[i];
-            _threads.emplace_back([configuration, i, allocation] {
-                pin_this_thread(allocation.cpu_id);
-                memory::configure(allocation.mem);
-                sigset_t mask;
-                sigfillset(&mask);
-                auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
-                throw_system_error_on(r == -1);
-                engine._id = i;
-                engine.configure(configuration);
-                engine.when_started().then([i] {
-                    start_all_queues();
-                });
-                engine.run();
-            });
-        }
-        start_all_queues();
+    smp::count = configuration["smp"].as<unsigned>();
+    resource::configuration rc;
+    if (configuration.count("memory")) {
+        rc.total_memory = parse_memory_size(configuration["memory"].as<std::string>());
     }
+    if (configuration.count("reserve-memory")) {
+        rc.reserve_memory = parse_memory_size(configuration["reserve-memory"].as<std::string>());
+    }
+    rc.cpus = smp::count;
+    std::vector<resource::cpu> allocations = resource::allocate(rc);
+    pin_this_thread(allocations[0].cpu_id);
+    memory::configure(allocations[0].mem);
+    smp::_qs = new inter_thread_work_queue* [smp::count];
+    for(unsigned i = 0; i < smp::count; i++) {
+        smp::_qs[i] = new inter_thread_work_queue[smp::count];
+    }
+
+    for (unsigned i = 1; i < smp::count; i++) {
+        auto allocation = allocations[i];
+        _threads.emplace_back([configuration, i, allocation] {
+            pin_this_thread(allocation.cpu_id);
+            memory::configure(allocation.mem);
+            sigset_t mask;
+            sigfillset(&mask);
+            auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
+            throw_system_error_on(r == -1);
+            engine._id = i;
+            engine.configure(configuration);
+            engine.when_started().then([i] {
+                start_all_queues();
+            });
+            engine.run();
+        });
+    }
+    start_all_queues();
     engine.configure(configuration);
 }
 
