@@ -10,6 +10,7 @@
 #include "core/shared_ptr.hh"
 #include "core/stream.hh"
 #include "core/memory.hh"
+#include "core/units.hh"
 #include "core/vector-data-sink.hh"
 #include "net/api.hh"
 #include "net/packet-data-source.hh"
@@ -142,6 +143,8 @@ struct cache_stats {
     size_t _decr_misses {};
     size_t _decr_hits {};
     size_t _expired {};
+    size_t _evicted {};
+    size_t _bytes {};
 };
 
 enum class cas_result {
@@ -165,13 +168,29 @@ private:
     timer _timer;
     cache_stats _stats;
     timer _flush_timer;
+    memory::reclaimer _reclaimer;
 private:
+    size_t item_footprint(item& item_ref) {
+        return sizeof(item) + item_ref._data.size() + item_ref._key.size();
+    }
+
+    template <bool IsInCache = true, bool IsInTimerList = true>
+    void erase(item& item_ref) {
+        if (IsInCache) {
+            _cache.erase(_cache.iterator_to(item_ref));
+        }
+        if (IsInTimerList) {
+            _alive.remove(item_ref);
+        }
+        _lru.erase(_lru.iterator_to(item_ref));
+        _stats._bytes -= item_footprint(item_ref);
+        intrusive_ptr_release(&item_ref);
+    }
+
     void expire() {
         _alive.expire(clock_type::now());
         while (auto item = _alive.pop_expired()) {
-            _cache.erase(_cache.iterator_to(*item));
-            _lru.erase(_lru.iterator_to(*item));
-            intrusive_ptr_release(item);
+            erase<true, false>(*item);
             _stats._expired++;
         }
         _timer.arm(_alive.get_next_timeout());
@@ -185,21 +204,19 @@ private:
     inline
     cache_iterator add_overriding(cache_iterator i, uint32_t flags, sstring&& data, clock_type::time_point expiry) {
         auto& old_item = *i;
-        _alive.remove(old_item);
-        _lru.erase(_lru.iterator_to(old_item));
-        _cache.erase(_cache.iterator_to(old_item));
 
         auto new_item = new item(std::move(old_item._key), flags, std::move(data), expiry, old_item._version + 1);
         intrusive_ptr_add_ref(new_item);
-        intrusive_ptr_release(&old_item);
+
+        erase(old_item);
 
         auto insert_result = _cache.insert(*new_item);
         assert(insert_result.second);
-
         if (_alive.insert(*new_item)) {
             _timer.rearm(new_item->get_timeout());
         }
         _lru.push_front(*new_item);
+        _stats._bytes += item_footprint(*new_item);
         return insert_result.first;
     }
 
@@ -213,6 +230,7 @@ private:
             _timer.rearm(item_ref.get_timeout());
         }
         _lru.push_front(item_ref);
+        _stats._bytes += item_footprint(item_ref);
         maybe_rehash();
     }
 
@@ -226,10 +244,45 @@ private:
             _resize_up_threshold = _cache.bucket_count() * load_factor;
         }
     }
+
+    void reclaim(size_t target) {
+        size_t reclaimed_so_far = 0;
+
+        auto i = _lru.end();
+        if (i == _lru.begin()) {
+            return;
+        }
+
+        --i;
+
+        bool done = false;
+        do {
+            item& victim = *i;
+            if (i != _lru.begin()) {
+                --i;
+            } else {
+                done = true;
+            }
+
+            // If the item is shared, we can not assume that removing it from
+            // cache would cause the memory to be reclaimed in a timely manner
+            // so we reclaim only items which are not shared.
+            if (victim._ref_count == 1) {
+                reclaimed_so_far += item_footprint(victim);
+                erase(victim);
+                _stats._evicted++;
+
+                if (reclaimed_so_far >= target) {
+                    done = true;
+                }
+            }
+        } while (!done);
+    }
 public:
     cache()
         : _buckets(new cache_type::bucket_type[initial_bucket_count])
         , _cache(cache_type::bucket_traits(_buckets, initial_bucket_count))
+        , _reclaimer([this] { reclaim(5*MB); })
     {
         _timer.set_callback([this] { expire(); });
         _flush_timer.set_callback([this] { flush_all(); });
@@ -238,9 +291,7 @@ public:
     void flush_all() {
         _flush_timer.cancel();
         _cache.erase_and_dispose(_cache.begin(), _cache.end(), [this] (item* it) {
-            _alive.remove(*it);
-            _lru.erase(_lru.iterator_to(*it));
-            intrusive_ptr_release(it);
+            erase<false, true>(*it);
         });
     }
 
@@ -291,10 +342,7 @@ public:
         }
         _stats._delete_hits++;
         auto& item_ref = *i;
-        _alive.remove(item_ref);
-        _lru.erase(_lru.iterator_to(item_ref));
-        _cache.erase(i);
-        intrusive_ptr_release(&item_ref);
+        erase(item_ref);
         return true;
     }
 
@@ -522,6 +570,10 @@ private:
                 return print_stat(out, "seastar.load", to_sstring_sprintf(v, "%.2lf"));
             }).then([this, &out, v = _cache.stats()._expired] {
                 return print_stat(out, "seastar.expired", v);
+            }).then([this, &out, v = _cache.stats()._evicted] {
+                return print_stat(out, "evicted", v);
+            }).then([this, &out, v = _cache.stats()._bytes] {
+                return print_stat(out, "bytes", v);
             }).then([&out] {
                 return out.write("END\r\n");
             });
