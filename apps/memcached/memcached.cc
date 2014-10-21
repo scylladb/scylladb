@@ -145,6 +145,7 @@ struct cache_stats {
     size_t _expired {};
     size_t _evicted {};
     size_t _bytes {};
+    size_t _resize_failure {};
 };
 
 enum class cas_result {
@@ -238,10 +239,24 @@ private:
         if (_cache.size() >= _resize_up_threshold) {
             auto new_size = _cache.bucket_count() * 2;
             auto old_buckets = _buckets;
-            _buckets = new cache_type::bucket_type[new_size];
+            try {
+                _buckets = new cache_type::bucket_type[new_size];
+            } catch (const std::bad_alloc& e) {
+                _stats._resize_failure++;
+                evict(100); // In order to amortize the cost of resize failure
+                return;
+            }
             _cache.rehash(cache_type::bucket_traits(_buckets, new_size));
             delete[] old_buckets;
             _resize_up_threshold = _cache.bucket_count() * load_factor;
+        }
+    }
+
+    // Evicts at most @count items.
+    void evict(size_t count) {
+        while (!_lru.empty() && count--) {
+            erase(_lru.back());
+            _stats._evicted++;
         }
     }
 
@@ -570,6 +585,8 @@ private:
                 return print_stat(out, "seastar.load", to_sstring_sprintf(v, "%.2lf"));
             }).then([this, &out, v = _cache.stats()._expired] {
                 return print_stat(out, "seastar.expired", v);
+            }).then([this, &out, v = _cache.stats()._resize_failure] {
+                return print_stat(out, "seastar.resize_failure", v);
             }).then([this, &out, v = _cache.stats()._evicted] {
                 return print_stat(out, "evicted", v);
             }).then([this, &out, v = _cache.stats()._bytes] {
