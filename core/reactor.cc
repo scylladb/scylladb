@@ -569,7 +569,6 @@ void smp::configure(boost::program_options::variables_map configuration)
 {
     smp::count = 1;
     smp::_tmain = std::this_thread::get_id();
-    engine.configure(configuration);
     if (configuration.count("smp")) {
         smp::count = configuration["smp"].as<unsigned>();
         resource::configuration rc;
@@ -607,6 +606,7 @@ void smp::configure(boost::program_options::variables_map configuration)
         }
         start_all_queues();
     }
+    engine.configure(configuration);
 }
 
 void smp::join_all()
