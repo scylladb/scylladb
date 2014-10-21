@@ -893,6 +893,12 @@ void operator delete[](void* ptr, size_t size, std::nothrow_t) throw () {
 
 namespace memory {
 
+reclaimer::reclaimer(std::function<void ()> reclaim) {
+}
+
+reclaimer::~reclaimer() {
+}
+
 void set_reclaim_hook(std::function<void (std::function<void ()>)> hook) {
 }
 
