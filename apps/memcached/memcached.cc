@@ -141,6 +141,7 @@ struct cache_stats {
     size_t _incr_hits {};
     size_t _decr_misses {};
     size_t _decr_hits {};
+    size_t _expired {};
 };
 
 enum class cas_result {
@@ -171,6 +172,7 @@ private:
             _cache.erase(_cache.iterator_to(*item));
             _lru.erase(_lru.iterator_to(*item));
             intrusive_ptr_release(item);
+            _stats._expired++;
         }
         _timer.arm(_alive.get_next_timeout());
     }
@@ -518,6 +520,8 @@ private:
                 return print_stat(out, "seastar.bucket_count", v);
             }).then([this, &out, v = (double)_cache.size() / _cache.bucket_count()] {
                 return print_stat(out, "seastar.load", to_sstring_sprintf(v, "%.2lf"));
+            }).then([this, &out, v = _cache.stats()._expired] {
+                return print_stat(out, "seastar.expired", v);
             }).then([&out] {
                 return out.write("END\r\n");
             });
