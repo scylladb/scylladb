@@ -189,6 +189,7 @@ class TcpSpecificTests(MemcacheTest):
 
         self.delete('key')
 
+    @slow
     def test_connection_statistics(self):
         with tcp_connection() as conn:
             curr_connections = int(self.getStat('curr_connections', call_fn=conn))
@@ -196,8 +197,9 @@ class TcpSpecificTests(MemcacheTest):
             with tcp_connection() as conn2:
                 self.assertEquals(curr_connections + 1, int(self.getStat('curr_connections', call_fn=conn)))
                 self.assertEquals(total_connections + 1, int(self.getStat('total_connections', call_fn=conn)))
-            self.assertEquals(curr_connections, int(self.getStat('curr_connections', call_fn=conn)))
             self.assertEquals(total_connections + 1, int(self.getStat('total_connections', call_fn=conn)))
+            time.sleep(0.1)
+            self.assertEquals(curr_connections, int(self.getStat('curr_connections', call_fn=conn)))
 
 class TestCommands(MemcacheTest):
     def test_basic_commands(self):
