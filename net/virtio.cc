@@ -376,7 +376,7 @@ class virtio_net_device : public net::device {
         vring _ring;
         unsigned _remaining_buffers = 0;
         std::vector<fragment> _fragments;
-        std::vector<std::unique_ptr<char[]>> _deleters;
+        std::vector<std::unique_ptr<char[], free_deleter>> _deleters;
     public:
         rxq(virtio_net_device& _if,
                 vring::config config, readable_eventfd notified, writeable_eventfd kicked);
@@ -506,7 +506,7 @@ virtio_net_device::rxq::prepare_buffers() {
             struct single_buffer_and_comletion : std::array<vring::buffer, 1> {
                 promise<size_t> completed;
             } bc;
-            std::unique_ptr<char[]> buf(new char[4096]);
+            std::unique_ptr<char[], free_deleter> buf(reinterpret_cast<char*>(malloc(4096)));
             vring::buffer& b = bc[0];
             b.addr = virt_to_phys(buf.get());
             b.len = 4096;
@@ -528,12 +528,19 @@ virtio_net_device::rxq::prepare_buffers() {
 
                 // Append current buffer
                 _fragments.emplace_back(fragment{frag_buf, frag_len});
-                _deleters.emplace_back(buf.release());
+                _deleters.push_back(std::move(buf));
                 _remaining_buffers--;
 
                 // Last buffer
                 if (_remaining_buffers == 0) {
-                    packet p(_fragments.begin(), _fragments.end(), [deleters = std::move(_deleters)] () mutable { deleters.clear(); });
+                    deleter del;
+                    if (_deleters.size() == 1) {
+                        del = make_free_deleter(_deleters[0].release());
+                        _deleters.clear();
+                    } else {
+                        del = make_deleter(deleter(), [deleters = std::move(_deleters)] {});
+                    }
+                    packet p(_fragments.begin(), _fragments.end(), std::move(del));
                     _dev._rx_ready = _dev._rx_ready.then([this, p = std::move(p)] () mutable {
                         return _dev.queue_rx_packet(std::move(p));
                     });

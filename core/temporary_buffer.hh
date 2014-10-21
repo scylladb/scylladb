@@ -18,8 +18,8 @@ class temporary_buffer {
     deleter _deleter;
 public:
     explicit temporary_buffer(size_t size)
-        : _buffer(new CharType[size]), _size(size)
-        , _deleter(make_deleter(deleter(), [b = _buffer] { delete[] b; })) {}
+        : _buffer(static_cast<CharType*>(malloc(size * sizeof(CharType)))), _size(size)
+        , _deleter(make_free_deleter(_buffer)) {}
     //explicit temporary_buffer(CharType* borrow, size_t size) : _buffer(borrow), _size(size) {}
     temporary_buffer() = delete;
     temporary_buffer(const temporary_buffer&) = delete;
