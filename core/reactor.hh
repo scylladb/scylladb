@@ -109,6 +109,7 @@ class timer {
     boost::optional<clock_type::duration> _period;
     bool _armed = false;
     bool _queued = false;
+    bool _expired = false;
 public:
     ~timer();
     future<> expired();
@@ -389,6 +390,7 @@ class reactor {
     bool _handle_sigint = true;
     std::unique_ptr<network_stack> _network_stack;
     int _return = 0;
+    timer_set<timer, &timer::_link, clock_type>::timer_list_t _expired_timers;
 public:
     file_desc _epollfd;
     readable_eventfd _io_eventfd;
@@ -899,6 +901,7 @@ void timer::arm(clock_type::time_point until, boost::optional<clock_type::durati
     assert(!_armed);
     _period = period;
     _armed = true;
+    _expired = false;
     _expiry = until;
     engine.add_timer(this);
     _queued = true;

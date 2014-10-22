@@ -191,8 +191,10 @@ private:
     }
 
     void expire() {
-        _alive.expire(clock_type::now());
-        while (auto item = _alive.pop_expired()) {
+        auto exp = _alive.expire(clock_type::now());
+        while (!exp.empty()) {
+            auto item = &*exp.begin();
+            exp.pop_front();
             erase<true, false>(*item);
             _stats._expired++;
         }

@@ -37,10 +37,10 @@ template<typename Timer, bi::list_member_hook<> Timer::*link, typename Clock>
 class timer_set {
 public:
     using time_point = typename Clock::time_point;
+    using timer_list_t = bi::list<Timer, bi::member_hook<Timer, bi::list_member_hook<>, link>>;
 private:
     using duration = typename Clock::duration;
     using timestamp_t = typename Clock::duration::rep;
-    using timer_list_t = bi::list<Timer, bi::member_hook<Timer, bi::list_member_hook<>, link>>;
 
     static constexpr timestamp_t max_timestamp = std::numeric_limits<timestamp_t>::max();
     static constexpr int ulong_bits = std::numeric_limits<unsigned long>::digits;
@@ -50,7 +50,6 @@ private:
     static constexpr int n_buckets = timestamp_bits + 1;
 
     timer_list_t _buckets[n_buckets];
-    timer_list_t _expired;
     timestamp_t _last;
     timestamp_t _next;
 
@@ -161,8 +160,9 @@ public:
      *  - all timers from the active set with Timer::get_timeout() <= now are moved
      *    to the expired set.
      */
-    void expire(time_point now)
+    timer_list_t expire(time_point now)
     {
+        timer_list_t exp;
         auto timestamp = get_timestamp(now);
 
         if (timestamp < _last) {
@@ -172,7 +172,7 @@ public:
         auto index = get_index(timestamp);
 
         for (int i : bitsets::for_each_set(_non_empty_buckets, index + 1)) {
-            _expired.splice(_expired.end(), _buckets[i]);
+            exp.splice(exp.end(), _buckets[i]);
             _non_empty_buckets[i] = false;
         }
 
@@ -184,7 +184,7 @@ public:
             auto& timer = *list.begin();
             list.pop_front();
             if (timer.get_timeout() <= now) {
-                _expired.push_back(timer);
+                exp.push_back(timer);
             } else {
                 insert(timer);
             }
@@ -197,35 +197,7 @@ public:
                 _next = std::min(_next, get_timestamp(timer));
             }
         }
-    }
-
-    /**
-     * Removes and returns a timer from the expired set.
-     *
-     * Preconditions:
-     *  - none
-     *
-     * Postconditions:
-     *  - when result == nullptr then there are no timers in the expired set
-     *  - when result != nullptr the returned timer is no longer in the
-     *    expired set and this structure will no longer hold any references
-     *    to this timer.
-     */
-    Timer* pop_expired()
-    {
-        if (_expired.empty()) {
-            return nullptr;
-        }
-        Timer* timer = &*_expired.begin();
-        _expired.pop_front();
-        return timer;
-    }
-
-    /**
-     * Returns an iterable collection over expired timers.
-     */
-    auto& expired_set() {
-        return _expired;
+        return exp;
     }
 
     /**
@@ -247,7 +219,6 @@ public:
         for (int i : bitsets::for_each_set(_non_empty_buckets)) {
             _buckets[i].clear();
         }
-        _expired.clear();
     }
 
     /**

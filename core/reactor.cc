@@ -261,17 +261,25 @@ void reactor::add_timer(timer* tmr) {
 }
 
 void reactor::del_timer(timer* tmr) {
-    _timers.remove(*tmr);
+    if (tmr->_expired) {
+        _expired_timers.erase(_expired_timers.iterator_to(*tmr));
+        tmr->_expired = false;
+    } else {
+        _timers.remove(*tmr);
+    }
 }
 
 void reactor::complete_timers() {
     _timerfd.read_some(reinterpret_cast<char*>(&_timers_completed), sizeof(_timers_completed)).then(
             [this] (size_t n) {
-        _timers.expire(clock_type::now());
-        for (auto& t : _timers.expired_set()) {
-            t._queued = false;
+        _expired_timers = _timers.expire(clock_type::now());
+        for (auto& t : _expired_timers) {
+            t._expired = true;
         }
-        while (auto t = _timers.pop_expired()) {
+        while (!_expired_timers.empty()) {
+            auto t = &*_expired_timers.begin();
+            _expired_timers.pop_front();
+            t->_queued = false;
             if (t->_armed) {
                 t->_armed = false;
                 if (t->_period) {
