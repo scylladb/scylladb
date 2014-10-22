@@ -14,6 +14,7 @@
 #include <iostream>
 #include <functional>
 #include <cstdio>
+#include <experimental/string_view>
 
 template <typename char_type, typename size_type, size_type max_size>
 class basic_sstring {
@@ -160,6 +161,10 @@ public:
     basic_sstring& operator+=(const basic_sstring& x) {
         return *this = *this + x;
     }
+
+    operator std::experimental::string_view() const {
+        return std::experimental::string_view(str(), size());
+    }
 };
 
 template <typename char_type, typename size_type, size_type max_size>
@@ -183,12 +188,7 @@ namespace std {
 template <typename char_type, typename size_type, size_type max_size>
 struct hash<basic_sstring<char_type, size_type, max_size>> {
     size_t operator()(const basic_sstring<char_type, size_type, max_size>& s) const {
-        size_t ret = 0;
-        for (auto c : s) {
-            ret = (ret << 6) | (ret >> (sizeof(ret) * 8 - 6));
-            ret ^= c;
-        }
-        return ret;
+        return std::hash<std::experimental::string_view>()(s);
     }
 };
 
