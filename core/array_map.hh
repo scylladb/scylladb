@@ -11,7 +11,7 @@
 
 template <typename Value, size_t Max>
 class array_map {
-    std::array<Value, Max> _a;
+    std::array<Value, Max> _a {};
 public:
     array_map(std::initializer_list<std::pair<size_t, Value>> i) {
         for (auto kv : i) {
