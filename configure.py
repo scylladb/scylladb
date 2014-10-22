@@ -34,6 +34,7 @@ libnet = [
     'net/stack.cc',
     'net/ip_checksum.cc',
     'net/udp.cc',
+    'net/tcp.cc',
     ]
 
 core = [

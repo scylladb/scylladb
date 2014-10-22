@@ -223,7 +223,7 @@ public:
 
     // prepend a header (default-initializing it)
     template <typename Header>
-    Header* prepend_header(size_t size = sizeof(Header));
+    Header* prepend_header(size_t extra_size = 0);
 
     // prepend a header (uninitialized!)
     char* prepend_uninitialized_header(size_t size);
@@ -484,8 +484,8 @@ void packet::trim_front(size_t how_much) {
 
 template <typename Header>
 Header*
-packet::prepend_header(size_t size) {
-    auto h = prepend_uninitialized_header(size);
+packet::prepend_header(size_t extra_size) {
+    auto h = prepend_uninitialized_header(sizeof(Header) + extra_size);
     return new (h) Header{};
 }
 

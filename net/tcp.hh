@@ -20,6 +20,63 @@ using namespace std::chrono_literals;
 
 namespace net {
 
+class tcp_hdr;
+
+struct tcp_option {
+    // The kind and len field are fixed and defined in TCP protocol
+    enum class option_kind: uint8_t { mss = 2, win_scale = 3, sack = 4, timestamps = 8,  nop = 1, eol = 0 };
+    enum class option_len:  uint8_t { mss = 4, win_scale = 3, sack = 2, timestamps = 10, nop = 1, eol = 1 };
+    struct mss {
+        option_kind kind = option_kind::mss;
+        option_len len = option_len::mss;
+        packed<uint16_t> mss;
+        template <typename Adjuster>
+        void adjust_endianness(Adjuster a) { a(mss); }
+    } __attribute__((packed));
+    struct win_scale {
+        option_kind kind = option_kind::win_scale;
+        option_len len = option_len::win_scale;
+        uint8_t shift;
+    } __attribute__((packed));
+    struct sack {
+        option_kind kind = option_kind::sack;
+        option_len len = option_len::sack;
+    } __attribute__((packed));
+    struct timestamps {
+        option_kind kind = option_kind::timestamps;
+        option_len len = option_len::timestamps;
+        packed<uint32_t> t1;
+        packed<uint32_t> t2;
+        template <typename Adjuster>
+        void adjust_endianness(Adjuster a) { a(t1, t2); }
+    } __attribute__((packed));
+    struct nop {
+        option_kind kind = option_kind::nop;
+    } __attribute__((packed));
+    struct eol {
+        option_kind kind = option_kind::eol;
+    } __attribute__((packed));
+    static const uint8_t align = 4;
+
+    void parse(tcp_hdr* th);
+    uint8_t fill(tcp_hdr* th, uint8_t option_size);
+    uint8_t get_size();
+
+    // For option negotiattion
+    bool _mss_received = false;
+    bool _win_scale_received = false;
+    bool _timestamps_received = false;
+    bool _sack_received = false;
+
+    // Option data
+    uint16_t _remote_mss = 536;
+    uint16_t _local_mss;
+    uint8_t _remote_win_scale = 0;
+    uint8_t _local_win_scale = 0;
+};
+inline uint8_t*& operator+=(uint8_t*& x, tcp_option::option_len len) { x += uint8_t(len); return x; }
+inline uint8_t& operator+=(uint8_t& x, tcp_option::option_len len) { x += uint8_t(len); return x; }
+
 struct tcp_seq {
     uint32_t raw;
 };
@@ -121,6 +178,8 @@ private:
             tcp_seq unacknowledged;
             tcp_seq next;
             uint32_t window;
+            uint8_t window_scale;
+            uint16_t mss;
             tcp_seq urgent;
             tcp_seq wl1;
             tcp_seq wl2;
@@ -133,7 +192,9 @@ private:
         } _snd;
         struct receive {
             tcp_seq next;
-            uint32_t window = 20000;
+            uint32_t window;
+            uint8_t window_scale;
+            uint16_t mss;
             tcp_seq urgent;
             tcp_seq initial;
             std::deque<packet> data;
@@ -141,6 +202,7 @@ private:
             bool _user_waiting = false;
             promise<> _data_received;
         } _rcv;
+        tcp_option _option;
         timer _delayed_ack;
     public:
         tcb(tcp& t, connid id);
@@ -279,7 +341,6 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
             return;
         }
     }
-    // FIXME: process options
     p.trim_front(th->data_offset * 4);
     ntoh(*th);
     auto id = connid{to, from, th->dst_port, th->src_port};
@@ -385,10 +446,21 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             _foreign_syn_received = true;
             _rcv.initial = seg_seq;
             _rcv.next = _rcv.initial + 1;
-            _rcv.window = 4500; // FIXME: what?
             _rcv.urgent = _rcv.next;
             _snd.wl1 = th->seq;
             _snd.next = _snd.initial = get_tcp_isn();
+            _option.parse(th);
+            // Remote receive window scale factor
+            _snd.window_scale = _option._remote_win_scale;
+            // Local receive window scale factor
+            _rcv.window_scale = _option._local_win_scale;
+            // Maximum segment size remote can receive
+            _snd.mss = _option._remote_mss;
+            // Maximum segment size local can receive
+            _rcv.mss = _option._local_mss =
+                _tcp.hw_features().mtu - sizeof(tcp_hdr) - net::ip_hdr_len_min;
+            // Linux's default window size
+            _rcv.window = 29200 << _rcv.window_scale;
         } else {
             if (seg_seq != _rcv.initial) {
                 return respond_with_reset(th);
@@ -482,7 +554,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
         if (!_snd.window && th->window && _snd.unsent_len) {
             do_output = true;
         }
-        _snd.window = th->window;
+        _snd.window = th->window << _snd.window_scale;
         _snd.wl1 = th->seq;
         _snd.wl2 = th->ack;
     }
@@ -505,9 +577,10 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
     uint32_t len;
     if (_tcp.hw_features().tx_tso) {
         // FIXME: No magic numbers when adding IP and TCP option support
+        // FIXME: Info tap device the size of the splitted packet
         len = _tcp.hw_features().max_packet_len - 20 - 20;
     } else {
-        len = _tcp.hw_features().mtu - 20 - 20;
+        len = std::min(uint16_t(_tcp.hw_features().mtu - 20 - 20), _snd.mss);
     }
     can_send = std::min(can_send, len);
     // easy case: one small packet
@@ -545,13 +618,17 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::output() {
+    uint8_t options_size = 0;
     packet p = get_transmit_packet();
     auto len = p.len();
     if (len) {
         _snd.data.push_back(p.share());
     }
 
-    auto th = p.prepend_header<tcp_hdr>();
+    if (!_local_syn_acked) {
+        options_size = _option.get_size();
+    }
+    auto th = p.prepend_header<tcp_hdr>(options_size);
     th->src_port = _local_port;
     th->dst_port = _foreign_port;
 
@@ -566,8 +643,8 @@ void tcp<InetTraits>::tcb::output() {
 
     th->seq = _snd.next;
     th->ack = _rcv.next;
-    th->data_offset = sizeof(*th) / 4; // FIXME: options
-    th->window = _rcv.window;
+    th->data_offset = (sizeof(*th) + options_size) / 4;
+    th->window = _rcv.window >> _rcv.window_scale;
     th->checksum = 0;
 
     _snd.next += len;
@@ -576,10 +653,12 @@ void tcp<InetTraits>::tcb::output() {
     th->f_fin = _snd.closed && _snd.unsent_len == 0 && !_local_fin_acked;
     _local_fin_sent |= th->f_fin;
 
+    // Add tcp options
+    _option.fill(th, options_size);
     hton(*th);
 
     checksummer csum;
-    InetTraits::tcp_pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + len);
+    InetTraits::tcp_pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + options_size + len);
     if (_tcp.hw_features().tx_csum_offload) {
         // virtio-net's VIRTIO_NET_F_CSUM feature requires th->checksum to be
         // initialized to ones' complement sum of the pseudo header.
@@ -590,10 +669,8 @@ void tcp<InetTraits>::tcb::output() {
     }
 
     offload_info oi;
-    // TCP protocol
     oi.protocol = ip_protocol_num::tcp;
-    // TCP hdr len
-    oi.tcp_hdr_len = 20;
+    oi.tcp_hdr_len = sizeof(tcp_hdr) + options_size;
     p.set_offload_info(oi);
 
     _tcp.send(_local_ip, _foreign_ip, std::move(p));
