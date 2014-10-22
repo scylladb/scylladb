@@ -212,6 +212,11 @@ private:
         future<> send(packet p);
         packet read();
         void close();
+        void remove_from_tcbs() {
+            auto id = connid{_local_ip, _foreign_ip, _local_port, _foreign_port};
+            _tcp._tcbs.erase(id);
+        }
+        bool both_closed() { return _foreign_fin_received && _local_fin_acked; }
     private:
         void respond_with_reset(tcp_hdr* th);
         void merge_out_of_order();
@@ -547,6 +552,11 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
         if (_local_fin_sent && th->ack == _snd.next + 1) {
             _local_fin_acked = true;
             _snd.next += 1;
+            if (both_closed()) {
+                clear_delayed_ack();
+                remove_from_tcbs();
+                return;
+            }
         }
     }
 
