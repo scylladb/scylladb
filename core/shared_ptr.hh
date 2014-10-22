@@ -81,6 +81,14 @@ public:
     T* operator->() const { return &_p->_value; }
     T* get() const { return &_p->_value; }
 
+    long int use_count() {
+        if (_p) {
+            return _p->_count;
+        } else {
+            return 0;
+        }
+    }
+
     operator shared_ptr<const T>() const {
         return shared_ptr<const T>(_p);
     }
