@@ -8,6 +8,7 @@
 #include <fstream>
 #include <cstdlib>
 #include "core/reactor.hh"
+#include "core/scollectd.hh"
 
 namespace bpo = boost::program_options;
 
@@ -22,6 +23,7 @@ public:
                 ;
         _opts.add(reactor::get_options_description());
         _opts.add(smp::get_options_description());
+        _opts.add(scollectd::get_options_description());
     };
 
     boost::program_options::options_description_easy_init add_options() {
@@ -47,6 +49,7 @@ public:
             return 1;
         }
         smp::configure(configuration);
+        scollectd::configure(configuration);
         _configuration = {std::move(configuration)};
         engine.when_started().then(func).rescue([] (auto get_ex) {
             try {

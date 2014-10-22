@@ -10,6 +10,9 @@
 inline uint64_t ntohq(uint64_t v) {
     return __builtin_bswap64(v);
 }
+inline uint64_t htonq(uint64_t v) {
+    return __builtin_bswap64(v);
+}
 
 namespace net {
 
@@ -20,6 +23,8 @@ inline void ntoh(uint16_t& x) { x = ntohs(x); }
 inline void hton(uint16_t& x) { x = htons(x); }
 inline void ntoh(uint32_t& x) { x = ntohl(x); }
 inline void hton(uint32_t& x) { x = htonl(x); }
+inline void ntoh(uint64_t& x) { x = ntohq(x); }
+inline void hton(uint64_t& x) { x = htonq(x); }
 
 // Wrapper around a primitive type to provide an unaligned version.
 // This is because gcc (correctly) doesn't allow binding an unaligned

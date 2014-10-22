@@ -42,6 +42,7 @@ core = [
     'core/posix.cc',
     'core/memory.cc',
     'core/resource.cc',
+    'core/scollectd.cc',
     'util/conversions.cc',
     'net/packet.cc',
     'net/posix-stack.cc',
