@@ -34,12 +34,13 @@ class item {
 public:
     using version_type = uint64_t;
 private:
+    using hook_type = bi::unordered_set_member_hook<bi::store_hash<true>>;
     item_key _key;
     const sstring _data;
     const uint32_t _flags;
     version_type _version;
     int _ref_count;
-    bi::unordered_set_member_hook<> _cache_link;
+    hook_type _cache_link;
     bi::list_member_hook<> _lru_link;
     bi::list_member_hook<> _timer_link;
     clock_type::time_point _expiry;
@@ -155,9 +156,10 @@ enum class cas_result {
 class cache {
 private:
     using cache_type = bi::unordered_set<item,
-        bi::member_hook<item, bi::unordered_set_member_hook<>, &item::_cache_link>,
+        bi::member_hook<item, item::hook_type, &item::_cache_link>,
         bi::power_2_buckets<true>,
-        bi::constant_time_size<true>>;
+        bi::constant_time_size<true>,
+        bi::compare_hash<true>>;
     using cache_iterator = typename cache_type::iterator;
     static constexpr size_t initial_bucket_count = 1 << 10;
     static constexpr float load_factor = 0.75f;
