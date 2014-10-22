@@ -147,7 +147,7 @@ public:
             return _write_buf.write(_resp->_body.begin(), _resp->_body.size());
         }
         void maybe_done() {
-            if (_eof && !_req && !_resp && _pending_responses.empty()) {
+            if ((_eof || _read_buf.eof()) && !_req && !_resp && _pending_responses.empty()) {
                 delete this;
             }
         }
