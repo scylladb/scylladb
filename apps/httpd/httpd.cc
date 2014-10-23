@@ -131,10 +131,38 @@ public:
         }
         void generate_response(std::unique_ptr<request> req) {
             auto resp = std::make_unique<response>();
-            resp->_response_line = "HTTP/1.1 200 OK\r\n";
+            bool conn_keep_alive = false;
+            bool conn_close = false;
+            auto it = req->_headers.find("Connection");
+            if (it != req->_headers.end()) {
+                if (it->second == "Keep-Alive") {
+                    conn_keep_alive = true;
+                } else if (it->second == "Close") {
+                    conn_close = true;
+                }
+            }
+            bool should_close;
+            // TODO: Handle HTTP/2.0 when it releases
+            if (req->_version == "1.0") {
+                resp->_response_line = "HTTP/1.0 200 OK\r\n";
+                if (conn_keep_alive) {
+                    resp->_headers["Connection"] = "Keep-Alive";
+                }
+                should_close = !conn_keep_alive;
+            } else if (req->_version == "1.1") {
+                resp->_response_line = "HTTP/1.1 200 OK\r\n";
+                should_close = conn_close;
+            } else {
+                // HTTP/0.9 goes here
+                resp->_response_line = "HTTP/1.0 200 OK\r\n";
+                should_close = true;
+            }
             resp->_headers["Content-Type"] = "text/html";
             resp->_body = "<html><head><title>this is the future</title></head><body><p>Future!!</p></body></html>";
             respond(std::move(resp));
+            if (should_close) {
+                _write_buf.close();
+            }
         }
         future<> write_body() {
             return _write_buf.write(_resp->_body.begin(), _resp->_body.size());
