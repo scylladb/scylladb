@@ -544,15 +544,16 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 return respond_with_reset(th);
             }
         }
-        if (th->ack > _snd.unacknowledged && th->ack <= _snd.next) {
+        auto data_ack = th->ack - th->f_fin;
+        if (data_ack > _snd.unacknowledged && data_ack <= _snd.next) {
             while (!_snd.data.empty()
-                    && (_snd.unacknowledged + _snd.data.front().len() <= th->ack)) {
+                    && (_snd.unacknowledged + _snd.data.front().len() <= data_ack)) {
                 _snd.unacknowledged += _snd.data.front().len();
                 _snd.data.pop_front();
             }
-            if (_snd.unacknowledged < th->ack) {
-                _snd.data.front().trim_front(th->ack - _snd.unacknowledged);
-                _snd.unacknowledged = th->ack;
+            if (_snd.unacknowledged < data_ack) {
+                _snd.data.front().trim_front(data_ack - _snd.unacknowledged);
+                _snd.unacknowledged = data_ack;
             }
         }
         if (_local_fin_sent && th->ack == _snd.next + 1) {
