@@ -155,8 +155,12 @@ public:
 };
 
 int main(int ac, char** av) {
-    return app_template().run(ac, av, [] {
-        uint16_t port = 10000;
+    app_template app;
+    app.add_options()
+        ("port", bpo::value<uint16_t>()->default_value(10000), "HTTP Server port") ;
+    return app.run(ac, av, [&] {
+        auto&& config = app.configuration();
+        uint16_t port = config["port"].as<uint16_t>();
         std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
         for(unsigned c = 0; c < smp::count; c++) {
             smp::submit_to(c, [port] () mutable {static thread_local http_server server; server.listen({port});});
