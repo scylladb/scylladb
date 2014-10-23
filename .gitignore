@@ -3,3 +3,4 @@
 .settings
 build
 build.ninja
+cscope.*
