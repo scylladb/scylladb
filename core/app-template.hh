@@ -17,7 +17,7 @@ private:
     bpo::options_description _opts;
     boost::optional<bpo::variables_map> _configuration;
 public:
-    app_template() {
+    app_template() : _opts("App options") {
         _opts.add_options()
                 ("help", "show help message")
                 ;
