@@ -500,7 +500,6 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
         do_output = should_send_ack();
     }
     if (th->f_fin) {
-        do_output = true;
         if (!_local_syn_acked) {
             return respond_with_reset(th);
         }
@@ -517,6 +516,13 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 if (_rcv._user_waiting) {
                     _rcv._user_waiting = false;
                     _rcv._data_received.set_value();
+                }
+                output();
+                // FIXME: Implement TIME-WAIT state
+                if (both_closed()) {
+                    clear_delayed_ack();
+                    remove_from_tcbs();
+                    return;
                 }
             }
         } else {
@@ -551,6 +557,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
         }
         if (_local_fin_sent && th->ack == _snd.next + 1) {
             _local_fin_acked = true;
+            _snd.unacknowledged += 1;
             _snd.next += 1;
             if (both_closed()) {
                 clear_delayed_ack();
@@ -716,6 +723,9 @@ future<> tcp<InetTraits>::tcb::send(packet p) {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::close() {
+    if (_snd.closed) {
+        return;
+    }
     _snd.closed = true;
     if (_snd.unsent_len == 0) {
         output();

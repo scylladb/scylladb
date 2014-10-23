@@ -31,6 +31,10 @@ private:
 public:
     explicit posix_data_sink_impl(pollable_fd& fd) : _fd(fd) {}
     future<> put(std::vector<temporary_buffer<char>> data) override;
+    future<> close() override {
+        // TODO: close on local side
+        return make_ready_future<>();
+    }
 };
 
 class posix_ap_server_socket_impl : public server_socket_impl {

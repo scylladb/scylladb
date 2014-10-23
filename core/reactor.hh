@@ -514,6 +514,7 @@ public:
         v.push_back(std::move(data));
         return put(std::move(v));
     }
+    virtual future<> close() = 0;
 };
 
 class data_sink {
@@ -527,6 +528,7 @@ public:
     future<> put(temporary_buffer<char> data) {
         return _dsi->put(std::move(data));
     }
+    future<> close() { return _dsi->close(); }
 };
 
 template <typename CharType>
@@ -575,6 +577,7 @@ public:
     future<> write(const char_type* buf);
     future<> write(const sstring& s);
     future<> flush();
+    future<> close() { return _fd.close(); }
 private:
 };
 

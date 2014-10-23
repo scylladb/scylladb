@@ -25,6 +25,11 @@ public:
         _v.push_back(std::move(data));
         return make_ready_future<>();
     }
+
+    virtual future<> close() override {
+        // TODO: close on local side
+        return make_ready_future<>();
+    }
 };
 
 #endif

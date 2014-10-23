@@ -106,6 +106,10 @@ public:
     virtual future<> put(temporary_buffer<char> data) override {
         return _conn.send(packet({data.get_write(), data.size()}, data.release()));
     }
+    virtual future<> close() override {
+        _conn.close_write();
+        return make_ready_future<>();
+    }
 };
 
 template <typename Protocol>
