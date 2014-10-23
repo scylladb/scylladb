@@ -377,7 +377,7 @@ packet::packet(fragment frag, packet&& x)
     } else {
         // didn't work out, allocate and copy
         _impl->unuse_internal_data();
-        _impl = impl::allocate_if_needed(std::move(x._impl), 1);
+        _impl = impl::allocate_if_needed(std::move(_impl), 1);
         _impl->_len += frag.size;
         std::unique_ptr<char[]> buf(new char[frag.size]);
         std::copy(frag.base, frag.base + frag.size, buf.get());
