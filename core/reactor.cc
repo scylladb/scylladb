@@ -384,21 +384,46 @@ reactor::signal_handler::signal_handler(int signo)
     throw_system_error_on(r == -1);
 }
 
-inter_thread_work_queue::inter_thread_work_queue()
+syscall_work_queue::syscall_work_queue()
     : _pending()
     , _completed()
     , _start_eventfd(0)
     , _complete_eventfd(0) {
 }
 
-void inter_thread_work_queue::submit_item(inter_thread_work_queue::work_item* item) {
+void syscall_work_queue::submit_item(syscall_work_queue::work_item* item) {
     _queue_has_room.wait().then([this, item] {
         _pending.push(item);
         _start_eventfd.signal(1);
     });
 }
 
-void inter_thread_work_queue::complete() {
+void syscall_work_queue::complete() {
+    _complete_eventfd.wait().then([this] (size_t count) {
+        auto nr = _completed.consume_all([this] (work_item* wi) {
+            wi->complete();
+            delete wi;
+        });
+        _queue_has_room.signal(nr);
+        complete();
+    });
+}
+
+smp_message_queue::smp_message_queue()
+    : _pending()
+    , _completed()
+    , _start_eventfd(0)
+    , _complete_eventfd(0) {
+}
+
+void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
+    _queue_has_room.wait().then([this, item] {
+        _pending.push(item);
+        _start_eventfd.signal(1);
+    });
+}
+
+void smp_message_queue::complete() {
     _complete_eventfd.wait().then([this] (size_t count) {
         auto nr = _completed.consume_all([this] (work_item* wi) {
             wi->complete();
@@ -421,7 +446,7 @@ void thread_pool::work() {
         if (_stopped.load(std::memory_order_relaxed)) {
             break;
         }
-        auto nr = inter_thread_wq._pending.consume_all([this] (inter_thread_work_queue::work_item* wi) {
+        auto nr = inter_thread_wq._pending.consume_all([this] (syscall_work_queue::work_item* wi) {
             wi->process();
             inter_thread_wq._completed.push(wi);
         });
@@ -540,14 +565,14 @@ smp::get_options_description()
 }
 
 std::vector<posix_thread> smp::_threads;
-inter_thread_work_queue** smp::_qs;
+smp_message_queue** smp::_qs;
 std::thread::id smp::_tmain;
 unsigned smp::count = 1;
 
-void smp::listen_one(inter_thread_work_queue& q, std::unique_ptr<readable_eventfd>&& rfd, std::unique_ptr<writeable_eventfd>&& wfd) {
+void smp::listen_one(smp_message_queue& q, std::unique_ptr<readable_eventfd>&& rfd, std::unique_ptr<writeable_eventfd>&& wfd) {
     auto f = rfd->wait();
     f.then([&q, rfd = std::move(rfd), wfd = std::move(wfd)](size_t count) mutable {
-        auto nr = q._pending.consume_all([&q, &rfd, &wfd] (inter_thread_work_queue::work_item* wi) {
+        auto nr = q._pending.consume_all([&q, &rfd, &wfd] (smp_message_queue::work_item* wi) {
             wi->process();
             q._completed.push(wi);
         });
@@ -556,7 +581,7 @@ void smp::listen_one(inter_thread_work_queue& q, std::unique_ptr<readable_eventf
     });
 }
 
-void smp::listen_all(inter_thread_work_queue* qs)
+void smp::listen_all(smp_message_queue* qs)
 {
     for (unsigned i = 0; i < smp::count; i++) {
         listen_one(qs[i],
@@ -589,9 +614,9 @@ void smp::configure(boost::program_options::variables_map configuration)
     std::vector<resource::cpu> allocations = resource::allocate(rc);
     pin_this_thread(allocations[0].cpu_id);
     memory::configure(allocations[0].mem);
-    smp::_qs = new inter_thread_work_queue* [smp::count];
+    smp::_qs = new smp_message_queue* [smp::count];
     for(unsigned i = 0; i < smp::count; i++) {
-        smp::_qs[i] = new inter_thread_work_queue[smp::count];
+        smp::_qs[i] = new smp_message_queue[smp::count];
     }
 
     for (unsigned i = 1; i < smp::count; i++) {

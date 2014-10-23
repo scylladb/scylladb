@@ -301,7 +301,7 @@ private:
 class thread_pool;
 class smp;
 
-class inter_thread_work_queue {
+class syscall_work_queue {
     static constexpr size_t queue_length = 128;
     struct work_item;
     using lf_queue = boost::lockfree::spsc_queue<work_item*,
@@ -335,7 +335,7 @@ class inter_thread_work_queue {
         future<T> get_future() { return _promise.get_future(); }
     };
 public:
-    inter_thread_work_queue();
+    syscall_work_queue();
     template <typename T, typename Func>
     future<T> submit(Func func) {
         auto wi = new work_item_returning<T, Func>(std::move(func));
@@ -357,11 +357,68 @@ private:
     void submit_item(work_item* wi);
 
     friend class thread_pool;
+};
+
+class smp_message_queue {
+    static constexpr size_t queue_length = 128;
+    struct work_item;
+    using lf_queue = boost::lockfree::spsc_queue<work_item*,
+                            boost::lockfree::capacity<queue_length>>;
+    lf_queue _pending;
+    lf_queue _completed;
+    writeable_eventfd _start_eventfd;
+    readable_eventfd _complete_eventfd;
+    semaphore _queue_has_room = { queue_length };
+    struct work_item {
+        virtual ~work_item() {}
+        virtual void process() = 0;
+        virtual void complete() = 0;
+    };
+    template <typename Func>
+    struct work_item_void : public work_item {
+        promise<> _promise;
+        Func _func;
+        work_item_void(Func&& func) : _func(std::move(func)) {}
+        virtual void process() override { _func(); }
+        virtual void complete() override { _promise.set_value(); }
+        future<> get_future() { return _promise.get_future(); }
+    };
+    template <typename T, typename Func>
+    struct work_item_returning : public work_item_void<Func> {
+        promise<T> _promise;
+        boost::optional<T> _result;
+        work_item_returning(Func&& func) : work_item_void<Func>(std::move(func)) {}
+        virtual void process() override { _result = this->_func(); }
+        virtual void complete() override { _promise.set_value(std::move(*_result)); }
+        future<T> get_future() { return _promise.get_future(); }
+    };
+public:
+    smp_message_queue();
+    template <typename T, typename Func>
+    future<T> submit(Func func) {
+        auto wi = new work_item_returning<T, Func>(std::move(func));
+        auto fut = wi->get_future();
+        submit_item(wi);
+        return fut;
+    }
+    template <typename Func>
+    future<> submit(Func func) {
+        auto wi = new work_item_void<Func>(std::move(func));
+        auto fut = wi->get_future();
+        submit_item(wi);
+        return fut;
+    }
+    void start() { complete(); }
+private:
+    void work();
+    void complete();
+    void submit_item(work_item* wi);
+
     friend class smp;
 };
 
 class thread_pool {
-    inter_thread_work_queue inter_thread_wq;
+    syscall_work_queue inter_thread_wq;
     posix_thread _worker_thread;
     std::atomic<bool> _stopped = { false };
 public:
@@ -461,7 +518,7 @@ extern thread_local reactor engine;
 
 class smp {
 	static std::vector<posix_thread> _threads;
-	static inter_thread_work_queue** _qs;
+	static smp_message_queue** _qs;
 	static std::thread::id _tmain;
 public:
 	static boost::program_options::options_description get_options_description();
@@ -478,8 +535,8 @@ public:
 	    return t == engine._id ? func(),  make_ready_future<>():
 	            _qs[t][engine._id].submit<>(std::move(func));}
 private:
-	static void listen_all(inter_thread_work_queue* qs);
-	static void listen_one(inter_thread_work_queue& q, std::unique_ptr<readable_eventfd>&& rfd, std::unique_ptr<writeable_eventfd>&& wfd);
+	static void listen_all(smp_message_queue* qs);
+	static void listen_one(smp_message_queue& q, std::unique_ptr<readable_eventfd>&& rfd, std::unique_ptr<writeable_eventfd>&& wfd);
 	static void start_all_queues();
 public:
 	static unsigned count;
