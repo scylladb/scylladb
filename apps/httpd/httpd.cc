@@ -84,13 +84,6 @@ public:
                 return make_ready_future<>();
             });
         }
-        future<> bad(std::unique_ptr<request> req) {
-            auto resp = std::make_unique<response>();
-            resp->_response_line = "HTTP/1.1 400 BAD REQUEST\r\n\r\n";
-            respond(std::move(resp));
-            _eof = true;
-            throw std::runtime_error("failed to parse request");
-        }
         void respond(std::unique_ptr<response> resp) {
             if (!_resp) {
                 _resp = std::move(resp);
