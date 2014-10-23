@@ -750,8 +750,10 @@ void* realloc(void* ptr, size_t size) {
     if (!nptr) {
         return nptr;
     }
-    std::memcpy(nptr, ptr, std::min(size, old_size));
-    ::free(ptr);
+    if (ptr) {
+        std::memcpy(nptr, ptr, std::min(size, old_size));
+        ::free(ptr);
+    }
     return nptr;
 }
 
