@@ -316,20 +316,12 @@ class syscall_work_queue {
         virtual void process() = 0;
         virtual void complete() = 0;
     };
-    template <typename Func>
-    struct work_item_void : public work_item {
-        promise<> _promise;
-        Func _func;
-        work_item_void(Func&& func) : _func(std::move(func)) {}
-        virtual void process() override { _func(); }
-        virtual void complete() override { _promise.set_value(); }
-        future<> get_future() { return _promise.get_future(); }
-    };
     template <typename T, typename Func>
-    struct work_item_returning : public work_item_void<Func> {
+    struct work_item_returning :  work_item {
+        Func _func;
         promise<T> _promise;
         boost::optional<T> _result;
-        work_item_returning(Func&& func) : work_item_void<Func>(std::move(func)) {}
+        work_item_returning(Func&& func) : _func(std::move(func)) {}
         virtual void process() override { _result = this->_func(); }
         virtual void complete() override { _promise.set_value(std::move(*_result)); }
         future<T> get_future() { return _promise.get_future(); }
@@ -339,13 +331,6 @@ public:
     template <typename T, typename Func>
     future<T> submit(Func func) {
         auto wi = new work_item_returning<T, Func>(std::move(func));
-        auto fut = wi->get_future();
-        submit_item(wi);
-        return fut;
-    }
-    template <typename Func>
-    future<> submit(Func func) {
-        auto wi = new work_item_void<Func>(std::move(func));
         auto fut = wi->get_future();
         submit_item(wi);
         return fut;
