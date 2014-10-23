@@ -50,11 +50,11 @@ template<typename AsyncAction>
 static inline
 future<> keep_doing(AsyncAction&& action) {
     while (true) {
-        try{
+        try {
             auto f = action();
             if (!f.available()) {
                 return f.then([action = std::forward<AsyncAction>(action)] () mutable {
-                     return keep_doing(std::forward<AsyncAction>(action));
+                    return keep_doing(std::forward<AsyncAction>(action));
                 });
             }
 
