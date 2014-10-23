@@ -413,7 +413,8 @@ smp_message_queue::smp_message_queue()
     : _pending()
     , _completed()
     , _start_eventfd(0)
-    , _complete_eventfd(0) {
+    , _complete_eventfd(0)
+    , _complete_eventfd_write(_complete_eventfd.write_side()) {
 }
 
 void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
@@ -421,6 +422,12 @@ void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
         _pending.push(item);
         _start_eventfd.signal(1);
     });
+}
+
+void smp_message_queue::respond(work_item* item) {
+    // FIXME: batcing
+    _completed.push(item);
+    _complete_eventfd_write.signal(1);
 }
 
 void smp_message_queue::complete() {
@@ -569,15 +576,15 @@ smp_message_queue** smp::_qs;
 std::thread::id smp::_tmain;
 unsigned smp::count = 1;
 
-void smp::listen_one(smp_message_queue& q, std::unique_ptr<readable_eventfd>&& rfd, std::unique_ptr<writeable_eventfd>&& wfd) {
+void smp::listen_one(smp_message_queue& q, std::unique_ptr<readable_eventfd>&& rfd) {
     auto f = rfd->wait();
-    f.then([&q, rfd = std::move(rfd), wfd = std::move(wfd)](size_t count) mutable {
-        auto nr = q._pending.consume_all([&q, &rfd, &wfd] (smp_message_queue::work_item* wi) {
-            wi->process();
-            q._completed.push(wi);
+    f.then([&q, rfd = std::move(rfd)] (size_t count) mutable {
+        q._pending.consume_all([&q] (smp_message_queue::work_item* wi) {
+            wi->process().then([&q, wi] {
+                q.respond(wi);
+            });
         });
-        wfd->signal(nr);
-        smp::listen_one(q, std::move(rfd), std::move(wfd));
+        smp::listen_one(q, std::move(rfd));
     });
 }
 
@@ -585,8 +592,7 @@ void smp::listen_all(smp_message_queue* qs)
 {
     for (unsigned i = 0; i < smp::count; i++) {
         listen_one(qs[i],
-                std::make_unique<readable_eventfd>(qs[i]._start_eventfd.read_side()),
-                std::make_unique<writeable_eventfd>(qs[i]._complete_eventfd.write_side()));
+                std::make_unique<readable_eventfd>(qs[i]._start_eventfd.read_side()));
     }
 }
 

@@ -24,6 +24,7 @@
 #include <system_error>
 #include <chrono>
 #include <atomic>
+#include <experimental/optional>
 #include <boost/lockfree/spsc_queue.hpp>
 #include <boost/optional.hpp>
 #include <boost/program_options.hpp>
@@ -353,42 +354,47 @@ class smp_message_queue {
     lf_queue _completed;
     writeable_eventfd _start_eventfd;
     readable_eventfd _complete_eventfd;
+    writeable_eventfd _complete_eventfd_write;
     semaphore _queue_has_room = { queue_length };
     struct work_item {
         virtual ~work_item() {}
-        virtual void process() = 0;
+        virtual future<> process() = 0;
         virtual void complete() = 0;
     };
-    template <typename Func>
-    struct work_item_void : public work_item {
-        promise<> _promise;
+    template <typename Func, typename Future>
+    struct async_work_item : work_item {
+        smp_message_queue& _q;
         Func _func;
-        work_item_void(Func&& func) : _func(std::move(func)) {}
-        virtual void process() override { _func(); }
-        virtual void complete() override { _promise.set_value(); }
-        future<> get_future() { return _promise.get_future(); }
-    };
-    template <typename T, typename Func>
-    struct work_item_returning : public work_item_void<Func> {
-        promise<T> _promise;
-        boost::optional<T> _result;
-        work_item_returning(Func&& func) : work_item_void<Func>(std::move(func)) {}
-        virtual void process() override { _result = this->_func(); }
-        virtual void complete() override { _promise.set_value(std::move(*_result)); }
-        future<T> get_future() { return _promise.get_future(); }
+        using value_type = typename Future::value_type;
+        std::experimental::optional<value_type> _result;
+        std::exception_ptr _ex; // if !_result
+        typename Future::promise_type _promise; // used on local side
+        async_work_item(smp_message_queue& q, Func&& func) : _q(q), _func(std::move(func)) {}
+        virtual future<> process() override {
+            return this->_func().rescue([this] (auto&& get_result) {
+                try {
+                    _result = get_result();
+                } catch (...) {
+                    _ex = std::current_exception();
+                }
+            });
+        }
+        virtual void complete() override {
+            if (_result) {
+                _promise.set_value(std::move(*_result));
+            } else {
+                // FIXME: _ex was allocated on another cpu
+                _promise.set_exception(std::move(_ex));
+            }
+        }
+        Future get_future() { return _promise.get_future(); }
     };
 public:
     smp_message_queue();
-    template <typename T, typename Func>
-    future<T> submit(Func func) {
-        auto wi = new work_item_returning<T, Func>(std::move(func));
-        auto fut = wi->get_future();
-        submit_item(wi);
-        return fut;
-    }
     template <typename Func>
-    future<> submit(Func func) {
-        auto wi = new work_item_void<Func>(std::move(func));
+    std::result_of_t<Func()> submit(Func func) {
+        using future = std::result_of_t<Func()>;
+        auto wi = new async_work_item<Func, future>(*this, std::move(func));
         auto fut = wi->get_future();
         submit_item(wi);
         return fut;
@@ -398,6 +404,7 @@ private:
     void work();
     void complete();
     void submit_item(work_item* wi);
+    void respond(work_item* wi);
 
     friend class smp;
 };
@@ -505,23 +512,35 @@ class smp {
 	static std::vector<posix_thread> _threads;
 	static smp_message_queue** _qs;
 	static std::thread::id _tmain;
+
+	template <typename Func>
+	using returns_future = is_future<std::result_of_t<Func()>>;
 public:
 	static boost::program_options::options_description get_options_description();
 	static void configure(boost::program_options::variables_map vm);
 	static void join_all();
 	static bool main_thread() { return std::this_thread::get_id() == _tmain; }
 
-	template <typename T, typename Func>
-	static future<T> submit_to(unsigned t, Func func) {
-	    return t == engine._id ? make_ready_future<T>(func()) :
-	            _qs[t][engine._id].submit<T>(std::move(func));}
 	template <typename Func>
-	static future<> submit_to(unsigned t, Func func) {
-	    return t == engine._id ? func(),  make_ready_future<>():
-	            _qs[t][engine._id].submit<>(std::move(func));}
+	static std::result_of_t<Func()> submit_to(unsigned t, Func func,
+	        std::enable_if_t<returns_future<Func>::value, void*> = nullptr) {
+	    if (t == engine._id) {
+	        return func();
+	    } else {
+	        return _qs[t][engine._id].submit(std::move(func));
+	    }
+	}
+	template <typename Func>
+	static future<> submit_to(unsigned t, Func func,
+	        std::enable_if_t<!returns_future<Func>::value, void*> = nullptr) {
+	    return submit_to(t, [func = std::move(func)] () mutable {
+	       func();
+	       return make_ready_future<>();
+	    });
+        }
 private:
 	static void listen_all(smp_message_queue* qs);
-	static void listen_one(smp_message_queue& q, std::unique_ptr<readable_eventfd>&& rfd, std::unique_ptr<writeable_eventfd>&& wfd);
+	static void listen_one(smp_message_queue& q, std::unique_ptr<readable_eventfd>&& rfd);
 	static void start_all_queues();
 public:
 	static unsigned count;
