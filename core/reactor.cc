@@ -414,7 +414,8 @@ smp_message_queue::smp_message_queue()
     , _completed()
     , _start_eventfd(0)
     , _complete_eventfd(0)
-    , _complete_eventfd_write(_complete_eventfd.write_side()) {
+    , _complete_eventfd_write(_complete_eventfd.write_side())
+    , _start_eventfd_read(_start_eventfd.read_side()) {
 }
 
 void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
@@ -576,23 +577,21 @@ smp_message_queue** smp::_qs;
 std::thread::id smp::_tmain;
 unsigned smp::count = 1;
 
-void smp::listen_one(smp_message_queue& q, std::unique_ptr<readable_eventfd>&& rfd) {
-    auto f = rfd->wait();
-    f.then([&q, rfd = std::move(rfd)] (size_t count) mutable {
-        q._pending.consume_all([&q] (smp_message_queue::work_item* wi) {
-            wi->process().then([&q, wi] {
-                q.respond(wi);
+void smp_message_queue::listen() {
+    _start_eventfd_read.wait().then([this] (size_t count) mutable {
+        _pending.consume_all([this] (smp_message_queue::work_item* wi) {
+            wi->process().then([this, wi] {
+                respond(wi);
             });
         });
-        smp::listen_one(q, std::move(rfd));
+        listen();
     });
 }
 
 void smp::listen_all(smp_message_queue* qs)
 {
     for (unsigned i = 0; i < smp::count; i++) {
-        listen_one(qs[i],
-                std::make_unique<readable_eventfd>(qs[i]._start_eventfd.read_side()));
+        qs[i].listen();
     }
 }
 

@@ -355,6 +355,7 @@ class smp_message_queue {
     writeable_eventfd _start_eventfd;
     readable_eventfd _complete_eventfd;
     writeable_eventfd _complete_eventfd_write;
+    readable_eventfd _start_eventfd_read;
     semaphore _queue_has_room = { queue_length };
     struct work_item {
         virtual ~work_item() {}
@@ -400,6 +401,7 @@ public:
         return fut;
     }
     void start() { complete(); }
+    void listen();
 private:
     void work();
     void complete();
