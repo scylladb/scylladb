@@ -498,8 +498,9 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                     insert_out_of_order(seg_seq, std::move(p));
                 }
             }
+            // Send <ACK> to ack data only when data is present in this packet
+            do_output = should_send_ack();
         }
-        do_output = should_send_ack();
     }
     if (th->f_fin) {
         if (!_local_syn_acked) {
