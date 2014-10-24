@@ -446,7 +446,6 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     tcp_seq seg_seq = th->seq;
     auto seg_len = p.len();
     if (th->f_syn) {
-        do_output = true;
         if (!_foreign_syn_received) {
             _foreign_syn_received = true;
             _rcv.initial = seg_seq;
@@ -466,6 +465,9 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 _tcp.hw_features().mtu - sizeof(tcp_hdr) - net::ip_hdr_len_min;
             // Linux's default window size
             _rcv.window = 29200 << _rcv.window_scale;
+
+            // Send <SYN,ACK> back
+            do_output = true;
         } else {
             if (seg_seq != _rcv.initial) {
                 return respond_with_reset(th);
@@ -496,8 +498,9 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                     insert_out_of_order(seg_seq, std::move(p));
                 }
             }
+            // Send <ACK> to ack data only when data is present in this packet
+            do_output = should_send_ack();
         }
-        do_output = should_send_ack();
     }
     if (th->f_fin) {
         if (!_local_syn_acked) {
@@ -512,12 +515,15 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 // FIXME: we might queue an out-of-order FIN.  Is it worthwhile?
                 _foreign_fin_received = true;
                 _rcv.next = fin_seq + 1;
-                _rcv.window = 0;
                 if (_rcv._user_waiting) {
                     _rcv._user_waiting = false;
                     _rcv._data_received.set_value();
                 }
+                // If this <FIN> packet contains data as well, we can ACK both data
+                // and <FIN> in a single packet, so canncel the previous ACK.
+                clear_delayed_ack();
                 output();
+
                 // FIXME: Implement TIME-WAIT state
                 if (both_closed()) {
                     clear_delayed_ack();

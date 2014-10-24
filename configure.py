@@ -31,7 +31,7 @@ libnet = [
     'net/ip.cc',
     'net/ethernet.cc',
     'net/arp.cc',
-    'net/stack.cc',
+    'net/native-stack.cc',
     'net/ip_checksum.cc',
     'net/udp.cc',
     'net/tcp.cc',
