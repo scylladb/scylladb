@@ -45,39 +45,26 @@ future<> do_until(StopCondition&& stop_cond, AsyncAction&& action) {
     return f;
 }
 
-
-template <typename AsyncAction>
-void
-do_keep_doing(promise<> pr, AsyncAction&& action) {
-    try {
-        while (true) {
+// Invoke given action until it fails.
+template<typename AsyncAction>
+static inline
+future<> keep_doing(AsyncAction&& action) {
+    while (true) {
+        try {
             auto f = action();
             if (!f.available()) {
-                f.then([pr = std::move(pr), action = std::forward<AsyncAction>(action)] () mutable {
-                    do_keep_doing(std::move(pr), std::forward<AsyncAction>(action));
+                return f.then([action = std::forward<AsyncAction>(action)] () mutable {
+                    return keep_doing(std::forward<AsyncAction>(action));
                 });
-                return;
             }
 
             if (f.failed()) {
-                f.forward_to(std::move(pr));
-                break;
+                return std::move(f);
             }
-            f.get();
+        } catch (...) {
+            return make_exception_future(std::current_exception());
         }
-    } catch (...) {
-        make_exception_future(std::current_exception()).forward_to(std::move(pr));
     }
-}
-
-// Invoke given action until it fails.
-template <typename AsyncAction>
-inline
-future<> keep_doing(AsyncAction&& action) {
-    promise<> pr;
-    auto fut = pr.get_future();
-    do_keep_doing(std::move(pr), std::forward<AsyncAction>(action));
-    return fut;
 }
 
 template<typename Iterator, typename AsyncAction>
