@@ -95,13 +95,9 @@ class ipv4_tcp final : public ip_protocol {
     ipv4_l4<ip_protocol_num::tcp> _inet_l4;
     tcp<ipv4_traits> _tcp;
 public:
-    ipv4_tcp(ipv4& inet) : _inet_l4(inet), _tcp(_inet_l4) {}
-    virtual void received(packet p, ipv4_address from, ipv4_address to) {
-        _tcp.received(std::move(p), from, to);
-    }
-    virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to) override {
-        return _tcp.forward(p, off, from, to);
-    }
+    ipv4_tcp(ipv4& inet);
+    virtual void received(packet p, ipv4_address from, ipv4_address to);
+    virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to) override;
     friend class ipv4;
 };
 

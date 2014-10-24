@@ -3,6 +3,7 @@
  */
 
 #include "tcp.hh"
+#include "ip.hh"
 #include "core/align.hh"
 
 namespace net {
@@ -102,6 +103,18 @@ uint8_t tcp_option::get_size() {
     // Insert NOP option to align on 32-bit
     size = align_up(size, tcp_option::align);
     return size;
+}
+
+ipv4_tcp::ipv4_tcp(ipv4& inet)
+	: _inet_l4(inet), _tcp(_inet_l4) {
+}
+
+void ipv4_tcp::received(packet p, ipv4_address from, ipv4_address to) {
+    _tcp.received(std::move(p), from, to);
+}
+
+unsigned ipv4_tcp::forward(packet& p, size_t off, ipv4_address from, ipv4_address to) {
+    return _tcp.forward(p, off, from, to);
 }
 
 }
