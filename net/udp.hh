@@ -13,6 +13,7 @@
 #include "core/shared_ptr.hh"
 #include "net/api.hh"
 #include "const.hh"
+#include "net.hh"
 
 namespace net {
 
