@@ -2,11 +2,10 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
-#include "stack.hh"
+#include "posix-stack.hh"
 #include "net.hh"
 #include "packet.hh"
 #include "api.hh"
-#include "posix-stack.hh"
 
 namespace net {
 
