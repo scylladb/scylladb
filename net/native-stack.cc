@@ -6,7 +6,7 @@
 #include "native-stack-impl.hh"
 #include "net.hh"
 #include "ip.hh"
-#include "tcp.hh"
+#include "tcp-stack.hh"
 #include "udp.hh"
 #include "virtio.hh"
 #include "proxy.hh"
@@ -50,8 +50,7 @@ native_network_stack::native_network_stack(boost::program_options::variables_map
 server_socket
 native_network_stack::listen(socket_address sa, listen_options opts) {
     assert(sa.as_posix_sockaddr().sa_family == AF_INET);
-    return server_socket(std::make_unique<native_server_socket_impl<tcp4>>(
-            _inet.get_tcp(), ntohs(sa.as_posix_sockaddr_in().sin_port), opts));
+    return tcpv4_listen(_inet.get_tcp(), ntohs(sa.as_posix_sockaddr_in().sin_port), opts);
 }
 
 std::unique_ptr<native_network_stack> native_network_stack::_s;

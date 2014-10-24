@@ -3,8 +3,10 @@
  */
 
 #include "tcp.hh"
+#include "tcp-stack.hh"
 #include "ip.hh"
 #include "core/align.hh"
+#include "native-stack-impl.hh"
 
 namespace net {
 
@@ -118,6 +120,12 @@ void ipv4_tcp::received(packet p, ipv4_address from, ipv4_address to) {
 
 unsigned ipv4_tcp::forward(packet& p, size_t off, ipv4_address from, ipv4_address to) {
     return _tcp->forward(p, off, from, to);
+}
+
+server_socket
+tcpv4_listen(tcp<ipv4_traits>& tcpv4, uint16_t port, listen_options opts) {
+	return server_socket(std::make_unique<native_server_socket_impl<tcp<ipv4_traits>>>(
+			tcpv4, port, opts));
 }
 
 }
