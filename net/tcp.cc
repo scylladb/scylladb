@@ -106,15 +106,18 @@ uint8_t tcp_option::get_size() {
 }
 
 ipv4_tcp::ipv4_tcp(ipv4& inet)
-	: _inet_l4(inet), _tcp(_inet_l4) {
+	: _inet_l4(inet), _tcp(std::make_unique<tcp<ipv4_traits>>(_inet_l4)) {
+}
+
+ipv4_tcp::~ipv4_tcp() {
 }
 
 void ipv4_tcp::received(packet p, ipv4_address from, ipv4_address to) {
-    _tcp.received(std::move(p), from, to);
+    _tcp->received(std::move(p), from, to);
 }
 
 unsigned ipv4_tcp::forward(packet& p, size_t off, ipv4_address from, ipv4_address to) {
-    return _tcp.forward(p, off, from, to);
+    return _tcp->forward(p, off, from, to);
 }
 
 }

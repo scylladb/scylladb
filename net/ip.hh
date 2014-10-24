@@ -13,7 +13,6 @@
 #include "core/array_map.hh"
 #include "byteorder.hh"
 #include "arp.hh"
-#include "tcp.hh"
 #include "ip_checksum.hh"
 #include "const.hh"
 
@@ -23,6 +22,9 @@ class ipv4;
 template <ip_protocol_num ProtoNum>
 class ipv4_l4;
 struct ipv4_address;
+
+template <typename InetTraits>
+class tcp;
 
 struct ipv4_address {
     ipv4_address() : ip(0) {}
@@ -93,9 +95,10 @@ public:
 
 class ipv4_tcp final : public ip_protocol {
     ipv4_l4<ip_protocol_num::tcp> _inet_l4;
-    tcp<ipv4_traits> _tcp;
+    std::unique_ptr<tcp<ipv4_traits>> _tcp;
 public:
     ipv4_tcp(ipv4& inet);
+    ~ipv4_tcp();
     virtual void received(packet p, ipv4_address from, ipv4_address to);
     virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to) override;
     friend class ipv4;
@@ -167,7 +170,7 @@ public:
     void set_gw_address(ipv4_address ip);
     void set_netmask_address(ipv4_address ip);
     future<> send(ipv4_address to, ip_protocol_num proto_num, packet p);
-    tcp<ipv4_traits>& get_tcp() { return _tcp._tcp; }
+    tcp<ipv4_traits>& get_tcp() { return *_tcp._tcp; }
     void register_l4(proto_type id, ip_protocol* handler);
     net::hw_features hw_features() { return _netif->hw_features(); }
 };

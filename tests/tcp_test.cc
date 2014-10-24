@@ -4,6 +4,7 @@
 
 #include "net/ip.hh"
 #include "net/virtio.hh"
+#include "net/tcp.hh"
 
 using namespace net;
 
