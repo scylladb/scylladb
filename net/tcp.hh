@@ -446,7 +446,6 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     tcp_seq seg_seq = th->seq;
     auto seg_len = p.len();
     if (th->f_syn) {
-        do_output = true;
         if (!_foreign_syn_received) {
             _foreign_syn_received = true;
             _rcv.initial = seg_seq;
@@ -466,6 +465,9 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 _tcp.hw_features().mtu - sizeof(tcp_hdr) - net::ip_hdr_len_min;
             // Linux's default window size
             _rcv.window = 29200 << _rcv.window_scale;
+
+            // Send <SYN,ACK> back
+            do_output = true;
         } else {
             if (seg_seq != _rcv.initial) {
                 return respond_with_reset(th);
