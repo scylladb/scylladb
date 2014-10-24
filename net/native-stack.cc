@@ -2,7 +2,7 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
-#include "stack.hh"
+#include "native-stack.hh"
 #include "net.hh"
 #include "ip.hh"
 #include "tcp.hh"
