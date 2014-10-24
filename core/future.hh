@@ -342,10 +342,16 @@ public:
         if (state()->available()) {
             state()->forward_to(pr);
         } else {
-            _promise->schedule([pr = std::move(pr)] (future_state<T...>& state) mutable {
-                state.forward_to(pr);
-            });
-            _promise->_future = nullptr;
+            if (pr._future) {
+                pr._future->_promise = _promise;
+                _promise->_future = pr._future;
+                pr._future = nullptr;
+                pr._state = nullptr;
+            } else {
+                _promise->_state = pr._state;
+                _promise->_task = std::move(pr._task);
+                _promise->_future = nullptr;
+            }
             _promise = nullptr;
         }
     }
