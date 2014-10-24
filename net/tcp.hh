@@ -520,7 +520,11 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                     _rcv._user_waiting = false;
                     _rcv._data_received.set_value();
                 }
+                // If this <FIN> packet contains data as well, we can ACK both data
+                // and <FIN> in a single packet, so canncel the previous ACK.
+                clear_delayed_ack();
                 output();
+
                 // FIXME: Implement TIME-WAIT state
                 if (both_closed()) {
                     clear_delayed_ack();
