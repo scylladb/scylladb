@@ -98,3 +98,67 @@ SEASTAR_TEST_CASE(test_failing_intermediate_promise_should_fail_the_master_futur
         } catch (...) {}
     });
 }
+
+SEASTAR_TEST_CASE(test_future_forwarding__not_ready_to_unarmed) {
+    promise<> p1;
+    promise<> p2;
+
+    auto f1 = p1.get_future();
+    auto f2 = p2.get_future();
+
+    f1.forward_to(std::move(p2));
+
+    BOOST_REQUIRE(!f2.available());
+
+    auto called = f2.then([] {});
+
+    p1.set_value();
+    return called;
+}
+
+SEASTAR_TEST_CASE(test_future_forwarding__not_ready_to_armed) {
+    promise<> p1;
+    promise<> p2;
+
+    auto f1 = p1.get_future();
+    auto f2 = p2.get_future();
+
+    auto called = f2.then([] {});
+
+    f1.forward_to(std::move(p2));
+
+    BOOST_REQUIRE(!f2.available());
+
+    p1.set_value();
+
+    return called;
+}
+
+SEASTAR_TEST_CASE(test_future_forwarding__ready_to_unarmed) {
+    promise<> p2;
+
+    auto f1 = make_ready_future<>();
+    auto f2 = p2.get_future();
+
+    std::move(f1).forward_to(std::move(p2));
+    BOOST_REQUIRE(f2.available());
+
+    auto called = std::move(f2).then([] {});
+    BOOST_REQUIRE(called.available());
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_future_forwarding__ready_to_armed) {
+    promise<> p2;
+
+    auto f1 = make_ready_future<>();
+    auto f2 = p2.get_future();
+
+    auto called = std::move(f2).then([] {});
+
+    BOOST_REQUIRE(f1.available());
+
+    f1.forward_to(std::move(p2));
+    return called;
+}
