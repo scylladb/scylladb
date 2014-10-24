@@ -515,7 +515,6 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 // FIXME: we might queue an out-of-order FIN.  Is it worthwhile?
                 _foreign_fin_received = true;
                 _rcv.next = fin_seq + 1;
-                _rcv.window = 0;
                 if (_rcv._user_waiting) {
                     _rcv._user_waiting = false;
                     _rcv._data_received.set_value();
