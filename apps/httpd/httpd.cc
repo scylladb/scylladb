@@ -7,6 +7,7 @@
 #include "core/sstring.hh"
 #include "core/app-template.hh"
 #include "core/circular_buffer.hh"
+#include "core/smp.hh"
 #include <iostream>
 #include <algorithm>
 #include <unordered_map>
@@ -18,11 +19,12 @@
 class http_server {
     std::vector<server_socket> _listeners;
 public:
-    void listen(ipv4_addr addr) {
+    future<> listen(ipv4_addr addr) {
         listen_options lo;
         lo.reuse_address = true;
         _listeners.push_back(engine.listen(make_ipv4_address(addr), lo));
         do_accepts(_listeners.size() - 1);
+        return make_ready_future<>();
     }
     void do_accepts(int which) {
         _listeners[which].accept().then([this, which] (connected_socket fd, socket_address addr) mutable {
@@ -182,9 +184,11 @@ int main(int ac, char** av) {
     return app.run(ac, av, [&] {
         auto&& config = app.configuration();
         uint16_t port = config["port"].as<uint16_t>();
-        std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
-        for(unsigned c = 0; c < smp::count; c++) {
-            smp::submit_to(c, [port] () mutable {static thread_local http_server server; server.listen({port});});
-        }
+        auto server = new distributed<http_server>;
+        server->start().then([server = std::move(server), port] () mutable {
+            server->invoke_on_all(&http_server::listen, ipv4_addr{port});
+        }).then([port] {
+            std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
+        });
     });
 }
