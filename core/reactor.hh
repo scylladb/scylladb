@@ -19,7 +19,6 @@
 #include <unistd.h>
 #include <vector>
 #include <algorithm>
-#include <list>
 #include <thread>
 #include <system_error>
 #include <chrono>
@@ -67,7 +66,7 @@ std::unique_ptr<CharType[], free_deleter> allocate_aligned_buffer(size_t size, s
 class semaphore {
 private:
     size_t _count;
-    std::list<std::pair<promise<>, size_t>> _wait_list;
+    circular_buffer<std::pair<promise<>, size_t>> _wait_list;
 public:
     semaphore(size_t count = 1) : _count(count) {}
     future<> wait(size_t nr = 1) {

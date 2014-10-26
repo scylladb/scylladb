@@ -8,6 +8,7 @@
 #include "apply.hh"
 #include <stdexcept>
 #include <memory>
+#include <type_traits>
 #include <assert.h>
 
 template <class... T>
@@ -20,12 +21,12 @@ template <typename... T, typename... A>
 future<T...> make_ready_future(A&&... value);
 
 template <typename... T>
-future<T...> make_exception_future(std::exception_ptr value);
+future<T...> make_exception_future(std::exception_ptr value) noexcept;
 
 class task {
 public:
-    virtual ~task() {}
-    virtual void run() = 0;
+    virtual ~task() noexcept {}
+    virtual void run() noexcept = 0;
 };
 
 void schedule(std::unique_ptr<task> t);
@@ -36,7 +37,7 @@ class lambda_task : public task {
 public:
     lambda_task(const Func& func) : _func(func) {}
     lambda_task(Func&& func) : _func(std::move(func)) {}
-    virtual void run() { _func(); }
+    virtual void run() noexcept { _func(); }
 };
 
 template <typename Func>
@@ -71,6 +72,8 @@ make_task(Func&& func) {
 
 template <typename... T>
 struct future_state {
+    static constexpr bool move_noexcept = std::is_nothrow_move_constructible<std::tuple<T...>>::value;
+    static constexpr bool copy_noexcept = std::is_nothrow_copy_constructible<std::tuple<T...>>::value;
     enum class state {
          invalid,
          future,
@@ -83,8 +86,9 @@ struct future_state {
         std::tuple<T...> value;
         std::exception_ptr ex;
     } _u;
-    future_state() = default;
-    future_state(future_state&& x) : _state(x._state) {
+    future_state() noexcept {}
+    future_state(future_state&& x) noexcept(move_noexcept)
+            : _state(x._state) {
         switch (_state) {
         case state::future:
             break;
@@ -116,22 +120,22 @@ struct future_state {
             abort();
         }
     }
-    future_state& operator=(future_state&& x) {
+    future_state& operator=(future_state&& x) noexcept(move_noexcept) {
         if (this != &x) {
             this->~future_state();
             new (this) future_state(std::move(x));
         }
         return *this;
     }
-    bool available() const { return _state == state::result || _state == state::exception; }
-    bool failed() const { return _state == state::exception; }
+    bool available() const noexcept { return _state == state::result || _state == state::exception; }
+    bool failed() const noexcept { return _state == state::exception; }
     void wait();
-    void set(const std::tuple<T...>& value) {
+    void set(const std::tuple<T...>& value) noexcept(copy_noexcept) {
         assert(_state == state::future);
         _state = state::result;
         new (&_u.value) std::tuple<T...>(value);
     }
-    void set(std::tuple<T...>&& value) {
+    void set(std::tuple<T...>&& value) noexcept(move_noexcept) {
         assert(_state == state::future);
         _state = state::result;
         new (&_u.value) std::tuple<T...>(std::move(value));
@@ -142,7 +146,7 @@ struct future_state {
         _state = state::result;
         new (&_u.value) std::tuple<T...>(std::forward<A>(a)...);
     }
-    void set_exception(std::exception_ptr ex) {
+    void set_exception(std::exception_ptr ex) noexcept {
         assert(_state == state::future);
         _state = state::exception;
         new (&_u.ex) std::exception_ptr(ex);
@@ -154,7 +158,7 @@ struct future_state {
         }
         return std::move(_u.value);
     }
-    void forward_to(promise<T...>& pr) {
+    void forward_to(promise<T...>& pr) noexcept {
         assert(_state != state::future);
         if (_state == state::exception) {
             pr.set_exception(_u.ex);
@@ -168,7 +172,7 @@ template <typename Func, typename... T>
 struct future_task final : task, future_state<T...> {
     Func _func;
     future_task(Func&& func) : _func(std::move(func)) {}
-    virtual void run() {
+    virtual void run() noexcept {
         func(*this);
     }
 };
@@ -179,9 +183,11 @@ class promise {
     future_state<T...> _local_state;
     future_state<T...>* _state;
     std::unique_ptr<task> _task;
+    static constexpr const bool move_noexcept = future_state<T...>::move_noexcept;
+    static constexpr const bool copy_noexcept = future_state<T...>::copy_noexcept;
 public:
-    promise() : _state(&_local_state) {}
-    promise(promise&& x) : _future(x._future), _state(x._state), _task(std::move(x._task)) {
+    promise() noexcept : _state(&_local_state) {}
+    promise(promise&& x) noexcept(move_noexcept) : _future(x._future), _state(x._state), _task(std::move(x._task)) {
         if (_state == &x._local_state) {
             _state = &_local_state;
             _local_state = std::move(x._local_state);
@@ -191,10 +197,10 @@ public:
         migrated();
     }
     promise(const promise&) = delete;
-    ~promise() {
+    ~promise() noexcept {
         abandoned();
     }
-    promise& operator=(promise&& x) {
+    promise& operator=(promise&& x) noexcept(move_noexcept) {
         if (this != &x) {
             this->~promise();
             new (this) promise(std::move(x));
@@ -202,34 +208,34 @@ public:
         return *this;
     }
     void operator=(const promise&) = delete;
-    future<T...> get_future();
-    void set_value(const std::tuple<T...>& result) {
+    future<T...> get_future() noexcept;
+    void set_value(const std::tuple<T...>& result) noexcept(copy_noexcept) {
         _state->set(result);
         make_ready();
     }
-    void set_value(std::tuple<T...>&& result) {
+    void set_value(std::tuple<T...>&& result) noexcept(move_noexcept) {
         _state->set(std::move(result));
         make_ready();
     }
     template <typename... A>
-    void set_value(A&&... a) {
+    void set_value(A&&... a) noexcept {
         _state->set(std::forward<A>(a)...);
         make_ready();
     }
-    void set_exception(std::exception_ptr ex) {
+    void set_exception(std::exception_ptr ex) noexcept {
         _state->set_exception(std::move(ex));
         make_ready();
     }
     template<typename Exception>
-    void set_exception(Exception&& e) {
+    void set_exception(Exception&& e) noexcept {
         set_exception(make_exception_ptr(std::forward<Exception>(e)));
     }
 private:
     template <typename Func>
-    void schedule(Func&& func) {
+    void schedule(Func&& func) noexcept {
         struct task_with_state final : task {
             task_with_state(Func&& func) : _func(std::move(func)) {}
-            virtual void run() override {
+            virtual void run() noexcept override {
                 _func(_state);
             }
             future_state<T...> _state;
@@ -239,9 +245,9 @@ private:
         _state = &tws->_state;
         _task = std::move(tws);
     }
-    void make_ready();
-    void migrated();
-    void abandoned();
+    void make_ready() noexcept;
+    void migrated() noexcept;
+    void abandoned() noexcept(move_noexcept);
 
     template <typename... U>
     friend class future;
@@ -257,24 +263,26 @@ template <typename... T>
 class future {
     promise<T...>* _promise;
     future_state<T...> _local_state;  // valid if !_promise
+    static constexpr const bool move_noexcept = future_state<T...>::move_noexcept;
+    static constexpr const bool copy_noexcept = future_state<T...>::copy_noexcept;
 private:
-    future(promise<T...>* pr) : _promise(pr) {
+    future(promise<T...>* pr) noexcept : _promise(pr) {
         _promise->_future = this;
     }
     template <typename... A>
     future(ready_future_marker, A&&... a) : _promise(nullptr) {
         _local_state.set(std::forward<A>(a)...);
     }
-    future(exception_future_marker, std::exception_ptr ex) : _promise(nullptr) {
+    future(exception_future_marker, std::exception_ptr ex) noexcept : _promise(nullptr) {
         _local_state.set_exception(std::move(ex));
     }
-    future_state<T...>* state() {
+    future_state<T...>* state() noexcept {
         return _promise ? _promise->_state : &_local_state;
     }
 public:
     using value_type = std::tuple<T...>;
     using promise_type = promise<T...>;
-    future(future&& x) : _promise(x._promise) {
+    future(future&& x) noexcept(move_noexcept) : _promise(x._promise) {
         if (!_promise) {
             _local_state = std::move(x._local_state);
         }
@@ -284,7 +292,7 @@ public:
         }
     }
     future(const future&) = delete;
-    future& operator=(future&& x) {
+    future& operator=(future&& x) noexcept {
         if (this != &x) {
             this->~future();
             new (this) future(std::move(x));
@@ -301,20 +309,20 @@ public:
         return state()->get();
     }
 
-    bool available() {
+    bool available() noexcept {
         return state()->available();
     }
 
-    bool failed() {
+    bool failed() noexcept {
         return state()->failed();
     }
 
     template <typename Func, typename Enable>
-    void then(Func, Enable);
+    void then(Func, Enable) noexcept;
 
     template <typename Func>
     future<> then(Func&& func,
-            std::enable_if_t<std::is_same<std::result_of_t<Func(T&&...)>, void>::value, void*> = nullptr) {
+            std::enable_if_t<std::is_same<std::result_of_t<Func(T&&...)>, void>::value, void*> = nullptr) noexcept {
         if (state()->available()) {
             try {
                 apply(std::move(func), std::move(state()->get()));
@@ -338,7 +346,7 @@ public:
         return fut;
     }
 
-    void forward_to(promise<T...>&& pr) {
+    void forward_to(promise<T...>&& pr) noexcept {
         if (state()->available()) {
             state()->forward_to(pr);
         } else {
@@ -359,7 +367,7 @@ public:
     template <typename Func>
     std::result_of_t<Func(T&&...)>
     then(Func&& func,
-            std::enable_if_t<is_future<std::result_of_t<Func(T&&...)>>::value, void*> = nullptr) {
+            std::enable_if_t<is_future<std::result_of_t<Func(T&&...)>>::value, void*> = nullptr) noexcept {
         using P = typename std::result_of_t<Func(T&&...)>::promise_type;
         if (state()->available()) {
             try {
@@ -387,7 +395,7 @@ public:
     }
 
     template <typename Func>
-    future<> rescue(Func&& func) {
+    future<> rescue(Func&& func) noexcept {
         if (state()->available()) {
             try {
                 func([&state = *state()] { return state.get(); });
@@ -412,7 +420,7 @@ public:
     }
 
     template <typename Func>
-    future<T...> finally(Func&& func) {
+    future<T...> finally(Func&& func) noexcept {
         promise<T...> pr;
         auto f = pr.get_future();
         if (state()->available()) {
@@ -439,7 +447,7 @@ public:
         return f;
     }
 
-    future<> or_terminate() {
+    future<> or_terminate() noexcept {
         return rescue([] (auto get) {
             try {
                 get();
@@ -454,23 +462,22 @@ public:
     template <typename... U, typename... A>
     friend future<U...> make_ready_future(A&&... value);
     template <typename... U>
-    friend future<U...> make_exception_future(std::exception_ptr ex);
+    friend future<U...> make_exception_future(std::exception_ptr ex) noexcept;
     template <typename... U, typename Exception>
-    friend future<U...> make_exception_future(Exception&& ex);
+    friend future<U...> make_exception_future(Exception&& ex) noexcept;
 };
 
 template <typename... T>
 inline
 future<T...>
-promise<T...>::get_future()
-{
+promise<T...>::get_future() noexcept {
     assert(!_future);
     return future<T...>(this);
 }
 
 template <typename... T>
 inline
-void promise<T...>::make_ready() {
+void promise<T...>::make_ready() noexcept {
     if (_task) {
         ::schedule(std::move(_task));
     }
@@ -478,7 +485,7 @@ void promise<T...>::make_ready() {
 
 template <typename... T>
 inline
-void promise<T...>::migrated() {
+void promise<T...>::migrated() noexcept {
     if (_future) {
         _future->_promise = this;
     }
@@ -486,7 +493,7 @@ void promise<T...>::migrated() {
 
 template <typename... T>
 inline
-void promise<T...>::abandoned() {
+void promise<T...>::abandoned() noexcept(move_noexcept) {
     if (_future) {
         assert(_state);
         assert(_state->available());
@@ -503,13 +510,13 @@ future<T...> make_ready_future(A&&... value) {
 
 template <typename... T>
 inline
-future<T...> make_exception_future(std::exception_ptr ex) {
+future<T...> make_exception_future(std::exception_ptr ex) noexcept {
     return future<T...>(exception_future_marker(), std::move(ex));
 }
 
 template <typename... T, typename Exception>
 inline
-future<T...> make_exception_future(Exception&& ex) {
+future<T...> make_exception_future(Exception&& ex) noexcept {
     return make_exception_future<T...>(make_exception_ptr(std::forward<Exception>(ex)));
 }
 
