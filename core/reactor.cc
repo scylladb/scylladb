@@ -350,7 +350,6 @@ int reactor::run() {
             auto& evt = eevt[i];
             auto pfd = reinterpret_cast<pollable_fd_state*>(evt.data.ptr);
             auto events = evt.events & (EPOLLIN | EPOLLOUT);
-            std::unique_ptr<task> t_in, t_out;
             pfd->events_known |= events;
             auto events_to_remove = events & ~pfd->events_requested;
             complete_epoll_event(*pfd, &pollable_fd_state::pollin, events, EPOLLIN);
