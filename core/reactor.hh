@@ -542,7 +542,6 @@ public:
         }
 private:
 	static void listen_all(smp_message_queue* qs);
-	static void listen_one(smp_message_queue& q, std::unique_ptr<readable_eventfd>&& rfd);
 	static void start_all_queues();
 public:
 	static unsigned count;
