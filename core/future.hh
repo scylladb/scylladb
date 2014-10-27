@@ -350,16 +350,8 @@ public:
         if (state()->available()) {
             state()->forward_to(pr);
         } else {
-            if (pr._future) {
-                pr._future->_promise = _promise;
-                _promise->_future = pr._future;
-                pr._future = nullptr;
-                pr._state = nullptr;
-            } else {
-                _promise->_state = pr._state;
-                _promise->_task = std::move(pr._task);
-                _promise->_future = nullptr;
-            }
+            _promise->_future = nullptr;
+            *_promise = std::move(pr);
             _promise = nullptr;
         }
     }
