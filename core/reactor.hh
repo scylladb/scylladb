@@ -336,13 +336,18 @@ class smp_message_queue {
         typename Future::promise_type _promise; // used on local side
         async_work_item(smp_message_queue& q, Func&& func) : _q(q), _func(std::move(func)) {}
         virtual future<> process() override {
-            return this->_func().rescue([this] (auto&& get_result) {
-                try {
-                    _result = get_result();
-                } catch (...) {
-                    _ex = std::current_exception();
-                }
-            });
+            try {
+                return this->_func().rescue([this] (auto&& get_result) {
+                    try {
+                        _result = get_result();
+                    } catch (...) {
+                        _ex = std::current_exception();
+                    }
+                });
+            } catch (...) {
+                _ex = std::current_exception();
+                return make_ready_future();
+            }
         }
         virtual void complete() override {
             if (_result) {
