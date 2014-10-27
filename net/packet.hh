@@ -162,7 +162,7 @@ public:
     // move existing packet
     packet(packet&& x) noexcept;
     // copy data into packet
-    packet(char* data, size_t len);
+    packet(const char* data, size_t len);
     // copy data into packet
     packet(fragment frag);
     // zero-copy single fragment
@@ -281,7 +281,7 @@ packet::packet(fragment frag) : _impl(new impl(frag)) {
 }
 
 inline
-packet::packet(char* data, size_t size) : packet(fragment{data, size}) {
+packet::packet(const char* data, size_t size) : packet(fragment{const_cast<char*>(data), size}) {
 }
 
 template <typename Deleter>
