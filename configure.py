@@ -152,6 +152,7 @@ if apply_tristate(args.xen, test = have_xen,
     libs += ' -lxenstore'
     core += [
                 'core/xen/xenstore.cc',
+                'core/xen/gntalloc.cc',
             ]
 
 memcached = [
