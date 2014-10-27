@@ -415,7 +415,7 @@ packet::packet(fragment frag, Deleter d, packet&& x)
             _impl->_frags + _impl->_nr_frags + 1);
     ++_impl->_nr_frags;
     _impl->_frags[0] = frag;
-    _impl->_deleter = make_deleter(std::move(_impl->_deleter), d);
+    _impl->_deleter = make_deleter(std::move(_impl->_deleter), std::move(d));
 }
 
 template <typename Deleter>
@@ -424,7 +424,7 @@ packet::packet(packet&& x, fragment frag, Deleter d)
     : _impl(impl::allocate_if_needed(std::move(x._impl), 1)) {
     _impl->_len += frag.size;
     _impl->_frags[_impl->_nr_frags++] = frag;
-    _impl->_deleter = make_deleter(std::move(_impl->_deleter), d);
+    _impl->_deleter = make_deleter(std::move(_impl->_deleter), std::move(d));
 }
 
 inline
