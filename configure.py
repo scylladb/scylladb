@@ -153,6 +153,7 @@ if apply_tristate(args.xen, test = have_xen,
     core += [
                 'core/xen/xenstore.cc',
                 'core/xen/gntalloc.cc',
+                'core/xen/evtchn.cc',
             ]
 
 memcached = [
