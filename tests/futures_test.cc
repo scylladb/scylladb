@@ -162,3 +162,15 @@ SEASTAR_TEST_CASE(test_future_forwarding__ready_to_armed) {
     f1.forward_to(std::move(p2));
     return called;
 }
+
+static void forward_dead_unarmed_promise_with_dead_future_to(promise<>& p) {
+    promise<> p2;
+    p.get_future().forward_to(std::move(p2));
+}
+
+SEASTAR_TEST_CASE(test_future_forwarding__ready_to_unarmed_soon_to_be_dead) {
+    promise<> p1;
+    forward_dead_unarmed_promise_with_dead_future_to(p1);
+    make_ready_future<>().forward_to(std::move(p1));
+    return make_ready_future<>();
+}
