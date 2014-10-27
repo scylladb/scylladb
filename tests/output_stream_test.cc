@@ -8,10 +8,20 @@
 #include "core/vector-data-sink.hh"
 #include "core/future-util.hh"
 #include "core/sstring.hh"
+#include "net/packet.hh"
 #include "test-utils.hh"
 #include <vector>
 
 using namespace net;
+
+static sstring to_sstring(const packet& p) {
+    sstring res(sstring::initialized_later(), p.len());
+    auto i = res.begin();
+    for (auto& frag : p.fragments()) {
+        i = std::copy(frag.base, frag.base + frag.size, i);
+    }
+    return res;
+}
 
 struct stream_maker {
     bool _trim = false;
@@ -39,7 +49,7 @@ future<> assert_split(StreamConstructor stream_maker, std::initializer_list<T> w
     BOOST_TEST_MESSAGE("checking split: " << i++);
     auto sh_write_calls = make_shared(std::move(write_calls));
     auto sh_expected_splits = make_shared(std::move(expected_split));
-    auto v = make_shared<std::vector<temporary_buffer<char>>>();
+    auto v = make_shared<std::vector<packet>>();
     auto out = stream_maker(data_sink(std::make_unique<vector_data_sink>(*v)));
 
     return do_for_each(sh_write_calls->begin(), sh_write_calls->end(), [out, sh_write_calls] (auto&& chunk) {
@@ -92,7 +102,7 @@ SEASTAR_TEST_CASE(test_splitting_with_trimming) {
 }
 
 SEASTAR_TEST_CASE(test_flush_on_empty_buffer_does_not_push_empty_packet_down_stream) {
-    auto v = make_shared<std::vector<temporary_buffer<char>>>();
+    auto v = make_shared<std::vector<packet>>();
     auto out = make_shared<output_stream<char>>(
         data_sink(std::make_unique<vector_data_sink>(*v)), 8);
 

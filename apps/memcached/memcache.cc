@@ -1620,8 +1620,9 @@ private:
         uint16_t _request_id;
         input_stream<char> _in;
         output_stream<char> _out;
-        std::vector<temporary_buffer<char>> _out_bufs;
+        std::vector<packet> _out_bufs;
         ascii_protocol<WithFlashCache> _proto;
+
         connection(ipv4_addr src, uint16_t request_id, input_stream<char>&& in, size_t out_size,
                 sharded_cache<WithFlashCache>& c, distributed<system_stats>& system_stats)
             : _src(src)
@@ -1630,6 +1631,18 @@ private:
             , _out(output_stream<char>(data_sink(std::make_unique<vector_data_sink>(_out_bufs)), out_size, true))
             , _proto(c, system_stats)
         {}
+
+        future<> respond(udp_channel& chan) {
+            int i = 0;
+            return do_for_each(_out_bufs.begin(), _out_bufs.end(), [this, i, &chan] (packet& p) mutable {
+                header* out_hdr = p.prepend_header<header>(0);
+                out_hdr->_request_id = _request_id;
+                out_hdr->_sequence_number = i++;
+                out_hdr->_n = _out_bufs.size();
+                *out_hdr = hton(*out_hdr);
+                return chan.send(_src, std::move(p));
+            });
+        }
     };
 
 public:
@@ -1641,32 +1654,6 @@ public:
 
     void set_max_datagram_size(size_t max_datagram_size) {
         _max_datagram_size = max_datagram_size;
-    }
-
-    future<> respond(ipv4_addr dst, uint16_t request_id, std::vector<temporary_buffer<char>>&& datagrams) {
-        if (datagrams.size() == 1) {
-            auto&& buf = datagrams[0];
-            auto p = packet(fragment{buf.get_write(), buf.size()}, buf.release());
-            header *out_hdr = p.prepend_header<header>();
-            out_hdr->_request_id = request_id;
-            out_hdr->_sequence_number = 0;
-            out_hdr->_n = 1;
-            *out_hdr = hton(*out_hdr);
-            return _chan.send(dst, std::move(p));
-        }
-
-        int i = 0;
-        auto sb = make_shared(std::move(datagrams));
-        return do_for_each(sb->begin(), sb->end(),
-                [this, i, sb, dst, request_id](auto&& buf) mutable {
-            auto p = packet(fragment{buf.get_write(), buf.size()}, buf.release());
-            header *out_hdr = p.prepend_header<header>();
-            out_hdr->_request_id = request_id;
-            out_hdr->_sequence_number = i++;
-            out_hdr->_n = sb->size();
-            *out_hdr = hton(*out_hdr);
-            return _chan.send(dst, std::move(p));
-        });
     }
 
     void start() {
@@ -1690,14 +1677,14 @@ public:
                 if (hdr._n != 1 || hdr._sequence_number != 0) {
                     return conn->_out.write("CLIENT_ERROR only single-datagram requests supported\r\n").then([this, conn] {
                         return conn->_out.flush().then([this, conn] {
-                            return respond(conn->_src, conn->_request_id, std::move(conn->_out_bufs));
+                            return conn->respond(_chan).then([conn] {});
                         });
                     });
                 }
 
                 return conn->_proto.handle(conn->_in, conn->_out).then([this, conn]() mutable {
-                    return conn->_out.flush().then([this, conn]() mutable {
-                        return respond(conn->_src, conn->_request_id, std::move(conn->_out_bufs));
+                    return conn->_out.flush().then([this, conn] {
+                        return conn->respond(_chan).then([conn] {});
                     });
                 });
             });

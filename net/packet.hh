@@ -216,6 +216,7 @@ public:
 
     unsigned nr_frags() const { return _impl->_nr_frags; }
     pseudo_vector fragments() const { return { _impl->_frags, _impl->_nr_frags }; }
+    fragment* fragment_array() const { return _impl->_frags; }
 
     // share packet data (reference counted, non COW)
     packet share();
@@ -243,6 +244,8 @@ public:
     packet free_on_cpu(unsigned cpu);
 
     void linearize() { return linearize(0, len()); }
+
+    void reset() { _impl.reset(); }
 
     void reserve(int n_frags) {
         if (n_frags > _impl->_nr_frags) {

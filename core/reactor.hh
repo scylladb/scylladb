@@ -41,6 +41,7 @@
 #include "circular_buffer.hh"
 #include "file.hh"
 #include "semaphore.hh"
+#include "core/scattered_message.hh"
 
 #ifdef HAVE_OSV
 #include <osv/newpoll.hh>
@@ -118,6 +119,16 @@ public:
     friend class pollable_fd;
 };
 
+inline
+size_t iovec_len(const std::vector<iovec>& iov)
+{
+    size_t ret = 0;
+    for (auto&& e : iov) {
+        ret += e.iov_len;
+    }
+    return ret;
+}
+
 class pollable_fd {
 public:
     using speculation = pollable_fd_state::speculation;
@@ -132,6 +143,8 @@ public:
     future<size_t> read_some(const std::vector<iovec>& iov);
     future<> write_all(const char* buffer, size_t size);
     future<> write_all(const uint8_t* buffer, size_t size);
+    future<size_t> write_some(net::packet& p);
+    future<> write_all(net::packet& p);
     future<pollable_fd, socket_address> accept();
     future<size_t> sendmsg(struct msghdr *msg);
     future<size_t> recvmsg(struct msghdr *msg);
@@ -757,12 +770,17 @@ public:
 class data_sink_impl {
 public:
     virtual ~data_sink_impl() {}
-    virtual future<> put(std::vector<temporary_buffer<char>> data) = 0;
-    virtual future<> put(temporary_buffer<char> data) {
-        std::vector<temporary_buffer<char>> v;
-        v.reserve(1);
-        v.push_back(std::move(data));
-        return put(std::move(v));
+    virtual future<> put(net::packet data) = 0;
+    virtual future<> put(std::vector<temporary_buffer<char>> data) {
+        net::packet p;
+        p.reserve(data.size());
+        for (auto& buf : data) {
+            p = net::packet(std::move(p), net::fragment{buf.get_write(), buf.size()}, buf.release());
+        }
+        return put(std::move(p));
+    }
+    virtual future<> put(temporary_buffer<char> buf) {
+        return put(net::packet(net::fragment{buf.get_write(), buf.size()}, buf.release()));
     }
     virtual future<> close() = 0;
 };
@@ -777,6 +795,9 @@ public:
     }
     future<> put(temporary_buffer<char> data) {
         return _dsi->put(std::move(data));
+    }
+    future<> put(net::packet p) {
+        return _dsi->put(std::move(p));
     }
     future<> close() { return _dsi->close(); }
 };
@@ -836,6 +857,8 @@ public:
     future<> write(const char_type* buf, size_t n);
     future<> write(const char_type* buf);
     future<> write(const sstring& s);
+    future<> write(net::packet p);
+    future<> write(scattered_message<char_type> msg);
     future<> flush();
     future<> close() { return _fd.close(); }
 private:
@@ -853,14 +876,32 @@ future<> output_stream<CharType>::write(const sstring& s) {
     return write(s.c_str(), s.size());
 }
 
-inline
-size_t iovec_len(const std::vector<iovec>& iov)
-{
-    size_t ret = 0;
-    for (auto&& e : iov) {
-        ret += e.iov_len;
+template<typename CharType>
+future<> output_stream<CharType>::write(scattered_message<CharType> msg) {
+    return write(std::move(msg).release());
+}
+
+template<typename CharType>
+future<> output_stream<CharType>::write(net::packet p) {
+    static_assert(std::is_same<CharType, char>::value, "packet works on char");
+
+    if (p.len() == 0) {
+        return make_ready_future<>();
     }
-    return ret;
+
+    assert(!_end && "Mixing buffered writes and zero-copy writes not supported yet");
+
+    if (!_trim_to_size || p.len() <= _size) {
+        // TODO: aggregate buffers for later coalescing. Currently we flush right
+        // after appending the message anyway, so it doesn't matter.
+        return _fd.put(std::move(p));
+    }
+
+    auto head = p.share(0, _size);
+    p.trim_front(_size);
+    return _fd.put(std::move(head)).then([this, p = std::move(p)] () mutable {
+        return write(std::move(p));
+    });
 }
 
 inline
@@ -1034,8 +1075,7 @@ input_stream<CharType>::consume(Consumer& consumer) {
 #include <iostream>
 #include "sstring.hh"
 
-// Writes @buf in chunks of _size length. The last chunk, if smaller
-// is buffered.
+// Writes @buf in chunks of _size length. The last chunk is buffered if smaller.
 template <typename CharType>
 future<>
 output_stream<CharType>::split_and_put(temporary_buffer<CharType> buf) {
@@ -1138,6 +1178,40 @@ future<> pollable_fd::write_all(const char* buffer, size_t size) {
 inline
 future<> pollable_fd::write_all(const uint8_t* buffer, size_t size) {
     return engine.write_all(*_s, buffer, size);
+}
+
+inline
+future<size_t> pollable_fd::write_some(net::packet& p) {
+    return engine.writeable(*_s).then([this, &p] () mutable {
+        static_assert(offsetof(iovec, iov_base) == offsetof(net::fragment, base) &&
+            sizeof(iovec::iov_base) == sizeof(net::fragment::base) &&
+            offsetof(iovec, iov_len) == offsetof(net::fragment, size) &&
+            sizeof(iovec::iov_len) == sizeof(net::fragment::size) &&
+            alignof(iovec) == alignof(net::fragment) &&
+            sizeof(iovec) == sizeof(net::fragment)
+            , "net::fragment and iovec should be equivalent");
+
+        iovec* iov = reinterpret_cast<iovec*>(p.fragment_array());
+        auto r = get_file_desc().writev(iov, p.nr_frags());
+        if (!r) {
+            return write_some(p);
+        }
+        if (size_t(*r) == p.len()) {
+            _s->speculate_epoll(EPOLLOUT);
+        }
+        return make_ready_future<size_t>(*r);
+    });
+}
+
+inline
+future<> pollable_fd::write_all(net::packet& p) {
+    return write_some(p).then([this, &p] (size_t size) {
+        if (p.len() == size) {
+            return make_ready_future<>();
+        }
+        p.trim_front(size);
+        return write_all(p);
+    });
 }
 
 inline

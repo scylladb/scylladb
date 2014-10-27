@@ -202,6 +202,14 @@ public:
         throw_system_error_on(r == -1);
         return { size_t(r) };
     }
+    boost::optional<size_t> writev(const iovec *iov, int iovcnt) {
+        auto r = ::writev(_fd, iov, iovcnt);
+        if (r == -1 && errno == EAGAIN) {
+            return {};
+        }
+        throw_system_error_on(r == -1);
+        return { size_t(r) };
+    }
     void timerfd_settime(int flags, const itimerspec& its) {
         auto r = ::timerfd_settime(_fd, flags, &its, NULL);
         throw_system_error_on(r == -1);

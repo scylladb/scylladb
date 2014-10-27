@@ -90,16 +90,8 @@ class native_connected_socket_impl<Protocol>::native_data_sink_impl final
 public:
     explicit native_data_sink_impl(typename Protocol::connection& conn)
         : _conn(conn) {}
-    virtual future<> put(std::vector<temporary_buffer<char>> data) override {
-        std::vector<fragment> frags;
-        frags.reserve(data.size());
-        for (auto& e : data) {
-            frags.push_back(fragment{e.get_write(), e.size()});
-        }
-        return _conn.send(packet(std::move(frags), [tmp = std::move(data)] () mutable {}));
-    }
-    virtual future<> put(temporary_buffer<char> data) override {
-        return _conn.send(packet({data.get_write(), data.size()}, data.release()));
+    virtual future<> put(packet p) override {
+        return _conn.send(std::move(p));
     }
     virtual future<> close() override {
         _conn.close_write();
