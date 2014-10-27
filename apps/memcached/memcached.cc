@@ -5,7 +5,7 @@
 #include <boost/optional.hpp>
 #include <iomanip>
 #include "core/app-template.hh"
-#include "core/async-action.hh"
+#include "core/future-util.hh"
 #include "core/timer-set.hh"
 #include "core/shared_ptr.hh"
 #include "core/stream.hh"

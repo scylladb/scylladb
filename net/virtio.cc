@@ -4,7 +4,7 @@
 
 #include "virtio.hh"
 #include "core/posix.hh"
-#include "core/async-action.hh"
+#include "core/future-util.hh"
 #include "core/vla.hh"
 #include "virtio-interface.hh"
 #include "core/reactor.hh"

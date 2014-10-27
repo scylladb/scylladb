@@ -16,7 +16,7 @@
 #include "scollectd.hh"
 #include "core/shared_ptr.hh"
 #include "core/app-template.hh"
-#include "core/async-action.hh"
+#include "core/future-util.hh"
 #include "core/shared_ptr.hh"
 
 using namespace std::chrono_literals;
