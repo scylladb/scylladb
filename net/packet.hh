@@ -419,6 +419,7 @@ void packet::append(packet&& p) {
     }
     _impl = impl::allocate_if_needed(std::move(_impl), p._impl->_nr_frags);
     _impl->_len += p._impl->_len;
+    p._impl->unuse_internal_data();
     std::copy(p._impl->_frags, p._impl->_frags + p._impl->_nr_frags,
             _impl->_frags + _impl->_nr_frags);
     _impl->_nr_frags += p._impl->_nr_frags;
