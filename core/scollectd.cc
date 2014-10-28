@@ -197,7 +197,7 @@ private:
         }
         cpwriter & put(part_type type, const value_list & v) {
             auto s = v.size();
-            auto sz = 4 + s + s * sizeof(uint64_t);
+            auto sz = 6 + s + s * sizeof(uint64_t);
             check(sz);
             write(uint16_t(type));
             write(uint16_t(sz));
