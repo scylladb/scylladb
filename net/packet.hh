@@ -171,7 +171,9 @@ public:
     packet(fragment frag, Deleter deleter);
     // zero-copy single fragment
     packet(fragment frag, deleter del);
-    // zero-copy multiple fragment
+    // zero-copy multiple fragments
+    packet(std::vector<fragment> frag, deleter del);
+    // zero-copy multiple fragments
     template <typename Deleter>
     packet(std::vector<fragment> frag, Deleter deleter);
     // build packet with iterator
@@ -190,6 +192,8 @@ public:
     // append fragment (zero-copy)
     template <typename Deleter>
     packet(packet&& x, fragment frag, Deleter deleter);
+    // append fragment (zero-copy)
+    packet(packet&& x, fragment frag, deleter d);
 
     packet& operator=(packet&& x) {
         if (this != &x) {
@@ -300,17 +304,22 @@ packet::packet(fragment frag, deleter d)
     _impl->_len = frag.size;
 }
 
-template <typename Deleter>
 inline
-packet::packet(std::vector<fragment> frag, Deleter d)
+packet::packet(std::vector<fragment> frag, deleter d)
     : _impl(impl::allocate(frag.size())) {
-    _impl->_deleter = make_deleter(deleter(), std::move(d));
+    _impl->_deleter = std::move(d);
     std::copy(frag.begin(), frag.end(), _impl->_frags);
     _impl->_nr_frags = frag.size();
     _impl->_len = 0;
     for (auto&& f : _impl->fragments()) {
         _impl->_len += f.size;
     }
+}
+
+template <typename Deleter>
+inline
+packet::packet(std::vector<fragment> frag, Deleter d)
+    : packet(std::move(frag), make_deleter(deleter(), std::move(d))) {
 }
 
 template <typename Iterator, typename Deleter>
@@ -416,6 +425,15 @@ packet::packet(packet&& x, fragment frag, Deleter d)
     _impl->_len += frag.size;
     _impl->_frags[_impl->_nr_frags++] = frag;
     _impl->_deleter = make_deleter(std::move(_impl->_deleter), d);
+}
+
+inline
+packet::packet(packet&& x, fragment frag, deleter d)
+    : _impl(impl::allocate_if_needed(std::move(x._impl), 1)) {
+    _impl->_len += frag.size;
+    _impl->_frags[_impl->_nr_frags++] = frag;
+    d.append(std::move(_impl->_deleter));
+    _impl->_deleter = std::move(d);
 }
 
 inline
