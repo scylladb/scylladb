@@ -32,7 +32,6 @@ class scollectd::impl {
     uint64_t _num_packets = 0;
     uint64_t _millis = 0;
     uint64_t _bytes = 0;
-    uint64_t _nvalues = 0;
     double _avg = 0;
 
 public:
@@ -101,7 +100,7 @@ public:
             add_polled_metric(
                     type_instance_id("scollectd", per_cpu_plugin_instance,
                             "total_values"),
-                    make_typed(data_type::DERIVE, _nvalues)
+                    make_typed(data_type::DERIVE, std::bind(&value_list_map::size, &_values))
             )
         };
 
@@ -279,44 +278,31 @@ private:
 
     void run() {
         typedef value_list_map::iterator iterator;
-        typedef std::tuple<value_list_map, iterator, cpwriter> context;
+        typedef std::tuple<iterator, cpwriter> context;
 
         auto ctxt = make_shared<context>();
 
-        auto & values = std::get<value_list_map>(*ctxt);
-
-        // take all values to be polled
         // note we're doing this unsynced since we assume
         // all registrations to this instance will be done on the
         // same cpu, and without interuptions (no wait-states)
-        values = std::move(_values);
-        _nvalues = values.size();
-        std::get<iterator>(*ctxt) = values.begin();
+        std::get<iterator>(*ctxt) = _values.begin();
 
-        auto stop_when =
-                [ctxt]() {
-                    auto done = std::get<iterator>(*ctxt) == std::get<value_list_map>(*ctxt).end();
-                    return done;
-                };
+        auto stop_when = [this, ctxt]() {
+            auto done = std::get<iterator>(*ctxt) == _values.end();
+            return done;
+        };
         // append as many values as we can fit into a packet (1024 bytes)
         auto send_packet = [this, ctxt]() {
             auto start = std::chrono::high_resolution_clock::now();
             auto & i = std::get<iterator>(*ctxt);
-            auto & values = std::get<value_list_map>(*ctxt);
             auto & out = std::get<cpwriter>(*ctxt);
 
             out.clear();
 
-            /* process potential de-regs already. if we did a send, someone might have de-regged
-             * a value in the set meanwhile
-             */
-            values.insert(_values.begin(), _values.end());
-            _values.clear();
-
-            while (i != values.end()) {
+            while (i != _values.end()) {
                 // nullptr value list means removed value. so remove.
                 if (!i->second) {
-                    i = values.erase(i);
+                    i = _values.erase(i);
                     continue;
                 }
                 auto m = out.mark();
@@ -349,12 +335,7 @@ private:
                         }
                     });
         };
-        do_until(stop_when, send_packet).then([this, ctxt]() {
-            /* finally, done, so append all values that might have been added while we we're
-             sending stuff.*/
-            auto & values = std::get<value_list_map>(*ctxt);
-            values.insert(_values.begin(), _values.end());
-            _values = std::move(values);
+        do_until(stop_when, send_packet).then([this]() {
             arm();
         });
     }

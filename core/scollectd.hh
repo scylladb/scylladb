@@ -76,18 +76,16 @@ public:
     // don't use directly. use make_typed.
     template<typename T>
     struct typed {
-        typed(data_type t, T & v)
-                : type(t), value(v) {
+        typed(data_type t, T && v)
+                : type(t), value(std::forward<T>(v)) {
         }
         data_type type;
-        T & value;
+        T value;
     };
 
     template<typename T>
-    static inline typed<typename std::remove_reference<T>::type> make_typed(
-            data_type type, T&& t) {
-        return typed<typename std::remove_reference<T>::type>(type,
-                std::forward<T>(t));
+    static inline typed<T> make_typed(data_type type, T&& t) {
+        return typed<T>(type, std::forward<T>(t));
     }
 
     typedef std::string plugin_id;
