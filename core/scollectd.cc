@@ -29,8 +29,9 @@ class scollectd::impl {
     ipv4_addr _addr = default_addr;
     clock_type::duration _period = default_period;
     uint64_t _num_packets = 0;
-    uint64_t _nanos = 0;
+    uint64_t _millis = 0;
     uint64_t _bytes = 0;
+    uint64_t _nvalues = 0;
     double _avg = 0;
 
 public:
@@ -73,13 +74,36 @@ public:
         _timer.set_callback(std::bind(&impl::run, this));
 
         // dogfood ourselves
-        type_instance_id typ("scollectd", per_cpu_plugin_instance, "network",
-                "sent");
-        _reg = add_polled_metric(typ, _num_packets,
-                make_typed(data_type::ABSOLUTE, _bytes),
-                make_typed(data_type::ABSOLUTE, _nanos), [this]() {return _avg;} // not needed, but demonstrates in a small way reg of callable
+        _regs = {
+            // total_bytes      value:DERIVE:0:U
+            add_polled_metric(
+                    type_instance_id("scollectd", per_cpu_plugin_instance,
+                            "total_bytes", "sent"),
+                    make_typed(data_type::DERIVE, _bytes)),
+            // total_requests      value:DERIVE:0:U
+            add_polled_metric(
+                    type_instance_id("scollectd", per_cpu_plugin_instance,
+                            "total_requests"),
+                    make_typed(data_type::DERIVE, _num_packets)
+            ),
+            // latency          value:GAUGE:0:U
+            add_polled_metric(
+                    type_instance_id("scollectd", per_cpu_plugin_instance,
+                            "latency"), _avg),
+            // total_time_in_ms    value:DERIVE:0:U
+            add_polled_metric(
+                    type_instance_id("scollectd", per_cpu_plugin_instance,
+                            "total_time_in_ms"),
+                    make_typed(data_type::DERIVE, _millis)
+            ),
+            // total_values     value:DERIVE:0:U
+            add_polled_metric(
+                    type_instance_id("scollectd", per_cpu_plugin_instance,
+                            "total_values"),
+                    make_typed(data_type::DERIVE, _nvalues)
+            )
+        };
 
-                );
         send_notification(
                 type_instance_id("scollectd", per_cpu_plugin_instance,
                         "network"), "daemon started");
@@ -87,7 +111,7 @@ public:
     }
     void stop() {
         _timer.cancel();
-        _reg.unregister();
+        _regs.clear();
     }
 
 private:
@@ -259,6 +283,7 @@ private:
         // all registrations to this instance will be done on the
         // same cpu, and without interuptions (no wait-states)
         values = std::move(_values);
+        _nvalues = values.size();
         std::get<iterator>(*ctxt) = values.begin();
 
         auto stop_when =
@@ -302,9 +327,9 @@ private:
                         auto now = std::chrono::high_resolution_clock::now();
                         // dogfood stats
                         ++_num_packets;
-                        _nanos += std::chrono::duration_cast<std::chrono::nanoseconds>(now - start).count();
+                        _millis += std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
                         _bytes += out.size();
-                        _avg = double(_nanos) / _num_packets;
+                        _avg = double(_millis) / _num_packets;
                     }).rescue([] (auto get_ex) {
                         try {
                             get_ex();
@@ -326,7 +351,7 @@ private:
     }
 private:
     value_list_map _values;
-    registration _reg;
+    std::vector<registration> _regs;
 };
 
 const ipv4_addr scollectd::default_addr("239.192.74.66:25826");
