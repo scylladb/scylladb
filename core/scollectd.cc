@@ -224,7 +224,7 @@ private:
         }
         template<typename T>
         typename std::enable_if<std::is_integral<T>::value, cpwriter &>::type put(
-                part_type type, T & t) {
+                part_type type, T t) {
             write(uint16_t(type));
             write(uint16_t(4 + sizeof(t)));
             write(t);
@@ -244,14 +244,15 @@ private:
             return *this;
         }
         cpwriter & put(const std::string & host, const type_instance_id & id) {
-            const auto ts =
-                    std::chrono::duration_cast<collectd_hres_duration>(
-                            std::chrono::system_clock::now().time_since_epoch()).count();
+            const auto ts = std::chrono::system_clock::now().time_since_epoch();
+            const auto lrts =
+                    std::chrono::duration_cast<std::chrono::seconds>(ts).count();
 
             put_cached(part_type::Host, host);
-            // TODO: we're only sending hi-res time stamps.
-            // Is this a problem?
-            put(part_type::TimeHr, ts);
+            put(part_type::Time, uint64_t(lrts));
+            // Seems hi-res timestamp does not work very well with
+            // at the very least my default collectd in fedora (or I did it wrong?)
+            // Use lo-res ts for now, it is probably quite sufficient.
             put_cached(part_type::Plugin, id.plugin());
             // Optional
             put_cached(part_type::PluginInst,
