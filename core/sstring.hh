@@ -135,6 +135,21 @@ public:
         u.internal.size = 0;
         u.internal.str[0] = '\0';
     }
+    temporary_buffer<char_type> release() && {
+        if (is_external()) {
+            auto ptr = u.external.str;
+            auto size = u.external.size;
+            u.external.str = nullptr;
+            u.external.size = 0;
+            return temporary_buffer<char_type>(ptr, size, make_deleter([ptr] { delete[] ptr; }));
+        } else {
+            auto buf = temporary_buffer<char_type>(u.internal.size);
+            std::copy(u.internal.str, u.internal.str + u.internal.size, buf.get_write());
+            u.internal.size = 0;
+            u.internal.str[0] = '\0';
+            return buf;
+        }
+    }
     void swap(basic_sstring& x) noexcept {
         contents tmp;
         tmp = x.u;
