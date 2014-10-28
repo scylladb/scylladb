@@ -297,7 +297,12 @@ private:
         }
         uint64_t operator()() const {
             auto v = _t();
-            return convert(v);
+            if (_type == data_type::GAUGE) {
+                return convert(double(v));
+            } else {
+                uint64_t u = v;
+                return convert(u);
+            }
         }
         operator uint64_t() const {
             return (*this)();
