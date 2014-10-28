@@ -12,6 +12,7 @@
 #include <string>
 #include <map>
 #include <iostream>
+#include <unordered_map>
 
 #include "scollectd.hh"
 #include "core/shared_ptr.hh"
@@ -154,6 +155,8 @@ private:
         buffer_type _buf;
         mark_type _pos;
 
+        std::unordered_map<uint16_t, std::string> _cache;
+
         cpwriter()
                 : _pos(_buf.begin()) {
         }
@@ -171,6 +174,7 @@ private:
         }
         void clear() {
             reset(_buf.begin());
+            _cache.clear();
         }
         const char * data() const {
             return &_buf.at(0);
@@ -211,6 +215,14 @@ private:
             write(s); // include \0
             return *this;
         }
+        cpwriter & put_cached(part_type type, const std::string & s) {
+            auto & cached = _cache[uint16_t(type)];
+            if (cached != s) {
+                put(type, s);
+                cached = s;
+            }
+            return *this;
+        }
         template<typename T>
         typename std::enable_if<std::is_integral<T>::value, cpwriter &>::type put(
                 part_type type, T & t) {
@@ -237,23 +249,18 @@ private:
                     std::chrono::duration_cast<collectd_hres_duration>(
                             std::chrono::system_clock::now().time_since_epoch()).count();
 
-            put(part_type::Host, host);
+            put_cached(part_type::Host, host);
             // TODO: we're only sending hi-res time stamps.
             // Is this a problem?
             put(part_type::TimeHr, ts);
-            put(part_type::Plugin, id.plugin());
+            put_cached(part_type::Plugin, id.plugin());
             // Optional
-            if (!id.plugin_instance().empty()) {
-                put(part_type::PluginInst,
-                        id.plugin_instance() == per_cpu_plugin_instance ?
-                                std::to_string(engine._id) :
-                                id.plugin_instance());
-            }
-            put(part_type::Type, id.type());
+            put_cached(part_type::PluginInst,
+                    id.plugin_instance() == per_cpu_plugin_instance ?
+                            std::to_string(engine._id) : id.plugin_instance());
+            put_cached(part_type::Type, id.type());
             // Optional
-            if (!id.type_instance().empty()) {
-                put(part_type::TypeInst, id.type_instance());
-            }
+            put_cached(part_type::TypeInst, id.type_instance());
             return *this;
         }
         cpwriter & put(const std::string & host,
@@ -297,6 +304,8 @@ private:
             auto & i = std::get<iterator>(*ctxt);
             auto & values = std::get<value_list_map>(*ctxt);
             auto & out = std::get<cpwriter>(*ctxt);
+
+            out.clear();
 
             /* process potential de-regs already. if we did a send, someone might have de-regged
              * a value in the set meanwhile
