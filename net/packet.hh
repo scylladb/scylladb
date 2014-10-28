@@ -203,7 +203,6 @@ public:
     fragment& frag(unsigned idx) { return _impl->_frags[idx]; }
 
     unsigned nr_frags() const { return _impl->_nr_frags; }
-    //std::vector<fragment>& fragments() { return _impl->_fragments; }
     pseudo_vector fragments() const { return { _impl->_frags, _impl->_nr_frags }; }
 
     // share packet data (reference counted, non COW)
