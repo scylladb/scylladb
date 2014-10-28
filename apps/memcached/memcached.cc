@@ -4,6 +4,7 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/optional.hpp>
 #include <iomanip>
+#include <sstream>
 #include "core/app-template.hh"
 #include "core/future-util.hh"
 #include "core/timer-set.hh"
@@ -15,6 +16,7 @@
 #include "net/api.hh"
 #include "net/packet-data-source.hh"
 #include "apps/memcached/ascii.hh"
+#include "core/bitops.hh"
 #include <unistd.h>
 
 #define VERSION_STRING "seastar v1.0"
@@ -439,6 +441,45 @@ public:
         i = add_overriding(i, item_ref._flags, to_sstring(*value - std::min(*value, delta)), item_ref._expiry);
         return {boost::intrusive_ptr<item>(&*i), true};
     }
+
+    future<> print_hash_stats(output_stream<char>& out) {
+        unsigned bits = sizeof(size_t) * 8;
+        size_t histo[bits + 1] {};
+        size_t max_size = 0;
+        unsigned max_bucket = 0;
+
+        for (size_t i = 0; i < _cache.bucket_count(); i++) {
+            size_t size = _cache.bucket_size(i);
+            unsigned bucket;
+            if (size == 0) {
+                bucket = 0;
+            } else {
+                bucket = bits - count_leading_zeros(size);
+            }
+            max_bucket = std::max(max_bucket, bucket);
+            max_size = std::max(max_size, size);
+            histo[bucket]++;
+        }
+
+        std::stringstream ss;
+
+        ss << "size: " << _cache.size() << "\n";
+        ss << "max: " << max_size << "\n";
+        ss << "bucket occupancy histogram:\n";
+
+        for (unsigned i = 0; i < (max_bucket + 2); i++) {
+            ss << "  ";
+            if (i == 0) {
+                ss << "0: ";
+            } else if (i == 1) {
+                ss << "1: ";
+            } else {
+                ss << (1 << (i - 1)) << "+: ";
+            }
+            ss << histo[i] << "\n";
+        }
+        return out.write(ss.str());
+    }
 };
 
 struct system_stats {
@@ -596,7 +637,14 @@ private:
             }).then([this, &out, v = _cache.stats()._bytes] {
                 return print_stat(out, "bytes", v);
             }).then([&out] {
-                return out.write("END\r\n");
+                return out.write(msg_end);
+            });
+    }
+
+    future<> print_hash_stats(output_stream<char>& out) {
+        return _cache.print_hash_stats(out)
+            .then([this, &out] {
+                return out.write(msg_end);
             });
     }
 public:
@@ -706,6 +754,9 @@ public:
 
                 case memcache_ascii_parser::state::cmd_stats:
                     return print_stats(out);
+
+                case memcache_ascii_parser::state::cmd_stats_hash:
+                    return print_hash_stats(out);
 
                 case memcache_ascii_parser::state::cmd_incr:
                 {

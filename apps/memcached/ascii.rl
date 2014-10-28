@@ -58,9 +58,11 @@ delete = "delete" sp key maybe_noreply crlf @{ _state = state::cmd_delete; };
 flush = "flush_all" maybe_expiration maybe_noreply crlf @{ _state = state::cmd_flush_all; };
 version = "version" crlf @{ _state = state::cmd_version; };
 stats = "stats" crlf @{ _state = state::cmd_stats; };
+stats_hash = "stats hash" crlf @{ _state = state::cmd_stats_hash; };
 incr = "incr" sp key sp u64 maybe_noreply crlf @{ _state = state::cmd_incr; };
 decr = "decr" sp key sp u64 maybe_noreply crlf @{ _state = state::cmd_decr; };
-main := (add | replace | set | get | gets | delete | flush | version | cas | stats | incr | decr) >eof{ _state = state::eof; };
+main := (add | replace | set | get | gets | delete | flush | version | cas | stats | incr | decr
+    | stats_hash) >eof{ _state = state::eof; };
 
 prepush {
     prepush();
@@ -88,6 +90,7 @@ public:
         cmd_flush_all,
         cmd_version,
         cmd_stats,
+        cmd_stats_hash,
         cmd_incr,
         cmd_decr,
     };
