@@ -346,7 +346,7 @@ class virtio_net_device : public net::device {
             _txq_notify_fd = _txq_notify.get_write_fd();
             _txq_kick_fd = _txq_kick.get_read_fd();
             _rxq_notify_fd = _rxq_notify.get_write_fd();
-            _rxq_kick_fd = _txq_kick.get_read_fd();
+            _rxq_kick_fd = _rxq_kick.get_read_fd();
         }
     };
     struct net_hdr {
