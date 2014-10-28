@@ -101,6 +101,12 @@ public:
                     type_instance_id("scollectd", per_cpu_plugin_instance,
                             "total_values"),
                     make_typed(data_type::DERIVE, std::bind(&value_list_map::size, &_values))
+            ),
+            // records          value:GAUGE:0:U
+            add_polled_metric(
+                    type_instance_id("scollectd", per_cpu_plugin_instance,
+                            "records"),
+                    make_typed(data_type::GAUGE, std::bind(&value_list_map::size, &_values))
             )
         };
 
