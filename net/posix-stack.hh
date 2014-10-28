@@ -32,7 +32,7 @@ public:
     explicit posix_data_sink_impl(pollable_fd& fd) : _fd(fd) {}
     future<> put(std::vector<temporary_buffer<char>> data) override;
     future<> close() override {
-        // TODO: close on local side
+        _fd.close();
         return make_ready_future<>();
     }
 };

@@ -131,6 +131,7 @@ public:
     future<size_t> recvmsg(struct msghdr *msg);
     future<size_t> sendto(socket_address addr, const void* buf, size_t len);
     file_desc& get_file_desc() const { return _s->fd; }
+    void close() { _s.reset(); }
 protected:
     int get_fd() const { return _s->fd.get(); }
     friend class reactor;
