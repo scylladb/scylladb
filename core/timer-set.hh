@@ -221,6 +221,15 @@ public:
         }
     }
 
+    size_t size() const
+    {
+        size_t res = 0;
+        for (int i : bitsets::for_each_set(_non_empty_buckets)) {
+            res += _buckets[i].size();
+        }
+        return res;
+    }
+
     /**
      * Returns true if and only if there are no timers in the active set.
      */

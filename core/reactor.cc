@@ -8,6 +8,7 @@
 #include "net/packet.hh"
 #include "resource.hh"
 #include "print.hh"
+#include "scollectd.hh"
 #include "util/conversions.hh"
 #include <cassert>
 #include <unistd.h>
@@ -319,6 +320,32 @@ void reactor::exit(int ret) {
 }
 
 int reactor::run() {
+    uint64_t tasks_processed = 0;
+    scollectd::registration regs[] = {
+            // queue_length     value:GAUGE:0:U
+            // Absolute value of num tasks in queue.
+            scollectd::add_polled_metric(scollectd::type_instance_id("reactor"
+                    , scollectd::per_cpu_plugin_instance
+                    , "queue_length", "tasks-pending")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                            , std::bind(&decltype(_pending_tasks)::size, &_pending_tasks))
+            ),
+            // total_operations value:DERIVE:0:U
+            scollectd::add_polled_metric(scollectd::type_instance_id("reactor"
+                    , scollectd::per_cpu_plugin_instance
+                    , "total_operations", "tasks-processed")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE, tasks_processed)
+            ),
+            // queue_length     value:GAUGE:0:U
+            // Absolute value of num timers in queue.
+            scollectd::add_polled_metric(scollectd::type_instance_id("reactor"
+                    , scollectd::per_cpu_plugin_instance
+                    , "queue_length", "timers-pending")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                            , std::bind(&decltype(_timers)::size, &_timers))
+            ),
+    };
+
     _io_eventfd.wait().then([this] (size_t count) {
         process_io(count);
     });
@@ -333,6 +360,7 @@ int reactor::run() {
             _pending_tasks.pop_front();
             tsk->run();
             tsk.reset();
+            ++tasks_processed;
         }
         if (_stopped) {
             if (_id == 0) {
