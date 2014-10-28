@@ -4,6 +4,9 @@
 
 #include "core/reactor.hh"
 #include "packet.hh"
+#include <iostream>
+#include <algorithm>
+#include <cctype>
 
 namespace net {
 
@@ -46,6 +49,50 @@ packet packet::free_on_cpu(unsigned cpu)
     });
 
     return packet(impl::copy(_impl.get()));
+}
+
+std::ostream& operator<<(std::ostream& os, const packet& p) {
+    os << "packet{";
+    bool first = true;
+    for (auto&& frag : p.fragments()) {
+        if (!first) {
+            os << ", ";
+        }
+        first = false;
+        if (std::all_of(frag.base, frag.base + frag.size, [] (int c) { return c >= 9 && c <= 0x7f; })) {
+            os << '"';
+            for (auto p = frag.base; p != frag.base + frag.size; ++p) {
+                auto c = *p;
+                if (isprint(c)) {
+                    os << c;
+                } else if (c == '\r') {
+                    os << "\\r";
+                } else if (c == '\n') {
+                    os << "\\n";
+                } else if (c == '\t') {
+                    os << "\\t";
+                } else {
+                    uint8_t b = c;
+                    os << "\\x" << (b / 16) << (b % 16);
+                }
+            }
+            os << '"';
+        } else {
+            os << "{";
+            bool nfirst = true;
+            for (auto p = frag.base; p != frag.base + frag.size; ++p) {
+                if (!nfirst) {
+                    os << " ";
+                }
+                nfirst = false;
+                uint8_t b = *p;
+                os << sprint("%02x", unsigned(b));
+            }
+            os << "}";
+        }
+    }
+    os << "}";
+    return os;
 }
 
 }

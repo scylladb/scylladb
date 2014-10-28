@@ -10,6 +10,7 @@
 #include <vector>
 #include <cassert>
 #include <algorithm>
+#include <iosfwd>
 
 namespace net {
 
@@ -235,6 +236,8 @@ public:
     class offload_info offload_info() { return _impl->_offload_info; }
     void set_offload_info(class offload_info oi) { _impl->_offload_info = oi; }
 };
+
+std::ostream& operator<<(std::ostream& os, const packet& p);
 
 inline
 packet::packet(packet&& x) noexcept
