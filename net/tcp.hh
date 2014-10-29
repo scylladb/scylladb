@@ -454,9 +454,13 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     bool do_output = false;
-
     tcp_seq seg_seq = th->seq;
     auto seg_len = p.len();
+
+    if (th->f_rst) {
+        cleanup();
+        return;
+    }
     if (th->f_syn) {
         if (!_foreign_syn_received) {
             _foreign_syn_received = true;
