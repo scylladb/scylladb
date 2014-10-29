@@ -461,7 +461,7 @@ class TestCommands(MemcacheTest):
         self.assertEqual(call('incr key 2\r\n'), b'3\r\n')
         self.assertEqual(call('incr key %d\r\n' % (pow(2, 64) - 1)), b'2\r\n')
         self.assertEqual(call('incr key %d\r\n' % (pow(2, 64) - 3)), b'18446744073709551615\r\n')
-        self.assertRegexpMatches(call('incr key 1\r\n').decode(), r'0(\w*)?\r\n')
+        self.assertRegexpMatches(call('incr key 1\r\n').decode(), r'0(\w+)?\r\n')
 
         self.assertEqual(call('set key 0 0 2\r\n1 \r\n'), b'STORED\r\n')
         self.assertEqual(call('incr key 1\r\n'), b'2\r\n')
