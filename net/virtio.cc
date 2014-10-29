@@ -142,7 +142,8 @@ private:
     std::atomic<uint16_t>* _avail_event;
     std::atomic<uint16_t>* _used_event;
     semaphore _available_descriptors = { 0 };
-    int _free_desc = -1;
+    int _free_head = -1;
+    int _free_last = -1;
 public:
 
     vring(config conf, readable_eventfd notified, writeable_eventfd kick);
@@ -221,7 +222,6 @@ private:
     size_t masked(size_t idx) { return idx & mask(); }
     size_t available();
     unsigned allocate_desc();
-    void free_desc(unsigned id);
     void setup();
 };
 
@@ -235,17 +235,14 @@ vring::used::used(config conf)
 
 inline
 unsigned vring::allocate_desc() {
-    assert(_free_desc != -1);
-    auto desc = _free_desc;
-    _free_desc = _descs[desc]._next;
+    assert(_free_head != -1);
+    auto desc = _free_head;
+    if (desc == _free_last) {
+        _free_last = _free_head = -1;
+    } else {
+        _free_head = _descs[desc]._next;
+    }
     return desc;
-}
-
-inline
-void vring::free_desc(unsigned id) {
-    _descs[id]._next = _free_desc;
-    _free_desc = id;
-    _available_descriptors.signal();
 }
 
 vring::vring(config conf, readable_eventfd notified, writeable_eventfd kick)
@@ -264,8 +261,11 @@ vring::vring(config conf, readable_eventfd notified, writeable_eventfd kick)
 
 void vring::setup() {
     for (unsigned i = 0; i < _config.size; ++i) {
-        free_desc(i);
+        _descs[i]._next = i + 1;
     }
+    _free_head = 0;
+    _free_last = _config.size - 1;
+    _available_descriptors.signal(_config.size);
 }
 
 void vring::run() {
@@ -313,14 +313,22 @@ void vring::do_complete() {
             auto ue = _used._shared->_used_elements[masked(_used._tail++)];
             _completions[ue._id].set_value(ue._len);
             auto id = ue._id;
-            auto has_next = true;
-            while (has_next) {
-                auto& d = _descs[id];
-                auto next = d._next;
-                has_next = d._flags.has_next;
-                free_desc(id);
-                id = next;
+            if (_free_last != -1) {
+                _descs[_free_last]._next = id;
+            } else {
+                _free_head = id;
             }
+            unsigned count = 0;
+            while (true) {
+                auto& d = _descs[id];
+                count++;
+                if (!d._flags.has_next) {
+                    break;
+                }
+                id = d._next;
+            }
+            _free_last = id;
+            _available_descriptors.signal(count);
         }
     } while (enable_interrupts());
 }
