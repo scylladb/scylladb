@@ -7,8 +7,13 @@ Running Seastar on OSv
 Before compiling Seastar, configure it with the following command:
 
 ./configure.py --so --disable-hwloc \
-    --cflags="-DDEFAULT_ALLOCATOR -fvisibility=default" \
+    --cflags="-DDEFAULT_ALLOCATOR -fvisibility=default -DHAVE_OSV -I../osv/include" \
     --mode release 
+
+Or more easily, use the "--with-osv=..." shortcut for all the above settings:
+
+./configure.py --mode release --with-osv=../osv
+
 
 Explanation of these configuration options:
    * The "--so" option is needed so that the Seastar applications, such as
@@ -33,6 +38,11 @@ Explanation of these configuration options:
      alternatively, make *only* main() visible - for example, to make httpd's
      main() visible add in apps/httpd/httpd.cc, before the main() definition,
      the chant: [[gnu::visibility("default")]]
+   * The "-DHAVE_OSV" conditionally compiles code in Seastar that relies
+     on OSv APIs (currently, this enables virtio device assignment).
+     This OSv-specific code relies on some OSv header files, which is
+     why the "-I../osv/include" is needed (where "../osv" is where the
+     OSv source tree is open).
    * The "--mode release" is to compile only the release build. You'll
      usually not want to debug Seastar on OSv (it's easier to debug on Linux).
 
