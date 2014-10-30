@@ -420,7 +420,7 @@ public:
     }
 
     template <typename Func>
-    future<> rescue(Func&& func) noexcept {
+    future<> rescue(Func&& func) && noexcept {
         if (state()->available()) {
             try {
                 func([&state = *state()] { return state.get(); });
@@ -472,8 +472,8 @@ public:
         return f;
     }
 
-    future<> or_terminate() noexcept {
-        return rescue([] (auto get) {
+    future<> or_terminate() && noexcept {
+        return std::move(*this).rescue([] (auto get) {
             try {
                 get();
             } catch (...) {
