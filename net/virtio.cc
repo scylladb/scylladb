@@ -22,6 +22,10 @@
 #include "ip.hh"
 #include "const.hh"
 
+#ifdef HAVE_OSV
+#include <osv/virtio-assign.hh>
+#endif
+
 using namespace net;
 
 /* The virtio_notifier class determines how to do host-to-guest and guest-to-
@@ -65,6 +69,38 @@ public:
         : _notified(std::move(notified))
         , _kick(std::move(kick)) {}
 };
+
+#ifdef HAVE_OSV
+class virtio_notifier_osv : public virtio_notifier {
+private:
+    // TODO: In the future, don't use eventfd at all. Change Seastar's event
+    // loop to use wait_until, and even a non-atomic variable is enough if the
+    // interrupt runs on the same CPU. We can also not use interrupts at all
+    // and instead use polling.
+    readable_eventfd _notified;
+    writeable_eventfd _notified_write;
+    uint16_t _q_index;
+    osv::assigned_virtio &_virtio;
+public:
+    virtual void notify() override {
+        _virtio.kick(_q_index);
+    }
+    virtual future<> wait() override {
+        return _notified.wait().then([this] (size_t ignore) {
+            return make_ready_future<>();
+        });
+    }
+    virtual void wake_wait() override {
+        _notified_write.signal(1);
+    }
+    virtio_notifier_osv(osv::assigned_virtio &virtio, uint16_t q_index)
+        : _notified_write(_notified.write_side())
+        , _q_index(q_index)
+        , _virtio(virtio)
+    {
+    }
+};
+#endif
 
 using phys = uint64_t;
 
@@ -840,10 +876,104 @@ virtio_net_device_vhost::virtio_net_device_vhost(sstring tap_device,
     _txq.run();
 }
 
+#ifdef HAVE_OSV
+class virtio_net_device_osv : public virtio_net_device {
+private:
+    ethernet_address _mac;
+    osv::assigned_virtio &_virtio;
+public:
+    virtio_net_device_osv(osv::assigned_virtio &virtio,
+            boost::program_options::variables_map opts);
+    virtual ethernet_address hw_address() override {
+        return _mac;
+    }
+    virtual phys virt_to_phys(void* p) override {
+        return osv::assigned_virtio::virt_to_phys(p);
+    }
+};
+
+virtio_net_device_osv::virtio_net_device_osv(osv::assigned_virtio &virtio,
+        boost::program_options::variables_map opts)
+        : virtio_net_device(opts, virtio.queue_size(0), virtio.queue_size(1))
+        , _virtio(virtio)
+{
+    // Read the host's virtio supported feature bitmask, AND it with the
+    // features we want to use, and tell the host of the result:
+    uint32_t subset = _virtio.init_features(_features);
+    if (subset & VIRTIO_NET_F_MRG_RXBUF) {
+        _header_len = sizeof(net_hdr_mrg);
+    } else {
+        _header_len = sizeof(net_hdr);
+    }
+
+    // TODO: save bits from "subset" in _hw_features?
+//    bool _mergeable_bufs = subset & VIRTIO_NET_F_MRG_RXBUF;
+//    bool _status = subset & VIRTIO_NET_F_STATUS;
+//    bool _tso_ecn = subset & VIRTIO_NET_F_GUEST_ECN;
+//    bool _host_tso_ecn = subset & VIRTIO_NET_F_HOST_ECN;
+//    bool _csum = subset & VIRTIO_NET_F_CSUM;
+//    bool _guest_csum = subset & VIRTIO_NET_F_GUEST_CSUM;
+//    bool _guest_tso4 = subset & VIRTIO_NET_F_GUEST_TSO4;
+//    bool _host_tso4 = subset & VIRTIO_NET_F_HOST_TSO4;
+//    bool _guest_ufo = subset & VIRTIO_NET_F_GUEST_UFO;
+
+    // Get the MAC address set by the host
+    assert(subset & VIRTIO_NET_F_MAC);
+    struct net_config {
+        /* The config defining mac address (if VIRTIO_NET_F_MAC) */
+        uint8_t mac[6];
+        /* See VIRTIO_NET_F_STATUS and VIRTIO_NET_S_* */
+        uint16_t status;
+        /* Maximum number of each of transmit and receive queues;
+         * see VIRTIO_NET_F_MQ and VIRTIO_NET_CTRL_MQ.
+         * Legal values are between 1 and 0x8000
+         */
+        uint16_t max_virtqueue_pairs;
+    } __attribute__((packed)) host_config;
+    _virtio.conf_read(&host_config, sizeof(host_config));
+    _mac = {{{ host_config.mac[0], host_config.mac[1], host_config.mac[2],
+               host_config.mac[3], host_config.mac[4], host_config.mac[5] }}};
+
+    // Setup notifiers
+    _rxq.set_notifier(std::make_unique<virtio_notifier_osv>(_virtio, 0));
+    _txq.set_notifier(std::make_unique<virtio_notifier_osv>(_virtio, 1));
+
+
+    // Tell the host where we put the rings (we already allocated them earlier)
+    _virtio.set_queue_pfn(
+            0, virt_to_phys(_rxq.getconfig().descs));
+    _virtio.set_queue_pfn(
+            1, virt_to_phys(_txq.getconfig().descs));
+
+    _txq.run();
+
+    // Set up interrupts
+    // FIXME: in OSv, the first thing we do in the handler is to call
+    // _rqx.disable_interrupts(). Here in seastar, we only do it much later
+    // in the main engine. Probably needs to do it like in osv - in the beginning of the handler.
+    _virtio.enable_interrupt(
+            0, [&] { _rxq.wake_notifier_wait(); } );
+    _virtio.enable_interrupt(
+            1, [&] { _txq.wake_notifier_wait(); } );
+
+    _virtio.set_driver_ok();
+}
+#endif
+
+// FIXME: no real reason why the tap_device needs to be a separate option -
+// can be opts["tap-device"] (this is what we do anyway in net/stack.cc)
 std::unique_ptr<net::device> create_virtio_net_device(sstring tap_device, boost::program_options::variables_map opts) {
-    auto ptr = std::make_unique<virtio_net_device_vhost>(tap_device, opts);
+    net::device *ptr;
+#ifdef HAVE_OSV
+    if (osv::assigned_virtio::get && osv::assigned_virtio::get()) {
+        std::cout << "In OSv and assigned host's virtio device\n";
+        ptr = new virtio_net_device_osv(*osv::assigned_virtio::get(), opts);
+    } else
+#endif
+    ptr = new virtio_net_device_vhost(tap_device, opts);
+
     // This assumes only one device per cpu. Will need to be fixed when
     // this assumption will no longer hold.
-    dev = ptr.get();
-    return std::move(ptr);
+    dev = ptr;
+    return std::unique_ptr<net::device>(ptr);
 }
