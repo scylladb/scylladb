@@ -27,7 +27,7 @@ public:
     function_input_iterator operator++(int) {
         function_input_iterator ret{*this};
         ++_state;
-        return *this;
+        return ret;
     }
     bool operator==(const function_input_iterator& x) const {
         return _state == x._state;
