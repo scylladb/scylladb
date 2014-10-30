@@ -11,30 +11,29 @@ namespace udp_v4_impl {
 
 class native_datagram : public udp_datagram_impl {
 private:
-    const ipv4_address _src;
-    const ipv4_address _dst;
+    ipv4_addr _src;
+    ipv4_addr _dst;
     packet _p;
-    udp_hdr *_hdr;
 public:
     native_datagram(ipv4_address src, ipv4_address dst, packet p)
-            : _src(src)
-            , _dst(dst)
-            , _p(std::move(p)) {
-        _hdr = _p.get_header<udp_hdr>();
+            : _p(std::move(p)) {
+        udp_hdr* _hdr = _p.get_header<udp_hdr>();
         ntoh(*_hdr);
         _p.trim_front(sizeof(*_hdr));
+        _src = to_ipv4_addr(src, _hdr->src_port);
+        _dst = to_ipv4_addr(dst, _hdr->dst_port);
     }
 
     virtual ipv4_addr get_src() override {
-        return to_ipv4_addr(_src, _hdr->src_port);
+        return _src;
     };
 
     virtual ipv4_addr get_dst() override {
-        return to_ipv4_addr(_dst, _hdr->dst_port);
+        return _dst;
     };
 
     virtual uint16_t get_dst_port() override {
-        return _hdr->dst_port;
+        return _dst.port;
     }
 
     virtual packet& get_data() override {
