@@ -68,11 +68,6 @@ public:
 
 using phys = uint64_t;
 
-inline
-phys virt_to_phys(void* p) {
-    return reinterpret_cast<uintptr_t>(p);
-}
-
 class vring {
 public:
     struct config {
@@ -460,6 +455,10 @@ public:
     virtual future<> send(packet p) override;
     virtual ethernet_address hw_address() override;
     virtual net::hw_features hw_features() override;
+    virtual phys virt_to_phys(void* p) {
+        return reinterpret_cast<uintptr_t>(p);
+    }
+
 };
 
     virtio_net_device::txq::txq(virtio_net_device& dev, vring::config config,
@@ -511,9 +510,9 @@ virtio_net_device::txq::post(packet p) {
 
     auto nr_frags = q.nr_frags();
     return _ring.available_descriptors().wait(nr_frags).then([this, p = std::move(q)] () mutable {
-        static auto fragment_to_buffer = [] (fragment f) {
+        static auto fragment_to_buffer = [this] (fragment f) {
             vring::buffer b;
-            b.addr = virt_to_phys(f.base);
+            b.addr = _dev.virt_to_phys(f.base);
             b.len = f.size;
             b.writeable = false;
             return b;
@@ -556,7 +555,7 @@ virtio_net_device::rxq::prepare_buffers() {
             } bc;
             std::unique_ptr<char[], free_deleter> buf(reinterpret_cast<char*>(malloc(4096)));
             vring::buffer& b = bc[0];
-            b.addr = virt_to_phys(buf.get());
+            b.addr = _dev.virt_to_phys(buf.get());
             b.len = 4096;
             b.writeable = true;
             bc.completed.get_future().then([this, buf = std::move(buf)] (size_t len) mutable {
