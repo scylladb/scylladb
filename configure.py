@@ -131,8 +131,19 @@ arg_parser.add_argument('--ldflags', action = 'store', dest = 'user_ldflags', de
                         help = 'Extra flags for the linker')
 arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 'g++',
                         help = 'C++ compiler path')
+arg_parser.add_argument('--with-osv', action = 'store', dest = 'with_osv', default = '',
+                        help = 'Shortcut for compile for OSv')
 add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
 args = arg_parser.parse_args()
+
+# The "--with-osv=<path>" parameter is a shortcut for a bunch of other
+# settings:
+if args.with_osv:
+    args.so = True
+    args.hwloc = False
+    args.user_cflags = (args.user_cflags +
+        ' -DDEFAULT_ALLOCATOR -fvisibility=default -DHAVE_OSV -I' +
+        args.with_osv + '/include')
 
 def try_compile(compiler, source = '', flags = []):
     with tempfile.NamedTemporaryFile() as sfile:
