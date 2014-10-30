@@ -6,6 +6,7 @@
 #define CORE_FUTURE_UTIL_HH_
 
 #include "future.hh"
+#include <tuple>
 
 // parallel_for_each - run tasks in parallel
 //
@@ -99,6 +100,41 @@ future<> do_for_each(Iterator begin, Iterator end, AsyncAction&& action) {
         }
     }
     return make_ready_future<>();
+}
+
+
+template <typename... Future>
+future<std::tuple<Future...>> when_all(Future&&... fut);
+
+template <>
+inline
+future<std::tuple<>>
+when_all() {
+    return make_ready_future<std::tuple<>>();
+}
+
+// gcc can't capture a parameter pack, so we need to capture
+// a tuple and use apply.  But apply cannot accept an overloaded
+// function pointer as its first parameter, so provide this instead.
+struct do_when_all {
+    template <typename... Future>
+    future<std::tuple<Future...>> operator()(Future&&... fut) const {
+        return when_all(std::move(fut)...);
+    }
+};
+
+template <typename Future, typename... Rest>
+inline
+future<std::tuple<Future, Rest...>>
+when_all(Future&& fut, Rest&&... rest) {
+    return std::move(fut).then_wrapped(
+            [rest = std::make_tuple(std::move(rest)...)] (Future&& fut) mutable {
+        return apply(do_when_all(), std::move(rest)).then_wrapped(
+                [fut = std::move(fut)] (future<std::tuple<Rest...>>&& rest) mutable {
+            return make_ready_future<std::tuple<Future, Rest...>>(
+                    std::tuple_cat(std::make_tuple(std::move(fut)), std::get<0>(rest.get())));
+        });
+    });
 }
 
 #endif /* CORE_FUTURE_UTIL_HH_ */
