@@ -160,7 +160,6 @@ private:
     };
     struct connid_hash;
     class tcb {
-        using clock_type = std::chrono::high_resolution_clock;
         // Instead of tracking state through an enum, track individual
         // bits of the state.  This reduces duplication in state handling.
         bool _local_syn_sent = false;
@@ -175,11 +174,6 @@ private:
         ipaddr _foreign_ip;
         uint16_t _local_port;
         uint16_t _foreign_port;
-        struct unacked_packet {
-            packet p;
-            clock_type::time_point tx_time;
-            unsigned nr_transmits;
-        };
         struct send {
             tcp_seq unacknowledged;
             tcp_seq next;
@@ -190,7 +184,7 @@ private:
             tcp_seq wl1;
             tcp_seq wl2;
             tcp_seq initial;
-            std::deque<unacked_packet> data;
+            std::deque<packet> data;
             std::deque<packet> unsent;
             uint32_t unsent_len = 0;
             bool closed = false;
@@ -210,9 +204,6 @@ private:
         } _rcv;
         tcp_option _option;
         timer _delayed_ack;
-        static constexpr std::chrono::milliseconds _retransmit_timeout{2000};
-        static constexpr uint16_t _max_nr_retransmit{5};
-        timer _retransmit;
     public:
         tcb(tcp& t, connid id);
         void input(tcp_hdr* th, packet p);
@@ -233,8 +224,6 @@ private:
         void trim_receive_data_after_window();
         bool should_send_ack();
         void clear_delayed_ack();
-        void retransmit();
-        void cleanup();
         packet get_transmit_packet();
         friend class connection;
     };
@@ -404,7 +393,6 @@ tcp<InetTraits>::tcb::tcb(tcp& t, connid id)
     , _local_port(id.local_port)
     , _foreign_port(id.foreign_port) {
         _delayed_ack.set_callback([this] { output(); });
-        _retransmit.set_callback([this] { retransmit(); });
 }
 
 template <typename InetTraits>
@@ -458,7 +446,8 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     auto seg_len = p.len();
 
     if (th->f_rst) {
-        cleanup();
+        clear_delayed_ack();
+        remove_from_tcbs();
         return;
     }
     if (th->f_syn) {
@@ -542,7 +531,8 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
 
                 // FIXME: Implement TIME-WAIT state
                 if (both_closed()) {
-                    cleanup();
+                    clear_delayed_ack();
+                    remove_from_tcbs();
                     return;
                 }
             }
@@ -568,12 +558,12 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
         auto data_ack = th->ack - th->f_fin;
         if (data_ack > _snd.unacknowledged && data_ack <= _snd.next) {
             while (!_snd.data.empty()
-                    && (_snd.unacknowledged + _snd.data.front().p.len() <= data_ack)) {
-                _snd.unacknowledged += _snd.data.front().p.len();
+                    && (_snd.unacknowledged + _snd.data.front().len() <= data_ack)) {
+                _snd.unacknowledged += _snd.data.front().len();
                 _snd.data.pop_front();
             }
             if (_snd.unacknowledged < data_ack) {
-                _snd.data.front().p.trim_front(data_ack - _snd.unacknowledged);
+                _snd.data.front().trim_front(data_ack - _snd.unacknowledged);
                 _snd.unacknowledged = data_ack;
             }
         }
@@ -582,7 +572,8 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             _snd.unacknowledged += 1;
             _snd.next += 1;
             if (both_closed()) {
-                cleanup();
+                clear_delayed_ack();
+                remove_from_tcbs();
                 return;
             }
         }
@@ -659,6 +650,9 @@ void tcp<InetTraits>::tcb::output() {
     uint8_t options_size = 0;
     packet p = get_transmit_packet();
     auto len = p.len();
+    if (len) {
+        _snd.data.push_back(p.share());
+    }
 
     if (!_local_syn_acked) {
         options_size = _option.get_size();
@@ -708,12 +702,6 @@ void tcp<InetTraits>::tcb::output() {
     oi.tcp_hdr_len = sizeof(tcp_hdr) + options_size;
     p.set_offload_info(oi);
 
-    if (len) {
-        if (!_retransmit.armed()) {
-            _retransmit.arm_periodic(_retransmit_timeout * 2);
-        }
-        _snd.data.push_back({p.share(), clock_type::now(), 0});
-    }
     _tcp.send(_local_ip, _foreign_ip, std::move(p));
 }
 
@@ -790,30 +778,6 @@ void tcp<InetTraits>::tcb::trim_receive_data_after_window() {
 }
 
 template <typename InetTraits>
-void tcp<InetTraits>::tcb::retransmit() {
-    using namespace std::chrono;
-    // If there are unacked data, retransmit them all
-    if (!_snd.data.empty()) {
-        for (auto&& x : _snd.data) {
-            auto time_span = duration_cast<milliseconds>(high_resolution_clock::now() - x.tx_time);
-            // TODO: Delete connection when max num of retransmission is reached.
-            if (time_span > _retransmit_timeout && x.nr_transmits < _max_nr_retransmit) {
-                x.nr_transmits++;
-                _tcp.send(_local_ip, _foreign_ip, x.p.share());
-            }
-        }
-    }
-}
-
-template <typename InetTraits>
-void tcp<InetTraits>::tcb::cleanup() {
-    _snd.data.clear();
-    _retransmit.cancel();
-    clear_delayed_ack();
-    remove_from_tcbs();
-}
-
-template <typename InetTraits>
 void tcp<InetTraits>::connection::close_read() {
 }
 
@@ -821,13 +785,6 @@ template <typename InetTraits>
 void tcp<InetTraits>::connection::close_write() {
     _tcb->close();
 }
-
-template <typename InetTraits>
-constexpr std::chrono::milliseconds tcp<InetTraits>::tcb::_retransmit_timeout;
-
-template <typename InetTraits>
-constexpr uint16_t tcp<InetTraits>::tcb::_max_nr_retransmit;
-
 
 }
 
