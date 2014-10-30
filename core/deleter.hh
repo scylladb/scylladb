@@ -168,4 +168,10 @@ make_free_deleter(void* obj) {
     return deleter(deleter::raw_object_tag(), obj);
 }
 
+inline
+deleter
+make_free_deleter(deleter next, void* obj) {
+    return make_deleter(std::move(next), [obj] () mutable { std::free(obj); });
+}
+
 #endif /* DELETER_HH_ */
