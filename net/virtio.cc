@@ -182,7 +182,13 @@ private:
     int _free_last = -1;
 public:
 
-    vring(config conf, std::unique_ptr<virtio_notifier> notifier);
+    explicit vring(config conf);
+    void set_notifier(std::unique_ptr<virtio_notifier> notifier) {
+        _notifier = std::move(notifier);
+    }
+    const config& getconfig() {
+        return _config;
+    }
 
     // start the queue
     void run();
@@ -281,9 +287,8 @@ unsigned vring::allocate_desc() {
     return desc;
 }
 
-vring::vring(config conf, std::unique_ptr<virtio_notifier> notifier)
+vring::vring(config conf)
     : _config(conf)
-    , _notifier(std::move(notifier))
     , _completions(new promise<size_t>[_config.size])
     , _descs(reinterpret_cast<desc*>(conf.descs))
     , _avail(conf)
@@ -376,22 +381,7 @@ void vring::complete() {
 }
 
 class virtio_net_device : public net::device {
-    struct init {
-        readable_eventfd _txq_notify;
-        writeable_eventfd _txq_kick;
-        readable_eventfd _rxq_notify;
-        writeable_eventfd _rxq_kick;
-        int _txq_notify_fd;
-        int _txq_kick_fd;
-        int _rxq_notify_fd;
-        int _rxq_kick_fd;
-        init() {
-            _txq_notify_fd = _txq_notify.get_write_fd();
-            _txq_kick_fd = _txq_kick.get_read_fd();
-            _rxq_notify_fd = _rxq_notify.get_write_fd();
-            _rxq_kick_fd = _rxq_kick.get_read_fd();
-        }
-    };
+protected:
     struct net_hdr {
         uint8_t needs_csum : 1;
         uint8_t flags_reserved : 7;
@@ -409,8 +399,13 @@ class virtio_net_device : public net::device {
         virtio_net_device& _dev;
         vring _ring;
     public:
-        txq(virtio_net_device& dev, vring::config config,
-                std::unique_ptr<virtio_notifier> notifier);
+        txq(virtio_net_device& dev, vring::config config);
+        void set_notifier(std::unique_ptr<virtio_notifier> notifier) {
+            _ring.set_notifier(std::move(notifier));
+        }
+        const vring::config& getconfig() {
+            return _ring.getconfig();
+        }
         void run() { _ring.run(); }
         future<> post(packet p);
     };
@@ -421,16 +416,22 @@ class virtio_net_device : public net::device {
         std::vector<fragment> _fragments;
         std::vector<std::unique_ptr<char[], free_deleter>> _deleters;
     public:
-        rxq(virtio_net_device& _if, vring::config config,
-                std::unique_ptr<virtio_notifier> notifier);
-        void run() { _ring.run(); }
+        rxq(virtio_net_device& _if, vring::config config);
+        void set_notifier(std::unique_ptr<virtio_notifier> notifier) {
+            _ring.set_notifier(std::move(notifier));
+        }
+        const vring::config& getconfig() {
+            return _ring.getconfig();
+        }
+        void run() {
+            keep_doing([this] { return prepare_buffers(); });
+            _ring.run();
+        }
     private:
         future<> prepare_buffers();
     };
-private:
+protected:
     size_t _header_len;
-    file_desc _tap_fd;
-    file_desc _vhost_fd;
     boost::program_options::variables_map _opts;
     std::unique_ptr<char[], free_deleter> _txq_storage;
     std::unique_ptr<char[], free_deleter> _rxq_storage;
@@ -440,20 +441,17 @@ private:
     rxq _rxq;
     stream<packet> _rx_stream;
     future<> _rx_ready;
-private:
+protected:
     uint64_t setup_features();
-    void setup_tap_device(sstring tap_device);
-    vring::config txq_config();
-    vring::config rxq_config();
+    vring::config txq_config(size_t txq_ring_size);
+    vring::config rxq_config(size_t rxq_ring_size);
     void common_config(vring::config& r);
     future<> queue_rx_packet(packet p);
-    size_t vring_storage_size();
-    size_t ring_size();
+    size_t vring_storage_size(size_t ring_size);
 public:
-    explicit virtio_net_device(sstring tap_device, boost::program_options::variables_map opts, init x = init());
+    explicit virtio_net_device(boost::program_options::variables_map opts, size_t rx_ring_size, size_t tx_ring_size);
     virtual subscription<packet> receive(std::function<future<> (packet)> next) override;
     virtual future<> send(packet p) override;
-    virtual ethernet_address hw_address() override;
     virtual net::hw_features hw_features() override;
     virtual phys virt_to_phys(void* p) {
         return reinterpret_cast<uintptr_t>(p);
@@ -461,9 +459,8 @@ public:
 
 };
 
-    virtio_net_device::txq::txq(virtio_net_device& dev, vring::config config,
-            std::unique_ptr<virtio_notifier> notifier)
-    : _dev(dev), _ring(config, std::move(notifier)) {
+    virtio_net_device::txq::txq(virtio_net_device& dev, vring::config config)
+        : _dev(dev), _ring(config) {
 }
 
 future<>
@@ -534,10 +531,8 @@ virtio_net_device::txq::post(packet p) {
     });
 }
 
-virtio_net_device::rxq::rxq(virtio_net_device& netif,
-        vring::config config, std::unique_ptr<virtio_notifier> notifier)
-    : _dev(netif), _ring(config, std::move(notifier)) {
-    keep_doing([this] { return prepare_buffers(); });
+    virtio_net_device::rxq::rxq(virtio_net_device& dev, vring::config config)
+        : _dev(dev), _ring(config) {
 }
 
 future<>
@@ -601,70 +596,26 @@ virtio_net_device::rxq::prepare_buffers() {
     });
 }
 
-void virtio_net_device::setup_tap_device(sstring tap_device) {
-    assert(tap_device.size() + 1 <= IFNAMSIZ);
-
-    ifreq ifr = {};
-    ifr.ifr_flags = IFF_TAP | IFF_NO_PI | IFF_ONE_QUEUE | IFF_VNET_HDR;
-    strcpy(ifr.ifr_ifrn.ifrn_name, tap_device.c_str());
-    _tap_fd.ioctl(TUNSETIFF, ifr);
-
-    unsigned int offload = 0;
-    if (hw_features().tx_csum_offload && hw_features().rx_csum_offload) {
-        offload = TUN_F_CSUM;
-        if (hw_features().tx_tso) {
-            offload |= TUN_F_TSO4;
-        }
-        if (hw_features().tx_ufo) {
-            offload |= TUN_F_UFO;
-        }
-    }
-    _tap_fd.ioctl(TUNSETOFFLOAD, offload);
-    _tap_fd.ioctl(TUNSETVNETHDRSZ, _header_len);
+// Allocate and zero-initialize a buffer which is page-aligned and can be
+// used for virt_to_phys (i.e., physically contiguous).
+static std::unique_ptr<char[], free_deleter> virtio_buffer(size_t size) {
+    void* ret;
+    auto r = posix_memalign(&ret, 4096, size);
+    assert(r == 0);
+    bzero(ret, size);
+    return std::unique_ptr<char[], free_deleter>(reinterpret_cast<char*>(ret));
 }
 
-virtio_net_device::virtio_net_device(sstring tap_device, boost::program_options::variables_map opts, init x)
-    : _tap_fd(file_desc::open("/dev/net/tun", O_RDWR | O_NONBLOCK))
-    , _vhost_fd(file_desc::open("/dev/vhost-net", O_RDWR))
-    , _opts(opts)
-    , _txq_storage(allocate_aligned_buffer<char>(vring_storage_size(), 4096))
-    , _rxq_storage(allocate_aligned_buffer<char>(vring_storage_size(), 4096))
+virtio_net_device::virtio_net_device(boost::program_options::variables_map opts,
+        size_t rx_ring_size, size_t tx_ring_size)
+    : _opts(opts)
+    , _txq_storage(virtio_buffer(vring_storage_size(tx_ring_size)))
+    , _rxq_storage(virtio_buffer(vring_storage_size(rx_ring_size)))
     , _features(setup_features())
-    , _txq(*this, txq_config(), std::make_unique<virtio_notifier_vhost>(
-        std::move(x._txq_notify), std::move(x._txq_kick)))
-    , _rxq(*this, rxq_config(), std::make_unique<virtio_notifier_vhost>(
-        std::move(x._rxq_notify), std::move(x._rxq_kick)))
+    , _txq(*this, txq_config(tx_ring_size))
+    , _rxq(*this, rxq_config(rx_ring_size))
     , _rx_stream()
     , _rx_ready(_rx_stream.started()) {
-    setup_tap_device(tap_device);
-    _vhost_fd.ioctl(VHOST_SET_OWNER);
-    auto mem_table = make_struct_with_vla(&vhost_memory::regions, 1);
-    mem_table->nregions = 1;
-    auto& region = mem_table->regions[0];
-    region.guest_phys_addr = 0;
-    region.memory_size = (size_t(1) << 47) - 4096;
-    region.userspace_addr = 0;
-    region.flags_padding = 0;
-    _vhost_fd.ioctl(VHOST_SET_MEM_TABLE, *mem_table);
-    vhost_vring_state vvs0 = { 0, rxq_config().size };
-    _vhost_fd.ioctl(VHOST_SET_VRING_NUM, vvs0);
-    vhost_vring_state vvs1 = { 1, txq_config().size };
-    _vhost_fd.ioctl(VHOST_SET_VRING_NUM, vvs1);
-    auto tov = [](char* x) { return reinterpret_cast<uintptr_t>(x); };
-
-    _vhost_fd.ioctl(VHOST_SET_VRING_ADDR, vhost_vring_addr{
-            0, 0, tov(rxq_config().descs), tov(rxq_config().used), tov(rxq_config().avail), 0
-    });
-    _vhost_fd.ioctl(VHOST_SET_VRING_ADDR, vhost_vring_addr{
-            1, 0, tov(txq_config().descs), tov(txq_config().used), tov(txq_config().avail), 0
-    });
-    _vhost_fd.ioctl(VHOST_SET_VRING_KICK, vhost_vring_file{0, x._rxq_kick_fd});
-    _vhost_fd.ioctl(VHOST_SET_VRING_CALL, vhost_vring_file{0, x._rxq_notify_fd});
-    _vhost_fd.ioctl(VHOST_SET_VRING_KICK, vhost_vring_file{1, x._txq_kick_fd});
-    _vhost_fd.ioctl(VHOST_SET_VRING_CALL, vhost_vring_file{1, x._txq_notify_fd});
-    _vhost_fd.ioctl(VHOST_NET_SET_BACKEND, vhost_vring_file{0, _tap_fd.get()});
-    _vhost_fd.ioctl(VHOST_NET_SET_BACKEND, vhost_vring_file{1, _tap_fd.get()});
-    _txq.run();
 }
 
 uint64_t virtio_net_device::setup_features() {
@@ -696,51 +647,35 @@ uint64_t virtio_net_device::setup_features() {
         _hw_features.tx_ufo = false;
     }
 
-    int64_t vhost_supported_features;
-    _vhost_fd.ioctl(VHOST_GET_FEATURES, vhost_supported_features);
-    vhost_supported_features &= seastar_supported_features;
-    _vhost_fd.ioctl(VHOST_SET_FEATURES, vhost_supported_features);
-
-    if (vhost_supported_features & VIRTIO_NET_F_MRG_RXBUF) {
-        _header_len = sizeof(net_hdr_mrg);
-    } else {
-        _header_len = sizeof(net_hdr);
-    }
-
+    seastar_supported_features |= VIRTIO_NET_F_MAC;
     return seastar_supported_features;
 }
 
-size_t virtio_net_device::ring_size() {
-    if (_opts.count("event-index")) {
-        return _opts["virtio-ring-size"].as<unsigned>();
-    } else {
-        return 256;
-    }
-}
 
-size_t virtio_net_device::vring_storage_size() {
+size_t virtio_net_device::vring_storage_size(size_t ring_size) {
     // overestimate, but not by much.
-    return 3 * 4096 + ring_size() * (16 + 2 + 8);
+    return 3 * 4096 + ring_size * (16 + 2 + 8);
 }
 
 void virtio_net_device::common_config(vring::config& r) {
-    r.size = ring_size();
     r.avail = r.descs + 16 * r.size;
     r.used = align_up(r.avail + 2 * r.size + 6, 4096);
     r.event_index = (_features & VIRTIO_RING_F_EVENT_IDX) != 0;
     r.indirect = false;
 }
 
-vring::config virtio_net_device::txq_config() {
+vring::config virtio_net_device::txq_config(size_t tx_ring_size) {
     vring::config r;
+    r.size = tx_ring_size;
     r.descs = _txq_storage.get();
     r.mergable_buffers = false;
     common_config(r);
     return r;
 }
 
-vring::config virtio_net_device::rxq_config() {
+vring::config virtio_net_device::rxq_config(size_t rx_ring_size) {
     vring::config r;
+    r.size = rx_ring_size;
     r.descs = _rxq_storage.get();
     r.mergable_buffers = true;
     common_config(r);
@@ -760,10 +695,6 @@ virtio_net_device::send(packet p) {
 
 future<> virtio_net_device::queue_rx_packet(packet p) {
     return _rx_stream.produce(std::move(p));
-}
-
-ethernet_address virtio_net_device::hw_address() {
-    return {{{ 0x12, 0x23, 0x34, 0x56, 0x67, 0x78 }}};
 }
 
 net::hw_features virtio_net_device::hw_features() {
@@ -795,8 +726,113 @@ get_virtio_net_options_description()
     return opts;
 }
 
+class virtio_net_device_vhost : public virtio_net_device {
+private:
+    // The vhost file descriptor needs to remain open throughout the life of
+    // this driver, as as soon as we close it, vhost stops servicing us.
+    file_desc _vhost_fd;
+public:
+    virtio_net_device_vhost(sstring tap_device, boost::program_options::variables_map opts);
+    virtual ethernet_address hw_address() override;
+};
+
+ethernet_address virtio_net_device_vhost::hw_address() {
+    return {{{ 0x12, 0x23, 0x34, 0x56, 0x67, 0x78 }}};
+}
+
+static size_t config_ring_size(boost::program_options::variables_map &opts) {
+    if (opts.count("event-index")) {
+        return opts["virtio-ring-size"].as<unsigned>();
+    } else {
+        return 256;
+    }
+}
+
+virtio_net_device_vhost::virtio_net_device_vhost(sstring tap_device,
+        boost::program_options::variables_map opts)
+    : virtio_net_device(opts, config_ring_size(opts), config_ring_size(opts))
+    , _vhost_fd(file_desc::open("/dev/vhost-net", O_RDWR))
+{
+    int64_t vhost_supported_features;
+    _vhost_fd.ioctl(VHOST_GET_FEATURES, vhost_supported_features);
+    vhost_supported_features &= _features;
+    _vhost_fd.ioctl(VHOST_SET_FEATURES, vhost_supported_features);
+    if (vhost_supported_features & VIRTIO_NET_F_MRG_RXBUF) {
+        _header_len = sizeof(net_hdr_mrg);
+    } else {
+        _header_len = sizeof(net_hdr);
+    }
+
+    // Open and set up the tap device, which we'll tell vhost to use.
+    // Note that the tap_fd we open here will be closed at the end of
+    // this function. It appears that this is fine - i.e., after we pass
+    // this fd to VHOST_NET_SET_BACKEND, the Linux kernel keeps the reference
+    // to it and it's fine to close the file descriptor.
+    file_desc tap_fd(file_desc::open("/dev/net/tun", O_RDWR | O_NONBLOCK));
+    assert(tap_device.size() + 1 <= IFNAMSIZ);
+    ifreq ifr = {};
+    ifr.ifr_flags = IFF_TAP | IFF_NO_PI | IFF_ONE_QUEUE | IFF_VNET_HDR;
+    strcpy(ifr.ifr_ifrn.ifrn_name, tap_device.c_str());
+    tap_fd.ioctl(TUNSETIFF, ifr);
+    unsigned int offload = 0;
+    if (hw_features().tx_csum_offload && hw_features().rx_csum_offload) {
+        offload = TUN_F_CSUM;
+        if (hw_features().tx_tso) {
+            offload |= TUN_F_TSO4;
+        }
+        if (hw_features().tx_ufo) {
+            offload |= TUN_F_UFO;
+        }
+    }
+    tap_fd.ioctl(TUNSETOFFLOAD, offload);
+    tap_fd.ioctl(TUNSETVNETHDRSZ, _header_len);
+
+    // Additional vhost setup:
+    _vhost_fd.ioctl(VHOST_SET_OWNER);
+    auto mem_table = make_struct_with_vla(&vhost_memory::regions, 1);
+    mem_table->nregions = 1;
+    auto& region = mem_table->regions[0];
+    region.guest_phys_addr = 0;
+    region.memory_size = (size_t(1) << 47) - 4096;
+    region.userspace_addr = 0;
+    region.flags_padding = 0;
+    _vhost_fd.ioctl(VHOST_SET_MEM_TABLE, *mem_table);
+    vhost_vring_state vvs0 = { 0, _rxq.getconfig().size };
+    _vhost_fd.ioctl(VHOST_SET_VRING_NUM, vvs0);
+    vhost_vring_state vvs1 = { 1, _txq.getconfig().size };
+    _vhost_fd.ioctl(VHOST_SET_VRING_NUM, vvs1);
+    auto tov = [](char* x) { return reinterpret_cast<uintptr_t>(x); };
+
+    _vhost_fd.ioctl(VHOST_SET_VRING_ADDR, vhost_vring_addr{
+        0, 0, tov(_rxq.getconfig().descs), tov(_rxq.getconfig().used),
+        tov(_rxq.getconfig().avail), 0
+    });
+    _vhost_fd.ioctl(VHOST_SET_VRING_ADDR, vhost_vring_addr{
+        1, 0, tov(_txq.getconfig().descs), tov(_txq.getconfig().used),
+        tov(_txq.getconfig().avail), 0
+    });
+
+    readable_eventfd _txq_notify;
+    writeable_eventfd _txq_kick;
+    readable_eventfd _rxq_notify;
+    writeable_eventfd _rxq_kick;
+    _vhost_fd.ioctl(VHOST_SET_VRING_KICK, vhost_vring_file{0, _rxq_kick.get_read_fd()});
+    _vhost_fd.ioctl(VHOST_SET_VRING_CALL, vhost_vring_file{0, _rxq_notify.get_write_fd()});
+    _vhost_fd.ioctl(VHOST_SET_VRING_KICK, vhost_vring_file{1, _txq_kick.get_read_fd()});
+    _vhost_fd.ioctl(VHOST_SET_VRING_CALL, vhost_vring_file{1, _txq_notify.get_write_fd()});
+    _rxq.set_notifier(std::make_unique<virtio_notifier_vhost>(
+            std::move(_rxq_notify), std::move(_rxq_kick)));
+    _txq.set_notifier(std::make_unique<virtio_notifier_vhost>(
+            std::move(_txq_notify), std::move(_txq_kick)));
+
+    _vhost_fd.ioctl(VHOST_NET_SET_BACKEND, vhost_vring_file{0, tap_fd.get()});
+    _vhost_fd.ioctl(VHOST_NET_SET_BACKEND, vhost_vring_file{1, tap_fd.get()});
+
+    _txq.run();
+}
+
 std::unique_ptr<net::device> create_virtio_net_device(sstring tap_device, boost::program_options::variables_map opts) {
-    auto ptr = std::make_unique<virtio_net_device>(tap_device, opts);
+    auto ptr = std::make_unique<virtio_net_device_vhost>(tap_device, opts);
     // This assumes only one device per cpu. Will need to be fixed when
     // this assumption will no longer hold.
     dev = ptr.get();
