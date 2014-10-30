@@ -57,6 +57,8 @@ public:
     // Pushes the element now or when there is room. Returns a future<> which
     // resolves when data was pushed.
     future<> push_eventually(T&& data);
+
+    size_t size() const { return _q.size(); }
 };
 
 template <typename T>
