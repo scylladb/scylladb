@@ -590,7 +590,7 @@ virtio_net_device::rxq::prepare_buffers() {
             count += opportunistic;
         }
         auto make_buffer_chain = [this] {
-            struct single_buffer_and_comletion : std::array<vring::buffer, 1> {
+            struct single_buffer_and_completion : std::array<vring::buffer, 1> {
                 promise<size_t> completed;
             } bc;
             std::unique_ptr<char[], free_deleter> buf(reinterpret_cast<char*>(malloc(4096)));
