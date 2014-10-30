@@ -189,6 +189,9 @@ public:
     const config& getconfig() {
         return _config;
     }
+    void wake_notifier_wait() {
+        _notifier->wake_wait();
+    }
 
     // start the queue
     void run();
@@ -406,6 +409,9 @@ protected:
         const vring::config& getconfig() {
             return _ring.getconfig();
         }
+        void wake_notifier_wait() {
+            _ring.wake_notifier_wait();
+        }
         void run() { _ring.run(); }
         future<> post(packet p);
     };
@@ -426,6 +432,9 @@ protected:
         void run() {
             keep_doing([this] { return prepare_buffers(); });
             _ring.run();
+        }
+        void wake_notifier_wait() {
+            _ring.wake_notifier_wait();
         }
     private:
         future<> prepare_buffers();
