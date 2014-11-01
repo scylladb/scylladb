@@ -91,7 +91,7 @@ SEASTAR_TEST_CASE(test_failing_intermediate_promise_should_fail_the_master_futur
     p1.set_value();
     p2.set_exception(std::runtime_error("boom"));
 
-    return f.rescue([](auto get) {
+    return std::move(f).rescue([](auto get) {
         try {
             get();
             BOOST_REQUIRE(false);

@@ -8,6 +8,8 @@
 #include "core/app-template.hh"
 #include "core/circular_buffer.hh"
 #include "core/smp.hh"
+#include "core/queue.hh"
+#include "core/future-util.hh"
 #include <iostream>
 #include <algorithm>
 #include <unordered_map>
@@ -28,7 +30,9 @@ public:
     }
     void do_accepts(int which) {
         _listeners[which].accept().then([this, which] (connected_socket fd, socket_address addr) mutable {
-            (new connection(*this, std::move(fd), addr))->read().rescue([this] (auto get_ex) {
+            auto conn = new connection(*this, std::move(fd), addr);
+            conn->process().rescue([this, conn] (auto&& get_ex) {
+                delete conn;
                 try {
                     get_ex();
                 } catch (std::exception& ex) {
@@ -48,7 +52,6 @@ public:
         connected_socket _fd;
         input_stream<char> _read_buf;
         output_stream<char> _write_buf;
-        bool _eof = false;
         static constexpr size_t limit = 4096;
         using tmp_buf = temporary_buffer<char>;
         using request = http_request;
@@ -60,43 +63,51 @@ public:
         http_request_parser _parser;
         std::unique_ptr<request> _req;
         std::unique_ptr<response> _resp;
-        std::queue<std::unique_ptr<response>,
-            circular_buffer<std::unique_ptr<response>>> _pending_responses;
+        // null element marks eof
+        queue<std::unique_ptr<response>> _responses { 10 };
     public:
         connection(http_server& server, connected_socket&& fd, socket_address addr)
             : _fd(std::move(fd)), _read_buf(_fd.input())
             , _write_buf(_fd.output()) {}
+        future<> process() {
+            // Launch read and write "threads" simultaneously:
+            return when_all(read(), respond()).then([] (std::tuple<future<>, future<>> joined) {
+                // FIXME: notify any exceptions in joined?
+                return make_ready_future<>();
+            });
+        }
         future<> read() {
             _parser.init();
             return _read_buf.consume(_parser).then([this] {
                 if (_parser.eof()) {
-                    maybe_done();
-                    return make_ready_future<>();
+                    return _responses.push_eventually({});
                 }
                 _req = _parser.get_parsed_request();
-                generate_response(std::move(_req));
-                read().rescue([this] (auto get_ex) mutable {
-                    try {
-                        get_ex();
-                    } catch (std::exception& ex) {
-                        std::cout << "read failed with " << ex.what() << "\n";
-                        this->maybe_done();
+                return _responses.not_full().then([this] {
+                    bool close = generate_response(std::move(_req));
+                    if (close) {
+                        return _responses.push_eventually({});
+                    } else {
+                        return read();
                     }
                 });
-                return make_ready_future<>();
             });
         }
-        void respond(std::unique_ptr<response> resp) {
-            if (!_resp) {
+        future<> respond() {
+            return _responses.pop_eventually().then([this] (std::unique_ptr<response> resp) {
+                if (!resp) {
+                    // eof
+                    return make_ready_future<>();
+                }
                 _resp = std::move(resp);
-                start_response();
-            } else {
-                _pending_responses.push(std::move(resp));
-            }
+                return start_response().then([this] {
+                    return respond();
+                });
+            });
         }
-        void start_response() {
+        future<> start_response() {
             _resp->_headers["Content-Length"] = to_sstring(_resp->_body.size());
-            _write_buf.write(_resp->_response_line.begin(), _resp->_response_line.size()).then(
+            return _write_buf.write(_resp->_response_line.begin(), _resp->_response_line.size()).then(
                     [this] {
                 return write_response_headers(_resp->_headers.begin());
             }).then([this] {
@@ -107,13 +118,6 @@ public:
                 return _write_buf.flush();
             }).then([this] {
                 _resp.reset();
-                if (!_pending_responses.empty()) {
-                    _resp = std::move(_pending_responses.front());
-                    _pending_responses.pop();
-                    start_response();
-                } else {
-                    maybe_done();
-                }
             });
         }
         future<> write_response_headers(std::unordered_map<sstring, sstring>::iterator hi) {
@@ -131,7 +135,7 @@ public:
                 return write_response_headers(++hi);
             });
         }
-        void generate_response(std::unique_ptr<request> req) {
+        bool generate_response(std::unique_ptr<request> req) {
             auto resp = std::make_unique<response>();
             bool conn_keep_alive = false;
             bool conn_close = false;
@@ -161,18 +165,12 @@ public:
             }
             resp->_headers["Content-Type"] = "text/html";
             resp->_body = "<html><head><title>this is the future</title></head><body><p>Future!!</p></body></html>";
-            respond(std::move(resp));
-            if (should_close) {
-                _write_buf.close();
-            }
+            // Caller guarantees enough room
+            _responses.push(std::move(resp));
+            return should_close;
         }
         future<> write_body() {
             return _write_buf.write(_resp->_body.begin(), _resp->_body.size());
-        }
-        void maybe_done() {
-            if ((_eof || _read_buf.eof()) && !_req && !_resp && _pending_responses.empty()) {
-                delete this;
-            }
         }
     };
 };

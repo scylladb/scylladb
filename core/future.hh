@@ -257,6 +257,7 @@ template <typename... T> struct is_future : std::false_type {};
 template <typename... T> struct is_future<future<T...>> : std::true_type {};
 
 struct ready_future_marker {};
+struct ready_future_from_tuple_marker {};
 struct exception_future_marker {};
 
 template <typename... T>
@@ -272,6 +273,10 @@ private:
     template <typename... A>
     future(ready_future_marker, A&&... a) : _promise(nullptr) {
         _local_state.set(std::forward<A>(a)...);
+    }
+    template <typename... A>
+    future(ready_future_from_tuple_marker, std::tuple<A...>&& data) : _promise(nullptr) {
+        _local_state.set(std::move(data));
     }
     future(exception_future_marker, std::exception_ptr ex) noexcept : _promise(nullptr) {
         _local_state.set_exception(std::move(ex));
@@ -387,7 +392,35 @@ public:
     }
 
     template <typename Func>
-    future<> rescue(Func&& func) noexcept {
+    std::result_of_t<Func(future<T...>)>
+    then_wrapped(Func&& func) && noexcept {
+        using P = typename std::result_of_t<Func(future<T...>)>::promise_type;
+        if (state()->available()) {
+            try {
+                return func(std::move(*this));
+            } catch (...) {
+                P pr;
+                pr.set_exception(std::current_exception());
+                return pr.get_future();
+            }
+        }
+        P pr;
+        auto next_fut = pr.get_future();
+        _promise->schedule([func = std::forward<Func>(func), pr = std::move(pr)] (auto& state) mutable {
+            try {
+                auto next_fut = func(future(ready_future_from_tuple_marker(), state.get()));
+                next_fut.forward_to(std::move(pr));
+            } catch (...) {
+                pr.set_exception(std::current_exception());
+            }
+        });
+        _promise->_future = nullptr;
+        _promise = nullptr;
+        return next_fut;
+    }
+
+    template <typename Func>
+    future<> rescue(Func&& func) && noexcept {
         if (state()->available()) {
             try {
                 func([&state = *state()] { return state.get(); });
@@ -439,8 +472,8 @@ public:
         return f;
     }
 
-    future<> or_terminate() noexcept {
-        return rescue([] (auto get) {
+    future<> or_terminate() && noexcept {
+        return std::move(*this).rescue([] (auto get) {
             try {
                 get();
             } catch (...) {
