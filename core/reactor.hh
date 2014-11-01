@@ -412,7 +412,6 @@ class reactor {
     std::unique_ptr<network_stack> _network_stack;
     int _return = 0;
     timer_set<timer, &timer::_link, clock_type>::timer_list_t _expired_timers;
-public:
     file_desc _epollfd;
     readable_eventfd _io_eventfd;
     io_context_t _io_context;
@@ -474,7 +473,8 @@ private:
     void stop();
     friend class pollable_fd;
     friend class pollable_fd_state;
-    friend class file;
+    friend class posix_file_impl;
+    friend class blockdev_file_impl;
     friend class readable_eventfd;
     friend class timer;
     friend class smp;
