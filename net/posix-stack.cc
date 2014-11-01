@@ -26,7 +26,7 @@ posix_server_socket_impl::accept() {
         static unsigned balance = 0;
         auto cpu = balance++ % smp::count;
 
-        if (cpu == engine._id) {
+        if (cpu == engine.cpu_id()) {
             std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(fd)));
             return make_ready_future<connected_socket, socket_address>(
                     connected_socket(std::move(csi)), sa);

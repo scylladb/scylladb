@@ -55,7 +55,7 @@ future<> proxy_net_device::send(packet p)
         _send_depth++;
 
         // Assumes that there is only one virtio device and it is on cpu 0
-        smp::submit_to(0, [p = std::move(p), cpu = engine._id]() mutable {
+        smp::submit_to(0, [p = std::move(p), cpu = engine.cpu_id()]() mutable {
             return dev->send(p.free_on_cpu(cpu));
         }).then([this] () {
             if (_send_depth == _send_queue_length) {

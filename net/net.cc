@@ -51,14 +51,14 @@ future<> interface::dispatch_packet(packet p) {
         auto i = _proto_map.find(proto);
         if (i != _proto_map.end()) {
             l3_rx_stream& l3 = i->second;
-            auto fw = (engine._id == 0) ? l3.forward(p, sizeof(eth_hdr)) : engine._id;
-            if (fw != engine._id && fw < smp::count) {
-                smp::submit_to(fw, [p = std::move(p), cpu = engine._id]() mutable { net::dev->l2inject(p.free_on_cpu(cpu)); });
+            auto fw = (engine.cpu_id() == 0) ? l3.forward(p, sizeof(eth_hdr)) : engine.cpu_id();
+            if (fw != engine.cpu_id() && fw < smp::count) {
+                smp::submit_to(fw, [p = std::move(p), cpu = engine.cpu_id()]() mutable { net::dev->l2inject(p.free_on_cpu(cpu)); });
             } else {
-                if (fw != engine._id) { // broadcast to all cpus
+                if (fw != engine.cpu_id()) { // broadcast to all cpus
                     for (unsigned i = 0; i< smp::count; i++) {
-                        if (i != engine._id) {
-                            smp::submit_to(i, [n = p.share(), cpu = engine._id] () mutable { net::dev->l2inject(n.free_on_cpu(cpu)); });
+                        if (i != engine.cpu_id()) {
+                            smp::submit_to(i, [n = p.share(), cpu = engine.cpu_id()] () mutable { net::dev->l2inject(n.free_on_cpu(cpu)); });
                         }
                     }
                 }

@@ -334,7 +334,7 @@ template <typename InetTraits>
 unsigned tcp<InetTraits>::forward(packet& p, size_t off, ipaddr from, ipaddr to) {
     auto th = p.get_header<tcp_hdr>(off);
     if (!th) {
-        return engine._id;
+        return engine.cpu_id();
     }
     auto dst = ntohs(uint16_t(th->dst_port));
     auto src = ntohs(uint16_t(th->src_port));

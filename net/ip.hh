@@ -90,7 +90,7 @@ class ip_protocol {
 public:
     virtual ~ip_protocol() {}
     virtual void received(packet p, ipv4_address from, ipv4_address to) = 0;
-    virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to) { return engine._id; }
+    virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to) { return engine.cpu_id(); }
 };
 
 class ipv4_tcp final : public ip_protocol {

@@ -263,7 +263,7 @@ private:
             // Optional
             put_cached(part_type::PluginInst,
                     id.plugin_instance() == per_cpu_plugin_instance ?
-                            std::to_string(engine._id) : id.plugin_instance());
+                            std::to_string(engine.cpu_id()) : id.plugin_instance());
             put_cached(part_type::Type, id.type());
             // Optional
             put_cached(part_type::TypeInst, id.type_instance());

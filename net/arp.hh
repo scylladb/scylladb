@@ -28,7 +28,7 @@ public:
     arp_for_protocol(arp& a, uint16_t proto_num);
     virtual ~arp_for_protocol();
     virtual future<> received(packet p) = 0;
-    virtual unsigned forward(packet& p, size_t off) { return engine._id; }
+    virtual unsigned forward(packet& p, size_t off) { return engine.cpu_id(); }
 };
 
 class arp {
@@ -200,7 +200,7 @@ unsigned arp_for<L3>::forward(packet& p, size_t off)
     if (oper == op_reply) {
         return std::numeric_limits<unsigned>::max(); // broadcast reply
     }
-    return engine._id;
+    return engine.cpu_id();
 }
 
 template <typename L3>

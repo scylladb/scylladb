@@ -645,9 +645,9 @@ void smp::listen_all(smp_message_queue* qs)
 void smp::start_all_queues()
 {
     for (unsigned c = 0; c < count; c++) {
-        _qs[c][engine._id].start();
+        _qs[c][engine.cpu_id()].start();
     }
-    listen_all(_qs[engine._id]);
+    listen_all(_qs[engine.cpu_id()]);
 }
 
 void smp::configure(boost::program_options::variables_map configuration)

@@ -94,7 +94,7 @@ unsigned udp_v4::forward(packet& p, size_t off, ipv4_address from, ipv4_address 
     auto uh = p.get_header<udp_hdr>(off);
 
     if (!uh) {
-        return engine._id;
+        return engine.cpu_id();
     }
 
     auto dst = ntohs(uint16_t(uh->dst_port));

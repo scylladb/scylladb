@@ -32,7 +32,7 @@ unsigned arp::handle_on_cpu(packet& p, size_t off) {
     if (i != _arp_for_protocol.end()) {
         return i->second->forward(p, off);
     }
-    return engine._id;
+    return engine.cpu_id();
 }
 
 void arp::add(uint16_t proto_num, arp_for_protocol* afp) {

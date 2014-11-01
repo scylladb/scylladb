@@ -477,6 +477,7 @@ private:
     friend class file;
     friend class readable_eventfd;
     friend class timer;
+    friend class smp;
 };
 
 extern thread_local reactor engine;
@@ -497,10 +498,10 @@ public:
 	template <typename Func>
 	static std::result_of_t<Func()> submit_to(unsigned t, Func func,
 	        std::enable_if_t<returns_future<Func>::value, void*> = nullptr) {
-	    if (t == engine._id) {
+	    if (t == engine.cpu_id()) {
 	        return func();
 	    } else {
-	        return _qs[t][engine._id].submit(std::move(func));
+	        return _qs[t][engine.cpu_id()].submit(std::move(func));
 	    }
 	}
 	template <typename Func>

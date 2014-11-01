@@ -36,7 +36,7 @@ unsigned ipv4::handle_on_cpu(packet& p, size_t off)
     auto iph = p.get_header<ip_hdr>(off);
     auto l4 = _l4[iph->ip_proto];
     if (!l4) {
-        return engine._id;
+        return engine.cpu_id();
     }
     return l4->forward(p, off + sizeof(ip_hdr), iph->src_ip, iph->dst_ip);
 }
