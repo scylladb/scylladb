@@ -43,8 +43,9 @@ class basic_sstring {
     char* str() {
         return is_internal() ? u.internal.str : u.external.str;
     }
-    struct initialized_later {};
 public:
+    struct initialized_later {};
+
     basic_sstring() noexcept {
         u.internal.size = 0;
         u.internal.str[0] = '\0';
