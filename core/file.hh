@@ -20,6 +20,7 @@ public:
     virtual future<> flush(void) = 0;
     virtual future<struct stat> stat(void) = 0;
     virtual future<> discard(uint64_t offset, uint64_t length) = 0;
+    virtual future<size_t> size(void) = 0;
 
     friend class reactor;
 };
@@ -41,12 +42,14 @@ public:
     future<> flush(void);
     future<struct stat> stat(void);
     future<> discard(uint64_t offset, uint64_t length);
+    future<size_t> size(void);
 };
 
 class blockdev_file_impl : public posix_file_impl {
 public:
     blockdev_file_impl(int fd) : posix_file_impl(fd) {}
     future<> discard(uint64_t offset, uint64_t length) override;
+    future<size_t> size(void) override;
 };
 
 inline
@@ -95,6 +98,10 @@ public:
 
     future<> discard(uint64_t offset, uint64_t length) {
         return _file_impl->discard(offset, length);
+    }
+
+    future<size_t> size() {
+        return _file_impl->size();
     }
 
     friend class reactor;

@@ -252,6 +252,26 @@ blockdev_file_impl::discard(uint64_t offset, uint64_t length) {
     });
 }
 
+future<size_t>
+posix_file_impl::size(void) {
+    return engine._thread_pool.submit<size_t>([this] {
+        struct stat st;
+        auto ret = ::fstat(_fd, &st);
+        throw_system_error_on(ret == -1);
+        return st.st_size;
+    });
+}
+
+future<size_t>
+blockdev_file_impl::size(void) {
+    return engine._thread_pool.submit<size_t>([this] {
+        size_t size;
+        auto ret = ::ioctl(_fd, BLKGETSIZE64, &size);
+        throw_system_error_on(ret == -1);
+        return size;
+    });
+}
+
 void reactor::add_timer(timer* tmr) {
     if (_timers.insert(*tmr)) {
         itimerspec its;
