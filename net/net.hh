@@ -49,8 +49,6 @@ private:
 };
 
 class interface {
-    std::unique_ptr<device> _dev;
-    subscription<packet> _rx;
     struct l3_rx_stream {
         stream<packet, ethernet_address> packet_stream;
         future<> ready;
@@ -58,6 +56,8 @@ class interface {
         l3_rx_stream(std::function<unsigned (packet&, size_t)>&& fw) : ready(packet_stream.started()), forward(fw) {}
     };
     std::unordered_map<uint16_t, l3_rx_stream> _proto_map;
+    std::unique_ptr<device> _dev;
+    subscription<packet> _rx;
     ethernet_address _hw_address;
     net::hw_features _hw_features;
 private:
