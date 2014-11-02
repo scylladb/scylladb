@@ -116,7 +116,7 @@ public:
 // and in that case we'll need to have an extra step here
 inline uint64_t
 virt_to_mfn(void *virt) {
-    return virt_to_phys(virt);
+    return virt_to_phys(virt) >> 12;
 }
 
 gntref& kernel_grant_head::new_ref() {
