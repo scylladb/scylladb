@@ -1,4 +1,66 @@
 #!/usr/bin/python3
+import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile, re
+
+configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
+
+def add_tristate(arg_parser, name, dest, help):
+    arg_parser.add_argument('--enable-' + name, dest = dest, action = 'store_true', default = None,
+                            help = 'Enable ' + help)
+    arg_parser.add_argument('--disable-' + name, dest = dest, action = 'store_false', default = None,
+                            help = 'Disable ' + help)
+
+def apply_tristate(var, test, note, missing):
+    if (var is None) or var:
+        if test():
+            return True
+        elif var == True:
+            print(missing)
+            sys.exit(1)
+        else:
+            print(note)
+            return False
+    return False
+
+def try_compile(compiler, source = '', flags = []):
+    with tempfile.NamedTemporaryFile() as sfile:
+        sfile.file.write(bytes(source, 'utf-8'))
+        sfile.file.flush()
+        return subprocess.call([compiler, '-x', 'c++', '-o', '/dev/null', '-c', sfile.name] + flags,
+                               stdout = subprocess.DEVNULL,
+                               stderr = subprocess.DEVNULL) == 0
+
+def warning_supported(warning, compiler):
+    # gcc ignores -Wno-x even if it is not supported
+    adjusted = re.sub('^-Wno-', '-W', warning)
+    return try_compile(flags = [adjusted], compiler = compiler)
+
+def debug_flag(compiler):
+    src_with_auto = textwrap.dedent('''\
+        template <typename T>
+        struct x { auto f() {} };
+
+        x<int> a;
+        ''')
+    if try_compile(source = src_with_auto, flags = ['-g', '-std=gnu++1y'], compiler = compiler):
+        return '-g'
+    else:
+        print('Note: debug information disabled; upgrade your compiler')
+        return ''
+
+modes = {
+    'debug': {
+        'sanitize': '-fsanitize=address -fsanitize=leak -fsanitize=undefined',
+        'sanitize_libs': '-lubsan -lasan',
+        'opt': '-O0 -DDEBUG -DDEFAULT_ALLOCATOR',
+        'libs': '',
+    },
+    'release': {
+        'sanitize': '',
+        'sanitize_libs': '',
+        'opt': '-O2',
+        'libs': '',
+    },
+}
 
 tests = [
     'tests/test-reactor',
@@ -23,6 +85,27 @@ apps = [
     ]
 
 all_artifacts = apps + tests
+
+arg_parser = argparse.ArgumentParser('Configure seastar')
+arg_parser.add_argument('--static', dest = 'static', action = 'store_const', default = '',
+                        const = '-static',
+                        help = 'Static link (useful for running on hosts outside the build environment')
+arg_parser.add_argument('--pie', dest = 'pie', action = 'store_true',
+                        help = 'Build position-independent executable (PIE)')
+arg_parser.add_argument('--so', dest = 'so', action = 'store_true',
+                        help = 'Build shared object (SO) instead of executable')
+arg_parser.add_argument('--mode', action='store', choices=list(modes.keys()) + ['all'], default='all')
+arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
+arg_parser.add_argument('--cflags', action = 'store', dest = 'user_cflags', default = '',
+                        help = 'Extra flags for the C++ compiler')
+arg_parser.add_argument('--ldflags', action = 'store', dest = 'user_ldflags', default = '',
+                        help = 'Extra flags for the linker')
+arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 'g++',
+                        help = 'C++ compiler path')
+arg_parser.add_argument('--with-osv', action = 'store', dest = 'with_osv', default = '',
+                        help = 'Shortcut for compile for OSv')
+add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
+args = arg_parser.parse_args()
 
 libnet = [
     'net/proxy.cc',
@@ -71,70 +154,12 @@ deps = {
     'tests/sstring_test': ['tests/sstring_test.cc'] + core,
 }
 
-modes = {
-    'debug': {
-        'sanitize': '-fsanitize=address -fsanitize=leak -fsanitize=undefined',
-        'sanitize_libs': '-lubsan -lasan',
-        'opt': '-O0 -DDEBUG -DDEFAULT_ALLOCATOR',
-        'libs': '',
-    },
-    'release': {
-        'sanitize': '',
-        'sanitize_libs': '',
-        'opt': '-O2',
-        'libs': '',
-    },
-}
-
 libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
     ]
-
-import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile, re
-
-configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
-
-def add_tristate(arg_parser, name, dest, help):
-    arg_parser.add_argument('--enable-' + name, dest = dest, action = 'store_true', default = None,
-                            help = 'Enable ' + help)
-    arg_parser.add_argument('--disable-' + name, dest = dest, action = 'store_false', default = None,
-                            help = 'Disable ' + help)
-
-def apply_tristate(var, test, note, missing):
-    if (var is None) or var:
-        if test():
-            return True
-        elif var == True:
-            print(missing)
-            sys.exit(1)
-        else:
-            print(note)
-            return False
-    return False
-
-arg_parser = argparse.ArgumentParser('Configure seastar')
-arg_parser.add_argument('--static', dest = 'static', action = 'store_const', default = '',
-                        const = '-static',
-                        help = 'Static link (useful for running on hosts outside the build environment')
-arg_parser.add_argument('--pie', dest = 'pie', action = 'store_true',
-                        help = 'Build position-independent executable (PIE)')
-arg_parser.add_argument('--so', dest = 'so', action = 'store_true',
-                        help = 'Build shared object (SO) instead of executable')
-arg_parser.add_argument('--mode', action='store', choices=list(modes.keys()) + ['all'], default='all')
-arg_parser.add_argument('--with', dest='artifacts', action='append', choices=all_artifacts, default=[])
-arg_parser.add_argument('--cflags', action = 'store', dest = 'user_cflags', default = '',
-                        help = 'Extra flags for the C++ compiler')
-arg_parser.add_argument('--ldflags', action = 'store', dest = 'user_ldflags', default = '',
-                        help = 'Extra flags for the linker')
-arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 'g++',
-                        help = 'C++ compiler path')
-arg_parser.add_argument('--with-osv', action = 'store', dest = 'with_osv', default = '',
-                        help = 'Shortcut for compile for OSv')
-add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
-args = arg_parser.parse_args()
 
 # The "--with-osv=<path>" parameter is a shortcut for a bunch of other
 # settings:
@@ -144,32 +169,6 @@ if args.with_osv:
     args.user_cflags = (args.user_cflags +
         ' -DDEFAULT_ALLOCATOR -fvisibility=default -DHAVE_OSV -I' +
         args.with_osv + '/include')
-
-def try_compile(compiler, source = '', flags = []):
-    with tempfile.NamedTemporaryFile() as sfile:
-        sfile.file.write(bytes(source, 'utf-8'))
-        sfile.file.flush()
-        return subprocess.call([compiler, '-x', 'c++', '-o', '/dev/null', '-c', sfile.name] + flags,
-                               stdout = subprocess.DEVNULL,
-                               stderr = subprocess.DEVNULL) == 0
-
-def warning_supported(warning, compiler):
-    # gcc ignores -Wno-x even if it is not supported
-    adjusted = re.sub('^-Wno-', '-W', warning)
-    return try_compile(flags = [adjusted], compiler = compiler)
-
-def debug_flag(compiler):
-    src_with_auto = textwrap.dedent('''\
-        template <typename T>
-        struct x { auto f() {} };
-
-        x<int> a;
-        ''')
-    if try_compile(source = src_with_auto, flags = ['-g', '-std=gnu++1y'], compiler = compiler):
-        return '-g'
-    else:
-        print('Note: debug information disabled; upgrade your compiler')
-        return ''
 
 warnings = [w
             for w in warnings
