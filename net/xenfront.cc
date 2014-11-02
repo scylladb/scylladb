@@ -77,14 +77,14 @@ public:
 
 subscription<packet>
 xenfront_net_device::receive(std::function<future<> (packet)> next) {
-
+    auto sub = _rx_stream.listen(std::move(next));
     keep_doing([this] () {
         return _evtchn->pending(_rx_evtchn).then([this] {
             return queue_rx_packet();
         });
     });
 
-    return _rx_stream.listen(std::move(next));
+    return std::move(sub);
 }
 
 future<>
