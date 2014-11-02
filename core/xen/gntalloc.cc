@@ -169,7 +169,7 @@ grant_head *kernel_gntalloc::alloc_ref(unsigned nr_ents, bool alloc) {
         void *page = nullptr;
         if (alloc) {
             page = new_frame();
-            gnttab_grant_foreign_access(ref, _otherend, virt_to_mfn(page), 0);
+            gnttab_grant_foreign_access_ref(ref, _otherend, virt_to_mfn(page), 0);
         }
         v.push_back(std::make_pair(ref, page));
     }
