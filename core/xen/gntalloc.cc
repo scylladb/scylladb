@@ -135,7 +135,7 @@ gntref& kernel_grant_head::new_ref(void *addr, size_t size) {
     ref.second = gnt->new_frame();
     memcpy(ref.second, addr, size);
 
-    gnttab_grant_foreign_access(ref.first, gnt->_otherend, virt_to_mfn(ref.second), 0);
+    gnttab_grant_foreign_access_ref(ref.first, gnt->_otherend, virt_to_mfn(ref.second), 0);
 
     return _refs[_id++ % _refs.size()];
 }
