@@ -105,6 +105,7 @@ arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 
 arg_parser.add_argument('--with-osv', action = 'store', dest = 'with_osv', default = '',
                         help = 'Shortcut for compile for OSv')
 add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
+add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 args = arg_parser.parse_args()
 
 libnet = [
@@ -131,6 +132,27 @@ core = [
     'net/posix-stack.cc',
     ]
 
+
+libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework'
+hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
+
+def have_xen():
+    source  = '#include <stdint.h>\n'
+    source += '#include <xen/xen.h>\n'
+    source += '#include <xen/sys/evtchn.h>\n'
+    source += '#include <xen/sys/gntdev.h>\n'
+    source += '#include <xen/sys/gntalloc.h>\n'
+
+    return try_compile(compiler = args.cxx, source = source)
+
+if apply_tristate(args.xen, test = have_xen,
+                  note = 'Note: xen-devel not installed.  No Xen support.',
+                  missing = 'Error: required package xen-devel not installed.'):
+    libs += ' -lxenstore'
+    core += [
+                'core/xen/xenstore.cc',
+            ]
+
 memcached = [
     'apps/memcached/ascii.rl'
 ] + libnet + core
@@ -153,9 +175,6 @@ deps = {
     'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
     'tests/sstring_test': ['tests/sstring_test.cc'] + core,
 }
-
-libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework'
-hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
