@@ -77,6 +77,7 @@ void userspace_evtchn::umask(int *port, unsigned count)
 #ifdef HAVE_OSV
 class kernel_evtchn: public evtchn {
     static void make_ready(void *arg);
+    static void process_interrupts(readable_eventfd* fd, semaphore* sem);
 public:
     kernel_evtchn(unsigned otherend) : evtchn(otherend) {}
     virtual int bind() override;
@@ -85,8 +86,9 @@ public:
 
 void kernel_evtchn::make_ready(void *arg) {
     printf("Got an interrupt!\n");
-    semaphore *sem = reinterpret_cast<semaphore *>(arg);
-    sem->signal();
+    int fd = reinterpret_cast<uintptr_t>(arg);
+    uint64_t one = 1;
+    ::write(fd, &one, sizeof(one));
 }
 
 int kernel_evtchn::bind() {
@@ -95,10 +97,23 @@ int kernel_evtchn::bind() {
 
     int port;
     irq = bind_listening_port_to_irq(_otherend, &port);
-    intr_add_handler("", irq, NULL, make_ready, init_port(port), 0, 0);
+    // We need to convert extra-seastar events to intra-seastar events
+    // (in this case, the semaphore interface of evtchn).  The only
+    // way to do that currently is via eventfd.
+    semaphore* sem = init_port(port);
+    auto fd = new readable_eventfd;
+    auto wfd = fd->get_write_fd();
+    intr_add_handler("", irq, NULL, make_ready, reinterpret_cast<void*>(uintptr_t(wfd)), 0, 0);
     unmask_evtchn(port);
-
+    process_interrupts(fd, sem);
     return evtchn_from_irq(irq);
+}
+
+void kernel_evtchn::process_interrupts(readable_eventfd* fd, semaphore* sem) {
+    fd->wait().then([fd, sem] (size_t ignore) {
+        sem->signal();
+        process_interrupts(fd, sem);
+    });
 }
 
 void kernel_evtchn::notify(int port) {
