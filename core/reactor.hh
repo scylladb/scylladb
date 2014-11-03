@@ -733,18 +733,21 @@ future<temporary_buffer<CharType>>
 input_stream<CharType>::read_exactly_part(size_t n, tmp_buf out, size_t completed) {
     if (available()) {
         auto now = std::min(n - completed, available());
-        std::copy(_buf.get(), _buf.get() + now, out.get() + completed);
+        std::copy(_buf.get(), _buf.get() + now, out.get_write() + completed);
         _buf.trim_front(now);
         completed += now;
     }
     if (completed == n) {
-        return make_ready_future<tmp_buf>(out);
+        return make_ready_future<tmp_buf>(std::move(out));
     }
 
     // _buf is now empty
-    return _fd.get().then([this, n, out = std::move(out), completed] (char* data, size_t m, std::unique_ptr<deleter> d) {
-        _buf = tmp_buf(data, m, std::move(d));
-        return read_exactly_part(n, std::move(out), completed);
+    return _fd.get().then([this, n, out = std::move(out), completed] (auto buf) mutable {
+        if (buf.size() == 0) {
+            return make_ready_future<tmp_buf>(std::move(buf));
+        }
+        _buf = std::move(buf);
+        return this->read_exactly_part(n, std::move(out), completed);
     });
 }
 
@@ -753,21 +756,24 @@ future<temporary_buffer<CharType>>
 input_stream<CharType>::read_exactly(size_t n) {
     if (_buf.size() == n) {
         // easy case: steal buffer, return to caller
-        return make_ready_future<temporary_buffer<CharType>>(std::move(_buf));
+        return make_ready_future<tmp_buf>(std::move(_buf));
     } else if (_buf.size() > n) {
         // buffer large enough, share it with caller
         auto front = _buf.share(0, n);
         _buf.trim_front(n);
-        return make_ready_future<temporary_buffer<CharType>>(front);
+        return make_ready_future<tmp_buf>(std::move(front));
     } else if (_buf.size() == 0) {
         // buffer is empty: grab one and retry
-        return _fd.get().then([this, n] (char* data, size_t m, std::unique_ptr<deleter> d) {
-            _buf = tmp_buf(data, m, std::move(d));
-            return read_exactly(n);
+        return _fd.get().then([this, n] (auto buf) mutable {
+            if (buf.size() == 0) {
+                return make_ready_future<tmp_buf>(std::move(buf));
+            }
+            _buf = std::move(buf);
+            return this->read_exactly(n);
         });
     } else {
         // buffer too small: start copy/read loop
-        temporary_buffer<CharType> b(n);
+        tmp_buf b(n);
         return read_exactly_part(n, std::move(b), 0);
     }
 }
