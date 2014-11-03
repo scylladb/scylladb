@@ -99,6 +99,10 @@ xenfront_net_device::send(packet _p) {
     // use a pre-determined page for data.
     //
     // In-kernel should be fine
+
+    // FIXME: negotiate and use scatter/gather
+    _p.linearize();
+
     return _tx_ring.free_idx().then([this, p = std::move(_p), frag] (uint32_t idx)  {
 
         auto req_prod = _tx_ring._sring->req_prod;
