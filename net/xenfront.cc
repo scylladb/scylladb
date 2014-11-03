@@ -182,7 +182,7 @@ future<> xenfront_net_device::queue_rx_packet() {
 }
 
 future<> xenfront_net_device::alloc_rx_references(unsigned refs) {
-    auto req_prod = _rx_ring._sring->req_prod;
+    auto req_prod = _rx_ring.req_prod_pvt;
     rmb();
 
     for (auto i = req_prod; (i < _rx_ring.nr_ents) && (i < refs); ++i) {
@@ -192,10 +192,11 @@ future<> xenfront_net_device::alloc_rx_references(unsigned refs) {
         auto req =  &_rx_ring._sring->_ring[i].req;
         req->id = i;
         req->gref = _rx_ring.entries[i].first;
-        _rx_ring.req_prod_pvt++;
+        ++req_prod;
     }
 
-    _rx_ring._sring->req_prod = req_prod + 1;
+    _rx_ring.req_prod_pvt = req_prod;
+    _rx_ring._sring->req_prod = req_prod;
     /* ready */
     _evtchn->notify(_rx_evtchn);
     wmb();
