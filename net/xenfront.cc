@@ -124,6 +124,7 @@ xenfront_net_device::send(packet _p) {
         auto req = &_tx_ring._sring->_ring[idx].req;
         req->gref = ref.first;
         req->offset = 0;
+        // FIXME: report partial checksum
         req->flags = 0;
         req->id = idx;
         req->size = f.size;
@@ -262,6 +263,9 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
             features_nack[feat] = 0;
         }
     }
+
+    _hw_features.rx_csum_offload = true;
+    _hw_features.tx_csum_offload = true;
 
     for (auto&s : all_features) {
         auto value = _xenstore->read(_backend + "/" + s);
