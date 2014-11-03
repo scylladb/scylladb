@@ -230,6 +230,8 @@ public:
     char* prepend_uninitialized_header(size_t size);
 
     packet free_on_cpu(unsigned cpu);
+
+    void linearize() { return linearize(0, len()); }
 private:
     void linearize(size_t at_frag, size_t desired_size);
     bool allocate_headroom(size_t size);
