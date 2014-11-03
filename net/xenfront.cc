@@ -27,6 +27,7 @@
 #include "core/xen/evtchn.hh"
 
 #include "xenfront.hh"
+#include <unordered_set>
 
 using namespace net;
 
@@ -54,6 +55,7 @@ private:
     grant_head *_rx_refs;
 
     std::list<std::pair<std::string, std::string>> _features;
+    static std::unordered_set<std::string> _supported_features;
 
     ethernet_address _hw_address;
 
@@ -73,6 +75,12 @@ public:
 
     ethernet_address hw_address();
     net::hw_features hw_features();
+};
+
+std::unordered_set<std::string>
+xenfront_net_device::_supported_features = {
+    "feature-split-event-channels",
+    "feature-rx-copy",
 };
 
 subscription<packet>
@@ -247,12 +255,13 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     _rx_stream.started();
 
     auto all_features = _xenstore->ls(_backend);
+    std::unordered_map<std::string, int> features_nack;
 
-    // FIXME: Also have to remove what xenstar don't support,
-    // but ATM we should support it all
-    all_features.remove_if([](std::string& el) {
-        return !!el.compare(0, 8, "feature-") && !!el.compare(0, 8, "request-");
-    });
+    for (auto&& feat : all_features) {
+        if (feat.compare(0, 8, "feature-") == 0 && !_supported_features.count(feat)) {
+            features_nack[feat] = 0;
+        }
+    }
 
     for (auto&s : all_features) {
         auto value = _xenstore->read(_backend + "/" + s);
@@ -262,7 +271,7 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     {
         auto t = xenstore::xenstore_transaction();
 
-        for (auto& f: _features) {
+        for (auto&& f: features_nack) {
             _xenstore->write(path(f.first), f.second, t);
         }
 
