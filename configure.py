@@ -76,6 +76,7 @@ tests = [
     'tests/blkdiscard_test',
     'tests/sstring_test',
     'tests/memcached/test_ascii_parser',
+    'tests/tcp_server',
     ]
 
 apps = [
@@ -172,6 +173,7 @@ deps = {
     'tests/futures_test': ['tests/futures_test.cc'] + core,
     'tests/udp_server': ['tests/udp_server.cc'] + core + libnet,
     'tests/udp_client': ['tests/udp_client.cc'] + core + libnet,
+    'tests/tcp_server': ['tests/tcp_server.cc'] + core + libnet,
     'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
     'tests/sstring_test': ['tests/sstring_test.cc'] + core,
 }
