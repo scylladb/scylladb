@@ -196,10 +196,10 @@ future<> xenfront_net_device::alloc_rx_references(unsigned refs) {
     }
 
     _rx_ring.req_prod_pvt = req_prod;
+    wmb();
     _rx_ring._sring->req_prod = req_prod;
     /* ready */
     _evtchn->notify(_rx_evtchn);
-    wmb();
     return make_ready_future();
 }
 
