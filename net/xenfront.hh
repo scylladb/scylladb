@@ -89,7 +89,8 @@ public:
 
     front_ring(gntref r)
         : ref(r.xen_id), entries(this)
-        , _sring(static_cast<sring<T> *>(r.page)) { new (_sring) sring<T>(); }
+        , _sring(new (r.page) sring<T>()) {
+    }
 
 
     future<uint32_t> free_idx();
