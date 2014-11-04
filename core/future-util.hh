@@ -69,21 +69,12 @@ future<> do_until(StopCondition&& stop_cond, AsyncAction&& action) {
 template<typename AsyncAction>
 static inline
 future<> keep_doing(AsyncAction&& action) {
-    while (true) {
-        try {
-            auto f = action();
-            if (!f.available()) {
-                return f.then([action = std::forward<AsyncAction>(action)] () mutable {
-                    return keep_doing(std::forward<AsyncAction>(action));
-                });
-            }
-
-            if (f.failed()) {
-                return std::move(f);
-            }
-        } catch (...) {
-            return make_exception_future(std::current_exception());
-        }
+    try {
+        return action().then([action = std::forward<AsyncAction>(action)] () mutable {
+            return keep_doing(std::forward<AsyncAction>(action));
+        });
+    } catch (...) {
+        return make_exception_future(std::current_exception());
     }
 }
 
