@@ -111,7 +111,7 @@ xenfront_net_device::send(packet _p) {
     // FIXME: negotiate and use scatter/gather
     _p.linearize();
 
-    return _tx_ring.free_idx().then([this, p = std::move(_p), frag] (uint32_t idx)  {
+    return _tx_ring.free_idx().then([this, p = std::move(_p), frag] (uint32_t idx) mutable {
 
         auto req_prod = _tx_ring._sring->req_prod;
 
@@ -124,8 +124,13 @@ xenfront_net_device::send(packet _p) {
         auto req = &_tx_ring._sring->_ring[idx].req;
         req->gref = ref.first;
         req->offset = 0;
-        // FIXME: report partial checksum
-        req->flags = 0;
+        req->flags = {};
+        if (p.offload_info().protocol != ip_protocol_num::unused) {
+            req->flags.csum_blank = true;
+            req->flags.data_validated = true;
+        } else {
+            req->flags.data_validated = true;
+        }
         req->id = idx;
         req->size = f.size;
 

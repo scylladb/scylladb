@@ -16,7 +16,13 @@ boost::program_options::options_description get_xenfront_net_options_description
 struct netif_tx_request {
     uint32_t gref;
     uint16_t offset;
-    uint16_t flags;
+    struct {
+        uint16_t csum_blank : 1;
+        uint16_t data_validated : 1;
+        uint16_t more_data : 1;
+        uint16_t extra_info : 1;
+        uint16_t pad : 12;
+    } flags;
     uint16_t id;
     uint16_t size;
 };
