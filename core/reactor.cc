@@ -703,5 +703,6 @@ void smp::join_all()
     }
 }
 
+__thread size_t future_avail_count = 0;
 
 thread_local reactor engine;
