@@ -71,7 +71,16 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
     }
     auto l4 = _l4[iph->ip_proto];
     if (l4) {
-        p.trim_front(iph->ihl * 4);
+        unsigned ip_len = iph->len;
+        unsigned ip_hdr_len = iph->ihl * 4;
+        unsigned ip_payload_len = ip_len - ip_hdr_len;
+        if (p.len() < ip_len) {
+            return make_ready_future<>();
+        }
+        p.trim_front(ip_hdr_len);
+        if (p.len() > ip_payload_len) {
+            p.trim_back(p.len() - ip_payload_len);
+        }
         l4->received(std::move(p), iph->src_ip, iph->dst_ip);
     }
     return make_ready_future<>();
