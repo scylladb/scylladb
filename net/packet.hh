@@ -213,6 +213,7 @@ public:
     void append(packet&& p);
 
     void trim_front(size_t how_much);
+    void trim_back(size_t how_much);
 
     // get a header pointer, linearizing if necessary
     template <typename Header>
@@ -482,6 +483,23 @@ void packet::trim_front(size_t how_much) {
         }
         _impl->_frags[0].base += how_much;
         _impl->_frags[0].size -= how_much;
+    }
+}
+
+inline
+void packet::trim_back(size_t how_much) {
+    assert(how_much <= _impl->_len);
+    _impl->_len -= how_much;
+    size_t i = _impl->_nr_frags - 1;
+    while (how_much && how_much >= _impl->_frags[i].size) {
+        how_much -= _impl->_frags[i--].size;
+    }
+    _impl->_nr_frags = i + 1;
+    if (how_much) {
+        _impl->_frags[i].size -= how_much;
+        if (i == 0 && _impl->using_internal_data()) {
+            _impl->_headroom += how_much;
+        }
     }
 }
 
