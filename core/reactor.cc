@@ -375,7 +375,8 @@ int reactor::run() {
     _start_promise.set_value();
     complete_timers();
     while (true) {
-        while (!_pending_tasks.empty()) {
+        unsigned loop = 0;
+        while (!_pending_tasks.empty() && loop++ < 200) {
             auto tsk = std::move(_pending_tasks.front());
             _pending_tasks.pop_front();
             tsk->run();
@@ -389,7 +390,7 @@ int reactor::run() {
             break;
         }
         std::array<epoll_event, 128> eevt;
-        int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(), -1);
+        int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(), _pending_tasks.empty() ? -1 : 0);
         if (nr == -1 && errno == EINTR) {
             continue; // gdb can cause this
         }
@@ -398,7 +399,10 @@ int reactor::run() {
             auto& evt = eevt[i];
             auto pfd = reinterpret_cast<pollable_fd_state*>(evt.data.ptr);
             auto events = evt.events & (EPOLLIN | EPOLLOUT);
-            pfd->events_known |= events;
+            // FIXME: it is enough to check that pfd's task is not in _pending_tasks here
+            if (_pending_tasks.empty()) {
+                pfd->events_known |= events;
+            }
             auto events_to_remove = events & ~pfd->events_requested;
             complete_epoll_event(*pfd, &pollable_fd_state::pollin, events, EPOLLIN);
             complete_epoll_event(*pfd, &pollable_fd_state::pollout, events, EPOLLOUT);
