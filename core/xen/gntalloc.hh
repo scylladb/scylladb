@@ -3,7 +3,10 @@
 
 #include "core/posix.hh"
 
-typedef std::pair<int, void *> gntref;
+struct gntref {
+    int xen_id;
+    void* page;
+};
 
 class gntalloc;
 

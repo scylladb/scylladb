@@ -122,7 +122,7 @@ xenfront_net_device::send(packet _p) {
         _tx_ring.entries[idx] = ref;
 
         auto req = &_tx_ring._sring->_ring[idx].req;
-        req->gref = ref.first;
+        req->gref = ref.xen_id;
         req->offset = 0;
         req->flags = {};
         if (p.offload_info().protocol != ip_protocol_num::unused) {
@@ -180,7 +180,7 @@ future<> xenfront_net_device::queue_rx_packet() {
         }
         auto rsp_size = rsp.status;
 
-        packet p(static_cast<char *>(entry.second) + rsp.offset, rsp_size);
+        packet p(static_cast<char *>(entry.page) + rsp.offset, rsp_size);
         _rx_stream.produce(std::move(p));
 
         auto req_prod = _rx_ring._sring->req_prod;
@@ -209,7 +209,7 @@ future<> xenfront_net_device::alloc_rx_references(unsigned refs) {
         // This is how the backend knows where to put data.
         auto req =  &_rx_ring._sring->_ring[i].req;
         req->id = i;
-        req->gref = _rx_ring.entries[i].first;
+        req->gref = _rx_ring.entries[i].xen_id;
         ++req_prod;
     }
 

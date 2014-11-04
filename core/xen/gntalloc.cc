@@ -60,7 +60,7 @@ grant_head *userspace_gntalloc::alloc_ref(unsigned nr_ents, bool alloc) {
     for (unsigned i = 0; i < nr_ents; ++i) {
         auto ref = gref->gref_ids[i];
         auto *page = addr + 4096 * i;
-        v.push_back(std::make_pair(ref, page));
+        v.push_back({int(ref), page});
     }
 
     free(gref);
@@ -72,7 +72,7 @@ gntref userspace_gntalloc::alloc_ref() {
     auto gref = get_gref(1);
 
     void *addr = _gntalloc.map_shared_rw(4096, gref->index);
-    auto p = std::make_pair(gref->gref_ids[0], addr);
+    auto p = gntref{int(gref->gref_ids[0]), addr};
     free(gref);
     return p;
 }
@@ -83,7 +83,7 @@ gntref& userspace_grant_head::new_ref() {
 
 gntref& userspace_grant_head::new_ref(void *addr, size_t size) {
     gntref& ref = _refs[_id % _refs.size()];
-    memcpy(ref.second, addr, size);
+    memcpy(ref.page, addr, size);
     return ref;
 }
 
@@ -132,10 +132,10 @@ gntref& kernel_grant_head::new_ref(void *addr, size_t size) {
     // FIXME: if we can guarantee that the packet allocation came from malloc, not
     // mmap, we can grant it directly, without copying. We would also have to propagate
     // the offset information, but that is easier
-    ref.second = gnt->new_frame();
-    memcpy(ref.second, addr, size);
+    ref.page = gnt->new_frame();
+    memcpy(ref.page, addr, size);
 
-    gnttab_grant_foreign_access_ref(ref.first, gnt->_otherend, virt_to_mfn(ref.second), 0);
+    gnttab_grant_foreign_access_ref(ref.xen_id, gnt->_otherend, virt_to_mfn(ref.page), 0);
 
     return _refs[_id++ % _refs.size()];
 }
@@ -153,7 +153,7 @@ gntref kernel_gntalloc::alloc_ref() {
         throw std::runtime_error("Failed to initialize allocate grant\n");
     }
 
-    return std::make_pair(ref, page);
+    return {int(ref), page};
 }
 
 grant_head *kernel_gntalloc::alloc_ref(unsigned nr_ents, bool alloc) {
@@ -171,7 +171,7 @@ grant_head *kernel_gntalloc::alloc_ref(unsigned nr_ents, bool alloc) {
             page = new_frame();
             gnttab_grant_foreign_access_ref(ref, _otherend, virt_to_mfn(page), 0);
         }
-        v.push_back(std::make_pair(ref, page));
+        v.push_back({ref, page});
     }
 
     return new kernel_grant_head(v);
