@@ -407,7 +407,6 @@ void vring::do_complete() {
                 id = d._next;
             }
             _free_last = id;
-            _available_descriptors.signal(count);
         }
     } while (enable_interrupts());
 }
@@ -550,7 +549,7 @@ virtio_net_device::txq::post(packet p) {
             std::move(p));
 
     auto nr_frags = q.nr_frags();
-    return _ring.available_descriptors().wait(nr_frags).then([this, p = std::move(q)] () mutable {
+    return _ring.available_descriptors().wait(nr_frags).then([this, nr_frags, p = std::move(q)] () mutable {
         static auto fragment_to_buffer = [this] (fragment f) {
             vring::buffer b;
             b.addr = _dev.virt_to_phys(f.base);
@@ -570,7 +569,9 @@ virtio_net_device::txq::post(packet p) {
             }
         } vbc[1] { { p.fragments().begin(), p.fragments().end() } };
         // schedule packet destruction
-        vbc[0].completed.get_future().then([p = std::move(p)] (size_t) {});
+        vbc[0].completed.get_future().then([this, nr_frags, p = std::move(p)] (size_t) {
+            _ring.available_descriptors().signal(nr_frags);
+       });
         _ring.post(std::begin(vbc), std::end(vbc));
     });
 }
@@ -628,6 +629,7 @@ virtio_net_device::rxq::prepare_buffers() {
                     }
                     packet p(_fragments.begin(), _fragments.end(), std::move(del));
                     _dev.queue_rx_packet(std::move(p));
+                    _ring.available_descriptors().signal(_fragments.size());
                 }
             });
             return bc;
