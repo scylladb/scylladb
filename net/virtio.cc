@@ -485,13 +485,12 @@ protected:
     txq _txq;
     rxq _rxq;
     stream<packet> _rx_stream;
-    future<> _rx_ready;
 protected:
     uint64_t setup_features();
     vring::config txq_config(size_t txq_ring_size);
     vring::config rxq_config(size_t rxq_ring_size);
     void common_config(vring::config& r);
-    future<> queue_rx_packet(packet p);
+    void queue_rx_packet(packet p);
     size_t vring_storage_size(size_t ring_size);
 public:
     explicit virtio_net_device(boost::program_options::variables_map opts, size_t rx_ring_size, size_t tx_ring_size);
@@ -628,9 +627,7 @@ virtio_net_device::rxq::prepare_buffers() {
                         del = make_deleter(deleter(), [deleters = std::move(_deleters)] {});
                     }
                     packet p(_fragments.begin(), _fragments.end(), std::move(del));
-                    _dev._rx_ready = _dev._rx_ready.then([this, p = std::move(p)] () mutable {
-                        return _dev.queue_rx_packet(std::move(p));
-                    });
+                    _dev.queue_rx_packet(std::move(p));
                 }
             });
             return bc;
@@ -659,8 +656,8 @@ virtio_net_device::virtio_net_device(boost::program_options::variables_map opts,
     , _features(setup_features())
     , _txq(*this, txq_config(tx_ring_size))
     , _rxq(*this, rxq_config(rx_ring_size))
-    , _rx_stream()
-    , _rx_ready(_rx_stream.started()) {
+    , _rx_stream() {
+    _rx_stream.started();
 }
 
 uint64_t virtio_net_device::setup_features() {
@@ -738,8 +735,8 @@ virtio_net_device::send(packet p) {
     return _txq.post(std::move(p));
 }
 
-future<> virtio_net_device::queue_rx_packet(packet p) {
-    return _rx_stream.produce(std::move(p));
+void virtio_net_device::queue_rx_packet(packet p) {
+    _rx_stream.produce(std::move(p));
 }
 
 net::hw_features virtio_net_device::hw_features() {
