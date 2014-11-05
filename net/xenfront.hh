@@ -72,7 +72,7 @@ class front_ring {
 public:
     class entries {
     private:
-        std::array<gntref, 256> _entries;
+        std::array<gntref, front_ring<T>::nr_ents> _entries;
         front_ring<T> *_ring;
     public:
         entries(front_ring<T> *ring) : _ring(ring) {}
