@@ -9,6 +9,7 @@
 #include "net.hh"
 #include "core/sstring.hh"
 #include "core/xen/gntalloc.hh"
+#include "core/queue.hh"
 
 std::unique_ptr<net::device> create_xenfront_net_device(boost::program_options::variables_map opts, bool userspace);
 boost::program_options::options_description get_xenfront_net_options_description();
@@ -71,13 +72,21 @@ template <typename T>
 class front_ring {
 public:
     class entries {
+    protected:
+        queue<unsigned> _ids;
     private:
         std::array<gntref, front_ring<T>::nr_ents> _entries;
         front_ring<T> *_ring;
     public:
-        entries(front_ring<T> *ring) : _ring(ring) {}
+        entries(front_ring<T> *ring) : _ids(front_ring<T>::nr_ents), _ring(ring) {
+            for (unsigned i = 0; i < front_ring<T>::nr_ents; ++i) {
+                _ids.push(std::move(i));
+            }
+        }
         gntref& operator[](std::size_t i) { return _entries[_ring->idx(i)]; }
         friend front_ring;
+        future<unsigned> get_index();
+        future<> free_index(unsigned index);
     };
 protected:
     uint32_t idx(int i) { return i & (nr_ents - 1); }
@@ -92,8 +101,6 @@ public:
         , _sring(new (r.page) sring<T>()) {
     }
 
-
-    future<uint32_t> free_idx();
     entries entries;
 
     sring<T> *_sring;

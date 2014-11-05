@@ -111,7 +111,7 @@ xenfront_net_device::send(packet _p) {
     // FIXME: negotiate and use scatter/gather
     _p.linearize();
 
-    return _tx_ring.free_idx().then([this, p = std::move(_p), frag] (uint32_t idx) mutable {
+    return _tx_ring.entries.get_index().then([this, p = std::move(_p), frag] (unsigned idx) mutable {
 
         auto req_prod = _tx_ring._sring->req_prod;
 
@@ -152,11 +152,14 @@ xenfront_net_device::send(packet _p) {
 #define rmb() asm volatile("lfence":::"memory");
 #define wmb() asm volatile("":::"memory");
 
-// FIXME: This is totally wrong, just coded so we can gt started with sending
 template <typename T>
-future<uint32_t> front_ring<T>::free_idx() {
-    static uint32_t idx = 0;
-    return make_ready_future<uint32_t>(idx++);
+future<unsigned> front_ring<T>::entries::get_index() {
+    return _ids.pop_eventually();
+}
+
+template <typename T>
+future<> front_ring<T>::entries::free_index(unsigned id) {
+    return _ids.push_eventually(std::move(id));
 }
 
 future<> xenfront_net_device::queue_rx_packet() {
