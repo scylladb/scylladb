@@ -20,6 +20,7 @@ public:
     userspace_grant_head(std::vector<gntref> v) : _refs(v) {}
     virtual gntref new_ref() override;
     virtual gntref new_ref(void *addr, size_t size) override;
+    virtual void free_ref(gntref& ref);
 };
 
 class userspace_gntalloc : public gntalloc {
@@ -90,6 +91,10 @@ gntref userspace_grant_head::new_ref(void *addr, size_t size) {
     return ref;
 }
 
+void userspace_grant_head::free_ref(gntref& ref) {
+    abort();
+}
+
 #ifdef HAVE_OSV
 class kernel_gntalloc;
 
@@ -99,6 +104,7 @@ public:
     kernel_grant_head(uint32_t head) : _head(head) {}
     virtual gntref new_ref() override;
     virtual gntref new_ref(void *addr, size_t size) override;
+    virtual void free_ref(gntref& ref);
 };
 
 class kernel_gntalloc : public gntalloc {
@@ -175,6 +181,12 @@ grant_head *kernel_gntalloc::alloc_ref(unsigned nr_ents) {
     return new kernel_grant_head(head);
 }
 
+void kernel_grant_head::free_ref(gntref& ref) {
+    gnttab_end_foreign_access_ref(ref.xen_id);
+    gnttab_release_grant_reference(&_head, ref.xen_id);
+    free(ref.page);
+    ref = invalid_ref;
+}
 #endif
 
 gntalloc *gntalloc::_instance = nullptr;

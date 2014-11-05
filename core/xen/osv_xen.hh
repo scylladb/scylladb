@@ -24,6 +24,10 @@ gnttab_claim_grant_reference(uint32_t *private_head);
 extern int
 gnttab_grant_foreign_access(uint16_t domid, unsigned long frame, int readonly, uint32_t *result);
 extern void gnttab_grant_foreign_access_ref(uint32_t ref, uint16_t domid, unsigned long frame, int readonly);
+extern void
+gnttab_release_grant_reference(uint32_t *private_head, unsigned ref);
+extern int
+gnttab_end_foreign_access_ref(unsigned ref);
 
 extern "C" uint64_t
 virt_to_phys(void *virt);

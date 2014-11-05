@@ -22,6 +22,7 @@ protected:
 public:
     virtual gntref new_ref() = 0;
     virtual gntref new_ref(void *addr, size_t size) = 0;
+    virtual void free_ref(gntref& ref) = 0;
 };
 
 class gntalloc {
