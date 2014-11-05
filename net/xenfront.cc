@@ -65,6 +65,7 @@ private:
     future<> alloc_rx_references(unsigned refs);
     future<> queue_rx_packet();
 
+    void alloc_one_rx_reference(unsigned id);
     std::string path(std::string s) { return _device_str + "/" + s; }
 
 public:
@@ -199,17 +200,22 @@ future<> xenfront_net_device::queue_rx_packet() {
     return make_ready_future<>();
 }
 
+void xenfront_net_device::alloc_one_rx_reference(unsigned index) {
+
+    _rx_ring.entries[index] = _rx_refs->new_ref();
+
+    // This is how the backend knows where to put data.
+    auto req =  &_rx_ring._sring->_ring[index].req;
+    req->id = index;
+    req->gref = _rx_ring.entries[index].xen_id;
+}
+
 future<> xenfront_net_device::alloc_rx_references(unsigned refs) {
     auto req_prod = _rx_ring.req_prod_pvt;
     rmb();
 
     for (auto i = req_prod; (i < _rx_ring.nr_ents) && (i < refs); ++i) {
-        _rx_ring.entries[i] = _rx_refs->new_ref();
-
-        // This is how the backend knows where to put data.
-        auto req =  &_rx_ring._sring->_ring[i].req;
-        req->id = i;
-        req->gref = _rx_ring.entries[i].xen_id;
+        alloc_one_rx_reference(i);
         ++req_prod;
     }
 
