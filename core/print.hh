@@ -7,6 +7,8 @@
 
 #include <boost/format.hpp>
 #include <iostream>
+#include <iomanip>
+#include <chrono>
 
 inline void
 apply_format(boost::format& fmt) {
@@ -66,6 +68,34 @@ format_separated(Iterator b, Iterator e, const char* sep = ", ") {
         ret += *b++;
     }
     return ret;
+}
+
+template <typename TimePoint>
+struct usecfmt_wrapper {
+    TimePoint val;
+};
+
+template <typename TimePoint>
+inline
+usecfmt_wrapper<TimePoint>
+usecfmt(TimePoint tp) {
+    return { tp };
+};
+
+template <typename Clock, typename Rep, typename Period>
+std::ostream&
+operator<<(std::ostream& os, usecfmt_wrapper<std::chrono::time_point<Clock, std::chrono::duration<Rep, Period>>> tp) {
+    auto usec = std::chrono::duration_cast<std::chrono::microseconds>(tp.val.time_since_epoch()).count();
+    std::ostream tmp(os.rdbuf());
+    tmp << std::setw(12) << (usec / 1000000) << "." << std::setw(6) << std::setfill('0') << (usec % 1000000);
+    return os;
+}
+
+template <typename... A>
+void
+log(A&&... a) {
+    std::cout << usecfmt(std::chrono::high_resolution_clock::now()) << " ";
+    print(std::forward<A>(a)...);
 }
 
 #endif /* PRINT_HH_ */
