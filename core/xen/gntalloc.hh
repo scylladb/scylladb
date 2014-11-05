@@ -3,9 +3,15 @@
 
 #include "core/posix.hh"
 
-struct gntref {
+class gntref {
+public:
     int xen_id;
     void* page;
+    bool operator==(const gntref &a) { return (xen_id == a.xen_id) && (page == a.page); }
+    gntref& operator=(const gntref &a) { xen_id = a.xen_id; page = a.page; return *this; }
+    gntref(int id, void *page) : xen_id(id), page(page) {}
+    gntref() : xen_id(-1), page(nullptr) {}
+    operator bool() const { return xen_id != -1 && page != nullptr; }
 };
 
 class gntalloc;
@@ -35,4 +41,6 @@ public:
     virtual grant_head *alloc_ref(unsigned nr_ents, bool alloc) = 0;
     friend class grant_head;
 };
+
+extern gntref invalid_ref;
 #endif

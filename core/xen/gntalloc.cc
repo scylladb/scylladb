@@ -8,6 +8,8 @@
 #include "osv_xen.hh"
 #include "gntalloc.hh"
 
+gntref invalid_ref;
+
 // FIXME: Most of the destructors are yet to be coded
 //
 
@@ -153,7 +155,7 @@ gntref kernel_gntalloc::alloc_ref() {
         throw std::runtime_error("Failed to initialize allocate grant\n");
     }
 
-    return {int(ref), page};
+    return gntref(int(ref), page);
 }
 
 grant_head *kernel_gntalloc::alloc_ref(unsigned nr_ents, bool alloc) {
