@@ -120,6 +120,7 @@ libnet = [
     'net/ip_checksum.cc',
     'net/udp.cc',
     'net/tcp.cc',
+    'net/dhcp.cc',
     ]
 
 core = [
