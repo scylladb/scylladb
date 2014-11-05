@@ -260,8 +260,8 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     , _rx_evtchn(bind_rx_evtchn())
     , _tx_ring(_gntalloc->alloc_ref())
     , _rx_ring(_gntalloc->alloc_ref())
-    , _tx_refs(_gntalloc->alloc_ref(front_ring<tx>::nr_ents, false))
-    , _rx_refs(_gntalloc->alloc_ref(front_ring<rx>::nr_ents, true))
+    , _tx_refs(_gntalloc->alloc_ref(front_ring<tx>::nr_ents))
+    , _rx_refs(_gntalloc->alloc_ref(front_ring<rx>::nr_ents))
     , _hw_address(net::parse_ethernet_address(_xenstore->read(path("mac")))) {
 
     _rx_stream.started();
