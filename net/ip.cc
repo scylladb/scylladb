@@ -34,6 +34,15 @@ ipv4::ipv4(interface* netif)
 unsigned ipv4::handle_on_cpu(packet& p, size_t off)
 {
     auto iph = p.get_header<ip_hdr>(off);
+
+    if (_packet_filter) {
+        bool h = false;
+        auto r = _packet_filter->forward(p, off + sizeof(ip_hdr), iph->src_ip, iph->dst_ip, h);
+        if (h) {
+            return r;
+        }
+    }
+
     auto l4 = _l4[iph->ip_proto];
     if (!l4) {
         return engine.cpu_id();
@@ -65,6 +74,15 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
         // FIXME: defragment
         return make_ready_future<>();
     }
+
+    if (_packet_filter) {
+        bool h = false;
+        auto r = _packet_filter->handle(p, from, h);
+        if (h) {
+            return std::move(r);
+        }
+    }
+
     if (iph->dst_ip != _host_address) {
         // FIXME: forward
         return make_ready_future<>();
@@ -115,9 +133,14 @@ future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
     }
 
     return _arp.lookup(dst).then([this, p = std::move(p)] (ethernet_address e_dst) mutable {
-        return _l3.send(e_dst, std::move(p));
+        return send_raw(e_dst, std::move(p));
     });
 }
+
+future<> ipv4::send_raw(ethernet_address dst, packet p) {
+    return _l3.send(dst, std::move(p));
+}
+
 
 void ipv4::set_host_address(ipv4_address ip) {
     _host_address = ip;
@@ -132,8 +155,24 @@ void ipv4::set_gw_address(ipv4_address ip) {
     _gw_address = ip;
 }
 
+ipv4_address ipv4::gw_address() const {
+    return _gw_address;
+}
+
 void ipv4::set_netmask_address(ipv4_address ip) {
     _netmask = ip;
+}
+
+ipv4_address ipv4::netmask_address() const {
+    return _netmask;
+}
+
+void ipv4::set_packet_filter(ip_packet_filter * f) {
+    _packet_filter = f;
+}
+
+ip_packet_filter * ipv4::packet_filter() const {
+    return _packet_filter;
 }
 
 void ipv4::register_l4(ipv4::proto_type id, ip_protocol *protocol) {

@@ -141,6 +141,14 @@ public:
     friend class ipv4;
 };
 
+struct ip_packet_filter {
+    virtual ~ip_packet_filter() {};
+    virtual future<> handle(packet& p, ethernet_address from, bool & handled) = 0;
+    virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to, bool & handled) {
+        return engine.cpu_id();
+    }
+};
+
 class ipv4 {
 public:
     using address_type = ipv4_address;
@@ -159,6 +167,7 @@ private:
     ipv4_tcp _tcp;
     ipv4_icmp _icmp;
     array_map<ip_protocol*, 256> _l4;
+    ip_packet_filter * _packet_filter = nullptr;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
     unsigned handle_on_cpu(packet& p, size_t off);
@@ -168,8 +177,19 @@ public:
     void set_host_address(ipv4_address ip);
     ipv4_address host_address();
     void set_gw_address(ipv4_address ip);
+    ipv4_address gw_address() const;
     void set_netmask_address(ipv4_address ip);
+    ipv4_address netmask_address() const;
+    interface * netif() const {
+        return _netif;
+    }
+    // TODO or something. Should perhaps truly be a list
+    // of filters. With ordering. And blackjack. Etc.
+    // But for now, a simple single raw pointer suffices
+    void set_packet_filter(ip_packet_filter *);
+    ip_packet_filter * packet_filter() const;
     future<> send(ipv4_address to, ip_protocol_num proto_num, packet p);
+    future<> send_raw(ethernet_address, packet);
     tcp<ipv4_traits>& get_tcp() { return *_tcp._tcp; }
     void register_l4(proto_type id, ip_protocol* handler);
     net::hw_features hw_features() { return _netif->hw_features(); }
