@@ -203,8 +203,7 @@ private:
         template<typename T>
         typename std::enable_if<std::is_integral<T>::value, cpwriter &>::type write(
                 const T & t) {
-            T tmp = t;
-            net::hton(tmp);
+            T tmp = net::hton(t);
             auto * p = reinterpret_cast<const uint8_t *>(&tmp);
             auto * e = p + sizeof(T);
             write(p, e);

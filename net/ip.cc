@@ -65,32 +65,32 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
     if (csum.get() != 0) {
         return make_ready_future<>();
     }
-    ntoh(*iph);
+    auto h = ntoh(*iph);
     // FIXME: process options
-    if (in_my_netmask(iph->src_ip) && iph->src_ip != _host_address) {
-        _arp.learn(from, iph->src_ip);
+    if (in_my_netmask(h.src_ip) && h.src_ip != _host_address) {
+        _arp.learn(from, h.src_ip);
     }
-    if (iph->frag & 0x3fff) {
+    if (h.frag & 0x3fff) {
         // FIXME: defragment
         return make_ready_future<>();
     }
 
     if (_packet_filter) {
-        bool h = false;
-        auto r = _packet_filter->handle(p, from, h);
-        if (h) {
+        bool handled = false;
+        auto r = _packet_filter->handle(p, &h, from, handled);
+        if (handled) {
             return std::move(r);
         }
     }
 
-    if (iph->dst_ip != _host_address) {
+    if (h.dst_ip != _host_address) {
         // FIXME: forward
         return make_ready_future<>();
     }
-    auto l4 = _l4[iph->ip_proto];
+    auto l4 = _l4[h.ip_proto];
     if (l4) {
-        unsigned ip_len = iph->len;
-        unsigned ip_hdr_len = iph->ihl * 4;
+        unsigned ip_len = h.len;
+        unsigned ip_hdr_len = h.ihl * 4;
         unsigned ip_payload_len = ip_len - ip_hdr_len;
         if (p.len() < ip_len) {
             return make_ready_future<>();
@@ -99,7 +99,7 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
         if (p.len() > ip_payload_len) {
             p.trim_back(p.len() - ip_payload_len);
         }
-        l4->received(std::move(p), iph->src_ip, iph->dst_ip);
+        l4->received(std::move(p), h.src_ip, h.dst_ip);
     }
     return make_ready_future<>();
 }
@@ -120,7 +120,7 @@ future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
     iph->src_ip = _host_address;
 
     iph->dst_ip = to;
-    hton(*iph);
+    *iph = hton(*iph);
     checksummer csum;
     csum.sum(reinterpret_cast<char*>(iph), sizeof(*iph));
     iph->csum = csum.get();

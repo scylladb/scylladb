@@ -10,10 +10,7 @@
 
 namespace net {
 
-void tcp_option::parse(tcp_hdr* th) {
-    auto hdr = reinterpret_cast<uint8_t*>(th);
-    auto beg = hdr + sizeof(tcp_hdr);
-    auto end = hdr + th->data_offset * 4;
+void tcp_option::parse(uint8_t* beg, uint8_t* end) {
     while (beg < end) {
         auto kind = option_kind(*beg);
         if (kind != option_kind::nop && kind != option_kind::eol) {
@@ -26,8 +23,7 @@ void tcp_option::parse(tcp_hdr* th) {
         switch (kind) {
         case option_kind::mss:
             _mss_received = true;
-            _remote_mss = reinterpret_cast<mss*>(beg)->mss;
-            ntoh(_remote_mss);
+            _remote_mss = ntoh(reinterpret_cast<mss*>(beg)->mss);
             beg += option_len::mss;
             break;
         case option_kind::win_scale:
@@ -70,7 +66,7 @@ uint8_t tcp_option::fill(tcp_hdr* th, uint8_t options_size) {
             mss->mss = _local_mss;
             off += mss->len;
             size += mss->len;
-            hton(*mss);
+            *mss = hton(*mss);
         }
         if (_win_scale_received || !th->f_ack) {
             auto win_scale = new (off) tcp_option::win_scale;

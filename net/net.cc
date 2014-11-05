@@ -46,9 +46,7 @@ interface::register_l3(eth_protocol_num proto_num,
 future<> interface::dispatch_packet(packet p) {
     auto eh = p.get_header<eth_hdr>();
     if (eh) {
-        auto proto = eh->eth_proto;
-        ntoh(proto);
-        auto i = _proto_map.find(proto);
+        auto i = _proto_map.find(ntoh(eh->eth_proto));
         if (i != _proto_map.end()) {
             l3_rx_stream& l3 = i->second;
             auto fw = (engine.cpu_id() == 0) ? l3.forward(p, sizeof(eth_hdr)) : engine.cpu_id();
@@ -62,8 +60,8 @@ future<> interface::dispatch_packet(packet p) {
                         }
                     }
                 }
-                ntoh(*eh);
-                auto from = eh->src_mac;
+                auto h = ntoh(*eh);
+                auto from = h.src_mac;
                 p.trim_front(sizeof(*eh));
                 // avoid chaining, since queue lenth is unlimited
                 // drop instead.
@@ -81,7 +79,7 @@ future<> interface::send(eth_protocol_num proto_num, ethernet_address to, packet
     eh->dst_mac = to;
     eh->src_mac = _hw_address;
     eh->eth_proto = uint16_t(proto_num);
-    hton(*eh);
+    *eh = hton(*eh);
     return _dev->send(std::move(p));
 }
 

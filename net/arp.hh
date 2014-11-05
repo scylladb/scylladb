@@ -120,7 +120,7 @@ arp_for<L3>::make_query_packet(l3addr paddr) {
     hdr.sender_paddr = _l3self;
     hdr.target_hwaddr = ethernet::broadcast_address();
     hdr.target_paddr = paddr;
-    hton(hdr);
+    hdr = hton(hdr);
     return packet(reinterpret_cast<char*>(&hdr), sizeof(hdr));
 }
 
@@ -195,9 +195,7 @@ template <typename L3>
 unsigned arp_for<L3>::forward(packet& p, size_t off)
 {
     auto ah = p.get_header<arp_hdr>(off);
-    auto oper = ah->oper;
-    ntoh(oper);
-    if (oper == op_reply) {
+    if (ntoh(ah->oper) == op_reply) {
         return std::numeric_limits<unsigned>::max(); // broadcast reply
     }
     return engine.cpu_id();
@@ -210,15 +208,15 @@ arp_for<L3>::received(packet p) {
     if (!ah) {
         return make_ready_future<>();
     }
-    ntoh(*ah);
-    if (ah->hlen != sizeof(l2addr) || ah->plen != sizeof(l3addr)) {
+    auto h = ntoh(*ah);
+    if (h.hlen != sizeof(l2addr) || h.plen != sizeof(l3addr)) {
         return make_ready_future<>();
     }
-    switch (ah->oper) {
+    switch (h.oper) {
     case op_request:
-        return handle_request(ah);
+        return handle_request(&h);
     case op_reply:
-        learn(ah->sender_hwaddr, ah->sender_paddr);
+        learn(h.sender_hwaddr, h.sender_paddr);
         return make_ready_future<>();
     default:
         return make_ready_future<>();
@@ -235,7 +233,7 @@ arp_for<L3>::handle_request(arp_hdr* ah) {
         ah->target_paddr = ah->sender_paddr;
         ah->sender_hwaddr = l2self();
         ah->sender_paddr = _l3self;
-        hton(*ah);
+        *ah = hton(*ah);
         packet p(reinterpret_cast<char*>(ah), sizeof(*ah));
         return _arp._proto.send(ah->target_hwaddr, std::move(p));
     } else {

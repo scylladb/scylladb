@@ -58,7 +58,7 @@ struct tcp_option {
     } __attribute__((packed));
     static const uint8_t align = 4;
 
-    void parse(tcp_hdr* th);
+    void parse(uint8_t* beg, uint8_t* end);
     uint8_t fill(tcp_hdr* th, uint8_t option_size);
     uint8_t get_size();
 
@@ -81,12 +81,12 @@ struct tcp_seq {
     uint32_t raw;
 };
 
-inline void ntoh(tcp_seq& s) {
-    ntoh(s.raw);
+inline tcp_seq ntoh(tcp_seq s) {
+    return tcp_seq { ntoh(s.raw) };
 }
 
-inline void hton(tcp_seq& s) {
-    hton(s.raw);
+inline tcp_seq hton(tcp_seq s) {
+    return tcp_seq { hton(s.raw) };
 }
 
 inline
@@ -360,16 +360,15 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
             return;
         }
     }
-    p.trim_front(th->data_offset * 4);
-    ntoh(*th);
-    auto id = connid{to, from, th->dst_port, th->src_port};
+    auto h = ntoh(*th);
+    auto id = connid{to, from, h.dst_port, h.src_port};
     auto tcbi = _tcbs.find(id);
     shared_ptr<tcb> tcbp;
     if (tcbi == _tcbs.end()) {
-        if (th->f_syn && !th->f_ack) {
+        if (h.f_syn && !h.f_ack) {
             auto listener = _listening.find(id.local_port);
             if (listener == _listening.end() || listener->second->_q.full()) {
-                return respond_with_reset(th, id.local_ip, id.foreign_ip);
+                return respond_with_reset(&h, id.local_ip, id.foreign_ip);
             }
             tcbp = make_shared<tcb>(*this, id);
             listener->second->_q.push(connection(tcbp));
@@ -379,9 +378,9 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
         tcbp = tcbi->second;
     }
     if (tcbp) {
-        tcbp->input(th, std::move(p));
+        tcbp->input(&h, std::move(p));
     } else {
-        respond_with_reset(th, id.local_ip, id.foreign_ip);
+        respond_with_reset(&h, id.local_ip, id.foreign_ip);
     }
 }
 
@@ -435,7 +434,7 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
     th->f_rst = true;
     th->data_offset = sizeof(*th) / 4;
     th->checksum = 0;
-    hton(*th);
+    *th = hton(*th);
 
     checksummer csum;
     InetTraits::tcp_pseudo_header_checksum(csum, local_ip, foreign_ip, sizeof(*th));
@@ -456,6 +455,11 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
+    auto opt_start = p.get_header<uint8_t>(sizeof(tcp_hdr));
+    auto opt_end = opt_start + th->data_offset * 4;
+
+    p.trim_front(th->data_offset * 4);
+
     bool do_output = false;
     tcp_seq seg_seq = th->seq;
     auto seg_len = p.len();
@@ -472,7 +476,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             _rcv.urgent = _rcv.next;
             _snd.wl1 = th->seq;
             _snd.next = _snd.initial = get_tcp_isn();
-            _option.parse(th);
+            _option.parse(opt_start, opt_end);
             // Remote receive window scale factor
             _snd.window_scale = _option._remote_win_scale;
             // Local receive window scale factor
@@ -709,7 +713,7 @@ void tcp<InetTraits>::tcb::output() {
 
     // Add tcp options
     _option.fill(th, options_size);
-    hton(*th);
+    *th = hton(*th);
 
     checksummer csum;
     InetTraits::tcp_pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + options_size + len);

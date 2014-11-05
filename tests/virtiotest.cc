@@ -31,12 +31,12 @@ future<> echo_packet(net::device& netif, packet p) {
     auto pos = 0;
     auto eh = reinterpret_cast<eth_hdr*>(f.base + pos);
     pos += sizeof(*eh);
-    ntoh(*eh);
+    *eh = ntoh(*eh);
     if (eh->eth_proto != 0x0800) {
         return make_ready_future<>();
     }
     auto iph = reinterpret_cast<ip_hdr*>(f.base + pos);
-    ntoh(*iph);
+    *iph = ntoh(*iph);
     pos += iph->ihl * 4;
     if (iph->ver != 4 || iph->ihl < 5 || iph->ip_proto != 1) {
         return make_ready_future<>();
@@ -54,8 +54,8 @@ future<> echo_packet(net::device& netif, packet p) {
     iph->dst_ip = x;
     icmph->type = icmp_hdr::msg_type::echo_reply;
     icmph->csum = 0;
-    hton(*iph);
-    hton(*eh);
+    *iph = hton(*iph);
+    *eh = hton(*eh);
     icmph->csum = ip_checksum(icmph, icmp_len);
     iph->csum = 0;
     iph->csum = ip_checksum(iph, iph->ihl * 4);

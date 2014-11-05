@@ -17,11 +17,11 @@ private:
 public:
     native_datagram(ipv4_address src, ipv4_address dst, packet p)
             : _p(std::move(p)) {
-        udp_hdr* _hdr = _p.get_header<udp_hdr>();
-        ntoh(*_hdr);
-        _p.trim_front(sizeof(*_hdr));
-        _src = to_ipv4_addr(src, _hdr->src_port);
-        _dst = to_ipv4_addr(dst, _hdr->dst_port);
+        udp_hdr* hdr = _p.get_header<udp_hdr>();
+        auto h = ntoh(*hdr);
+        _p.trim_front(sizeof(*hdr));
+        _src = to_ipv4_addr(src, h.src_port);
+        _dst = to_ipv4_addr(dst, h.dst_port);
     }
 
     virtual ipv4_addr get_src() override {
@@ -97,7 +97,7 @@ unsigned udp_v4::forward(packet& p, size_t off, ipv4_address from, ipv4_address 
         return engine.cpu_id();
     }
 
-    auto dst = ntohs(uint16_t(uh->dst_port));
+    auto dst = ntoh(uh->dst_port);
 
     return dst % smp::count;
 }
@@ -120,7 +120,7 @@ future<> udp_v4::send(uint16_t src_port, ipv4_addr dst, packet &&p)
     hdr->src_port = src_port;
     hdr->dst_port = dst.port;
     hdr->len = p.len();
-    hton(*hdr);
+    *hdr = hton(*hdr);
 
     checksummer csum;
     ipv4_traits::udp_pseudo_header_checksum(csum, src, dst, p.len());

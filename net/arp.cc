@@ -26,9 +26,7 @@ arp::arp(interface* netif) : _netif(netif), _proto(netif, eth_protocol_num::arp)
 
 unsigned arp::handle_on_cpu(packet& p, size_t off) {
     auto ah = p.get_header<arp_hdr>(off);
-    auto ptype = ah->ptype;
-    ntoh(ptype);
-    auto i = _arp_for_protocol.find(ptype);
+    auto i = _arp_for_protocol.find(ntoh(ah->ptype));
     if (i != _arp_for_protocol.end()) {
         return i->second->forward(p, off);
     }
@@ -45,10 +43,8 @@ void arp::del(uint16_t proto_num) {
 
 future<>
 arp::process_packet(packet p, ethernet_address from) {
-    auto ah = p.get_header<arp_hdr>();
-    ntoh(*ah);
-    auto i = _arp_for_protocol.find(ah->ptype);
-    hton(*ah); // return to raw state for further processing
+    auto ah = ntoh(*p.get_header<arp_hdr>());
+    auto i = _arp_for_protocol.find(ah.ptype);
     if (i != _arp_for_protocol.end()) {
         i->second->received(std::move(p));
     }

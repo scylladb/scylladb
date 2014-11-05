@@ -255,12 +255,11 @@ public:
        : _stack(stack)
     {}
 
-    future<> handle(packet& p, ethernet_address from, bool & handled) override {
+    future<> handle(packet& p, ip_hdr* iph, ethernet_address from, bool & handled) override {
         if (_state == state::NONE || p.len() < sizeof(dhcp_packet_base)) {
             return make_ready_future<>();
         }
 
-        auto iph = p.get_header<ip_hdr>(0);
         auto ipl = iph->ihl * 4;
         auto udp = p.get_header<udp_hdr>(ipl);
         auto dhp = p.get_header<dhcp_payload>(ipl + sizeof(*udp));
@@ -275,11 +274,11 @@ public:
             return make_ready_future<>();
         }
 
-        ntoh(*dhp);
+        auto h = ntoh(*dhp);
 
         ip_info info;
 
-        info.ip = dhp->bootp.yiaddr;
+        info.ip = h.bootp.yiaddr;
         info.parse_options(p, opt_off);
 
         switch (_state) {
@@ -369,7 +368,7 @@ public:
         auto mac = ipf->hw_address().mac;
         std::copy(mac.begin(), mac.end(), std::begin(pkt.dhp.bootp.chaddr));
 
-        hton(pkt);
+        pkt = hton(pkt);
 
         checksummer csum;
         csum.sum(reinterpret_cast<char*>(&ip), sizeof(ip));

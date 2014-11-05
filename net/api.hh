@@ -57,10 +57,8 @@ struct ipv4_addr {
     }
 
     ipv4_addr(const socket_address &sa) {
-        ip = sa.u.in.sin_addr.s_addr;
-        net::ntoh(ip);
-        port = sa.u.in.sin_port;
-        net::ntoh(port);
+        ip = net::ntoh(sa.u.in.sin_addr.s_addr);
+        port = net::ntoh(sa.u.in.sin_port);
     }
 
     ipv4_addr(socket_address &&sa) : ipv4_addr(sa) {}

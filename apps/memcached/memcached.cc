@@ -844,7 +844,7 @@ public:
             out_hdr->_request_id = request_id;
             out_hdr->_sequence_number = 0;
             out_hdr->_n = 1;
-            hton(*out_hdr);
+            *out_hdr = hton(*out_hdr);
             return _chan.send(dst, std::move(p));
         }
 
@@ -857,7 +857,7 @@ public:
             out_hdr->_request_id = request_id;
             out_hdr->_sequence_number = i++;
             out_hdr->_n = sb->size();
-            hton(*out_hdr);
+            *out_hdr = hton(*out_hdr);
             return _chan.send(dst, std::move(p));
         });
     }
@@ -876,13 +876,12 @@ public:
                 auto out = output_stream<char>(data_sink(std::make_unique<vector_data_sink>(out_bufs)),
                     _max_datagram_size - sizeof(header));
 
-                header *hdr = p.get_header<header>();
-                ntoh(*hdr);
-                p.trim_front(sizeof(*hdr));
+                header hdr = ntoh(*p.get_header<header>());
+                p.trim_front(sizeof(hdr));
 
-                auto request_id = hdr->_request_id;
+                auto request_id = hdr._request_id;
 
-                if (hdr->_n != 1 || hdr->_sequence_number != 0) {
+                if (hdr._n != 1 || hdr._sequence_number != 0) {
                     out.write("CLIENT_ERROR only single-datagram requests supported\r\n");
                 } else {
                     auto in = as_input_stream(std::move(p));

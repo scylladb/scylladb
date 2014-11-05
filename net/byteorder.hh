@@ -19,12 +19,12 @@ namespace net {
 inline void ntoh() {}
 inline void hton() {}
 
-inline void ntoh(uint16_t& x) { x = ntohs(x); }
-inline void hton(uint16_t& x) { x = htons(x); }
-inline void ntoh(uint32_t& x) { x = ntohl(x); }
-inline void hton(uint32_t& x) { x = htonl(x); }
-inline void ntoh(uint64_t& x) { x = ntohq(x); }
-inline void hton(uint64_t& x) { x = htonq(x); }
+inline uint16_t ntoh(uint16_t x) { return ntohs(x); }
+inline uint16_t hton(uint16_t x) { return htons(x); }
+inline uint32_t ntoh(uint32_t x) { return ntohl(x); }
+inline uint32_t hton(uint32_t x) { return htonl(x); }
+inline uint64_t ntoh(uint64_t x) { return ntohq(x); }
+inline uint64_t hton(uint64_t x) { return htonq(x); }
 
 // Wrapper around a primitive type to provide an unaligned version.
 // This is because gcc (correctly) doesn't allow binding an unaligned
@@ -47,17 +47,15 @@ struct packed {
 } __attribute__((packed));
 
 template <typename T>
-inline void ntoh(packed<T>& x) {
+inline T ntoh(packed<T>& x) {
     T v = x;
-    ntoh(v);
-    x = v;
+    return ntoh(v);
 }
 
 template <typename T>
-inline void hton(packed<T>& x) {
+inline T hton(packed<T>& x) {
     T v = x;
-    hton(v);
-    x = v;
+    return hton(v);
 }
 
 template <typename T>
@@ -66,30 +64,39 @@ inline std::ostream& operator<<(std::ostream& os, const packed<T>& v) {
     return os << x;
 }
 
+inline
+void ntoh_inplace() {}
+inline
+void hton_inplace() {};
+
 template <typename First, typename... Rest>
 inline
-void ntoh(First& first, Rest&... rest) {
-    ntoh(first);
-    ntoh(std::forward<Rest&>(rest)...);
+void ntoh_inplace(First& first, Rest&... rest) {
+    first = ntoh(first);
+    ntoh_inplace(std::forward<Rest&>(rest)...);
 }
 
 template <typename First, typename... Rest>
 inline
-void hton(First& first, Rest&... rest) {
-    hton(first);
-    hton(std::forward<Rest&>(rest)...);
+void hton_inplace(First& first, Rest&... rest) {
+    first = hton(first);
+    hton_inplace(std::forward<Rest&>(rest)...);
 }
 
 template <class T>
 inline
-void ntoh(T& x) {
-    x.adjust_endianness([] (auto&... what) { ntoh(std::forward<decltype(what)&>(what)...); });
+T ntoh(T& x) {
+    T tmp = x;
+    tmp.adjust_endianness([] (auto&... what) { ntoh_inplace(std::forward<decltype(what)&>(what)...); });
+    return tmp;
 }
 
 template <class T>
 inline
-void hton(T& x) {
-    x.adjust_endianness([] (auto&... what) { hton(std::forward<decltype(what)&>(what)...); });
+T hton(T& x) {
+    T tmp = x;
+    tmp.adjust_endianness([] (auto&... what) { hton_inplace(std::forward<decltype(what)&>(what)...); });
+    return tmp;
 }
 
 }
