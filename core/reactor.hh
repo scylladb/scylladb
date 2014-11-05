@@ -190,6 +190,9 @@ public:
     virtual ~network_stack() {}
     virtual server_socket listen(socket_address sa, listen_options opts) = 0;
     virtual net::udp_channel make_udp_channel(ipv4_addr addr = {}) = 0;
+    virtual future<> initialize() {
+        return make_ready_future();
+    }
 };
 
 class network_stack_registry {

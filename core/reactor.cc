@@ -372,7 +372,9 @@ int reactor::run() {
     if (_handle_sigint && _id == 0) {
         receive_signal(SIGINT).then([this] { stop(); });
     }
-    _start_promise.set_value();
+    _network_stack->initialize().then([this]() {
+        _start_promise.set_value();
+    });
     complete_timers();
     while (true) {
         unsigned loop = 0;
@@ -685,10 +687,8 @@ void smp::configure(boost::program_options::variables_map configuration)
             auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
             throw_system_error_on(r == -1);
             engine._id = i;
+            start_all_queues();
             engine.configure(configuration);
-            engine.when_started().then([i] {
-                start_all_queues();
-            });
             engine.run();
         });
     }
