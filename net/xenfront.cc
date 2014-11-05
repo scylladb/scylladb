@@ -190,7 +190,6 @@ future<> xenfront_net_device::queue_rx_packet() {
         }
 
         _rx_ring._sring->rsp_event = rsp_cons + 1;
-        _rx_ring._sring->req_prod  = rsp_cons + 1;
 
         rsp_prod = _rx_ring._sring->rsp_prod;
         // FIXME: END GRANT. FIXME: ALLOCATE MORE MEMORY
