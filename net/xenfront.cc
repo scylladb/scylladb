@@ -139,7 +139,6 @@ xenfront_net_device::send(packet _p) {
 
         _tx_ring._sring->req_event++;
         if ((frag + 1) == p.nr_frags()) {
-            printf("NOTIFY!!\n");
             _evtchn->notify(_tx_evtchn);
             return make_ready_future<>();
         } else {
@@ -162,7 +161,6 @@ future<uint32_t> front_ring<T>::free_idx() {
 
 future<> xenfront_net_device::queue_rx_packet() {
 
-    printf("Got at queue\n");
     auto rsp_cons = _rx_ring.rsp_cons;
     rmb();
     auto rsp_prod = _rx_ring._sring->rsp_prod;
