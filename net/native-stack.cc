@@ -9,10 +9,18 @@
 #include "tcp-stack.hh"
 #include "udp.hh"
 #include "virtio.hh"
+#include "xenfront.hh"
 #include "proxy.hh"
 #include "dhcp.hh"
 #include <memory>
 #include <queue>
+#ifdef HAVE_OSV
+#include <osv/firmware.hh>
+#include <gnu/libc-version.h>
+#endif
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace net {
 
@@ -45,8 +53,59 @@ native_network_stack::make_udp_channel(ipv4_addr addr) {
     return _udp.make_channel(addr);
 }
 
+enum class xen_info {
+    nonxen = 0,
+    userspace = 1,
+    osv = 2,
+};
+
+static xen_info is_xen()
+{
+    struct stat buf;
+    if (!stat("/proc/xen", &buf) || !stat("/dev/xen", &buf)) {
+        return xen_info::userspace;
+    }
+
+#ifdef HAVE_OSV
+    const char *str = gnu_get_libc_release();
+    if (std::string("OSv") != str) {
+        return xen_info::nonxen;
+    }
+    auto firmware = osv::firmware_vendor();
+    if (firmware == "Xen") {
+        return xen_info::osv;
+    }
+#endif
+
+    return xen_info::nonxen;
+}
+
+std::unique_ptr<net::device> create_native_net_device(boost::program_options::variables_map opts) {
+
+    if (!smp::main_thread()) {
+        return create_proxy_net_device(opts);
+    }
+
+    auto xen = is_xen();
+    if (xen == xen_info::nonxen) {
+        return create_virtio_net_device(opts["tap-device"].as<std::string>(), opts);
+    }
+    return create_xenfront_net_device(opts, xen == xen_info::userspace);
+}
+
+void
+add_native_net_options_description(boost::program_options::options_description &opts) {
+
+    auto xen = is_xen();
+    if (xen != xen_info::nonxen) {
+        opts.add(get_xenfront_net_options_description());
+    } else {
+        opts.add(get_virtio_net_options_description());
+    }
+}
+
 native_network_stack::native_network_stack(boost::program_options::variables_map opts)
-    : _netif(smp::main_thread() ? create_virtio_net_device(opts["tap-device"].as<std::string>(), opts) : create_proxy_net_device(opts))
+    : _netif(create_native_net_device(opts))
     , _inet(&_netif)
     , _udp(_inet) {
     _inet.set_host_address(ipv4_address(opts["host-ipv4-addr"].as<std::string>()));
@@ -136,7 +195,8 @@ boost::program_options::options_description nns_options() {
                 boost::program_options::value<bool>()->default_value(true),
                         "Use DHCP discovery")
         ;
-    opts.add(get_virtio_net_options_description());
+
+    add_native_net_options_description(opts);
     return opts;
 }
 
