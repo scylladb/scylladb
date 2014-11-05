@@ -63,6 +63,7 @@ private:
     int bind_rx_evtchn();
 
     future<> alloc_rx_references(unsigned refs);
+    future<> handle_tx_completions();
     future<> queue_rx_packet();
 
     void alloc_one_rx_reference(unsigned id);
@@ -119,6 +120,8 @@ xenfront_net_device::send(packet _p) {
         auto f = p.frag(frag);
 
         auto ref = _tx_refs->new_ref(f.base, f.size);
+
+        assert(!_tx_ring.entries[idx]);
 
         _tx_ring.entries[idx] = ref;
 
@@ -193,7 +196,11 @@ future<> xenfront_net_device::queue_rx_packet() {
         _rx_ring._sring->rsp_event = rsp_cons + 1;
 
         rsp_prod = _rx_ring._sring->rsp_prod;
-        // FIXME: END GRANT. FIXME: ALLOCATE MORE MEMORY
+
+        _rx_refs->free_ref(entry);
+        _rx_ring.entries.free_index(rsp.id).then([this, id = rsp.id]() {
+            alloc_one_rx_reference(id);
+        });
     }
 
     // FIXME: Queue_rx maybe should not be a future then
@@ -225,6 +232,30 @@ future<> xenfront_net_device::alloc_rx_references(unsigned refs) {
     /* ready */
     _evtchn->notify(_rx_evtchn);
     return make_ready_future();
+}
+
+future<> xenfront_net_device::handle_tx_completions() {
+    auto prod = _tx_ring._sring->rsp_prod;
+    rmb();
+
+    for (unsigned i = _tx_ring.rsp_cons; i != prod; i++) {
+        auto rsp = _tx_ring[i].rsp;
+
+        if (rsp.status == 1) {
+            continue;
+        }
+
+        if (rsp.status != 0) {
+            printf("Packet error: Handle it\n");
+            continue;
+        }
+
+        auto entry = _tx_ring.entries[rsp.id];
+        _tx_refs->free_ref(entry);
+        _tx_ring.entries.free_index(rsp.id).then([this]() {});
+    }
+    _tx_ring.rsp_cons = prod;
+    return make_ready_future<>();
 }
 
 ethernet_address xenfront_net_device::hw_address() {
@@ -298,6 +329,11 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     }
 
     alloc_rx_references(_rx_ring.nr_ents);
+    keep_doing([this] () {
+        return _evtchn->pending(_tx_evtchn).then([this] {
+            handle_tx_completions();
+        });
+    });
 }
 
 xenfront_net_device::~xenfront_net_device() {
