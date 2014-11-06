@@ -11,6 +11,7 @@
 #include "core/stream.hh"
 #include "ethernet.hh"
 #include "packet.hh"
+#include "const.hh"
 #include <unordered_map>
 
 namespace net {
@@ -32,7 +33,7 @@ struct hw_features {
     // Maximum Transmission Unit
     uint16_t mtu = 1500;
     // Maximun packet len when TCP/UDP offload is enabled
-    uint16_t max_packet_len = 65535;
+    uint16_t max_packet_len = net::ip_packet_len_max - net::eth_hdr_len;
 };
 
 class l3_protocol {
