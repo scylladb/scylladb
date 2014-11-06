@@ -6,6 +6,7 @@
 #define REACTOR_HH_
 
 #include <memory>
+#include <type_traits>
 #include <libaio.h>
 #include <sys/epoll.h>
 #include <sys/types.h>
@@ -499,7 +500,9 @@ class smp {
 	static std::thread::id _tmain;
 
 	template <typename Func>
-	using returns_future = is_future<std::result_of_t<Func()>>;
+    using returns_future = is_future<std::result_of_t<Func()>>;
+    template <typename Func>
+    using returns_void = std::is_same<std::result_of_t<Func()>, void>;
 public:
 	static boost::program_options::options_description get_options_description();
 	static void configure(boost::program_options::variables_map vm);
@@ -515,14 +518,21 @@ public:
 	        return _qs[t][engine.cpu_id()].submit(std::move(func));
 	    }
 	}
-	template <typename Func>
-	static future<> submit_to(unsigned t, Func func,
-	        std::enable_if_t<!returns_future<Func>::value, void*> = nullptr) {
-	    return submit_to(t, [func = std::move(func)] () mutable {
-	       func();
-	       return make_ready_future<>();
-	    });
-        }
+    template <typename Func>
+    static future<std::result_of_t<Func()>> submit_to(unsigned t, Func func,
+            std::enable_if_t<!returns_future<Func>::value && !returns_void<Func>::value, void*> = nullptr) {
+        return submit_to(t, [func = std::move(func)] () mutable {
+           return make_ready_future<std::result_of_t<Func()>>(func());
+        });
+    }
+    template <typename Func>
+    static future<> submit_to(unsigned t, Func func,
+            std::enable_if_t<!returns_future<Func>::value && returns_void<Func>::value, void*> = nullptr) {
+        return submit_to(t, [func = std::move(func)] () mutable {
+            func();
+            return make_ready_future<>();
+        });
+    }
 	static size_t poll_queues() {
 	    size_t got = 0;
 	    for (unsigned i = 0; i < count; i++) {
