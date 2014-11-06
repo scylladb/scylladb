@@ -79,6 +79,9 @@ public:
                 }, std::move(args));
             });
     }
+
+    // Returns reference to the local instance.
+    Service& local();
 };
 
 template <typename Service>
@@ -131,6 +134,9 @@ distributed<Service>::invoke_on_all(future<> (Service::*func)(Args...), Args... 
     });
 }
 
+template <typename Service>
+Service& distributed<Service>::local() {
+    return *_instances[engine.cpu_id()];
 }
 
 #endif /* SMP_HH_ */
