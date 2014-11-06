@@ -158,4 +158,50 @@ Service& distributed<Service>::local() {
     return *_instances[engine.cpu_id()];
 }
 
+// Smart pointer wrapper which makes it safe to move across CPUs.
+// An armed pointer will be deleted on the CPU on which it was wrapped.
+// Empty pointer will be deleted on the current CPU so it must be SMP-safe.
+template <typename PtrType>
+class foreign_ptr {
+private:
+    PtrType _value;
+    unsigned _cpu;
+private:
+    bool on_origin() {
+        return engine.cpu_id() == _cpu;
+    }
+public:
+    using element_type = typename PtrType::element_type;
+
+    foreign_ptr()
+        : _value(PtrType())
+        , _cpu(engine.cpu_id()) {
+    }
+    foreign_ptr(std::nullptr_t) : foreign_ptr() {}
+    foreign_ptr(PtrType value)
+        : _value(std::move(value))
+        , _cpu(engine.cpu_id()) {
+    }
+    // The type is intentionally non-copyable because copies
+    // are expensive because each copy requires across-CPU call.
+    foreign_ptr(const foreign_ptr&) = delete;
+    foreign_ptr(foreign_ptr&& other) = default;
+    ~foreign_ptr() {
+        if (_value && !on_origin()) {
+            smp::submit_to(_cpu, [v = std::move(_value)] () mutable {
+                auto local(std::move(v));
+            });
+        }
+    }
+    element_type& operator*() const { return *_value; }
+    element_type* operator->() const { return &*_value; }
+    operator bool() const { return static_cast<bool>(_value); }
+    foreign_ptr& operator=(foreign_ptr&& other) = default;
+};
+
+template <typename T>
+foreign_ptr<T> make_foreign(T ptr) {
+    return foreign_ptr<T>(std::move(ptr));
+}
+
 #endif /* SMP_HH_ */
