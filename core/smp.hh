@@ -59,8 +59,15 @@ public:
     // Invoke a method on a specific instance of @Service.
     // The return value (which must be a future) contains the future
     // returned by @Service.
-    template <typename Ret, typename... Args>
-    Ret invoke_on(unsigned id, Ret (Service::*func)(Args...), Args... args);
+    template <typename Ret, typename... FuncArgs, typename... Args>
+    Ret
+    invoke_on(unsigned id, Ret (Service::*func)(FuncArgs...), Args&&... args) {
+        return smp::submit_to(id, [inst = _instances[id], func, args = std::make_tuple(std::forward<Args>(args)...)] () mutable {
+            return apply([inst, func] (Args&&... args) mutable {
+                return (inst->*func)(std::forward<Args>(args)...);
+            }, std::move(args));
+        });
+    }
 };
 
 template <typename Service>
@@ -113,14 +120,6 @@ distributed<Service>::invoke_on_all(future<> (Service::*func)(Args...), Args... 
     });
 }
 
-template <typename Service>
-template <typename Ret, typename... Args>
-inline
-Ret
-distributed<Service>::invoke_on(unsigned id, Ret (Service::*func)(Args...), Args... args) {
-    return smp::submit_to(id, [inst = _instances[id], func, args...] {
-        return (inst->*func)(args...);
-    });
 }
 
 #endif /* SMP_HH_ */
