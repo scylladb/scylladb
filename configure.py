@@ -134,7 +134,7 @@ core = [
     'net/posix-stack.cc',
     ]
 
-
+defines = []
 libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
 
@@ -151,6 +151,7 @@ if apply_tristate(args.xen, test = have_xen,
                   note = 'Note: xen-devel not installed.  No Xen support.',
                   missing = 'Error: required package xen-devel not installed.'):
     libs += ' -lxenstore'
+    defines.append("HAVE_XEN")
     libnet += [ 'net/xenfront.cc' ]
     core += [
                 'core/xen/xenstore.cc',
@@ -202,7 +203,6 @@ warnings = [w
 warnings = ' '.join(warnings)
 
 dbgflag = debug_flag(args.cxx)
-defines = []
 
 def have_hwloc():
     return try_compile(compiler = args.cxx, source = '#include <hwloc.h>\n#include <numa.h>')

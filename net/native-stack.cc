@@ -59,6 +59,7 @@ enum class xen_info {
     osv = 2,
 };
 
+#ifdef HAVE_XEN
 static xen_info is_xen()
 {
     struct stat buf;
@@ -79,6 +80,7 @@ static xen_info is_xen()
 
     return xen_info::nonxen;
 }
+#endif
 
 std::unique_ptr<net::device> create_native_net_device(boost::program_options::variables_map opts) {
 
@@ -86,22 +88,26 @@ std::unique_ptr<net::device> create_native_net_device(boost::program_options::va
         return create_proxy_net_device(opts);
     }
 
+#ifdef HAVE_XEN
     auto xen = is_xen();
-    if (xen == xen_info::nonxen) {
-        return create_virtio_net_device(opts["tap-device"].as<std::string>(), opts);
+    if (xen != xen_info::nonxen) {
+        return create_xenfront_net_device(opts, xen == xen_info::userspace);
     }
-    return create_xenfront_net_device(opts, xen == xen_info::userspace);
+#endif
+    return create_virtio_net_device(opts["tap-device"].as<std::string>(), opts);
 }
 
 void
 add_native_net_options_description(boost::program_options::options_description &opts) {
 
+#ifdef HAVE_XEN
     auto xen = is_xen();
     if (xen != xen_info::nonxen) {
         opts.add(get_xenfront_net_options_description());
-    } else {
-        opts.add(get_virtio_net_options_description());
+        return;
     }
+#endif
+    opts.add(get_virtio_net_options_description());
 }
 
 native_network_stack::native_network_stack(boost::program_options::variables_map opts)
