@@ -32,10 +32,10 @@ static auto make_input_stream(packet&& p) {
 }
 
 static auto parse(packet&& p) {
-    auto is = make_input_stream(std::move(p));
+    auto is = make_shared(make_input_stream(std::move(p)));
     auto parser = make_shared<parser_type>();
     parser->init();
-    return is.consume(*parser).then([parser] {
+    return is->consume(*parser).then([is, parser] {
         return make_ready_future<shared_ptr<parser_type>>(parser);
     });
 }
