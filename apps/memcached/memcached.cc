@@ -809,7 +809,8 @@ class udp_server {
 public:
     static const size_t default_max_datagram_size = 1400;
 private:
-    ascii_protocol _proto;
+    cache& _cache;
+    system_stats& _system_stats;
     udp_channel _chan;
     uint16_t _port;
     size_t _max_datagram_size = default_max_datagram_size;
@@ -826,10 +827,28 @@ private:
         }
     } __attribute__((packed));
 
+    struct connection {
+        ipv4_addr _src;
+        uint16_t _request_id;
+        input_stream<char> _in;
+        output_stream<char> _out;
+        std::vector<temporary_buffer<char>> _out_bufs;
+        ascii_protocol _proto;
+        connection(ipv4_addr src, uint16_t request_id, input_stream<char>&& in, size_t out_size,
+                cache& c, system_stats& system_stats)
+            : _src(src)
+            , _request_id(request_id)
+            , _in(std::move(in))
+            , _out(output_stream<char>(data_sink(std::make_unique<vector_data_sink>(_out_bufs)), out_size))
+            , _proto(c, system_stats)
+        {}
+    };
+
 public:
     udp_server(cache& c, system_stats& system_stats, uint16_t port = 11211)
-         : _proto(c, system_stats)
-         , _port(port)
+        : _cache(c)
+        , _system_stats(system_stats)
+        , _port(port)
     {}
 
     void set_max_datagram_size(size_t max_datagram_size) {
@@ -880,16 +899,23 @@ public:
                 p.trim_front(sizeof(hdr));
 
                 auto request_id = hdr._request_id;
+                auto in = as_input_stream(std::move(p));
+                auto conn = make_shared<connection>(dgram.get_src(), request_id, std::move(in),
+                    _max_datagram_size - sizeof(header), _cache, _system_stats);
 
                 if (hdr._n != 1 || hdr._sequence_number != 0) {
-                    out.write("CLIENT_ERROR only single-datagram requests supported\r\n");
-                } else {
-                    auto in = as_input_stream(std::move(p));
-                    assert_resolved(_proto.handle(in, out));
+                    conn->_out.write("CLIENT_ERROR only single-datagram requests supported\r\n").then([this, conn] {
+                        return conn->_out.flush().then([this, conn] {
+                            return respond(conn->_src, conn->_request_id, std::move(conn->_out_bufs));
+                        });
+                    });
                 }
 
-                assert_resolved(out.flush());
-                return respond(dgram.get_src(), request_id, std::move(out_bufs));
+                return conn->_proto.handle(conn->_in, conn->_out).then([this, conn]() mutable {
+                    return conn->_out.flush().then([this, conn]() mutable {
+                        return respond(conn->_src, conn->_request_id, std::move(conn->_out_bufs));
+                    });
+                });
             });
         }).or_terminate();
     };
