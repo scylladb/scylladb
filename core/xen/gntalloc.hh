@@ -3,9 +3,15 @@
 
 #include "core/posix.hh"
 
-struct gntref {
+class gntref {
+public:
     int xen_id;
     void* page;
+    bool operator==(const gntref &a) { return (xen_id == a.xen_id) && (page == a.page); }
+    gntref& operator=(const gntref &a) { xen_id = a.xen_id; page = a.page; return *this; }
+    gntref(int id, void *page) : xen_id(id), page(page) {}
+    gntref() : xen_id(-1), page(nullptr) {}
+    operator bool() const { return xen_id != -1 && page != nullptr; }
 };
 
 class gntalloc;
@@ -13,11 +19,10 @@ class gntalloc;
 class grant_head {
 protected:
     unsigned _id = 0;
-    std::vector<gntref> _refs;
 public:
-    grant_head(std::vector<gntref> r) : _refs(r) {}
-    virtual gntref& new_ref() = 0;
-    virtual gntref& new_ref(void *addr, size_t size) = 0;
+    virtual gntref new_ref() = 0;
+    virtual gntref new_ref(void *addr, size_t size) = 0;
+    virtual void free_ref(gntref& ref) = 0;
 };
 
 class gntalloc {
@@ -32,7 +37,9 @@ public:
     // The kernel interface can defer allocation, userspace allocation
     // cannot. The boolean "alloc" tell us whether or not we should allocate
     // now or try to defer.
-    virtual grant_head *alloc_ref(unsigned nr_ents, bool alloc) = 0;
+    virtual grant_head *alloc_ref(unsigned nr_ents) = 0;
     friend class grant_head;
 };
+
+extern gntref invalid_ref;
 #endif

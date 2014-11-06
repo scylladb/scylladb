@@ -85,7 +85,6 @@ public:
 };
 
 void kernel_evtchn::make_ready(void *arg) {
-    printf("Got an interrupt!\n");
     int fd = reinterpret_cast<uintptr_t>(arg);
     uint64_t one = 1;
     ::write(fd, &one, sizeof(one));

@@ -63,8 +63,10 @@ private:
     int bind_rx_evtchn();
 
     future<> alloc_rx_references(unsigned refs);
+    future<> handle_tx_completions();
     future<> queue_rx_packet();
 
+    void alloc_one_rx_reference(unsigned id);
     std::string path(std::string s) { return _device_str + "/" + s; }
 
 public:
@@ -111,13 +113,15 @@ xenfront_net_device::send(packet _p) {
     // FIXME: negotiate and use scatter/gather
     _p.linearize();
 
-    return _tx_ring.free_idx().then([this, p = std::move(_p), frag] (uint32_t idx) mutable {
+    return _tx_ring.entries.get_index().then([this, p = std::move(_p), frag] (unsigned idx) mutable {
 
         auto req_prod = _tx_ring._sring->req_prod;
 
         auto f = p.frag(frag);
 
         auto ref = _tx_refs->new_ref(f.base, f.size);
+
+        assert(!_tx_ring.entries[idx]);
 
         _tx_ring.entries[idx] = ref;
 
@@ -139,7 +143,6 @@ xenfront_net_device::send(packet _p) {
 
         _tx_ring._sring->req_event++;
         if ((frag + 1) == p.nr_frags()) {
-            printf("NOTIFY!!\n");
             _evtchn->notify(_tx_evtchn);
             return make_ready_future<>();
         } else {
@@ -153,16 +156,18 @@ xenfront_net_device::send(packet _p) {
 #define rmb() asm volatile("lfence":::"memory");
 #define wmb() asm volatile("":::"memory");
 
-// FIXME: This is totally wrong, just coded so we can gt started with sending
 template <typename T>
-future<uint32_t> front_ring<T>::free_idx() {
-    static uint32_t idx = 0;
-    return make_ready_future<uint32_t>(idx++);
+future<unsigned> front_ring<T>::entries::get_index() {
+    return _ids.pop_eventually();
+}
+
+template <typename T>
+future<> front_ring<T>::entries::free_index(unsigned id) {
+    return _ids.push_eventually(std::move(id));
 }
 
 future<> xenfront_net_device::queue_rx_packet() {
 
-    printf("Got at queue\n");
     auto rsp_cons = _rx_ring.rsp_cons;
     rmb();
     auto rsp_prod = _rx_ring._sring->rsp_prod;
@@ -189,14 +194,27 @@ future<> xenfront_net_device::queue_rx_packet() {
         }
 
         _rx_ring._sring->rsp_event = rsp_cons + 1;
-        _rx_ring._sring->req_prod  = rsp_cons + 1;
 
         rsp_prod = _rx_ring._sring->rsp_prod;
-        // FIXME: END GRANT. FIXME: ALLOCATE MORE MEMORY
+
+        _rx_refs->free_ref(entry);
+        _rx_ring.entries.free_index(rsp.id).then([this, id = rsp.id]() {
+            alloc_one_rx_reference(id);
+        });
     }
 
     // FIXME: Queue_rx maybe should not be a future then
     return make_ready_future<>();
+}
+
+void xenfront_net_device::alloc_one_rx_reference(unsigned index) {
+
+    _rx_ring.entries[index] = _rx_refs->new_ref();
+
+    // This is how the backend knows where to put data.
+    auto req =  &_rx_ring._sring->_ring[index].req;
+    req->id = index;
+    req->gref = _rx_ring.entries[index].xen_id;
 }
 
 future<> xenfront_net_device::alloc_rx_references(unsigned refs) {
@@ -204,12 +222,7 @@ future<> xenfront_net_device::alloc_rx_references(unsigned refs) {
     rmb();
 
     for (auto i = req_prod; (i < _rx_ring.nr_ents) && (i < refs); ++i) {
-        _rx_ring.entries[i] = _rx_refs->new_ref();
-
-        // This is how the backend knows where to put data.
-        auto req =  &_rx_ring._sring->_ring[i].req;
-        req->id = i;
-        req->gref = _rx_ring.entries[i].xen_id;
+        alloc_one_rx_reference(i);
         ++req_prod;
     }
 
@@ -219,6 +232,30 @@ future<> xenfront_net_device::alloc_rx_references(unsigned refs) {
     /* ready */
     _evtchn->notify(_rx_evtchn);
     return make_ready_future();
+}
+
+future<> xenfront_net_device::handle_tx_completions() {
+    auto prod = _tx_ring._sring->rsp_prod;
+    rmb();
+
+    for (unsigned i = _tx_ring.rsp_cons; i != prod; i++) {
+        auto rsp = _tx_ring[i].rsp;
+
+        if (rsp.status == 1) {
+            continue;
+        }
+
+        if (rsp.status != 0) {
+            printf("Packet error: Handle it\n");
+            continue;
+        }
+
+        auto entry = _tx_ring.entries[rsp.id];
+        _tx_refs->free_ref(entry);
+        _tx_ring.entries.free_index(rsp.id).then([this]() {});
+    }
+    _tx_ring.rsp_cons = prod;
+    return make_ready_future<>();
 }
 
 ethernet_address xenfront_net_device::hw_address() {
@@ -254,8 +291,8 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     , _rx_evtchn(bind_rx_evtchn())
     , _tx_ring(_gntalloc->alloc_ref())
     , _rx_ring(_gntalloc->alloc_ref())
-    , _tx_refs(_gntalloc->alloc_ref(front_ring<tx>::nr_ents, false))
-    , _rx_refs(_gntalloc->alloc_ref(front_ring<rx>::nr_ents, true))
+    , _tx_refs(_gntalloc->alloc_ref(front_ring<tx>::nr_ents))
+    , _rx_refs(_gntalloc->alloc_ref(front_ring<rx>::nr_ents))
     , _hw_address(net::parse_ethernet_address(_xenstore->read(path("mac")))) {
 
     _rx_stream.started();
@@ -292,6 +329,11 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     }
 
     alloc_rx_references(_rx_ring.nr_ents);
+    keep_doing([this] () {
+        return _evtchn->pending(_tx_evtchn).then([this] {
+            handle_tx_completions();
+        });
+    });
 }
 
 xenfront_net_device::~xenfront_net_device() {

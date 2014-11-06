@@ -8,15 +8,19 @@
 #include "osv_xen.hh"
 #include "gntalloc.hh"
 
+gntref invalid_ref;
+
 // FIXME: Most of the destructors are yet to be coded
 //
 
 class userspace_grant_head : public grant_head {
     std::atomic<int> _ref_head = { 0 };
+    std::vector<gntref> _refs;
 public:
-    userspace_grant_head(std::vector<gntref> v) : grant_head(v) {}
-    virtual gntref& new_ref() override;
-    virtual gntref& new_ref(void *addr, size_t size) override;
+    userspace_grant_head(std::vector<gntref> v) : _refs(v) {}
+    virtual gntref new_ref() override;
+    virtual gntref new_ref(void *addr, size_t size) override;
+    virtual void free_ref(gntref& ref);
 };
 
 class userspace_gntalloc : public gntalloc {
@@ -27,7 +31,7 @@ public:
     explicit userspace_gntalloc(unsigned otherend);
     ~userspace_gntalloc();
     virtual gntref alloc_ref() override;
-    virtual grant_head *alloc_ref(unsigned refs, bool alloc) override;
+    virtual grant_head *alloc_ref(unsigned refs) override;
 };
 
 userspace_gntalloc::userspace_gntalloc(unsigned otherend)
@@ -50,7 +54,7 @@ userspace_gntalloc::get_gref(unsigned nr_ents)
     return gref;
 }
 
-grant_head *userspace_gntalloc::alloc_ref(unsigned nr_ents, bool alloc) {
+grant_head *userspace_gntalloc::alloc_ref(unsigned nr_ents) {
 
     auto gref = get_gref(nr_ents);
 
@@ -77,24 +81,30 @@ gntref userspace_gntalloc::alloc_ref() {
     return p;
 }
 
-gntref& userspace_grant_head::new_ref() {
+gntref userspace_grant_head::new_ref() {
     return _refs[_id++ % _refs.size()];
 }
 
-gntref& userspace_grant_head::new_ref(void *addr, size_t size) {
+gntref userspace_grant_head::new_ref(void *addr, size_t size) {
     gntref& ref = _refs[_id % _refs.size()];
     memcpy(ref.page, addr, size);
     return ref;
+}
+
+void userspace_grant_head::free_ref(gntref& ref) {
+    abort();
 }
 
 #ifdef HAVE_OSV
 class kernel_gntalloc;
 
 class kernel_grant_head : public grant_head {
+    uint32_t _head;
 public:
-    kernel_grant_head(std::vector<gntref> r) : grant_head(r) {}
-    virtual gntref& new_ref() override;
-    virtual gntref& new_ref(void *addr, size_t size) override;
+    kernel_grant_head(uint32_t head) : _head(head) {}
+    virtual gntref new_ref() override;
+    virtual gntref new_ref(void *addr, size_t size) override;
+    virtual void free_ref(gntref& ref);
 };
 
 class kernel_gntalloc : public gntalloc {
@@ -108,7 +118,7 @@ public:
     kernel_gntalloc(unsigned otherend) : gntalloc(otherend) {}
 
     virtual gntref alloc_ref() override;
-    virtual grant_head *alloc_ref(unsigned refs, bool alloc) override;
+    virtual grant_head *alloc_ref(unsigned refs) override;
     friend class kernel_grant_head;
 };
 
@@ -119,25 +129,28 @@ virt_to_mfn(void *virt) {
     return virt_to_phys(virt) >> 12;
 }
 
-gntref& kernel_grant_head::new_ref() {
-    return _refs[_id++ % _refs.size()];
+gntref kernel_grant_head::new_ref() {
+    auto gnt = dynamic_cast<kernel_gntalloc *>(gntalloc::instance());
+
+    auto ref = gnttab_claim_grant_reference(&_head);
+    auto page = gnt->new_frame();
+    gnttab_grant_foreign_access_ref(ref, gnt->_otherend, virt_to_mfn(page), 0);
+    return gntref(ref, page);
 }
 
-gntref& kernel_grant_head::new_ref(void *addr, size_t size) {
-
-    gntref& ref = _refs[_id % _refs.size()];
+gntref kernel_grant_head::new_ref(void *addr, size_t size) {
 
     auto gnt = dynamic_cast<kernel_gntalloc *>(gntalloc::instance());
 
     // FIXME: if we can guarantee that the packet allocation came from malloc, not
     // mmap, we can grant it directly, without copying. We would also have to propagate
     // the offset information, but that is easier
-    ref.page = gnt->new_frame();
-    memcpy(ref.page, addr, size);
+    auto page = gnt->new_frame();
+    memcpy(page, addr, size);
 
-    gnttab_grant_foreign_access_ref(ref.xen_id, gnt->_otherend, virt_to_mfn(ref.page), 0);
-
-    return _refs[_id++ % _refs.size()];
+    auto ref = gnttab_claim_grant_reference(&_head);
+    gnttab_grant_foreign_access_ref(ref, gnt->_otherend, virt_to_mfn(page), 0);
+    return gntref(ref, page);
 }
 
 void *kernel_gntalloc::new_frame() {
@@ -153,10 +166,10 @@ gntref kernel_gntalloc::alloc_ref() {
         throw std::runtime_error("Failed to initialize allocate grant\n");
     }
 
-    return {int(ref), page};
+    return gntref(int(ref), page);
 }
 
-grant_head *kernel_gntalloc::alloc_ref(unsigned nr_ents, bool alloc) {
+grant_head *kernel_gntalloc::alloc_ref(unsigned nr_ents) {
 
     std::vector<gntref> v;
     uint32_t head;
@@ -164,17 +177,15 @@ grant_head *kernel_gntalloc::alloc_ref(unsigned nr_ents, bool alloc) {
     if (gnttab_alloc_grant_references(nr_ents, &head)) {
         throw std::runtime_error("Failed to initialize allocate grant\n");
     }
-    for (unsigned i = 0; i < nr_ents; ++i) {
-        auto ref = gnttab_claim_grant_reference(&head);
-        void *page = nullptr;
-        if (alloc) {
-            page = new_frame();
-            gnttab_grant_foreign_access_ref(ref, _otherend, virt_to_mfn(page), 0);
-        }
-        v.push_back({ref, page});
-    }
 
-    return new kernel_grant_head(v);
+    return new kernel_grant_head(head);
+}
+
+void kernel_grant_head::free_ref(gntref& ref) {
+    gnttab_end_foreign_access_ref(ref.xen_id);
+    gnttab_release_grant_reference(&_head, ref.xen_id);
+    free(ref.page);
+    ref = invalid_ref;
 }
 #endif
 
