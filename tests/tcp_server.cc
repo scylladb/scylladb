@@ -18,7 +18,7 @@ static int tx_msg_size = 4 * 1024;
 static int tx_msg_nr = tx_msg_total_size / tx_msg_size;
 static std::string str_txbuf(tx_msg_size, 'X');
 
-class http_server {
+class tcp_server {
     std::vector<server_socket> _listeners;
 public:
     future<> listen(ipv4_addr addr) {
@@ -53,7 +53,7 @@ public:
         input_stream<char> _read_buf;
         output_stream<char> _write_buf;
     public:
-        connection(http_server& server, connected_socket&& fd, socket_address addr)
+        connection(tcp_server& server, connected_socket&& fd, socket_address addr)
             : _fd(std::move(fd))
             , _read_buf(_fd.input())
             , _write_buf(_fd.output()) {}
@@ -118,9 +118,9 @@ int main(int ac, char** av) {
     return app.run(ac, av, [&] {
         auto&& config = app.configuration();
         uint16_t port = config["port"].as<uint16_t>();
-        auto server = new distributed<http_server>;
+        auto server = new distributed<tcp_server>;
         server->start().then([server = std::move(server), port] () mutable {
-            server->invoke_on_all(&http_server::listen, ipv4_addr{port});
+            server->invoke_on_all(&tcp_server::listen, ipv4_addr{port});
         }).then([port] {
             std::cout << "Seastar TCP server listening on port " << port << " ...\n";
         });
