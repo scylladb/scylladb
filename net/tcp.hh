@@ -7,6 +7,7 @@
 
 #include "core/shared_ptr.hh"
 #include "core/queue.hh"
+#include "core/semaphore.hh"
 #include "net.hh"
 #include "ip_checksum.hh"
 #include "const.hh"
@@ -15,6 +16,7 @@
 #include <functional>
 #include <deque>
 #include <chrono>
+#include <experimental/optional>
 
 using namespace std::chrono_literals;
 
@@ -195,6 +197,10 @@ private:
             uint32_t unsent_len = 0;
             bool closed = false;
             promise<> _window_opened;
+            // Wait for all data are acked
+            std::experimental::optional<promise<>> _all_data_acked_promise;
+            // Limit number of data queued into send queue
+            semaphore user_queue_space = {212992};
         } _snd;
         struct receive {
             tcp_seq next;
@@ -219,6 +225,7 @@ private:
         void input(tcp_hdr* th, packet p);
         void output();
         future<> wait_for_data();
+        future<> wait_for_all_data_acked();
         future<> send(packet p);
         packet read();
         void close();
@@ -239,6 +246,9 @@ private:
         void stop_retransmit_timer() { _retransmit.cancel(); };
         void retransmit();
         void cleanup();
+        uint32_t can_send() {
+           return std::min(uint32_t(_snd.unacknowledged + _snd.window - _snd.next), _snd.unsent_len);
+        }
         friend class connection;
     };
     inet_type& _inet;
@@ -592,9 +602,18 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 _snd.unacknowledged = data_ack;
             }
 
+            // some data is acked, try send more data
+            if (can_send() > 0) {
+                do_output = true;
+            }
+
             if (_snd.data.empty()) {
                 // All outstanding segments are acked, turn off the timer.
                 stop_retransmit_timer();
+                // Signal the waiter of this event
+                if (_snd._all_data_acked_promise) {
+                    _snd._all_data_acked_promise->set_value();
+                }
             } else {
                 // Restart the timer becasue new data is acked.
                 start_retransmit_timer();
@@ -631,9 +650,7 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
     if (_snd.unsent.empty()) {
         return packet();
     }
-    auto can_send = std::min(
-            uint32_t(_snd.unacknowledged + _snd.window - _snd.next),
-            _snd.unsent_len);
+    auto can_send = this->can_send();
     // Max number of TCP payloads we can pass to NIC
     uint32_t len;
     if (_tcp.hw_features().tx_tso) {
@@ -649,6 +666,7 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
         auto p = std::move(_snd.unsent.front());
         _snd.unsent.pop_front();
         _snd.unsent_len -= p.len();
+        _snd.user_queue_space.signal(p.len());
         return p;
     }
     // moderate case: need to split one packet
@@ -656,6 +674,7 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
         auto p = _snd.unsent.front().share(0, can_send);
         _snd.unsent.front().trim_front(can_send);
         _snd.unsent_len -= p.len();
+        _snd.user_queue_space.signal(p.len());
         return p;
     }
     // hard case: merge some packets, possibly split last
@@ -674,6 +693,7 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
         q.trim_front(can_send);
     }
     _snd.unsent_len -= p.len();
+    _snd.user_queue_space.signal(p.len());
     return p;
 }
 
@@ -751,6 +771,18 @@ future<> tcp<InetTraits>::tcb::wait_for_data() {
 }
 
 template <typename InetTraits>
+future<> tcp<InetTraits>::tcb::wait_for_all_data_acked() {
+    if (_snd.data.empty()) {
+        return make_ready_future<>();
+    }
+    _snd._all_data_acked_promise = promise<>();
+    return _snd._all_data_acked_promise->get_future().then([this] {
+        _snd._all_data_acked_promise = {};
+        return make_ready_future<>();
+    });
+}
+
+template <typename InetTraits>
 packet tcp<InetTraits>::tcb::read() {
     packet p;
     for (auto&& q : _rcv.data) {
@@ -762,10 +794,15 @@ packet tcp<InetTraits>::tcb::read() {
 
 template <typename InetTraits>
 future<> tcp<InetTraits>::tcb::send(packet p) {
-    _snd.unsent_len += p.len();
-    _snd.unsent.push_back(std::move(p));
-    output();
-    return make_ready_future<>();
+    // TODO: Handle p.len() > max user_queue_space case
+    auto len = p.len();
+    return _snd.user_queue_space.wait(len).then([this, p = std::move(p)] () mutable {
+        _snd.unsent_len += p.len();
+        _snd.unsent.push_back(std::move(p));
+        if (can_send() > 0)
+            output();
+        return make_ready_future<>();
+    });
 }
 
 template <typename InetTraits>
@@ -773,10 +810,13 @@ void tcp<InetTraits>::tcb::close() {
     if (_snd.closed) {
         return;
     }
-    _snd.closed = true;
-    if (_snd.unsent_len == 0) {
-        output();
-    }
+    // TODO: We should return a future to upper layer
+    wait_for_all_data_acked().then([this]{
+        _snd.closed = true;
+        if (_snd.unsent_len == 0) {
+            output();
+        }
+    });
 }
 
 template <typename InetTraits>
