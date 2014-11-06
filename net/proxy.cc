@@ -9,7 +9,6 @@ private:
     static constexpr size_t _send_queue_length = 1000;
     boost::program_options::variables_map _opts;
     stream<packet> _rx_stream;
-    future<> _rx_ready;
     net::hw_features _hw_features;
     size_t _send_depth = 0;
     promise<> _send_promise;
@@ -24,8 +23,7 @@ public:
 
 proxy_net_device::proxy_net_device(boost::program_options::variables_map opts) :
         _opts(std::move(opts)),
-        _rx_stream(),
-        _rx_ready(_rx_stream.started())
+        _rx_stream()
 {
     if (!(_opts.count("csum-offload") && _opts["csum-offload"].as<std::string>() == "off")) {
         _hw_features.tx_csum_offload = true;
@@ -44,6 +42,7 @@ proxy_net_device::proxy_net_device(boost::program_options::variables_map opts) :
     } else {
         _hw_features.tx_ufo = false;
     }
+    _rx_stream.started();
 }
 
 subscription<packet> proxy_net_device::receive(std::function<future<> (packet)> next)
@@ -53,9 +52,7 @@ subscription<packet> proxy_net_device::receive(std::function<future<> (packet)> 
 
 future<> proxy_net_device::l2inject(packet p)
 {
-    _rx_ready = _rx_ready.then([this, p = std::move(p)] () mutable {
-        return _rx_stream.produce(std::move(p));
-    });
+    _rx_stream.produce(std::move(p));
     return make_ready_future<>();
 }
 
