@@ -6,6 +6,7 @@
 #define CORE_FUTURE_UTIL_HH_
 
 #include "future.hh"
+#include "shared_ptr.hh"
 #include <tuple>
 
 // parallel_for_each - run tasks in parallel
@@ -93,7 +94,6 @@ future<> do_for_each(Iterator begin, Iterator end, AsyncAction&& action) {
     return make_ready_future<>();
 }
 
-
 template <typename... Future>
 future<std::tuple<Future...>> when_all(Future&&... fut);
 
@@ -127,5 +127,69 @@ when_all(Future&& fut, Rest&&... rest) {
         });
     });
 }
+
+template <typename T>
+struct reducer_with_get_traits {
+    using result_type = decltype(std::declval<T>().get());
+    using future_type = future<result_type>;
+    static future_type maybe_call_get(future<> f, shared_ptr<T> r) {
+        return f.then([r = std::move(r)] () mutable {
+            return make_ready_future<result_type>(std::move(*r).get());
+        });
+    }
+};
+
+template <typename T, typename V = void>
+struct reducer_traits {
+    using future_type = future<>;
+    static future_type maybe_call_get(future<> f, shared_ptr<T> r) {
+        return f.then([r = std::move(r)] {});
+    }
+};
+
+template <typename T>
+struct reducer_traits<T, decltype(std::declval<T>().get(), void())> : public reducer_with_get_traits<T> {};
+
+// @Mapper is a callable which transforms values from the iterator range
+// into a future<T>. @Reducer is an object which can be called with T as
+// parameter and yields a future<>. It may have a get() method which returns
+// a value of type U which holds the result of reduction. This value is wrapped
+// in a future and returned by this function. If the reducer has no get() method
+// then this function returns future<>.
+//
+// TODO: specialize for non-deferring reducer
+template <typename Iterator, typename Mapper, typename Reducer>
+inline
+auto
+map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Reducer&& r)
+    -> typename reducer_traits<Reducer>::future_type
+{
+    auto r_ptr = make_shared(std::forward<Reducer>(r));
+    future<> ret = make_ready_future<>();
+    while (begin != end) {
+        ret = mapper(*begin++).then([ret = std::move(ret), r_ptr] (auto value) mutable {
+            return ret.then([value = std::move(value), r_ptr] () mutable {
+                return (*r_ptr)(std::move(value));
+            });
+        });
+    }
+    return reducer_traits<Reducer>::maybe_call_get(std::move(ret), r_ptr);
+}
+
+// Implements @Reducer concept. Calculates the result by
+// adding elements to the accumulator.
+template <typename Result, typename Addend = Result>
+class adder {
+private:
+    Result _result;
+public:
+    future<> operator()(const Addend& value) {
+        _result += value;
+        return make_ready_future<>();
+    }
+    Result get() && {
+        return std::move(_result);
+    }
+};
 
 #endif /* CORE_FUTURE_UTIL_HH_ */
