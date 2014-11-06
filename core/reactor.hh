@@ -407,6 +407,8 @@ private:
 
 class reactor {
     static constexpr size_t max_aio = 128;
+    promise<> _exit_promise;
+    future<> _exit_future;
     pollable_fd _timerfd = file_desc::timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC | TFD_NONBLOCK);
     struct signal_handler {
         signal_handler(int signo);
@@ -468,6 +470,12 @@ public:
     int run();
     void exit(int ret);
     future<> when_started() { return _start_promise.get_future(); }
+
+    template <typename Func>
+    void at_exit(Func&& func) {
+        _exit_future = _exit_future.then(func);
+    }
+
     future<> receive_signal(int signo);
 
     void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
@@ -483,6 +491,7 @@ private:
     void add_timer(timer* tmr);
     void del_timer(timer* tmr);
 
+    future<> run_exit_tasks();
     void stop();
     friend class pollable_fd;
     friend class pollable_fd_state;

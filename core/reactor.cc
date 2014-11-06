@@ -45,7 +45,8 @@ wrap_syscall(T result) {
 }
 
 reactor::reactor()
-    : _network_stack(network_stack_registry::create({}))
+    : _exit_future(_exit_promise.get_future())
+    , _network_stack(network_stack_registry::create({}))
     , _epollfd(file_desc::epoll_create(EPOLL_CLOEXEC))
     , _io_eventfd()
     , _io_context(0)
@@ -319,19 +320,28 @@ void reactor::complete_timers() {
     });
 }
 
+future<> reactor::run_exit_tasks() {
+    _exit_promise.set_value();
+    return std::move(_exit_future);
+}
+
 void reactor::stop() {
     assert(engine._id == 0);
-    auto sem = new semaphore(0);
-    for (unsigned i = 1; i < smp::count; i++) {
-        smp::submit_to<>(i, []() {
-            engine._stopped = true;
-        }).then([sem, i]() {
-            sem->signal();
+    run_exit_tasks().then([this] {
+        auto sem = new semaphore(0);
+            for (unsigned i = 1; i < smp::count; i++) {
+            smp::submit_to<>(i, []() {
+                return engine.run_exit_tasks().then([] {
+                    engine._stopped = true;
+                });
+            }).then([sem, i]() {
+                sem->signal();
+            });
+        }
+        sem->wait(smp::count - 1).then([sem, this](){
+            _stopped = true;
+            delete sem;
         });
-    }
-    sem->wait(smp::count - 1).then([sem, this](){
-        _stopped = true;
-        delete sem;
     });
 }
 
