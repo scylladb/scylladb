@@ -211,8 +211,7 @@ private:
             tcp_seq initial;
             std::deque<packet> data;
             std::map<tcp_seq, packet> out_of_order;
-            bool _user_waiting = false;
-            promise<> _data_received;
+            std::experimental::optional<promise<>> _data_received_promise;
         } _rcv;
         tcp_option _option;
         timer _delayed_ack;
@@ -523,9 +522,8 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                     _rcv.data.push_back(std::move(p));
                     _rcv.next += seg_len;
                     merge_out_of_order();
-                    if (_rcv._user_waiting) {
-                        _rcv._user_waiting = false;
-                        _rcv._data_received.set_value();
+                    if (_rcv._data_received_promise) {
+                        _rcv._data_received_promise->set_value();
                     }
                 } else {
                     insert_out_of_order(seg_seq, std::move(p));
@@ -548,9 +546,8 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 // FIXME: we might queue an out-of-order FIN.  Is it worthwhile?
                 _foreign_fin_received = true;
                 _rcv.next = fin_seq + 1;
-                if (_rcv._user_waiting) {
-                    _rcv._user_waiting = false;
-                    _rcv._data_received.set_value();
+                if (_rcv._data_received_promise) {
+                    _rcv._data_received_promise->set_value();
                 }
                 // If this <FIN> packet contains data as well, we can ACK both data
                 // and <FIN> in a single packet, so canncel the previous ACK.
@@ -765,9 +762,11 @@ future<> tcp<InetTraits>::tcb::wait_for_data() {
     if (!_rcv.data.empty() || _foreign_fin_received) {
         return make_ready_future<>();
     }
-    _rcv._user_waiting = true;
-    _rcv._data_received = promise<>();
-    return _rcv._data_received.get_future();
+    _rcv._data_received_promise = promise<>();
+    return _rcv._data_received_promise->get_future().then([this] {
+        _rcv._data_received_promise = {};
+        return make_ready_future<>();
+    });
 }
 
 template <typename InetTraits>
