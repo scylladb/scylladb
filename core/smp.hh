@@ -37,6 +37,12 @@ public:
     template <typename... Args>
     future<> invoke_on_all(future<> (Service::*func)(Args...), Args... args);
 
+    // Invoke a method on all instances of @Service.
+    // The return value becomes ready when all instances have processed
+    // the message.
+    template <typename... Args>
+    future<> invoke_on_all(void (Service::*func)(Args...), Args... args);
+
     // Invoke a method on all instances of @Service and reduce the results using
     // @Reducer. See ::map_reduce().
     template <typename Reducer, typename Ret, typename... FuncArgs, typename... Args>
@@ -130,6 +136,19 @@ distributed<Service>::invoke_on_all(future<> (Service::*func)(Args...), Args... 
     return parallel_for_each(_instances.begin(), _instances.end(), [&c, func, args...] (Service* inst) {
         return smp::submit_to(c++, [inst, func, args...] {
             return (inst->*func)(args...);
+        });
+    });
+}
+
+template <typename Service>
+template <typename... Args>
+inline
+future<>
+distributed<Service>::invoke_on_all(void (Service::*func)(Args...), Args... args) {
+    unsigned c = 0;
+    return parallel_for_each(_instances.begin(), _instances.end(), [&c, func, args...] (Service* inst) {
+        return smp::submit_to(c++, [inst, func, args...] {
+            (inst->*func)(args...);
         });
     });
 }
