@@ -37,6 +37,25 @@ public:
     template <typename... Args>
     future<> invoke_on_all(future<> (Service::*func)(Args...), Args... args);
 
+    // Invoke a method on all instances of @Service and reduce the results using
+    // @Reducer. See ::map_reduce().
+    template <typename Reducer, typename Ret, typename... FuncArgs, typename... Args>
+    inline
+    auto
+    map_reduce(Reducer&& r, Ret (Service::*func)(FuncArgs...), Args&&... args)
+        -> typename reducer_traits<Reducer>::future_type
+    {
+        unsigned c = 0;
+        return ::map_reduce(_instances.begin(), _instances.end(),
+            [&c, func, args = std::make_tuple(std::forward<Args>(args)...)] (Service* inst) mutable {
+                return smp::submit_to(c++, [inst, func, args = std::move(args)] () mutable {
+                    return apply([inst, func] (Args&&... args) mutable {
+                        return (inst->*func)(std::forward<Args>(args)...);
+                    }, std::move(args));
+                });
+            }, std::forward<Reducer>(r));
+    }
+
     // Invoke a method on a specific instance of @Service.
     // The return value (which must be a future) contains the future
     // returned by @Service.
