@@ -64,6 +64,7 @@ class interface {
 private:
     future<> dispatch_packet(packet p);
     future<> send(eth_protocol_num proto_num, ethernet_address to, packet p);
+    void forward(unsigned cpuid, packet p);
 public:
     explicit interface(std::unique_ptr<device> dev);
     ethernet_address hw_address() { return _hw_address; }

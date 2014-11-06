@@ -43,6 +43,19 @@ interface::register_l3(eth_protocol_num proto_num,
     return l3_rx.packet_stream.listen(std::move(next));
 }
 
+void interface::forward(unsigned cpuid, packet p) {
+    static __thread unsigned queue_depth;
+
+    if (queue_depth < 1000) {
+        queue_depth++;
+        smp::submit_to(cpuid, [p = std::move(p), cpu = engine.cpu_id()]() mutable {
+            net::dev->l2inject(p.free_on_cpu(cpu));
+        }).then([] {
+            queue_depth--;
+        });
+    }
+}
+
 future<> interface::dispatch_packet(packet p) {
     auto eh = p.get_header<eth_hdr>();
     if (eh) {
@@ -51,12 +64,12 @@ future<> interface::dispatch_packet(packet p) {
             l3_rx_stream& l3 = i->second;
             auto fw = (engine.cpu_id() == 0) ? l3.forward(p, sizeof(eth_hdr)) : engine.cpu_id();
             if (fw != engine.cpu_id() && fw < smp::count) {
-                smp::submit_to(fw, [p = std::move(p), cpu = engine.cpu_id()]() mutable { net::dev->l2inject(p.free_on_cpu(cpu)); });
+                forward(fw, std::move(p));
             } else {
                 if (fw != engine.cpu_id()) { // broadcast to all cpus
                     for (unsigned i = 0; i< smp::count; i++) {
                         if (i != engine.cpu_id()) {
-                            smp::submit_to(i, [n = p.share(), cpu = engine.cpu_id()] () mutable { net::dev->l2inject(n.free_on_cpu(cpu)); });
+                            forward(i, p.share());
                         }
                     }
                 }
