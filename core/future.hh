@@ -499,6 +499,10 @@ public:
         });
     }
 
+    future<> discard_result() && noexcept {
+        return then([] (T&&...) {});
+    }
+
     template <typename... U>
     friend class promise;
     template <typename... U, typename... A>
