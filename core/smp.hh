@@ -69,13 +69,15 @@ template <typename Service>
 future<>
 distributed<Service>::stop() {
     unsigned c = 0;
-    return parallel_for_each(_instances.begin(), _instances.end(), [&c] (Service*& inst) {
-        return smp::submit_to(c++, [inst] {
-            return inst->stop().then([&inst] {
+    return parallel_for_each(_instances.begin(), _instances.end(), [&c] (Service*& inst) mutable {
+        return smp::submit_to(c++, [inst] () mutable {
+            return inst->stop().then([&inst] () mutable {
                 delete inst;
                 inst = nullptr;
             });
         });
+    }).then([this] {
+        _instances.clear();
     });
 }
 
