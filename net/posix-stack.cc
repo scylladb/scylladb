@@ -185,8 +185,7 @@ public:
             : _closed(false) {
         auto sa = make_ipv4_address(bind_address);
         file_desc fd = file_desc::socket(sa.u.sa.sa_family, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-        bool pktinfo_flag = true;
-        ::setsockopt(fd.get(), SOL_IP, IP_PKTINFO, &pktinfo_flag, sizeof(pktinfo_flag));
+        fd.setsockopt(SOL_IP, IP_PKTINFO, true);
         fd.bind(sa.u.sa, sizeof(sa.u.sas));
         _address = ipv4_addr(fd.get_address());
         _fd = std::make_unique<pollable_fd>(std::move(fd));

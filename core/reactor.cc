@@ -105,8 +105,7 @@ pollable_fd
 reactor::posix_listen(socket_address sa, listen_options opts) {
     file_desc fd = file_desc::socket(sa.u.sa.sa_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (opts.reuse_address) {
-        int opt = 1;
-        fd.setsockopt(SOL_SOCKET, SO_REUSEADDR, opt);
+        fd.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1);
     }
 
     fd.bind(sa.u.sa, sizeof(sa.u.sas));
