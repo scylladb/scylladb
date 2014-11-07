@@ -470,6 +470,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     p.trim_front(th->data_offset * 4);
 
     bool do_output = false;
+    bool do_output_data = false;
     tcp_seq seg_seq = th->seq;
     auto seg_len = p.len();
 
@@ -554,6 +555,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 // If this <FIN> packet contains data as well, we can ACK both data
                 // and <FIN> in a single packet, so canncel the previous ACK.
                 clear_delayed_ack();
+                do_output = false;
                 output();
 
                 // FIXME: Implement TIME-WAIT state
@@ -602,9 +604,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             }
 
             // some data is acked, try send more data
-            if (can_send() > 0) {
-                do_output = true;
-            }
+            do_output_data = true;
 
             if (_snd.data.empty()) {
                 // All outstanding segments are acked, turn off the timer.
@@ -632,14 +632,14 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
 
     if (th->seq >= _snd.wl1 && th->ack >= _snd.wl2) {
         if (!_snd.window && th->window && _snd.unsent_len) {
-            do_output = true;
+            do_output_data = true;
         }
         _snd.window = th->window << _snd.window_scale;
         _snd.wl1 = th->seq;
         _snd.wl2 = th->ack;
     }
     // send some stuff
-    if (do_output) {
+    if (do_output || (do_output_data && can_send())) {
         output();
     }
 }
