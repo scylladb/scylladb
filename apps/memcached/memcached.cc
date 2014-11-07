@@ -891,10 +891,6 @@ public:
                     return make_ready_future<>();
                 }
 
-                std::vector<temporary_buffer<char>> out_bufs;
-                auto out = output_stream<char>(data_sink(std::make_unique<vector_data_sink>(out_bufs)),
-                    _max_datagram_size - sizeof(header));
-
                 header hdr = ntoh(*p.get_header<header>());
                 p.trim_front(sizeof(hdr));
 
