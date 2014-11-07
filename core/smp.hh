@@ -26,6 +26,13 @@ public:
     template <typename... Args>
     future<> start(Args&&... args);
 
+    // Start @Service by constructing an instance on a single CPU.
+    // with @args passed to the constructor.
+    // The return value becomes ready when all instances have been
+    // constructed.
+    template <typename... Args>
+    future<> start_single(Args&&... args);
+
     // Stop @Service by destroying the instances started by start().
     // The return value becomes ready when all instances have been
     // destroyed.
@@ -108,6 +115,19 @@ distributed<Service>::start(Args&&... args) {
                     return new Service(std::forward<Args>(args)...);
                 }, std::move(args));
             });
+    });
+}
+
+template <typename Service>
+template <typename... Args>
+future<>
+distributed<Service>::start_single(Args&&... args) {
+    assert(_instances.empty());
+    _instances.resize(1);
+    return smp::submit_to(0, [this, args = std::make_tuple(std::forward<Args>(args)...)] () mutable {
+        _instances[0] = apply([] (Args&&... args) {
+            return new Service(std::forward<Args>(args)...);
+        }, std::move(args));
     });
 }
 
