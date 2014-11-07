@@ -121,7 +121,7 @@ public:
         return r;
     }
     template <class X>
-    int setsockopt(int level, int optname, X& data) {
+    int setsockopt(int level, int optname, X&& data) {
         int r = ::setsockopt(_fd, level, optname, &data, sizeof(data));
         throw_system_error_on(r == -1);
         return r;
