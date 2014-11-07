@@ -158,12 +158,17 @@ xenfront_net_device::send(packet _p) {
 
 template <typename T>
 future<unsigned> front_ring<T>::entries::get_index() {
-    return _ids.pop_eventually();
+    return _available.wait().then([this] {
+        auto ret = _ids.front();
+        _ids.pop();
+        return make_ready_future<unsigned>(ret);
+    });
 }
 
 template <typename T>
-future<> front_ring<T>::entries::free_index(unsigned id) {
-    return _ids.push_eventually(std::move(id));
+void front_ring<T>::entries::free_index(unsigned id) {
+    _ids.push(id);
+    _available.signal();
 }
 
 future<> xenfront_net_device::queue_rx_packet() {
@@ -198,9 +203,8 @@ future<> xenfront_net_device::queue_rx_packet() {
         rsp_prod = _rx_ring._sring->rsp_prod;
 
         _rx_refs->free_ref(entry);
-        _rx_ring.entries.free_index(rsp.id).then([this, id = rsp.id]() {
-            alloc_one_rx_reference(id);
-        });
+        _rx_ring.entries.free_index(rsp.id);
+        alloc_one_rx_reference(rsp.id);
     }
 
     // FIXME: Queue_rx maybe should not be a future then
@@ -252,7 +256,7 @@ future<> xenfront_net_device::handle_tx_completions() {
 
         auto entry = _tx_ring.entries[rsp.id];
         _tx_refs->free_ref(entry);
-        _tx_ring.entries.free_index(rsp.id).then([this]() {});
+        _tx_ring.entries.free_index(rsp.id);
     }
     _tx_ring.rsp_cons = prod;
     return make_ready_future<>();
