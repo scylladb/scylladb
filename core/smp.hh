@@ -55,10 +55,13 @@ future<>
 distributed<Service>::start(Args&&... args) {
     _instances.resize(smp::count);
     unsigned c = 0;
-    return parallel_for_each(_instances.begin(), _instances.end(), [this, &c, args...] (Service*& inst) {
-        return smp::submit_to(c++, [&inst, args...] {
-            inst = new Service(args...);
-        });
+    return parallel_for_each(_instances.begin(), _instances.end(),
+        [this, &c, args = std::make_tuple(std::forward<Args>(args)...)] (Service*& inst) mutable {
+            return smp::submit_to(c++, [&inst, args = std::move(args)] () mutable {
+                inst = apply([] (Args&&... args) {
+                    return new Service(std::forward<Args>(args)...);
+                }, std::move(args));
+            });
     });
 }
 
