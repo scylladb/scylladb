@@ -524,6 +524,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                     merge_out_of_order();
                     if (_rcv._data_received_promise) {
                         _rcv._data_received_promise->set_value();
+                        _rcv._data_received_promise = {};
                     }
                 } else {
                     insert_out_of_order(seg_seq, std::move(p));
@@ -548,6 +549,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 _rcv.next = fin_seq + 1;
                 if (_rcv._data_received_promise) {
                     _rcv._data_received_promise->set_value();
+                    _rcv._data_received_promise = {};
                 }
                 // If this <FIN> packet contains data as well, we can ACK both data
                 // and <FIN> in a single packet, so canncel the previous ACK.
@@ -610,6 +612,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 // Signal the waiter of this event
                 if (_snd._all_data_acked_promise) {
                     _snd._all_data_acked_promise->set_value();
+                    _snd._all_data_acked_promise = {};
                 }
             } else {
                 // Restart the timer becasue new data is acked.
@@ -764,7 +767,6 @@ future<> tcp<InetTraits>::tcb::wait_for_data() {
     }
     _rcv._data_received_promise = promise<>();
     return _rcv._data_received_promise->get_future().then([this] {
-        _rcv._data_received_promise = {};
         return make_ready_future<>();
     });
 }
@@ -776,7 +778,6 @@ future<> tcp<InetTraits>::tcb::wait_for_all_data_acked() {
     }
     _snd._all_data_acked_promise = promise<>();
     return _snd._all_data_acked_promise->get_future().then([this] {
-        _snd._all_data_acked_promise = {};
         return make_ready_future<>();
     });
 }
