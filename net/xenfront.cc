@@ -179,7 +179,7 @@ future<> xenfront_net_device::queue_rx_packet() {
 
     while (rsp_cons < rsp_prod) {
         auto rsp = _rx_ring[rsp_cons].rsp;
-        auto entry = _rx_ring.entries[rsp.id];
+        auto& entry = _rx_ring.entries[rsp.id];
 
         rsp_cons++;
         _rx_ring.rsp_cons = rsp_cons;
@@ -244,7 +244,7 @@ future<> xenfront_net_device::handle_tx_completions() {
             continue;
         }
 
-        auto entry = _tx_ring.entries[rsp.id];
+        auto& entry = _tx_ring.entries[rsp.id];
         _tx_refs->free_ref(entry);
         _tx_ring.entries.free_index(rsp.id);
     }
