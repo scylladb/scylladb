@@ -34,6 +34,16 @@ proxy_net_device::proxy_net_device(boost::program_options::variables_map opts) :
         _hw_features.tx_csum_offload = false;
         _hw_features.rx_csum_offload = false;
     }
+    if (!(_opts.count("tso") && _opts["tso"].as<std::string>() == "off")) {
+        _hw_features.tx_tso = true;
+    } else {
+        _hw_features.tx_tso = false;
+    }
+    if (!(_opts.count("ufo") && _opts["ufo"].as<std::string>() == "off")) {
+        _hw_features.tx_ufo = true;
+    } else {
+        _hw_features.tx_ufo = false;
+    }
 }
 
 subscription<packet> proxy_net_device::receive(std::function<future<> (packet)> next)
