@@ -249,6 +249,7 @@ future<> xenfront_net_device::handle_tx_completions() {
         _tx_ring.entries.free_index(rsp.id);
     }
     _tx_ring.rsp_cons = prod;
+    _tx_ring._sring->rsp_event = prod + 1;
     return make_ready_future<>();
 }
 
