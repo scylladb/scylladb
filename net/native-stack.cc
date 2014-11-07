@@ -45,6 +45,7 @@ public:
     static std::unique_ptr<network_stack> create(boost::program_options::variables_map opts) {
         return std::make_unique<native_network_stack>(opts);
     }
+    virtual bool has_per_core_namespace() override { return true; };
     friend class native_server_socket_impl<tcp4>;
 };
 

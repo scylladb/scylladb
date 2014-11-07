@@ -68,6 +68,7 @@ public:
     static std::unique_ptr<network_stack> create(boost::program_options::variables_map opts) {
         return std::unique_ptr<network_stack>(new posix_network_stack(opts));
     }
+    virtual bool has_per_core_namespace() override { return false; };
 };
 
 class posix_ap_network_stack : public posix_network_stack {

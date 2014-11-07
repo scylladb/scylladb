@@ -194,6 +194,7 @@ public:
     virtual future<> initialize() {
         return make_ready_future();
     }
+    virtual bool has_per_core_namespace() = 0;
 };
 
 class network_stack_registry {
