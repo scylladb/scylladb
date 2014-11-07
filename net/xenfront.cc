@@ -62,7 +62,7 @@ private:
     int bind_tx_evtchn();
     int bind_rx_evtchn();
 
-    future<> alloc_rx_references(unsigned refs);
+    future<> alloc_rx_references();
     future<> handle_tx_completions();
     future<> queue_rx_packet();
 
@@ -193,18 +193,12 @@ future<> xenfront_net_device::queue_rx_packet() {
         packet p(static_cast<char *>(entry.page) + rsp.offset, rsp_size);
         _rx_stream.produce(std::move(p));
 
-        auto req_prod = _rx_ring._sring->req_prod;
-        if (req_prod >= _rx_ring.req_prod_pvt) {
-            printf("Allocate more\n"); // FIXME: This is futurized as well,
-        }
-
         _rx_ring._sring->rsp_event = rsp_cons + 1;
 
         rsp_prod = _rx_ring._sring->rsp_prod;
 
         _rx_refs->free_ref(entry);
         _rx_ring.entries.free_index(rsp.id);
-        alloc_one_rx_reference(rsp.id);
     }
 
     // FIXME: Queue_rx maybe should not be a future then
@@ -221,21 +215,17 @@ void xenfront_net_device::alloc_one_rx_reference(unsigned index) {
     req->gref = _rx_ring.entries[index].xen_id;
 }
 
-future<> xenfront_net_device::alloc_rx_references(unsigned refs) {
-    auto req_prod = _rx_ring.req_prod_pvt;
-    rmb();
-
-    for (auto i = req_prod; (i < _rx_ring.nr_ents) && (i < refs); ++i) {
+future<> xenfront_net_device::alloc_rx_references() {
+    return _rx_ring.entries.get_index().then([this] (unsigned i) {
+        auto req_prod = _rx_ring.req_prod_pvt;
         alloc_one_rx_reference(i);
         ++req_prod;
-    }
-
-    _rx_ring.req_prod_pvt = req_prod;
-    wmb();
-    _rx_ring._sring->req_prod = req_prod;
-    /* ready */
-    _evtchn->notify(_rx_evtchn);
-    return make_ready_future();
+        _rx_ring.req_prod_pvt = req_prod;
+        wmb();
+        _rx_ring._sring->req_prod = req_prod;
+        /* ready */
+        _evtchn->notify(_rx_evtchn);
+    });
 }
 
 future<> xenfront_net_device::handle_tx_completions() {
@@ -332,7 +322,9 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
         _xenstore->write<int>(path("state"), 4, t);
     }
 
-    alloc_rx_references(_rx_ring.nr_ents);
+    keep_doing([this] {
+        return alloc_rx_references();
+    });
     keep_doing([this] () {
         return _evtchn->pending(_tx_evtchn).then([this] {
             handle_tx_completions();
