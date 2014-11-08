@@ -10,27 +10,35 @@
 #include "evtchn.hh"
 #include "osv_xen.hh"
 
-semaphore *evtchn::init_port(int port) {
-    _promises.emplace(port, semaphore(0));
-    return port_to_sem(port);
+semlist *evtchn::init_port(port &p) {
+
+    auto handle = _promises.find(p);
+    if (handle == _promises.end()) {
+        semlist s;
+        s.push_back(p.sem());
+        _promises.emplace(p, s);
+    }
+
+    auto l = port_to_sem(p);
+    l->push_back(p.sem());
+    return l;
 }
 
 void evtchn::make_ready_port(int port) {
     auto sem = port_to_sem(port);
-    sem->signal();
-}
-
-future<> evtchn::pending(int port) {
-    auto sem = port_to_sem(port);
-    return sem->wait();
+    for (auto s: *sem) {
+        s->signal();
+    }
 }
 
 port::port(int p)
-    : _port(p), _evtchn(evtchn::instance()) {
+    : _port(p), _sem(0), _evtchn(evtchn::instance()) {
+
+    _evtchn->init_port(*this);
 }
 
 future<> port::pending() {
-    return _evtchn->pending(_port);
+    return _sem.wait();
 }
 
 void port::notify() {
@@ -69,9 +77,7 @@ port *userspace_evtchn::bind()
     struct ioctl_evtchn_bind_unbound_port bind = { _otherend };
 
     auto ret = _evtchn.get_file_desc().ioctl<struct ioctl_evtchn_bind_unbound_port>(IOCTL_EVTCHN_BIND_UNBOUND_PORT, bind);
-    auto p = new port(ret);
-    init_port(*p);
-    return p;
+    return new port(ret);
 }
 
 void userspace_evtchn::notify(int port)
@@ -109,16 +115,17 @@ port *kernel_evtchn::bind() {
 
     int newp;
     irq = bind_listening_port_to_irq(_otherend, &newp);
+
+    auto p = new port(newp);
     // We need to convert extra-seastar events to intra-seastar events
     // (in this case, the semaphore interface of evtchn).  The only
     // way to do that currently is via eventfd.
-    init_port(newp);
     auto fd = new readable_eventfd;
     auto wfd = fd->get_write_fd();
     intr_add_handler("", irq, NULL, make_ready, reinterpret_cast<void*>(uintptr_t(wfd)), 0, 0);
     unmask_evtchn(newp);
     process_interrupts(fd, newp);
-    return new port(evtchn_from_irq(irq));
+    return p;
 }
 
 void kernel_evtchn::process_interrupts(readable_eventfd* fd, int port) {
