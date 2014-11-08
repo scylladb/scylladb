@@ -21,6 +21,7 @@ protected:
     std::unordered_map<int, semaphore> _promises;
 public:
     static evtchn *instance(bool userspace, unsigned otherend);
+    static evtchn *instance();
     evtchn(unsigned otherend) : _otherend(otherend) {}
     virtual int bind() = 0;
     virtual void notify(int port) = 0;

@@ -121,6 +121,16 @@ void kernel_evtchn::notify(int port) {
 #endif
 
 evtchn *evtchn::_instance = nullptr;
+
+evtchn *evtchn::instance()
+{
+    if (!_instance) {
+        throw std::runtime_error("Acquiring evtchn instance without specifying otherend: invalid context");
+    }
+
+    return _instance;
+}
+
 evtchn *evtchn::instance(bool userspace, unsigned otherend)
 {
     if (!_instance) {
