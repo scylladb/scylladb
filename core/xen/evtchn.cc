@@ -90,7 +90,7 @@ void userspace_evtchn::umask(int *port, unsigned count)
 #ifdef HAVE_OSV
 class kernel_evtchn: public evtchn {
     static void make_ready(void *arg);
-    static void process_interrupts(readable_eventfd* fd, semaphore* sem);
+    void process_interrupts(readable_eventfd* fd, int port);
 public:
     kernel_evtchn(unsigned otherend) : evtchn(otherend) {}
     virtual port *bind() override;
@@ -112,19 +112,19 @@ port *kernel_evtchn::bind() {
     // We need to convert extra-seastar events to intra-seastar events
     // (in this case, the semaphore interface of evtchn).  The only
     // way to do that currently is via eventfd.
-    semaphore* sem = init_port(newp);
+    init_port(newp);
     auto fd = new readable_eventfd;
     auto wfd = fd->get_write_fd();
     intr_add_handler("", irq, NULL, make_ready, reinterpret_cast<void*>(uintptr_t(wfd)), 0, 0);
     unmask_evtchn(newp);
-    process_interrupts(fd, sem);
+    process_interrupts(fd, newp);
     return new port(evtchn_from_irq(irq));
 }
 
-void kernel_evtchn::process_interrupts(readable_eventfd* fd, semaphore* sem) {
-    fd->wait().then([fd, sem] (size_t ignore) {
-        sem->signal();
-        process_interrupts(fd, sem);
+void kernel_evtchn::process_interrupts(readable_eventfd* fd, int port) {
+    fd->wait().then([this, fd, port] (size_t ignore) {
+        make_ready_port(port);
+        process_interrupts(fd, port);
     });
 }
 
