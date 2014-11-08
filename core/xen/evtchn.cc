@@ -25,12 +25,24 @@ future<> evtchn::pending(int port) {
     return sem->wait();
 }
 
+port::port(int p)
+    : _port(p), _evtchn(evtchn::instance()) {
+}
+
+future<> port::pending() {
+    return _evtchn->pending(_port);
+}
+
+void port::notify() {
+    _evtchn->notify(_port);
+}
+
 class userspace_evtchn: public evtchn {
     pollable_fd _evtchn;
     void umask(int *port, unsigned count);
 public:
     userspace_evtchn(unsigned otherend);
-    virtual int bind() override;
+    virtual port *bind() override;
     virtual void notify(int port) override;
 };
 
@@ -52,13 +64,14 @@ userspace_evtchn::userspace_evtchn(unsigned otherend)
     });
 }
 
-int userspace_evtchn::bind()
+port *userspace_evtchn::bind()
 {
     struct ioctl_evtchn_bind_unbound_port bind = { _otherend };
 
     auto ret = _evtchn.get_file_desc().ioctl<struct ioctl_evtchn_bind_unbound_port>(IOCTL_EVTCHN_BIND_UNBOUND_PORT, bind);
-    init_port(ret);
-    return ret;
+    auto p = new port(ret);
+    init_port(*p);
+    return p;
 }
 
 void userspace_evtchn::notify(int port)
@@ -80,7 +93,7 @@ class kernel_evtchn: public evtchn {
     static void process_interrupts(readable_eventfd* fd, semaphore* sem);
 public:
     kernel_evtchn(unsigned otherend) : evtchn(otherend) {}
-    virtual int bind() override;
+    virtual port *bind() override;
     virtual void notify(int port) override;
 };
 
@@ -90,22 +103,22 @@ void kernel_evtchn::make_ready(void *arg) {
     ::write(fd, &one, sizeof(one));
 }
 
-int kernel_evtchn::bind() {
+port *kernel_evtchn::bind() {
 
     unsigned int irq;
 
-    int port;
-    irq = bind_listening_port_to_irq(_otherend, &port);
+    int newp;
+    irq = bind_listening_port_to_irq(_otherend, &newp);
     // We need to convert extra-seastar events to intra-seastar events
     // (in this case, the semaphore interface of evtchn).  The only
     // way to do that currently is via eventfd.
-    semaphore* sem = init_port(port);
+    semaphore* sem = init_port(newp);
     auto fd = new readable_eventfd;
     auto wfd = fd->get_write_fd();
     intr_add_handler("", irq, NULL, make_ready, reinterpret_cast<void*>(uintptr_t(wfd)), 0, 0);
-    unmask_evtchn(port);
+    unmask_evtchn(newp);
     process_interrupts(fd, sem);
-    return evtchn_from_irq(irq);
+    return new port(evtchn_from_irq(irq));
 }
 
 void kernel_evtchn::process_interrupts(readable_eventfd* fd, semaphore* sem) {

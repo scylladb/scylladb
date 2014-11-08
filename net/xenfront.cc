@@ -45,8 +45,8 @@ private:
     std::string _backend;
     gntalloc *_gntalloc;
     evtchn   *_evtchn;
-    int _tx_evtchn;
-    int _rx_evtchn;
+    port *_tx_evtchn;
+    port *_rx_evtchn;
 
     front_ring<tx> _tx_ring;
     front_ring<rx> _rx_ring;
@@ -59,8 +59,8 @@ private:
 
     ethernet_address _hw_address;
 
-    int bind_tx_evtchn();
-    int bind_rx_evtchn();
+    port *bind_tx_evtchn();
+    port *bind_rx_evtchn();
 
     future<> alloc_rx_references();
     future<> handle_tx_completions();
@@ -88,8 +88,8 @@ xenfront_net_device::_supported_features = {
 subscription<packet>
 xenfront_net_device::receive(std::function<future<> (packet)> next) {
     auto sub = _rx_stream.listen(std::move(next));
-    keep_doing([this] () {
-        return _evtchn->pending(_rx_evtchn).then([this] {
+    keep_doing([this] {
+        return _rx_evtchn->pending().then([this] {
             return queue_rx_packet();
         });
     });
@@ -143,7 +143,7 @@ xenfront_net_device::send(packet _p) {
 
         _tx_ring._sring->req_event++;
         if ((frag + 1) == p.nr_frags()) {
-            _evtchn->notify(_tx_evtchn);
+            _tx_evtchn->notify();
             return make_ready_future<>();
         } else {
             return make_ready_future<>();
@@ -224,7 +224,7 @@ future<> xenfront_net_device::alloc_rx_references() {
         wmb();
         _rx_ring._sring->req_prod = req_prod;
         /* ready */
-        _evtchn->notify(_rx_evtchn);
+        _rx_evtchn->notify();
     });
 }
 
@@ -261,17 +261,17 @@ net::hw_features xenfront_net_device::hw_features() {
     return _hw_features;
 }
 
-int xenfront_net_device::bind_tx_evtchn() {
+port *xenfront_net_device::bind_tx_evtchn() {
     return _evtchn->bind();
 }
 
-int xenfront_net_device::bind_rx_evtchn() {
+port *xenfront_net_device::bind_rx_evtchn() {
 
     auto split = _xenstore->read(_backend + "/feature-split-event-channels");
     if (split != "") {
         return _evtchn->bind();
     }
-    return _tx_evtchn;
+    return _evtchn->bind(*_tx_evtchn);
 }
 
 xenfront_net_device::xenfront_net_device(boost::program_options::variables_map opts, bool userspace)
@@ -316,8 +316,8 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
             _xenstore->write(path(f.first), f.second, t);
         }
 
-        _xenstore->write<int>(path("event-channel-tx"), _tx_evtchn, t);
-        _xenstore->write<int>(path("event-channel-rx"), _rx_evtchn, t);
+        _xenstore->write<int>(path("event-channel-tx"), *_tx_evtchn, t);
+        _xenstore->write<int>(path("event-channel-rx"), *_rx_evtchn, t);
         _xenstore->write<int>(path("tx-ring-ref"), _tx_ring.ref, t);
         _xenstore->write<int>(path("rx-ring-ref"), _rx_ring.ref, t);
         _xenstore->write<int>(path("state"), 4, t);
@@ -327,7 +327,7 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
         return alloc_rx_references();
     });
     keep_doing([this] () {
-        return _evtchn->pending(_tx_evtchn).then([this] {
+        return _tx_evtchn->pending().then([this] {
             handle_tx_completions();
         });
     });

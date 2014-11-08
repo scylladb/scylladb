@@ -4,6 +4,18 @@
 #include "core/posix.hh"
 #include "core/future.hh"
 
+class evtchn;
+
+class port {
+    int _port = -1;
+    evtchn *_evtchn;
+public:
+    port(int p);
+    operator int() { return _port; }
+    future<> pending();
+    void notify();
+};
+
 class evtchn {
     static evtchn *_instance;
     inline semaphore *port_to_sem(int port) {
@@ -19,13 +31,16 @@ protected:
     semaphore* init_port(int port);
     void make_ready_port(int port);
     std::unordered_map<int, semaphore> _promises;
+    virtual void notify(int port) = 0;
+    friend class port;
 public:
     static evtchn *instance(bool userspace, unsigned otherend);
     static evtchn *instance();
     evtchn(unsigned otherend) : _otherend(otherend) {}
-    virtual int bind() = 0;
-    virtual void notify(int port) = 0;
+    virtual port *bind() = 0;
+    port *bind(int p) { return new port(p); };
 
     future<> pending(int port);
+
 };
 #endif
