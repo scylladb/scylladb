@@ -267,8 +267,8 @@ int xenfront_net_device::bind_tx_evtchn() {
 
 int xenfront_net_device::bind_rx_evtchn() {
 
-    auto split = _xenstore->read<bool>(_backend + "/feature-split-event-channels");
-    if (split) {
+    auto split = _xenstore->read(_backend + "/feature-split-event-channels");
+    if (split != "") {
         return _evtchn->bind();
     }
     return _tx_evtchn;
@@ -278,7 +278,7 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     : _userspace(userspace)
     , _rx_stream()
     , _device_str("device/vif/" + std::to_string(opts["vif"].as<unsigned>()))
-    , _otherend(std::stoi(_xenstore->read(path("backend-id"))))
+    , _otherend(_xenstore->read<int>(path("backend-id")))
     , _backend(_xenstore->read(path("backend")))
     , _gntalloc(gntalloc::instance(_userspace, _otherend))
     , _evtchn(evtchn::instance(_userspace, _otherend))
