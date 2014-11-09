@@ -302,6 +302,9 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
             features_nack[feat] = 0;
         }
     }
+    if (!opts["split-event-channels"].as<bool>()) {
+        features_nack["feature-split-event-channels"] = 0;
+    }
 
     _hw_features.rx_csum_offload = true;
     _hw_features.tx_csum_offload = true;
@@ -362,6 +365,9 @@ get_xenfront_net_options_description() {
         ("vif",
                 boost::program_options::value<unsigned>()->default_value(0),
                 "vif number to hijack")
+        ("split-event-channels",
+                boost::program_options::value<bool>()->default_value(true),
+                "Split event channel support")
         ;
     return opts;
 }
