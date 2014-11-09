@@ -31,6 +31,8 @@
 
 using namespace net;
 
+namespace xen {
+
 using phys = uint64_t;
 
 class xenfront_net_device : public net::device {
@@ -371,4 +373,6 @@ std::unique_ptr<net::device> create_xenfront_net_device(boost::program_options::
     // this assumption will no longer hold.
     dev = ptr.get();
     return std::move(ptr);
+}
+
 }

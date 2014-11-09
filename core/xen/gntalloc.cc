@@ -8,6 +8,8 @@
 #include "osv_xen.hh"
 #include "gntalloc.hh"
 
+namespace xen {
+
 gntref invalid_ref;
 
 // FIXME: Most of the destructors are yet to be coded
@@ -209,4 +211,6 @@ gntalloc *gntalloc::instance() {
         throw std::runtime_error("Acquiring grant instance without specifying otherend: invalid context");
     }
     return _instance;
+}
+
 }

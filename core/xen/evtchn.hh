@@ -4,6 +4,8 @@
 #include "core/posix.hh"
 #include "core/future.hh"
 
+namespace xen {
+
 class evtchn;
 
 class port {
@@ -38,4 +40,7 @@ public:
     virtual port bind() = 0;
     port bind(int p) { return port(p); };
 };
+
+}
+
 #endif

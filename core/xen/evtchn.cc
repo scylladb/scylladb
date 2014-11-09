@@ -10,6 +10,8 @@
 #include "evtchn.hh"
 #include "osv_xen.hh"
 
+namespace xen {
+
 void evtchn::make_ready_port(int port) {
     auto ports = _ports.equal_range(port);
     for (auto i = ports.first; i != ports.second; ++i) {
@@ -175,4 +177,6 @@ evtchn *evtchn::instance(bool userspace, unsigned otherend)
             _instance = new userspace_evtchn(otherend);
     }
     return _instance;
+}
+
 }

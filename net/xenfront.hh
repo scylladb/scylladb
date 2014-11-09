@@ -11,6 +11,8 @@
 #include "core/xen/gntalloc.hh"
 #include "core/queue.hh"
 
+namespace xen {
+
 std::unique_ptr<net::device> create_xenfront_net_device(boost::program_options::variables_map opts, bool userspace);
 boost::program_options::options_description get_xenfront_net_options_description();
 
@@ -107,5 +109,7 @@ public:
     sring<T> *_sring;
     T& operator[](std::size_t i) { return _sring->_ring[idx(i)]; }
 };
+
+}
 
 #endif /* XENFRONT_HH_ */

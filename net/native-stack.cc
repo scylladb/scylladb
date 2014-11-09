@@ -91,7 +91,7 @@ std::unique_ptr<net::device> create_native_net_device(boost::program_options::va
 #ifdef HAVE_XEN
     auto xen = is_xen();
     if (xen != xen_info::nonxen) {
-        return create_xenfront_net_device(opts, xen == xen_info::userspace);
+        return xen::create_xenfront_net_device(opts, xen == xen_info::userspace);
     }
 #endif
     return create_virtio_net_device(opts["tap-device"].as<std::string>(), opts);
@@ -103,7 +103,7 @@ add_native_net_options_description(boost::program_options::options_description &
 #ifdef HAVE_XEN
     auto xen = is_xen();
     if (xen != xen_info::nonxen) {
-        opts.add(get_xenfront_net_options_description());
+        opts.add(xen::get_xenfront_net_options_description());
         return;
     }
 #endif

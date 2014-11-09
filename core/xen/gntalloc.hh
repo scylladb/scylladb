@@ -3,6 +3,8 @@
 
 #include "core/posix.hh"
 
+namespace xen {
+
 class gntref {
 public:
     int xen_id;
@@ -42,4 +44,7 @@ public:
 };
 
 extern gntref invalid_ref;
+
+}
+
 #endif
