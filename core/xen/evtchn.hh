@@ -14,7 +14,7 @@ public:
     port(int p);
     port(port&& other);
     ~port();
-    operator int() { return _port; }
+    int number() const { return _port; }
     future<> pending();
     void notify();
 

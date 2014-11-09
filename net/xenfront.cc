@@ -271,7 +271,7 @@ port xenfront_net_device::bind_rx_evtchn() {
     if (split) {
         return _evtchn->bind();
     }
-    return _evtchn->bind(_tx_evtchn);
+    return _evtchn->bind(_tx_evtchn.number());
 }
 
 xenfront_net_device::xenfront_net_device(boost::program_options::variables_map opts, bool userspace)
@@ -316,8 +316,8 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
             _xenstore->write(path(f.first), f.second, t);
         }
 
-        _xenstore->write<int>(path("event-channel-tx"), int(_tx_evtchn), t);
-        _xenstore->write<int>(path("event-channel-rx"), int(_rx_evtchn), t);
+        _xenstore->write<int>(path("event-channel-tx"), _tx_evtchn.number(), t);
+        _xenstore->write<int>(path("event-channel-rx"), _rx_evtchn.number(), t);
         _xenstore->write<int>(path("tx-ring-ref"), _tx_ring.ref, t);
         _xenstore->write<int>(path("rx-ring-ref"), _rx_ring.ref, t);
         _xenstore->write<int>(path("state"), 4, t);
