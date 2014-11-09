@@ -4,8 +4,6 @@
 #include "core/posix.hh"
 #include "core/future.hh"
 
-typedef std::list<semaphore *> semlist;
-
 class evtchn;
 
 class port {
@@ -18,23 +16,16 @@ public:
     semaphore *sem() { return &_sem; }
     future<> pending();
     void notify();
+
+    friend class evtchn;
 };
 
 class evtchn {
     static evtchn *_instance;
 protected:
-    inline semlist* port_to_sem(int port) {
-        auto handle = _promises.find(port);
-        if (handle == _promises.end()) {
-            throw std::runtime_error("listening on unbound port");
-        }
-        return &((*handle).second);
-    }
-
     unsigned _otherend;
-    semlist* init_port(port &p);
     void make_ready_port(int port);
-    std::unordered_map<int, semlist> _promises;
+    std::unordered_multimap<int, port*> _ports;
     virtual void notify(int port) = 0;
     friend class port;
 public:

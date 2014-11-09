@@ -10,31 +10,16 @@
 #include "evtchn.hh"
 #include "osv_xen.hh"
 
-semlist *evtchn::init_port(port &p) {
-
-    auto handle = _promises.find(p);
-    if (handle == _promises.end()) {
-        semlist s;
-        s.push_back(p.sem());
-        _promises.emplace(p, s);
-    }
-
-    auto l = port_to_sem(p);
-    l->push_back(p.sem());
-    return l;
-}
-
 void evtchn::make_ready_port(int port) {
-    auto sem = port_to_sem(port);
-    for (auto s: *sem) {
-        s->signal();
+    auto ports = _ports.equal_range(port);
+    for (auto i = ports.first; i != ports.second; ++i) {
+        i->second->_sem.signal();
     }
 }
 
 port::port(int p)
     : _port(p), _sem(0), _evtchn(evtchn::instance()) {
-
-    _evtchn->init_port(*this);
+    _evtchn->_ports.emplace(p, this);
 }
 
 future<> port::pending() {
