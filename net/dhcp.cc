@@ -11,6 +11,8 @@
 #include "ip.hh"
 #include "udp.hh"
 
+using namespace std::literals::chrono_literals;
+
 class net::dhcp::impl : public ip_packet_filter {
 public:
 
@@ -274,6 +276,8 @@ public:
             return make_ready_future<>();
         }
 
+        _retry_timer.cancel();
+
         auto h = ntoh(*dhp);
 
         ip_info info;
@@ -321,20 +325,24 @@ public:
         _timer.set_callback([this]() {
             _state = state::FAIL;
             log() << "timeout" << std::endl;
+            _retry_timer.cancel();
             _result.set_value(false, lease());
         });
 
         // Hijack the ip-stack.
         _stack.set_packet_filter(this);
 
-        return send_discover(l.ip).then([this, timeout]() {
-            if (timeout != clock_type::duration()) {
-                _timer.arm(timeout);
-            }
-            return _result.get_future().finally([this]() {
-                        assert(_stack.packet_filter() == this);
-                        _stack.set_packet_filter(nullptr);
-                    });
+        send_discover(l.ip); // FIXME: ignoring return
+        if (timeout.count()) {
+            _timer.arm(timeout);
+        }
+        _retry_timer.set_callback([this, l] {
+            send_discover(l.ip);
+        });
+        _retry_timer.arm_periodic(1s);
+        return _result.get_future().finally([this]() {
+            assert(_stack.packet_filter() == this);
+            _stack.set_packet_filter(nullptr);
         });
     }
 
@@ -433,6 +441,7 @@ private:
     promise<bool, lease> _result;
     state _state = state::NONE;
     timer _timer;
+    timer _retry_timer;
     ipv4 & _stack;
     uint32_t _xid = 0;
 };
