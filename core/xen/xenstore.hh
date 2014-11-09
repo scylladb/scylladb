@@ -50,6 +50,15 @@ public:
     virtual std::list<std::string> ls(std::string path, xenstore_transaction &t = _xs_null);
     template <typename T>
     T read(std::string path, xenstore_transaction &t = _xs_null) { return boost::lexical_cast<T>(read(path, t)); }
+    template <typename T>
+    T read_or_default(std::string path, T deflt = T(), xenstore_transaction &t = _xs_null) {
+        auto val = read(path, t);
+        if (val.empty()) {
+            return deflt;
+        } else {
+            return boost::lexical_cast<T>(val);
+        }
+    }
 
     template <typename T>
     void write(std::string path, T val, xenstore_transaction &t = _xs_null) { return write(path, std::to_string(val), t); }
