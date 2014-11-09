@@ -223,6 +223,37 @@ struct ip_hdr {
     }
 } __attribute__((packed));
 
+template <typename InetTraits>
+struct l4connid {
+    using ipaddr = typename InetTraits::address_type;
+    using inet_type = typename InetTraits::inet_type;
+    struct connid_hash;
+
+    ipaddr local_ip;
+    ipaddr foreign_ip;
+    uint16_t local_port;
+    uint16_t foreign_port;
+
+    bool operator==(const l4connid& x) const {
+        return local_ip == x.local_ip
+                && foreign_ip == x.foreign_ip
+                && local_port == x.local_port
+                && foreign_port == x.foreign_port;
+    }
+};
+
+template <typename InetTraits>
+struct l4connid<InetTraits>::connid_hash : private std::hash<ipaddr>, private std::hash<uint16_t> {
+    size_t operator()(const l4connid<InetTraits>& id) const noexcept {
+        using h1 = std::hash<ipaddr>;
+        using h2 = std::hash<uint16_t>;
+        return h1::operator()(id.local_ip)
+            ^ h1::operator()(id.foreign_ip)
+            ^ h2::operator()(id.local_port)
+            ^ h2::operator()(id.foreign_port);
+    }
+};
+
 }
 
 #endif /* IP_HH_ */

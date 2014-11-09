@@ -10,6 +10,7 @@
 #include "core/semaphore.hh"
 #include "net.hh"
 #include "ip_checksum.hh"
+#include "ip.hh"
 #include "const.hh"
 #include <unordered_map>
 #include <map>
@@ -141,26 +142,13 @@ class tcp {
 public:
     using ipaddr = typename InetTraits::address_type;
     using inet_type = typename InetTraits::inet_type;
+    using connid = l4connid<InetTraits>;
+    using connid_hash = typename connid::connid_hash;
     class connection;
     class listener;
 private:
-    struct connid;
     class tcb;
 
-    struct connid {
-        ipaddr local_ip;
-        ipaddr foreign_ip;
-        uint16_t local_port;
-        uint16_t foreign_port;
-
-        bool operator==(const connid& x) const {
-            return local_ip == x.local_ip
-                    && foreign_ip == x.foreign_ip
-                    && local_port == x.local_port
-                    && foreign_port == x.foreign_port;
-        }
-    };
-    struct connid_hash;
     class tcb {
         using clock_type = std::chrono::high_resolution_clock;
         // Instead of tracking state through an enum, track individual
@@ -320,18 +308,6 @@ private:
     void send(ipaddr from, ipaddr to, packet p);
     void respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr foreign_ip);
     friend class listener;
-};
-
-template <typename InetTraits>
-struct tcp<InetTraits>::connid_hash : private std::hash<ipaddr>, private std::hash<uint16_t> {
-    size_t operator()(const tcp<InetTraits>::connid& id) const noexcept {
-        using h1 = std::hash<ipaddr>;
-        using h2 = std::hash<uint16_t>;
-        return h1::operator()(id.local_ip)
-            ^ h1::operator()(id.foreign_ip)
-            ^ h2::operator()(id.local_port)
-            ^ h2::operator()(id.foreign_port);
-    }
 };
 
 template <typename InetTraits>
