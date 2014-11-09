@@ -49,9 +49,12 @@ public:
             return 1;
         }
         smp::configure(configuration);
-        scollectd::configure(configuration);
         _configuration = {std::move(configuration)};
-        engine.when_started().then(func).rescue([] (auto get_ex) {
+        engine.when_started().then([this] {
+            scollectd::configure( this->configuration());
+        }).then(
+            func
+        ).rescue([] (auto get_ex) {
             try {
                 get_ex();
             } catch (std::exception& ex) {
