@@ -130,11 +130,13 @@ native_network_stack::listen(socket_address sa, listen_options opts) {
 }
 
 void native_network_stack::on_dhcp(bool success, const dhcp::lease & res) {
-    if (success) {
-        _inet.set_host_address(res.ip);
-        _inet.set_gw_address(res.gateway);
-        _inet.set_netmask_address(res.netmask);
+    if (!success) {
+        return;
     }
+
+    _inet.set_host_address(res.ip);
+    _inet.set_gw_address(res.gateway);
+    _inet.set_netmask_address(res.netmask);
 
     // Signal waiters.
     _config.set_value();
