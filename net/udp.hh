@@ -41,6 +41,9 @@ struct udp_channel_state {
 };
 
 class udp_v4 : ip_protocol {
+    using connid = l4connid<ipv4_traits>;
+    using connid_hash = typename connid::connid_hash;
+
 public:
     static const int default_queue_size;
 private:

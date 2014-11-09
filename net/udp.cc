@@ -98,8 +98,9 @@ unsigned udp_v4::forward(packet& p, size_t off, ipv4_address from, ipv4_address 
     }
 
     auto dst = ntoh(uh->dst_port);
+    auto src = ntoh(uh->src_port);
 
-    return dst % smp::count;
+    return connid_hash()(connid{to, from, dst, src}) % smp::count;
 }
 
 void udp_v4::received(packet p, ipv4_address from, ipv4_address to)
