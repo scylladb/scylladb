@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/eventfd.h>
+#include <boost/thread/barrier.hpp>
 
 using namespace net;
 
@@ -391,8 +392,22 @@ int reactor::run() {
             }
             break;
         }
+
+        smp::poll_queues();
+
+        if (_pending_tasks.empty()) {
+            _idle.store(true, std::memory_order_seq_cst);
+
+            if (smp::poll_queues() && !_pending_tasks.empty()) {
+                _idle.store(false, std::memory_order_relaxed);
+            }
+        }
+
         std::array<epoll_event, 128> eevt;
         int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(), _pending_tasks.empty() ? -1 : 0);
+        if (_pending_tasks.empty()) { // _idle already false, so avoid dirtying cache line
+            _idle.store(false, std::memory_order_relaxed);
+        }
         if (nr == -1 && errno == EINTR) {
             continue; // gdb can cause this
         }
@@ -471,27 +486,68 @@ smp_message_queue::smp_message_queue()
     , _start_eventfd_read(_start_eventfd.read_side()) {
 }
 
+void smp_message_queue::submit_kick() {
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    if (_pending_peer->idle()) {
+        _start_eventfd.signal(1);
+    }
+}
+
+void smp_message_queue::complete_kick() {
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    if (_complete_peer->idle()) {
+        _complete_eventfd_write.signal(1);
+    }
+}
+
 void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
     _queue_has_room.wait().then([this, item] {
         _pending.push(item);
-        _start_eventfd.signal(1);
+        submit_kick();
     });
 }
 
 void smp_message_queue::respond(work_item* item) {
     // FIXME: batcing
     _completed.push(item);
-    _complete_eventfd_write.signal(1);
+    complete_kick();
+}
+
+size_t smp_message_queue::process_completions() {
+    auto nr = _completed.consume_all([this] (work_item* wi) {
+        wi->complete();
+        delete wi;
+    });
+    if (nr) {
+        _queue_has_room.signal(nr);
+    }
+    return nr;
 }
 
 void smp_message_queue::complete() {
     _complete_eventfd.wait().then([this] (size_t count) {
-        auto nr = _completed.consume_all([this] (work_item* wi) {
-            wi->complete();
-            delete wi;
-        });
-        _queue_has_room.signal(nr);
+        process_completions();
         complete();
+    });
+}
+
+size_t smp_message_queue::process_incoming() {
+    return _pending.consume_all([this] (smp_message_queue::work_item* wi) {
+        wi->process().then([this, wi] {
+            respond(wi);
+        });
+    });
+}
+
+void smp_message_queue::start() {
+    _complete_peer = &engine;
+    complete();
+}
+
+void smp_message_queue::listen() {
+    _start_eventfd_read.wait().then([this] (size_t count) mutable {
+        process_incoming();
+        listen();
     });
 }
 
@@ -630,20 +686,10 @@ smp_message_queue** smp::_qs;
 std::thread::id smp::_tmain;
 unsigned smp::count = 1;
 
-void smp_message_queue::listen() {
-    _start_eventfd_read.wait().then([this] (size_t count) mutable {
-        _pending.consume_all([this] (smp_message_queue::work_item* wi) {
-            wi->process().then([this, wi] {
-                respond(wi);
-            });
-        });
-        listen();
-    });
-}
-
 void smp::listen_all(smp_message_queue* qs)
 {
     for (unsigned i = 0; i < smp::count; i++) {
+        qs[i]._pending_peer = &engine;
         qs[i].listen();
     }
 }
@@ -677,9 +723,11 @@ void smp::configure(boost::program_options::variables_map configuration)
         smp::_qs[i] = new smp_message_queue[smp::count];
     }
 
+    boost::barrier inited(smp::count);
+
     for (unsigned i = 1; i < smp::count; i++) {
         auto allocation = allocations[i];
-        _threads.emplace_back([configuration, i, allocation] {
+        _threads.emplace_back([configuration, i, allocation, &inited] {
             pin_this_thread(allocation.cpu_id);
             memory::configure(allocation.mem);
             sigset_t mask;
@@ -689,9 +737,11 @@ void smp::configure(boost::program_options::variables_map configuration)
             engine._id = i;
             start_all_queues();
             engine.configure(configuration);
+            inited.wait();
             engine.run();
         });
     }
+    inited.wait();
     start_all_queues();
     engine.configure(configuration);
 }

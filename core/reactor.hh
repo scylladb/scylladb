@@ -325,6 +325,8 @@ class smp_message_queue {
     writeable_eventfd _complete_eventfd_write;
     readable_eventfd _start_eventfd_read;
     semaphore _queue_has_room = { queue_length };
+    reactor* _pending_peer;
+    reactor* _complete_peer;
     struct work_item {
         virtual ~work_item() {}
         virtual future<> process() = 0;
@@ -373,13 +375,17 @@ public:
         submit_item(wi);
         return fut;
     }
-    void start() { complete(); }
+    void start();
     void listen();
+    size_t process_incoming();
+    size_t process_completions();
 private:
     void work();
     void complete();
     void submit_item(work_item* wi);
     void respond(work_item* wi);
+    void submit_kick();
+    void complete_kick();
 
     friend class smp;
 };
@@ -399,9 +405,6 @@ private:
 
 class reactor {
     static constexpr size_t max_aio = 128;
-    promise<> _start_promise;
-    uint64_t _timers_completed;
-    timer_set<timer, &timer::_link, clock_type> _timers;
     pollable_fd _timerfd = file_desc::timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC | TFD_NONBLOCK);
     struct signal_handler {
         signal_handler(int signo);
@@ -409,11 +412,16 @@ class reactor {
         pollable_fd _signalfd;
         signalfd_siginfo _siginfo;
     };
-    std::unordered_map<int, signal_handler> _signal_handlers;
+    std::atomic<bool> _idle;
+    unsigned _id = 0;
     bool _stopped = false;
     bool _handle_sigint = true;
     std::unique_ptr<network_stack> _network_stack;
     int _return = 0;
+    std::unordered_map<int, signal_handler> _signal_handlers;
+    promise<> _start_promise;
+    uint64_t _timers_completed;
+    timer_set<timer, &timer::_link, clock_type> _timers;
     timer_set<timer, &timer::_link, clock_type>::timer_list_t _expired_timers;
     file_desc _epollfd;
     readable_eventfd _io_eventfd;
@@ -421,7 +429,6 @@ class reactor {
     semaphore _io_context_available;
     circular_buffer<std::unique_ptr<task>> _pending_tasks;
     thread_pool _thread_pool;
-    unsigned _id = 0;
 private:
     future<> get_epoll_future(pollable_fd_state& fd, promise<> pollable_fd_state::* pr, int event);
     void complete_epoll_event(pollable_fd_state& fd, promise<> pollable_fd_state::* pr, int events, int event);
@@ -465,6 +472,7 @@ public:
 
     network_stack& net() { return *_network_stack; }
     unsigned cpu_id() const { return _id; }
+    bool idle() { return _idle.load(std::memory_order_relaxed); }
 private:
     future<size_t> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
 
@@ -515,6 +523,16 @@ public:
 	       return make_ready_future<>();
 	    });
         }
+	static size_t poll_queues() {
+	    size_t got = 0;
+	    for (unsigned i = 0; i < count; i++) {
+	        if (engine.cpu_id() != i) {
+                    got += _qs[engine.cpu_id()][i].process_incoming();
+                    got += _qs[i][engine._id].process_completions();
+	        }
+	    }
+	    return got;
+	}
 private:
 	static void listen_all(smp_message_queue* qs);
 	static void start_all_queues();

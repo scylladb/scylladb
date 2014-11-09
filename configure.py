@@ -135,7 +135,7 @@ core = [
     ]
 
 defines = []
-libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework'
+libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework -lboost_thread'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
 
 def have_xen():
