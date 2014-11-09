@@ -267,8 +267,8 @@ port *xenfront_net_device::bind_tx_evtchn() {
 
 port *xenfront_net_device::bind_rx_evtchn() {
 
-    auto split = _xenstore->read(_backend + "/feature-split-event-channels");
-    if (split != "") {
+    auto split = _xenstore->read_or_default<int>(_backend + "/feature-split-event-channels");
+    if (split) {
         return _evtchn->bind();
     }
     return _evtchn->bind(*_tx_evtchn);
