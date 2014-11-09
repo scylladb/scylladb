@@ -17,9 +17,23 @@ void evtchn::make_ready_port(int port) {
     }
 }
 
+void evtchn::port_moved(int prt, port* old, port* now) {
+    auto ports = _ports.equal_range(prt);
+    for (auto i = ports.first; i != ports.second; ++i) {
+        if (i->second == old) {
+            i->second = now;
+        }
+    }
+}
+
 port::port(int p)
     : _port(p), _sem(0), _evtchn(evtchn::instance()) {
     _evtchn->_ports.emplace(p, this);
+}
+
+port::port(port&& other)
+    : _port(other._port), _sem(std::move(other._sem)), _evtchn(other._evtchn) {
+    _evtchn->port_moved(_port, &other, this);
 }
 
 future<> port::pending() {
@@ -35,7 +49,7 @@ class userspace_evtchn: public evtchn {
     void umask(int *port, unsigned count);
 public:
     userspace_evtchn(unsigned otherend);
-    virtual port *bind() override;
+    virtual port bind() override;
     virtual void notify(int port) override;
 };
 
@@ -57,12 +71,12 @@ userspace_evtchn::userspace_evtchn(unsigned otherend)
     });
 }
 
-port *userspace_evtchn::bind()
+port userspace_evtchn::bind()
 {
     struct ioctl_evtchn_bind_unbound_port bind = { _otherend };
 
     auto ret = _evtchn.get_file_desc().ioctl<struct ioctl_evtchn_bind_unbound_port>(IOCTL_EVTCHN_BIND_UNBOUND_PORT, bind);
-    return new port(ret);
+    return port(ret);
 }
 
 void userspace_evtchn::notify(int port)
@@ -84,7 +98,7 @@ class kernel_evtchn: public evtchn {
     void process_interrupts(readable_eventfd* fd, int port);
 public:
     kernel_evtchn(unsigned otherend) : evtchn(otherend) {}
-    virtual port *bind() override;
+    virtual port bind() override;
     virtual void notify(int port) override;
 };
 
@@ -94,14 +108,14 @@ void kernel_evtchn::make_ready(void *arg) {
     ::write(fd, &one, sizeof(one));
 }
 
-port *kernel_evtchn::bind() {
+port kernel_evtchn::bind() {
 
     unsigned int irq;
 
     int newp;
     irq = bind_listening_port_to_irq(_otherend, &newp);
 
-    auto p = new port(newp);
+    port p(newp);
     // We need to convert extra-seastar events to intra-seastar events
     // (in this case, the semaphore interface of evtchn).  The only
     // way to do that currently is via eventfd.

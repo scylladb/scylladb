@@ -12,8 +12,8 @@ class port {
     evtchn *_evtchn;
 public:
     port(int p);
+    port(port&& other);
     operator int() { return _port; }
-    semaphore *sem() { return &_sem; }
     future<> pending();
     void notify();
 
@@ -25,6 +25,7 @@ class evtchn {
 protected:
     unsigned _otherend;
     void make_ready_port(int port);
+    void port_moved(int prt, port* old, port* now);
     std::unordered_multimap<int, port*> _ports;
     virtual void notify(int port) = 0;
     friend class port;
@@ -32,7 +33,7 @@ public:
     static evtchn *instance(bool userspace, unsigned otherend);
     static evtchn *instance();
     evtchn(unsigned otherend) : _otherend(otherend) {}
-    virtual port *bind() = 0;
-    port *bind(int p) { return new port(p); };
+    virtual port bind() = 0;
+    port bind(int p) { return port(p); };
 };
 #endif
