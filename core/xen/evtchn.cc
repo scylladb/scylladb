@@ -26,6 +26,15 @@ void evtchn::port_moved(int prt, port* old, port* now) {
     }
 }
 
+void evtchn::port_deleted(int prt, port* obj) {
+    auto ports = _ports.equal_range(prt);
+    for (auto i = ports.first; i != ports.second; ++i) {
+        if (i->second == obj) {
+            i = _ports.erase(i);
+        }
+    }
+}
+
 port::port(int p)
     : _port(p), _sem(0), _evtchn(evtchn::instance()) {
     _evtchn->_ports.emplace(p, this);
@@ -34,6 +43,11 @@ port::port(int p)
 port::port(port&& other)
     : _port(other._port), _sem(std::move(other._sem)), _evtchn(other._evtchn) {
     _evtchn->port_moved(_port, &other, this);
+}
+
+port::~port() {
+    // FIXME: unbind from Xen
+    _evtchn->port_deleted(_port, this);
 }
 
 future<> port::pending() {

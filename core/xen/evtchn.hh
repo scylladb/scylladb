@@ -13,6 +13,7 @@ class port {
 public:
     port(int p);
     port(port&& other);
+    ~port();
     operator int() { return _port; }
     future<> pending();
     void notify();
@@ -26,6 +27,7 @@ protected:
     unsigned _otherend;
     void make_ready_port(int port);
     void port_moved(int prt, port* old, port* now);
+    void port_deleted(int prt, port* old);
     std::unordered_multimap<int, port*> _ports;
     virtual void notify(int port) = 0;
     friend class port;
