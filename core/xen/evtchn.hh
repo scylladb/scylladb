@@ -11,7 +11,7 @@ class port {
     semaphore _sem;
     evtchn *_evtchn;
 public:
-    port(int p);
+    explicit port(int p);
     port(port&& other);
     ~port();
     int number() const { return _port; }
