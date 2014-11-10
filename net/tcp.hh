@@ -815,12 +815,92 @@ void tcp<InetTraits>::tcb::merge_out_of_order() {
     if (_rcv.out_of_order.empty()) {
         return;
     }
-    abort();
+    for (auto it = _rcv.out_of_order.begin(); it != _rcv.out_of_order.end();) {
+        auto& p = it->second;
+        auto seg_beg = it->first;
+        auto seg_len = p.len();
+        auto seg_end = seg_beg + seg_len;
+        if (seg_beg <= _rcv.next && _rcv.next < seg_end) {
+            // This segment has been received out of order and its previous
+            // segment has been received now
+            auto trim = _rcv.next - seg_beg;
+            if (trim) {
+                p.trim_front(trim);
+                seg_len -= trim;
+            }
+            _rcv.next += seg_len;
+            _rcv.data.push_back(std::move(p));
+            // Since c++11, erase() always returns the value of the following element
+            it = _rcv.out_of_order.erase(it);
+        } else if (_rcv.next >= seg_end) {
+            // This segment has been receive already, drop it
+            it = _rcv.out_of_order.erase(it);
+        } else {
+            // seg_beg > _rcv.need, can not merge
+            it++;
+        }
+    }
 }
 
 template <typename InetTraits>
-void tcp<InetTraits>::tcb::insert_out_of_order(tcp_seq seq, packet p) {
-    abort();
+void tcp<InetTraits>::tcb::insert_out_of_order(tcp_seq seg, packet p) {
+    bool insert;
+    auto beg = seg;
+    auto end = beg + p.len();
+    for (auto it = _rcv.out_of_order.begin(); it != _rcv.out_of_order.end();) {
+        auto& seg_pkt = it->second;
+        auto seg_beg = it->first;
+        auto seg_end = seg_beg + seg_pkt.len();
+        // There are 6 cases:
+        if (seg_beg <= beg && end <= seg_end) {
+            // 1) seg_beg beg end seg_end
+            // We already have data in this packet
+            return;
+        } else if (seg <= seg_beg && seg_end <= end) {
+            // 2) beg seg_beg seg_end end
+            // The new segment contains more data than this old segment
+            // Delete the old one, insert the new one
+            it = _rcv.out_of_order.erase(it);
+            insert = true;
+            break;
+        } else if (beg < seg_beg && seg_beg <= end && end <= seg_end) {
+            // 3) beg seg_beg end seg_end
+            // Merge two segments, trim front of old segment
+            auto trim = end - seg_beg;
+            seg_pkt.trim_front(trim);
+            p.append(std::move(seg_pkt));
+            // Delete the old one, insert the new one
+            it = _rcv.out_of_order.erase(it);
+            insert = true;
+            break;
+        } else if (seg_beg <= beg && beg <= seg_end && seg_end < end) {
+            // 4) seg_beg beg seg_end end
+            // Merge two segments, trim front of new segment
+            auto trim = seg_end - beg;
+            p.trim_front(trim);
+            // Append new data to the old segment, keep the old segment
+            seg_pkt.append(std::move(p));
+            insert = false;
+            break;
+        } else {
+            // 5) beg end < seg_beg seg_end
+            //   or
+            // 6) seg_beg seg_end < beg end
+            // Can not merge with this segment, keep looking
+            it++;
+            insert = true;
+        }
+    }
+
+    if (insert) {
+        p.linearize();
+        _rcv.out_of_order.emplace(beg, std::move(p));
+    }
+
+    // TODO: With new segment merged with old segment, we might be able to
+    // merge adjacent segments. Not urgent since merge_out_of_order will
+    // consume these un-merged segments soon.
+    return;
 }
 
 template <typename InetTraits>
@@ -853,6 +933,7 @@ void tcp<InetTraits>::tcb::retransmit() {
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::cleanup() {
     _snd.data.clear();
+    _rcv.out_of_order.clear();
     stop_retransmit_timer();
     clear_delayed_ack();
     remove_from_tcbs();
