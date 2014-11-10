@@ -257,6 +257,11 @@ public:
        : _stack(stack)
     {}
 
+    unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to, bool & handled) override {
+        handled = true;
+        return engine.cpu_id();
+    }
+
     future<> handle(packet& p, ip_hdr* iph, ethernet_address from, bool & handled) override {
         if (_state == state::NONE || p.len() < sizeof(dhcp_packet_base)) {
             return make_ready_future<>();
