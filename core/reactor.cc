@@ -499,11 +499,24 @@ void smp_message_queue::complete_kick() {
     }
 }
 
-void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
-    _queue_has_room.wait().then([this, item] {
-        _pending.push(item);
+void smp_message_queue::move_pending() {
+    bool kick = false;
+
+    while (_current_queue_length < queue_length && !_pending_fifo.empty()) {
+        _pending.push(_pending_fifo.front());
+        _pending_fifo.pop();
+        _current_queue_length++;
+        kick = true;
+    }
+
+    if (kick) {
         submit_kick();
-    });
+    }
+}
+
+void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
+    _pending_fifo.push(item);
+    move_pending();
 }
 
 void smp_message_queue::respond(work_item* item) {
@@ -517,9 +530,11 @@ size_t smp_message_queue::process_completions() {
         wi->complete();
         delete wi;
     });
-    if (nr) {
-        _queue_has_room.signal(nr);
-    }
+
+    _current_queue_length -= nr;
+
+    move_pending();
+
     return nr;
 }
 

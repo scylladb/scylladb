@@ -18,6 +18,7 @@
 #include <iostream>
 #include <unistd.h>
 #include <vector>
+#include <queue>
 #include <algorithm>
 #include <thread>
 #include <system_error>
@@ -324,7 +325,7 @@ class smp_message_queue {
     readable_eventfd _complete_eventfd;
     writeable_eventfd _complete_eventfd_write;
     readable_eventfd _start_eventfd_read;
-    semaphore _queue_has_room = { queue_length };
+    size_t _current_queue_length = 0;
     reactor* _pending_peer;
     reactor* _complete_peer;
     struct work_item {
@@ -365,6 +366,7 @@ class smp_message_queue {
         }
         Future get_future() { return _promise.get_future(); }
     };
+    std::queue<work_item*, circular_buffer<work_item*>> _pending_fifo;
 public:
     smp_message_queue();
     template <typename Func>
@@ -386,6 +388,7 @@ private:
     void respond(work_item* wi);
     void submit_kick();
     void complete_kick();
+    void move_pending();
 
     friend class smp;
 };
