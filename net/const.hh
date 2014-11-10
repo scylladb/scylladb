@@ -15,7 +15,9 @@ enum class eth_protocol_num : uint16_t {
 };
 
 const uint8_t eth_hdr_len = 14;
-const uint8_t ip_hdr_len_min = 20;
+const uint8_t tcp_hdr_len_min = 20;
+const uint8_t ipv4_hdr_len_min = 20;
+const uint8_t ipv6_hdr_len_min = 40;
 const uint16_t ip_packet_len_max = 65535;
 
 }

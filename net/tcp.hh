@@ -471,7 +471,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             _snd.mss = _option._remote_mss;
             // Maximum segment size local can receive
             _rcv.mss = _option._local_mss =
-                _tcp.hw_features().mtu - sizeof(tcp_hdr) - net::ip_hdr_len_min;
+                _tcp.hw_features().mtu - net::tcp_hdr_len_min - InetTraits::ip_hdr_len_min;
             // Linux's default window size
             _rcv.window = 29200 << _rcv.window_scale;
 
@@ -630,11 +630,10 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
     // Max number of TCP payloads we can pass to NIC
     uint32_t len;
     if (_tcp.hw_features().tx_tso) {
-        // FIXME: No magic numbers when adding IP and TCP option support
         // FIXME: Info tap device the size of the splitted packet
-        len = _tcp.hw_features().max_packet_len - 20 - 20;
+        len = _tcp.hw_features().max_packet_len - net::tcp_hdr_len_min - InetTraits::ip_hdr_len_min;
     } else {
-        len = std::min(uint16_t(_tcp.hw_features().mtu - 20 - 20), _snd.mss);
+        len = std::min(uint16_t(_tcp.hw_features().mtu - net::tcp_hdr_len_min - InetTraits::ip_hdr_len_min), _snd.mss);
     }
     can_send = std::min(can_send, len);
     // easy case: one small packet

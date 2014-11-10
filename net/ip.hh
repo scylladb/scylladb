@@ -75,6 +75,7 @@ struct ipv4_traits {
     static void udp_pseudo_header_checksum(checksummer& csum, ipv4_address src, ipv4_address dst, uint16_t len) {
         csum.sum_many(src.ip.raw, dst.ip.raw, uint8_t(0), uint8_t(ip_protocol_num::udp), len);
     }
+    static constexpr uint8_t ip_hdr_len_min = net::ipv4_hdr_len_min;
 };
 
 template <ip_protocol_num ProtoNum>
