@@ -11,11 +11,13 @@
 
 static std::string str_ping{"ping"};
 static std::string str_txtx{"txtx"};
+static std::string str_rxrx{"rxrx"};
 static std::string str_pong{"pong"};
 static std::string str_unknow{"unknow cmd"};
 static int tx_msg_total_size = 10 * 1024 * 1024;
 static int tx_msg_size = 4 * 1024;
 static int tx_msg_nr = tx_msg_total_size / tx_msg_size;
+static int rx_msg_size = 4 * 1024;
 static std::string str_txbuf(tx_msg_size, 'X');
 
 class tcp_server {
@@ -81,6 +83,9 @@ public:
                 // server tx test
                 } else if (cmd == str_txtx) {
                     return tx_test();
+                // server tx test
+                } else if (cmd == str_rxrx) {
+                    return rx_test();
                 // unknow test
                 } else {
                     return _write_buf.write(str_unknow).then([this] {
@@ -105,6 +110,20 @@ public:
             return do_write(tx_msg_nr).then([this] {
                 return _write_buf.close();
             }).then([this] {
+                return make_ready_future<>();
+            });
+        }
+        future<> do_read() {
+            return _read_buf.read_exactly(rx_msg_size).then([this] (temporary_buffer<char> buf) {
+                if (buf.size() == 0) {
+                    return make_ready_future();
+                } else {
+                    return do_read();
+                }
+            });
+        }
+        future<> rx_test() {
+            return do_read().then([] {
                 return make_ready_future<>();
             });
         }
