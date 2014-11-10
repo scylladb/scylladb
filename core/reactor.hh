@@ -416,13 +416,13 @@ class reactor {
     unsigned _id = 0;
     bool _stopped = false;
     bool _handle_sigint = true;
+    timer_set<timer, &timer::_link, clock_type> _timers;
+    timer_set<timer, &timer::_link, clock_type>::timer_list_t _expired_timers;
     std::unique_ptr<network_stack> _network_stack;
     int _return = 0;
     std::unordered_map<int, signal_handler> _signal_handlers;
     promise<> _start_promise;
     uint64_t _timers_completed;
-    timer_set<timer, &timer::_link, clock_type> _timers;
-    timer_set<timer, &timer::_link, clock_type>::timer_list_t _expired_timers;
     file_desc _epollfd;
     readable_eventfd _io_eventfd;
     io_context_t _io_context;
