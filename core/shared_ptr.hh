@@ -43,6 +43,8 @@ private:
         return shared_ptr(new data(std::forward<A>(a)...));
     }
 public:
+    using element_type = T;
+
     shared_ptr() = default;
     shared_ptr(const shared_ptr& x) : _p(x._p) {
         if (_p) {
