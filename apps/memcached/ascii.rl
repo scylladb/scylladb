@@ -3,6 +3,7 @@
  */
 
 #include "core/ragel.hh"
+#include "apps/memcached/memcached.hh"
 #include <memory>
 #include <algorithm>
 #include <functional>
@@ -38,7 +39,7 @@ crlf = '\r\n';
 sp = ' ';
 u32 = digit+ >{ _u32 = 0; } ${ _u32 *= 10; _u32 += fc - '0'; };
 u64 = digit+ >{ _u64 = 0; } ${ _u64 *= 10; _u64 += fc - '0'; };
-key = [^ ]+ >mark %{ _key = str(); };
+key = [^ ]+ >mark %{ _key = memcache::item_key(str()); };
 flags = u32 %{ _flags = _u32; };
 expiration = u32 %{ _expiration = _u32; };
 size = u32 %{ _size = _u32; };
@@ -52,8 +53,8 @@ set = "set" insertion_params @{ _state = state::cmd_set; };
 add = "add" insertion_params @{ _state = state::cmd_add; };
 replace = "replace" insertion_params @{ _state = state::cmd_replace; };
 cas = "cas" sp key sp flags sp expiration sp size sp version_field maybe_noreply (crlf @{ fcall blob; } ) crlf @{ _state = state::cmd_cas; };
-get = "get" (sp key %{ _keys.push_back(std::move(_key)); })+ crlf @{ _state = state::cmd_get; };
-gets = "gets" (sp key %{ _keys.push_back(std::move(_key)); })+ crlf @{ _state = state::cmd_gets; };
+get = "get" (sp key %{ _keys.emplace_back(std::move(_key)); })+ crlf @{ _state = state::cmd_get; };
+gets = "gets" (sp key %{ _keys.emplace_back(std::move(_key)); })+ crlf @{ _state = state::cmd_gets; };
 delete = "delete" sp key maybe_noreply crlf @{ _state = state::cmd_delete; };
 flush = "flush_all" maybe_expiration maybe_noreply crlf @{ _state = state::cmd_flush_all; };
 version = "version" crlf @{ _state = state::cmd_version; };
@@ -97,7 +98,7 @@ public:
     state _state;
     uint32_t _u32;
     uint64_t _u64;
-    sstring _key;
+    memcache::item_key _key;
     uint32_t _flags;
     uint32_t _expiration;
     uint32_t _size;
@@ -105,7 +106,7 @@ public:
     uint64_t _version;
     sstring _blob;
     bool _noreply;
-    std::vector<sstring> _keys;
+    std::vector<memcache::item_key> _keys;
 public:
     void init() {
         init_base();

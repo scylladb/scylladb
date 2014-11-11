@@ -6,6 +6,7 @@
 #define REACTOR_HH_
 
 #include <memory>
+#include <type_traits>
 #include <libaio.h>
 #include <sys/epoll.h>
 #include <sys/types.h>
@@ -194,6 +195,7 @@ public:
     virtual future<> initialize() {
         return make_ready_future();
     }
+    virtual bool has_per_core_namespace() = 0;
 };
 
 class network_stack_registry {
@@ -408,6 +410,8 @@ private:
 
 class reactor {
     static constexpr size_t max_aio = 128;
+    promise<> _exit_promise;
+    future<> _exit_future;
     pollable_fd _timerfd = file_desc::timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC | TFD_NONBLOCK);
     struct signal_handler {
         signal_handler(int signo);
@@ -419,13 +423,13 @@ class reactor {
     unsigned _id = 0;
     bool _stopped = false;
     bool _handle_sigint = true;
+    timer_set<timer, &timer::_link, clock_type> _timers;
+    timer_set<timer, &timer::_link, clock_type>::timer_list_t _expired_timers;
     std::unique_ptr<network_stack> _network_stack;
     int _return = 0;
     std::unordered_map<int, signal_handler> _signal_handlers;
     promise<> _start_promise;
     uint64_t _timers_completed;
-    timer_set<timer, &timer::_link, clock_type> _timers;
-    timer_set<timer, &timer::_link, clock_type>::timer_list_t _expired_timers;
     file_desc _epollfd;
     readable_eventfd _io_eventfd;
     io_context_t _io_context;
@@ -469,6 +473,12 @@ public:
     int run();
     void exit(int ret);
     future<> when_started() { return _start_promise.get_future(); }
+
+    template <typename Func>
+    void at_exit(Func&& func) {
+        _exit_future = _exit_future.then(func);
+    }
+
     future<> receive_signal(int signo);
 
     void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
@@ -484,6 +494,7 @@ private:
     void add_timer(timer* tmr);
     void del_timer(timer* tmr);
 
+    future<> run_exit_tasks();
     void stop();
     friend class pollable_fd;
     friend class pollable_fd_state;
@@ -502,7 +513,9 @@ class smp {
 	static std::thread::id _tmain;
 
 	template <typename Func>
-	using returns_future = is_future<std::result_of_t<Func()>>;
+    using returns_future = is_future<std::result_of_t<Func()>>;
+    template <typename Func>
+    using returns_void = std::is_same<std::result_of_t<Func()>, void>;
 public:
 	static boost::program_options::options_description get_options_description();
 	static void configure(boost::program_options::variables_map vm);
@@ -518,14 +531,21 @@ public:
 	        return _qs[t][engine.cpu_id()].submit(std::move(func));
 	    }
 	}
-	template <typename Func>
-	static future<> submit_to(unsigned t, Func func,
-	        std::enable_if_t<!returns_future<Func>::value, void*> = nullptr) {
-	    return submit_to(t, [func = std::move(func)] () mutable {
-	       func();
-	       return make_ready_future<>();
-	    });
-        }
+    template <typename Func>
+    static future<std::result_of_t<Func()>> submit_to(unsigned t, Func func,
+            std::enable_if_t<!returns_future<Func>::value && !returns_void<Func>::value, void*> = nullptr) {
+        return submit_to(t, [func = std::move(func)] () mutable {
+           return make_ready_future<std::result_of_t<Func()>>(func());
+        });
+    }
+    template <typename Func>
+    static future<> submit_to(unsigned t, Func func,
+            std::enable_if_t<!returns_future<Func>::value && returns_void<Func>::value, void*> = nullptr) {
+        return submit_to(t, [func = std::move(func)] () mutable {
+            func();
+            return make_ready_future<>();
+        });
+    }
 	static size_t poll_queues() {
 	    size_t got = 0;
 	    for (unsigned i = 0; i < count; i++) {
