@@ -34,7 +34,7 @@ class native_network_stack : public network_stack {
     promise<> _config;
     timer _timer;
 
-    void on_dhcp(bool, const dhcp::lease &);
+    void on_dhcp(bool, const dhcp::lease &, bool);
 
     using tcp4 = tcp<ipv4_traits>;
 public:
@@ -130,35 +130,42 @@ native_network_stack::listen(socket_address sa, listen_options opts) {
     return tcpv4_listen(_inet.get_tcp(), ntohs(sa.as_posix_sockaddr_in().sin_port), opts);
 }
 
-void native_network_stack::on_dhcp(bool success, const dhcp::lease & res) {
-    if (!success) {
-        return;
+using namespace std::chrono_literals;
+
+void native_network_stack::on_dhcp(bool success, const dhcp::lease & res, bool is_renew) {
+    if (success) {
+        _inet.set_host_address(res.ip);
+        _inet.set_gw_address(res.gateway);
+        _inet.set_netmask_address(res.netmask);
     }
-
-    _inet.set_host_address(res.ip);
-    _inet.set_gw_address(res.gateway);
-    _inet.set_netmask_address(res.netmask);
-
     // Signal waiters.
-    _config.set_value();
+    if (!is_renew) {
+        _config.set_value();
+    }
 
     if (smp::main_thread()) {
         // And the other cpus, which, in the case of initial discovery,
         // will be waiting for us.
         for (unsigned i = 1; i < smp::count; i++) {
-            smp::submit_to(i, [success, res]() {
+            smp::submit_to(i, [success, res, is_renew]() {
                 auto & ns = static_cast<native_network_stack&>(engine.net());
-                ns.on_dhcp(success, res);
+                ns.on_dhcp(success, res, is_renew);
             });
         }
-        // And set up to renew the lease later on.
-        _timer.set_callback([this, res]() {
-            shared_ptr<dhcp> d = make_shared<dhcp>(_inet);
-            d->renew(res).then([this, d](bool success, const dhcp::lease & res) {
-                on_dhcp(success, res);
-            });
-        });
-        _timer.arm(std::chrono::duration_cast<clock_type::duration>(res.lease_time));
+        if (success) {
+            // And set up to renew the lease later on.
+            _timer.set_callback(
+                    [this, res]() {
+                        _config = promise<>();
+                        shared_ptr<dhcp> d = make_shared<dhcp>(_inet);
+                        d->renew(res).then([this, d](bool success, const dhcp::lease & res) {
+                                    on_dhcp(success, res, true);
+                                });
+                    });
+            _timer.arm(
+                    std::chrono::duration_cast<clock_type::duration>(
+                            res.lease_time));
+        }
     }
 }
 
@@ -172,7 +179,7 @@ future<> native_network_stack::initialize() {
         if (smp::main_thread()) {
             shared_ptr<dhcp> d = make_shared<dhcp>(_inet);
             return d->discover().then([this, d](bool success, const dhcp::lease & res) {
-                on_dhcp(success, res);
+                on_dhcp(success, res, false);
             });
         }
         return _config.get_future();
