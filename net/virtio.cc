@@ -73,12 +73,7 @@ public:
 #ifdef HAVE_OSV
 class virtio_notifier_osv : public virtio_notifier {
 private:
-    // TODO: In the future, don't use eventfd at all. Change Seastar's event
-    // loop to use wait_until, and even a non-atomic variable is enough if the
-    // interrupt runs on the same CPU. We can also not use interrupts at all
-    // and instead use polling.
-    readable_eventfd _notified;
-    writeable_eventfd _notified_write;
+    std::unique_ptr<reactor_notifier> _notified;
     uint16_t _q_index;
     osv::assigned_virtio &_virtio;
 public:
@@ -86,15 +81,13 @@ public:
         _virtio.kick(_q_index);
     }
     virtual future<> wait() override {
-        return _notified.wait().then([this] (size_t ignore) {
-            return make_ready_future<>();
-        });
+        return _notified->wait();
     }
     virtual void wake_wait() override {
-        _notified_write.signal(1);
+        _notified->signal();
     }
     virtio_notifier_osv(osv::assigned_virtio &virtio, uint16_t q_index)
-        : _notified_write(_notified.write_side())
+        : _notified(engine.make_reactor_notifier())
         , _q_index(q_index)
         , _virtio(virtio)
     {
@@ -976,3 +969,10 @@ std::unique_ptr<net::device> create_virtio_net_device(sstring tap_device, boost:
     dev = ptr;
     return std::unique_ptr<net::device>(ptr);
 }
+
+// Locks the shared object in memory and forces on-load function resolution.
+// Needed if the function passed to enable_interrupt() is run at interrupt
+// time.
+// TODO: Instead of doing this, _virtio.enable_interrupt() could take a
+// pollable to wake instead of a function, then this won't be needed.
+asm(".pushsection .note.osv-mlock, \"a\"; .long 0, 0, 0; .popsection");
