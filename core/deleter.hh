@@ -79,4 +79,10 @@ deleter::share() {
     return deleter(_impl);
 }
 
+inline
+deleter
+make_free_deleter(void* obj) {
+    return make_deleter(deleter(), [obj] { free(obj); });
+}
+
 #endif /* DELETER_HH_ */
