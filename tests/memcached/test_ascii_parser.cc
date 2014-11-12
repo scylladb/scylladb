@@ -54,9 +54,10 @@ SEASTAR_TEST_CASE(test_set_command_is_parsed) {
     return for_each_fragment_size([] (auto make_packet) {
         return parse(make_packet({"set key 1 2 3\r\nabc\r\n"})).then([] (auto p) {
             BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
-            BOOST_REQUIRE(p->_flags == 1);
+            BOOST_REQUIRE(p->_flags_str == "1");
             BOOST_REQUIRE(p->_expiration == 2);
             BOOST_REQUIRE(p->_size == 3);
+            BOOST_REQUIRE(p->_size_str == "3");
             BOOST_REQUIRE(p->_key.key() == "key");
             BOOST_REQUIRE(p->_blob == "abc");
         });
@@ -67,9 +68,10 @@ SEASTAR_TEST_CASE(test_empty_data_is_parsed) {
     return for_each_fragment_size([] (auto make_packet) {
         return parse(make_packet({"set key 1 2 0\r\n\r\n"})).then([] (auto p) {
             BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
-            BOOST_REQUIRE(p->_flags == 1);
+            BOOST_REQUIRE(p->_flags_str == "1");
             BOOST_REQUIRE(p->_expiration == 2);
             BOOST_REQUIRE(p->_size == 0);
+            BOOST_REQUIRE(p->_size_str == "0");
             BOOST_REQUIRE(p->_key.key() == "key");
             BOOST_REQUIRE(p->_blob == "");
         });
@@ -97,13 +99,13 @@ SEASTAR_TEST_CASE(test_u32_parsing) {
         return make_ready_future<>().then([make_packet] {
             return parse(make_packet({"set key 0 0 0\r\n\r\n"})).then([] (auto p) {
                 BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
-                BOOST_REQUIRE(p->_flags == 0);
+                BOOST_REQUIRE(p->_flags_str == "0");
             });
         }).then([make_packet] {
             return parse(make_packet({"set key 12345 0 0\r\n\r\n"}))
                     .then([] (auto p) {
                 BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
-                BOOST_REQUIRE(p->_flags == 12345);
+                BOOST_REQUIRE(p->_flags_str == "12345");
             });
         }).then([make_packet] {
             return parse(make_packet({"set key -1 0 0\r\n\r\n"}))
@@ -119,7 +121,7 @@ SEASTAR_TEST_CASE(test_u32_parsing) {
             return parse(make_packet({"set key " + std::to_string(std::numeric_limits<uint32_t>::max()) + " 0 0\r\n\r\n"}))
                     .then([] (auto p) {
                 BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
-                BOOST_REQUIRE(p->_flags == std::numeric_limits<uint32_t>::max());
+                BOOST_REQUIRE(p->_flags_str == to_sstring(std::numeric_limits<uint32_t>::max()));
             });
         });
     });
@@ -133,9 +135,10 @@ SEASTAR_TEST_CASE(test_parsing_of_split_data) {
                     .then([] (auto p) {
                 BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
                 BOOST_REQUIRE(p->_key.key() == "key");
-                BOOST_REQUIRE(p->_flags == 111);
+                BOOST_REQUIRE(p->_flags_str == "111");
                 BOOST_REQUIRE(p->_expiration == 222);
                 BOOST_REQUIRE(p->_size == 3);
+                BOOST_REQUIRE(p->_size_str == "3");
                 BOOST_REQUIRE(p->_blob == "asd");
             });
         }).then([make_packet] {
@@ -143,9 +146,10 @@ SEASTAR_TEST_CASE(test_parsing_of_split_data) {
                     .then([] (auto p) {
                 BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
                 BOOST_REQUIRE(p->_key.key() == "key");
-                BOOST_REQUIRE(p->_flags == 111);
+                BOOST_REQUIRE(p->_flags_str == "111");
                 BOOST_REQUIRE(p->_expiration == 222);
                 BOOST_REQUIRE(p->_size == 3);
+                BOOST_REQUIRE(p->_size_str == "3");
                 BOOST_REQUIRE(p->_blob == "asd");
             });
         }).then([make_packet] {
@@ -153,9 +157,10 @@ SEASTAR_TEST_CASE(test_parsing_of_split_data) {
                     .then([] (auto p) {
                 BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
                 BOOST_REQUIRE(p->_key.key() == "key");
-                BOOST_REQUIRE(p->_flags == 111);
+                BOOST_REQUIRE(p->_flags_str == "111");
                 BOOST_REQUIRE(p->_expiration == 222);
                 BOOST_REQUIRE(p->_size == 3);
+                BOOST_REQUIRE(p->_size_str == "3");
                 BOOST_REQUIRE(p->_blob == "asd");
             });
         }).then([make_packet] {
@@ -163,9 +168,10 @@ SEASTAR_TEST_CASE(test_parsing_of_split_data) {
                     .then([] (auto p) {
                 BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
                 BOOST_REQUIRE(p->_key.key() == "key");
-                BOOST_REQUIRE(p->_flags == 111);
+                BOOST_REQUIRE(p->_flags_str == "111");
                 BOOST_REQUIRE(p->_expiration == 222);
                 BOOST_REQUIRE(p->_size == 3);
+                BOOST_REQUIRE(p->_size_str == "3");
                 BOOST_REQUIRE(p->_blob == "asd");
             });
         }).then([make_packet] {
@@ -173,9 +179,10 @@ SEASTAR_TEST_CASE(test_parsing_of_split_data) {
                     .then([] (auto p) {
                 BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
                 BOOST_REQUIRE(p->_key.key() == "key");
-                BOOST_REQUIRE(p->_flags == 111);
+                BOOST_REQUIRE(p->_flags_str == "111");
                 BOOST_REQUIRE(p->_expiration == 222);
                 BOOST_REQUIRE(p->_size == 3);
+                BOOST_REQUIRE(p->_size_str == "3");
                 BOOST_REQUIRE(p->_blob == "asd");
             });
         }).then([make_packet] {
@@ -183,9 +190,10 @@ SEASTAR_TEST_CASE(test_parsing_of_split_data) {
                     .then([] (auto p) {
                 BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
                 BOOST_REQUIRE(p->_key.key() == "key");
-                BOOST_REQUIRE(p->_flags == 111);
+                BOOST_REQUIRE(p->_flags_str == "111");
                 BOOST_REQUIRE(p->_expiration == 222);
                 BOOST_REQUIRE(p->_size == 3);
+                BOOST_REQUIRE(p->_size_str == "3");
                 BOOST_REQUIRE(p->_blob == "asd");
             });
         }).then([make_packet] {
@@ -193,9 +201,10 @@ SEASTAR_TEST_CASE(test_parsing_of_split_data) {
                     .then([] (auto p) {
                 BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
                 BOOST_REQUIRE(p->_key.key() == "key");
-                BOOST_REQUIRE(p->_flags == 111);
+                BOOST_REQUIRE(p->_flags_str == "111");
                 BOOST_REQUIRE(p->_expiration == 222);
                 BOOST_REQUIRE(p->_size == 3);
+                BOOST_REQUIRE(p->_size_str == "3");
                 BOOST_REQUIRE(p->_blob == "asd");
             });
         });
@@ -287,18 +296,20 @@ SEASTAR_TEST_CASE(test_multiple_requests_in_one_stream) {
         return is->consume(*p).then([p] {
             BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
             BOOST_REQUIRE(p->_key.key() == "key1");
-            BOOST_REQUIRE(p->_flags == 1);
+            BOOST_REQUIRE(p->_flags_str == "1");
             BOOST_REQUIRE(p->_expiration == 1);
             BOOST_REQUIRE(p->_size == 5);
+            BOOST_REQUIRE(p->_size_str == "5");
             BOOST_REQUIRE(p->_blob == "data1");
         }).then([is, p] {
             p->init();
             return is->consume(*p).then([p] {
                 BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
                 BOOST_REQUIRE(p->_key.key() == "key2");
-                BOOST_REQUIRE(p->_flags == 2);
+                BOOST_REQUIRE(p->_flags_str == "2");
                 BOOST_REQUIRE(p->_expiration == 2);
                 BOOST_REQUIRE(p->_size == 6);
+                BOOST_REQUIRE(p->_size_str == "6");
                 BOOST_REQUIRE(p->_blob == "data2+");
             });
         });

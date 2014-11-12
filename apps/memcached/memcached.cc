@@ -41,7 +41,7 @@ private:
     // TODO: align shared data to cache line boundary
     item_key _key;
     const sstring _data;
-    const uint32_t _flags;
+    const sstring _ascii_prefix;
     version_type _version;
     int _ref_count;
     hook_type _cache_link;
@@ -50,10 +50,10 @@ private:
     clock_type::time_point _expiry;
     friend class cache;
 public:
-    item(item_key&& key, uint32_t flags, sstring&& data, clock_type::time_point expiry, version_type version = 1)
+    item(item_key&& key, sstring&& ascii_prefix, sstring&& data, clock_type::time_point expiry, version_type version = 1)
         : _key(std::move(key))
         , _data(data)
-        , _flags(flags)
+        , _ascii_prefix(ascii_prefix)
         , _version(version)
         , _ref_count(0)
         , _expiry(expiry)
@@ -71,12 +71,12 @@ public:
         return _version;
     }
 
-    uint32_t flags() {
-        return _flags;
-    }
-
     const sstring& data() {
         return _data;
+    }
+
+    const sstring& ascii_prefix() {
+        return _ascii_prefix;
     }
 
     const sstring& key() {
@@ -201,7 +201,7 @@ struct local_origin_tag {
 
 struct item_insertion_data {
     item_key key;
-    uint32_t flags;
+    sstring ascii_prefix;
     sstring data;
     clock_type::time_point expiry;
 };
@@ -263,7 +263,7 @@ private:
     cache_iterator add_overriding(cache_iterator i, item_insertion_data& insertion) {
         auto& old_item = *i;
 
-        auto new_item = new item(Origin::move_if_local(insertion.key), insertion.flags,
+        auto new_item = new item(Origin::move_if_local(insertion.key), Origin::move_if_local(insertion.ascii_prefix),
             Origin::move_if_local(insertion.data), insertion.expiry, old_item._version + 1);
         intrusive_ptr_add_ref(new_item);
 
@@ -282,7 +282,7 @@ private:
     template <typename Origin>
     inline
     void add_new(item_insertion_data& insertion) {
-        auto new_item = new item(Origin::move_if_local(insertion.key), insertion.flags,
+        auto new_item = new item(Origin::move_if_local(insertion.key), Origin::move_if_local(insertion.ascii_prefix),
             Origin::move_if_local(insertion.data), insertion.expiry);
         intrusive_ptr_add_ref(new_item);
         auto& item_ref = *new_item;
@@ -482,7 +482,7 @@ public:
         }
         item_insertion_data insertion {
             .key = Origin::move_if_local(key),
-            .flags = item_ref._flags,
+            .ascii_prefix = item_ref._ascii_prefix,
             .data = to_sstring(*value + delta),
             .expiry = item_ref._expiry
         };
@@ -505,7 +505,7 @@ public:
         }
         item_insertion_data insertion {
             .key = Origin::move_if_local(key),
-            .flags = item_ref._flags,
+            .ascii_prefix = item_ref._ascii_prefix,
             .data = to_sstring(*value - std::min(*value, delta)),
             .expiry = item_ref._expiry
         };
@@ -722,17 +722,10 @@ private:
             if (!item) {
                 return make_ready_future<>();
             }
-            return _out.write(msg_value)
-                .then([this, item = std::move(item)] () mutable {
-                    auto f = _out.write(item->key()).then([this] {
-                        return _out.write(" ");
-                    }).then([this, v = item->flags()] {
-                        return _out.write(to_sstring(v));
-                    }).then([this] {
-                        return _out.write(" ");
-                    }).then([this, v = item->data().size()] {
-                        return _out.write(to_sstring(v));
-                    });
+            return _out.write(msg_value).then([this, item = std::move(item)] () mutable {
+                auto f = _out.write(item->key());
+                return std::move(f).then([this, item = std::move(item)] () mutable {
+                    auto f = _out.write(item->ascii_prefix());
 
                     if (SendCasVersion) {
                         f = std::move(f).then([this, v = item->version()] {
@@ -750,6 +743,7 @@ private:
                         return _out.write(msg_crlf);
                     });
                 });
+            });
         }
     };
 
@@ -874,7 +868,7 @@ public:
     void prepare_insertion() {
         _insertion = item_insertion_data{
             .key = std::move(_parser._key),
-            .flags = _parser._flags,
+            .ascii_prefix = make_sstring(" ", _parser._flags_str, " ", _parser._size_str),
             .data = std::move(_parser._blob),
             .expiry = seconds_to_time_point(_parser._expiration)
         };
