@@ -168,6 +168,36 @@ public:
     }
 };
 
+template <size_t N>
+static inline
+size_t str_len(const char(&s)[N]) { return N - 1; }
+
+template <size_t N>
+static inline
+const char* str_begin(const char(&s)[N]) { return s; }
+
+template <size_t N>
+static inline
+const char* str_end(const char(&s)[N]) { return str_begin(s) + str_len(s); }
+
+template <typename char_type, typename size_type, size_type max_size>
+static inline
+const char_type* str_begin(const basic_sstring<char_type, size_type, max_size>& s) { return s.begin(); }
+
+template <typename char_type, typename size_type, size_type max_size>
+static inline
+const char_type* str_end(const basic_sstring<char_type, size_type, max_size>& s) { return s.end(); }
+
+template <typename char_type, typename size_type, size_type max_size>
+static inline
+size_type str_len(const basic_sstring<char_type, size_type, max_size>& s) { return s.size(); }
+
+template <typename First, typename Second, typename... Tail>
+static inline
+const size_t str_len(const First& first, const Second& second, const Tail&... tail) {
+    return str_len(first) + str_len(second, tail...);
+}
+
 template <typename char_type, typename size_type, size_type max_size>
 inline
 void swap(basic_sstring<char_type, size_type, max_size>& x,
@@ -196,6 +226,25 @@ struct hash<basic_sstring<char_type, size_type, max_size>> {
 }
 
 using sstring = basic_sstring<char, uint32_t, 15>;
+
+static inline
+char* copy_str_to(char* dst) {
+    return dst;
+}
+
+template <typename Head, typename... Tail>
+static inline
+char* copy_str_to(char* dst, const Head& head, const Tail&... tail) {
+    return copy_str_to(std::copy(str_begin(head), str_end(head), dst), tail...);
+}
+
+template <typename String = sstring, typename... Args>
+static String make_sstring(Args&&... args)
+{
+    String ret(sstring::initialized_later(), str_len(args...));
+    copy_str_to(ret.begin(), args...);
+    return ret;
+}
 
 template <typename T, typename String = sstring, typename for_enable_if = void*>
 String to_sstring(T value, for_enable_if);
