@@ -37,8 +37,18 @@ if __name__ == "__main__":
     for n, path in enumerate(test_to_run):
         prefix = '[%d/%d]' % (n + 1, n_total)
         print_status('%s RUNNING %s' % (prefix, path))
-        if subprocess.call(path.split(' '), stdout=black_hole, stderr=black_hole):
+        proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = proc.communicate()
+        if proc.returncode:
             print_status('FAILED: %s\n' % (path))
+            if out:
+                print('=== stdout START ===')
+                print(out.decode())
+                print('=== stdout END ===')
+            if err:
+                print('=== stderr START ===')
+                print(err.decode())
+                print('=== stderr END ===')
             all_ok = False
         else:
             print_status('%s PASSED %s' % (prefix, path))
