@@ -16,6 +16,10 @@
 #include <sys/eventfd.h>
 #include <boost/thread/barrier.hpp>
 
+#ifdef HAVE_OSV
+#include <osv/newpoll.hh>
+#endif
+
 using namespace net;
 
 timespec to_timespec(clock_type::time_point t) {
@@ -44,10 +48,14 @@ wrap_syscall(T result) {
     return sr;
 }
 
+reactor_backend_epoll::reactor_backend_epoll()
+    : _epollfd(file_desc::epoll_create(EPOLL_CLOEXEC)) {
+}
+
 reactor::reactor()
-    : _exit_future(_exit_promise.get_future())
-    , _network_stack(network_stack_registry::create({}))
-    , _epollfd(file_desc::epoll_create(EPOLL_CLOEXEC))
+    : _backend()
+    , _exit_future(_exit_promise.get_future())
+    , _network_stack()
     , _io_eventfd()
     , _io_context(0)
     , _io_context_available(max_aio) {
@@ -68,7 +76,7 @@ void reactor::configure(boost::program_options::variables_map vm) {
     _handle_sigint = !vm.count("no-handle-interrupt");
 }
 
-future<> reactor::get_epoll_future(pollable_fd_state& pfd,
+future<> reactor_backend_epoll::get_epoll_future(pollable_fd_state& pfd,
         promise<> pollable_fd_state::*pr, int event) {
     if (pfd.events_known & event) {
         pfd.events_known &= ~event;
@@ -88,19 +96,28 @@ future<> reactor::get_epoll_future(pollable_fd_state& pfd,
     return (pfd.*pr).get_future();
 }
 
-future<> reactor::readable(pollable_fd_state& fd) {
+future<> reactor_backend_epoll::readable(pollable_fd_state& fd) {
     return get_epoll_future(fd, &pollable_fd_state::pollin, EPOLLIN);
 }
 
-future<> reactor::writeable(pollable_fd_state& fd) {
+future<> reactor_backend_epoll::writeable(pollable_fd_state& fd) {
     return get_epoll_future(fd, &pollable_fd_state::pollout, EPOLLOUT);
 }
 
-void reactor::forget(pollable_fd_state& fd) {
+void reactor_backend_epoll::forget(pollable_fd_state& fd) {
     if (fd.events_epoll) {
         ::epoll_ctl(_epollfd.get(), EPOLL_CTL_DEL, fd.fd.get(), nullptr);
     }
 }
+
+future<> reactor_backend_epoll::notified(reactor_notifier *n) {
+    // Currently reactor_backend_epoll doesn't need to support notifiers,
+    // because we add to it file descriptors instead. But this can be fixed
+    // later.
+    std::cout << "reactor_backend_epoll does not yet support notifiers!\n";
+    abort();
+}
+
 
 pollable_fd
 reactor::posix_listen(socket_address sa, listen_options opts) {
@@ -119,7 +136,7 @@ reactor::listen(socket_address sa, listen_options opt) {
     return _network_stack->listen(sa, opt);
 }
 
-void reactor::complete_epoll_event(pollable_fd_state& pfd, promise<> pollable_fd_state::*pr,
+void reactor_backend_epoll::complete_epoll_event(pollable_fd_state& pfd, promise<> pollable_fd_state::*pr,
         int events, int event) {
     if (pfd.events_requested & events & event) {
         pfd.events_requested &= ~event;
@@ -273,12 +290,17 @@ blockdev_file_impl::size(void) {
     });
 }
 
+void reactor_backend_epoll::enable_timer(clock_type::time_point when)
+{
+    itimerspec its;
+    its.it_interval = {};
+    its.it_value = to_timespec(when);
+    _timerfd.get_file_desc().timerfd_settime(TFD_TIMER_ABSTIME, its);
+}
+
 void reactor::add_timer(timer* tmr) {
     if (_timers.insert(*tmr)) {
-        itimerspec its;
-        its.it_interval = {};
-        its.it_value = to_timespec(_timers.get_next_timeout());
-        _timerfd.get_file_desc().timerfd_settime(TFD_TIMER_ABSTIME, its);
+        enable_timer(_timers.get_next_timeout());
     }
 }
 
@@ -291,9 +313,21 @@ void reactor::del_timer(timer* tmr) {
     }
 }
 
+future<> reactor_backend_epoll::timers_completed() {
+    // TODO: The following idiom converts a future<size_t>, to a future<>.
+    // Is there a more efficient way? Or maybe need a variant of read_some()
+    // that returns future<>? It would also be nice to have a variant of
+    // read_some<> that reads the data into temporary storage (inside the
+    // future), so we don't need the "_timers_completed" variable here.
+    return _timerfd.read_some(
+                reinterpret_cast<char*>(&_timers_completed),
+                sizeof(_timers_completed))
+            .then([] (size_t ignore) { return make_ready_future<>(); });
+}
+
 void reactor::complete_timers() {
-    _timerfd.read_some(reinterpret_cast<char*>(&_timers_completed), sizeof(_timers_completed)).then(
-            [this] (size_t n) {
+    timers_completed().then(
+            [this] () {
         _expired_timers = _timers.expire(clock_type::now());
         for (auto& t : _expired_timers) {
             t._expired = true;
@@ -311,10 +345,7 @@ void reactor::complete_timers() {
             }
         }
         if (!_timers.empty()) {
-            itimerspec its;
-            its.it_interval = {};
-            its.it_value = to_timespec(_timers.get_next_timeout());
-            _timerfd.get_file_desc().timerfd_settime(TFD_TIMER_ABSTIME, its);
+            enable_timer(_timers.get_next_timeout());
         }
         complete_timers();
     });
@@ -376,9 +407,11 @@ int reactor::run() {
             ),
     };
 
+#ifndef HAVE_OSV
     _io_eventfd.wait().then([this] (size_t count) {
         process_io(count);
     });
+#endif
     if (_handle_sigint && _id == 0) {
         receive_signal(SIGINT).then([this] { stop(); });
     }
@@ -412,39 +445,49 @@ int reactor::run() {
             }
         }
 
-        std::array<epoll_event, 128> eevt;
-        int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(), _pending_tasks.empty() ? -1 : 0);
-        if (_pending_tasks.empty()) { // _idle already false, so avoid dirtying cache line
-            _idle.store(false, std::memory_order_relaxed);
-        }
-        if (nr == -1 && errno == EINTR) {
-            continue; // gdb can cause this
-        }
-        assert(nr != -1);
-        for (int i = 0; i < nr; ++i) {
-            auto& evt = eevt[i];
-            auto pfd = reinterpret_cast<pollable_fd_state*>(evt.data.ptr);
-            auto events = evt.events & (EPOLLIN | EPOLLOUT);
-            // FIXME: it is enough to check that pfd's task is not in _pending_tasks here
+        wait_and_process(_pending_tasks.empty(), [this] {
             if (_pending_tasks.empty()) {
-                pfd->events_known |= events;
+                _idle.store(false, std::memory_order_relaxed);
             }
-            auto events_to_remove = events & ~pfd->events_requested;
-            complete_epoll_event(*pfd, &pollable_fd_state::pollin, events, EPOLLIN);
-            complete_epoll_event(*pfd, &pollable_fd_state::pollout, events, EPOLLOUT);
-            if (events_to_remove) {
-                pfd->events_epoll &= ~events_to_remove;
-                evt.events = pfd->events_epoll;
-                auto op = evt.events ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
-                ::epoll_ctl(_epollfd.get(), op, pfd->fd.get(), &evt);
-            }
-        }
+            // else, _idle already false, no need to set it again and dirty
+            // cache line.
+        });
     }
     return _return;
 }
 
+void
+reactor_backend_epoll::wait_and_process(bool block, std::function<void()> &&pre_process) {
+    std::array<epoll_event, 128> eevt;
+    int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(),
+            block ? -1 : 0);
+    pre_process();
+    if (nr == -1 && errno == EINTR) {
+        return; // gdb can cause this
+    }
+    assert(nr != -1);
+    for (int i = 0; i < nr; ++i) {
+        auto& evt = eevt[i];
+        auto pfd = reinterpret_cast<pollable_fd_state*>(evt.data.ptr);
+        auto events = evt.events & (EPOLLIN | EPOLLOUT);
+        // FIXME: it is enough to check that pfd's task is not in _pending_tasks here
+        if (block) {
+            pfd->events_known |= events;
+        }
+        auto events_to_remove = events & ~pfd->events_requested;
+        complete_epoll_event(*pfd, &pollable_fd_state::pollin, events, EPOLLIN);
+        complete_epoll_event(*pfd, &pollable_fd_state::pollout, events, EPOLLOUT);
+        if (events_to_remove) {
+            pfd->events_epoll &= ~events_to_remove;
+            evt.events = pfd->events_epoll;
+            auto op = evt.events ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+            ::epoll_ctl(_epollfd.get(), op, pfd->fd.get(), &evt);
+        }
+    }
+}
+
 future<>
-reactor::receive_signal(int signo) {
+reactor_backend_epoll::receive_signal(int signo) {
     auto i = _signal_handlers.emplace(signo, signo).first;
     signal_handler& sh = i->second;
     return sh._signalfd.read_some(reinterpret_cast<char*>(&sh._siginfo), sizeof(sh._siginfo)).then([&sh] (size_t ignore) {
@@ -454,7 +497,7 @@ reactor::receive_signal(int signo) {
     });
 }
 
-reactor::signal_handler::signal_handler(int signo)
+reactor_backend_epoll::signal_handler::signal_handler(int signo)
     : _signalfd(file_desc::signalfd(make_sigset_mask(signo), SFD_CLOEXEC | SFD_NONBLOCK)) {
     auto mask = make_sigset_mask(signo);
     auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
@@ -489,23 +532,22 @@ void syscall_work_queue::complete() {
 smp_message_queue::smp_message_queue()
     : _pending()
     , _completed()
-    , _start_eventfd(0)
-    , _complete_eventfd(0)
-    , _complete_eventfd_write(_complete_eventfd.write_side())
-    , _start_eventfd_read(_start_eventfd.read_side()) {
+    , _start_event(engine.make_reactor_notifier())
+    , _complete_event(engine.make_reactor_notifier())
+{
 }
 
 void smp_message_queue::submit_kick() {
     std::atomic_thread_fence(std::memory_order_seq_cst);
     if (_pending_peer->idle()) {
-        _start_eventfd.signal(1);
+        _start_event->signal();
     }
 }
 
 void smp_message_queue::complete_kick() {
     std::atomic_thread_fence(std::memory_order_seq_cst);
     if (_complete_peer->idle()) {
-        _complete_eventfd_write.signal(1);
+        _complete_event->signal();
     }
 }
 
@@ -549,7 +591,7 @@ size_t smp_message_queue::process_completions() {
 }
 
 void smp_message_queue::complete() {
-    _complete_eventfd.wait().then([this] (size_t count) {
+    _complete_event->wait().then([this] {
         process_completions();
         complete();
     });
@@ -569,12 +611,14 @@ void smp_message_queue::start() {
 }
 
 void smp_message_queue::listen() {
-    _start_eventfd_read.wait().then([this] (size_t count) mutable {
+    _start_event->wait().then([this] () mutable {
         process_incoming();
         listen();
     });
 }
 
+/* not yet implemented for OSv. TODO: do the notification like we do class smp. */
+#ifndef HAVE_OSV
 void thread_pool::work() {
     sigset_t mask;
     sigfillset(&mask);
@@ -602,6 +646,7 @@ thread_pool::~thread_pool() {
     inter_thread_wq._start_eventfd.signal(1);
     _worker_thread.join();
 }
+#endif
 
 readable_eventfd writeable_eventfd::read_side() {
     return readable_eventfd(_fd.dup());
@@ -780,3 +825,156 @@ void smp::join_all()
 __thread size_t future_avail_count = 0;
 
 thread_local reactor engine;
+
+
+class reactor_notifier_epoll : public reactor_notifier {
+    writeable_eventfd _write;
+    readable_eventfd _read;
+public:
+    reactor_notifier_epoll()
+        : _write()
+        , _read(_write.read_side()) {
+    }
+    virtual future<> wait() override {
+        // convert _read.wait(), a future<size_t>, to a future<>:
+        return _read.wait().then([this] (size_t ignore) {
+            return make_ready_future<>();
+        });
+    }
+    virtual void signal() override {
+        _write.signal(1);
+    }
+};
+
+std::unique_ptr<reactor_notifier>
+reactor_backend_epoll::make_reactor_notifier() {
+    return std::make_unique<reactor_notifier_epoll>();
+}
+
+#ifdef HAVE_OSV
+class reactor_notifier_osv :
+        public reactor_notifier, private osv::newpoll::pollable {
+    promise<> _pr;
+    // TODO: pollable should probably remember its poller, so we shouldn't
+    // need to keep another copy of this pointer
+    osv::newpoll::poller *_poller = nullptr;
+    bool _needed = false;
+public:
+    virtual future<> wait() override {
+        return engine.notified(this);
+    }
+    virtual void signal() override {
+        wake();
+    }
+    virtual void on_wake() override {
+        _pr.set_value();
+        _pr = promise<>();
+        // We try to avoid del()/add() ping-pongs: After an one occurance of
+        // the event, we don't del() but rather set needed=false. We guess
+        // the future's continuation (scheduler by _pr.set_value() above)
+        // will make the pollable needed again. Only if we reach this callback
+        // a second time, and needed is still false, do we finally del().
+        if (!_needed) {
+            _poller->del(this);
+            _poller = nullptr;
+
+        }
+        _needed = false;
+    }
+
+    void enable(osv::newpoll::poller &poller) {
+        _needed = true;
+        if (_poller == &poller) {
+            return;
+        }
+        assert(!_poller); // don't put same pollable on multiple pollers!
+        _poller = &poller;
+        _poller->add(this);
+    }
+
+    virtual ~reactor_notifier_osv() {
+        if (_poller) {
+            _poller->del(this);
+        }
+    }
+
+    friend class reactor_backend_osv;
+};
+
+std::unique_ptr<reactor_notifier>
+reactor_backend_osv::make_reactor_notifier() {
+    return std::make_unique<reactor_notifier_osv>();
+}
+#endif
+
+
+#ifdef HAVE_OSV
+reactor_backend_osv::reactor_backend_osv() {
+}
+
+void
+reactor_backend_osv::wait_and_process(bool block, std::function<void()> &&pre_process) {
+    if (block) {
+        _poller.wait();
+    }
+    pre_process();
+    _poller.process();
+    // osv::poller::process runs pollable's callbacks, but does not currently
+    // have a timer expiration callback - instead if gives us an expired()
+    // function we need to check:
+    if (_poller.expired()) {
+        _timer_promise.set_value();
+        _timer_promise = promise<>();
+    }
+}
+
+future<>
+reactor_backend_osv::notified(reactor_notifier *notifier) {
+    // reactor_backend_osv::make_reactor_notifier() generates a
+    // reactor_notifier_osv, so we only can work on such notifiers.
+    reactor_notifier_osv *n = dynamic_cast<reactor_notifier_osv *>(notifier);
+    if (n->read()) {
+        return make_ready_future<>();
+    }
+    n->enable(_poller);
+    return n->_pr.get_future();
+}
+
+
+future<>
+reactor_backend_osv::readable(pollable_fd_state& fd) {
+    std::cout << "reactor_backend_osv does not support file descriptors - readable() shouldn't have been called!\n";
+    abort();
+}
+
+future<>
+reactor_backend_osv::writeable(pollable_fd_state& fd) {
+    std::cout << "reactor_backend_osv does not support file descriptors - writeable() shouldn't have been called!\n";
+    abort();
+}
+
+void
+reactor_backend_osv::forget(pollable_fd_state& fd) {
+    std::cout << "reactor_backend_osv does not support file descriptors - forget() shouldn't have been called!\n";
+    abort();
+}
+
+future<>
+reactor_backend_osv::receive_signal(int signo) {
+    std::cout << "reactor_backend_osv::receive_signal() not yet implemented\n";
+    abort();
+}
+
+void
+reactor_backend_osv::enable_timer(clock_type::time_point when) {
+    _poller.set_timer(when);
+}
+
+future<>
+reactor_backend_osv::timers_completed() {
+    if (_poller.expired()) {
+        return make_ready_future<>();
+    }
+    return _timer_promise.get_future();
+}
+#endif

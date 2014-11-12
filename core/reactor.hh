@@ -42,6 +42,10 @@
 #include "file.hh"
 #include "semaphore.hh"
 
+#ifdef HAVE_OSV
+#include <osv/newpoll.hh>
+#endif
+
 class reactor;
 class pollable_fd;
 class pollable_fd_state;
@@ -270,6 +274,18 @@ private:
     friend class readable_eventfd;
 };
 
+// The reactor_notifier interface is a simplified version of Linux's eventfd
+// interface (with semaphore behavior off, and signal() always signaling 1).
+//
+// A call to signal() causes an ongoing wait() to invoke its continuation.
+// If no wait() is ongoing, the next wait() will continue immediately.
+class reactor_notifier {
+public:
+    virtual future<> wait() = 0;
+    virtual void signal() = 0;
+    virtual ~reactor_notifier() {}
+};
+
 class thread_pool;
 class smp;
 
@@ -323,10 +339,8 @@ class smp_message_queue {
                             boost::lockfree::capacity<queue_length>>;
     lf_queue _pending;
     lf_queue _completed;
-    writeable_eventfd _start_eventfd;
-    readable_eventfd _complete_eventfd;
-    writeable_eventfd _complete_eventfd_write;
-    readable_eventfd _start_eventfd_read;
+    std::unique_ptr<reactor_notifier> _start_event;
+    std::unique_ptr<reactor_notifier> _complete_event;
     size_t _current_queue_length = 0;
     reactor* _pending_peer;
     reactor* _complete_peer;
@@ -396,6 +410,8 @@ private:
 };
 
 class thread_pool {
+#ifndef HAVE_OSV
+    // FIXME: implement using reactor_notifier abstraction we used for SMP
     syscall_work_queue inter_thread_wq;
     posix_thread _worker_thread;
     std::atomic<bool> _stopped = { false };
@@ -404,14 +420,61 @@ public:
     ~thread_pool();
     template <typename T, typename Func>
     future<T> submit(Func func) {return inter_thread_wq.submit<T>(std::move(func));}
+#else
+public:
+    template <typename T, typename Func>
+    future<T> submit(Func func) { std::cout << "thread_pool not yet implemented on osv\n"; abort(); }
+#endif
 private:
     void work();
 };
 
-class reactor {
-    static constexpr size_t max_aio = 128;
-    promise<> _exit_promise;
-    future<> _exit_future;
+// The "reactor_backend" interface provides a method of waiting for various
+// basic events on one thread. We have one implementation based on epoll and
+// file-descriptors (reactor_backend_epoll) and one implementation based on
+// OSv-specific file-descriptor-less mechanisms (reactor_backend_osv).
+class reactor_backend {
+public:
+    virtual ~reactor_backend() {};
+    // wait_and_process() waits for some events to become available, and
+    // processes one or more of them. If block==false, it doesn't wait,
+    // and just processes events that have already happened, if any.
+    // After the optional wait, just before processing the events, the
+    // pre_process() function is called.
+    virtual void wait_and_process(bool block,
+            std::function<void()> &&pre_process) = 0;
+    // Methods that allow polling on file descriptors. This will only work on
+    // reactor_backend_epoll. Other reactor_backend will probably abort if
+    // they are called (which is fine if no file descriptors are waited on):
+    virtual future<> readable(pollable_fd_state& fd) = 0;
+    virtual future<> writeable(pollable_fd_state& fd) = 0;
+    virtual void forget(pollable_fd_state& fd) = 0;
+    // Methods that allow polling on a reactor_notifier. This is currently
+    // used only for reactor_backend_osv, but in the future it should really
+    // replace the above functions.
+    virtual future<> notified(reactor_notifier *n) = 0;
+    // Methods that allow capturing Unix signals.
+    virtual future<> receive_signal(int signo) = 0;
+    // Method for enabling a single timer (reactor multiplexes on this
+    // multiple timers).
+    virtual void enable_timer(clock_type::time_point when) = 0;
+    virtual future<> timers_completed() = 0;
+    // Methods for allowing sending notifications events between threads.
+    virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() = 0;
+};
+
+// reactor backend using file-descriptor & epoll, suitable for running on
+// Linux. Can wait on multiple file descriptors, and converts other events
+// (such as timers, signals, inter-thread notifications) into file descriptors
+// using mechanisms like timerfd, signalfd and eventfd respectively.
+class reactor_backend_epoll : public reactor_backend {
+private:
+    file_desc _epollfd;
+    future<> get_epoll_future(pollable_fd_state& fd,
+            promise<> pollable_fd_state::* pr, int event);
+    void complete_epoll_event(pollable_fd_state& fd,
+            promise<> pollable_fd_state::* pr, int events, int event);
+    uint64_t _timers_completed;
     pollable_fd _timerfd = file_desc::timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC | TFD_NONBLOCK);
     struct signal_handler {
         signal_handler(int signo);
@@ -419,29 +482,76 @@ class reactor {
         pollable_fd _signalfd;
         signalfd_siginfo _siginfo;
     };
+    std::unordered_map<int, signal_handler> _signal_handlers;
+public:
+    reactor_backend_epoll();
+    virtual ~reactor_backend_epoll() override { }
+    virtual void wait_and_process(bool block, std::function<void()> &&pre_process) override;
+    virtual future<> readable(pollable_fd_state& fd) override;
+    virtual future<> writeable(pollable_fd_state& fd) override;
+    virtual void forget(pollable_fd_state& fd) override;
+    virtual future<> notified(reactor_notifier *n) override;
+    virtual future<> receive_signal(int signo) override;
+    virtual void enable_timer(clock_type::time_point when) override;
+    virtual future<> timers_completed() override;
+    virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
+};
+
+#ifdef HAVE_OSV
+// reactor_backend using OSv-specific features, without any file descriptors.
+// This implementation cannot currently wait on file descriptors, but unlike
+// reactor_backend_epoll it doesn't need file descriptors for waiting on a
+// timer, for example, so file descriptors are not necessary.
+class reactor_notifier_osv;
+class reactor_backend_osv : public reactor_backend {
+private:
+    osv::newpoll::poller _poller;
+    future<> get_poller_future(reactor_notifier_osv *n);
+    promise<> _timer_promise;
+public:
+    reactor_backend_osv();
+    virtual ~reactor_backend_osv() override { }
+    virtual void wait_and_process(bool block,
+            std::function<void()> &&pre_process) override;
+    virtual future<> readable(pollable_fd_state& fd) override;
+    virtual future<> writeable(pollable_fd_state& fd) override;
+    virtual void forget(pollable_fd_state& fd) override;
+    virtual future<> notified(reactor_notifier *n) override;
+    virtual future<> receive_signal(int signo) override;
+    virtual void enable_timer(clock_type::time_point when) override;
+    virtual future<> timers_completed() override;
+    virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
+    friend class reactor_notifier_osv;
+};
+#endif /* HAVE_OSV */
+
+class reactor {
+private:
+    // FIXME: make _backend a unique_ptr<reactor_backend>, not a compile-time #ifdef.
+#ifdef HAVE_OSV
+    reactor_backend_osv _backend;
+#else
+    reactor_backend_epoll _backend;
+#endif
+    static constexpr size_t max_aio = 128;
+    promise<> _exit_promise;
+    future<> _exit_future;
     std::atomic<bool> _idle;
     unsigned _id = 0;
     bool _stopped = false;
     bool _handle_sigint = true;
-    timer_set<timer, &timer::_link, clock_type> _timers;
-    timer_set<timer, &timer::_link, clock_type>::timer_list_t _expired_timers;
     std::unique_ptr<network_stack> _network_stack;
     int _return = 0;
-    std::unordered_map<int, signal_handler> _signal_handlers;
     promise<> _start_promise;
     uint64_t _timers_completed;
-    file_desc _epollfd;
+    timer_set<timer, &timer::_link, clock_type> _timers;
+    timer_set<timer, &timer::_link, clock_type>::timer_list_t _expired_timers;
     readable_eventfd _io_eventfd;
     io_context_t _io_context;
     semaphore _io_context_available;
     circular_buffer<std::unique_ptr<task>> _pending_tasks;
     thread_pool _thread_pool;
 private:
-    future<> get_epoll_future(pollable_fd_state& fd, promise<> pollable_fd_state::* pr, int event);
-    void complete_epoll_event(pollable_fd_state& fd, promise<> pollable_fd_state::* pr, int events, int event);
-    future<> readable(pollable_fd_state& fd);
-    future<> writeable(pollable_fd_state& fd);
-    void forget(pollable_fd_state& fd);
     void abort_on_error(int ret);
     void complete_timers();
 public:
@@ -479,8 +589,6 @@ public:
         _exit_future = _exit_future.then(func);
     }
 
-    future<> receive_signal(int signo);
-
     void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
 
     network_stack& net() { return *_network_stack; }
@@ -503,6 +611,34 @@ private:
     friend class readable_eventfd;
     friend class timer;
     friend class smp;
+public:
+    void wait_and_process(bool block, std::function<void()> &&pre_process) {
+        _backend.wait_and_process(block, std::move(pre_process));
+    }
+    future<> readable(pollable_fd_state& fd) {
+        return _backend.readable(fd);
+    }
+    future<> writeable(pollable_fd_state& fd) {
+        return _backend.writeable(fd);
+    }
+    void forget(pollable_fd_state& fd) {
+        _backend.forget(fd);
+    }
+    future<> notified(reactor_notifier *n) {
+        return _backend.notified(n);
+    }
+    future<> receive_signal(int signo) {
+        return _backend.receive_signal(signo);
+    }
+    void enable_timer(clock_type::time_point when) {
+        _backend.enable_timer(when);
+    }
+    future<> timers_completed() {
+        return _backend.timers_completed();
+    }
+    std::unique_ptr<reactor_notifier> make_reactor_notifier() {
+        return _backend.make_reactor_notifier();
+    }
 };
 
 extern thread_local reactor engine;
