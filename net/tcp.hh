@@ -207,6 +207,7 @@ private:
         std::chrono::milliseconds _retransmit_timeout{3000};
         static constexpr uint16_t _max_nr_retransmit{5};
         timer _retransmit;
+        uint16_t _nr_full_seg_received = 0;
     public:
         tcb(tcp& t, connid id);
         void input(tcp_hdr* th, packet p);
@@ -226,7 +227,7 @@ private:
         void merge_out_of_order();
         void insert_out_of_order(tcp_seq seq, packet p);
         void trim_receive_data_after_window();
-        bool should_send_ack();
+        bool should_send_ack(uint16_t seg_len);
         void clear_delayed_ack();
         packet get_transmit_packet();
         void start_retransmit_timer() { _retransmit.rearm(clock_type::now() + _retransmit_timeout); };
@@ -390,7 +391,7 @@ tcp<InetTraits>::tcb::tcb(tcp& t, connid id)
     , _foreign_ip(id.foreign_ip)
     , _local_port(id.local_port)
     , _foreign_port(id.foreign_port) {
-        _delayed_ack.set_callback([this] { output(); });
+        _delayed_ack.set_callback([this] { _nr_full_seg_received = 0; output(); });
         _retransmit.set_callback([this] { retransmit(); });
 }
 
@@ -508,7 +509,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 }
             }
             // Send <ACK> to ack data only when data is present in this packet
-            do_output = should_send_ack();
+            do_output = should_send_ack(seg_len);
         }
     }
     if (th->f_fin) {
@@ -616,6 +617,8 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     }
     // send some stuff
     if (do_output || (do_output_data && can_send())) {
+        // Since we will do output, we can canncel scheduled delayed ACK.
+        clear_delayed_ack();
         output();
     }
 }
@@ -795,13 +798,31 @@ void tcp<InetTraits>::tcb::close() {
 }
 
 template <typename InetTraits>
-bool tcp<InetTraits>::tcb::should_send_ack() {
-    if (_delayed_ack.cancel()) {
+bool tcp<InetTraits>::tcb::should_send_ack(uint16_t seg_len) {
+    // We've received a TSO packet, do ack immediately
+    if (seg_len > _rcv.mss) {
+        _nr_full_seg_received = 0;
+        _delayed_ack.cancel();
         return true;
-    } else {
-        _delayed_ack.arm(400ms);
+    }
+
+    // We've received a full sized segment, ack for every second full sized segment
+    if (seg_len == _rcv.mss) {
+        if (_nr_full_seg_received++ >= 1) {
+            _nr_full_seg_received = 0;
+            _delayed_ack.cancel();
+            return true;
+        }
+    }
+
+    // If the timer is armed and its callback hasn't been run.
+    if (_delayed_ack.armed()) {
         return false;
     }
+
+    // If the timer is not armed, schedule a delayed ACK.
+    _delayed_ack.arm(500ms);
+    return false;
 }
 
 template <typename InetTraits>
