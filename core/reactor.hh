@@ -1021,9 +1021,8 @@ output_stream<CharType>::flush() {
     _buf.trim(_end);
     temporary_buffer<CharType> next(_size);
     std::swap(_buf, next);
-    return _fd.put(std::move(next)).then([this] {
-        _end = 0;
-    });
+    _end = 0;
+    return _fd.put(std::move(next));
 }
 
 inline
