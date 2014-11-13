@@ -78,6 +78,7 @@ tests = [
     'tests/memcached/test_ascii_parser',
     'tests/tcp_server',
     'tests/allocator_test',
+    'tests/output_stream_test',
     ]
 
 apps = [
@@ -182,7 +183,8 @@ deps = {
     'tests/tcp_server': ['tests/tcp_server.cc'] + core + libnet,
     'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
     'tests/sstring_test': ['tests/sstring_test.cc'] + core,
-    'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc']
+    'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc'],
+    'tests/output_stream_test': ['tests/output_stream_test.cc'] + core + libnet,
 }
 
 warnings = [

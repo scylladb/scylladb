@@ -8,6 +8,7 @@ all_tests = [
     'futures_test',
     'memcached/test_ascii_parser',
     'sstring_test',
+    'output_stream_test',
 ]
 
 last_len = 0
