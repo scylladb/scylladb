@@ -22,6 +22,8 @@ public:
 
     void run() {
         posix_thread t([this] {
+            boost::program_options::variables_map configuration;
+            engine.configure(configuration);
             engine.when_started().then([this] {
                 return run_test_case();
             }).rescue([] (auto get) {
