@@ -991,12 +991,21 @@ input_stream<CharType>::consume(Consumer& consumer) {
 template <typename CharType>
 future<>
 output_stream<CharType>::write(const char_type* buf, size_t n) {
-    if (n >= _size) {
-        temporary_buffer<char> tmp(n);
-        std::copy(buf, buf + n, tmp.get_write());
-        return flush().then([this, tmp = std::move(tmp)] () mutable {
+    auto bulk_threshold = _end ? (2 * _size - _end) : _size;
+    if (n >= bulk_threshold) {
+        if (_end) {
+            auto now = _size - _end;
+            std::copy(buf, buf + now, _buf.get_write() + _end);
+            temporary_buffer<char> tmp(n - now);
+            std::copy(buf + now, buf + n, tmp.get_write());
+            return flush().then([this, tmp = std::move(tmp)]() mutable {
+                return _fd.put(std::move(tmp));
+            });
+        } else {
+            temporary_buffer<char> tmp(n);
+            std::copy(buf, buf + n, tmp.get_write());
             return _fd.put(std::move(tmp));
-        });
+        }
     }
     auto now = std::min(n, _size - _end);
     std::copy(buf, buf + now, _buf.get_write() + _end);
