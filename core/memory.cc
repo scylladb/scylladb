@@ -270,9 +270,19 @@ struct cpu_pages {
 static thread_local cpu_pages cpu_mem;
 std::atomic<unsigned> cpu_pages::cpu_id_gen;
 
+// Free spans are store in the largest index i such that nr_pages >= 1 << i.
 static inline
 unsigned index_of(unsigned pages) {
     return std::numeric_limits<unsigned>::digits - count_leading_zeros(pages) - 1;
+}
+
+// Smallest index i such that all spans stored in the index are >= pages.
+static inline
+unsigned index_of_conservative(unsigned pages) {
+    if (pages == 1) {
+        return 0;
+    }
+    return std::numeric_limits<unsigned>::digits - count_leading_zeros(pages - 1);
 }
 
 void
@@ -320,8 +330,7 @@ void cpu_pages::free_span(uint32_t span_start, uint32_t nr_pages) {
 template <typename Trimmer>
 void*
 cpu_pages::allocate_large_and_trim(unsigned n_pages, Trimmer trimmer) {
-    auto idx = index_of(n_pages);
-    assert(n_pages >= (1u << idx));
+    auto idx = index_of_conservative(n_pages);
     assert(n_pages < (2u << idx));
     while (idx < nr_span_lists && fsu.free_spans[idx].empty()) {
         ++idx;
