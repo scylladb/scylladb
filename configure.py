@@ -77,6 +77,7 @@ tests = [
     'tests/sstring_test',
     'tests/memcached/test_ascii_parser',
     'tests/tcp_server',
+    'tests/allocator_test',
     ]
 
 apps = [
@@ -181,6 +182,7 @@ deps = {
     'tests/tcp_server': ['tests/tcp_server.cc'] + core + libnet,
     'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
     'tests/sstring_test': ['tests/sstring_test.cc'] + core,
+    'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc']
 }
 
 warnings = [
