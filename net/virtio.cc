@@ -206,11 +206,12 @@ private:
     used _used;
     std::atomic<uint16_t>* _avail_event;
     std::atomic<uint16_t>* _used_event;
+    uint16_t _used_event_last_set = 0;
     semaphore _available_descriptors = { 0 };
     int _free_head = -1;
     int _free_last = -1;
+    bool _lazy_interrupts = false;
 public:
-
     explicit vring(config conf);
     void set_notifier(std::unique_ptr<virtio_notifier> notifier) {
         _notifier = std::move(notifier);
@@ -238,6 +239,9 @@ public:
     void post(Iterator begin, Iterator end);
 
     semaphore& available_descriptors() { return _available_descriptors; }
+
+    void set_lazy_interrupts() { _lazy_interrupts = true; }
+    void do_complete();
 private:
     // Let host know about interrupt delivery
     void disable_interrupts() {
@@ -252,7 +256,14 @@ private:
         if (!_config.event_index) {
             _avail._shared->_flags.store(0, std::memory_order_relaxed);
         } else {
-            _used_event->store(tail, std::memory_order_relaxed);
+            auto used_event = tail;
+            if (_lazy_interrupts) {
+               used_event = uint16_t(tail + uint16_t(size() / 4));
+            }
+            if (used_event != _used_event_last_set) {
+                _used_event_last_set = used_event;
+                _used_event->store(used_event, std::memory_order_relaxed);
+            }
         }
 
         // We need to set the host notification flag then check if the queue is
@@ -291,7 +302,6 @@ private:
         }
     }
 
-    void do_complete();
     size_t mask() { return size() - 1; }
     size_t masked(size_t idx) { return idx & mask(); }
     size_t available();
@@ -495,8 +505,9 @@ public:
 
 };
 
-    virtio_net_device::txq::txq(virtio_net_device& dev, vring::config config)
-        : _dev(dev), _ring(config) {
+virtio_net_device::txq::txq(virtio_net_device& dev, vring::config config)
+    : _dev(dev) , _ring(config) {
+    _ring.set_lazy_interrupts();
 }
 
 future<>
@@ -542,6 +553,10 @@ virtio_net_device::txq::post(packet p) {
             std::move(p));
 
     auto nr_frags = q.nr_frags();
+
+    if (_ring.available_descriptors().current() < nr_frags) {
+        _ring.do_complete();
+    }
     return _ring.available_descriptors().wait(nr_frags).then([this, nr_frags, p = std::move(q)] () mutable {
         static auto fragment_to_buffer = [this] (fragment f) {
             vring::buffer b;
@@ -569,8 +584,8 @@ virtio_net_device::txq::post(packet p) {
     });
 }
 
-    virtio_net_device::rxq::rxq(virtio_net_device& dev, vring::config config)
-        : _dev(dev), _ring(config) {
+virtio_net_device::rxq::rxq(virtio_net_device& dev, vring::config config)
+    : _dev(dev), _ring(config) {
 }
 
 future<>
