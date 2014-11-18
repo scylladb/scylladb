@@ -7,6 +7,7 @@
 
 #ifdef HAVE_HWLOC
 
+#include "util/defer.hh"
 #include <hwloc.h>
 #include <unordered_map>
 
@@ -26,6 +27,7 @@ size_t div_roundup(size_t num, size_t denom) {
 std::vector<cpu> allocate(configuration c) {
     hwloc_topology_t topology;
     hwloc_topology_init(&topology);
+    auto free_hwloc = defer([&] { hwloc_topology_destroy(topology); });
     hwloc_topology_load(topology);
     auto machine_depth = hwloc_get_type_depth(topology, HWLOC_OBJ_MACHINE);
     assert(hwloc_get_nbobjs_by_depth(topology, machine_depth) == 1);
@@ -77,6 +79,7 @@ std::vector<cpu> allocate(configuration c) {
 unsigned nr_processing_units() {
     hwloc_topology_t topology;
     hwloc_topology_init(&topology);
+    auto free_hwloc = defer([&] { hwloc_topology_destroy(topology); });
     hwloc_topology_load(topology);
     return hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
 }
