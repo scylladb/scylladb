@@ -560,7 +560,14 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 return respond_with_reset(th);
             }
         }
-        auto data_ack = th->ack - th->f_fin;
+
+        // If we've sent out FIN, remote can ack both data and FIN, skip FIN
+        // when acking data
+        auto data_ack = th->ack;
+        if (_local_fin_sent && th->ack == _snd.next + 1) {
+            data_ack = th->ack - 1;
+        }
+
         if (data_ack > _snd.unacknowledged && data_ack <= _snd.next) {
             // Full ACK of segment
             while (!_snd.data.empty()
