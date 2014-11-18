@@ -70,13 +70,28 @@ future<> do_until(StopCondition&& stop_cond, AsyncAction&& action) {
 template<typename AsyncAction>
 static inline
 future<> keep_doing(AsyncAction&& action) {
-    try {
-        return action().then([action = std::forward<AsyncAction>(action)] () mutable {
-            return keep_doing(std::forward<AsyncAction>(action));
-        });
-    } catch (...) {
-        return make_exception_future(std::current_exception());
+    while (task_quota) {
+        auto f = action();
+
+        if (!f.available()) {
+            return f.then([action = std::forward<AsyncAction>(action)] () mutable {
+                return keep_doing(std::forward<AsyncAction>(action));
+            });
+        }
+
+        if (f.failed()) {
+            return std::move(f);
+        }
+
+        --task_quota;
     }
+
+    promise<> p;
+    auto f = p.get_future();
+    schedule(make_task([action = std::forward<AsyncAction>(action), p = std::move(p)] () mutable {
+        keep_doing(std::forward<AsyncAction>(action)).forward_to(std::move(p));
+    }));
+    return f;
 }
 
 template<typename Iterator, typename AsyncAction>

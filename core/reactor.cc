@@ -74,6 +74,7 @@ void reactor::configure(boost::program_options::variables_map vm) {
         ? network_stack_registry::create(sstring(vm["network-stack"].as<std::string>()), vm)
         : network_stack_registry::create(vm);
     _handle_sigint = !vm.count("no-handle-interrupt");
+    _task_quota = vm["task-quota"].as<int>();
 }
 
 future<> reactor_backend_epoll::get_epoll_future(pollable_fd_state& pfd,
@@ -420,8 +421,9 @@ int reactor::run() {
     });
     complete_timers();
     while (true) {
-        unsigned loop = 0;
-        while (!_pending_tasks.empty() && loop++ < 200) {
+        task_quota = _task_quota;
+        while (!_pending_tasks.empty() && task_quota) {
+            --task_quota;
             auto tsk = std::move(_pending_tasks.front());
             _pending_tasks.pop_front();
             tsk->run();
@@ -731,6 +733,7 @@ reactor::get_options_description() {
                 sprint("select network stack (valid values: %s)",
                         format_separated(net_stack_names.begin(), net_stack_names.end(), ", ")).c_str())
         ("no-handle-interrupt", "ignore SIGINT (for gdb)")
+        ("task-quota", bpo::value<int>()->default_value(200), "Max number of tasks executed between polls and in loops")
         ;
     opts.add(network_stack_registry::options_description());
     return opts;
@@ -823,6 +826,7 @@ void smp::join_all()
 }
 
 __thread size_t future_avail_count = 0;
+__thread size_t task_quota = 0;
 
 thread_local reactor engine;
 

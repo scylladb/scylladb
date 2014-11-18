@@ -551,6 +551,7 @@ private:
     semaphore _io_context_available;
     circular_buffer<std::unique_ptr<task>> _pending_tasks;
     thread_pool _thread_pool;
+    size_t _task_quota;
 private:
     void abort_on_error(int ret);
     void complete_timers();
@@ -642,6 +643,7 @@ public:
 };
 
 extern thread_local reactor engine;
+extern __thread size_t task_quota;
 
 class smp {
 	static std::vector<posix_thread> _threads;
