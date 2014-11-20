@@ -122,18 +122,23 @@ void userspace_evtchn::umask(int *port, unsigned count)
 
 #ifdef HAVE_OSV
 class kernel_evtchn: public evtchn {
+    // We need to convert extra-seastar events to intra-seastar events
+    // (in this case, the semaphore interface of evtchn). The interface for
+    // that currently is the reactor notifier.
+    std::unique_ptr<reactor_notifier> _notified;
     static void make_ready(void *arg);
-    void process_interrupts(readable_eventfd* fd, int port);
+    void process_interrupts(int port);
 public:
-    kernel_evtchn(unsigned otherend) : evtchn(otherend) {}
+    kernel_evtchn(unsigned otherend)
+        : evtchn(otherend)
+        , _notified(engine.make_reactor_notifier()) {}
     virtual port bind() override;
     virtual void notify(int port) override;
 };
 
 void kernel_evtchn::make_ready(void *arg) {
-    int fd = reinterpret_cast<uintptr_t>(arg);
-    uint64_t one = 1;
-    ::write(fd, &one, sizeof(one));
+    auto notifier = reinterpret_cast<reactor_notifier *>(arg);
+    notifier->signal();
 }
 
 port kernel_evtchn::bind() {
@@ -144,21 +149,19 @@ port kernel_evtchn::bind() {
     irq = bind_listening_port_to_irq(_otherend, &newp);
 
     port p(newp);
-    // We need to convert extra-seastar events to intra-seastar events
-    // (in this case, the semaphore interface of evtchn).  The only
-    // way to do that currently is via eventfd.
-    auto fd = new readable_eventfd;
-    auto wfd = fd->get_write_fd();
-    intr_add_handler("", irq, NULL, make_ready, reinterpret_cast<void*>(uintptr_t(wfd)), 0, 0);
+
+    auto notifier = reinterpret_cast<void *>(_notified.get());
+
+    intr_add_handler("", irq, NULL, make_ready, notifier, 0, 0);
     unmask_evtchn(newp);
-    process_interrupts(fd, newp);
+    process_interrupts(newp);
     return p;
 }
 
-void kernel_evtchn::process_interrupts(readable_eventfd* fd, int port) {
-    fd->wait().then([this, fd, port] (size_t ignore) {
+void kernel_evtchn::process_interrupts(int port) {
+    _notified->wait().then([this, port] () {
         make_ready_port(port);
-        process_interrupts(fd, port);
+        process_interrupts(port);
     });
 }
 
