@@ -14,8 +14,10 @@ class port {
     evtchn *_evtchn;
 public:
     explicit port(int p);
+    port() = default;
     port(port&& other);
     ~port();
+    port& operator=(port&& other);
     int number() const { return _port; }
     future<> pending();
     void notify();

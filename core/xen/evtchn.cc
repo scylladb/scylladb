@@ -44,12 +44,24 @@ port::port(int p)
 
 port::port(port&& other)
     : _port(other._port), _sem(std::move(other._sem)), _evtchn(other._evtchn) {
-    _evtchn->port_moved(_port, &other, this);
+    if (_port != -1) {
+        _evtchn->port_moved(_port, &other, this);
+    }
 }
 
 port::~port() {
     // FIXME: unbind from Xen
-    _evtchn->port_deleted(_port, this);
+    if (_port != -1) {
+        _evtchn->port_deleted(_port, this);
+    }
+}
+
+port& port::operator=(port&& other) {
+    if (this != &other) {
+        this->~port();
+        new (this) port(std::move(other));
+    }
+    return *this;
 }
 
 future<> port::pending() {

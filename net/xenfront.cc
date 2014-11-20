@@ -61,8 +61,8 @@ private:
 
     ethernet_address _hw_address;
 
-    port bind_tx_evtchn();
-    port bind_rx_evtchn();
+    port bind_tx_evtchn(bool split);
+    port bind_rx_evtchn(bool split);
 
     future<> alloc_rx_references();
     future<> handle_tx_completions();
@@ -263,13 +263,12 @@ net::hw_features xenfront_net_device::hw_features() {
     return _hw_features;
 }
 
-port xenfront_net_device::bind_tx_evtchn() {
+port xenfront_net_device::bind_tx_evtchn(bool split) {
     return _evtchn->bind();
 }
 
-port xenfront_net_device::bind_rx_evtchn() {
+port xenfront_net_device::bind_rx_evtchn(bool split) {
 
-    auto split = _xenstore->read_or_default<int>(_backend + "/feature-split-event-channels");
     if (split) {
         return _evtchn->bind();
     }
@@ -284,8 +283,6 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     , _backend(_xenstore->read(path("backend")))
     , _gntalloc(gntalloc::instance(_userspace, _otherend))
     , _evtchn(evtchn::instance(_userspace, _otherend))
-    , _tx_evtchn(bind_tx_evtchn())
-    , _rx_evtchn(bind_rx_evtchn())
     , _tx_ring(_gntalloc->alloc_ref())
     , _rx_ring(_gntalloc->alloc_ref())
     , _tx_refs(_gntalloc->alloc_ref(front_ring<tx>::nr_ents))
@@ -298,13 +295,16 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     std::unordered_map<std::string, int> features_nack;
 
     for (auto&& feat : all_features) {
-        if (feat.compare(0, 8, "feature-") == 0 && !_supported_features.count(feat)) {
-            features_nack[feat] = 0;
+        if (feat.compare(0, 8, "feature-") == 0) {
+            auto val = _xenstore->read<int>(_backend + "/" + feat);
+            features_nack[feat] = val && _supported_features.count(feat);
         }
     }
     if (!opts["split-event-channels"].as<bool>()) {
         features_nack["feature-split-event-channels"] = 0;
     }
+
+    bool split = features_nack["feature-split-event-channel"];
 
     _hw_features.rx_csum_offload = true;
     _hw_features.tx_csum_offload = true;
@@ -314,6 +314,9 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
         _features.push_back(std::make_pair(s, value));
     }
 
+    _tx_evtchn = bind_tx_evtchn(split);
+    _rx_evtchn = bind_rx_evtchn(split);
+
     {
         auto t = xenstore::xenstore_transaction();
 
@@ -321,8 +324,12 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
             _xenstore->write(path(f.first), f.second, t);
         }
 
-        _xenstore->write<int>(path("event-channel-tx"), _tx_evtchn.number(), t);
-        _xenstore->write<int>(path("event-channel-rx"), _rx_evtchn.number(), t);
+        if (split) {
+            _xenstore->write<int>(path("event-channel-tx"), _tx_evtchn.number(), t);
+            _xenstore->write<int>(path("event-channel-rx"), _rx_evtchn.number(), t);
+        } else {
+            _xenstore->write<int>(path("event-channel"), _rx_evtchn.number(), t);
+        }
         _xenstore->write<int>(path("tx-ring-ref"), _tx_ring.ref, t);
         _xenstore->write<int>(path("rx-ring-ref"), _rx_ring.ref, t);
         _xenstore->write<int>(path("state"), 4, t);
