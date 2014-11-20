@@ -718,44 +718,55 @@ private:
     public:
         item_writer(output_stream<char>& out) : _out(out) {}
 
-        future<> operator()(item_ptr item) {
+        static future<> write(output_stream<char>& out, item_ptr item) {
             if (!item) {
                 return make_ready_future<>();
             }
-            return _out.write(msg_value).then([this, item = std::move(item)] () mutable {
-                auto f = _out.write(item->key());
-                return std::move(f).then([this, item = std::move(item)] () mutable {
-                    auto f = _out.write(item->ascii_prefix());
+            return out.write(msg_value).then([&out, item = std::move(item)] () mutable {
+                auto f = out.write(item->key());
+                return std::move(f).then([&out, item = std::move(item)] () mutable {
+                    auto f = out.write(item->ascii_prefix());
 
                     if (SendCasVersion) {
-                        f = std::move(f).then([this, v = item->version()] {
-                            return _out.write(" ").then([this, v] {
-                                return _out.write(to_sstring(v));
+                        f = std::move(f).then([&out, v = item->version()] {
+                            return out.write(" ").then([&out, v] {
+                                return out.write(to_sstring(v));
                             });
                         });
                     }
 
-                    return std::move(f).then([this] {
-                        return _out.write(msg_crlf);
-                    }).then([this, item = std::move(item)] {
-                        return _out.write(item->data());
-                    }).then([this] {
-                        return _out.write(msg_crlf);
+                    return std::move(f).then([&out] {
+                        return out.write(msg_crlf);
+                    }).then([&out, item = std::move(item)] {
+                        return out.write(item->data());
+                    }).then([&out] {
+                        return out.write(msg_crlf);
                     });
                 });
             });
+        }
+
+        future<> operator()(item_ptr item) {
+            return write(_out, std::move(item));
         }
     };
 
     template <bool SendCasVersion>
     future<> handle_get(output_stream<char>& out) {
         _system_stats.local()._cmd_get++;
-        auto keys_p = make_shared<std::vector<item_key>>(std::move(_parser._keys));
-        return map_reduce(keys_p->begin(), keys_p->end(), [this] (auto& key) {
-            return _cache.get(key);
-        }, item_writer<SendCasVersion>(out)).then([&out, keys_p] {
-            return out.write(msg_end);
-        });
+        if (_parser._keys.size() == 1) {
+            return _cache.get(_parser._keys[0]).then([&out] (auto item_ptr) {
+                return item_writer<SendCasVersion>::write(out, std::move(item_ptr)).then([&out] {
+                    return out.write(msg_end);
+                });
+            });
+        } else {
+            return map_reduce(_parser._keys.begin(), _parser._keys.end(), [this] (const auto& key) {
+                return _cache.get(key);
+            }, item_writer<SendCasVersion>(out)).then([&out] {
+                return out.write(msg_end);
+            });
+        }
     }
 
     template <typename Value>
