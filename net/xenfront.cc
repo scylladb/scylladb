@@ -298,8 +298,9 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     std::unordered_map<std::string, int> features_nack;
 
     for (auto&& feat : all_features) {
-        if (feat.compare(0, 8, "feature-") == 0 && !_supported_features.count(feat)) {
-            features_nack[feat] = 0;
+        if (feat.compare(0, 8, "feature-") == 0) {
+            auto val = _xenstore->read<int>(_backend + "/" + feat);
+            features_nack[feat] = val && _supported_features.count(feat);
         }
     }
     if (!opts["split-event-channels"].as<bool>()) {
