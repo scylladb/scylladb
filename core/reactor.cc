@@ -795,11 +795,13 @@ void smp::configure(boost::program_options::variables_map configuration)
         smp::_qs[i] = new smp_message_queue[smp::count];
     }
 
-    boost::barrier inited(smp::count);
+    // Better to put it into the smp class, but at smp construction time
+    // correct smp::count is not known.
+    static boost::barrier inited(smp::count);
 
     for (unsigned i = 1; i < smp::count; i++) {
         auto allocation = allocations[i];
-        _threads.emplace_back([configuration, i, allocation, &inited] {
+        _threads.emplace_back([configuration, i, allocation] {
             pin_this_thread(allocation.cpu_id);
             memory::configure(allocation.mem);
             sigset_t mask;
