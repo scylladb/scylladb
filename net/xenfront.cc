@@ -324,8 +324,12 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
             _xenstore->write(path(f.first), f.second, t);
         }
 
-        _xenstore->write<int>(path("event-channel-tx"), _tx_evtchn.number(), t);
-        _xenstore->write<int>(path("event-channel-rx"), _rx_evtchn.number(), t);
+        if (split) {
+            _xenstore->write<int>(path("event-channel-tx"), _tx_evtchn.number(), t);
+            _xenstore->write<int>(path("event-channel-rx"), _rx_evtchn.number(), t);
+        } else {
+            _xenstore->write<int>(path("event-channel"), _rx_evtchn.number(), t);
+        }
         _xenstore->write<int>(path("tx-ring-ref"), _tx_ring.ref, t);
         _xenstore->write<int>(path("rx-ring-ref"), _rx_ring.ref, t);
         _xenstore->write<int>(path("state"), 4, t);
