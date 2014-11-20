@@ -169,6 +169,7 @@ private:
             packet p;
             uint16_t data_len;
             unsigned nr_transmits;
+            clock_type::time_point tx_time;
         };
         struct send {
             tcp_seq unacknowledged;
@@ -189,6 +190,12 @@ private:
             std::experimental::optional<promise<>> _all_data_acked_promise;
             // Limit number of data queued into send queue
             semaphore user_queue_space = {212992};
+            // Round-trip time variation
+            std::chrono::milliseconds rttvar;
+            // Smoothed round-trip time
+            std::chrono::milliseconds srtt;
+            bool first_rto_sample = true;
+            clock_type::time_point syn_tx_time;
         } _snd;
         struct receive {
             tcp_seq next;
@@ -203,8 +210,12 @@ private:
         } _rcv;
         tcp_option _option;
         timer _delayed_ack;
-        // RTO: retransmission timeout
-        std::chrono::milliseconds _retransmit_timeout{3000};
+        // Retransmission timeout
+        std::chrono::milliseconds _rto{1000};
+        static constexpr std::chrono::milliseconds _rto_min{1000};
+        static constexpr std::chrono::milliseconds _rto_max{60000};
+        // Clock granularity
+        static constexpr std::chrono::milliseconds _rto_clk_granularity{1};
         static constexpr uint16_t _max_nr_retransmit{5};
         timer _retransmit;
         uint16_t _nr_full_seg_received = 0;
@@ -230,9 +241,11 @@ private:
         bool should_send_ack(uint16_t seg_len);
         void clear_delayed_ack();
         packet get_transmit_packet();
-        void start_retransmit_timer() { _retransmit.rearm(clock_type::now() + _retransmit_timeout); };
+        void start_retransmit_timer() { _retransmit.rearm(clock_type::now() + _rto); };
+        void start_retransmit_timer(clock_type::time_point now) { _retransmit.rearm(now + _rto); };
         void stop_retransmit_timer() { _retransmit.cancel(); };
         void retransmit();
+        void update_rto(clock_type::time_point tx_time);
         void cleanup();
         uint32_t can_send() {
            return std::min(uint32_t(_snd.unacknowledged + _snd.window - _snd.next), _snd.unsent_len);
@@ -478,6 +491,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
 
             // Send <SYN,ACK> back
             do_output = true;
+            _snd.syn_tx_time = clock_type::now();
         } else {
             if (seg_seq != _rcv.initial) {
                 return respond_with_reset(th);
@@ -556,6 +570,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 _snd.unacknowledged = _snd.next = _snd.initial + 1;
                 _local_syn_acked = true;
                 _snd.wl2 = th->ack;
+                update_rto(_snd.syn_tx_time);
             } else {
                 return respond_with_reset(th);
             }
@@ -573,6 +588,10 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             while (!_snd.data.empty()
                     && (_snd.unacknowledged + _snd.data.front().data_len <= data_ack)) {
                 _snd.unacknowledged += _snd.data.front().data_len;
+                // Ignore retransmitted segments when setting the RTO
+                if (_snd.data.front().nr_transmits == 0) {
+                    update_rto(_snd.data.front().tx_time);
+                }
                 _snd.data.pop_front();
             }
 
@@ -737,9 +756,11 @@ void tcp<InetTraits>::tcb::output() {
     p.set_offload_info(oi);
 
     if (len) {
-        _snd.data.push_back({p.share(), len, 0});
+        unsigned nr_transmits = 0;
+        auto now = clock_type::now();
+        _snd.data.push_back({p.share(), len, nr_transmits, now});
         if (!_retransmit.armed()) {
-            start_retransmit_timer();
+            start_retransmit_timer(now);
         }
     }
     _tcp.send(_local_ip, _foreign_ip, std::move(p));
@@ -953,8 +974,35 @@ void tcp<InetTraits>::tcb::retransmit() {
     // TODO: If the Path MTU changes, we need to split the segment if it is larger than current MSS
     _tcp.send(_local_ip, _foreign_ip, unacked_seg.p.share());
 
-    // TODO: According to RFC 6298: Update RTO <- RTO * 2, when we support dynamic RTO calculation
+    // According to RFC6298, Update RTO <- RTO * 2 to perform binary exponential back-off
+    _rto = std::min(_rto * 2, _rto_max);
     start_retransmit_timer();
+}
+
+template <typename InetTraits>
+void tcp<InetTraits>::tcb::update_rto(clock_type::time_point tx_time) {
+    // Update RTO according to RFC6298
+    auto R = std::chrono::duration_cast<std::chrono::milliseconds>(clock_type::now() - tx_time);
+    if (_snd.first_rto_sample) {
+        _snd.first_rto_sample = false;
+        // RTTVAR <- R/2
+        // SRTT <- R
+        _snd.rttvar = R / 2;
+        _snd.srtt = R;
+    } else {
+        // RTTVAR <- (1 - beta) * RTTVAR + beta * |SRTT - R'|
+        // SRTT <- (1 - alpha) * SRTT + alpha * R'
+        // where alpha = 1/8 and beta = 1/4
+        auto delta = _snd.srtt > R ? (_snd.srtt - R) : (R - _snd.srtt);
+        _snd.rttvar = _snd.rttvar * 3 / 4 + delta / 4;
+        _snd.srtt = _snd.srtt * 7 / 8 +  R / 8;
+    }
+    // RTO <- SRTT + max(G, K * RTTVAR)
+    _rto =  _snd.srtt + std::max(_rto_clk_granularity, 4 * _snd.rttvar);
+
+    // Make sure 1 sec << _rto << 60 sec
+    _rto = std::max(_rto, _rto_min);
+    _rto = std::min(_rto, _rto_max);
 }
 
 template <typename InetTraits>
@@ -978,6 +1026,14 @@ void tcp<InetTraits>::connection::close_write() {
 template <typename InetTraits>
 constexpr uint16_t tcp<InetTraits>::tcb::_max_nr_retransmit;
 
+template <typename InetTraits>
+constexpr std::chrono::milliseconds tcp<InetTraits>::tcb::_rto_min;
+
+template <typename InetTraits>
+constexpr std::chrono::milliseconds tcp<InetTraits>::tcb::_rto_max;
+
+template <typename InetTraits>
+constexpr std::chrono::milliseconds tcp<InetTraits>::tcb::_rto_clk_granularity;
 
 }
 
