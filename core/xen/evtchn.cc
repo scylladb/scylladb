@@ -55,6 +55,13 @@ port::~port() {
         _evtchn->port_deleted(_port, this);
     }
 }
+
+port& port::operator=(port&& other) {
+    if (this != &other) {
+        this->~port();
+        new (this) port(std::move(other));
+    }
+    return *this;
 }
 
 future<> port::pending() {
