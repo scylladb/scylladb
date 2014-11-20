@@ -12,6 +12,17 @@
 namespace net {
 
 struct ethernet_address {
+    ethernet_address() {}
+
+    ethernet_address(const uint8_t *eaddr) {
+        std::copy(eaddr, eaddr + 6, mac.begin());
+    }
+
+    ethernet_address(std::initializer_list<uint8_t> eaddr) {
+        assert(eaddr.size() == mac.size());
+        std::copy(eaddr.begin(), eaddr.end(), mac.begin());
+    }
+
     std::array<uint8_t, 6> mac;
 
     template <typename Adjuster>
@@ -23,7 +34,7 @@ std::ostream& operator<<(std::ostream& os, ethernet_address ea);
 struct ethernet {
     using address = ethernet_address;
     static address broadcast_address() {
-        return {{{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }}};
+        return  {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
     }
     static constexpr uint16_t arp_hardware_type() { return 1; }
 };

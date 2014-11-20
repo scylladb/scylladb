@@ -789,7 +789,7 @@ public:
 };
 
 ethernet_address virtio_net_device_vhost::hw_address() {
-    return {{{ 0x12, 0x23, 0x34, 0x56, 0x67, 0x78 }}};
+    return { 0x12, 0x23, 0x34, 0x56, 0x67, 0x78 };
 }
 
 static size_t config_ring_size(boost::program_options::variables_map &opts) {
@@ -938,8 +938,8 @@ virtio_net_device_osv::virtio_net_device_osv(osv::assigned_virtio &virtio,
         uint16_t max_virtqueue_pairs;
     } __attribute__((packed)) host_config;
     _virtio.conf_read(&host_config, sizeof(host_config));
-    _mac = {{{ host_config.mac[0], host_config.mac[1], host_config.mac[2],
-               host_config.mac[3], host_config.mac[4], host_config.mac[5] }}};
+    _mac = { host_config.mac[0], host_config.mac[1], host_config.mac[2],
+             host_config.mac[3], host_config.mac[4], host_config.mac[5] };
 
     // Setup notifiers
     _rxq.set_notifier(std::make_unique<virtio_notifier_osv>(_virtio, 0));

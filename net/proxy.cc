@@ -16,7 +16,7 @@ public:
     explicit proxy_net_device(boost::program_options::variables_map opts);
     virtual subscription<packet> receive(std::function<future<> (packet)> next) override;
     virtual future<> send(packet p) override;
-    virtual ethernet_address hw_address() override { return {{{ 0x12, 0x23, 0x34, 0x56, 0x67, 0x78 }}}; }
+    virtual ethernet_address hw_address() override { return { 0x12, 0x23, 0x34, 0x56, 0x67, 0x78 }; }
     virtual net::hw_features hw_features() override { return _hw_features; };
     virtual future<> l2inject(packet p) override;
 };
