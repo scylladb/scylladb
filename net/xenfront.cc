@@ -187,7 +187,7 @@ future<> xenfront_net_device::queue_rx_packet() {
         _rx_ring.rsp_cons = rsp_cons;
 
         if (rsp.status < 0) {
-            printf("Packet error: Handle it\n");
+            _rx_ring.dump("RX Packet error", rsp);
             continue;
         }
         auto rsp_size = rsp.status;
@@ -242,7 +242,7 @@ future<> xenfront_net_device::handle_tx_completions() {
         }
 
         if (rsp.status != 0) {
-            printf("Packet error: Handle it\n");
+            _tx_ring.dump("TX Packet error", rsp);
             continue;
         }
 

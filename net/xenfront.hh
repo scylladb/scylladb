@@ -66,6 +66,10 @@ public:
     uint32_t rsp_event = 1;
     uint8_t  pad[48] = { 0 };
     T _ring[1];
+    void dump() {
+        printf("Shared ring status: req_prod: %d, req_event %d, rsp_prod %d, rsp_event %d\n", req_prod, req_event, rsp_prod, rsp_event);
+    }
+    sring<T>() = default;
 };
 
 using phys = uint64_t;
@@ -105,6 +109,22 @@ public:
     }
 
     entries entries;
+
+    void dump() {
+        _sring->dump();
+        printf("Ring status: req_prod_pvt: %d, rsp cons %d\n\n", req_prod_pvt, rsp_cons);
+    }
+
+    void dump(const char *str, netif_tx_response &r) {
+        printf("%s: tx_response: id %hu, status %hd\n", str, r.id, r.status);
+        dump();
+
+    }
+
+    void dump(const char *str, netif_rx_response &r) {
+        printf("%s: rx_response: id %hu, offset %hu, flags %hx, status %hd\n", str, r.id, r.offset, r.flags, r.status);
+        dump();
+    }
 
     sring<T> *_sring;
     T& operator[](std::size_t i) { return _sring->_ring[idx(i)]; }
