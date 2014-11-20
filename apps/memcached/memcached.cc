@@ -52,8 +52,8 @@ private:
 public:
     item(item_key&& key, sstring&& ascii_prefix, sstring&& data, clock_type::time_point expiry, version_type version = 1)
         : _key(std::move(key))
-        , _data(data)
-        , _ascii_prefix(ascii_prefix)
+        , _data(std::move(data))
+        , _ascii_prefix(std::move(ascii_prefix))
         , _version(version)
         , _ref_count(0)
         , _expiry(expiry)
