@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cassert>
 #include <memory>
+#include <chrono>
+#include <boost/program_options.hpp>
 
 struct allocation {
     size_t n;
@@ -40,13 +42,23 @@ struct allocation {
 };
 
 int main(int ac, char** av) {
+    namespace bpo = boost::program_options;
+    bpo::options_description opts("Allowed options");
+    opts.add_options()
+            ("help", "produce this help message")
+            ("iterations", bpo::value<unsigned>(), "run s specified number of iterations")
+            ("time", bpo::value<float>()->default_value(5.0), "run for a specified amount of time, in seconds")
+            ;
+    bpo::variables_map vm;
+    bpo::store(bpo::parse_command_line(ac, av, opts), vm);
+    bpo::notify(vm);
     std::default_random_engine random_engine;
     std::exponential_distribution<> distr(0.2);
     std::uniform_int_distribution<> type(0, 1);
     std::uniform_int_distribution<char> poison(-128, 127);
     std::uniform_real_distribution<> which(0, 1);
     std::vector<allocation> allocations;
-    for (auto i = 0; i < 200000; ++i) {
+    auto iteration = [&] {
         auto typ = type(random_engine);
         switch (typ) {
         case 0: {
@@ -60,13 +72,32 @@ int main(int ac, char** av) {
         }
         case 1: {
             if (allocations.empty()) {
-                continue;
+                break;
             }
             size_t i = which(random_engine) * allocations.size();
             allocations[i] = std::move(allocations.back());
             allocations.pop_back();
             break;
         }
+        }
+    };
+    if (vm.count("help")) {
+        std::cout << opts << "\n";
+        return 1;
+    }
+    if (vm.count("iterations")) {
+        auto iterations = vm["iterations"].as<unsigned>();
+        for (unsigned i = 0; i < iterations; ++i) {
+            iteration();
+        }
+    } else {
+        auto time = vm["time"].as<float>();
+        using clock = std::chrono::high_resolution_clock;
+        auto end = clock::now() + std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::seconds(1) * time);
+        while (clock::now() < end) {
+            for (unsigned i = 0; i < 1000; ++i) {
+                iteration();
+            }
         }
     }
     return 0;
