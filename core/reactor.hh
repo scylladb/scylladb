@@ -1043,6 +1043,11 @@ output_stream<CharType>::write(const char_type* buf, size_t n) {
             return _fd.put(std::move(tmp));
         }
     }
+
+    if (!_buf) {
+        _buf = temporary_buffer<char>(_size);
+    }
+
     auto now = std::min(n, _size - _end);
     std::copy(buf, buf + now, _buf.get_write() + _end);
     _end += now;
@@ -1064,10 +1069,8 @@ output_stream<CharType>::flush() {
         return make_ready_future<>();
     }
     _buf.trim(_end);
-    temporary_buffer<CharType> next(_size);
-    std::swap(_buf, next);
     _end = 0;
-    return _fd.put(std::move(next));
+    return _fd.put(std::move(_buf));
 }
 
 inline
