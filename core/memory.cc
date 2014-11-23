@@ -61,6 +61,9 @@ using pageidx = uint32_t;
 struct page;
 class page_list;
 
+static uint64_t g_allocs;
+static uint64_t g_frees;
+
 namespace bi = boost::intrusive;
 
 class page_list_link {
@@ -641,6 +644,7 @@ size_t object_size(void* ptr) {
 }
 
 void* allocate(size_t size) {
+    ++g_allocs;
     if (size <= sizeof(free_object)) {
         size = sizeof(free_object);
     }
@@ -652,6 +656,7 @@ void* allocate(size_t size) {
 }
 
 void* allocate_aligned(size_t align, size_t size) {
+    ++g_allocs;
     size = std::max(size, align);
     if (size <= sizeof(free_object)) {
         size = sizeof(free_object);
@@ -664,10 +669,12 @@ void* allocate_aligned(size_t align, size_t size) {
 }
 
 void free(void* obj) {
+    ++g_frees;
     cpu_mem.free(obj);
 }
 
 void free(void* obj, size_t size) {
+    ++g_frees;
     cpu_mem.free(obj, size);
 }
 
@@ -703,6 +710,10 @@ void configure(std::vector<resource::memory> m) {
 #endif
         pos += x.bytes;
     }
+}
+
+statistics stats() {
+    return statistics{g_allocs, g_frees};
 }
 
 }
@@ -914,6 +925,10 @@ void set_reclaim_hook(std::function<void (std::function<void ()>)> hook) {
 }
 
 void configure(std::vector<resource::memory> m) {
+}
+
+statistics stats() {
+    return statistics{0, 0};
 }
 
 }
