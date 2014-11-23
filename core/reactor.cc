@@ -406,6 +406,27 @@ int reactor::run() {
                     , scollectd::make_typed(scollectd::data_type::GAUGE
                             , std::bind(&decltype(_timers)::size, &_timers))
             ),
+            scollectd::add_polled_metric(
+                scollectd::type_instance_id("memory",
+                    scollectd::per_cpu_plugin_instance,
+                    "total_operations", "malloc"),
+                scollectd::make_typed(scollectd::data_type::DERIVE,
+                        [] { return memory::stats().object_allocated(); })
+            ),
+            scollectd::add_polled_metric(
+                scollectd::type_instance_id("memory",
+                    scollectd::per_cpu_plugin_instance,
+                    "total_operations", "free"),
+                scollectd::make_typed(scollectd::data_type::DERIVE,
+                        [] { return memory::stats().object_freed(); })
+            ),
+            scollectd::add_polled_metric(
+                scollectd::type_instance_id("memory",
+                    scollectd::per_cpu_plugin_instance,
+                    "objects", "malloc"),
+                scollectd::make_typed(scollectd::data_type::GAUGE,
+                        [] { return memory::stats().allocated_objects(); })
+            ),
     };
 
 #ifndef HAVE_OSV
