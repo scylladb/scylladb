@@ -61,8 +61,8 @@ using pageidx = uint32_t;
 struct page;
 class page_list;
 
-static uint64_t g_allocs;
-static uint64_t g_frees;
+static thread_local uint64_t g_allocs;
+static thread_local uint64_t g_frees;
 
 namespace bi = boost::intrusive;
 
