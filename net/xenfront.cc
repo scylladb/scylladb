@@ -115,7 +115,7 @@ xenfront_net_device::send(packet _p) {
     // FIXME: negotiate and use scatter/gather
     _p.linearize();
 
-    return _tx_ring.entries.get_index().then([this, p = std::move(_p), frag] (unsigned idx) mutable {
+    return _tx_ring.entries.has_room().then([this, p = std::move(_p), frag] () mutable {
 
         auto req_prod = _tx_ring._sring->req_prod;
 
@@ -123,6 +123,7 @@ xenfront_net_device::send(packet _p) {
 
         auto ref = _tx_refs->new_ref(f.base, f.size);
 
+        unsigned idx = _tx_ring.entries.get_index();
         assert(!_tx_ring.entries[idx]);
 
         _tx_ring.entries[idx] = ref;
@@ -159,18 +160,18 @@ xenfront_net_device::send(packet _p) {
 #define wmb() asm volatile("":::"memory");
 
 template <typename T>
-future<unsigned> front_ring<T>::entries::get_index() {
-    return _available.wait().then([this] {
-        auto ret = _ids.front();
-        _ids.pop();
-        return make_ready_future<unsigned>(ret);
-    });
+future<> front_ring<T>::entries::has_room() {
+    return _available.wait();
 }
 
 template <typename T>
 void front_ring<T>::entries::free_index(unsigned id) {
-    _ids.push(id);
     _available.signal();
+}
+
+template <typename T>
+unsigned front_ring<T>::entries::get_index() {
+    return front_ring<T>::idx(_next_idx++);
 }
 
 future<> xenfront_net_device::queue_rx_packet() {
@@ -219,7 +220,9 @@ void xenfront_net_device::alloc_one_rx_reference(unsigned index) {
 }
 
 future<> xenfront_net_device::alloc_rx_references() {
-    return _rx_ring.entries.get_index().then([this] (unsigned i) {
+    return _rx_ring.entries.has_room().then([this] () {
+        unsigned i = _rx_ring.entries.get_index();
+
         auto req_prod = _rx_ring.req_prod_pvt;
         alloc_one_rx_reference(i);
         ++req_prod;

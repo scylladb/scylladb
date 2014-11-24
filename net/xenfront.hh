@@ -84,15 +84,13 @@ public:
     private:
         std::array<gntref, front_ring<T>::nr_ents> _entries;
         front_ring<T> *_ring;
+        std::atomic<uint32_t> _next_idx = { 0 };
     public:
-        entries(front_ring<T> *ring) : _ring(ring) {
-            for (unsigned i = 0; i < front_ring<T>::nr_ents; ++i) {
-                _ids.push(std::move(i));
-            }
-        }
+        entries(front_ring<T> *ring) : _ring(ring) {}
         gntref& operator[](std::size_t i) { return _entries[_ring->idx(i)]; }
         friend front_ring;
-        future<unsigned> get_index();
+        future<> has_room();
+        unsigned get_index();
         void free_index(unsigned index);
     };
 protected:
