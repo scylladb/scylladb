@@ -764,67 +764,72 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::output() {
-    uint8_t options_size = 0;
-    packet p = get_transmit_packet();
-    uint16_t len = p.len();
+    do {
+        uint8_t options_size = 0;
+        packet p = get_transmit_packet();
+        uint16_t len = p.len();
 
-    if (!_local_syn_acked) {
-        options_size = _option.get_size();
-    }
-    auto th = p.prepend_header<tcp_hdr>(options_size);
-    th->src_port = _local_port;
-    th->dst_port = _foreign_port;
-
-    th->f_syn = !_local_syn_acked;
-    _local_syn_sent |= th->f_syn;
-    th->f_ack = _foreign_syn_received;
-    if (th->f_ack) {
-        clear_delayed_ack();
-    }
-    th->f_urg = false;
-    th->f_psh = false;
-
-    th->seq = _snd.next;
-    th->ack = _rcv.next;
-    th->data_offset = (sizeof(*th) + options_size) / 4;
-    th->window = _rcv.window >> _rcv.window_scale;
-    th->checksum = 0;
-
-    _snd.next += len;
-
-    // FIXME: does the FIN have to fit in the window?
-    th->f_fin = _snd.closed && _snd.unsent_len == 0 && !_local_fin_acked;
-    _local_fin_sent |= th->f_fin;
-
-    // Add tcp options
-    _option.fill(th, options_size);
-    *th = hton(*th);
-
-    checksummer csum;
-    InetTraits::tcp_pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + options_size + len);
-    if (_tcp.hw_features().tx_csum_offload) {
-        // virtio-net's VIRTIO_NET_F_CSUM feature requires th->checksum to be
-        // initialized to ones' complement sum of the pseudo header.
-        th->checksum = ~csum.get();
-    } else {
-        csum.sum(p);
-        th->checksum = csum.get();
-    }
-
-    offload_info oi;
-    oi.protocol = ip_protocol_num::tcp;
-    oi.tcp_hdr_len = sizeof(tcp_hdr) + options_size;
-    p.set_offload_info(oi);
-
-    if (len) {
-        unsigned nr_transmits = 0;
-        auto now = clock_type::now();
-        _snd.data.push_back({p.share(), len, nr_transmits, now});
-        if (!_retransmit.armed()) {
-            start_retransmit_timer(now);
+        if (!_local_syn_acked) {
+            options_size = _option.get_size();
         }
-    }
-    _tcp.send(_local_ip, _foreign_ip, std::move(p));
+        auto th = p.prepend_header<tcp_hdr>(options_size);
+        th->src_port = _local_port;
+        th->dst_port = _foreign_port;
+
+        th->f_syn = !_local_syn_acked;
+        _local_syn_sent |= th->f_syn;
+        th->f_ack = _foreign_syn_received;
+        if (th->f_ack) {
+            clear_delayed_ack();
+        }
+        th->f_urg = false;
+        th->f_psh = false;
+
+        th->seq = _snd.next;
+        th->ack = _rcv.next;
+        th->data_offset = (sizeof(*th) + options_size) / 4;
+        th->window = _rcv.window >> _rcv.window_scale;
+        th->checksum = 0;
+
+        _snd.next += len;
+
+        // FIXME: does the FIN have to fit in the window?
+        th->f_fin = _snd.closed && _snd.unsent_len == 0 && !_local_fin_acked;
+        _local_fin_sent |= th->f_fin;
+
+        // Add tcp options
+        _option.fill(th, options_size);
+        *th = hton(*th);
+
+        checksummer csum;
+        InetTraits::tcp_pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + options_size + len);
+        if (_tcp.hw_features().tx_csum_offload) {
+            // virtio-net's VIRTIO_NET_F_CSUM feature requires th->checksum to be
+            // initialized to ones' complement sum of the pseudo header.
+            th->checksum = ~csum.get();
+        } else {
+            csum.sum(p);
+            th->checksum = csum.get();
+        }
+
+        offload_info oi;
+        oi.protocol = ip_protocol_num::tcp;
+        oi.tcp_hdr_len = sizeof(tcp_hdr) + options_size;
+        p.set_offload_info(oi);
+
+        if (len) {
+            unsigned nr_transmits = 0;
+            auto now = clock_type::now();
+            _snd.data.emplace_back(unacked_segment{p.share(), len, nr_transmits, now});
+            if (!_retransmit.armed()) {
+                start_retransmit_timer(now);
+            }
+        }
+        _tcp.send(_local_ip, _foreign_ip, std::move(p));
+
+    // Keep sending more if allowed. In addition, dupacks >= 3 is an indication
+    // that an segment is lost, stop sending more in this case.
+    } while (_snd.dupacks < 3 && can_send() > 0);
 }
 
 template <typename InetTraits>
