@@ -10,6 +10,7 @@
 #include "core/smp.hh"
 #include "core/queue.hh"
 #include "core/future-util.hh"
+#include "core/scollectd.hh"
 #include <iostream>
 #include <algorithm>
 #include <unordered_map>
@@ -17,9 +18,23 @@
 #include <bitset>
 #include <limits>
 #include <cctype>
+#include <vector>
+
+class http_server;
+class http_stats;
+
+class http_stats {
+    std::vector<scollectd::registration> _regs;
+public:
+    http_stats(http_server& server);
+};
 
 class http_server {
     std::vector<server_socket> _listeners;
+    http_stats _stats{*this};
+    uint64_t _total_connections = 0;
+    uint64_t _current_connections = 0;
+    uint64_t _requests_served = 0;
 public:
     future<> listen(ipv4_addr addr) {
         listen_options lo;
@@ -49,6 +64,7 @@ public:
         });
     }
     class connection {
+        http_server& _server;
         connected_socket _fd;
         input_stream<char> _read_buf;
         output_stream<char> _write_buf;
@@ -67,8 +83,14 @@ public:
         queue<std::unique_ptr<response>> _responses { 10 };
     public:
         connection(http_server& server, connected_socket&& fd, socket_address addr)
-            : _fd(std::move(fd)), _read_buf(_fd.input())
-            , _write_buf(_fd.output()) {}
+            : _server(server), _fd(std::move(fd)), _read_buf(_fd.input())
+            , _write_buf(_fd.output()) {
+            ++_server._total_connections;
+            ++_server._current_connections;
+        }
+        ~connection() {
+            --_server._current_connections;
+        }
         future<> process() {
             // Launch read and write "threads" simultaneously:
             return when_all(read(), respond()).then([] (std::tuple<future<>, future<>> joined) {
@@ -82,6 +104,7 @@ public:
                 if (_parser.eof()) {
                     return _responses.push_eventually({});
                 }
+                ++_server._requests_served;
                 _req = _parser.get_parsed_request();
                 return _responses.not_full().then([this] {
                     bool close = generate_response(std::move(_req));
@@ -173,7 +196,37 @@ public:
             return _write_buf.write(_resp->_body.begin(), _resp->_body.size());
         }
     };
+    uint64_t total_connections() const {
+        return _total_connections;
+    }
+    uint64_t current_connections() const {
+        return _current_connections;
+    }
+    uint64_t requests_served() const {
+        return _requests_served;
+    }
 };
+
+http_stats::http_stats(http_server& server)
+    : _regs{
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("httpd", scollectd::per_cpu_plugin_instance,
+                    "connections", "http-connections"),
+            scollectd::make_typed(scollectd::data_type::DERIVE,
+                    [&server] { return server.total_connections(); })),
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("httpd", scollectd::per_cpu_plugin_instance,
+                    "current_connections", "current"),
+            scollectd::make_typed(scollectd::data_type::GAUGE,
+                    [&server] { return server.current_connections(); })),
+        scollectd::add_polled_metric(
+            scollectd::type_instance_id("httpd", scollectd::per_cpu_plugin_instance,
+                    "http_requests", "served"),
+            scollectd::make_typed(scollectd::data_type::DERIVE,
+                    [&server] { return server.requests_served(); })),
+    } {
+}
+
 
 int main(int ac, char** av) {
     app_template app;

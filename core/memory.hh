@@ -33,6 +33,23 @@ public:
 void set_reclaim_hook(
         std::function<void (std::function<void ()>)> hook);
 
+class statistics;
+statistics stats();
+
+class statistics {
+    uint64_t _objects_allocated;
+    uint64_t _objects_freed;
+private:
+    statistics(uint64_t allocs, uint64_t frees)
+        : _objects_allocated(allocs), _objects_freed(frees) {}
+public:
+    uint64_t object_allocated() const { return _objects_allocated; }
+    uint64_t object_freed() const { return _objects_freed; }
+    size_t allocated_objects() const { return object_allocated() - object_freed(); }
+    friend statistics stats();
+};
+
+
 }
 
 #endif /* MEMORY_HH_ */
