@@ -196,6 +196,12 @@ private:
             std::chrono::milliseconds srtt;
             bool first_rto_sample = true;
             clock_type::time_point syn_tx_time;
+            // Congestion window
+            uint32_t cwnd;
+            // Slow start threshold
+            uint32_t ssthresh;
+            // Duplicated ACKs
+            uint16_t dupacks = 0;
         } _snd;
         struct receive {
             tcp_seq next;
@@ -245,10 +251,27 @@ private:
         void start_retransmit_timer(clock_type::time_point now) { _retransmit.rearm(now + _rto); };
         void stop_retransmit_timer() { _retransmit.cancel(); };
         void retransmit();
+        void fast_retransmit();
         void update_rto(clock_type::time_point tx_time);
+        void update_cwnd(uint32_t acked_bytes);
         void cleanup();
         uint32_t can_send() {
-           return std::min(uint32_t(_snd.unacknowledged + _snd.window - _snd.next), _snd.unsent_len);
+            // Can not send more than advertised window allows
+            auto x = std::min(uint32_t(_snd.unacknowledged + _snd.window - _snd.next), _snd.unsent_len);
+            // Can not send more than congestion window allows
+            x = std::min(_snd.cwnd, x);
+            if (_snd.dupacks == 1 || _snd.dupacks == 2) {
+                // TODO: Send cwnd + 2*smss per RFC3042
+            } else if (_snd.dupacks >= 3) {
+                // Sent 1 full-sized segment at most
+                x = std::min(uint32_t(_snd.mss), x);
+            }
+            return x;
+        }
+        uint32_t flight_size() {
+            uint32_t size = 0;
+            std::for_each(_snd.data.begin(), _snd.data.end(), [&] (unacked_segment& seg) { size += seg.data_len; });
+            return size;
         }
         friend class connection;
     };
@@ -489,6 +512,17 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             // Linux's default window size
             _rcv.window = 29200 << _rcv.window_scale;
 
+            // Setup initial congestion window
+            if (2190 < _snd.mss) {
+                _snd.cwnd = 2 * _snd.mss;
+            } else if (1095 < _snd.mss && _snd.mss <= 2190) {
+                _snd.cwnd = 3 * _snd.mss;
+            } else {
+                _snd.cwnd = 4 * _snd.mss;
+            }
+            // Setup initial slow start threshold
+            _snd.ssthresh = th->window << _snd.window_scale;
+
             // Send <SYN,ACK> back
             do_output = true;
             _snd.syn_tx_time = clock_type::now();
@@ -576,6 +610,23 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             }
         }
 
+        // Is this a duplicated ACK
+        if (!_snd.data.empty() && seg_len == 0 &&
+            th->f_fin == 0 && th->f_syn == 0 &&
+            th->ack == _snd.unacknowledged &&
+            uint32_t(th->window << _snd.window_scale) == _snd.window) {
+            _snd.dupacks++;
+            uint32_t smss = _snd.mss;
+            // 3 duplicated ACKs trigger a fast retransmit
+            if (_snd.dupacks == 3) {
+                _snd.ssthresh = std::max(flight_size() / 2, 2 * smss);
+                _snd.cwnd = _snd.ssthresh + 3 * smss;
+                fast_retransmit();
+            } if (_snd.dupacks > 3) {
+                _snd.cwnd += smss;
+            }
+        }
+
         // If we've sent out FIN, remote can ack both data and FIN, skip FIN
         // when acking data
         auto data_ack = th->ack;
@@ -587,11 +638,13 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             // Full ACK of segment
             while (!_snd.data.empty()
                     && (_snd.unacknowledged + _snd.data.front().data_len <= data_ack)) {
-                _snd.unacknowledged += _snd.data.front().data_len;
+                auto acked_bytes = _snd.data.front().data_len;
+                _snd.unacknowledged += acked_bytes;
                 // Ignore retransmitted segments when setting the RTO
                 if (_snd.data.front().nr_transmits == 0) {
                     update_rto(_snd.data.front().tx_time);
                 }
+                update_cwnd(acked_bytes);
                 _snd.data.pop_front();
             }
 
@@ -602,8 +655,10 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 // the tcp header when retransmit the segment, but the downside
                 // is that we will retransmit the whole segment although part
                 // of them are already acked.
-                _snd.data.front().data_len -= (data_ack - _snd.unacknowledged);
+                auto acked_bytes = data_ack - _snd.unacknowledged;
+                _snd.data.front().data_len -= acked_bytes;
                 _snd.unacknowledged = data_ack;
+                update_cwnd(acked_bytes);
             }
 
             // some data is acked, try send more data
@@ -621,6 +676,12 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 // Restart the timer becasue new data is acked.
                 start_retransmit_timer();
             }
+
+            // New data is acked, exit fast recovery
+            if (_snd.dupacks >= 3) {
+                _snd.cwnd = _snd.ssthresh;
+            }
+            _snd.dupacks = 0;
         }
         if (_local_fin_sent && th->ack == _snd.next + 1) {
             _local_fin_acked = true;
@@ -964,6 +1025,17 @@ void tcp<InetTraits>::tcb::retransmit() {
 
     // If there are unacked data, retransmit the earliest segment
     auto& unacked_seg = _snd.data.front();
+
+    // According to RFC5681
+    // Update ssthresh only for the first retransmit
+    uint32_t smss = _snd.mss;
+    if (unacked_seg.nr_transmits == 0) {
+        _snd.ssthresh = std::max(flight_size() / 2, 2 * smss);
+    }
+    // Start the slow start process
+    _snd.cwnd = smss;
+    _snd.dupacks = 0;
+
     if (unacked_seg.nr_transmits < _max_nr_retransmit) {
         unacked_seg.nr_transmits++;
     } else {
@@ -977,6 +1049,15 @@ void tcp<InetTraits>::tcb::retransmit() {
     // According to RFC6298, Update RTO <- RTO * 2 to perform binary exponential back-off
     _rto = std::min(_rto * 2, _rto_max);
     start_retransmit_timer();
+}
+
+template <typename InetTraits>
+void tcp<InetTraits>::tcb::fast_retransmit() {
+    if (!_snd.data.empty()) {
+        auto& unacked_seg = _snd.data.front();
+        unacked_seg.nr_transmits++;
+        _tcp.send(_local_ip, _foreign_ip, unacked_seg.p.share());
+    }
 }
 
 template <typename InetTraits>
@@ -1003,6 +1084,19 @@ void tcp<InetTraits>::tcb::update_rto(clock_type::time_point tx_time) {
     // Make sure 1 sec << _rto << 60 sec
     _rto = std::max(_rto, _rto_min);
     _rto = std::min(_rto, _rto_max);
+}
+
+template <typename InetTraits>
+void tcp<InetTraits>::tcb::update_cwnd(uint32_t acked_bytes) {
+    uint32_t smss = _snd.mss;
+    if (_snd.cwnd < _snd.ssthresh) {
+        // In slow start phase
+        _snd.cwnd += std::min(acked_bytes, smss);
+    } else {
+        // In congestion avoidance phase
+        uint32_t round_up = 1;
+        _snd.cwnd += std::max(round_up, smss * smss / _snd.cwnd);
+    }
 }
 
 template <typename InetTraits>
