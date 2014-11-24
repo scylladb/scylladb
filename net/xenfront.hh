@@ -96,7 +96,7 @@ public:
         void free_index(unsigned index);
     };
 protected:
-    uint32_t idx(int i) { return i & (nr_ents - 1); }
+    static uint32_t idx(int i) { return i & (nr_ents - 1); }
 public:
     uint32_t req_prod_pvt = 0;
     uint32_t rsp_cons = 0;
