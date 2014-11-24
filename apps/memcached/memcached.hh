@@ -5,6 +5,9 @@
 
 namespace memcache {
 
+template <bool WithFlashCache>
+class cache;
+
 class item_key {
 private:
     sstring _key;
