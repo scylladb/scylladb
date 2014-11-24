@@ -169,7 +169,7 @@ deps = {
     'apps/seastar/seastar': ['apps/seastar/main.cc'] + core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['apps/httpd/httpd.cc', 'apps/httpd/request_parser.rl'] + libnet + core,
-    'apps/memcached/memcached': ['apps/memcached/memcached.cc'] + memcached,
+    'apps/memcached/memcached': ['apps/memcached/memcache.cc'] + memcached,
     'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcached,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
     'tests/virtiotest': ['tests/virtiotest.cc'] + core + libnet,
