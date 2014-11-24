@@ -411,21 +411,21 @@ int reactor::run() {
                     scollectd::per_cpu_plugin_instance,
                     "total_operations", "malloc"),
                 scollectd::make_typed(scollectd::data_type::DERIVE,
-                        [] { return memory::stats().object_allocated(); })
+                        [] { return memory::stats().mallocs(); })
             ),
             scollectd::add_polled_metric(
                 scollectd::type_instance_id("memory",
                     scollectd::per_cpu_plugin_instance,
                     "total_operations", "free"),
                 scollectd::make_typed(scollectd::data_type::DERIVE,
-                        [] { return memory::stats().object_freed(); })
+                        [] { return memory::stats().frees(); })
             ),
             scollectd::add_polled_metric(
                 scollectd::type_instance_id("memory",
                     scollectd::per_cpu_plugin_instance,
                     "objects", "malloc"),
                 scollectd::make_typed(scollectd::data_type::GAUGE,
-                        [] { return memory::stats().allocated_objects(); })
+                        [] { return memory::stats().live_objects(); })
             ),
     };
 

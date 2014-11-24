@@ -37,15 +37,15 @@ class statistics;
 statistics stats();
 
 class statistics {
-    uint64_t _objects_allocated;
-    uint64_t _objects_freed;
+    uint64_t _mallocs;
+    uint64_t _frees;
 private:
-    statistics(uint64_t allocs, uint64_t frees)
-        : _objects_allocated(allocs), _objects_freed(frees) {}
+    statistics(uint64_t mallocs, uint64_t frees)
+        : _mallocs(mallocs), _frees(frees) {}
 public:
-    uint64_t object_allocated() const { return _objects_allocated; }
-    uint64_t object_freed() const { return _objects_freed; }
-    size_t allocated_objects() const { return object_allocated() - object_freed(); }
+    uint64_t mallocs() const { return _mallocs; }
+    uint64_t frees() const { return _frees; }
+    size_t live_objects() const { return mallocs() - frees(); }
     friend statistics stats();
 };
 
