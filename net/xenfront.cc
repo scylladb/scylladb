@@ -198,6 +198,8 @@ future<> xenfront_net_device::queue_rx_packet() {
 
         rsp_prod = _rx_ring._sring->rsp_prod;
 
+        assert(entry.xen_id >= 0);
+
         _rx_refs->free_ref(entry);
         _rx_ring.entries.free_index(rsp_cons++);
     }
@@ -246,6 +248,8 @@ future<> xenfront_net_device::handle_tx_completions() {
         }
 
         auto& entry = _tx_ring.entries[i];
+
+        assert(entry.xen_id >= 0);
 
         _tx_refs->free_ref(entry);
         _tx_ring.entries.free_index(i);
