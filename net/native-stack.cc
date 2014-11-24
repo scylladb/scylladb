@@ -26,7 +26,6 @@ namespace net {
 
 // native_network_stack
 class native_network_stack : public network_stack {
-    static std::unique_ptr<native_network_stack> _s;
     interface _netif;
     ipv4 _inet;
     udp_v4 _udp;
@@ -185,8 +184,6 @@ future<> native_network_stack::initialize() {
         return _config.get_future();
     });
 }
-
-std::unique_ptr<native_network_stack> native_network_stack::_s;
 
 boost::program_options::options_description nns_options() {
     boost::program_options::options_description opts(
