@@ -1798,7 +1798,7 @@ public:
 } /* namespace memcache */
 
 template <bool WithFlashCache>
-int memcache_instance_run(int ac, char** av) {
+int start_instance(int ac, char** av) {
     distributed<memcache::cache<WithFlashCache>> cache_peers;
     memcache::sharded_cache<WithFlashCache> cache(cache_peers);
     distributed<memcache::system_stats> system_stats;
@@ -1877,8 +1877,10 @@ int memcache_instance_run(int ac, char** av) {
     });
 }
 
-int main(int ac, char** av)
-{
-    constexpr bool WithFlashCache = false;
-    return memcache_instance_run<WithFlashCache>(ac, av);
+int memcache_instance<false>::run(int ac, char** av) {
+    return start_instance<false>(ac, av);
+}
+
+int memcache_instance<true>::run(int ac, char** av) {
+    return start_instance<true>(ac, av);
 }

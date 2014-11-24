@@ -3,6 +3,21 @@
 
 #include "core/sstring.hh"
 
+template <bool WithFlashCache>
+class memcache_instance;
+
+template <>
+class memcache_instance<false> {
+public:
+    int run(int ac, char** av);
+};
+
+template <>
+class memcache_instance<true> {
+public:
+    int run(int ac, char** av);
+};
+
 namespace memcache {
 
 template <bool WithFlashCache>
