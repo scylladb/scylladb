@@ -831,13 +831,13 @@ void smp::configure(boost::program_options::variables_map configuration)
             throw_system_error_on(r == -1);
             engine._id = i;
             start_all_queues();
-            engine.configure(configuration);
             inited.wait();
+            engine.configure(configuration);
             engine.run();
         });
     }
-    inited.wait();
     start_all_queues();
+    inited.wait();
     engine.configure(configuration);
 }
 
