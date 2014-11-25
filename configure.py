@@ -57,7 +57,7 @@ modes = {
     'release': {
         'sanitize': '',
         'sanitize_libs': '',
-        'opt': '-O2 -DDEFAULT_ALLOCATOR',
+        'opt': '-O2',
         'libs': '',
     },
 }
