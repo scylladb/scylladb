@@ -915,7 +915,9 @@ bool tcp<InetTraits>::tcb::should_send_ack(uint16_t seg_len) {
     }
 
     // If the timer is not armed, schedule a delayed ACK.
-    _delayed_ack.arm(500ms);
+    // The maximum delayed ack timer allowed by RFC1122 is 500ms, most
+    // implementations use 200ms.
+    _delayed_ack.arm(200ms);
     return false;
 }
 
