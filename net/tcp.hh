@@ -952,8 +952,10 @@ void tcp<InetTraits>::tcb::merge_out_of_order() {
             // This segment has been receive already, drop it
             it = _rcv.out_of_order.erase(it);
         } else {
-            // seg_beg > _rcv.need, can not merge
+            // seg_beg > _rcv.need, can not merge. Note, seg_beg can grow only,
+            // so we can stop looking here.
             it++;
+            break;
         }
     }
 }
