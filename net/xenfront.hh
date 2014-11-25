@@ -108,6 +108,8 @@ public:
 
     entries entries;
 
+    future<> process_ring(std::function<bool (gntref &entry, T& el)> func, grant_head *refs);
+
     void dump() {
         _sring->dump();
         printf("Ring status: req_prod_pvt: %d, rsp cons %d\n\n", req_prod_pvt, rsp_cons);

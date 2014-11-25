@@ -174,39 +174,46 @@ unsigned front_ring<T>::entries::get_index() {
     return front_ring<T>::idx(_next_idx++);
 }
 
-future<> xenfront_net_device::queue_rx_packet() {
-
-    auto rsp_cons = _rx_ring.rsp_cons;
+template <typename T>
+future<> front_ring<T>::process_ring(std::function<bool (gntref &entry, T& el)> func, grant_head *refs)
+{
+    auto prod = _sring->rsp_prod;
     rmb();
-    auto rsp_prod = _rx_ring._sring->rsp_prod;
 
-    while (rsp_cons < rsp_prod) {
-        auto rsp = _rx_ring[rsp_cons].rsp;
-        auto& entry = _rx_ring.entries[rsp_cons];
+    for (unsigned i = rsp_cons; i != prod; i++) {
+        auto el = _sring->_ring[idx(i)];
 
-        _rx_ring.rsp_cons = rsp_cons + 1;
-
-        if (rsp.status < 0) {
-            _rx_ring.dump("RX Packet error", rsp);
+        if (el.rsp.status < 0) {
+            dump("Packet error", el.rsp);
             continue;
         }
-        auto rsp_size = rsp.status;
 
-        packet p(static_cast<char *>(entry.page) + rsp.offset, rsp_size);
-        _rx_stream.produce(std::move(p));
+        auto& entry = entries[i];
 
-        rsp_prod = _rx_ring._sring->rsp_prod;
+        if (!func(entry, el)) {
+            continue;
+        }
 
         assert(entry.xen_id >= 0);
 
-        _rx_refs->free_ref(entry);
-        _rx_ring.entries.free_index(rsp_cons++);
+        refs->free_ref(entry);
+        entries.free_index(i);
+
+        prod = _sring->rsp_prod;
     }
+    rsp_cons = prod;
+    _sring->rsp_event = prod + 1;
 
-    _rx_ring._sring->rsp_event = rsp_prod + 1;
-
-    // FIXME: Queue_rx maybe should not be a future then
     return make_ready_future<>();
+}
+
+future<> xenfront_net_device::queue_rx_packet()
+{
+    return _rx_ring.process_ring([this] (gntref &entry, rx &rx) {
+        packet p(static_cast<char *>(entry.page) + rx.rsp.offset, rx.rsp.status);
+        _rx_stream.produce(std::move(p));
+        return true;
+    }, _rx_refs);
 }
 
 void xenfront_net_device::alloc_one_rx_reference(unsigned index) {
@@ -235,33 +242,19 @@ future<> xenfront_net_device::alloc_rx_references() {
 }
 
 future<> xenfront_net_device::handle_tx_completions() {
-    auto prod = _tx_ring._sring->rsp_prod;
-    rmb();
 
-    for (unsigned i = _tx_ring.rsp_cons; i != prod; i++) {
-        auto rsp = _tx_ring[i].rsp;
-
-        if (rsp.status == 1) {
-            continue;
+    return _tx_ring.process_ring([this] (gntref &entry, tx &tx) {
+        if (tx.rsp.status == 1) {
+            return false;
         }
 
-        if (rsp.status != 0) {
-            _tx_ring.dump("TX Packet error", rsp);
-            continue;
+        if (tx.rsp.status != 0) {
+            _tx_ring.dump("TX positive packet error", tx.rsp);
+            return false;
         }
 
-        auto& entry = _tx_ring.entries[i];
-
-        assert(entry.xen_id >= 0);
-
-        _tx_refs->free_ref(entry);
-        _tx_ring.entries.free_index(i);
-
-        prod = _tx_ring._sring->rsp_prod;
-    }
-    _tx_ring.rsp_cons = prod;
-    _tx_ring._sring->rsp_event = prod + 1;
-    return make_ready_future<>();
+        return true;
+    }, _tx_refs);
 }
 
 ethernet_address xenfront_net_device::hw_address() {
