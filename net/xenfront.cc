@@ -115,7 +115,7 @@ xenfront_net_device::send(packet _p) {
     // FIXME: negotiate and use scatter/gather
     _p.linearize();
 
-    return _tx_ring.entries.get_index().then([this, p = std::move(_p), frag] (unsigned idx) mutable {
+    return _tx_ring.entries.has_room().then([this, p = std::move(_p), frag] () mutable {
 
         auto req_prod = _tx_ring._sring->req_prod;
 
@@ -123,6 +123,7 @@ xenfront_net_device::send(packet _p) {
 
         auto ref = _tx_refs->new_ref(f.base, f.size);
 
+        unsigned idx = _tx_ring.entries.get_index();
         assert(!_tx_ring.entries[idx]);
 
         _tx_ring.entries[idx] = ref;
@@ -159,18 +160,18 @@ xenfront_net_device::send(packet _p) {
 #define wmb() asm volatile("":::"memory");
 
 template <typename T>
-future<unsigned> front_ring<T>::entries::get_index() {
-    return _available.wait().then([this] {
-        auto ret = _ids.front();
-        _ids.pop();
-        return make_ready_future<unsigned>(ret);
-    });
+future<> front_ring<T>::entries::has_room() {
+    return _available.wait();
 }
 
 template <typename T>
 void front_ring<T>::entries::free_index(unsigned id) {
-    _ids.push(id);
     _available.signal();
+}
+
+template <typename T>
+unsigned front_ring<T>::entries::get_index() {
+    return front_ring<T>::idx(_next_idx++);
 }
 
 future<> xenfront_net_device::queue_rx_packet() {
@@ -181,13 +182,12 @@ future<> xenfront_net_device::queue_rx_packet() {
 
     while (rsp_cons < rsp_prod) {
         auto rsp = _rx_ring[rsp_cons].rsp;
-        auto& entry = _rx_ring.entries[rsp.id];
+        auto& entry = _rx_ring.entries[rsp_cons];
 
-        rsp_cons++;
-        _rx_ring.rsp_cons = rsp_cons;
+        _rx_ring.rsp_cons = rsp_cons + 1;
 
         if (rsp.status < 0) {
-            printf("Packet error: Handle it\n");
+            _rx_ring.dump("RX Packet error", rsp);
             continue;
         }
         auto rsp_size = rsp.status;
@@ -195,12 +195,14 @@ future<> xenfront_net_device::queue_rx_packet() {
         packet p(static_cast<char *>(entry.page) + rsp.offset, rsp_size);
         _rx_stream.produce(std::move(p));
 
-        _rx_ring._sring->rsp_event = rsp_cons + 1;
+        _rx_ring._sring->rsp_event = _rx_ring.rsp_cons + 1;
 
         rsp_prod = _rx_ring._sring->rsp_prod;
 
+        assert(entry.xen_id >= 0);
+
         _rx_refs->free_ref(entry);
-        _rx_ring.entries.free_index(rsp.id);
+        _rx_ring.entries.free_index(rsp_cons++);
     }
 
     // FIXME: Queue_rx maybe should not be a future then
@@ -218,7 +220,9 @@ void xenfront_net_device::alloc_one_rx_reference(unsigned index) {
 }
 
 future<> xenfront_net_device::alloc_rx_references() {
-    return _rx_ring.entries.get_index().then([this] (unsigned i) {
+    return _rx_ring.entries.has_room().then([this] () {
+        unsigned i = _rx_ring.entries.get_index();
+
         auto req_prod = _rx_ring.req_prod_pvt;
         alloc_one_rx_reference(i);
         ++req_prod;
@@ -242,13 +246,16 @@ future<> xenfront_net_device::handle_tx_completions() {
         }
 
         if (rsp.status != 0) {
-            printf("Packet error: Handle it\n");
+            _tx_ring.dump("TX Packet error", rsp);
             continue;
         }
 
-        auto& entry = _tx_ring.entries[rsp.id];
+        auto& entry = _tx_ring.entries[i];
+
+        assert(entry.xen_id >= 0);
+
         _tx_refs->free_ref(entry);
-        _tx_ring.entries.free_index(rsp.id);
+        _tx_ring.entries.free_index(i);
     }
     _tx_ring.rsp_cons = prod;
     _tx_ring._sring->rsp_event = prod + 1;

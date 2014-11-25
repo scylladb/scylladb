@@ -66,6 +66,10 @@ public:
     uint32_t rsp_event = 1;
     uint8_t  pad[48] = { 0 };
     T _ring[1];
+    void dump() {
+        printf("Shared ring status: req_prod: %d, req_event %d, rsp_prod %d, rsp_event %d\n", req_prod, req_event, rsp_prod, rsp_event);
+    }
+    sring<T>() = default;
 };
 
 using phys = uint64_t;
@@ -80,19 +84,17 @@ public:
     private:
         std::array<gntref, front_ring<T>::nr_ents> _entries;
         front_ring<T> *_ring;
+        std::atomic<uint32_t> _next_idx = { 0 };
     public:
-        entries(front_ring<T> *ring) : _ring(ring) {
-            for (unsigned i = 0; i < front_ring<T>::nr_ents; ++i) {
-                _ids.push(std::move(i));
-            }
-        }
+        entries(front_ring<T> *ring) : _ring(ring) {}
         gntref& operator[](std::size_t i) { return _entries[_ring->idx(i)]; }
         friend front_ring;
-        future<unsigned> get_index();
+        future<> has_room();
+        unsigned get_index();
         void free_index(unsigned index);
     };
 protected:
-    uint32_t idx(int i) { return i & (nr_ents - 1); }
+    static uint32_t idx(int i) { return i & (nr_ents - 1); }
 public:
     uint32_t req_prod_pvt = 0;
     uint32_t rsp_cons = 0;
@@ -105,6 +107,22 @@ public:
     }
 
     entries entries;
+
+    void dump() {
+        _sring->dump();
+        printf("Ring status: req_prod_pvt: %d, rsp cons %d\n\n", req_prod_pvt, rsp_cons);
+    }
+
+    void dump(const char *str, netif_tx_response &r) {
+        printf("%s: tx_response: id %hu, status %hd\n", str, r.id, r.status);
+        dump();
+
+    }
+
+    void dump(const char *str, netif_rx_response &r) {
+        printf("%s: rx_response: id %hu, offset %hu, flags %hx, status %hd\n", str, r.id, r.offset, r.flags, r.status);
+        dump();
+    }
 
     sring<T> *_sring;
     T& operator[](std::size_t i) { return _sring->_ring[idx(i)]; }
