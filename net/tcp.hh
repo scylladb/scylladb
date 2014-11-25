@@ -552,12 +552,15 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                         _rcv._data_received_promise->set_value();
                         _rcv._data_received_promise = {};
                     }
+                    // Send <ACK> to ack data only when data is present in this packet
+                    do_output = should_send_ack(seg_len);
                 } else {
                     insert_out_of_order(seg_seq, std::move(p));
+                    // A TCP receiver SHOULD send an immediate duplicate ACK
+                    // when an out-of-order segment arrives.
+                    do_output = true;
                 }
             }
-            // Send <ACK> to ack data only when data is present in this packet
-            do_output = should_send_ack(seg_len);
         }
     }
     if (th->f_fin) {
