@@ -241,7 +241,7 @@ private:
         bool both_closed() { return _foreign_fin_received && _local_fin_acked; }
     private:
         void respond_with_reset(tcp_hdr* th);
-        void merge_out_of_order();
+        bool merge_out_of_order();
         void insert_out_of_order(tcp_seq seq, packet p);
         void trim_receive_data_after_window();
         bool should_send_ack(uint16_t seg_len);
@@ -547,17 +547,26 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 if (seg_seq == _rcv.next) {
                     _rcv.data.push_back(std::move(p));
                     _rcv.next += seg_len;
-                    merge_out_of_order();
+                    auto merged = merge_out_of_order();
                     if (_rcv._data_received_promise) {
                         _rcv._data_received_promise->set_value();
                         _rcv._data_received_promise = {};
                     }
+                    if (merged) {
+                        // TCP receiver SHOULD send an immediate ACK when the
+                        // incoming segment fills in all or part of a gap in the
+                        // sequence space.
+                        do_output = true;
+                    } else {
+                        do_output = should_send_ack(seg_len);
+                    }
                 } else {
                     insert_out_of_order(seg_seq, std::move(p));
+                    // A TCP receiver SHOULD send an immediate duplicate ACK
+                    // when an out-of-order segment arrives.
+                    do_output = true;
                 }
             }
-            // Send <ACK> to ack data only when data is present in this packet
-            do_output = should_send_ack(seg_len);
         }
     }
     if (th->f_fin) {
@@ -915,7 +924,9 @@ bool tcp<InetTraits>::tcb::should_send_ack(uint16_t seg_len) {
     }
 
     // If the timer is not armed, schedule a delayed ACK.
-    _delayed_ack.arm(500ms);
+    // The maximum delayed ack timer allowed by RFC1122 is 500ms, most
+    // implementations use 200ms.
+    _delayed_ack.arm(200ms);
     return false;
 }
 
@@ -925,9 +936,10 @@ void tcp<InetTraits>::tcb::clear_delayed_ack() {
 }
 
 template <typename InetTraits>
-void tcp<InetTraits>::tcb::merge_out_of_order() {
+bool tcp<InetTraits>::tcb::merge_out_of_order() {
+    bool merged = false;
     if (_rcv.out_of_order.empty()) {
-        return;
+        return merged;
     }
     for (auto it = _rcv.out_of_order.begin(); it != _rcv.out_of_order.end();) {
         auto& p = it->second;
@@ -946,14 +958,18 @@ void tcp<InetTraits>::tcb::merge_out_of_order() {
             _rcv.data.push_back(std::move(p));
             // Since c++11, erase() always returns the value of the following element
             it = _rcv.out_of_order.erase(it);
+            merged = true;
         } else if (_rcv.next >= seg_end) {
             // This segment has been receive already, drop it
             it = _rcv.out_of_order.erase(it);
         } else {
-            // seg_beg > _rcv.need, can not merge
+            // seg_beg > _rcv.need, can not merge. Note, seg_beg can grow only,
+            // so we can stop looking here.
             it++;
+            break;
         }
     }
+    return merged;
 }
 
 template <typename InetTraits>
