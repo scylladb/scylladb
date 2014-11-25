@@ -195,8 +195,6 @@ future<> xenfront_net_device::queue_rx_packet() {
         packet p(static_cast<char *>(entry.page) + rsp.offset, rsp_size);
         _rx_stream.produce(std::move(p));
 
-        _rx_ring._sring->rsp_event = _rx_ring.rsp_cons + 1;
-
         rsp_prod = _rx_ring._sring->rsp_prod;
 
         assert(entry.xen_id >= 0);
@@ -204,6 +202,8 @@ future<> xenfront_net_device::queue_rx_packet() {
         _rx_refs->free_ref(entry);
         _rx_ring.entries.free_index(rsp_cons++);
     }
+
+    _rx_ring._sring->rsp_event = rsp_prod + 1;
 
     // FIXME: Queue_rx maybe should not be a future then
     return make_ready_future<>();
@@ -256,6 +256,8 @@ future<> xenfront_net_device::handle_tx_completions() {
 
         _tx_refs->free_ref(entry);
         _tx_ring.entries.free_index(i);
+
+        prod = _tx_ring._sring->rsp_prod;
     }
     _tx_ring.rsp_cons = prod;
     _tx_ring._sring->rsp_event = prod + 1;
