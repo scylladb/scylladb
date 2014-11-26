@@ -208,4 +208,9 @@ public:
     }
 };
 
+static inline
+future<> now() {
+    return make_ready_future<>();
+}
+
 #endif /* CORE_FUTURE_UTIL_HH_ */
