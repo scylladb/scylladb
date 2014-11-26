@@ -1032,6 +1032,7 @@ output_stream<CharType>::write(const char_type* buf, size_t n) {
         if (_end) {
             auto now = _size - _end;
             std::copy(buf, buf + now, _buf.get_write() + _end);
+            _end = _size;
             temporary_buffer<char> tmp(n - now);
             std::copy(buf + now, buf + n, tmp.get_write());
             return flush().then([this, tmp = std::move(tmp)]() mutable {
