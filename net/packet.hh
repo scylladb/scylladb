@@ -194,6 +194,9 @@ public:
     packet(packet&& x, fragment frag, Deleter deleter);
     // append fragment (zero-copy)
     packet(packet&& x, fragment frag, deleter d);
+    // append deleter
+    template <typename Deleter>
+    packet(packet&& x, Deleter d);
 
     packet& operator=(packet&& x) {
         if (this != &x) {
@@ -434,6 +437,13 @@ packet::packet(packet&& x, fragment frag, deleter d)
     _impl->_frags[_impl->_nr_frags++] = frag;
     d.append(std::move(_impl->_deleter));
     _impl->_deleter = std::move(d);
+}
+
+template <typename Deleter>
+inline
+packet::packet(packet&& x, Deleter d)
+    : _impl(std::move(x._impl)) {
+    _impl->_deleter = make_deleter(std::move(_impl->_deleter), std::move(d));
 }
 
 inline
