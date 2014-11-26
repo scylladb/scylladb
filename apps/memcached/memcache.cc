@@ -1050,7 +1050,7 @@ public:
     }
 
     std::pair<unsigned, foreign_ptr<shared_ptr<std::string>>> print_hash_stats() {
-        unsigned bits = sizeof(size_t) * 8;
+        static constexpr unsigned bits = sizeof(size_t) * 8;
         size_t histo[bits + 1] {};
         size_t max_size = 0;
         unsigned max_bucket = 0;
