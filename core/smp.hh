@@ -75,7 +75,8 @@ public:
     template <typename Ret, typename... FuncArgs, typename... Args>
     std::enable_if_t<is_future<Ret>::value, Ret>
     invoke_on(unsigned id, Ret (Service::*func)(FuncArgs...), Args&&... args) {
-        return smp::submit_to(id, [inst = _instances[id], func, args = std::make_tuple(std::forward<Args>(args)...)] () mutable {
+        auto inst = _instances[id];
+        return smp::submit_to(id, [inst, func, args = std::make_tuple(std::forward<Args>(args)...)] () mutable {
             return apply([inst, func] (Args&&... args) mutable {
                 return (inst->*func)(std::forward<Args>(args)...);
             }, std::move(args));
@@ -86,7 +87,8 @@ public:
     template <typename Ret, typename... FuncArgs, typename... Args>
     std::enable_if_t<!is_future<Ret>::value && !std::is_same<Ret, void>::value, future<Ret>>
     invoke_on(unsigned id, Ret (Service::*func)(FuncArgs...), Args&&... args) {
-        return smp::submit_to(id, [inst = _instances[id], func, args = std::make_tuple(std::forward<Args>(args)...)] () mutable {
+        auto inst = _instances[id];
+        return smp::submit_to(id, [inst, func, args = std::make_tuple(std::forward<Args>(args)...)] () mutable {
                 return apply([inst, func] (Args&&... args) mutable {
                     return make_ready_future<Ret>((inst->*func)(std::forward<Args>(args)...));
                 }, std::move(args));

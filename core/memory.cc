@@ -853,13 +853,13 @@ void operator delete[](void* ptr) throw () {
     }
 }
 
-void operator delete(void* ptr, size_t size) {
+void operator delete(void* ptr, size_t size) throw () {
     if (ptr) {
         memory::free(ptr, size);
     }
 }
 
-void operator delete[](void* ptr, size_t size) {
+void operator delete[](void* ptr, size_t size) throw () {
     if (ptr) {
         memory::free(ptr, size);
     }

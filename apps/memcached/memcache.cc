@@ -65,7 +65,6 @@ public:
 class subdevice {
     foreign_ptr<shared_ptr<flashcache::devfile>> _dev;
     uint64_t _offset;
-    uint64_t _length;
     uint64_t _end;
     std::queue<block> _free_blocks;
     semaphore _par = { 1000 };
@@ -73,7 +72,6 @@ public:
     subdevice(foreign_ptr<shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length)
         : _dev(std::move(dev))
         , _offset(offset)
-        , _length(length)
         , _end(offset + length)
     {
         auto blks = length / block_size;
@@ -1052,7 +1050,7 @@ public:
     }
 
     std::pair<unsigned, foreign_ptr<shared_ptr<std::string>>> print_hash_stats() {
-        unsigned bits = sizeof(size_t) * 8;
+        static constexpr unsigned bits = sizeof(size_t) * 8;
         size_t histo[bits + 1] {};
         size_t max_size = 0;
         unsigned max_bucket = 0;
@@ -1268,7 +1266,8 @@ private:
                     auto f = out.write(item->ascii_prefix());
 
                     if (SendCasVersion) {
-                        f = std::move(f).then([&out, v = item->version()] {
+                        auto v  = item->version();
+                        f = std::move(f).then([&out, v] {
                             return out.write(" ").then([&out, v] {
                                 return out.write(to_sstring(v));
                             });

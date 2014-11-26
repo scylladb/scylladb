@@ -451,12 +451,12 @@ private:
     uint32_t _xid = 0;
 };
 
-const net::dhcp::impl::req_opt_type net::dhcp::impl::requested_options = {
+const net::dhcp::impl::req_opt_type net::dhcp::impl::requested_options = { {
         opt_type::SUBNET_MASK, opt_type::ROUTER, opt_type::DOMAIN_NAME_SERVERS,
-        opt_type::INTERFACE_MTU, opt_type::BROADCAST_ADDRESS };
+        opt_type::INTERFACE_MTU, opt_type::BROADCAST_ADDRESS } };
 
-const net::dhcp::impl::magic_tag net::dhcp::impl::options_magic = { 0x63, 0x82, 0x53,
-        0x63 };
+const net::dhcp::impl::magic_tag net::dhcp::impl::options_magic = { { 0x63, 0x82, 0x53,
+        0x63 } };
 
 const uint16_t net::dhcp::impl::client_port;
 const uint16_t net::dhcp::impl::server_port;
