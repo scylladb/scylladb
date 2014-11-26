@@ -65,7 +65,6 @@ public:
 class subdevice {
     foreign_ptr<shared_ptr<flashcache::devfile>> _dev;
     uint64_t _offset;
-    uint64_t _length;
     uint64_t _end;
     std::queue<block> _free_blocks;
     semaphore _par = { 1000 };
@@ -73,7 +72,6 @@ public:
     subdevice(foreign_ptr<shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length)
         : _dev(std::move(dev))
         , _offset(offset)
-        , _length(length)
         , _end(offset + length)
     {
         auto blks = length / block_size;
