@@ -1155,7 +1155,7 @@ tcp_seq tcp<InetTraits>::tcb::get_isn() {
     hash[3] = _isn_secret.key[15];
     CryptoPP::Weak::MD5::Transform(hash, _isn_secret.key);
     auto seq = hash[0];
-    auto m = duration_cast<milliseconds>(clock_type::now().time_since_epoch());
+    auto m = duration_cast<microseconds>(clock_type::now().time_since_epoch());
     seq += m.count() / 4;
     return make_seq(seq);
 }
