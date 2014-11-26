@@ -54,6 +54,7 @@ public:
         return _buffer[pos];
     }
     bool empty() const { return !size(); }
+    operator bool() { return size(); }
     temporary_buffer share() {
         return temporary_buffer(_buffer, _size, _deleter.share());
     }
