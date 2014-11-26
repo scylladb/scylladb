@@ -65,8 +65,8 @@ public:
     posix_network_stack(boost::program_options::variables_map opts) {}
     virtual server_socket listen(socket_address sa, listen_options opts) override;
     virtual net::udp_channel make_udp_channel(ipv4_addr addr) override;
-    static std::unique_ptr<network_stack> create(boost::program_options::variables_map opts) {
-        return std::unique_ptr<network_stack>(new posix_network_stack(opts));
+    static future<std::unique_ptr<network_stack>> create(boost::program_options::variables_map opts) {
+        return make_ready_future<std::unique_ptr<network_stack>>(std::unique_ptr<network_stack>(new posix_network_stack(opts)));
     }
     virtual bool has_per_core_namespace() override { return false; };
 };
@@ -75,8 +75,8 @@ class posix_ap_network_stack : public posix_network_stack {
 public:
     posix_ap_network_stack(boost::program_options::variables_map opts) : posix_network_stack(std::move(opts)) {}
     virtual server_socket listen(socket_address sa, listen_options opts) override;
-    static std::unique_ptr<network_stack> create(boost::program_options::variables_map opts) {
-        return std::unique_ptr<network_stack>(new posix_ap_network_stack(opts));
+    static future<std::unique_ptr<network_stack>> create(boost::program_options::variables_map opts) {
+        return make_ready_future<std::unique_ptr<network_stack>>(std::unique_ptr<network_stack>(new posix_ap_network_stack(opts)));
     }
 };
 

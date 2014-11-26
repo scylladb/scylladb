@@ -41,8 +41,8 @@ public:
     virtual server_socket listen(socket_address sa, listen_options opt) override;
     virtual udp_channel make_udp_channel(ipv4_addr addr) override;
     virtual future<> initialize() override;
-    static std::unique_ptr<network_stack> create(boost::program_options::variables_map opts) {
-        return std::make_unique<native_network_stack>(opts);
+    static future<std::unique_ptr<network_stack>> create(boost::program_options::variables_map opts) {
+        return make_ready_future<std::unique_ptr<network_stack>>(std::make_unique<native_network_stack>(opts));
     }
     virtual bool has_per_core_namespace() override { return true; };
     friend class native_server_socket_impl<tcp4>;

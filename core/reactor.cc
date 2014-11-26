@@ -70,9 +70,13 @@ reactor::reactor()
 }
 
 void reactor::configure(boost::program_options::variables_map vm) {
-    _network_stack = vm.count("network-stack")
+    auto network_stack_ready = vm.count("network-stack")
         ? network_stack_registry::create(sstring(vm["network-stack"].as<std::string>()), vm)
         : network_stack_registry::create(vm);
+    network_stack_ready.then([this] (std::unique_ptr<network_stack> stack) {
+        _network_stack_ready_promise.set_value(std::move(stack));
+    });
+
     _handle_sigint = !vm.count("no-handle-interrupt");
     _task_quota = vm["task-quota"].as<int>();
 }
@@ -437,8 +441,11 @@ int reactor::run() {
     if (_handle_sigint && _id == 0) {
         receive_signal(SIGINT).then([this] { stop(); });
     }
-    _network_stack->initialize().then([this]() {
-        _start_promise.set_value();
+    _network_stack_ready_promise.get_future().then([this] (std::unique_ptr<network_stack> stack) {
+        _network_stack = std::move(stack);
+        _network_stack->initialize().then([this]() {
+            _start_promise.set_value();
+        });
     });
     complete_timers();
     while (true) {
@@ -714,7 +721,7 @@ bool operator==(const ::sockaddr_in a, const ::sockaddr_in b) {
 
 void network_stack_registry::register_stack(sstring name,
         boost::program_options::options_description opts,
-        std::function<std::unique_ptr<network_stack> (options opts)> create, bool make_default) {
+        std::function<future<std::unique_ptr<network_stack>> (options opts)> create, bool make_default) {
     _map()[name] = std::move(create);
     options_description().add(opts);
     if (make_default) {
@@ -734,12 +741,12 @@ std::vector<sstring> network_stack_registry::list() {
     return ret;
 }
 
-std::unique_ptr<network_stack>
+future<std::unique_ptr<network_stack>>
 network_stack_registry::create(options opts) {
     return create(_default(), opts);
 }
 
-std::unique_ptr<network_stack>
+future<std::unique_ptr<network_stack>>
 network_stack_registry::create(sstring name, options opts) {
     return _map()[name](opts);
 }

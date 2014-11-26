@@ -207,9 +207,9 @@ public:
     using options = boost::program_options::variables_map;
 private:
     static std::unordered_map<sstring,
-            std::function<std::unique_ptr<network_stack> (options opts)>>& _map() {
+            std::function<future<std::unique_ptr<network_stack>> (options opts)>>& _map() {
         static std::unordered_map<sstring,
-                std::function<std::unique_ptr<network_stack> (options opts)>> map;
+                std::function<future<std::unique_ptr<network_stack>> (options opts)>> map;
         return map;
     }
     static sstring& _default() {
@@ -223,12 +223,12 @@ public:
     }
     static void register_stack(sstring name,
             boost::program_options::options_description opts,
-            std::function<std::unique_ptr<network_stack> (options opts)> create,
+            std::function<future<std::unique_ptr<network_stack>> (options opts)> create,
             bool make_default = false);
     static sstring default_stack();
     static std::vector<sstring> list();
-    static std::unique_ptr<network_stack> create(options opts);
-    static std::unique_ptr<network_stack> create(sstring name, options opts);
+    static future<std::unique_ptr<network_stack>> create(options opts);
+    static future<std::unique_ptr<network_stack>> create(sstring name, options opts);
 };
 
 class network_stack_registrator {
@@ -236,7 +236,7 @@ public:
     using options = boost::program_options::variables_map;
     explicit network_stack_registrator(sstring name,
             boost::program_options::options_description opts,
-            std::function<std::unique_ptr<network_stack> (options opts)> factory,
+            std::function<future<std::unique_ptr<network_stack>> (options opts)> factory,
             bool make_default = false) {
         network_stack_registry::register_stack(name, opts, factory, make_default);
     }
@@ -540,6 +540,7 @@ private:
     unsigned _id = 0;
     bool _stopped = false;
     bool _handle_sigint = true;
+    promise<std::unique_ptr<network_stack>> _network_stack_ready_promise;
     std::unique_ptr<network_stack> _network_stack;
     int _return = 0;
     promise<> _start_promise;
