@@ -57,7 +57,7 @@ private:
     grant_head *_rx_refs;
 
     std::list<std::pair<std::string, std::string>> _features;
-    static std::unordered_set<std::string> _supported_features;
+    static std::unordered_map<std::string, std::string> _supported_features;
 
     ethernet_address _hw_address;
 
@@ -81,10 +81,10 @@ public:
     net::hw_features hw_features();
 };
 
-std::unordered_set<std::string>
+std::unordered_map<std::string, std::string>
 xenfront_net_device::_supported_features = {
-    "feature-split-event-channels",
-    "feature-rx-copy",
+    { "feature-split-event-channels", "feature-split-event-channels" },
+    { "feature-rx-copy", "request-rx-copy" }
 };
 
 subscription<packet>
@@ -299,7 +299,12 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     for (auto&& feat : all_features) {
         if (feat.compare(0, 8, "feature-") == 0) {
             auto val = _xenstore->read<int>(_backend + "/" + feat);
-            features_nack[feat] = val && _supported_features.count(feat);
+            try {
+                auto key = _supported_features.at(feat);
+                features_nack[key] = val;
+            } catch (const std::out_of_range& oor) {
+                features_nack[feat] = 0;
+            }
         }
     }
     if (!opts["split-event-channels"].as<bool>()) {
