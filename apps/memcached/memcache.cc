@@ -1266,7 +1266,8 @@ private:
                     auto f = out.write(item->ascii_prefix());
 
                     if (SendCasVersion) {
-                        f = std::move(f).then([&out, v = item->version()] {
+                        auto v  = item->version();
+                        f = std::move(f).then([&out, v] {
                             return out.write(" ").then([&out, v] {
                                 return out.write(to_sstring(v));
                             });
