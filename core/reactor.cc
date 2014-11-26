@@ -383,7 +383,7 @@ void reactor::exit(int ret) {
 
 int reactor::run() {
     uint64_t tasks_processed = 0;
-    scollectd::registration regs[] = {
+    std::vector<scollectd::registration> regs = {
             // queue_length     value:GAUGE:0:U
             // Absolute value of num tasks in queue.
             scollectd::add_polled_metric(scollectd::type_instance_id("reactor"
