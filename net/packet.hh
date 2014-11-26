@@ -240,6 +240,13 @@ public:
     packet free_on_cpu(unsigned cpu);
 
     void linearize() { return linearize(0, len()); }
+
+    void reserve(int n_frags) {
+        if (n_frags > _impl->_nr_frags) {
+            auto extra = n_frags - _impl->_nr_frags;
+            _impl = impl::allocate_if_needed(std::move(_impl), extra);
+        }
+    }
 private:
     void linearize(size_t at_frag, size_t desired_size);
     bool allocate_headroom(size_t size);
