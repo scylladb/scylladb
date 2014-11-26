@@ -77,6 +77,7 @@ using phys = uint64_t;
 template <typename T>
 class front_ring {
 public:
+    static constexpr uint32_t nr_ents = 256; /* FIXME : DYN */
     class entries {
     protected:
         std::queue<unsigned, circular_buffer<unsigned>> _ids;
@@ -98,7 +99,6 @@ protected:
 public:
     uint32_t req_prod_pvt = 0;
     uint32_t rsp_cons = 0;
-    static constexpr uint32_t nr_ents = 256; /* FIXME : DYN */
     int32_t  ref = -1;
 
     front_ring(gntref r)
