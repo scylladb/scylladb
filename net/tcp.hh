@@ -19,6 +19,9 @@
 #include <chrono>
 #include <experimental/optional>
 
+#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
+#include <cryptopp/md5.h>
+
 using namespace std::chrono_literals;
 
 namespace net {
@@ -109,11 +112,6 @@ inline bool operator<(tcp_seq s, tcp_seq q) { return s - q < 0; }
 inline bool operator>(tcp_seq s, tcp_seq q) { return q < s; }
 inline bool operator<=(tcp_seq s, tcp_seq q) { return !(s > q); }
 inline bool operator>=(tcp_seq s, tcp_seq q) { return !(s < q); }
-
-inline tcp_seq get_tcp_isn() {
-    // FIXME: should increase every 4ms
-    return make_seq(1000000);
-}
 
 struct tcp_hdr {
     packed<uint16_t> src_port;
@@ -225,6 +223,20 @@ private:
         static constexpr uint16_t _max_nr_retransmit{5};
         timer _retransmit;
         uint16_t _nr_full_seg_received = 0;
+        struct isn_secret {
+            // 512 bits secretkey for ISN generating
+            uint32_t key[16];
+            isn_secret () {
+                std::random_device rd;
+                std::default_random_engine e(rd());
+                std::uniform_int_distribution<uint32_t> dist{};
+                for (auto& k : key) {
+                    k = dist(e);
+                }
+            }
+        };
+        static isn_secret _isn_secret;
+        tcp_seq get_isn();
     public:
         tcb(tcp& t, connid id);
         void input(tcp_hdr* th, packet p);
@@ -498,7 +510,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             _rcv.next = _rcv.initial + 1;
             _rcv.urgent = _rcv.next;
             _snd.wl1 = th->seq;
-            _snd.next = _snd.initial = get_tcp_isn();
+            _snd.next = _snd.initial = get_isn();
             _option.parse(opt_start, opt_end);
             // Remote receive window scale factor
             _snd.window_scale = _option._remote_win_scale;
@@ -1130,6 +1142,25 @@ void tcp<InetTraits>::tcb::cleanup() {
 }
 
 template <typename InetTraits>
+tcp_seq tcp<InetTraits>::tcb::get_isn() {
+    // Per RFC6528, TCP SHOULD generate its Initial Sequence Numbers
+    // with the expression:
+    //   ISN = M + F(localip, localport, remoteip, remoteport, secretkey)
+    //   M is the 4 microsecond timer
+    using namespace std::chrono;
+    uint32_t hash[4];
+    hash[0] = _local_ip.ip;
+    hash[1] = _foreign_ip.ip;
+    hash[2] = (_local_port << 16) + _foreign_port;
+    hash[3] = _isn_secret.key[15];
+    CryptoPP::Weak::MD5::Transform(hash, _isn_secret.key);
+    auto seq = hash[0];
+    auto m = duration_cast<milliseconds>(clock_type::now().time_since_epoch());
+    seq += m.count() / 4;
+    return make_seq(seq);
+}
+
+template <typename InetTraits>
 void tcp<InetTraits>::connection::close_read() {
 }
 
@@ -1149,6 +1180,9 @@ constexpr std::chrono::milliseconds tcp<InetTraits>::tcb::_rto_max;
 
 template <typename InetTraits>
 constexpr std::chrono::milliseconds tcp<InetTraits>::tcb::_rto_clk_granularity;
+
+template <typename InetTraits>
+typename tcp<InetTraits>::tcb::isn_secret tcp<InetTraits>::tcb::_isn_secret;
 
 }
 
