@@ -345,11 +345,16 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     keep_doing([this] {
         return alloc_rx_references();
     });
+
+    _rx_evtchn.umask();
+
     keep_doing([this] () {
         return _tx_evtchn.pending().then([this] {
             handle_tx_completions();
         });
     });
+
+    _tx_evtchn.umask();
 }
 
 xenfront_net_device::~xenfront_net_device() {

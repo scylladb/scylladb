@@ -72,9 +72,14 @@ void port::notify() {
     _evtchn->notify(_port);
 }
 
+void port::umask() {
+    _evtchn->umask(&_port, 1);
+}
+
 class userspace_evtchn: public evtchn {
     pollable_fd _evtchn;
-    void umask(int *port, unsigned count);
+protected:
+    virtual void umask(int *port, unsigned count);
 public:
     userspace_evtchn(unsigned otherend);
     virtual port bind() override;
