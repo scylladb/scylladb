@@ -189,6 +189,11 @@ reactor::listen(socket_address sa, listen_options opt) {
     return _network_stack->listen(sa, opt);
 }
 
+future<connected_socket>
+reactor::connect(socket_address sa) {
+    return _network_stack->connect(sa);
+}
+
 void reactor_backend_epoll::complete_epoll_event(pollable_fd_state& pfd, promise<> pollable_fd_state::*pr,
         int events, int event) {
     if (pfd.events_requested & events & event) {

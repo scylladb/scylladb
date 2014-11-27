@@ -116,12 +116,22 @@ posix_network_stack::listen(socket_address sa, listen_options opt) {
     return server_socket(std::make_unique<posix_server_socket_impl>(sa, engine.posix_listen(sa, opt)));
 }
 
+future<connected_socket>
+posix_network_stack::connect(socket_address sa) {
+    return make_ready_future<connected_socket>(connected_socket(nullptr));
+}
+
 thread_local std::unordered_map<::sockaddr_in, promise<connected_socket, socket_address>> posix_ap_server_socket_impl::sockets;
 thread_local std::unordered_multimap<::sockaddr_in, posix_ap_server_socket_impl::connection> posix_ap_server_socket_impl::conn_q;
 
 server_socket
 posix_ap_network_stack::listen(socket_address sa, listen_options opt) {
     return server_socket(std::make_unique<posix_ap_server_socket_impl>(sa));
+}
+
+future<connected_socket>
+posix_ap_network_stack::connect(socket_address sa) {
+    return make_ready_future<connected_socket>(connected_socket(nullptr));
 }
 
 struct cmsg_with_pktinfo {

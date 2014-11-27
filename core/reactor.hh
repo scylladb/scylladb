@@ -243,6 +243,7 @@ class network_stack {
 public:
     virtual ~network_stack() {}
     virtual server_socket listen(socket_address sa, listen_options opts) = 0;
+    virtual future<connected_socket> connect(socket_address sa) = 0;
     virtual net::udp_channel make_udp_channel(ipv4_addr addr = {}) = 0;
     virtual future<> initialize() {
         return make_ready_future();
@@ -662,6 +663,8 @@ public:
     void configure(boost::program_options::variables_map config);
 
     server_socket listen(socket_address sa, listen_options opts = {});
+
+    future<connected_socket> connect(socket_address sa);
 
     pollable_fd posix_listen(socket_address sa, listen_options opts = {});
 
