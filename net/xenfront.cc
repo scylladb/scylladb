@@ -361,6 +361,7 @@ xenfront_net_device::~xenfront_net_device() {
         }
         _xenstore->remove(path("event-channel-tx"), t);
         _xenstore->remove(path("event-channel-rx"), t);
+        _xenstore->remove(path("event-channel"), t);
         _xenstore->remove(path("tx-ring-ref"), t);
         _xenstore->remove(path("rx-ring-ref"), t);
         _xenstore->write<int>(path("state"), 6, t);
