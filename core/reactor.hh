@@ -663,6 +663,8 @@ public:
 
     pollable_fd posix_listen(socket_address sa, listen_options opts = {});
 
+    future<pollable_fd> posix_connect(socket_address sa);
+
     future<pollable_fd, socket_address> accept(pollable_fd_state& listen_fd);
 
     future<size_t> read_some(pollable_fd_state& fd, void* buffer, size_t size);
