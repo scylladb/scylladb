@@ -19,6 +19,9 @@ xenstore *xenstore::instance() {
 xenstore::xenstore()
     : _h(xs_daemon_open())
 {
+    if (!_h) {
+        throw std::runtime_error("Failed to initialize xenstore");
+    }
 }
 
 xenstore::~xenstore()
