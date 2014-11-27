@@ -65,7 +65,7 @@ modes = {
 tests = [
     'tests/test-reactor',
     'tests/fileiotest',
-    'tests/virtiotest',
+    'tests/echotest',
     'tests/l3_test',
     'tests/ip_test',
     'tests/timertest',
@@ -182,7 +182,7 @@ deps = {
     'apps/memcached/flashcached': ['apps/memcached/flashcached.cc'] + memcache,
     'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
-    'tests/virtiotest': ['tests/virtiotest.cc'] + core + libnet,
+    'tests/echotest': ['tests/echotest.cc'] + core + libnet,
     'tests/l3_test': ['tests/l3_test.cc'] + core + libnet,
     'tests/ip_test': ['tests/ip_test.cc'] + core + libnet,
     'tests/tcp_test': ['tests/tcp_test.cc'] + core + libnet,
