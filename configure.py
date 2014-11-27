@@ -108,6 +108,8 @@ arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 
                         help = 'C++ compiler path')
 arg_parser.add_argument('--with-osv', action = 'store', dest = 'with_osv', default = '',
                         help = 'Shortcut for compile for OSv')
+arg_parser.add_argument('--dpdk-target', action = 'store', dest = 'dpdk_target', default = '',
+                        help = 'Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
 add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
 add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 args = arg_parser.parse_args()
@@ -115,6 +117,7 @@ args = arg_parser.parse_args()
 libnet = [
     'net/proxy.cc',
     'net/virtio.cc',
+    'net/dpdk.cc',
     'net/net.cc',
     'net/ip.cc',
     'net/ethernet.cc',
@@ -206,6 +209,14 @@ if args.with_osv:
     args.user_cflags = (args.user_cflags +
         ' -DDEFAULT_ALLOCATOR -fvisibility=default -DHAVE_OSV -I' +
         args.with_osv + '/include')
+
+if args.dpdk_target:
+    args.user_cflags = (args.user_cflags +
+        ' -DHAVE_DPDK -I' +
+        args.dpdk_target + '/include')
+    args.user_ldflags = (args.user_ldflags +
+        ' -L' +
+        args.dpdk_target + '/lib -Wl,--whole-archive -Wl,-lrte_distributor -Wl,-lrte_kni -Wl,-lrte_pipeline -Wl,-lrte_table -Wl,-lrte_port -Wl,-lrte_timer -Wl,-lrte_hash -Wl,-lrte_lpm -Wl,-lrte_power -Wl,-lrte_acl -Wl,-lrte_meter -Wl,-lrte_sched -Wl,-lm -Wl,-lrt -Wl,--start-group -Wl,-lrte_kvargs -Wl,-lrte_mbuf -Wl,-lrte_ip_frag -Wl,-lethdev -Wl,-lrte_malloc -Wl,-lrte_mempool -Wl,-lrte_ring -Wl,-lrte_eal -Wl,-lrte_cmdline -Wl,-lrte_cfgfile -Wl,-lrte_pmd_bond -Wl,-lrte_pmd_vmxnet3_uio -Wl,-lrte_pmd_virtio_uio -Wl,-lrte_pmd_i40e -Wl,-lrte_pmd_ixgbe -Wl,-lrte_pmd_e1000 -Wl,-lrte_pmd_ring -Wl,-lrt -Wl,-lm -Wl,-ldl -Wl,--end-group -Wl,--no-whole-archive')
 
 warnings = [w
             for w in warnings
