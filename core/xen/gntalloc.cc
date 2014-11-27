@@ -84,17 +84,21 @@ gntref userspace_gntalloc::alloc_ref() {
 }
 
 gntref userspace_grant_head::new_ref() {
-    return _refs[_id++ % _refs.size()];
+    auto r = _refs.back();
+    _refs.pop_back();
+    return r;
 }
 
 gntref userspace_grant_head::new_ref(void *addr, size_t size) {
-    gntref& ref = _refs[_id % _refs.size()];
+    auto ref = _refs.back();
     memcpy(ref.page, addr, size);
+    _refs.pop_back();
     return ref;
 }
 
 void userspace_grant_head::free_ref(gntref& ref) {
-    abort();
+    _refs.push_back(ref);
+    ref = invalid_ref;
 }
 
 #ifdef HAVE_OSV
