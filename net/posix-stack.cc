@@ -18,6 +18,8 @@ public:
     virtual output_stream<char> output() override { return output_stream<char>(posix_data_sink(_fd), 8192); }
     friend class posix_server_socket_impl;
     friend class posix_ap_server_socket_impl;
+    friend class posix_network_stack;
+    friend class posix_ap_network_stack;
 };
 
 future<connected_socket, socket_address>
@@ -118,7 +120,10 @@ posix_network_stack::listen(socket_address sa, listen_options opt) {
 
 future<connected_socket>
 posix_network_stack::connect(socket_address sa) {
-    return make_ready_future<connected_socket>(connected_socket(nullptr));
+    return engine.posix_connect(sa).then([] (pollable_fd fd) {
+        std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(fd)));
+        return make_ready_future<connected_socket>(connected_socket(std::move(csi)));
+    });
 }
 
 thread_local std::unordered_map<::sockaddr_in, promise<connected_socket, socket_address>> posix_ap_server_socket_impl::sockets;
@@ -131,7 +136,10 @@ posix_ap_network_stack::listen(socket_address sa, listen_options opt) {
 
 future<connected_socket>
 posix_ap_network_stack::connect(socket_address sa) {
-    return make_ready_future<connected_socket>(connected_socket(nullptr));
+    return engine.posix_connect(sa).then([] (pollable_fd fd) {
+        std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(fd)));
+        return make_ready_future<connected_socket>(connected_socket(std::move(csi)));
+    });
 }
 
 struct cmsg_with_pktinfo {
