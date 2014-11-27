@@ -4,6 +4,7 @@
  */
 
 #include "net/virtio.hh"
+#include "net/dpdk.hh"
 #include "core/reactor.hh"
 #include "net/ip.hh"
 #include <iostream>
@@ -48,10 +49,7 @@ future<> echo_packet(net::device& netif, packet p) {
     }
     auto icmp_len = ip_len - iph->ihl * 4;
     std::swap(eh->src_mac, eh->dst_mac);
-    eh->src_mac = { 0x12, 0x23, 0x45, 0x56, 0x67, 0x68 };
-    auto x = iph->src_ip;
-    iph->src_ip = ipv4_address("192.168.122.2");
-    iph->dst_ip = x;
+    std::swap(iph->src_ip, iph->dst_ip);
     icmph->type = icmp_hdr::msg_type::echo_reply;
     icmph->csum = 0;
     *iph = hton(*iph);
@@ -62,12 +60,40 @@ future<> echo_packet(net::device& netif, packet p) {
     return netif.send(std::move(p));
 }
 
+#ifdef HAVE_DPDK
+void usage()
+{
+    std::cout<<"Usage: echotest [-virtio|-dpdk]"<<std::endl;
+    std::cout<<"   -virtio - use virtio backend (default)"<<std::endl;
+    std::cout<<"   -dpdk   - use dpdk-pmd backend"<<std::endl;
+}
+#endif
+
 int main(int ac, char** av) {
-    auto vnet = create_virtio_net_device("tap0");
-    subscription<packet> rx = vnet->receive([netif = vnet.get(), &rx] (packet p) {
-        dump_packet(p);
-        return echo_packet(*netif, std::move(p));
-    });
+    std::unique_ptr<net::device> vnet;
+
+#ifdef HAVE_DPDK
+    if (ac > 2) {
+        usage();
+        return -1;
+    }
+
+    if ((ac == 1) || !std::strcmp(av[1], "-virtio")) {
+        vnet = create_virtio_net_device("tap0");
+    } else if (!std::strcmp(av[1], "-dpdk")) {
+        vnet = create_dpdk_net_device();
+    } else {
+        usage();
+        return -1;
+    }
+#else
+    vnet = create_virtio_net_device("tap0");
+#endif // HAVE_DPDK
+
+    subscription<packet> rx =
+        vnet->receive([netif = vnet.get(), &rx] (packet p) {
+            return echo_packet(*netif, std::move(p));
+        });
     engine.run();
     return 0;
 }
