@@ -15,10 +15,8 @@ struct test {
         void copy_data() {
             fd.read_some(buffer, sizeof(buffer)).then([this] (size_t n) {
                 if (n) {
-                    fd.write_all(buffer, n).then([this, n] (size_t w) {
-                        if (w == n) {
-                            copy_data();
-                        }
+                    fd.write_all(buffer, n).then([this] {
+                        copy_data();
                     });
                 } else {
                     delete this;

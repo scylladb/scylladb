@@ -130,8 +130,8 @@ public:
     future<size_t> read_some(char* buffer, size_t size);
     future<size_t> read_some(uint8_t* buffer, size_t size);
     future<size_t> read_some(const std::vector<iovec>& iov);
-    future<size_t> write_all(const char* buffer, size_t size);
-    future<size_t> write_all(const uint8_t* buffer, size_t size);
+    future<> write_all(const char* buffer, size_t size);
+    future<> write_all(const uint8_t* buffer, size_t size);
     future<pollable_fd, socket_address> accept();
     future<size_t> sendmsg(struct msghdr *msg);
     future<size_t> recvmsg(struct msghdr *msg);
@@ -593,7 +593,7 @@ public:
 
     future<size_t> write_some(pollable_fd_state& fd, const void* buffer, size_t size);
 
-    future<size_t> write_all(pollable_fd_state& fd, const void* buffer, size_t size);
+    future<> write_all(pollable_fd_state& fd, const void* buffer, size_t size);
 
     future<file> open_file_dma(sstring name);
 
@@ -629,7 +629,7 @@ public:
 private:
     struct collectd_registrations;
     collectd_registrations register_collectd_metrics();
-    future<size_t> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
+    future<> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
 
     void process_io(size_t count);
 
@@ -935,10 +935,10 @@ reactor::write_some(pollable_fd_state& fd, const void* buffer, size_t len) {
 }
 
 inline
-future<size_t>
+future<>
 reactor::write_all_part(pollable_fd_state& fd, const void* buffer, size_t len, size_t completed) {
     if (completed == len) {
-        return make_ready_future<size_t>(completed);
+        return make_ready_future<>();
     } else {
         return write_some(fd, static_cast<const char*>(buffer) + completed, len - completed).then(
                 [&fd, buffer, len, completed, this] (size_t part) mutable {
@@ -948,7 +948,7 @@ reactor::write_all_part(pollable_fd_state& fd, const void* buffer, size_t len, s
 }
 
 inline
-future<size_t>
+future<>
 reactor::write_all(pollable_fd_state& fd, const void* buffer, size_t len) {
     assert(len);
     return write_all_part(fd, buffer, len, 0);
@@ -1131,12 +1131,12 @@ future<size_t> pollable_fd::read_some(const std::vector<iovec>& iov) {
 }
 
 inline
-future<size_t> pollable_fd::write_all(const char* buffer, size_t size) {
+future<> pollable_fd::write_all(const char* buffer, size_t size) {
     return engine.write_all(*_s, buffer, size);
 }
 
 inline
-future<size_t> pollable_fd::write_all(const uint8_t* buffer, size_t size) {
+future<> pollable_fd::write_all(const uint8_t* buffer, size_t size) {
     return engine.write_all(*_s, buffer, size);
 }
 
