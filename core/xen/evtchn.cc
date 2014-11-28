@@ -78,6 +78,7 @@ void port::umask() {
 
 class userspace_evtchn: public evtchn {
     pollable_fd _evtchn;
+    int ports[2];
 protected:
     virtual void umask(int *port, unsigned count);
 public:
@@ -91,15 +92,14 @@ userspace_evtchn::userspace_evtchn(unsigned otherend)
     , _evtchn(pollable_fd(file_desc::open("/dev/xen/evtchn", O_RDWR | O_NONBLOCK)))
 {
     keep_doing([this] {
-        int ports[2];
-        return _evtchn.read_some(reinterpret_cast<char *>(&ports), sizeof(ports)).then([this, &ports] (size_t s)
+        return _evtchn.read_some(reinterpret_cast<char *>(&ports), sizeof(ports)).then([this] (size_t s)
         {
             auto count = s / sizeof(ports[0]);
-            umask(ports, count);
             for (unsigned i = 0; i < count; ++i) {
                 make_ready_port(ports[i]);
             }
-            make_ready_future<>();
+            umask(ports, count);
+            return make_ready_future<>();
         });
     });
 }
