@@ -310,7 +310,7 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
         _features["feature-split-event-channels"] = 0;
     }
 
-    bool split = _features["feature-split-event-channel"];
+    bool split = _features["feature-split-event-channels"];
 
     _hw_features.rx_csum_offload = true;
     _hw_features.tx_csum_offload = true;
