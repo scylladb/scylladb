@@ -196,6 +196,7 @@ public:
     tcp<ipv4_traits>& get_tcp() { return *_tcp._tcp; }
     void register_l4(proto_type id, ip_protocol* handler);
     net::hw_features hw_features() { return _netif->hw_features(); }
+    static bool needs_frag(packet& p, ip_protocol_num proto_num, net::hw_features hw_features);
 };
 
 template <ip_protocol_num ProtoNum>
@@ -212,6 +213,7 @@ struct ip_hdr {
     packed<uint16_t> len;
     packed<uint16_t> id;
     packed<uint16_t> frag;
+    enum class frag_bits : uint8_t { mf = 13, df = 14 };
     uint8_t ttl;
     uint8_t ip_proto;
     packed<uint16_t> csum;

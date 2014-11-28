@@ -511,10 +511,12 @@ virtio_net_device::txq::post(packet p) {
         auto mtu = _dev.hw_features().mtu;
         if (oi.protocol == ip_protocol_num::tcp) {
             auto tcp_hdr_len = oi.tcp_hdr_len;
-            vhdr.needs_csum = 1;
-            vhdr.csum_start = eth_hdr_len + ip_hdr_len;
-            // TCP checksum filed's offset within the TCP header is 16 bytes
-            vhdr.csum_offset = 16;
+            if (oi.needs_csum) {
+                vhdr.needs_csum = 1;
+                vhdr.csum_start = eth_hdr_len + ip_hdr_len;
+                // TCP checksum filed's offset within the TCP header is 16 bytes
+                vhdr.csum_offset = 16;
+            }
             if (_dev.hw_features().tx_tso && p.len() > mtu + eth_hdr_len) {
                 // IPv4 TCP TSO
                 vhdr.gso_type = net_hdr::gso_tcpv4;
@@ -525,10 +527,12 @@ virtio_net_device::txq::post(packet p) {
             }
         } else if (oi.protocol == ip_protocol_num::udp) {
             auto udp_hdr_len = oi.udp_hdr_len;
-            vhdr.needs_csum = 1;
-            vhdr.csum_start = eth_hdr_len + ip_hdr_len;
-            // UDP checksum filed's offset within the UDP header is 6 bytes
-            vhdr.csum_offset = 6;
+            if (oi.needs_csum) {
+                vhdr.needs_csum = 1;
+                vhdr.csum_start = eth_hdr_len + ip_hdr_len;
+                // UDP checksum filed's offset within the UDP header is 6 bytes
+                vhdr.csum_offset = 6;
+            }
             if (_dev.hw_features().tx_ufo && p.len() > mtu + eth_hdr_len) {
                 vhdr.gso_type = net_hdr::gso_udp;
                 vhdr.hdr_len = eth_hdr_len + ip_hdr_len + udp_hdr_len;

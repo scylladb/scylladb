@@ -21,6 +21,7 @@ struct fragment {
 
 struct offload_info {
     ip_protocol_num protocol = ip_protocol_num::unused;
+    bool needs_csum = false;
     uint8_t ip_hdr_len = 20;
     uint8_t tcp_hdr_len = 20;
     uint8_t udp_hdr_len = 8;

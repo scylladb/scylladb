@@ -123,16 +123,18 @@ future<> udp_v4::send(uint16_t src_port, ipv4_addr dst, packet &&p)
     hdr->len = p.len();
     *hdr = hton(*hdr);
 
+    offload_info oi;
     checksummer csum;
     ipv4_traits::udp_pseudo_header_checksum(csum, src, dst, p.len());
-    if (hw_features().tx_csum_offload) {
+    bool needs_frag = ipv4::needs_frag(p, ip_protocol_num::udp, hw_features());
+    if (hw_features().tx_csum_offload && !needs_frag) {
         hdr->cksum = ~csum.get();
+        oi.needs_csum = true;
     } else {
         csum.sum(p);
         hdr->cksum = csum.get();
+        oi.needs_csum = false;
     }
-
-    offload_info oi;
     oi.protocol = ip_protocol_num::udp;
     p.set_offload_info(oi);
 

@@ -822,18 +822,19 @@ void tcp<InetTraits>::tcb::output() {
         _option.fill(th, options_size);
         *th = hton(*th);
 
+        offload_info oi;
         checksummer csum;
         InetTraits::tcp_pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + options_size + len);
         if (_tcp.hw_features().tx_csum_offload) {
             // virtio-net's VIRTIO_NET_F_CSUM feature requires th->checksum to be
             // initialized to ones' complement sum of the pseudo header.
             th->checksum = ~csum.get();
+            oi.needs_csum = true;
         } else {
             csum.sum(p);
             th->checksum = csum.get();
+            oi.needs_csum = false;
         }
-
-        offload_info oi;
         oi.protocol = ip_protocol_num::tcp;
         oi.tcp_hdr_len = sizeof(tcp_hdr) + options_size;
         p.set_offload_info(oi);

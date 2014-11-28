@@ -5,6 +5,8 @@
 
 #include "ip.hh"
 #include "core/print.hh"
+#include "core/future-util.hh"
+#include "core/shared_ptr.hh"
 
 namespace net {
 
@@ -52,6 +54,19 @@ unsigned ipv4::handle_on_cpu(packet& p, size_t off)
 
 bool ipv4::in_my_netmask(ipv4_address a) const {
     return !((a.ip ^ _host_address.ip) & _netmask.ip);
+}
+
+bool ipv4::needs_frag(packet& p, ip_protocol_num prot_num, net::hw_features hw_features) {
+    if (p.len() + ipv4_hdr_len_min <= hw_features.mtu) {
+        return false;
+    }
+
+    if ((prot_num == ip_protocol_num::tcp && hw_features.tx_tso) ||
+        (prot_num == ip_protocol_num::udp && hw_features.tx_ufo)) {
+        return false;
+    }
+
+    return true;
 }
 
 future<>
@@ -105,26 +120,12 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
 }
 
 future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
-    // FIXME: fragment
-    auto iph = p.prepend_header<ip_hdr>();
-    iph->ihl = sizeof(*iph) / 4;
-    iph->ver = 4;
-    iph->dscp = 0;
-    iph->ecn = 0;
-    iph->len = p.len();
-    iph->id = 0;
-    iph->frag = 0;
-    iph->ttl = 64;
-    iph->ip_proto = (uint8_t)proto_num;
-    iph->csum = 0;
-    iph->src_ip = _host_address;
+    uint16_t remaining = p.len();
+    uint16_t offset = 0;
+    auto needs_frag = this->needs_frag(p, proto_num, hw_features());
 
-    iph->dst_ip = to;
-    *iph = hton(*iph);
-    checksummer csum;
-    csum.sum(reinterpret_cast<char*>(iph), sizeof(*iph));
-    iph->csum = csum.get();
-
+    // Figure out where to send the packet to. If it is a directly connected
+    // host, send to it directly, otherwise send to the default gateway.
     ipv4_address dst;
     if (in_my_netmask(to)) {
         dst = to;
@@ -132,15 +133,70 @@ future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
         dst = _gw_address;
     }
 
-    return _arp.lookup(dst).then([this, p = std::move(p)] (ethernet_address e_dst) mutable {
-        return send_raw(e_dst, std::move(p));
-    });
+
+    auto send_pkt = [this, to, dst, proto_num, needs_frag] (packet& pkt, uint16_t remaining, uint16_t offset) {
+        auto iph = pkt.prepend_header<ip_hdr>();
+        iph->ihl = sizeof(*iph) / 4;
+        iph->ver = 4;
+        iph->dscp = 0;
+        iph->ecn = 0;
+        iph->len = pkt.len();
+        // FIXME: a proper id
+        iph->id = 0;
+        if (needs_frag) {
+            uint16_t mf = remaining > 0;
+            // The fragment offset is measured in units of 8 octets (64 bits)
+            auto off = offset / 8;
+            iph->frag = (mf << uint8_t(ip_hdr::frag_bits::mf)) | off;
+        } else {
+            iph->frag = 0;
+        }
+        iph->ttl = 64;
+        iph->ip_proto = (uint8_t)proto_num;
+        iph->csum = 0;
+        iph->src_ip = _host_address;
+        iph->dst_ip = to;
+        *iph = hton(*iph);
+
+        checksummer csum;
+        csum.sum(reinterpret_cast<char*>(iph), sizeof(*iph));
+        iph->csum = csum.get();
+
+        return _arp.lookup(dst).then([this, pkt = std::move(pkt)] (ethernet_address e_dst) mutable {
+            return send_raw(e_dst, std::move(pkt));
+        });
+    };
+
+    if (needs_frag) {
+        struct send_info {
+            packet p;
+            uint16_t remaining;
+            uint16_t offset;
+        };
+        auto si = make_shared<send_info>({std::move(p), remaining, offset});
+        auto stop = [si] { return si->remaining == 0; };
+        auto send_frag = [this, send_pkt, si] () mutable {
+            auto& remaining = si->remaining;
+            auto& offset = si->offset;
+            auto mtu = hw_features().mtu;
+            auto can_send = std::min(uint16_t(mtu - net::ipv4_hdr_len_min), remaining);
+            remaining -= can_send;
+            auto pkt = si->p.share(offset, can_send);
+            auto ret = send_pkt(pkt, remaining, offset);
+            offset += can_send;
+            return ret;
+        };
+        return do_until(stop, send_frag);
+    } else {
+        // The whole packet can be send in one shot
+        remaining = 0;
+        return send_pkt(p, remaining, offset);
+    }
 }
 
 future<> ipv4::send_raw(ethernet_address dst, packet p) {
     return _l3.send(dst, std::move(p));
 }
-
 
 void ipv4::set_host_address(ipv4_address ip) {
     _host_address = ip;
