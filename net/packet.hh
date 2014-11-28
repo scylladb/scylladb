@@ -6,6 +6,7 @@
 #define PACKET_HH_
 
 #include "core/deleter.hh"
+#include "core/temporary_buffer.hh"
 #include "const.hh"
 #include <vector>
 #include <cassert>
@@ -194,6 +195,8 @@ public:
     packet(packet&& x, fragment frag, Deleter deleter);
     // append fragment (zero-copy)
     packet(packet&& x, fragment frag, deleter d);
+    // append temporary_buffer (zero-copy)
+    packet(packet&& x, temporary_buffer<char> buf);
     // append deleter
     template <typename Deleter>
     packet(packet&& x, Deleter d);
@@ -451,6 +454,11 @@ inline
 packet::packet(packet&& x, Deleter d)
     : _impl(std::move(x._impl)) {
     _impl->_deleter = make_deleter(std::move(_impl->_deleter), std::move(d));
+}
+
+inline
+packet::packet(packet&& x, temporary_buffer<char> buf)
+    : packet(std::move(x), fragment{buf.get_write(), buf.size()}, buf.release()) {
 }
 
 inline
