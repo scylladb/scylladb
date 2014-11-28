@@ -246,10 +246,11 @@ class TestCommands(MemcacheTest):
         time.sleep(2)
         self.assertEqual(call('get key\r\n'), b'END\r\n')
 
-    def test_mutliple_keys_in_get(self):
+    def test_multiple_keys_in_get(self):
         self.assertEqual(call('set key1 0 0 2\r\nv1\r\n'), b'STORED\r\n')
         self.assertEqual(call('set key 0 0 2\r\nv2\r\n'), b'STORED\r\n')
-        self.assertEqual(call('get key1 key\r\n'), b'VALUE key1 0 2\r\nv1\r\nVALUE key 0 2\r\nv2\r\nEND\r\n')
+        resp = call('get key1 key\r\n')
+        self.assertRegexpMatches(resp, b'^(VALUE key1 0 2\r\nv1\r\nVALUE key 0 2\r\nv2\r\nEND\r\n)|(VALUE key 0 2\r\nv2\r\nVALUE key1 0 2\r\nv1\r\nEND\r\n)$')
         self.delete("key")
         self.delete("key1")
 
