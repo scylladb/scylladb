@@ -56,7 +56,7 @@ private:
     grant_head *_tx_refs;
     grant_head *_rx_refs;
 
-    std::list<std::pair<std::string, std::string>> _features;
+    std::unordered_map<std::string, int> _features;
     static std::unordered_map<std::string, std::string> _supported_features;
 
     ethernet_address _hw_address;
@@ -294,32 +294,26 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     _rx_stream.started();
 
     auto all_features = _xenstore->ls(_backend);
-    std::unordered_map<std::string, int> features_nack;
 
     for (auto&& feat : all_features) {
         if (feat.compare(0, 8, "feature-") == 0) {
             auto val = _xenstore->read<int>(_backend + "/" + feat);
             try {
                 auto key = _supported_features.at(feat);
-                features_nack[key] = val;
+                _features[key] = val;
             } catch (const std::out_of_range& oor) {
-                features_nack[feat] = 0;
+                _features[feat] = 0;
             }
         }
     }
     if (!opts["split-event-channels"].as<bool>()) {
-        features_nack["feature-split-event-channels"] = 0;
+        _features["feature-split-event-channels"] = 0;
     }
 
-    bool split = features_nack["feature-split-event-channel"];
+    bool split = _features["feature-split-event-channels"];
 
     _hw_features.rx_csum_offload = true;
     _hw_features.tx_csum_offload = true;
-
-    for (auto&s : all_features) {
-        auto value = _xenstore->read(_backend + "/" + s);
-        _features.push_back(std::make_pair(s, value));
-    }
 
     _tx_evtchn = bind_tx_evtchn(split);
     _rx_evtchn = bind_rx_evtchn(split);
@@ -327,7 +321,7 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     {
         auto t = xenstore::xenstore_transaction();
 
-        for (auto&& f: features_nack) {
+        for (auto&& f: _features) {
             _xenstore->write(path(f.first), f.second, t);
         }
 
@@ -345,11 +339,16 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     keep_doing([this] {
         return alloc_rx_references();
     });
+
+    _rx_evtchn.umask();
+
     keep_doing([this] () {
         return _tx_evtchn.pending().then([this] {
             handle_tx_completions();
         });
     });
+
+    _tx_evtchn.umask();
 }
 
 xenfront_net_device::~xenfront_net_device() {
@@ -362,6 +361,7 @@ xenfront_net_device::~xenfront_net_device() {
         }
         _xenstore->remove(path("event-channel-tx"), t);
         _xenstore->remove(path("event-channel-rx"), t);
+        _xenstore->remove(path("event-channel"), t);
         _xenstore->remove(path("tx-ring-ref"), t);
         _xenstore->remove(path("rx-ring-ref"), t);
         _xenstore->write<int>(path("state"), 6, t);

@@ -72,9 +72,15 @@ void port::notify() {
     _evtchn->notify(_port);
 }
 
+void port::umask() {
+    _evtchn->umask(&_port, 1);
+}
+
 class userspace_evtchn: public evtchn {
     pollable_fd _evtchn;
-    void umask(int *port, unsigned count);
+    int ports[2];
+protected:
+    virtual void umask(int *port, unsigned count);
 public:
     userspace_evtchn(unsigned otherend);
     virtual port bind() override;
@@ -86,15 +92,14 @@ userspace_evtchn::userspace_evtchn(unsigned otherend)
     , _evtchn(pollable_fd(file_desc::open("/dev/xen/evtchn", O_RDWR | O_NONBLOCK)))
 {
     keep_doing([this] {
-        int ports[2];
-        return _evtchn.read_some(reinterpret_cast<char *>(&ports), sizeof(ports)).then([this, &ports] (size_t s)
+        return _evtchn.read_some(reinterpret_cast<char *>(&ports), sizeof(ports)).then([this] (size_t s)
         {
             auto count = s / sizeof(ports[0]);
-            umask(ports, count);
             for (unsigned i = 0; i < count; ++i) {
                 make_ready_port(ports[i]);
             }
-            make_ready_future<>();
+            umask(ports, count);
+            return make_ready_future<>();
         });
     });
 }
