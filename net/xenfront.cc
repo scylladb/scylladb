@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <linux/if_tun.h>
 #include "ip.hh"
+#include "net/native-stack.hh"
 
 #include <xen/xen.h>
 
@@ -35,7 +36,7 @@ namespace xen {
 
 using phys = uint64_t;
 
-class xenfront_net_device : public net::device {
+class xenfront_net_device : public net::master_device {
 private:
     bool _userspace;
     stream<packet> _rx_stream;
@@ -387,12 +388,18 @@ get_xenfront_net_options_description() {
 }
 
 
-std::unique_ptr<net::device> create_xenfront_net_device(boost::program_options::variables_map opts, bool userspace) {
-    auto ptr = std::make_unique<xenfront_net_device>(opts, userspace);
-    // This assumes only one device per cpu. Will need to be fixed when
-    // this assumption will no longer hold.
-    dev = ptr.get();
-    return std::move(ptr);
+net::device_placement create_xenfront_net_device(boost::program_options::variables_map opts, bool userspace) {
+    if (engine.cpu_id() == 0) {
+        std::set<unsigned> slaves;
+        for (unsigned i = 0; i < smp::count; i++) {
+            if (i != engine.cpu_id()) {
+                slaves.insert(i);
+            }
+        }
+        return net::device_placement{std::make_unique<xenfront_net_device>(opts, userspace), std::move(slaves)};
+    } else {
+        return net::device_placement{std::unique_ptr<xenfront_net_device>(nullptr), std::set<unsigned>()};
+    }
 }
 
 }

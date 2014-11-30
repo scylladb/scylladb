@@ -451,9 +451,9 @@ int reactor::run() {
     }
     _network_stack_ready_promise.get_future().then([this] (std::unique_ptr<network_stack> stack) {
         _network_stack = std::move(stack);
-        _network_stack->initialize().then([this]() {
-            _start_promise.set_value();
-        });
+        return _network_stack->initialize();
+    }).then([this] {
+        _start_promise.set_value();
     });
 
     // Register smp queues poller

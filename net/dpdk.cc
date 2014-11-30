@@ -75,7 +75,7 @@ static constexpr const char* pktmbuf_pool_name   = "dpdk_net_pktmbuf_pool";
 static constexpr uint8_t packet_read_size        = 32;
 /******************************************************************************/
 
-class net_device : public net::device {
+class net_device : public net::master_device {
 public:
     explicit net_device(boost::program_options::variables_map opts,
                              uint8_t num_queues);
@@ -685,20 +685,22 @@ net::hw_features net_device::hw_features()
 
 /******************************** Interface functions *************************/
 
-std::unique_ptr<net::device> create_dpdk_net_device(
+net::device_placement create_dpdk_net_device(
                                     boost::program_options::variables_map opts,
                                     uint8_t num_queues)
 {
-    net::device *ptr;
+    if (engine.cpu_id() == 0) {
+        std::set<unsigned> slaves;
 
-    ptr = new dpdk::net_device(opts, num_queues);
-
-    // Vlad: A global variable?! - Demn, this is ugly!
-    //
-    // This assumes only one device per cpu. Will need to be fixed when this
-    // assumption will no longer hold.
-    dev = ptr;
-    return std::unique_ptr<net::device>(ptr);
+        for (unsigned i = 0; i < smp::count; i++) {
+            if (i != engine.cpu_id()) {
+                slaves.insert(i);
+            }
+        }
+        return net::device_placement{std::make_unique<dpdk::net_device>(opts, num_queues), std::move(slaves)};
+    } else {
+        return net::device_placement{std::unique_ptr<dpdk::net_device>(nullptr), std::set<unsigned>()};
+    }
 }
 
 boost::program_options::options_description

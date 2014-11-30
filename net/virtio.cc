@@ -21,6 +21,8 @@
 #include <linux/if_tun.h>
 #include "ip.hh"
 #include "const.hh"
+#include "net/proxy.hh"
+#include "net/native-stack.hh"
 
 #ifdef HAVE_OSV
 #include <osv/virtio-assign.hh>
@@ -411,7 +413,7 @@ void vring::complete() {
     });
 }
 
-class virtio_net_device : public net::device {
+class virtio_net_device : public net::master_device {
 protected:
     struct net_hdr {
         uint8_t needs_csum : 1;
@@ -492,7 +494,6 @@ public:
     virtual phys virt_to_phys(void* p) {
         return reinterpret_cast<uintptr_t>(p);
     }
-
 };
 
     virtio_net_device::txq::txq(virtio_net_device& dev, vring::config config)
@@ -958,20 +959,26 @@ virtio_net_device_osv::virtio_net_device_osv(osv::assigned_virtio &virtio,
 
 // FIXME: no real reason why the tap_device needs to be a separate option -
 // can be opts["tap-device"] (this is what we do anyway in net/stack.cc)
-std::unique_ptr<net::device> create_virtio_net_device(sstring tap_device, boost::program_options::variables_map opts) {
-    net::device *ptr;
-#ifdef HAVE_OSV
-    if (osv::assigned_virtio::get && osv::assigned_virtio::get()) {
-        std::cout << "In OSv and assigned host's virtio device\n";
-        ptr = new virtio_net_device_osv(*osv::assigned_virtio::get(), opts);
-    } else
-#endif
-    ptr = new virtio_net_device_vhost(tap_device, opts);
+net::device_placement create_virtio_net_device(sstring tap_device, boost::program_options::variables_map opts) {
+    virtio_net_device *ptr = nullptr;
+    std::set<unsigned> slaves;
 
-    // This assumes only one device per cpu. Will need to be fixed when
-    // this assumption will no longer hold.
-    dev = ptr;
-    return std::unique_ptr<net::device>(ptr);
+    if (engine.cpu_id() == 0) {
+#ifdef HAVE_OSV
+        if (osv::assigned_virtio::get && osv::assigned_virtio::get()) {
+            std::cout << "In OSv and assigned host's virtio device\n";
+            ptr = new virtio_net_device_osv(*osv::assigned_virtio::get(), opts);
+        } else
+#endif
+        ptr = new virtio_net_device_vhost(tap_device, opts);
+
+        for (unsigned i = 0; i < smp::count; i++) {
+            if (i != engine.cpu_id()) {
+                slaves.insert(i);
+            }
+        }
+    }
+    return net::device_placement{std::unique_ptr<net::master_device>(ptr), std::move(slaves)};
 }
 
 // Locks the shared object in memory and forces on-load function resolution.

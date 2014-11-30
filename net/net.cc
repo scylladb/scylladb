@@ -10,8 +10,6 @@ using std::move;
 
 namespace net {
 
-__thread device *dev;
-
 l3_protocol::l3_protocol(interface* netif, eth_protocol_num proto_num)
     : _netif(netif), _proto_num(proto_num) {
 }
@@ -48,8 +46,8 @@ void interface::forward(unsigned cpuid, packet p) {
 
     if (queue_depth < 1000) {
         queue_depth++;
-        smp::submit_to(cpuid, [p = std::move(p), cpu = engine.cpu_id()]() mutable {
-            net::dev->l2inject(p.free_on_cpu(cpu));
+        smp::submit_to(cpuid, [dev = _dev->cpu2slave(cpuid), p = std::move(p), cpu = engine.cpu_id()]() mutable {
+            dev->l2inject(p.free_on_cpu(cpu));
         }).then([] {
             queue_depth--;
         });
@@ -62,7 +60,7 @@ future<> interface::dispatch_packet(packet p) {
         auto i = _proto_map.find(ntoh(eh->eth_proto));
         if (i != _proto_map.end()) {
             l3_rx_stream& l3 = i->second;
-            auto fw = (engine.cpu_id() == 0) ? l3.forward(p, sizeof(eth_hdr)) : engine.cpu_id();
+            auto fw = _dev->may_forward() ? l3.forward(p, sizeof(eth_hdr)) : engine.cpu_id();
             if (fw != engine.cpu_id() && fw < smp::count) {
                 forward(fw, std::move(p));
             } else {

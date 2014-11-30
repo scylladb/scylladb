@@ -79,15 +79,15 @@ int main(int ac, char** av) {
     }
 
     if ((ac == 1) || !std::strcmp(av[1], "-virtio")) {
-        vnet = create_virtio_net_device("tap0");
+        vnet = create_virtio_net_device("tap0").device;
     } else if (!std::strcmp(av[1], "-dpdk")) {
-        vnet = create_dpdk_net_device();
+        vnet = create_dpdk_net_device().device;
     } else {
         usage();
         return -1;
     }
 #else
-    vnet = create_virtio_net_device("tap0");
+    vnet = create_virtio_net_device("tap0").device;
 #endif // HAVE_DPDK
 
     subscription<packet> rx =

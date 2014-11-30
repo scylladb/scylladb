@@ -25,35 +25,6 @@
 
 namespace net {
 
-// native_network_stack
-class native_network_stack : public network_stack {
-    interface _netif;
-    ipv4 _inet;
-    udp_v4 _udp;
-    bool _dhcp = false;
-    promise<> _config;
-    timer _timer;
-
-    void on_dhcp(bool, const dhcp::lease &, bool);
-
-    using tcp4 = tcp<ipv4_traits>;
-public:
-    explicit native_network_stack(boost::program_options::variables_map opts);
-    virtual server_socket listen(socket_address sa, listen_options opt) override;
-    virtual udp_channel make_udp_channel(ipv4_addr addr) override;
-    virtual future<> initialize() override;
-    static future<std::unique_ptr<network_stack>> create(boost::program_options::variables_map opts) {
-        return make_ready_future<std::unique_ptr<network_stack>>(std::make_unique<native_network_stack>(opts));
-    }
-    virtual bool has_per_core_namespace() override { return true; };
-    friend class native_server_socket_impl<tcp4>;
-};
-
-udp_channel
-native_network_stack::make_udp_channel(ipv4_addr addr) {
-    return _udp.make_channel(addr);
-}
-
 enum class xen_info {
     nonxen = 0,
     userspace = 1,
@@ -83,25 +54,73 @@ static xen_info is_xen()
 }
 #endif
 
-std::unique_ptr<net::device> create_native_net_device(boost::program_options::variables_map opts) {
-    // TODO: Rework this in case of the DPDK backend
-    if (!smp::main_thread()) {
-        return create_proxy_net_device(opts);
-    }
+void create_native_net_device(boost::program_options::variables_map opts) {
+    device_placement dp;
 
 #ifdef HAVE_XEN
     auto xen = is_xen();
     if (xen != xen_info::nonxen) {
-        return xen::create_xenfront_net_device(opts, xen == xen_info::userspace);
-    }
+        dp = xen::create_xenfront_net_device(opts, xen == xen_info::userspace);
+    } else
 #endif
 
 #ifdef HAVE_DPDK
     if (opts["dpdk-pmd"].as<bool>()) {
-        return create_dpdk_net_device(opts, smp::count);
-    }
+        dp = create_dpdk_net_device(opts, smp::count);
+    } else
 #endif
-    return create_virtio_net_device(opts["tap-device"].as<std::string>(), opts);
+    dp = create_virtio_net_device(opts["tap-device"].as<std::string>(), opts);
+
+    if (dp.device) {
+        auto cpu = engine.cpu_id();
+        auto ptr = dp.device.get();
+        std::for_each(dp.slaves_placement.begin(), dp.slaves_placement.end(), [opts, ptr, cpu] (unsigned i) {
+            smp::submit_to<>(i, [opts, cpu, ptr] {
+                auto slave = create_proxy_net_device(cpu, ptr, opts);
+                auto sptr = slave.get();
+                create_native_stack(opts, std::move(slave));
+                return sptr;
+            }).then([ptr, i] (slave_device* dev) {
+                ptr->enslave(i, dev);
+            });
+        });
+        create_native_stack(opts, std::move(dp.device));
+    }
+}
+
+// native_network_stack
+class native_network_stack : public network_stack {
+public:
+    static thread_local promise<std::unique_ptr<network_stack>> ready_promise;
+private:
+    interface _netif;
+    ipv4 _inet;
+    udp_v4 _udp;
+    bool _dhcp = false;
+    promise<> _config;
+    timer _timer;
+
+    void on_dhcp(bool, const dhcp::lease &, bool);
+
+    using tcp4 = tcp<ipv4_traits>;
+public:
+    explicit native_network_stack(boost::program_options::variables_map opts, std::unique_ptr<device> dev);
+    virtual server_socket listen(socket_address sa, listen_options opt) override;
+    virtual udp_channel make_udp_channel(ipv4_addr addr) override;
+    virtual future<> initialize() override;
+    static future<std::unique_ptr<network_stack>> create(boost::program_options::variables_map opts) {
+        create_native_net_device(opts);
+        return ready_promise.get_future();
+    }
+    virtual bool has_per_core_namespace() override { return true; };
+    friend class native_server_socket_impl<tcp4>;
+};
+
+thread_local promise<std::unique_ptr<network_stack>> native_network_stack::ready_promise;
+
+udp_channel
+native_network_stack::make_udp_channel(ipv4_addr addr) {
+    return _udp.make_channel(addr);
 }
 
 void
@@ -120,8 +139,8 @@ add_native_net_options_description(boost::program_options::options_description &
 #endif
 }
 
-native_network_stack::native_network_stack(boost::program_options::variables_map opts)
-    : _netif(create_native_net_device(opts))
+native_network_stack::native_network_stack(boost::program_options::variables_map opts, std::unique_ptr<device> dev)
+    : _netif(std::move(dev))
     , _inet(&_netif)
     , _udp(_inet) {
     _inet.set_host_address(ipv4_address(opts["host-ipv4-addr"].as<std::string>()));
@@ -193,6 +212,10 @@ future<> native_network_stack::initialize() {
         }
         return _config.get_future();
     });
+}
+
+void create_native_stack(boost::program_options::variables_map opts, std::unique_ptr<device> dev) {
+    native_network_stack::ready_promise.set_value(std::unique_ptr<network_stack>(std::make_unique<native_network_stack>(opts, std::move(dev))));
 }
 
 boost::program_options::options_description nns_options() {
