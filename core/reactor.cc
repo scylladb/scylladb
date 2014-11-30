@@ -447,6 +447,26 @@ int reactor::run() {
             _start_promise.set_value();
         });
     });
+
+    // Register smp queues poller
+    if (smp::count > 1) {
+        register_new_poller(
+            [&] {
+                smp::poll_queues();
+
+                if (_pending_tasks.empty()) {
+                    _idle.store(true, std::memory_order_seq_cst);
+
+                    if (smp::poll_queues() && !_pending_tasks.empty()) {
+                        _idle.store(false, std::memory_order_relaxed);
+                    }
+                }
+
+                return idle();
+            }
+        );
+    }
+
     complete_timers();
     while (true) {
         task_quota = _task_quota;
@@ -465,17 +485,9 @@ int reactor::run() {
             break;
         }
 
-        smp::poll_queues();
+        bool blocking_allowed = poll_once();
 
-        if (_pending_tasks.empty()) {
-            _idle.store(true, std::memory_order_seq_cst);
-
-            if (smp::poll_queues() && !_pending_tasks.empty()) {
-                _idle.store(false, std::memory_order_relaxed);
-            }
-        }
-
-        wait_and_process(_pending_tasks.empty(), [this] {
+        wait_and_process(_pending_tasks.empty() && blocking_allowed, [this] {
             if (_pending_tasks.empty()) {
                 _idle.store(false, std::memory_order_relaxed);
             }

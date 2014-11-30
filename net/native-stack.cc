@@ -9,6 +9,7 @@
 #include "tcp-stack.hh"
 #include "udp.hh"
 #include "virtio.hh"
+#include "dpdk.hh"
 #include "xenfront.hh"
 #include "proxy.hh"
 #include "dhcp.hh"
@@ -83,7 +84,7 @@ static xen_info is_xen()
 #endif
 
 std::unique_ptr<net::device> create_native_net_device(boost::program_options::variables_map opts) {
-
+    // TODO: Rework this in case of the DPDK backend
     if (!smp::main_thread()) {
         return create_proxy_net_device(opts);
     }
@@ -92,6 +93,12 @@ std::unique_ptr<net::device> create_native_net_device(boost::program_options::va
     auto xen = is_xen();
     if (xen != xen_info::nonxen) {
         return xen::create_xenfront_net_device(opts, xen == xen_info::userspace);
+    }
+#endif
+
+#ifdef HAVE_DPDK
+    if (opts["dpdk-pmd"].as<bool>()) {
+        return create_dpdk_net_device(opts, smp::count);
     }
 #endif
     return create_virtio_net_device(opts["tap-device"].as<std::string>(), opts);
@@ -108,6 +115,9 @@ add_native_net_options_description(boost::program_options::options_description &
     }
 #endif
     opts.add(get_virtio_net_options_description());
+#ifdef HAVE_DPDK
+    opts.add(get_dpdk_net_options_description());
+#endif
 }
 
 native_network_stack::native_network_stack(boost::program_options::variables_map opts)
@@ -207,6 +217,11 @@ boost::program_options::options_description nns_options() {
         ("dhcp",
                 boost::program_options::value<bool>()->default_value(true),
                         "Use DHCP discovery")
+#ifdef HAVE_DPDK
+        ("dpdk-pmd",
+                boost::program_options::value<bool>()->default_value(false),
+                        "Use DPDK PMD drivers")
+#endif
         ;
 
     add_native_net_options_description(opts);
