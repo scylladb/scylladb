@@ -43,7 +43,7 @@ ninja-build
 
 Installing required packages:
 ```
-sudo apt-get install libaio-dev ninja-build ragel libhwloc-dev libnuma-dev libpciaccess-dev
+sudo apt-get install libaio-dev ninja-build ragel libhwloc-dev libnuma-dev libpciaccess-dev libcrypto++-dev
 ```
 
 Installing GCC 4.9 for gnu++1y. Unlike the Fedora case above, this will
