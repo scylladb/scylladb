@@ -70,7 +70,7 @@ std::vector<cpu> allocate(configuration c) {
         auto node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NODE, pu); 
         cpu this_cpu;
         this_cpu.cpu_id = cpu_id;
-        remain = mem_per_proc - alloc_from_node(this_cpu, node, topo_used_mem, remain);
+        remain = mem_per_proc - alloc_from_node(this_cpu, node, topo_used_mem, mem_per_proc);
 
         remains.emplace_back(std::move(this_cpu), remain); 
     }
@@ -86,7 +86,9 @@ std::vector<cpu> allocate(configuration c) {
 
         while (remain) {
             remain -= alloc_from_node(this_cpu, obj, topo_used_mem, remain);
-            obj = obj->next_cousin;
+            do {
+                obj = hwloc_get_next_obj_by_type(topology, HWLOC_OBJ_NODE, obj);
+            } while (!obj);
             if (obj == node)
                 break;
         }
