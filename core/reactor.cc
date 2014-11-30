@@ -385,8 +385,12 @@ void reactor::exit(int ret) {
     smp::submit_to(0, [this, ret] { _return = ret; stop(); });
 }
 
-int reactor::run() {
-    uint64_t tasks_processed = 0;
+struct reactor::collectd_registrations {
+    std::vector<scollectd::registration> regs;
+};
+
+reactor::collectd_registrations
+reactor::register_collectd_metrics() {
     std::vector<scollectd::registration> regs = {
             // queue_length     value:GAUGE:0:U
             // Absolute value of num tasks in queue.
@@ -400,7 +404,7 @@ int reactor::run() {
             scollectd::add_polled_metric(scollectd::type_instance_id("reactor"
                     , scollectd::per_cpu_plugin_instance
                     , "total_operations", "tasks-processed")
-                    , scollectd::make_typed(scollectd::data_type::DERIVE, tasks_processed)
+                    , scollectd::make_typed(scollectd::data_type::DERIVE, _tasks_processed)
             ),
             // queue_length     value:GAUGE:0:U
             // Absolute value of num timers in queue.
@@ -432,7 +436,11 @@ int reactor::run() {
                         [] { return memory::stats().live_objects(); })
             ),
     };
+    return { regs };
+}
 
+int reactor::run() {
+    auto collectd_metrics = register_collectd_metrics();
 #ifndef HAVE_OSV
     _io_eventfd.wait().then([this] (size_t count) {
         process_io(count);
@@ -476,7 +484,7 @@ int reactor::run() {
             _pending_tasks.pop_front();
             tsk->run();
             tsk.reset();
-            ++tasks_processed;
+            ++_tasks_processed;
         }
         if (_stopped) {
             if (_id == 0) {

@@ -546,6 +546,7 @@ private:
     int _return = 0;
     promise<> _start_promise;
     uint64_t _timers_completed;
+    uint64_t _tasks_processed = 0;
     timer_set<timer, &timer::_link, clock_type> _timers;
     timer_set<timer, &timer::_link, clock_type>::timer_list_t _expired_timers;
     readable_eventfd _io_eventfd;
@@ -626,6 +627,8 @@ public:
         _pollers.push_back(std::move(fn));
     }
 private:
+    struct collectd_registrations;
+    collectd_registrations register_collectd_metrics();
     future<size_t> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
 
     void process_io(size_t count);
