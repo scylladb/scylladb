@@ -24,6 +24,17 @@ size_t div_roundup(size_t num, size_t denom) {
     return (num + denom - 1) / denom;
 }
 
+static size_t alloc_from_node(cpu& this_cpu, hwloc_obj_t node, std::unordered_map<hwloc_obj_t, size_t>& used_mem, size_t alloc) {
+    auto taken = std::min(node->memory.local_memory - used_mem[node], alloc);
+    if (taken) {
+        used_mem[node] += taken;
+        auto node_id = hwloc_bitmap_first(node->nodeset);
+        assert(node_id != -1);
+        this_cpu.mem.push_back({taken, unsigned(node_id)});
+    }
+    return taken;
+}
+
 std::vector<cpu> allocate(configuration c) {
     hwloc_topology_t topology;
     hwloc_topology_init(&topology);
@@ -49,26 +60,35 @@ std::vector<cpu> allocate(configuration c) {
     hwloc_distribute(topology, root, cpu_sets.data(), cpu_sets.size(), INT_MAX);
     std::vector<cpu> ret;
     std::unordered_map<hwloc_obj_t, size_t> topo_used_mem;
+    std::vector<std::pair<cpu, size_t>> remains;
+    size_t remain;
+    // Divide local memory to cpus
     for (auto&& cs : cpu_sets) {
         auto cpu_id = hwloc_bitmap_first(cs);
         assert(cpu_id != -1);
         auto pu = hwloc_get_pu_obj_by_os_index(topology, cpu_id);
-        // walk up the hierarchy, stealing local memory as we find it.
-        auto obj = pu;
+        auto node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NODE, pu); 
         cpu this_cpu;
         this_cpu.cpu_id = cpu_id;
-        size_t remain = mem_per_proc;
-        while (remain && obj) {
-            auto mem_in_obj = obj->memory.local_memory - topo_used_mem[obj];
-            auto taken = std::min(mem_in_obj, remain);
-            if (taken) {
-                topo_used_mem[obj] += taken;
-                auto node_id = hwloc_bitmap_first(obj->nodeset);
-                assert(node_id != -1);
-                this_cpu.mem.push_back({taken, unsigned(node_id)});
-                remain -= taken;
-            }
-            obj = obj->parent;
+        remain = mem_per_proc - alloc_from_node(this_cpu, node, topo_used_mem, remain);
+
+        remains.emplace_back(std::move(this_cpu), remain); 
+    }
+
+    // Divide the rest of the memory
+    for (auto&& r : remains) {
+        cpu this_cpu;
+        size_t remain; 
+        std::tie(this_cpu, remain) = r;
+        auto pu = hwloc_get_pu_obj_by_os_index(topology, this_cpu.cpu_id);
+        auto node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NODE, pu); 
+        auto obj = node;
+
+        while (remain) {
+            remain -= alloc_from_node(this_cpu, obj, topo_used_mem, remain);
+            obj = obj->next_cousin;
+            if (obj == node)
+                break;
         }
         assert(!remain);
         ret.push_back(std::move(this_cpu));
