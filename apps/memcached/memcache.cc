@@ -473,6 +473,7 @@ public:
             break;
         case item_state::DISK:
             _disk_lru.erase(_disk_lru.iterator_to(item_ref));
+            break;
         default:
             assert(0);
         }
