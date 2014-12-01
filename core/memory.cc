@@ -721,6 +721,7 @@ statistics stats() {
 using namespace memory;
 
 extern "C"
+[[gnu::visibility("default")]]
 void* malloc(size_t n) throw () {
     if (n == 0) {
         return nullptr;
@@ -734,6 +735,7 @@ void* malloc(size_t n) throw () {
 
 extern "C"
 [[gnu::alias("malloc")]]
+[[gnu::visibility("default")]]
 void* __libc_malloc(size_t n) throw ();
 
 extern "C"
@@ -745,9 +747,11 @@ void free(void* ptr) {
 
 extern "C"
 [[gnu::alias("free")]]
+[[gnu::visibility("default")]]
 void* __libc_free(void* obj) throw ();
 
 extern "C"
+[[gnu::visibility("default")]]
 void* calloc(size_t nmemb, size_t size) {
     auto s1 = __int128(nmemb) * __int128(size);
     assert(s1 == size_t(s1));
@@ -761,9 +765,11 @@ void* calloc(size_t nmemb, size_t size) {
 
 extern "C"
 [[gnu::alias("calloc")]]
+[[gnu::visibility("default")]]
 void* __libc_calloc(size_t n, size_t m) throw ();
 
 extern "C"
+[[gnu::visibility("default")]]
 void* realloc(void* ptr, size_t size) {
     auto old_size = ptr ? object_size(ptr) : 0;
     auto nptr = malloc(size);
@@ -779,9 +785,11 @@ void* realloc(void* ptr, size_t size) {
 
 extern "C"
 [[gnu::alias("realloc")]]
+[[gnu::visibility("default")]]
 void* __libc_realloc(void* obj, size_t size) throw ();
 
 extern "C"
+[[gnu::visibility("default")]]
 int posix_memalign(void** ptr, size_t align, size_t size) {
     try {
         *ptr = allocate_aligned(align, size);
@@ -793,9 +801,11 @@ int posix_memalign(void** ptr, size_t align, size_t size) {
 
 extern "C"
 [[gnu::alias("posix_memalign")]]
+[[gnu::visibility("default")]]
 int __libc_posix_memalign(void** ptr, size_t align, size_t size) throw ();
 
 extern "C"
+[[gnu::visibility("default")]]
 void* memalign(size_t align, size_t size) {
     try {
         return allocate_aligned(align, size);
@@ -806,27 +816,33 @@ void* memalign(size_t align, size_t size) {
 
 extern "C"
 [[gnu::alias("memalign")]]
+[[gnu::visibility("default")]]
 void* __libc_memalign(size_t align, size_t size);
 
 extern "C"
+[[gnu::visibility("default")]]
 void cfree(void* obj) {
     return ::free(obj);
 }
 
 extern "C"
 [[gnu::alias("cfree")]]
+[[gnu::visibility("default")]]
 void __libc_cfree(void* obj);
 
 extern "C"
+[[gnu::visibility("default")]]
 size_t malloc_usable_size(void* obj) {
     return object_size(obj);
 }
 
 extern "C"
+[[gnu::visibility("default")]]
 int malloc_trim(size_t pad) {
     return 0;
 }
 
+[[gnu::visibility("default")]]
 void* operator new(size_t size) {
     if (size == 0) {
         size = 1;
@@ -834,6 +850,7 @@ void* operator new(size_t size) {
     return allocate(size);
 }
 
+[[gnu::visibility("default")]]
 void* operator new[](size_t size) {
     if (size == 0) {
         size = 1;
@@ -841,30 +858,35 @@ void* operator new[](size_t size) {
     return allocate(size);
 }
 
+[[gnu::visibility("default")]]
 void operator delete(void* ptr) throw () {
     if (ptr) {
         memory::free(ptr);
     }
 }
 
+[[gnu::visibility("default")]]
 void operator delete[](void* ptr) throw () {
     if (ptr) {
         memory::free(ptr);
     }
 }
 
+[[gnu::visibility("default")]]
 void operator delete(void* ptr, size_t size) throw () {
     if (ptr) {
         memory::free(ptr, size);
     }
 }
 
+[[gnu::visibility("default")]]
 void operator delete[](void* ptr, size_t size) throw () {
     if (ptr) {
         memory::free(ptr, size);
     }
 }
 
+[[gnu::visibility("default")]]
 void* operator new(size_t size, std::nothrow_t) throw () {
     if (size == 0) {
         size = 1;
@@ -876,6 +898,7 @@ void* operator new(size_t size, std::nothrow_t) throw () {
     }
 }
 
+[[gnu::visibility("default")]]
 void* operator new[](size_t size, std::nothrow_t) throw () {
     if (size == 0) {
         size = 1;
@@ -887,24 +910,28 @@ void* operator new[](size_t size, std::nothrow_t) throw () {
     }
 }
 
+[[gnu::visibility("default")]]
 void operator delete(void* ptr, std::nothrow_t) throw () {
     if (ptr) {
         memory::free(ptr);
     }
 }
 
+[[gnu::visibility("default")]]
 void operator delete[](void* ptr, std::nothrow_t) throw () {
     if (ptr) {
         memory::free(ptr);
     }
 }
 
+[[gnu::visibility("default")]]
 void operator delete(void* ptr, size_t size, std::nothrow_t) throw () {
     if (ptr) {
         memory::free(ptr, size);
     }
 }
 
+[[gnu::visibility("default")]]
 void operator delete[](void* ptr, size_t size, std::nothrow_t) throw () {
     if (ptr) {
         memory::free(ptr, size);
