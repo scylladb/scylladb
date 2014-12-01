@@ -135,6 +135,7 @@ core = [
     'core/memory.cc',
     'core/resource.cc',
     'core/scollectd.cc',
+    'core/app-template.cc',
     'util/conversions.cc',
     'net/packet.cc',
     'net/posix-stack.cc',
