@@ -24,6 +24,17 @@ size_t div_roundup(size_t num, size_t denom) {
     return (num + denom - 1) / denom;
 }
 
+static unsigned find_memory_depth(hwloc_topology_t& topology) {
+    auto obj = hwloc_get_pu_obj_by_os_index(topology, 0);
+    auto depth = hwloc_get_type_depth(topology, HWLOC_OBJ_PU);
+
+    while (!obj->memory.local_memory && obj) {
+        obj = hwloc_get_ancestor_obj_by_depth(topology, --depth, obj);
+    }
+    assert(obj);
+    return depth;
+}
+
 static size_t alloc_from_node(cpu& this_cpu, hwloc_obj_t node, std::unordered_map<hwloc_obj_t, size_t>& used_mem, size_t alloc) {
     auto taken = std::min(node->memory.local_memory - used_mem[node], alloc);
     if (taken) {
@@ -62,12 +73,14 @@ std::vector<cpu> allocate(configuration c) {
     std::unordered_map<hwloc_obj_t, size_t> topo_used_mem;
     std::vector<std::pair<cpu, size_t>> remains;
     size_t remain;
+    unsigned depth = find_memory_depth(topology);
+
     // Divide local memory to cpus
     for (auto&& cs : cpu_sets) {
         auto cpu_id = hwloc_bitmap_first(cs);
         assert(cpu_id != -1);
         auto pu = hwloc_get_pu_obj_by_os_index(topology, cpu_id);
-        auto node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NODE, pu); 
+        auto node = hwloc_get_ancestor_obj_by_depth(topology, depth, pu); 
         cpu this_cpu;
         this_cpu.cpu_id = cpu_id;
         remain = mem_per_proc - alloc_from_node(this_cpu, node, topo_used_mem, mem_per_proc);
@@ -81,13 +94,13 @@ std::vector<cpu> allocate(configuration c) {
         size_t remain; 
         std::tie(this_cpu, remain) = r;
         auto pu = hwloc_get_pu_obj_by_os_index(topology, this_cpu.cpu_id);
-        auto node = hwloc_get_ancestor_obj_by_type(topology, HWLOC_OBJ_NODE, pu); 
+        auto node = hwloc_get_ancestor_obj_by_depth(topology, depth, pu); 
         auto obj = node;
 
         while (remain) {
             remain -= alloc_from_node(this_cpu, obj, topo_used_mem, remain);
             do {
-                obj = hwloc_get_next_obj_by_type(topology, HWLOC_OBJ_NODE, obj);
+                obj = hwloc_get_next_obj_by_depth(topology, depth, obj);
             } while (!obj);
             if (obj == node)
                 break;
