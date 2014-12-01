@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include "core/reactor.hh"
 #include "core/scollectd.hh"
+#include "core/print.hh"
 
 namespace bpo = boost::program_options;
 
@@ -34,6 +35,9 @@ public:
 
     template<typename Func>
     int run(int ac, char ** av, Func&& func) {
+#ifdef DEBUG
+        print("WARNING: debug mode. Not for benchmarking or production\n");
+#endif
         bpo::variables_map configuration;
         bpo::store(bpo::command_line_parser(ac, av).options(_opts).run(), configuration);
         auto home = std::getenv("HOME");
