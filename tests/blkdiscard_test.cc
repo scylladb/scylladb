@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include "core/app-template.hh"
+#include "core/future-util.hh"
 
 struct file_test {
     file_test(file&& f) : f(std::move(f)) {}
