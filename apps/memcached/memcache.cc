@@ -466,6 +466,7 @@ public:
             _total_mem -= item_ref.size();
             break;
         case item_state::TO_MEM_DISK:
+            _total_mem_disk -= item_ref.size();
             break;
         case item_state::MEM_DISK:
             _mem_disk_lru.erase(_mem_disk_lru.iterator_to(item_ref));
@@ -473,6 +474,7 @@ public:
             break;
         case item_state::DISK:
             _disk_lru.erase(_disk_lru.iterator_to(item_ref));
+            break;
         default:
             assert(0);
         }
