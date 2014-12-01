@@ -51,6 +51,8 @@ public:
     }
 };
 
+namespace bpo = boost::program_options;
+
 int main(int ac, char ** av) {
     client _client;
     app_template app;

@@ -227,6 +227,7 @@ http_stats::http_stats(http_server& server)
     } {
 }
 
+namespace bpo = boost::program_options;
 
 int main(int ac, char** av) {
     app_template app;

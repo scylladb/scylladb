@@ -22,6 +22,7 @@ public:
 
     void run() {
         posix_thread t([this] {
+            namespace bpo = boost::program_options;
             boost::program_options::variables_map configuration;
             auto opts = reactor::get_options_description();
             bpo::store(bpo::command_line_parser(0, nullptr).options(opts).run(), configuration);

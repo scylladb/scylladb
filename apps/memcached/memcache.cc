@@ -1807,6 +1807,7 @@ int start_instance(int ac, char** av) {
     distributed<memcache::tcp_server<WithFlashCache>> tcp_server;
     memcache::stats_printer<WithFlashCache> stats(cache);
 
+    namespace bpo = boost::program_options;
     app_template app;
     if (WithFlashCache) {
         app.add_options()

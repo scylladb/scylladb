@@ -6,6 +6,8 @@
 #include "core/app-template.hh"
 #include "core/future-util.hh"
 
+namespace bpo = boost::program_options;
+
 struct file_test {
     file_test(file&& f) : f(std::move(f)) {}
     file f;

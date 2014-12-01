@@ -130,6 +130,8 @@ public:
     };
 };
 
+namespace bpo = boost::program_options;
+
 int main(int ac, char** av) {
     app_template app;
     app.add_options()
