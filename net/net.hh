@@ -75,14 +75,20 @@ public:
     friend class l3_protocol;
 };
 
-class slave_device;
-
 class device {
+protected:
+    stream<packet> _rx_stream;
 public:
+    device() : _rx_stream() { _rx_stream.started(); }
     virtual ~device() {}
-    virtual subscription<packet> receive(std::function<future<> (packet)> next_packet) = 0;
+    virtual subscription<packet> receive(std::function<future<> (packet)> next_packet) {
+        return _rx_stream.listen(std::move(next_packet));
+    }
+    virtual void l2inject(packet p) {
+        _rx_stream.produce(std::move(p));
+    }
     virtual future<> send(packet p) = 0;
-    virtual slave_device* cpu2slave(unsigned cpu) = 0;
+    virtual device* cpu2device(unsigned cpu) = 0;
     virtual bool may_forward() = 0;
     virtual ethernet_address hw_address() = 0;
     virtual net::hw_features hw_features() = 0;
@@ -91,8 +97,6 @@ public:
 class slave_device : public device {
 public:
     virtual ~slave_device() {}
-    virtual future<> l2inject(packet p) = 0;
-    virtual slave_device* cpu2slave(unsigned cpu) override { abort(); return nullptr; }
     virtual bool may_forward() override { return false; }
 };
 
@@ -102,7 +106,7 @@ private:
 public:
     virtual ~master_device() {}
     master_device() { slaves.resize(smp::count, nullptr); };
-    virtual slave_device* cpu2slave(unsigned cpu) { return slaves[cpu]; }
+    virtual device* cpu2device(unsigned cpu) { return slaves[cpu]; }
     virtual void enslave(unsigned cpu, slave_device* dev) { slaves[cpu] = dev; }
     virtual bool may_forward() override { return true; }
 };

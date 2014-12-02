@@ -80,11 +80,7 @@ public:
     explicit net_device(boost::program_options::variables_map opts,
                              uint8_t num_queues);
 
-    virtual subscription<packet> receive(
-        std::function<future<>(packet)> next_packet) override;
-
     virtual future<> send(packet p) override;
-    virtual future<> l2inject(packet p) { assert(0); return make_ready_future(); }
     virtual ethernet_address hw_address() override;
     virtual net::hw_features hw_features() override;
 
@@ -204,7 +200,6 @@ private:
         uint8_t id[RTE_MAX_ETHPORTS];
     } _ports;
 
-    stream<packet> _rx_stream;
     net::hw_features _hw_features;
     rte_mempool *_pktmbuf_pool;
     uint8_t _num_queues;
@@ -423,10 +418,8 @@ void net_device::check_all_ports_link_status(uint32_t port_mask)
 
 net_device::net_device(boost::program_options::variables_map opts,
                                  uint8_t num_queues) :
-    _ports({0}), _rx_stream(), _num_queues(num_queues)
+    _ports({0}), _num_queues(num_queues)
 {
-    _rx_stream.started();
-
     _rx_conf_default.rx_thresh.pthresh = default_pthresh;
     _rx_conf_default.rx_thresh.hthresh = default_rx_hthresh;
     _rx_conf_default.rx_thresh.wthresh = default_wthresh;
@@ -492,20 +485,6 @@ net_device::net_device(boost::program_options::variables_map opts,
     engine.register_new_poller([&] { poll_rx_once(0, 0); return false; });
 }
 
-/**
- * Start polling for new packets
- *
- * TODO: Rework this naive implementation to utilize the dpdk_bulk_receive()
- * @param next the packet processing callback.
- *
- * @return the subscription crap
- */
-subscription<packet>
-net_device::receive(std::function<future<>(packet)> next)
-{
-    return _rx_stream.listen(std::move(next));
-}
-
 void net_device::process_packets(struct rte_mbuf **bufs, uint16_t count)
 {
     for (uint16_t i = 0; i < count; i++) {
@@ -520,7 +499,7 @@ void net_device::process_packets(struct rte_mbuf **bufs, uint16_t count)
 
         packet p(f, make_deleter(deleter(), [m] { rte_pktmbuf_free(m); }));
 
-        _rx_stream.produce(std::move(p));
+        l2inject(std::move(p));
     }
 }
 

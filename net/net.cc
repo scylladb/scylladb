@@ -46,7 +46,7 @@ void interface::forward(unsigned cpuid, packet p) {
 
     if (queue_depth < 1000) {
         queue_depth++;
-        smp::submit_to(cpuid, [dev = _dev->cpu2slave(cpuid), p = std::move(p), cpu = engine.cpu_id()]() mutable {
+        smp::submit_to(cpuid, [dev = _dev->cpu2device(cpuid), p = std::move(p), cpu = engine.cpu_id()]() mutable {
             dev->l2inject(p.free_on_cpu(cpu));
         }).then([] {
             queue_depth--;
