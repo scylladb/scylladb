@@ -12,6 +12,7 @@
 #include "ip_checksum.hh"
 #include "ip.hh"
 #include "const.hh"
+#include "packet-util.hh"
 #include <unordered_map>
 #include <map>
 #include <functional>
@@ -209,7 +210,7 @@ private:
             tcp_seq urgent;
             tcp_seq initial;
             std::deque<packet> data;
-            std::map<tcp_seq, packet> out_of_order;
+            packet_merger<tcp_seq> out_of_order;
             std::experimental::optional<promise<>> _data_received_promise;
         } _rcv;
         tcp_option _option;
@@ -951,10 +952,10 @@ void tcp<InetTraits>::tcb::clear_delayed_ack() {
 template <typename InetTraits>
 bool tcp<InetTraits>::tcb::merge_out_of_order() {
     bool merged = false;
-    if (_rcv.out_of_order.empty()) {
+    if (_rcv.out_of_order.map.empty()) {
         return merged;
     }
-    for (auto it = _rcv.out_of_order.begin(); it != _rcv.out_of_order.end();) {
+    for (auto it = _rcv.out_of_order.map.begin(); it != _rcv.out_of_order.map.end();) {
         auto& p = it->second;
         auto seg_beg = it->first;
         auto seg_len = p.len();
@@ -970,11 +971,11 @@ bool tcp<InetTraits>::tcb::merge_out_of_order() {
             _rcv.next += seg_len;
             _rcv.data.push_back(std::move(p));
             // Since c++11, erase() always returns the value of the following element
-            it = _rcv.out_of_order.erase(it);
+            it = _rcv.out_of_order.map.erase(it);
             merged = true;
         } else if (_rcv.next >= seg_end) {
             // This segment has been receive already, drop it
-            it = _rcv.out_of_order.erase(it);
+            it = _rcv.out_of_order.map.erase(it);
         } else {
             // seg_beg > _rcv.need, can not merge. Note, seg_beg can grow only,
             // so we can stop looking here.
@@ -987,63 +988,7 @@ bool tcp<InetTraits>::tcb::merge_out_of_order() {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::insert_out_of_order(tcp_seq seg, packet p) {
-    bool insert;
-    auto beg = seg;
-    auto end = beg + p.len();
-    for (auto it = _rcv.out_of_order.begin(); it != _rcv.out_of_order.end();) {
-        auto& seg_pkt = it->second;
-        auto seg_beg = it->first;
-        auto seg_end = seg_beg + seg_pkt.len();
-        // There are 6 cases:
-        if (seg_beg <= beg && end <= seg_end) {
-            // 1) seg_beg beg end seg_end
-            // We already have data in this packet
-            return;
-        } else if (seg <= seg_beg && seg_end <= end) {
-            // 2) beg seg_beg seg_end end
-            // The new segment contains more data than this old segment
-            // Delete the old one, insert the new one
-            it = _rcv.out_of_order.erase(it);
-            insert = true;
-            break;
-        } else if (beg < seg_beg && seg_beg <= end && end <= seg_end) {
-            // 3) beg seg_beg end seg_end
-            // Merge two segments, trim front of old segment
-            auto trim = end - seg_beg;
-            seg_pkt.trim_front(trim);
-            p.append(std::move(seg_pkt));
-            // Delete the old one, insert the new one
-            it = _rcv.out_of_order.erase(it);
-            insert = true;
-            break;
-        } else if (seg_beg <= beg && beg <= seg_end && seg_end < end) {
-            // 4) seg_beg beg seg_end end
-            // Merge two segments, trim front of new segment
-            auto trim = seg_end - beg;
-            p.trim_front(trim);
-            // Append new data to the old segment, keep the old segment
-            seg_pkt.append(std::move(p));
-            insert = false;
-            break;
-        } else {
-            // 5) beg end < seg_beg seg_end
-            //   or
-            // 6) seg_beg seg_end < beg end
-            // Can not merge with this segment, keep looking
-            it++;
-            insert = true;
-        }
-    }
-
-    if (insert) {
-        p.linearize();
-        _rcv.out_of_order.emplace(beg, std::move(p));
-    }
-
-    // TODO: With new segment merged with old segment, we might be able to
-    // merge adjacent segments. Not urgent since merge_out_of_order will
-    // consume these un-merged segments soon.
-    return;
+    _rcv.out_of_order.merge(seg, std::move(p));
 }
 
 template <typename InetTraits>
@@ -1136,7 +1081,7 @@ void tcp<InetTraits>::tcb::update_cwnd(uint32_t acked_bytes) {
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::cleanup() {
     _snd.data.clear();
-    _rcv.out_of_order.clear();
+    _rcv.out_of_order.map.clear();
     stop_retransmit_timer();
     clear_delayed_ack();
     remove_from_tcbs();
