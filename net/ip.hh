@@ -8,13 +8,16 @@
 
 #include <boost/asio/ip/address_v4.hpp>
 #include <arpa/inet.h>
+#include <unordered_map>
 #include <cstdint>
 #include <array>
+#include <map>
 #include "core/array_map.hh"
 #include "byteorder.hh"
 #include "arp.hh"
 #include "ip_checksum.hh"
 #include "const.hh"
+#include "packet-util.hh"
 
 namespace net {
 
@@ -152,6 +155,33 @@ struct ip_packet_filter {
     }
 };
 
+struct ipv4_frag_id {
+    struct hash;
+    ipv4_address src_ip;
+    ipv4_address dst_ip;
+    uint16_t identification;
+    uint8_t protocol;
+    bool operator==(const ipv4_frag_id& x) const {
+        return src_ip == x.src_ip &&
+               dst_ip == x.dst_ip &&
+               identification == x.identification &&
+               protocol == x.protocol;
+    }
+};
+
+struct ipv4_frag_id::hash : private std::hash<ipv4_address>,
+    private std::hash<uint16_t>, private std::hash<uint8_t> {
+    size_t operator()(const ipv4_frag_id& id) const noexcept {
+        using h1 = std::hash<ipv4_address>;
+        using h2 = std::hash<uint16_t>;
+        using h3 = std::hash<uint8_t>;
+        return h1::operator()(id.src_ip) ^
+               h1::operator()(id.dst_ip) ^
+               h2::operator()(id.identification) ^
+               h3::operator()(id.protocol);
+    }
+};
+
 class ipv4 {
 public:
     using address_type = ipv4_address;
@@ -171,6 +201,17 @@ private:
     ipv4_icmp _icmp;
     array_map<ip_protocol*, 256> _l4;
     ip_packet_filter * _packet_filter = nullptr;
+    struct frag {
+        packet header;
+        packet_merger<uint32_t> data;
+        uint32_t rx_time;
+        void merge(ip_hdr &h, uint16_t offset, packet p);
+        bool is_complete();
+        // fragment with MF == 0 inidates it is the last fragment
+        bool last_frag_received = false;
+        packet get_assembled_packet(ethernet_address from, ethernet_address to);
+    };
+    std::unordered_map<ipv4_frag_id, frag, ipv4_frag_id::hash> _frags;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
     unsigned handle_on_cpu(packet& p, size_t off);

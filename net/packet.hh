@@ -25,6 +25,7 @@ struct offload_info {
     uint8_t ip_hdr_len = 20;
     uint8_t tcp_hdr_len = 20;
     uint8_t udp_hdr_len = 8;
+    bool needs_ip_csum = true;
 };
 
 // Zero-copy friendly packet class
