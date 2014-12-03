@@ -213,7 +213,7 @@ struct ip_hdr {
     packed<uint16_t> len;
     packed<uint16_t> id;
     packed<uint16_t> frag;
-    enum class frag_bits : uint8_t { mf = 13, df = 14 };
+    enum class frag_bits : uint8_t { mf = 13, df = 14, reserved = 15, offset_shift = 3 };
     uint8_t ttl;
     uint8_t ip_proto;
     packed<uint16_t> csum;
@@ -224,6 +224,9 @@ struct ip_hdr {
     auto adjust_endianness(Adjuster a) {
         return a(len, id, frag, csum, src_ip, dst_ip);
     }
+    bool mf() { return frag & (1 << uint8_t(frag_bits::mf)); }
+    bool df() { return frag & (1 << uint8_t(frag_bits::df)); }
+    uint16_t offset() { return frag << uint8_t(frag_bits::offset_shift); }
 } __attribute__((packed));
 
 template <typename InetTraits>
