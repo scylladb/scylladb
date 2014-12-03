@@ -613,7 +613,10 @@ public:
 
     network_stack& net() { return *_network_stack; }
     unsigned cpu_id() const { return _id; }
-    bool idle() { return _idle.load(std::memory_order_relaxed); }
+    bool idle() {
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        return _idle.load(std::memory_order_relaxed);
+    }
 
     /**
      * Add a new "poller" - a non-blocking function returning a boolean, that

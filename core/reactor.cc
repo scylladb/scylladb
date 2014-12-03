@@ -491,7 +491,7 @@ int reactor::run() {
             }
         }
 
-        wait_and_process(idle(), [this] {
+        wait_and_process(_idle.load(std::memory_order_relaxed), [this] {
             if (_pending_tasks.empty()) {
                 _idle.store(false, std::memory_order_relaxed);
             }
@@ -584,14 +584,12 @@ smp_message_queue::smp_message_queue()
 }
 
 void smp_message_queue::submit_kick() {
-    std::atomic_thread_fence(std::memory_order_seq_cst);
     if (_pending_peer->idle()) {
         _start_event->signal();
     }
 }
 
 void smp_message_queue::complete_kick() {
-    std::atomic_thread_fence(std::memory_order_seq_cst);
     if (_complete_peer->idle()) {
         _complete_event->signal();
     }
