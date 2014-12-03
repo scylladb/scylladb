@@ -39,7 +39,6 @@ using phys = uint64_t;
 class xenfront_net_device : public net::master_device {
 private:
     bool _userspace;
-    stream<packet> _rx_stream;
     net::hw_features _hw_features;
 
     std::string _device_str;
@@ -90,7 +89,7 @@ xenfront_net_device::_supported_features = {
 
 subscription<packet>
 xenfront_net_device::receive(std::function<future<> (packet)> next) {
-    auto sub = _rx_stream.listen(std::move(next));
+    auto sub = net::device::receive(std::move(next));
     keep_doing([this] {
         return _rx_evtchn.pending().then([this] {
             return queue_rx_packet();
@@ -212,7 +211,7 @@ future<> xenfront_net_device::queue_rx_packet()
 {
     return _rx_ring.process_ring([this] (gntref &entry, rx &rx) {
         packet p(static_cast<char *>(entry.page) + rx.rsp.offset, rx.rsp.status);
-        _rx_stream.produce(std::move(p));
+        l2inject(std::move(p));
         return true;
     }, _rx_refs);
 }
@@ -280,7 +279,6 @@ port xenfront_net_device::bind_rx_evtchn(bool split) {
 
 xenfront_net_device::xenfront_net_device(boost::program_options::variables_map opts, bool userspace)
     : _userspace(userspace)
-    , _rx_stream()
     , _device_str("device/vif/" + std::to_string(opts["vif"].as<unsigned>()))
     , _otherend(_xenstore->read<int>(path("backend-id")))
     , _backend(_xenstore->read(path("backend")))
@@ -291,8 +289,6 @@ xenfront_net_device::xenfront_net_device(boost::program_options::variables_map o
     , _tx_refs(_gntalloc->alloc_ref(front_ring<tx>::nr_ents))
     , _rx_refs(_gntalloc->alloc_ref(front_ring<rx>::nr_ents))
     , _hw_address(net::parse_ethernet_address(_xenstore->read(path("mac")))) {
-
-    _rx_stream.started();
 
     auto all_features = _xenstore->ls(_backend);
 
