@@ -55,6 +55,7 @@ reactor_backend_epoll::reactor_backend_epoll()
 reactor::reactor()
     : _backend()
     , _exit_future(_exit_promise.get_future())
+    ,  _idle(false)
     , _network_stack()
     , _io_eventfd()
     , _io_context(0)
@@ -79,6 +80,7 @@ void reactor::configure(boost::program_options::variables_map vm) {
 
     _handle_sigint = !vm.count("no-handle-interrupt");
     _task_quota = vm["task-quota"].as<int>();
+    _poll = vm.count("poll");
 }
 
 future<> reactor_backend_epoll::get_epoll_future(pollable_fd_state& pfd,
@@ -479,7 +481,7 @@ int reactor::run() {
             break;
         }
 
-        if (!poll_once()) {
+        if (!poll_once() && !_poll) {
             if (_pending_tasks.empty()) {
                 _idle.store(true, std::memory_order_seq_cst);
 
@@ -776,6 +778,7 @@ reactor::get_options_description() {
                         format_separated(net_stack_names.begin(), net_stack_names.end(), ", ")).c_str())
         ("no-handle-interrupt", "ignore SIGINT (for gdb)")
         ("task-quota", bpo::value<int>()->default_value(200), "Max number of tasks executed between polls and in loops")
+        ("poll", "never sleep, poll for the next event")
         ;
     opts.add(network_stack_registry::options_description());
     return opts;

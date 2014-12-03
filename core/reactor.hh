@@ -541,6 +541,7 @@ private:
     unsigned _id = 0;
     bool _stopped = false;
     bool _handle_sigint = true;
+    bool _poll = false;
     promise<std::unique_ptr<network_stack>> _network_stack_ready_promise;
     std::unique_ptr<network_stack> _network_stack;
     int _return = 0;
@@ -614,8 +615,12 @@ public:
     network_stack& net() { return *_network_stack; }
     unsigned cpu_id() const { return _id; }
     bool idle() {
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-        return _idle.load(std::memory_order_relaxed);
+        if (_poll) {
+            return false;
+        } else {
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+            return _idle.load(std::memory_order_relaxed);
+        }
     }
 
     /**
