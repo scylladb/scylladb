@@ -64,7 +64,6 @@ class interface {
 private:
     future<> dispatch_packet(packet p);
     future<> send(eth_protocol_num proto_num, ethernet_address to, packet p);
-    void forward(unsigned cpuid, packet p);
 public:
     explicit interface(std::unique_ptr<device> dev);
     ethernet_address hw_address() { return _hw_address; }
@@ -72,6 +71,7 @@ public:
     subscription<packet, ethernet_address> register_l3(eth_protocol_num proto_num,
             std::function<future<> (packet p, ethernet_address from)> next,
             std::function<unsigned (packet&, size_t)> forward);
+    void forward(unsigned cpuid, packet p);
     friend class l3_protocol;
 };
 
