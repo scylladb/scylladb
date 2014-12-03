@@ -1688,7 +1688,7 @@ public:
                     _max_datagram_size - sizeof(header), _cache, _system_stats);
 
                 if (hdr._n != 1 || hdr._sequence_number != 0) {
-                    conn->_out.write("CLIENT_ERROR only single-datagram requests supported\r\n").then([this, conn] {
+                    return conn->_out.write("CLIENT_ERROR only single-datagram requests supported\r\n").then([this, conn] {
                         return conn->_out.flush().then([this, conn] {
                             return respond(conn->_src, conn->_request_id, std::move(conn->_out_bufs));
                         });
