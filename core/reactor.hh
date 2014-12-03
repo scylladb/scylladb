@@ -566,12 +566,12 @@ private:
      *         execution.
      */
     bool poll_once() {
-        bool allow_blocking = true;
+        bool work = false;
         for (auto c : _pollers) {
-            allow_blocking = c() && allow_blocking;
+            work |= c();
         }
 
-        return allow_blocking;
+        return work;
     }
 
 public:
@@ -718,7 +718,7 @@ public:
             return make_ready_future<>();
         });
     }
-	static size_t poll_queues() {
+	static bool poll_queues() {
 	    size_t got = 0;
 	    for (unsigned i = 0; i < count; i++) {
 	        if (engine.cpu_id() != i) {
@@ -726,7 +726,7 @@ public:
                     got += _qs[i][engine._id].process_completions();
 	        }
 	    }
-	    return got;
+	    return got != 0;
 	}
 private:
 	static void listen_all(smp_message_queue* qs);

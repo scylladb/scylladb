@@ -489,7 +489,7 @@ net_device::net_device(boost::program_options::variables_map opts,
     printf("Created DPDK device\n");
 
     // Register a DPDK poller.
-    engine.register_new_poller([&] { poll_rx_once(0, 0); return false; });
+    engine.register_new_poller([&] { poll_rx_once(0, 0); return true; });
 }
 
 /**

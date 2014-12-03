@@ -458,21 +458,7 @@ int reactor::run() {
 
     // Register smp queues poller
     if (smp::count > 1) {
-        register_new_poller(
-            [&] {
-                smp::poll_queues();
-
-                if (_pending_tasks.empty()) {
-                    _idle.store(true, std::memory_order_seq_cst);
-
-                    if (smp::poll_queues() && !_pending_tasks.empty()) {
-                        _idle.store(false, std::memory_order_relaxed);
-                    }
-                }
-
-                return idle();
-            }
-        );
+        register_new_poller(smp::poll_queues);
     }
 
     complete_timers();
@@ -493,9 +479,19 @@ int reactor::run() {
             break;
         }
 
-        bool blocking_allowed = poll_once();
+        if (!poll_once()) {
+            if (_pending_tasks.empty()) {
+                _idle.store(true, std::memory_order_seq_cst);
 
-        wait_and_process(_pending_tasks.empty() && blocking_allowed, [this] {
+                if (poll_once()) {
+                    _idle.store(false, std::memory_order_relaxed);
+                } else {
+                    assert(_pending_tasks.empty());
+                }
+            }
+        }
+
+        wait_and_process(idle(), [this] {
             if (_pending_tasks.empty()) {
                 _idle.store(false, std::memory_order_relaxed);
             }
