@@ -9,7 +9,6 @@ all_tests = [
     'memcached/test_ascii_parser',
     'sstring_test',
     'output_stream_test',
-    'allocator_test',
 ]
 
 last_len = 0
@@ -29,9 +28,20 @@ if __name__ == "__main__":
 
     test_to_run = []
     for mode in ['debug', 'release']:
+        prefix = os.path.join('build', mode, 'tests')
         for test in all_tests:
-            test_to_run.append(os.path.join('build', mode, 'tests', test))
+            test_to_run.append(os.path.join(prefix, test))
         test_to_run.append('tests/memcached/test.py --mode ' + mode + (' --fast' if args.fast else ''))
+
+        allocator_test_path = os.path.join(prefix, 'allocator_test')
+        if args.fast:
+            if mode == 'debug':
+                test_to_run.append(allocator_test_path + ' --iterations 5')
+            else:
+                test_to_run.append(allocator_test_path + ' --time 0.1')
+        else:
+            test_to_run.append(allocator_test_path)
+
 
     all_ok = True
 

@@ -53,7 +53,7 @@ def tcp_call(msg, timeout=1):
     s.close()
     return data
 
-def udp_call(msg, timeout=1):
+def udp_call_for_fragments(msg, timeout=1):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
     this_req_id = random.randint(-32768, 32767)
@@ -82,12 +82,13 @@ def udp_call(msg, timeout=1):
         if len(messages) == n:
             break
 
-    msg = b''
     for k, v in sorted(messages.items(), key=lambda e: e[0]):
-        msg += v
+        yield v
 
     sock.close()
-    return msg
+
+def udp_call(msg, **kwargs):
+    return b''.join(udp_call_for_fragments(msg, **kwargs))
 
 class MemcacheTest(unittest.TestCase):
     def set(self, key, value, flags=0, expiry=0):
@@ -201,6 +202,23 @@ class TcpSpecificTests(MemcacheTest):
             time.sleep(0.1)
             self.assertEquals(curr_connections, int(self.getStat('curr_connections', call_fn=conn)))
 
+class UdpSpecificTests(MemcacheTest):
+    def test_large_response_is_split_into_mtu_chunks(self):
+        max_datagram_size = 1400
+        data = '1' * (max_datagram_size*3)
+        self.set('key', data)
+
+        chunks = list(udp_call_for_fragments('get key\r\n'))
+
+        for chunk in chunks:
+            self.assertLessEqual(len(chunk), max_datagram_size)
+
+        self.assertEqual(b''.join(chunks).decode(),
+            'VALUE key 0 %d\r\n%s\r\n' \
+            'END\r\n' % (len(data), data))
+
+        self.delete('key')
+
 class TestCommands(MemcacheTest):
     def test_basic_commands(self):
         self.assertEqual(call('get key\r\n'), b'END\r\n')
@@ -228,10 +246,11 @@ class TestCommands(MemcacheTest):
         time.sleep(2)
         self.assertEqual(call('get key\r\n'), b'END\r\n')
 
-    def test_mutliple_keys_in_get(self):
+    def test_multiple_keys_in_get(self):
         self.assertEqual(call('set key1 0 0 2\r\nv1\r\n'), b'STORED\r\n')
         self.assertEqual(call('set key 0 0 2\r\nv2\r\n'), b'STORED\r\n')
-        self.assertEqual(call('get key1 key\r\n'), b'VALUE key1 0 2\r\nv1\r\nVALUE key 0 2\r\nv2\r\nEND\r\n')
+        resp = call('get key1 key\r\n')
+        self.assertRegexpMatches(resp, b'^(VALUE key1 0 2\r\nv1\r\nVALUE key 0 2\r\nv2\r\nEND\r\n)|(VALUE key 0 2\r\nv2\r\nVALUE key1 0 2\r\nv1\r\nEND\r\n)$')
         self.delete("key")
         self.delete("key1")
 
@@ -547,7 +566,9 @@ if __name__ == '__main__':
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     suite.addTest(loader.loadTestsFromTestCase(TestCommands))
-    if not args.udp:
+    if args.udp:
+        suite.addTest(loader.loadTestsFromTestCase(UdpSpecificTests))
+    else:
         suite.addTest(loader.loadTestsFromTestCase(TcpSpecificTests))
     result = runner.run(suite)
     if not result.wasSuccessful():

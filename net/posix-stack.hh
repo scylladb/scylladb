@@ -25,12 +25,11 @@ public:
 
 class posix_data_sink_impl : public data_sink_impl {
     pollable_fd& _fd;
-    std::vector<temporary_buffer<char>> _data;
-private:
-    future<> do_write(size_t idx);
+    packet _p;
 public:
     explicit posix_data_sink_impl(pollable_fd& fd) : _fd(fd) {}
-    future<> put(std::vector<temporary_buffer<char>> data) override;
+    future<> put(packet p) override;
+    future<> put(temporary_buffer<char> buf) override;
     future<> close() override {
         _fd.close();
         return make_ready_future<>();

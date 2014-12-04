@@ -15,6 +15,7 @@
 #include <functional>
 #include <cstdio>
 #include <experimental/string_view>
+#include "core/temporary_buffer.hh"
 
 template <typename char_type, typename size_type, size_type max_size>
 class basic_sstring {
@@ -133,6 +134,21 @@ public:
         }
         u.internal.size = 0;
         u.internal.str[0] = '\0';
+    }
+    temporary_buffer<char_type> release() && {
+        if (is_external()) {
+            auto ptr = u.external.str;
+            auto size = u.external.size;
+            u.external.str = nullptr;
+            u.external.size = 0;
+            return temporary_buffer<char_type>(ptr, size, make_deleter([ptr] { delete[] ptr; }));
+        } else {
+            auto buf = temporary_buffer<char_type>(u.internal.size);
+            std::copy(u.internal.str, u.internal.str + u.internal.size, buf.get_write());
+            u.internal.size = 0;
+            u.internal.str[0] = '\0';
+            return buf;
+        }
     }
     void swap(basic_sstring& x) noexcept {
         contents tmp;
@@ -303,6 +319,11 @@ template <typename string_type = sstring>
 inline
 string_type to_sstring(sstring value, void* = nullptr) {
     return value;
+}
+
+template <typename string_type = sstring>
+static string_type to_sstring(const temporary_buffer<char>& buf) {
+    return string_type(buf.get(), buf.size());
 }
 
 template <typename T>

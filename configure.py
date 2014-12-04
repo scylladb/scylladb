@@ -79,6 +79,7 @@ tests = [
     'tests/tcp_server',
     'tests/allocator_test',
     'tests/output_stream_test',
+    'tests/udp_zero_copy',
     ]
 
 apps = [
@@ -196,6 +197,7 @@ deps = {
     'tests/sstring_test': ['tests/sstring_test.cc'] + core,
     'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc'],
     'tests/output_stream_test': ['tests/output_stream_test.cc'] + core + libnet,
+    'tests/udp_zero_copy': ['tests/udp_zero_copy.cc'] + core + libnet,
 }
 
 warnings = [

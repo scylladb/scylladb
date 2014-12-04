@@ -41,6 +41,7 @@
 #include "circular_buffer.hh"
 #include "file.hh"
 #include "semaphore.hh"
+#include "core/scattered_message.hh"
 
 #ifdef HAVE_OSV
 #include <osv/newpoll.hh>
@@ -118,6 +119,16 @@ public:
     friend class pollable_fd;
 };
 
+inline
+size_t iovec_len(const std::vector<iovec>& iov)
+{
+    size_t ret = 0;
+    for (auto&& e : iov) {
+        ret += e.iov_len;
+    }
+    return ret;
+}
+
 class pollable_fd {
 public:
     using speculation = pollable_fd_state::speculation;
@@ -130,8 +141,10 @@ public:
     future<size_t> read_some(char* buffer, size_t size);
     future<size_t> read_some(uint8_t* buffer, size_t size);
     future<size_t> read_some(const std::vector<iovec>& iov);
-    future<size_t> write_all(const char* buffer, size_t size);
-    future<size_t> write_all(const uint8_t* buffer, size_t size);
+    future<> write_all(const char* buffer, size_t size);
+    future<> write_all(const uint8_t* buffer, size_t size);
+    future<size_t> write_some(net::packet& p);
+    future<> write_all(net::packet& p);
     future<pollable_fd, socket_address> accept();
     future<size_t> sendmsg(struct msghdr *msg);
     future<size_t> recvmsg(struct msghdr *msg);
@@ -594,7 +607,7 @@ public:
 
     future<size_t> write_some(pollable_fd_state& fd, const void* buffer, size_t size);
 
-    future<size_t> write_all(pollable_fd_state& fd, const void* buffer, size_t size);
+    future<> write_all(pollable_fd_state& fd, const void* buffer, size_t size);
 
     future<file> open_file_dma(sstring name);
 
@@ -637,7 +650,7 @@ public:
 private:
     struct collectd_registrations;
     collectd_registrations register_collectd_metrics();
-    future<size_t> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
+    future<> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
 
     void process_io(size_t count);
 
@@ -765,12 +778,17 @@ public:
 class data_sink_impl {
 public:
     virtual ~data_sink_impl() {}
-    virtual future<> put(std::vector<temporary_buffer<char>> data) = 0;
-    virtual future<> put(temporary_buffer<char> data) {
-        std::vector<temporary_buffer<char>> v;
-        v.reserve(1);
-        v.push_back(std::move(data));
-        return put(std::move(v));
+    virtual future<> put(net::packet data) = 0;
+    virtual future<> put(std::vector<temporary_buffer<char>> data) {
+        net::packet p;
+        p.reserve(data.size());
+        for (auto& buf : data) {
+            p = net::packet(std::move(p), net::fragment{buf.get_write(), buf.size()}, buf.release());
+        }
+        return put(std::move(p));
+    }
+    virtual future<> put(temporary_buffer<char> buf) {
+        return put(net::packet(net::fragment{buf.get_write(), buf.size()}, buf.release()));
     }
     virtual future<> close() = 0;
 };
@@ -785,6 +803,9 @@ public:
     }
     future<> put(temporary_buffer<char> data) {
         return _dsi->put(std::move(data));
+    }
+    future<> put(net::packet p) {
+        return _dsi->put(std::move(p));
     }
     future<> close() { return _dsi->close(); }
 };
@@ -816,6 +837,14 @@ private:
     future<temporary_buffer<CharType>> read_exactly_part(size_t n, tmp_buf buf, size_t completed);
 };
 
+// Facilitates data buffering before it's handed over to data_sink.
+//
+// When trim_to_size is true it's guaranteed that data sink will not receive
+// chunks larger than the configured size, which could be the case when a
+// single write call is made with data larger than the configured size.
+//
+// The data sink will not receive empty chunks.
+//
 template <typename CharType>
 class output_stream {
     static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
@@ -824,16 +853,20 @@ class output_stream {
     size_t _size;
     size_t _begin = 0;
     size_t _end = 0;
+    bool _trim_to_size;
 private:
     size_t available() const { return _end - _begin; }
     size_t possibly_available() const { return _size - _begin; }
+    future<> split_and_put(temporary_buffer<CharType> buf);
 public:
     using char_type = CharType;
-    output_stream(data_sink fd, size_t size)
-        : _fd(std::move(fd)), _buf(size), _size(size) {}
+    output_stream(data_sink fd, size_t size, bool trim_to_size = false)
+        : _fd(std::move(fd)), _size(size), _trim_to_size(trim_to_size) {}
     future<> write(const char_type* buf, size_t n);
     future<> write(const char_type* buf);
     future<> write(const sstring& s);
+    future<> write(net::packet p);
+    future<> write(scattered_message<char_type> msg);
     future<> flush();
     future<> close() { return _fd.close(); }
 private:
@@ -851,14 +884,32 @@ future<> output_stream<CharType>::write(const sstring& s) {
     return write(s.c_str(), s.size());
 }
 
-inline
-size_t iovec_len(const std::vector<iovec>& iov)
-{
-    size_t ret = 0;
-    for (auto&& e : iov) {
-        ret += e.iov_len;
+template<typename CharType>
+future<> output_stream<CharType>::write(scattered_message<CharType> msg) {
+    return write(std::move(msg).release());
+}
+
+template<typename CharType>
+future<> output_stream<CharType>::write(net::packet p) {
+    static_assert(std::is_same<CharType, char>::value, "packet works on char");
+
+    if (p.len() == 0) {
+        return make_ready_future<>();
     }
-    return ret;
+
+    assert(!_end && "Mixing buffered writes and zero-copy writes not supported yet");
+
+    if (!_trim_to_size || p.len() <= _size) {
+        // TODO: aggregate buffers for later coalescing. Currently we flush right
+        // after appending the message anyway, so it doesn't matter.
+        return _fd.put(std::move(p));
+    }
+
+    auto head = p.share(0, _size);
+    p.trim_front(_size);
+    return _fd.put(std::move(head)).then([this, p = std::move(p)] () mutable {
+        return write(std::move(p));
+    });
 }
 
 inline
@@ -933,10 +984,10 @@ reactor::write_some(pollable_fd_state& fd, const void* buffer, size_t len) {
 }
 
 inline
-future<size_t>
+future<>
 reactor::write_all_part(pollable_fd_state& fd, const void* buffer, size_t len, size_t completed) {
     if (completed == len) {
-        return make_ready_future<size_t>(completed);
+        return make_ready_future<>();
     } else {
         return write_some(fd, static_cast<const char*>(buffer) + completed, len - completed).then(
                 [&fd, buffer, len, completed, this] (size_t part) mutable {
@@ -946,7 +997,7 @@ reactor::write_all_part(pollable_fd_state& fd, const void* buffer, size_t len, s
 }
 
 inline
-future<size_t>
+future<>
 reactor::write_all(pollable_fd_state& fd, const void* buffer, size_t len) {
     assert(len);
     return write_all_part(fd, buffer, len, 0);
@@ -1032,6 +1083,28 @@ input_stream<CharType>::consume(Consumer& consumer) {
 #include <iostream>
 #include "sstring.hh"
 
+// Writes @buf in chunks of _size length. The last chunk is buffered if smaller.
+template <typename CharType>
+future<>
+output_stream<CharType>::split_and_put(temporary_buffer<CharType> buf) {
+    assert(_end == 0);
+
+    if (buf.size() < _size) {
+        if (!_buf) {
+            _buf = temporary_buffer<char>(_size);
+        }
+        std::copy(buf.get(), buf.get() + buf.size(), _buf.get_write());
+        _end = buf.size();
+        return make_ready_future<>();
+    }
+
+    auto chunk = buf.share(0, _size);
+    buf.trim_front(_size);
+    return _fd.put(std::move(chunk)).then([this, buf = std::move(buf)] () mutable {
+        return split_and_put(std::move(buf));
+    });
+}
+
 template <typename CharType>
 future<>
 output_stream<CharType>::write(const char_type* buf, size_t n) {
@@ -1040,17 +1113,31 @@ output_stream<CharType>::write(const char_type* buf, size_t n) {
         if (_end) {
             auto now = _size - _end;
             std::copy(buf, buf + now, _buf.get_write() + _end);
+            _end = _size;
             temporary_buffer<char> tmp(n - now);
             std::copy(buf + now, buf + n, tmp.get_write());
             return flush().then([this, tmp = std::move(tmp)]() mutable {
-                return _fd.put(std::move(tmp));
+                if (_trim_to_size) {
+                    return split_and_put(std::move(tmp));
+                } else {
+                    return _fd.put(std::move(tmp));
+                }
             });
         } else {
             temporary_buffer<char> tmp(n);
             std::copy(buf, buf + n, tmp.get_write());
-            return _fd.put(std::move(tmp));
+            if (_trim_to_size) {
+                return split_and_put(std::move(tmp));
+            } else {
+                return _fd.put(std::move(tmp));
+            }
         }
     }
+
+    if (!_buf) {
+        _buf = temporary_buffer<char>(_size);
+    }
+
     auto now = std::min(n, _size - _end);
     std::copy(buf, buf + now, _buf.get_write() + _end);
     _end += now;
@@ -1072,10 +1159,8 @@ output_stream<CharType>::flush() {
         return make_ready_future<>();
     }
     _buf.trim(_end);
-    temporary_buffer<CharType> next(_size);
-    std::swap(_buf, next);
     _end = 0;
-    return _fd.put(std::move(next));
+    return _fd.put(std::move(_buf));
 }
 
 inline
@@ -1094,13 +1179,47 @@ future<size_t> pollable_fd::read_some(const std::vector<iovec>& iov) {
 }
 
 inline
-future<size_t> pollable_fd::write_all(const char* buffer, size_t size) {
+future<> pollable_fd::write_all(const char* buffer, size_t size) {
     return engine.write_all(*_s, buffer, size);
 }
 
 inline
-future<size_t> pollable_fd::write_all(const uint8_t* buffer, size_t size) {
+future<> pollable_fd::write_all(const uint8_t* buffer, size_t size) {
     return engine.write_all(*_s, buffer, size);
+}
+
+inline
+future<size_t> pollable_fd::write_some(net::packet& p) {
+    return engine.writeable(*_s).then([this, &p] () mutable {
+        static_assert(offsetof(iovec, iov_base) == offsetof(net::fragment, base) &&
+            sizeof(iovec::iov_base) == sizeof(net::fragment::base) &&
+            offsetof(iovec, iov_len) == offsetof(net::fragment, size) &&
+            sizeof(iovec::iov_len) == sizeof(net::fragment::size) &&
+            alignof(iovec) == alignof(net::fragment) &&
+            sizeof(iovec) == sizeof(net::fragment)
+            , "net::fragment and iovec should be equivalent");
+
+        iovec* iov = reinterpret_cast<iovec*>(p.fragment_array());
+        auto r = get_file_desc().writev(iov, p.nr_frags());
+        if (!r) {
+            return write_some(p);
+        }
+        if (size_t(*r) == p.len()) {
+            _s->speculate_epoll(EPOLLOUT);
+        }
+        return make_ready_future<size_t>(*r);
+    });
+}
+
+inline
+future<> pollable_fd::write_all(net::packet& p) {
+    return write_some(p).then([this, &p] (size_t size) {
+        if (p.len() == size) {
+            return make_ready_future<>();
+        }
+        p.trim_front(size);
+        return write_all(p);
+    });
 }
 
 inline

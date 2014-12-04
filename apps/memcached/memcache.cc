@@ -1228,11 +1228,13 @@ public:
 template <bool WithFlashCache>
 class ascii_protocol {
 private:
+    using this_type = ascii_protocol<WithFlashCache>;
     sharded_cache<WithFlashCache>& _cache;
     distributed<system_stats>& _system_stats;
     memcache_ascii_parser _parser;
     item_key _item_key;
     item_insertion_data _insertion;
+    std::vector<item_ptr<WithFlashCache>> _items;
 private:
     static constexpr uint32_t seconds_in_a_month = 60 * 60 * 24 * 30;
     static constexpr const char *msg_crlf = "\r\n";
@@ -1249,63 +1251,50 @@ private:
     static constexpr const char *msg_stat = "STAT ";
     static constexpr const char *msg_error_non_numeric_value = "CLIENT_ERROR cannot increment or decrement non-numeric value\r\n";
 private:
-
-    // Implements @Reducer concept
-    template <bool SendCasVersion>
-    class item_writer {
-    private:
-        output_stream<char>& _out;
-    public:
-        item_writer(output_stream<char>& out) : _out(out) {}
-
-        static future<> write(output_stream<char>& out, item_ptr<WithFlashCache> item) {
-            if (!item) {
-                return make_ready_future<>();
-            }
-            return out.write(msg_value).then([&out, item = std::move(item)] () mutable {
-                auto f = out.write(item->key());
-                return std::move(f).then([&out, item = std::move(item)] () mutable {
-                    auto f = out.write(item->ascii_prefix());
-
-                    if (SendCasVersion) {
-                        auto v  = item->version();
-                        f = std::move(f).then([&out, v] {
-                            return out.write(" ").then([&out, v] {
-                                return out.write(to_sstring(v));
-                            });
-                        });
-                    }
-
-                    return std::move(f).then([&out] {
-                        return out.write(msg_crlf);
-                    }).then([&out, item = std::move(item)] {
-                        return out.write(item->data());
-                    }).then([&out] {
-                        return out.write(msg_crlf);
-                    });
-                });
-            });
+    template <bool WithVersion>
+    static void append_item(scattered_message<char>& msg, item_ptr<WithFlashCache> item) {
+        if (!item) {
+            return;
         }
 
-        future<> operator()(item_ptr<WithFlashCache> item) {
-            return write(_out, std::move(item));
-        }
-    };
+        msg.append_static("VALUE ");
+        msg.append_static(item->key());
+        msg.append_static(item->ascii_prefix());
 
-    template <bool SendCasVersion>
+        if (WithVersion) {
+             msg.append_static(" ");
+             msg.append(to_sstring(item->version()));
+        }
+
+        msg.append_static(msg_crlf);
+        msg.append_static(item->data());
+        msg.append_static(msg_crlf);
+        msg.on_delete([item = std::move(item)] {});
+    }
+
+    template <bool WithVersion>
     future<> handle_get(output_stream<char>& out) {
         _system_stats.local()._cmd_get++;
         if (_parser._keys.size() == 1) {
-            return _cache.get(_parser._keys[0]).then([&out] (auto item_ptr) {
-                return item_writer<SendCasVersion>::write(out, std::move(item_ptr)).then([&out] {
-                    return out.write(msg_end);
-                });
+            return _cache.get(_parser._keys[0]).then([&out] (auto item) -> future<> {
+                scattered_message<char> msg;
+                this_type::append_item<WithVersion>(msg, std::move(item));
+                msg.append_static(msg_end);
+                return out.write(std::move(msg));
             });
         } else {
-            return map_reduce(_parser._keys.begin(), _parser._keys.end(), [this] (const auto& key) {
-                return _cache.get(key);
-            }, item_writer<SendCasVersion>(out)).then([&out] {
-                return out.write(msg_end);
+            _items.clear();
+            return parallel_for_each(_parser._keys.begin(), _parser._keys.end(), [this] (const auto& key) {
+                return _cache.get(key).then([this] (auto item) {
+                    _items.emplace_back(std::move(item));
+                });
+            }).then([this, &out] () {
+                scattered_message<char> msg;
+                for (auto& item : _items) {
+                    append_item<WithVersion>(msg, std::move(item));
+                }
+                msg.append_static(msg_end);
+                return out.write(std::move(msg));
             });
         }
     }
@@ -1620,16 +1609,29 @@ private:
         uint16_t _request_id;
         input_stream<char> _in;
         output_stream<char> _out;
-        std::vector<temporary_buffer<char>> _out_bufs;
+        std::vector<packet> _out_bufs;
         ascii_protocol<WithFlashCache> _proto;
+
         connection(ipv4_addr src, uint16_t request_id, input_stream<char>&& in, size_t out_size,
                 sharded_cache<WithFlashCache>& c, distributed<system_stats>& system_stats)
             : _src(src)
             , _request_id(request_id)
             , _in(std::move(in))
-            , _out(output_stream<char>(data_sink(std::make_unique<vector_data_sink>(_out_bufs)), out_size))
+            , _out(output_stream<char>(data_sink(std::make_unique<vector_data_sink>(_out_bufs)), out_size, true))
             , _proto(c, system_stats)
         {}
+
+        future<> respond(udp_channel& chan) {
+            int i = 0;
+            return do_for_each(_out_bufs.begin(), _out_bufs.end(), [this, i, &chan] (packet& p) mutable {
+                header* out_hdr = p.prepend_header<header>(0);
+                out_hdr->_request_id = _request_id;
+                out_hdr->_sequence_number = i++;
+                out_hdr->_n = _out_bufs.size();
+                *out_hdr = hton(*out_hdr);
+                return chan.send(_src, std::move(p));
+            });
+        }
     };
 
 public:
@@ -1641,32 +1643,6 @@ public:
 
     void set_max_datagram_size(size_t max_datagram_size) {
         _max_datagram_size = max_datagram_size;
-    }
-
-    future<> respond(ipv4_addr dst, uint16_t request_id, std::vector<temporary_buffer<char>>&& datagrams) {
-        if (datagrams.size() == 1) {
-            auto&& buf = datagrams[0];
-            auto p = packet(fragment{buf.get_write(), buf.size()}, buf.release());
-            header *out_hdr = p.prepend_header<header>();
-            out_hdr->_request_id = request_id;
-            out_hdr->_sequence_number = 0;
-            out_hdr->_n = 1;
-            *out_hdr = hton(*out_hdr);
-            return _chan.send(dst, std::move(p));
-        }
-
-        int i = 0;
-        auto sb = make_shared(std::move(datagrams));
-        return do_for_each(sb->begin(), sb->end(),
-                [this, i, sb, dst, request_id](auto&& buf) mutable {
-            auto p = packet(fragment{buf.get_write(), buf.size()}, buf.release());
-            header *out_hdr = p.prepend_header<header>();
-            out_hdr->_request_id = request_id;
-            out_hdr->_sequence_number = i++;
-            out_hdr->_n = sb->size();
-            *out_hdr = hton(*out_hdr);
-            return _chan.send(dst, std::move(p));
-        });
     }
 
     void start() {
@@ -1688,16 +1664,16 @@ public:
                     _max_datagram_size - sizeof(header), _cache, _system_stats);
 
                 if (hdr._n != 1 || hdr._sequence_number != 0) {
-                    conn->_out.write("CLIENT_ERROR only single-datagram requests supported\r\n").then([this, conn] {
+                    return conn->_out.write("CLIENT_ERROR only single-datagram requests supported\r\n").then([this, conn] {
                         return conn->_out.flush().then([this, conn] {
-                            return respond(conn->_src, conn->_request_id, std::move(conn->_out_bufs));
+                            return conn->respond(_chan).then([conn] {});
                         });
                     });
                 }
 
                 return conn->_proto.handle(conn->_in, conn->_out).then([this, conn]() mutable {
-                    return conn->_out.flush().then([this, conn]() mutable {
-                        return respond(conn->_src, conn->_request_id, std::move(conn->_out_bufs));
+                    return conn->_out.flush().then([this, conn] {
+                        return conn->respond(_chan).then([conn] {});
                     });
                 });
             });

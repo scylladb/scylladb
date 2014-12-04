@@ -567,7 +567,7 @@ virtio_net_device::txq::post(packet p) {
         // schedule packet destruction
         vbc[0].completed.get_future().then([this, nr_frags, p = std::move(p)] (size_t) {
             _ring.available_descriptors().signal(nr_frags);
-       });
+        });
         _ring.post(std::begin(vbc), std::end(vbc));
     });
 }

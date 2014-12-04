@@ -98,16 +98,24 @@ future<> keep_doing(AsyncAction&& action) {
 template<typename Iterator, typename AsyncAction>
 static inline
 future<> do_for_each(Iterator begin, Iterator end, AsyncAction&& action) {
-    while (begin != end) {
+    if (begin == end) {
+        return make_ready_future<>();
+    }
+    while (true) {
         auto f = action(*begin++);
+        if (begin == end) {
+            return f;
+        }
         if (!f.available()) {
-            return f.then([action = std::forward<AsyncAction>(action),
+            return std::move(f).then([action = std::forward<AsyncAction>(action),
                     begin = std::move(begin), end = std::move(end)] () mutable {
                 return do_for_each(std::move(begin), std::move(end), std::forward<AsyncAction>(action));
             });
         }
+        if (f.failed()) {
+            return std::move(f);
+        }
     }
-    return make_ready_future<>();
 }
 
 template <typename... Future>
@@ -207,5 +215,10 @@ public:
         return std::move(_result);
     }
 };
+
+static inline
+future<> now() {
+    return make_ready_future<>();
+}
 
 #endif /* CORE_FUTURE_UTIL_HH_ */

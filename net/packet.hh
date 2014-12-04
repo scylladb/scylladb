@@ -6,6 +6,7 @@
 #define PACKET_HH_
 
 #include "core/deleter.hh"
+#include "core/temporary_buffer.hh"
 #include "const.hh"
 #include <vector>
 #include <cassert>
@@ -172,7 +173,9 @@ public:
     packet(fragment frag, Deleter deleter);
     // zero-copy single fragment
     packet(fragment frag, deleter del);
-    // zero-copy multiple fragment
+    // zero-copy multiple fragments
+    packet(std::vector<fragment> frag, deleter del);
+    // zero-copy multiple fragments
     template <typename Deleter>
     packet(std::vector<fragment> frag, Deleter deleter);
     // build packet with iterator
@@ -191,6 +194,13 @@ public:
     // append fragment (zero-copy)
     template <typename Deleter>
     packet(packet&& x, fragment frag, Deleter deleter);
+    // append fragment (zero-copy)
+    packet(packet&& x, fragment frag, deleter d);
+    // append temporary_buffer (zero-copy)
+    packet(packet&& x, temporary_buffer<char> buf);
+    // append deleter
+    template <typename Deleter>
+    packet(packet&& x, Deleter d);
 
     packet& operator=(packet&& x) {
         if (this != &x) {
@@ -207,6 +217,7 @@ public:
 
     unsigned nr_frags() const { return _impl->_nr_frags; }
     pseudo_vector fragments() const { return { _impl->_frags, _impl->_nr_frags }; }
+    fragment* fragment_array() const { return _impl->_frags; }
 
     // share packet data (reference counted, non COW)
     packet share();
@@ -234,6 +245,15 @@ public:
     packet free_on_cpu(unsigned cpu);
 
     void linearize() { return linearize(0, len()); }
+
+    void reset() { _impl.reset(); }
+
+    void reserve(int n_frags) {
+        if (n_frags > _impl->_nr_frags) {
+            auto extra = n_frags - _impl->_nr_frags;
+            _impl = impl::allocate_if_needed(std::move(_impl), extra);
+        }
+    }
 private:
     void linearize(size_t at_frag, size_t desired_size);
     bool allocate_headroom(size_t size);
@@ -301,17 +321,22 @@ packet::packet(fragment frag, deleter d)
     _impl->_len = frag.size;
 }
 
-template <typename Deleter>
 inline
-packet::packet(std::vector<fragment> frag, Deleter d)
+packet::packet(std::vector<fragment> frag, deleter d)
     : _impl(impl::allocate(frag.size())) {
-    _impl->_deleter = make_deleter(deleter(), std::move(d));
+    _impl->_deleter = std::move(d);
     std::copy(frag.begin(), frag.end(), _impl->_frags);
     _impl->_nr_frags = frag.size();
     _impl->_len = 0;
     for (auto&& f : _impl->fragments()) {
         _impl->_len += f.size;
     }
+}
+
+template <typename Deleter>
+inline
+packet::packet(std::vector<fragment> frag, Deleter d)
+    : packet(std::move(frag), make_deleter(deleter(), std::move(d))) {
 }
 
 template <typename Iterator, typename Deleter>
@@ -407,7 +432,7 @@ packet::packet(fragment frag, Deleter d, packet&& x)
             _impl->_frags + _impl->_nr_frags + 1);
     ++_impl->_nr_frags;
     _impl->_frags[0] = frag;
-    _impl->_deleter = make_deleter(std::move(_impl->_deleter), d);
+    _impl->_deleter = make_deleter(std::move(_impl->_deleter), std::move(d));
 }
 
 template <typename Deleter>
@@ -416,7 +441,28 @@ packet::packet(packet&& x, fragment frag, Deleter d)
     : _impl(impl::allocate_if_needed(std::move(x._impl), 1)) {
     _impl->_len += frag.size;
     _impl->_frags[_impl->_nr_frags++] = frag;
-    _impl->_deleter = make_deleter(std::move(_impl->_deleter), d);
+    _impl->_deleter = make_deleter(std::move(_impl->_deleter), std::move(d));
+}
+
+inline
+packet::packet(packet&& x, fragment frag, deleter d)
+    : _impl(impl::allocate_if_needed(std::move(x._impl), 1)) {
+    _impl->_len += frag.size;
+    _impl->_frags[_impl->_nr_frags++] = frag;
+    d.append(std::move(_impl->_deleter));
+    _impl->_deleter = std::move(d);
+}
+
+template <typename Deleter>
+inline
+packet::packet(packet&& x, Deleter d)
+    : _impl(std::move(x._impl)) {
+    _impl->_deleter = make_deleter(std::move(_impl->_deleter), std::move(d));
+}
+
+inline
+packet::packet(packet&& x, temporary_buffer<char> buf)
+    : packet(std::move(x), fragment{buf.get_write(), buf.size()}, buf.release()) {
 }
 
 inline

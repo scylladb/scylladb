@@ -21,7 +21,7 @@ public:
                     temporary_buffer<char>(f.base, f.size,
                             make_deleter(deleter(), [p = _p.share()] () mutable {})));
         }
-        return make_ready_future<temporary_buffer<char>>(temporary_buffer<char>(0));
+        return make_ready_future<temporary_buffer<char>>(temporary_buffer<char>());
     }
 };
 

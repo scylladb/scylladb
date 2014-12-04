@@ -21,7 +21,9 @@ public:
         : _buffer(static_cast<CharType*>(malloc(size * sizeof(CharType)))), _size(size)
         , _deleter(make_free_deleter(_buffer)) {}
     //explicit temporary_buffer(CharType* borrow, size_t size) : _buffer(borrow), _size(size) {}
-    temporary_buffer() = delete;
+    temporary_buffer()
+        : _buffer(nullptr)
+        , _size(0) {}
     temporary_buffer(const temporary_buffer&) = delete;
     temporary_buffer(temporary_buffer&& x) : _buffer(x._buffer), _size(x._size), _deleter(std::move(x._deleter)) {
         x._buffer = nullptr;
@@ -54,6 +56,7 @@ public:
         return _buffer[pos];
     }
     bool empty() const { return !size(); }
+    operator bool() { return size(); }
     temporary_buffer share() {
         return temporary_buffer(_buffer, _size, _deleter.share());
     }

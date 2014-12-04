@@ -82,23 +82,33 @@ data_sink posix_data_sink(pollable_fd& fd) {
     return data_sink(std::make_unique<posix_data_sink_impl>(fd));
 }
 
-future<>
-posix_data_sink_impl::put(std::vector<temporary_buffer<char>> data) {
-    std::swap(data, _data);
-    return do_write(0);
+std::vector<struct iovec> to_iovec(const packet& p) {
+    std::vector<struct iovec> v;
+    v.reserve(p.nr_frags());
+    for (auto&& f : p.fragments()) {
+        v.push_back({.iov_base = f.base, .iov_len = f.size});
+    }
+    return v;
+}
+
+std::vector<iovec> to_iovec(std::vector<temporary_buffer<char>>& buf_vec) {
+    std::vector<iovec> v;
+    v.reserve(buf_vec.size());
+    for (auto& buf : buf_vec) {
+        v.push_back({.iov_base = buf.get_write(), .iov_len = buf.size()});
+    }
+    return v;
 }
 
 future<>
-posix_data_sink_impl::do_write(size_t idx) {
-    // FIXME: use writev
-    return _fd.write_all(_data[idx].get(), _data[idx].size()).then([this, idx] (size_t size) mutable {
-        assert(size == _data[idx].size()); // FIXME: exception? short write?
-        if (++idx == _data.size()) {
-            _data.clear();
-            return make_ready_future<>();
-        }
-        return do_write(idx);
-    });
+posix_data_sink_impl::put(temporary_buffer<char> buf) {
+    return _fd.write_all(buf.get(), buf.size()).then([d = buf.release()] {});
+}
+
+future<>
+posix_data_sink_impl::put(packet p) {
+    _p = std::move(p);
+    return _fd.write_all(_p).then([this] { _p.reset(); });
 }
 
 server_socket
@@ -118,15 +128,6 @@ struct cmsg_with_pktinfo {
     struct cmsghdrcmh;
     struct in_pktinfo pktinfo;
 };
-
-std::vector<struct iovec> to_iovec(const packet& p) {
-    std::vector<struct iovec> v;
-    v.reserve(p.nr_frags());
-    for (auto&& f : p.fragments()) {
-        v.push_back({.iov_base = f.base, .iov_len = f.size});
-    }
-    return v;
-}
 
 class posix_udp_channel : public udp_channel_impl {
 private:
