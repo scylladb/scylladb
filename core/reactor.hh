@@ -539,6 +539,8 @@ public:
 #endif /* HAVE_OSV */
 
 class reactor {
+public:
+    class poller;
 private:
     // FIXME: make _backend a unique_ptr<reactor_backend>, not a compile-time #ifdef.
 #ifdef HAVE_OSV
@@ -546,7 +548,7 @@ private:
 #else
     reactor_backend_epoll _backend;
 #endif
-    std::vector<std::function<bool()>> _pollers;
+    std::vector<poller*> _pollers;
     static constexpr size_t max_aio = 128;
     promise<> _exit_promise;
     future<> _exit_future;
@@ -579,16 +581,9 @@ private:
      * @return FALSE if at least one of the blockers requires a non-blocking
      *         execution.
      */
-    bool poll_once() {
-        bool work = false;
-        for (auto c : _pollers) {
-            work |= c();
-        }
-
-        return work;
-    }
-
+    bool poll_once();
 public:
+    class poller;
     static boost::program_options::options_description get_options_description();
     reactor();
     reactor(const reactor&) = delete;
@@ -636,6 +631,7 @@ public:
         }
     }
 
+private:
     /**
      * Add a new "poller" - a non-blocking function returning a boolean, that
      * will be called every iteration of a main loop.
@@ -644,10 +640,8 @@ public:
      *
      * @param fn a new "poller" function to register
      */
-    void register_new_poller(std::function<bool()>&& fn) {
-        _pollers.push_back(std::move(fn));
-    }
-private:
+    void register_poller(poller* p);
+    void unregister_poller(poller* p);
     struct collectd_registrations;
     collectd_registrations register_collectd_metrics();
     future<> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
@@ -666,6 +660,7 @@ private:
     friend class readable_eventfd;
     friend class timer;
     friend class smp;
+    friend class poller;
 public:
     void wait_and_process(bool block, std::function<void()> &&pre_process) {
         _backend.wait_and_process(block, std::move(pre_process));
@@ -695,6 +690,16 @@ public:
     std::unique_ptr<reactor_notifier> make_reactor_notifier() {
         return _backend.make_reactor_notifier();
     }
+};
+
+class reactor::poller {
+    std::function<bool ()> _poll_and_check_more_work;
+public:
+    explicit poller(std::function<bool ()> poll_and_check_more_work);
+    ~poller();
+    poller(poller&& x);
+    poller& operator=(poller&& x);
+    friend class reactor;
 };
 
 extern thread_local reactor engine;

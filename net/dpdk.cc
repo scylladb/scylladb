@@ -179,6 +179,7 @@ private:
     rte_eth_dev_info _dev_info = {};
     net::hw_features _hw_features;
     rte_mempool *_pktmbuf_pool;
+    reactor::poller _rx_poller;
 };
 
 int net_device::init_port()
@@ -341,6 +342,7 @@ void net_device::check_port_link_status()
 net_device::net_device(boost::program_options::variables_map opts,
                        uint8_t port_idx, uint8_t num_queues) :
     _port_idx(port_idx), _num_queues(num_queues)
+    , _rx_poller([&] { poll_rx_once(0, 0); return true; })
 {
     _rx_conf_default.rx_thresh.pthresh = default_pthresh;
     _rx_conf_default.rx_thresh.hthresh = default_rx_hthresh;
@@ -371,9 +373,6 @@ net_device::net_device(boost::program_options::variables_map opts,
     check_port_link_status();
 
     printf("Created DPDK device\n");
-
-    // Register a DPDK poller.
-    engine.register_new_poller([&] { poll_rx_once(0, 0); return true; });
 }
 
 void net_device::process_packets(struct rte_mbuf **bufs, uint16_t count)

@@ -459,8 +459,9 @@ int reactor::run() {
     });
 
     // Register smp queues poller
+    std::experimental::optional<poller> smp_poller;
     if (smp::count > 1) {
-        register_new_poller(smp::poll_queues);
+        smp_poller = poller(smp::poll_queues);
     }
 
     complete_timers();
@@ -502,6 +503,52 @@ int reactor::run() {
         });
     }
     return _return;
+}
+
+bool
+reactor::poll_once() {
+    bool work = false;
+    for (auto c : _pollers) {
+        work |= c->_poll_and_check_more_work();
+    }
+
+    return work;
+}
+
+void reactor::register_poller(poller* p) {
+    _pollers.push_back(p);
+}
+
+void reactor::unregister_poller(poller* p) {
+    _pollers.erase(std::find(_pollers.begin(), _pollers.end(), p));
+}
+
+reactor::poller::poller(std::function<bool ()> poll_and_check_more_work)
+        : _poll_and_check_more_work(poll_and_check_more_work) {
+    engine.register_poller(this);
+}
+
+reactor::poller::~poller() {
+    if (_poll_and_check_more_work) {
+        engine.unregister_poller(this);
+    }
+}
+
+reactor::poller::poller(poller&& x) {
+    if (x._poll_and_check_more_work) {
+        engine.unregister_poller(&x);
+        _poll_and_check_more_work = std::move(x._poll_and_check_more_work);
+        engine.register_poller(this);
+    }
+}
+
+reactor::poller&
+reactor::poller::operator=(poller&& x) {
+    if (this != &x) {
+        this->~poller();
+        new (this) poller(std::move(x));
+    }
+    return *this;
 }
 
 void
