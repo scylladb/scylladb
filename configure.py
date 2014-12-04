@@ -216,7 +216,7 @@ if args.with_osv:
 if args.dpdk_target:
     args.user_cflags = (args.user_cflags +
         ' -DHAVE_DPDK -I' +
-        args.dpdk_target + '/include -Wno-error=literal-suffix')
+        args.dpdk_target + '/include -Wno-error=literal-suffix -Wno-literal-suffix')
     libs += (' -L' + args.dpdk_target + '/lib ' +
         '-Wl,--whole-archive -lrte_pmd_bond -lrte_pmd_vmxnet3_uio -lrte_pmd_virtio_uio -lrte_pmd_i40e -lrte_pmd_ixgbe -lrte_pmd_e1000 -lrte_pmd_ring -Wl,--no-whole-archive -lrte_distributor -lrte_kni -lrte_pipeline -lrte_table -lrte_port -lrte_timer -lrte_hash -lrte_lpm -lrte_power -lrte_acl -lrte_meter -lrte_sched -lrte_kvargs -lrte_mbuf -lrte_ip_frag -lethdev -lrte_eal -lrte_malloc -lrte_mempool -lrte_ring -lrte_cmdline -lrte_cfgfile -lrt -lm -ldl')
 
