@@ -21,8 +21,15 @@ public:
     virtual future<> run_test_case() = 0;
 
     void run() {
-        posix_thread t([this] {
-            namespace bpo = boost::program_options;
+        namespace bpo = boost::program_options;
+
+        // HACK: please see https://github.com/cloudius-systems/seastar/issues/10
+        BOOST_REQUIRE(true);
+
+        // HACK: please see https://github.com/cloudius-systems/seastar/issues/10
+        bpo::variables_map()["dummy"];
+
+        posix_thread t([this] () mutable {
             boost::program_options::variables_map configuration;
             auto opts = reactor::get_options_description();
             bpo::store(bpo::command_line_parser(0, nullptr).options(opts).run(), configuration);
