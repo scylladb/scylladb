@@ -15,6 +15,7 @@
 #include <functional>
 #include <cstdio>
 #include <experimental/string_view>
+#include "core/temporary_buffer.hh"
 
 template <typename char_type, typename size_type, size_type max_size>
 class basic_sstring {
@@ -303,6 +304,11 @@ template <typename string_type = sstring>
 inline
 string_type to_sstring(sstring value, void* = nullptr) {
     return value;
+}
+
+template <typename string_type = sstring>
+static string_type to_sstring(const temporary_buffer<char>& buf) {
+    return string_type(buf.get(), buf.size());
 }
 
 template <typename T>
