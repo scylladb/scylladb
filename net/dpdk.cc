@@ -75,10 +75,25 @@ static constexpr const char* pktmbuf_pool_name   = "dpdk_net_pktmbuf_pool";
 static constexpr uint8_t packet_read_size        = 32;
 /******************************************************************************/
 
+// DPDK Environment Abstraction Layer object
+class dpdk_eal {
+public:
+    dpdk_eal() : _num_ports(0) {}
+    void init(boost::program_options::variables_map opts);
+    uint8_t get_port_num() const { return _num_ports; }
+    void get_port_hw_info(uint8_t port_idx, rte_eth_dev_info* info) {
+        assert(port_idx < _num_ports);
+        rte_eth_dev_info_get(port_idx, info);
+    }
+private:
+    bool _initialized = false;
+    uint8_t _num_ports;
+} eal;
+
 class net_device : public net::master_device {
 public:
     explicit net_device(boost::program_options::variables_map opts,
-                             uint8_t num_queues);
+                        uint8_t port_idx, uint8_t num_queues);
 
     virtual future<> send(packet p) override;
     virtual ethernet_address hw_address() override;
@@ -93,12 +108,10 @@ private:
      * - set up each tx ring
      * - start the port and report its status to stdout
      *
-     * @param port_num index of the port to initialize
-     *
      * @return 0 in case of success and an appropriate error code in case of an
      *         error.
      */
-    int init_port(uint8_t port_num);
+    int init_port();
 
     /**
      * Initialise the mbuf pool for packet reception for the NIC, and any other
@@ -109,44 +122,9 @@ private:
     void usage();
 
     /**
-     * The ports to be used by the application are passed in
-     * the form of a bitmask. This function parses the bitmask
-     * and places the port numbers to be used into the _ports[]
-     * array.
-     *
-     * @param max_ports Total number of present NIC ports
-     * @param portmask
-     *
-     * @return TRUE in case of success
+     * Check the link status of out port in up to 9s, and print them finally.
      */
-    bool parse_portmask(uint8_t max_ports, const char *portmask);
-
-    /**
-     * The application specific arguments follow the DPDK-specific
-     * arguments which are stripped by the DPDK init. This function
-     * processes these application arguments, printing usage info
-     * on error.
-     *
-     * Currently only "-p <portmask>" parameter is supported.
-     *
-     * TODO: Move this to standard seastar arguments.
-     *
-     * @param max_ports Total number of present NIC ports
-     * @param argc
-     * @param argv
-     *
-     * @return TRUE in case of success
-     */
-    bool parse_app_args(uint8_t max_ports, int argc, const char* *argv);
-
-    /**
-     * Check the link status of given ports in up to 9s, and print them
-     * finally.
-     *
-     * @param port_mask Mask of the ports to check (~0x0 will check all
-     *                  available ports)
-     */
-    void check_all_ports_link_status(uint32_t port_mask);
+    void check_port_link_status();
 
     /**
      * Polls for a burst of incoming packets. This function will not block and
@@ -195,36 +173,33 @@ private:
 private:
     struct rte_eth_rxconf _rx_conf_default = {};
     struct rte_eth_txconf _tx_conf_default = {};
-    struct port_info {
-        uint8_t num_ports;
-        uint8_t id[RTE_MAX_ETHPORTS];
-    } _ports;
 
+    uint8_t _port_idx;
+    uint8_t _num_queues;
     net::hw_features _hw_features;
     rte_mempool *_pktmbuf_pool;
-    uint8_t _num_queues;
 };
 
-int net_device::init_port(uint8_t port_num)
+int net_device::init_port()
 {
     /* for port configuration all features are off by default */
     rte_eth_conf port_conf = { 0 };
     port_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
 
-    const uint16_t rx_ring_size = default_rx_ring_size ;
+    const uint16_t rx_ring_size = default_rx_ring_size;
     const uint16_t tx_ring_size = default_tx_ring_size;
 
     uint16_t q;
     int retval;
 
-    printf("Port %u init ... ", (unsigned)port_num);
+    printf("Port %u init ... ", _port_idx);
     fflush(stdout);
 
     /*
      * Standard DPDK port initialisation - config port, then set up
      * rx and tx rings.
       */
-    if ((retval = rte_eth_dev_configure(port_num, _num_queues, _num_queues,
+    if ((retval = rte_eth_dev_configure(_port_idx, _num_queues, _num_queues,
                                         &port_conf)) != 0) {
         return retval;
     }
@@ -236,8 +211,8 @@ int net_device::init_port(uint8_t port_num)
     // rte_eth_dev_start().
     //
     for (q = 0; q < _num_queues; q++) {
-        retval = rte_eth_rx_queue_setup(port_num, q, rx_ring_size,
-                                        rte_eth_dev_socket_id(port_num),
+        retval = rte_eth_rx_queue_setup(_port_idx, q, rx_ring_size,
+                                        rte_eth_dev_socket_id(_port_idx),
                                         &_rx_conf_default, _pktmbuf_pool);
         if (retval < 0) {
             return retval;
@@ -245,8 +220,8 @@ int net_device::init_port(uint8_t port_num)
     }
 
     for (q = 0; q < _num_queues; q++) {
-        retval = rte_eth_tx_queue_setup(port_num, q, tx_ring_size,
-                                        rte_eth_dev_socket_id(port_num),
+        retval = rte_eth_tx_queue_setup(_port_idx, q, tx_ring_size,
+                                        rte_eth_dev_socket_id(_port_idx),
                                         &_tx_conf_default);
         if (retval < 0) {
             return retval;
@@ -255,7 +230,7 @@ int net_device::init_port(uint8_t port_num)
 
     //rte_eth_promiscuous_enable(port_num);
 
-    retval  = rte_eth_dev_start(port_num);
+    retval  = rte_eth_dev_start(_port_idx);
     if (retval < 0) {
         return retval;
     }
@@ -275,76 +250,17 @@ bool net_device::init_mbuf_pools()
     printf("Creating mbuf pool '%s' [%u mbufs] ...\n",
         pktmbuf_pool_name, num_mbufs);
 
+    //
+    // We currently allocate a one big mempool on the current CPU to fit all
+    // requested queues.
+    // TODO: Allocate a separate pool for each queue on the appropriate CPU.
+    //
     _pktmbuf_pool = rte_mempool_create(pktmbuf_pool_name, num_mbufs,
         mbuf_size, mbuf_cache_size,
         sizeof(struct rte_pktmbuf_pool_private), rte_pktmbuf_pool_init,
         NULL, rte_pktmbuf_init, NULL, rte_socket_id(), 0);
 
     return _pktmbuf_pool != NULL;
-}
-
-bool net_device::parse_portmask(uint8_t max_ports, const char *portmask)
-{
-    char *end = NULL;
-    unsigned long pm;
-    uint8_t count = 0;
-
-    if (portmask == NULL)
-        return false;
-
-    /* convert parameter to a number and verify */
-    pm = strtoul(portmask, &end, 16);
-    if (end == NULL || *end != '\0' || pm == 0)
-        return false;
-
-    /* loop through bits of the mask and mark ports */
-    while (pm != 0) {
-        if (pm & 0x01) { /* bit is set in mask, use port */
-            if (count >= max_ports)
-                printf("WARNING: requested port %u not present"
-                    " - ignoring\n", (unsigned)count);
-            else
-                _ports.id[_ports.num_ports++] = count;
-        }
-        pm = (pm >> 1);
-        count++;
-    }
-
-    return true;
-}
-
-bool net_device::parse_app_args(uint8_t max_ports, int argc,
-                                const char* *argv)
-{
-    // argv should be: {"app name", "-p", "<mask>"}
-    if (argc < 3) {
-        usage();
-        return false;
-    }
-
-    argc++;
-    argv++;
-
-    if (std::strcmp(argv[0], "-p")) {
-        usage();
-        return false;
-    }
-
-    argc++;
-    argv++;
-
-    if (!parse_portmask(max_ports, *argv)) {
-        usage();
-        return false;
-    }
-
-    if (_ports.num_ports != 1) {
-        printf("ERROR: We support only a single port configuration at the "
-               "moment\n");
-        return false;
-    }
-
-    return true;
 }
 
 /**
@@ -357,68 +273,45 @@ void net_device::usage()
         " -p PORTMASK: hexadecimal bitmask of ports to use\n");
 }
 
-void net_device::check_all_ports_link_status(uint32_t port_mask)
+void net_device::check_port_link_status()
 {
     using namespace std::literals::chrono_literals;
     constexpr auto check_interval = 100ms;
     const int max_check_time = 90;  /* 9s (90 * 100ms) in total */
-    uint8_t portid, count, all_ports_up, print_flag = 0;
+    int count;
     struct rte_eth_link link;
 
     printf("\nChecking link status");
     fflush(stdout);
     for (count = 0; count <= max_check_time; count++) {
-        all_ports_up = 1;
-        for (portid = 0; portid < _ports.num_ports; portid++) {
-            if ((port_mask & (1 << _ports.id[portid])) == 0) {
-                continue;
-            }
-
             memset(&link, 0, sizeof(link));
-            rte_eth_link_get_nowait(_ports.id[portid], &link);
-            /* print link status if flag set */
-            if (print_flag == 1) {
-                if (link.link_status) {
-                    printf("Port %d Link Up - speed %u "
-                        "Mbps - %s\n", _ports.id[portid],
-                        (unsigned)link.link_speed,
-                        (link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-                        ("full-duplex") : ("half-duplex\n"));
-                } else {
-                    printf("Port %d Link Down\n",
-                        (uint8_t)_ports.id[portid]);
-                }
-                continue;
-            }
-            /* clear all_ports_up flag if any link down */
+            rte_eth_link_get_nowait(_port_idx, &link);
+
             if (link.link_status == 0) {
-                all_ports_up = 0;
+                printf(".");
+                fflush(stdout);
+                std::this_thread::sleep_for(check_interval);
+            } else {
                 break;
             }
-        }
-        /* after finally printing all link status, get out */
-        if (print_flag == 1) {
-            break;
-        }
+    }
 
-        if (all_ports_up == 0) {
-            printf(".");
-            fflush(stdout);
-            std::this_thread::sleep_for(check_interval);
-        }
-
-        /* set the print_flag if all ports up or timeout */
-        if (all_ports_up == 1 || count == (max_check_time - 1)) {
-            print_flag = 1;
-            printf("done\n");
-        }
+    /* print link status */
+    if (link.link_status) {
+        printf("done\nPort %d Link Up - speed %u "
+            "Mbps - %s\n", _port_idx,
+            (unsigned)link.link_speed,
+            (link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
+            ("full-duplex") : ("half-duplex\n"));
+    } else {
+        printf("done\nPort %d Link Down\n", _port_idx);
     }
 }
 
 
 net_device::net_device(boost::program_options::variables_map opts,
-                                 uint8_t num_queues) :
-    _ports({0}), _num_queues(num_queues)
+                       uint8_t port_idx, uint8_t num_queues) :
+    _port_idx(port_idx), _num_queues(num_queues)
 {
     _rx_conf_default.rx_thresh.pthresh = default_pthresh;
     _rx_conf_default.rx_thresh.hthresh = default_rx_hthresh;
@@ -432,52 +325,21 @@ net_device::net_device(boost::program_options::variables_map opts,
     _tx_conf_default.tx_free_thresh = 0; /* Use PMD default values */
     _tx_conf_default.tx_rs_thresh   = 0; /* Use PMD default values */
 
-    const char *argv[] = {"dpdk_args", "-c", "0x1",  "-n", "1", "--", "-p",
-                          "1"};
-    int argc = sizeof(argv) / sizeof(char*);
-
-    /* initialise the EAL for all */
-    int ret = rte_eal_init(argc, const_cast<char**>(argv));
-    if (ret < 0) {
-        rte_exit(EXIT_FAILURE, "Cannot init EAL\n");
-    }
-
-    int argc_app = argc - ret;
-    const char* *argv_app = argv + ret;
-
-    /* probe to determine the NIC devices available */
-    if (rte_eal_pci_probe() < 0) {
-        rte_exit(EXIT_FAILURE, "Cannot probe PCI\n");
-    }
-
-    uint8_t dev_count = rte_eth_dev_count();
-    if (dev_count == 0) {
-        rte_exit(EXIT_FAILURE, "No Ethernet ports - bye\n");
-    } else {
-        printf("ports number: %d\n", dev_count);
-    }
-
-    /* parse additional, application arguments */
-    if (!parse_app_args(dev_count, argc_app, argv_app)) {
-        rte_exit(EXIT_FAILURE, "Failed to parse app args\n");
-    }
-
     if (!init_mbuf_pools()) {
         rte_exit(EXIT_FAILURE, "Cannot initialise mbuf pools\n");
     }
 
-    /* now initialise the ports we will use */
-    for (uint8_t i = 0; i < _ports.num_ports; i++) {
-        ret = init_port(_ports.id[i]);
-        if (ret != 0) {
-            rte_exit(EXIT_FAILURE, "Cannot initialise port %u\n", i);
-        }
+    /* now initialise the port we will use */
+    int ret = init_port();
+    if (ret != 0) {
+        rte_exit(EXIT_FAILURE, "Cannot initialise port %u\n", _port_idx);
     }
 
     // Print the MAC
     hw_address();
 
-    check_all_ports_link_status(~0x0);
+    // Wait for a link
+    check_port_link_status();
 
     printf("Created DPDK device\n");
 
@@ -508,7 +370,7 @@ void net_device::poll_rx_once(uint8_t port_num, uint16_t qid)
     struct rte_mbuf *buf[packet_read_size];
 
     /* read a port */
-    uint16_t rx_count = rte_eth_rx_burst(_ports.id[port_num], qid,
+    uint16_t rx_count = rte_eth_rx_burst(_port_idx, qid,
                                          buf, packet_read_size);
 
     /* Now process the NIC packets read */
@@ -634,7 +496,7 @@ future<> net_device::send(packet p)
     // Currently we will spin till completion.
     // TODO: implement a poller + xmit queue
     //
-    while(rte_eth_tx_burst(_ports.id[0], 0, &head, 1) < 1);
+    while(rte_eth_tx_burst(_port_idx, 0, &head, 1) < 1);
 
     return make_ready_future<>();
 }
@@ -647,7 +509,7 @@ future<> net_device::send(packet p)
 ethernet_address net_device::hw_address()
 {
     struct ether_addr mac;
-    rte_eth_macaddr_get(_ports.id[0], &mac);
+    rte_eth_macaddr_get(_port_idx, &mac);
     printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
         mac.addr_bytes[0], mac.addr_bytes[1], mac.addr_bytes[2],
         mac.addr_bytes[3], mac.addr_bytes[4], mac.addr_bytes[5]);
@@ -660,15 +522,51 @@ net::hw_features net_device::hw_features()
     return _hw_features;
 }
 
+void dpdk_eal::init(boost::program_options::variables_map opts)
+{
+    if (_initialized) {
+        return;
+    }
+
+    // TODO: Inherit these from the app parameters - "opts"
+    const char *argv[] = {"dpdk_args", "-c", "0x1",  "-n", "1"};
+    int argc = sizeof(argv) / sizeof(char*);
+
+    /* initialise the EAL for all */
+    int ret = rte_eal_init(argc, const_cast<char**>(argv));
+    if (ret < 0) {
+        rte_exit(EXIT_FAILURE, "Cannot init EAL\n");
+    }
+
+    /* probe to determine the NIC devices available */
+    if (rte_eal_pci_probe() < 0) {
+        rte_exit(EXIT_FAILURE, "Cannot probe PCI\n");
+    }
+
+    _num_ports = rte_eth_dev_count();
+    assert(_num_ports <= RTE_MAX_ETHPORTS);
+    if (_num_ports == 0) {
+        rte_exit(EXIT_FAILURE, "No Ethernet ports - bye\n");
+    } else {
+        printf("ports number: %d\n", _num_ports);
+    }
+
+    _initialized = true;
+}
+
 } // namespace dpdk
 
 /******************************** Interface functions *************************/
 
 net::device_placement create_dpdk_net_device(
                                     boost::program_options::variables_map opts,
+                                    uint8_t port_idx,
                                     uint8_t num_queues)
 {
     if (engine.cpu_id() == 0) {
+        // Init a DPDK EAL
+        dpdk::eal.init(opts);
+
         std::set<unsigned> slaves;
 
         for (unsigned i = 0; i < smp::count; i++) {
@@ -676,7 +574,7 @@ net::device_placement create_dpdk_net_device(
                 slaves.insert(i);
             }
         }
-        return net::device_placement{std::make_unique<dpdk::net_device>(opts, num_queues), std::move(slaves)};
+        return net::device_placement{std::make_unique<dpdk::net_device>(opts, port_idx, num_queues), std::move(slaves)};
     } else {
         return net::device_placement{std::unique_ptr<dpdk::net_device>(nullptr), std::set<unsigned>()};
     }

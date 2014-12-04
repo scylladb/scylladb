@@ -66,7 +66,9 @@ void create_native_net_device(boost::program_options::variables_map opts) {
 
 #ifdef HAVE_DPDK
     if (opts["dpdk-pmd"].as<bool>()) {
-        dp = create_dpdk_net_device(opts, smp::count);
+        // Hardcoded port index 0.
+        // TODO: Inherit it from the opts
+        dp = create_dpdk_net_device(opts, 0, smp::count);
     } else
 #endif
     dp = create_virtio_net_device(opts["tap-device"].as<std::string>(), opts);
