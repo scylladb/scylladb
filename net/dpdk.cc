@@ -176,15 +176,44 @@ private:
 
     uint8_t _port_idx;
     uint8_t _num_queues;
+    rte_eth_dev_info _dev_info = {};
     net::hw_features _hw_features;
     rte_mempool *_pktmbuf_pool;
 };
 
 int net_device::init_port()
 {
+    eal.get_port_hw_info(_port_idx, &_dev_info);
+
     /* for port configuration all features are off by default */
     rte_eth_conf port_conf = { 0 };
-    port_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
+
+    printf("Port %d: max_rx_queues %d max_tx_queues %d\n",
+           _port_idx, _dev_info.max_rx_queues, _dev_info.max_tx_queues);
+
+    if (_num_queues > _dev_info.max_rx_queues) {
+        _num_queues = _dev_info.max_rx_queues;
+    }
+
+    if (_num_queues > _dev_info.max_tx_queues) {
+        _num_queues = _dev_info.max_tx_queues;
+    }
+
+    printf("Port %d: using %d %s\n", _port_idx, _num_queues,
+           (_num_queues > 1) ? "queues" : "queue");
+
+    // Set RSS mode: enable RSS only if there are more than 1 Rx queues
+    // available.
+    if (_num_queues > 1) {
+        port_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
+    } else {
+        port_conf.rxmode.mq_mode = ETH_MQ_RX_NONE;
+    }
+
+    // Set Rx VLAN stripping
+    if (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_STRIP) {
+        port_conf.rxmode.hw_vlan_strip = 1;
+    }
 
     const uint16_t rx_ring_size = default_rx_ring_size;
     const uint16_t tx_ring_size = default_tx_ring_size;
@@ -351,6 +380,7 @@ void net_device::process_packets(struct rte_mbuf **bufs, uint16_t count)
 {
     for (uint16_t i = 0; i < count; i++) {
         struct rte_mbuf *m = bufs[i];
+        offload_info oi;
 
         if (!rte_pktmbuf_is_contiguous(m)) {
             rte_exit(EXIT_FAILURE,
@@ -360,6 +390,16 @@ void net_device::process_packets(struct rte_mbuf **bufs, uint16_t count)
         fragment f{rte_pktmbuf_mtod(m, char*), rte_pktmbuf_data_len(m)};
 
         packet p(f, make_deleter(deleter(), [m] { rte_pktmbuf_free(m); }));
+
+        // Set stipped VLAN value if available
+        if ((_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_STRIP) &&
+            (m->ol_flags & PKT_RX_VLAN_PKT)) {
+
+            oi.hw_vlan = true;
+            oi.vlan_tci = m->pkt.vlan_macip.f.vlan_tci;
+        }
+
+        p.set_offload_info(oi);
 
         l2inject(std::move(p));
     }
