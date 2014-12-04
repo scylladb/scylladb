@@ -448,7 +448,9 @@ void vring::post(Iterator begin, Iterator end) {
     });
     _avail._shared->_idx.store(_avail._head, std::memory_order_release);
     kick();
-    do_complete();
+    if (!_poll_mode) {
+        do_complete();
+    }
 }
 
 void vring::do_complete() {
