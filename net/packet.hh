@@ -27,6 +27,8 @@ struct offload_info {
     uint8_t tcp_hdr_len = 20;
     uint8_t udp_hdr_len = 8;
     bool needs_ip_csum = true;
+    bool hw_vlan = false; // if true, there is a HW stripped VLAN in vlan_tci
+    uint16_t vlan_tci = 0;// valid iff hw_vlan == true (CPU order)
 };
 
 // Zero-copy friendly packet class
