@@ -270,9 +270,11 @@ private:
     semaphore _available_descriptors = { 0 };
     int _free_head = -1;
     int _free_last = -1;
+    std::experimental::optional<reactor::poller> _poller;
+    bool _poll_mode = false;
 public:
 
-    explicit vring(config conf);
+    explicit vring(config conf, bool poll_mode);
     void set_notifier(std::unique_ptr<virtio_notifier> notifier) {
         _notifier = std::move(notifier);
     }
@@ -302,13 +304,16 @@ public:
 private:
     // Let host know about interrupt delivery
     void disable_interrupts() {
-        if (!_config.event_index) {
+        if (!_poll_mode && !_config.event_index) {
             _avail._shared->_flags.store(VRING_AVAIL_F_NO_INTERRUPT, std::memory_order_relaxed);
         }
     }
 
     // Return "true" if there are pending buffers in the queue
     bool enable_interrupts() {
+        if (_poll_mode) {
+            return false;
+        }
         auto tail = _used._tail;
         if (!_config.event_index) {
             _avail._shared->_flags.store(0, std::memory_order_relaxed);
@@ -380,7 +385,7 @@ unsigned vring::allocate_desc() {
     return desc;
 }
 
-vring::vring(config conf)
+vring::vring(config conf, bool poll_mode)
     : _config(conf)
     , _completions(new promise<size_t>[_config.size])
     , _descs(reinterpret_cast<desc*>(conf.descs))
@@ -388,6 +393,7 @@ vring::vring(config conf)
     , _used(conf)
     , _avail_event(reinterpret_cast<std::atomic<uint16_t>*>(&_used._shared->_used_elements[conf.size]))
     , _used_event(reinterpret_cast<std::atomic<uint16_t>*>(&_avail._shared->_ring[conf.size]))
+    , _poll_mode(poll_mode)
 {
     setup();
 }
@@ -402,7 +408,14 @@ void vring::setup() {
 }
 
 void vring::run() {
-    complete();
+    if (!_poll_mode) {
+        complete();
+    } else {
+        _poller = reactor::poller([this] {
+            do_complete();
+            return true;
+        });
+    }
 }
 
 template <typename Iterator>
@@ -491,7 +504,7 @@ protected:
         virtio_qp& _dev;
         vring _ring;
     public:
-        txq(virtio_qp& dev, vring::config config);
+        txq(virtio_qp& dev, vring::config config, bool poll_mode);
         void set_notifier(std::unique_ptr<virtio_notifier> notifier) {
             _ring.set_notifier(std::move(notifier));
         }
@@ -511,7 +524,7 @@ protected:
         std::vector<fragment> _fragments;
         std::vector<std::unique_ptr<char[], free_deleter>> _deleters;
     public:
-        rxq(virtio_qp& _if, vring::config config);
+        rxq(virtio_qp& _if, vring::config config, bool poll_mode);
         void set_notifier(std::unique_ptr<virtio_notifier> notifier) {
             _ring.set_notifier(std::move(notifier));
         }
@@ -541,7 +554,7 @@ protected:
     void common_config(vring::config& r);
     size_t vring_storage_size(size_t ring_size);
 public:
-    explicit virtio_qp(virtio_device* dev, size_t rx_ring_size, size_t tx_ring_size);
+    explicit virtio_qp(virtio_device* dev, size_t rx_ring_size, size_t tx_ring_size, bool poll_mode);
     virtual future<> send(packet p) override;
     virtual void rx_start() override;
     virtual phys virt_to_phys(void* p) {
@@ -549,8 +562,8 @@ public:
     }
 };
 
-    virtio_qp::txq::txq(virtio_qp& dev, vring::config config)
-        : _dev(dev), _ring(config) {
+    virtio_qp::txq::txq(virtio_qp& dev, vring::config config, bool poll_mode)
+        : _dev(dev), _ring(config, poll_mode) {
 }
 
 future<>
@@ -627,8 +640,8 @@ virtio_qp::txq::post(packet p) {
     });
 }
 
-    virtio_qp::rxq::rxq(virtio_qp& dev, vring::config config)
-        : _dev(dev), _ring(config) {
+    virtio_qp::rxq::rxq(virtio_qp& dev, vring::config config, bool poll_mode)
+        : _dev(dev), _ring(config, poll_mode) {
 }
 
 future<>
@@ -701,12 +714,12 @@ static std::unique_ptr<char[], free_deleter> virtio_buffer(size_t size) {
     return std::unique_ptr<char[], free_deleter>(reinterpret_cast<char*>(ret));
 }
 
-virtio_qp::virtio_qp(virtio_device* dev, size_t rx_ring_size, size_t tx_ring_size)
+virtio_qp::virtio_qp(virtio_device* dev, size_t rx_ring_size, size_t tx_ring_size, bool poll_mode)
     : _dev(dev)
     , _txq_storage(virtio_buffer(vring_storage_size(tx_ring_size)))
     , _rxq_storage(virtio_buffer(vring_storage_size(rx_ring_size)))
-    , _txq(*this, txq_config(tx_ring_size))
-    , _rxq(*this, rxq_config(rx_ring_size)) {
+    , _txq(*this, txq_config(tx_ring_size), poll_mode)
+    , _rxq(*this, rxq_config(rx_ring_size), poll_mode) {
 }
 
 size_t virtio_qp::vring_storage_size(size_t ring_size) {
@@ -770,6 +783,9 @@ get_virtio_net_options_description()
         ("virtio-ring-size",
                 boost::program_options::value<unsigned>()->default_value(256),
                 "Virtio ring size (must be power-of-two)")
+        ("virtio-poll-mode",
+                boost::program_options::value<bool>()->default_value(false),
+                "Poll virtio rings instead of using interrupts")
         ;
     return opts;
 }
@@ -792,7 +808,7 @@ static size_t config_ring_size(boost::program_options::variables_map &opts) {
 }
 
 virtio_qp_vhost::virtio_qp_vhost(virtio_device *dev, boost::program_options::variables_map opts)
-    : virtio_qp(dev, config_ring_size(opts), config_ring_size(opts))
+    : virtio_qp(dev, config_ring_size(opts), config_ring_size(opts), opts["virtio-poll-mode"].as<bool>())
     , _vhost_fd(file_desc::open("/dev/vhost-net", O_RDWR))
 {
     auto tap_device = opts["tap-device"].as<std::string>();
@@ -893,7 +909,7 @@ public:
 
 virtio_qp_osv::virtio_qp_osv(osv::assigned_virtio &virtio,
         boost::program_options::variables_map opts)
-        : virtio_qp(opts, virtio.queue_size(0), virtio.queue_size(1))
+        : virtio_qp(opts, virtio.queue_size(0), virtio.queue_size(1), opts["virtio-poll-mode"].as<bool>())
         , _virtio(virtio)
 {
     // Read the host's virtio supported feature bitmask, AND it with the
