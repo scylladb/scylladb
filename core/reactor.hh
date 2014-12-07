@@ -400,7 +400,7 @@ class smp_message_queue {
         ~tx_side() {}
         void init() { new (&a) aa; }
         struct aa {
-            std::queue<work_item*, circular_buffer<work_item*>> pending_fifo;
+            std::deque<work_item*> pending_fifo;
         } a;
     } _tx;
 public:

@@ -652,22 +652,21 @@ void smp_message_queue::complete_kick() {
 }
 
 void smp_message_queue::move_pending() {
-    bool kick = false;
-
-    while (_current_queue_length < queue_length && !_tx.a.pending_fifo.empty()) {
-        _pending.push(_tx.a.pending_fifo.front());
-        _tx.a.pending_fifo.pop();
-        _current_queue_length++;
-        kick = true;
+    auto queue_room = queue_length - _current_queue_length;
+    auto nr = std::min(queue_room, _tx.a.pending_fifo.size());
+    if (!nr) {
+        return;
     }
-
-    if (kick) {
-        submit_kick();
-    }
+    auto begin = _tx.a.pending_fifo.begin();
+    auto end = begin + nr;
+    _pending.push(begin, end);
+    _tx.a.pending_fifo.erase(begin, end);
+    _current_queue_length += nr;
+    submit_kick();
 }
 
 void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
-    _tx.a.pending_fifo.push(item);
+    _tx.a.pending_fifo.push_back(item);
     move_pending();
 }
 
