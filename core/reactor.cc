@@ -667,12 +667,21 @@ void smp_message_queue::move_pending() {
 
 void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
     _tx.a.pending_fifo.push_back(item);
-    move_pending();
+    if (_tx.a.pending_fifo.size() >= batch_size) {
+        move_pending();
+    }
 }
 
 void smp_message_queue::respond(work_item* item) {
-    // FIXME: batcing
-    _completed.push(item);
+    _completed_fifo.push_back(item);
+    if (_completed_fifo.size() >= batch_size) {
+        flush_response_batch();
+    }
+}
+
+void smp_message_queue::flush_response_batch() {
+    _completed.push(_completed_fifo.begin(), _completed_fifo.end());
+    _completed_fifo.clear();
     complete_kick();
 }
 
@@ -684,9 +693,11 @@ size_t smp_message_queue::process_completions() {
 
     _current_queue_length -= nr;
 
-    move_pending();
-
     return nr;
+}
+
+void smp_message_queue::flush_request_batch() {
+    move_pending();
 }
 
 void smp_message_queue::complete() {
