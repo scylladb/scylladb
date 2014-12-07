@@ -706,29 +706,29 @@ extern thread_local reactor engine;
 extern __thread size_t task_quota;
 
 class smp {
-	static std::vector<posix_thread> _threads;
-	static smp_message_queue** _qs;
-	static std::thread::id _tmain;
+    static std::vector<posix_thread> _threads;
+    static smp_message_queue** _qs;
+    static std::thread::id _tmain;
 
-	template <typename Func>
+    template <typename Func>
     using returns_future = is_future<std::result_of_t<Func()>>;
     template <typename Func>
     using returns_void = std::is_same<std::result_of_t<Func()>, void>;
 public:
-	static boost::program_options::options_description get_options_description();
-	static void configure(boost::program_options::variables_map vm);
-	static void join_all();
-	static bool main_thread() { return std::this_thread::get_id() == _tmain; }
+    static boost::program_options::options_description get_options_description();
+    static void configure(boost::program_options::variables_map vm);
+    static void join_all();
+    static bool main_thread() { return std::this_thread::get_id() == _tmain; }
 
-	template <typename Func>
-	static std::result_of_t<Func()> submit_to(unsigned t, Func func,
-	        std::enable_if_t<returns_future<Func>::value, void*> = nullptr) {
-	    if (t == engine.cpu_id()) {
-	        return func();
-	    } else {
-	        return _qs[t][engine.cpu_id()].submit(std::move(func));
-	    }
-	}
+    template <typename Func>
+    static std::result_of_t<Func()> submit_to(unsigned t, Func func,
+            std::enable_if_t<returns_future<Func>::value, void*> = nullptr) {
+        if (t == engine.cpu_id()) {
+            return func();
+        } else {
+            return _qs[t][engine.cpu_id()].submit(std::move(func));
+        }
+    }
     template <typename Func>
     static future<std::result_of_t<Func()>> submit_to(unsigned t, Func func,
             std::enable_if_t<!returns_future<Func>::value && !returns_void<Func>::value, void*> = nullptr) {
@@ -744,21 +744,21 @@ public:
             return make_ready_future<>();
         });
     }
-	static bool poll_queues() {
-	    size_t got = 0;
-	    for (unsigned i = 0; i < count; i++) {
-	        if (engine.cpu_id() != i) {
-                    got += _qs[engine.cpu_id()][i].process_incoming();
-                    got += _qs[i][engine._id].process_completions();
-	        }
-	    }
-	    return got != 0;
-	}
+    static bool poll_queues() {
+        size_t got = 0;
+        for (unsigned i = 0; i < count; i++) {
+            if (engine.cpu_id() != i) {
+                got += _qs[engine.cpu_id()][i].process_incoming();
+                got += _qs[i][engine._id].process_completions();
+            }
+        }
+        return got != 0;
+    }
 private:
-	static void listen_all(smp_message_queue* qs);
-	static void start_all_queues();
+    static void listen_all(smp_message_queue* qs);
+    static void start_all_queues();
 public:
-	static unsigned count;
+    static unsigned count;
 };
 
 inline
