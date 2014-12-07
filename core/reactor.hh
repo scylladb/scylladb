@@ -558,7 +558,6 @@ private:
     bool _handle_sigint = true;
     bool _poll = false;
     promise<std::unique_ptr<network_stack>> _network_stack_ready_promise;
-    std::unique_ptr<network_stack> _network_stack;
     int _return = 0;
     promise<> _start_promise;
     uint64_t _timers_completed;
@@ -571,6 +570,7 @@ private:
     circular_buffer<std::unique_ptr<task>> _pending_tasks;
     thread_pool _thread_pool;
     size_t _task_quota;
+    std::unique_ptr<network_stack> _network_stack;
 private:
     void abort_on_error(int ret);
     void complete_timers();

@@ -56,7 +56,6 @@ reactor::reactor()
     : _backend()
     , _exit_future(_exit_promise.get_future())
     ,  _idle(false)
-    , _network_stack()
     , _io_eventfd()
     , _io_context(0)
     , _io_context_available(max_aio) {
