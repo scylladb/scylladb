@@ -620,7 +620,7 @@ public:
 
     template <typename Func>
     void at_exit(Func&& func) {
-        _exit_future = _exit_future.then(func);
+        _exit_future = _exit_future.then(std::forward<Func>(func));
     }
 
     void add_task(std::unique_ptr<task>&& t) { _pending_tasks.push_back(std::move(t)); }
