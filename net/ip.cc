@@ -35,27 +35,27 @@ ipv4::ipv4(interface* netif)
 
 unsigned ipv4::handle_on_cpu(packet& p, size_t off)
 {
-    auto iph = p.get_header<ip_hdr>(off);
+    auto iph = ntoh(*p.get_header<ip_hdr>(off));
 
     if (_packet_filter) {
         bool h = false;
-        auto r = _packet_filter->forward(p, off + sizeof(ip_hdr), iph->src_ip, iph->dst_ip, h);
+        auto r = _packet_filter->forward(p, off + sizeof(ip_hdr), iph.src_ip, iph.dst_ip, h);
         if (h) {
             return r;
         }
     }
 
-    auto l4 = _l4[iph->ip_proto];
+    auto l4 = _l4[iph.ip_proto];
     if (!l4) {
         return engine.cpu_id();
     }
 
-    if (iph->mf() == false && iph->offset() == 0) {
+    if (iph.mf() == false && iph.offset() == 0) {
         // This IP datagram is atomic, forward according to tcp or udp connection hash
-        return l4->forward(p, off + sizeof(ip_hdr), iph->src_ip, iph->dst_ip);
+        return l4->forward(p, off + sizeof(ip_hdr), iph.src_ip, iph.dst_ip);
     } else {
         // otherwise, forward according to frag_id hash
-        auto frag_id = ipv4_frag_id{ntoh(iph->src_ip), ntoh(iph->dst_ip), iph->id, iph->ip_proto};
+        auto frag_id = ipv4_frag_id{iph.src_ip, iph.dst_ip, iph.id, iph.ip_proto};
         return ipv4_frag_id::hash()(frag_id) % smp::count;
     }
 }
