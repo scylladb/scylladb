@@ -654,9 +654,9 @@ void smp_message_queue::complete_kick() {
 void smp_message_queue::move_pending() {
     bool kick = false;
 
-    while (_current_queue_length < queue_length && !_pending_fifo.empty()) {
-        _pending.push(_pending_fifo.front());
-        _pending_fifo.pop();
+    while (_current_queue_length < queue_length && !_tx.a.pending_fifo.empty()) {
+        _pending.push(_tx.a.pending_fifo.front());
+        _tx.a.pending_fifo.pop();
         _current_queue_length++;
         kick = true;
     }
@@ -667,7 +667,7 @@ void smp_message_queue::move_pending() {
 }
 
 void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
-    _pending_fifo.push(item);
+    _tx.a.pending_fifo.push(item);
     move_pending();
 }
 
@@ -706,6 +706,7 @@ size_t smp_message_queue::process_incoming() {
 }
 
 void smp_message_queue::start() {
+    _tx.init();
     _complete_peer = &engine;
     complete();
 }

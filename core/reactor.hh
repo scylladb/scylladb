@@ -395,7 +395,14 @@ class smp_message_queue {
         }
         Future get_future() { return _promise.get_future(); }
     };
-    std::queue<work_item*, circular_buffer<work_item*>> _pending_fifo;
+    union tx_side {
+        tx_side() {}
+        ~tx_side() {}
+        void init() { new (&a) aa; }
+        struct aa {
+            std::queue<work_item*, circular_buffer<work_item*>> pending_fifo;
+        } a;
+    } _tx;
 public:
     smp_message_queue();
     template <typename Func>
