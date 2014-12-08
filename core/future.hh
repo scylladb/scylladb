@@ -168,6 +168,76 @@ struct future_state {
     }
 };
 
+// Specialize future_state<> to overlap the state enum with the exception, as there
+// is no value to hold.
+//
+// Assumes std::exception_ptr is really a pointer.
+template <>
+struct future_state<> {
+    static_assert(sizeof(std::exception_ptr) == sizeof(void*), "exception_ptr not a pointer");
+    static constexpr const bool move_noexcept = true;
+    static constexpr const bool copy_noexcept = true;
+    enum class state : uintptr_t {
+         invalid = 0,
+         future = 1,
+         result = 2,
+         exception_min = 3,  // or anything greater
+    };
+    union any {
+        any() { st = state::future; }
+        ~any() {}
+        state st;
+        std::exception_ptr ex;
+    } _u;
+    future_state() noexcept {}
+    future_state(future_state&& x) noexcept {
+        if (x._u.st < state::exception_min) {
+            _u.st = x._u.st;
+        } else {
+            new (&_u.ex) std::exception_ptr(std::move(x._u.ex));
+        }
+    }
+    ~future_state() noexcept {
+        if (_u.st >= state::exception_min) {
+            _u.ex.~exception_ptr();
+        }
+    }
+    future_state& operator=(future_state&& x) noexcept {
+        if (this != &x) {
+            this->~future_state();
+            new (this) future_state(std::move(x));
+        }
+        return *this;
+    }
+    bool available() const noexcept { return _u.st == state::result || _u.st >= state::exception_min; }
+    bool failed() const noexcept { return _u.st >= state::exception_min; }
+    void set(const std::tuple<>& value) noexcept {
+        assert(_u.st == state::future);
+        _u.st = state::result;
+    }
+    void set(std::tuple<>&& value) noexcept {
+        assert(_u.st == state::future);
+        _u.st = state::result;
+    }
+    void set() {
+        assert(_u.st == state::future);
+        _u.st = state::result;
+    }
+    void set_exception(std::exception_ptr ex) noexcept {
+        assert(_u.st == state::future);
+        new (&_u.ex) std::exception_ptr(ex);
+        assert(_u.st >= state::exception_min);
+    }
+    std::tuple<> get() {
+        assert(_u.st != state::future);
+        if (_u.st >= state::exception_min) {
+            std::rethrow_exception(_u.ex);
+        }
+        return {};
+    }
+    void forward_to(promise<>& pr) noexcept;
+};
+
 template <typename Func, typename... T>
 struct future_task final : task, future_state<T...> {
     Func _func;
@@ -512,6 +582,16 @@ public:
     template <typename... U, typename Exception>
     friend future<U...> make_exception_future(Exception&& ex) noexcept;
 };
+
+inline
+void future_state<>::forward_to(promise<>& pr) noexcept {
+    assert(_u.st != state::future && _u.st != state::invalid);
+    if (_u.st >= state::exception_min) {
+        pr.set_exception(_u.ex);
+    } else {
+        pr.set_value(std::tuple<>());
+    }
+}
 
 template <typename... T>
 inline
