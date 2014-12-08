@@ -97,16 +97,21 @@ ninja-build
 
 ### Building with a DPDK network backend
 
-1) Prepare a DPDK SDK:
+1. Setup host to compile DPDK:
+   - Ubuntu 
+```
+sudo apt-get install -y build-essential linux-image-extra-`uname -r` 
+```
+2. Prepare a DPDK SDK:
   - Download the latest DPDK release: `wget http://dpdk.org/browse/dpdk/snapshot/dpdk-1.7.1.tar.gz`
   - Untar it.
   - Start the tools/setup.sh script as root.
   - Compile a linuxapp target (option 8).
   - Install IGB_UIO module (option 10).
   - Bind some physical port to IGB_UIO (option 16).
-  - Configure hugepage mappings (option 14).
-2) Run a configure.py: `./configure.py --dpdk-target <Path to untared dpdk-1.7.1 above>/x86_64-native-linuxapp-gcc`.
-3) Run `ninja-build`.
+  - Configure hugepage mappings (option 13/14).
+3. Run a configure.py: `./configure.py --dpdk-target <Path to untared dpdk-1.7.1 above>/x86_64-native-linuxapp-gcc --compiler=g++-4.9`.
+4. Run `ninja-build`.
 
 To run with the DPDK backend for a native stack give the seastar application `--dpdk-pmd 1` parameter.
 
