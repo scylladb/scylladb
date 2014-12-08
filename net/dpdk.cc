@@ -216,6 +216,15 @@ int net_device::init_port()
         port_conf.rxmode.hw_vlan_strip = 1;
     }
 
+    // Set Rx checksum checking
+    if (  (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_IPV4_CKSUM) &&
+          (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_UDP_CKSUM) &&
+          (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_TCP_CKSUM)) {
+        printf("RX checksum offload supported\n");
+        port_conf.rxmode.hw_ip_checksum = 1;
+        _hw_features.rx_csum_offload = 1;
+    }
+
     const uint16_t rx_ring_size = default_rx_ring_size;
     const uint16_t tx_ring_size = default_tx_ring_size;
 
@@ -396,6 +405,21 @@ void net_device::process_packets(struct rte_mbuf **bufs, uint16_t count)
 
             oi.hw_vlan = true;
             oi.vlan_tci = m->pkt.vlan_macip.f.vlan_tci;
+        }
+
+        if (_hw_features.rx_csum_offload) {
+            if (m->ol_flags & (PKT_RX_IP_CKSUM_BAD | PKT_RX_L4_CKSUM_BAD)) {
+                // Packet with bad checksum, just drop it.
+                continue;
+            }
+            // Tell our code not to bother to calculate and check the IP and
+            // L4 (TCP or UDP) checksums later.
+            // TODO: Currently, ipv4::handle_received_packet() tests this
+            // oi.needs_ip_csum, while tcp<InetTraits>::received() instead
+            // tests _hw_features.rx_csum_offload directly (and there is
+            // a third variable, oi.needs_csum, which isn't used on rx, and
+            // doesn't even default to true). Need to clean up...
+            oi.needs_ip_csum = false;
         }
 
         p.set_offload_info(oi);
