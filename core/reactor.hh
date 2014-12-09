@@ -560,6 +560,7 @@ private:
     promise<std::unique_ptr<network_stack>> _network_stack_ready_promise;
     int _return = 0;
     promise<> _start_promise;
+    semaphore _cpu_started;
     uint64_t _timers_completed;
     uint64_t _tasks_processed = 0;
     timer_set<timer, &timer::_link, clock_type> _timers;
