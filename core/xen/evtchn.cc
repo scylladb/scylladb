@@ -80,7 +80,7 @@ class userspace_evtchn: public evtchn {
     pollable_fd _evtchn;
     int ports[2];
 protected:
-    virtual void umask(int *port, unsigned count);
+    virtual void umask(int *port, unsigned count) override;
 public:
     userspace_evtchn(unsigned otherend);
     virtual port bind() override;

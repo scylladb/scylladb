@@ -35,7 +35,7 @@ protected:
     void port_deleted(int prt, port* old);
     std::unordered_multimap<int, port*> _ports;
     virtual void notify(int port) = 0;
-    virtual void umask(int *port, int count) {};
+    virtual void umask(int *port, unsigned count) {};
     friend class port;
 public:
     static evtchn *instance(bool userspace, unsigned otherend);
