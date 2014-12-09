@@ -32,7 +32,13 @@ void packet::linearize(size_t at_frag, size_t desired_size) {
             _impl->_frags + at_frag + 1);
     _impl->_nr_frags -= nr_frags - 1;
     _impl->_frags[at_frag] = fragment{new_frag.get(), accum_size};
-    _impl->_deleter = make_deleter(std::move(_impl->_deleter), [buf = std::move(new_frag)] {});
+    if (at_frag == 0 && desired_size == len()) {
+        // We can drop the old buffer safely
+        auto x = std::move(_impl->_deleter);
+        _impl->_deleter = make_deleter([buf = std::move(new_frag)] {});
+    } else {
+        _impl->_deleter = make_deleter(std::move(_impl->_deleter), [buf = std::move(new_frag)] {});
+    }
 }
 
 
