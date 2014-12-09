@@ -10,7 +10,7 @@
 #include <assert.h>
 #include <type_traits>
 
-class deleter {
+class deleter final {
 public:
     struct impl;
     struct raw_object_tag {};
