@@ -213,6 +213,7 @@ public:
     }
 
     unsigned len() const { return _impl->_len; }
+    unsigned memory() const { return len() +  sizeof(packet::impl); }
 
     fragment frag(unsigned idx) const { return _impl->_frags[idx]; }
     fragment& frag(unsigned idx) { return _impl->_frags[idx]; }
