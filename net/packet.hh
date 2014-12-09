@@ -480,17 +480,8 @@ void packet::append(packet&& p) {
     std::copy(p._impl->_frags, p._impl->_frags + p._impl->_nr_frags,
             _impl->_frags + _impl->_nr_frags);
     _impl->_nr_frags += p._impl->_nr_frags;
-    if (!p._impl->_deleter) {
-        return;
-    } else if (!_impl->_deleter) {
-        _impl->_deleter = std::move(p._impl->_deleter);
-    } else if (!_impl->_deleter->next) {
-        _impl->_deleter->next = std::move(p._impl->_deleter);
-    } else {
-        auto chain = make_deleter(std::move(_impl->_deleter->next),
-                [d = std::move(p._impl->_deleter)] {});
-        _impl->_deleter->next = std::move(chain);
-    }
+    p._impl->_deleter.append(std::move(_impl->_deleter));
+    _impl->_deleter = std::move(p._impl->_deleter);
 }
 
 inline
