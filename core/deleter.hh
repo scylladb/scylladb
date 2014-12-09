@@ -165,6 +165,9 @@ void deleter::append(deleter d) {
 inline
 deleter
 make_free_deleter(void* obj) {
+    if (!obj) {
+        return deleter();
+    }
     return deleter(deleter::raw_object_tag(), obj);
 }
 
