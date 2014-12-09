@@ -27,10 +27,6 @@ public:
     ~deleter();
     deleter& operator=(deleter&& x);
     deleter& operator=(deleter&) = delete;
-    impl& operator*() const { return *_impl; }
-    impl* operator->() const { return _impl; }
-    impl* get() const { return _impl; }
-    void unshare();
     deleter share();
     explicit operator bool() const { return bool(_impl); }
     void reset(impl* i) {
