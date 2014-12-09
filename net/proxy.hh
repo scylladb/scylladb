@@ -7,7 +7,7 @@
 
 namespace net {
 
-std::unique_ptr<slave_device> create_proxy_net_device(unsigned cpu, master_device* dev, boost::program_options::variables_map opts = boost::program_options::variables_map());
+std::unique_ptr<slave_device> create_proxy_net_device(unsigned cpu, master_device* dev);
 
 }
 #endif

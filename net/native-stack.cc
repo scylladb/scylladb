@@ -78,7 +78,7 @@ void create_native_net_device(boost::program_options::variables_map opts) {
         auto ptr = dp.device.get();
         std::for_each(dp.slaves_placement.begin(), dp.slaves_placement.end(), [opts, ptr, cpu] (unsigned i) {
             smp::submit_to<>(i, [opts, cpu, ptr] {
-                auto slave = create_proxy_net_device(cpu, ptr, opts);
+                auto slave = create_proxy_net_device(cpu, ptr);
                 auto sptr = slave.get();
                 create_native_stack(opts, std::move(slave));
                 return sptr;
