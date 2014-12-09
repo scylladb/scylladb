@@ -11,6 +11,7 @@
 #include "core/stream.hh"
 #include "core/circular_buffer.hh"
 #include "core/align.hh"
+#include "core/sstring.hh"
 #include "util/function_input_iterator.hh"
 #include "util/transform_iterator.hh"
 #include <atomic>
@@ -19,6 +20,7 @@
 #include "ip.hh"
 #include "const.hh"
 #include "dpdk.hh"
+#include "proxy.hh"
 
 #include <getopt.h>
 
@@ -90,17 +92,18 @@ private:
     uint8_t _num_ports;
 } eal;
 
-class net_device : public net::master_device {
-public:
-    explicit net_device(boost::program_options::variables_map opts,
-                        uint8_t port_idx, uint8_t num_queues);
+class dpdk_distributed_device : public distributed_device {
+    uint8_t _port_idx;
+    uint8_t _num_queues;
+    net::hw_features _hw_features;
+    uint8_t _queues_ready = 0;
 
-    virtual future<> send(packet p) override;
-    virtual ethernet_address hw_address() override;
-    virtual net::hw_features hw_features() override;
+public:
+    rte_eth_dev_info _dev_info = {};
+    struct rte_eth_rxconf _rx_conf_default = {};
+    struct rte_eth_txconf _tx_conf_default = {};
 
 private:
-
     /**
      * Initialise an individual port:
      * - configure number of rx and tx rings
@@ -114,26 +117,73 @@ private:
     int init_port();
 
     /**
-     * Initialise the mbuf pool for packet reception for the NIC, and any other
-     * buffer pools needed by the app - currently none.
-     */
-    bool init_mbuf_pools();
-
-    void usage();
-
-    /**
      * Check the link status of out port in up to 9s, and print them finally.
      */
     void check_port_link_status();
+
+public:
+    dpdk_distributed_device(boost::program_options::variables_map opts,
+                        uint8_t port_idx, uint8_t num_queues)
+        : _port_idx(port_idx)
+        , _num_queues(num_queues) {
+        _rx_conf_default.rx_thresh.pthresh = default_pthresh;
+        _rx_conf_default.rx_thresh.hthresh = default_rx_hthresh;
+        _rx_conf_default.rx_thresh.wthresh = default_wthresh;
+
+
+        _tx_conf_default.tx_thresh.pthresh = default_pthresh;
+        _tx_conf_default.tx_thresh.hthresh = default_tx_hthresh;
+        _tx_conf_default.tx_thresh.wthresh = default_wthresh;
+
+        _tx_conf_default.tx_free_thresh = 0; /* Use PMD default values */
+        _tx_conf_default.tx_rs_thresh   = 0; /* Use PMD default values */
+
+        /* now initialise the port we will use */
+        int ret = init_port();
+        if (ret != 0) {
+            rte_exit(EXIT_FAILURE, "Cannot initialise port %u\n", _port_idx);
+        }
+
+        // Print the MAC
+        hw_address();
+
+        // Wait for a link
+        check_port_link_status();
+
+        printf("Created DPDK device\n");
+    }
+    ethernet_address hw_address() override {
+        struct ether_addr mac;
+        rte_eth_macaddr_get(_port_idx, &mac);
+        printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
+            mac.addr_bytes[0], mac.addr_bytes[1], mac.addr_bytes[2],
+            mac.addr_bytes[3], mac.addr_bytes[4], mac.addr_bytes[5]);
+
+        return mac.addr_bytes;
+    }
+    net::hw_features hw_features() override {
+        return _hw_features;
+    }
+    virtual void init_local_queue(boost::program_options::variables_map opts) override;
+    uint8_t port_idx() { return _port_idx; }
+};
+
+class net_device : public net::device {
+public:
+    explicit net_device(dpdk_distributed_device* dev, uint8_t qid);
+
+    virtual future<> send(packet p) override;
+
+private:
+
+    bool init_mbuf_pools();
 
     /**
      * Polls for a burst of incoming packets. This function will not block and
      * will immediately return after processing all available packets.
      *
-     * @param port_num Port index
-     * @param qid  Queue index
      */
-    void poll_rx_once(uint8_t port_num, uint16_t qid);
+    void poll_rx_once();
 
     /**
      * Translates an rte_mbuf's into net::packet and feeds them to _rx_stream.
@@ -171,18 +221,13 @@ private:
     size_t copy_one_data_buf(rte_mbuf*& m, char* data, size_t l);
 
 private:
-    struct rte_eth_rxconf _rx_conf_default = {};
-    struct rte_eth_txconf _tx_conf_default = {};
-
-    uint8_t _port_idx;
-    uint8_t _num_queues;
-    rte_eth_dev_info _dev_info = {};
-    net::hw_features _hw_features;
-    rte_mempool *_pktmbuf_pool;
+    dpdk_distributed_device* _dev;
+    uint8_t _qid;
+    rte_mempool* _pktmbuf_pool;
     reactor::poller _rx_poller;
 };
 
-int net_device::init_port()
+int dpdk_distributed_device::init_port()
 {
     eal.get_port_hw_info(_port_idx, &_dev_info);
 
@@ -225,10 +270,6 @@ int net_device::init_port()
         _hw_features.rx_csum_offload = 1;
     }
 
-    const uint16_t rx_ring_size = default_rx_ring_size;
-    const uint16_t tx_ring_size = default_tx_ring_size;
-
-    uint16_t q;
     int retval;
 
     printf("Port %u init ... ", _port_idx);
@@ -243,37 +284,7 @@ int net_device::init_port()
         return retval;
     }
 
-    //
-    // TODO: We may want to rework the initialization of the queues by moving
-    // the queue setup to the corresponding CPU. However this will require a
-    // handshake to ensure that all queues are set up and after that call
-    // rte_eth_dev_start().
-    //
-    for (q = 0; q < _num_queues; q++) {
-        retval = rte_eth_rx_queue_setup(_port_idx, q, rx_ring_size,
-                                        rte_eth_dev_socket_id(_port_idx),
-                                        &_rx_conf_default, _pktmbuf_pool);
-        if (retval < 0) {
-            return retval;
-        }
-    }
-
-    for (q = 0; q < _num_queues; q++) {
-        retval = rte_eth_tx_queue_setup(_port_idx, q, tx_ring_size,
-                                        rte_eth_dev_socket_id(_port_idx),
-                                        &_tx_conf_default);
-        if (retval < 0) {
-            return retval;
-        }
-    }
-
     //rte_eth_promiscuous_enable(port_num);
-
-    retval  = rte_eth_dev_start(_port_idx);
-    if (retval < 0) {
-        return retval;
-    }
-
     printf("done: \n");
 
     return 0;
@@ -282,19 +293,18 @@ int net_device::init_port()
 bool net_device::init_mbuf_pools()
 {
     // Allocate the same amount of buffers for Rx and Tx.
-    const unsigned num_mbufs = 2 * _num_queues * mbufs_per_queue;
-
+    const unsigned num_mbufs = 2 * mbufs_per_queue;
+    sstring name = to_sstring(pktmbuf_pool_name) + to_sstring(_qid);
     /* don't pass single-producer/single-consumer flags to mbuf create as it
      * seems faster to use a cache instead */
-    printf("Creating mbuf pool '%s' [%u mbufs] ...\n",
-        pktmbuf_pool_name, num_mbufs);
+    printf("Creating mbuf pool '%s' [%u mbufs] ...\n", name.c_str(), num_mbufs);
 
     //
     // We currently allocate a one big mempool on the current CPU to fit all
     // requested queues.
     // TODO: Allocate a separate pool for each queue on the appropriate CPU.
     //
-    _pktmbuf_pool = rte_mempool_create(pktmbuf_pool_name, num_mbufs,
+    _pktmbuf_pool = rte_mempool_create(name.c_str(), num_mbufs,
         mbuf_size, mbuf_cache_size,
         sizeof(struct rte_pktmbuf_pool_private), rte_pktmbuf_pool_init,
         NULL, rte_pktmbuf_init, NULL, rte_socket_id(), 0);
@@ -302,17 +312,7 @@ bool net_device::init_mbuf_pools()
     return _pktmbuf_pool != NULL;
 }
 
-/**
- * Prints out usage information to stdout
- */
-void net_device::usage()
-{
-    printf(
-        " [EAL options] -- -p PORTMASK\n"
-        " -p PORTMASK: hexadecimal bitmask of ports to use\n");
-}
-
-void net_device::check_port_link_status()
+void dpdk_distributed_device::check_port_link_status()
 {
     using namespace std::literals::chrono_literals;
     constexpr auto check_interval = 100ms;
@@ -348,40 +348,27 @@ void net_device::check_port_link_status()
 }
 
 
-net_device::net_device(boost::program_options::variables_map opts,
-                       uint8_t port_idx, uint8_t num_queues) :
-    _port_idx(port_idx), _num_queues(num_queues)
-    , _rx_poller([&] { poll_rx_once(0, 0); return true; })
+net_device::net_device(dpdk_distributed_device* dev, uint8_t qid)
+     : _dev(dev), _qid(qid), _rx_poller([&] { poll_rx_once(); return true; })
 {
-    _rx_conf_default.rx_thresh.pthresh = default_pthresh;
-    _rx_conf_default.rx_thresh.hthresh = default_rx_hthresh;
-    _rx_conf_default.rx_thresh.wthresh = default_wthresh;
-
-
-    _tx_conf_default.tx_thresh.pthresh = default_pthresh;
-    _tx_conf_default.tx_thresh.hthresh = default_tx_hthresh;
-    _tx_conf_default.tx_thresh.wthresh = default_wthresh;
-
-    _tx_conf_default.tx_free_thresh = 0; /* Use PMD default values */
-    _tx_conf_default.tx_rs_thresh   = 0; /* Use PMD default values */
-
     if (!init_mbuf_pools()) {
-        rte_exit(EXIT_FAILURE, "Cannot initialise mbuf pools\n");
+        rte_exit(EXIT_FAILURE, "Cannot initialize mbuf pools\n");
     }
 
-    /* now initialise the port we will use */
-    int ret = init_port();
-    if (ret != 0) {
-        rte_exit(EXIT_FAILURE, "Cannot initialise port %u\n", _port_idx);
+    const uint16_t rx_ring_size = default_rx_ring_size;
+    const uint16_t tx_ring_size = default_tx_ring_size;
+
+    if (rte_eth_rx_queue_setup(_dev->port_idx(), _qid, rx_ring_size,
+            rte_eth_dev_socket_id(_dev->port_idx()),
+            &_dev->_rx_conf_default, _pktmbuf_pool) < 0) {
+        rte_exit(EXIT_FAILURE, "Cannot initialize rx queue\n");
     }
 
-    // Print the MAC
-    hw_address();
-
-    // Wait for a link
-    check_port_link_status();
-
-    printf("Created DPDK device\n");
+    if (rte_eth_tx_queue_setup(_dev->port_idx(), _qid, tx_ring_size,
+            rte_eth_dev_socket_id(_dev->port_idx()),
+            &_dev->_tx_conf_default) < 0) {
+        rte_exit(EXIT_FAILURE, "Cannot initialize tx queue\n");
+    }
 }
 
 void net_device::process_packets(struct rte_mbuf **bufs, uint16_t count)
@@ -400,14 +387,14 @@ void net_device::process_packets(struct rte_mbuf **bufs, uint16_t count)
         packet p(f, make_deleter(deleter(), [m] { rte_pktmbuf_free(m); }));
 
         // Set stipped VLAN value if available
-        if ((_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_STRIP) &&
+        if ((_dev->_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_STRIP) &&
             (m->ol_flags & PKT_RX_VLAN_PKT)) {
 
             oi.hw_vlan = true;
             oi.vlan_tci = m->pkt.vlan_macip.f.vlan_tci;
         }
 
-        if (_hw_features.rx_csum_offload) {
+        if (_dev->hw_features().rx_csum_offload) {
             if (m->ol_flags & (PKT_RX_IP_CKSUM_BAD | PKT_RX_L4_CKSUM_BAD)) {
                 // Packet with bad checksum, just drop it.
                 continue;
@@ -424,16 +411,16 @@ void net_device::process_packets(struct rte_mbuf **bufs, uint16_t count)
 
         p.set_offload_info(oi);
 
-        l2inject(std::move(p));
+        _dev->l2receive(std::move(p));
     }
 }
 
-void net_device::poll_rx_once(uint8_t port_num, uint16_t qid)
+void net_device::poll_rx_once()
 {
     struct rte_mbuf *buf[packet_read_size];
 
     /* read a port */
-    uint16_t rx_count = rte_eth_rx_burst(_port_idx, qid,
+    uint16_t rx_count = rte_eth_rx_burst(_dev->port_idx(), _qid,
                                          buf, packet_read_size);
 
     /* Now process the NIC packets read */
@@ -555,34 +542,12 @@ future<> net_device::send(packet p)
     head->pkt.nb_segs = total_nsegs;
 
     //
-    // DEBUG DEBUG: Sending on port 0, queue 0
     // Currently we will spin till completion.
     // TODO: implement a poller + xmit queue
     //
-    while(rte_eth_tx_burst(_port_idx, 0, &head, 1) < 1);
+    while(rte_eth_tx_burst(_dev->port_idx(), _qid, &head, 1) < 1);
 
     return make_ready_future<>();
-}
-
-/**
- * @note We currently always use the first configured port
- *
- * @return port's MAC address
- */
-ethernet_address net_device::hw_address()
-{
-    struct ether_addr mac;
-    rte_eth_macaddr_get(_port_idx, &mac);
-    printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
-        mac.addr_bytes[0], mac.addr_bytes[1], mac.addr_bytes[2],
-        mac.addr_bytes[3], mac.addr_bytes[4], mac.addr_bytes[5]);
-
-    return mac.addr_bytes;
-}
-
-net::hw_features net_device::hw_features()
-{
-    return _hw_features;
 }
 
 void dpdk_eal::init(boost::program_options::variables_map opts)
@@ -617,11 +582,35 @@ void dpdk_eal::init(boost::program_options::variables_map opts)
     _initialized = true;
 }
 
+void dpdk_distributed_device::init_local_queue(boost::program_options::variables_map opts) {
+    std::unique_ptr<device> ptr;
+
+    if (engine.cpu_id() < smp::count) {
+        ptr = std::make_unique<net_device>(this, engine.cpu_id());
+
+        // TODO: device reset of the cpus between queues
+        for (unsigned i = _num_queues; i < smp::count; i++) {
+            if (i != engine.cpu_id()) {
+                ptr->add_proxy(i);
+            }
+        }
+        smp::submit_to(0, [this] () mutable {
+            if (++_queues_ready == _num_queues) {
+                if (rte_eth_dev_start(_port_idx) < 0) {
+                    rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
+                }
+            }
+        });
+    } else {
+        ptr = create_proxy_net_device(0, this);
+    }
+    set_local_queue(std::move(ptr));
+}
 } // namespace dpdk
 
 /******************************** Interface functions *************************/
 
-net::device_placement create_dpdk_net_device(
+std::unique_ptr<net::distributed_device> create_dpdk_net_device(
                                     boost::program_options::variables_map opts,
                                     uint8_t port_idx,
                                     uint8_t num_queues)
@@ -630,16 +619,9 @@ net::device_placement create_dpdk_net_device(
         // Init a DPDK EAL
         dpdk::eal.init(opts);
 
-        std::set<unsigned> slaves;
-
-        for (unsigned i = 0; i < smp::count; i++) {
-            if (i != engine.cpu_id()) {
-                slaves.insert(i);
-            }
-        }
-        return net::device_placement{std::make_unique<dpdk::net_device>(opts, port_idx, num_queues), std::move(slaves)};
+        return std::make_unique<dpdk::dpdk_distributed_device>(opts, port_idx, num_queues);
     } else {
-        return net::device_placement{std::unique_ptr<dpdk::net_device>(nullptr), std::set<unsigned>()};
+        return nullptr;
     }
 }
 

@@ -11,7 +11,7 @@
 #include "net.hh"
 #include "core/sstring.hh"
 
-net::device_placement create_dpdk_net_device(
+std::unique_ptr<net::distributed_device> create_dpdk_net_device(
                                     boost::program_options::variables_map opts =
                                         boost::program_options::variables_map(),
                                     uint8_t port_idx = 0,

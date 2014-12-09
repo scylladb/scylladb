@@ -18,6 +18,7 @@ namespace net {
 
 class packet;
 class interface;
+class distributed_device;
 class device;
 class l3_protocol;
 
@@ -57,7 +58,7 @@ class interface {
         l3_rx_stream(std::function<unsigned (packet&, size_t)>&& fw) : ready(packet_stream.started()), forward(fw) {}
     };
     std::unordered_map<uint16_t, l3_rx_stream> _proto_map;
-    std::unique_ptr<device> _dev;
+    std::shared_ptr<distributed_device> _dev;
     subscription<packet> _rx;
     ethernet_address _hw_address;
     net::hw_features _hw_features;
@@ -65,7 +66,7 @@ private:
     future<> dispatch_packet(packet p);
     future<> send(eth_protocol_num proto_num, ethernet_address to, packet p);
 public:
-    explicit interface(std::unique_ptr<device> dev);
+    explicit interface(std::shared_ptr<distributed_device> dev);
     ethernet_address hw_address() { return _hw_address; }
     net::hw_features hw_features() { return _hw_features; }
     subscription<packet, ethernet_address> register_l3(eth_protocol_num proto_num,
@@ -76,43 +77,45 @@ public:
 };
 
 class device {
-protected:
+    std::vector<unsigned> proxies;
     stream<packet> _rx_stream;
 public:
-    device() : _rx_stream() { _rx_stream.started(); }
     virtual ~device() {}
-    virtual subscription<packet> receive(std::function<future<> (packet)> next_packet) {
-        return _rx_stream.listen(std::move(next_packet));
-    }
-    virtual void l2inject(packet p) {
-        _rx_stream.produce(std::move(p));
-    }
     virtual future<> send(packet p) = 0;
-    virtual device* cpu2device(unsigned cpu) = 0;
-    virtual bool may_forward() = 0;
+    virtual void rx_start() {};
+    bool may_forward() { return !proxies.empty(); }
+    void add_proxy(unsigned cpu) { proxies.push_back(cpu); }
+    friend class distributed_device;
+};
+
+class distributed_device {
+protected:
+    std::unique_ptr<device*[]> _queues;
+public:
+    distributed_device() {
+        _queues = std::make_unique<device*[]>(smp::count);
+    }
+    virtual ~distributed_device() {};
+    device& queue_for_cpu(unsigned cpu) { return *_queues[cpu]; }
+    device& local_queue() { return queue_for_cpu(engine.cpu_id()); }
+    void l2receive(packet p) { _queues[engine.cpu_id()]->_rx_stream.produce(std::move(p)); }
+    subscription<packet> receive(std::function<future<> (packet)> next_packet) {
+        auto sub = _queues[engine.cpu_id()]->_rx_stream.listen(std::move(next_packet));
+        _queues[engine.cpu_id()]->rx_start();
+        return std::move(sub);
+    }
     virtual ethernet_address hw_address() = 0;
     virtual net::hw_features hw_features() = 0;
-};
-
-class slave_device : public device {
-public:
-    virtual ~slave_device() {}
-    virtual bool may_forward() override { return false; }
-};
-
-class master_device : public device {
-private:
-    std::vector<slave_device*> slaves;
-public:
-    virtual ~master_device() {}
-    master_device() { slaves.resize(smp::count, nullptr); };
-    virtual device* cpu2device(unsigned cpu) { return slaves[cpu]; }
-    virtual void enslave(unsigned cpu, slave_device* dev) { slaves[cpu] = dev; }
-    virtual bool may_forward() override { return true; }
+    virtual void init_local_queue(boost::program_options::variables_map opts) = 0;
+protected:
+    void set_local_queue(std::unique_ptr<device> dev) {
+        _queues[engine.cpu_id()] = dev.get();
+        engine.at_exit([dev = std::move(dev)] {});
+    }
 };
 
 struct device_placement {
-    std::unique_ptr<net::master_device> device;
+    std::unique_ptr<net::device> device;
     std::set<unsigned> slaves_placement;
 };
 }

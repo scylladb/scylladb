@@ -24,8 +24,8 @@ future<> l3_protocol::send(ethernet_address to, packet p) {
     return _netif->send(_proto_num, to, std::move(p));
 }
 
-interface::interface(std::unique_ptr<device> dev)
-    : _dev(std::move(dev))
+interface::interface(std::shared_ptr<distributed_device> dev)
+    : _dev(dev)
     , _rx(_dev->receive([this] (packet p) { return dispatch_packet(std::move(p)); }))
     , _hw_address(_dev->hw_address())
     , _hw_features(_dev->hw_features()) {
@@ -46,8 +46,9 @@ void interface::forward(unsigned cpuid, packet p) {
 
     if (queue_depth < 1000) {
         queue_depth++;
-        smp::submit_to(cpuid, [dev = _dev->cpu2device(cpuid), p = std::move(p), cpu = engine.cpu_id()]() mutable {
-            dev->l2inject(p.free_on_cpu(cpu));
+        auto src_cpu = engine.cpu_id();
+        smp::submit_to(cpuid, [this, p = std::move(p), src_cpu]() mutable {
+            _dev->l2receive(p.free_on_cpu(src_cpu));
         }).then([] {
             queue_depth--;
         });
@@ -60,7 +61,7 @@ future<> interface::dispatch_packet(packet p) {
         auto i = _proto_map.find(ntoh(eh->eth_proto));
         if (i != _proto_map.end()) {
             l3_rx_stream& l3 = i->second;
-            auto fw = _dev->may_forward() ? l3.forward(p, sizeof(eth_hdr)) : engine.cpu_id();
+            auto fw = _dev->local_queue().may_forward() ? l3.forward(p, sizeof(eth_hdr)) : engine.cpu_id();
             if (fw != engine.cpu_id() && fw < smp::count) {
                 forward(fw, std::move(p));
             } else {
@@ -91,7 +92,7 @@ future<> interface::send(eth_protocol_num proto_num, ethernet_address to, packet
     eh->src_mac = _hw_address;
     eh->eth_proto = uint16_t(proto_num);
     *eh = hton(*eh);
-    return _dev->send(std::move(p));
+    return _dev->local_queue().send(std::move(p));
 }
 
 }

@@ -4,22 +4,19 @@
 
 namespace net {
 
-class proxy_net_device : public slave_device {
+class proxy_net_device : public device {
 private:
     static constexpr size_t _send_queue_length = 1000;
     size_t _send_depth = 0;
     promise<> _send_promise;
     unsigned _cpu;
-    device* _dev;
+    distributed_device* _dev;
 public:
-    explicit proxy_net_device(unsigned cpu, device *dev);
+    explicit proxy_net_device(unsigned cpu, distributed_device* dev);
     virtual future<> send(packet p) override;
-    virtual ethernet_address hw_address() override { return _dev->hw_address(); }
-    virtual net::hw_features hw_features() override { return _dev->hw_features(); };
-    virtual device* cpu2device(unsigned cpu) override { return (cpu == _cpu) ? _dev : _dev->cpu2device(cpu); }
 };
 
-proxy_net_device::proxy_net_device(unsigned cpu, device* dev) :
+proxy_net_device::proxy_net_device(unsigned cpu, distributed_device* dev) :
         _cpu(cpu),
         _dev(dev)
 {
@@ -30,7 +27,9 @@ future<> proxy_net_device::send(packet p)
     if (_send_depth < _send_queue_length) {
         _send_depth++;
 
-        smp::submit_to(_cpu, [dev = _dev, p = std::move(p), cpu = engine.cpu_id()]() mutable {
+        device* dev = &_dev->queue_for_cpu(_cpu);
+        auto cpu = engine.cpu_id();
+        smp::submit_to(_cpu, [dev, p = std::move(p), cpu]() mutable {
             return dev->send(p.free_on_cpu(cpu));
         }).then([this] () {
             if (_send_depth == _send_queue_length) {
@@ -47,7 +46,7 @@ future<> proxy_net_device::send(packet p)
     return make_ready_future();
 }
 
-std::unique_ptr<slave_device> create_proxy_net_device(unsigned cpu, master_device* dev) {
-    return std::make_unique<proxy_net_device>(cpu, dev);
+std::unique_ptr<device> create_proxy_net_device(unsigned master_cpu, distributed_device* dev) {
+    return std::make_unique<proxy_net_device>(master_cpu, dev);
 }
 }

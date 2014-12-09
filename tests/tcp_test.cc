@@ -38,7 +38,10 @@ struct tcp_test {
 };
 
 int main(int ac, char** av) {
-    auto vnet = create_virtio_net_device("tap0").device;
+    boost::program_options::variables_map opts;
+    opts.insert(std::make_pair("tap-device", boost::program_options::variable_value(std::string("tap0"), false)));
+
+    auto vnet = create_virtio_net_device(opts);
     interface netif(std::move(vnet));
     ipv4 inet(&netif);
     inet.set_host_address(ipv4_address("192.168.122.2"));

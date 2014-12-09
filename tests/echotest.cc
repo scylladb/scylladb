@@ -70,7 +70,11 @@ void usage()
 #endif
 
 int main(int ac, char** av) {
-    std::unique_ptr<net::device> vnet;
+    std::unique_ptr<net::distributed_device> dnet;
+    net::device* vnet;
+
+    boost::program_options::variables_map opts;
+    opts.insert(std::make_pair("tap-device", boost::program_options::variable_value(std::string("tap0"), false)));
 
 #ifdef HAVE_DPDK
     if (ac > 2) {
@@ -79,20 +83,22 @@ int main(int ac, char** av) {
     }
 
     if ((ac == 1) || !std::strcmp(av[1], "-virtio")) {
-        vnet = create_virtio_net_device("tap0").device;
+        dnet = create_virtio_net_device(opts);
     } else if (!std::strcmp(av[1], "-dpdk")) {
-        vnet = create_dpdk_net_device().device;
+        dnet = create_dpdk_net_device();
     } else {
         usage();
         return -1;
     }
 #else
-    vnet = create_virtio_net_device("tap0").device;
+    dnet = create_virtio_net_device(opts);
 #endif // HAVE_DPDK
 
+    dnet->init_local_queue(opts);
+    vnet = &dnet->local_queue();
     subscription<packet> rx =
-        vnet->receive([netif = vnet.get(), &rx] (packet p) {
-            return echo_packet(*netif, std::move(p));
+        dnet->receive([vnet, &rx] (packet p) {
+            return echo_packet(*vnet, std::move(p));
         });
     engine.run();
     return 0;

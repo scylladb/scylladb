@@ -30,6 +30,65 @@
 
 using namespace net;
 
+class virtio_distributed_device : public distributed_device {
+private:
+    boost::program_options::variables_map _opts;
+    net::hw_features _hw_features;
+    uint64_t _features;
+
+private:
+    uint64_t setup_features() {
+        int64_t seastar_supported_features = VIRTIO_RING_F_INDIRECT_DESC | VIRTIO_NET_F_MRG_RXBUF;
+
+        if (!(_opts.count("event-index") && _opts["event-index"].as<std::string>() == "off")) {
+            seastar_supported_features |= VIRTIO_RING_F_EVENT_IDX;
+        }
+        if (!(_opts.count("csum-offload") && _opts["csum-offload"].as<std::string>() == "off")) {
+            seastar_supported_features |= VIRTIO_NET_F_CSUM | VIRTIO_NET_F_GUEST_CSUM;
+            _hw_features.tx_csum_offload = true;
+            _hw_features.rx_csum_offload = true;
+        } else {
+            _hw_features.tx_csum_offload = false;
+            _hw_features.rx_csum_offload = false;
+        }
+        if (!(_opts.count("tso") && _opts["tso"].as<std::string>() == "off")) {
+            seastar_supported_features |= VIRTIO_NET_F_HOST_TSO4;
+            seastar_supported_features |= VIRTIO_NET_F_GUEST_TSO4;
+            _hw_features.tx_tso = true;
+        } else {
+            _hw_features.tx_tso = false;
+        }
+        if (!(_opts.count("ufo") && _opts["ufo"].as<std::string>() == "off")) {
+            seastar_supported_features |= VIRTIO_NET_F_HOST_UFO;
+            seastar_supported_features |= VIRTIO_NET_F_GUEST_UFO;
+            _hw_features.tx_ufo = true;
+        } else {
+            _hw_features.tx_ufo = false;
+        }
+
+        seastar_supported_features |= VIRTIO_NET_F_MAC;
+        return seastar_supported_features;
+    }
+
+public:
+    virtio_distributed_device(boost::program_options::variables_map opts)
+       : _opts(opts), _features(setup_features())
+       {}
+    ethernet_address hw_address() override {
+        return { 0x12, 0x23, 0x34, 0x56, 0x67, 0x78 };
+    }
+
+    net::hw_features hw_features() {
+        return _hw_features;
+    }
+
+    uint64_t features() {
+        return _features;
+    }
+
+    virtual void init_local_queue(boost::program_options::variables_map opts) override;
+};
+
 /* The virtio_notifier class determines how to do host-to-guest and guest-to-
  * host notifications. We have two different implementations - one for vhost
  * (where both notifications occur through eventfds) and one for an assigned
@@ -413,7 +472,7 @@ void vring::complete() {
     });
 }
 
-class virtio_net_device : public net::master_device {
+class virtio_net_device : public net::device {
 protected:
     struct net_hdr {
         uint8_t needs_csum : 1;
@@ -470,25 +529,21 @@ protected:
         future<> prepare_buffers();
     };
 protected:
+    virtio_distributed_device* _dev;
     size_t _header_len;
-    boost::program_options::variables_map _opts;
     std::unique_ptr<char[], free_deleter> _txq_storage;
     std::unique_ptr<char[], free_deleter> _rxq_storage;
-    net::hw_features _hw_features;
-    uint64_t _features;
     txq _txq;
     rxq _rxq;
 protected:
-    uint64_t setup_features();
     vring::config txq_config(size_t txq_ring_size);
     vring::config rxq_config(size_t rxq_ring_size);
     void common_config(vring::config& r);
     size_t vring_storage_size(size_t ring_size);
 public:
-    explicit virtio_net_device(boost::program_options::variables_map opts, size_t rx_ring_size, size_t tx_ring_size);
-    virtual subscription<packet> receive(std::function<future<> (packet)> next) override;
+    explicit virtio_net_device(virtio_distributed_device* dev, size_t rx_ring_size, size_t tx_ring_size);
     virtual future<> send(packet p) override;
-    virtual net::hw_features hw_features() override;
+    virtual void rx_start() override;
     virtual phys virt_to_phys(void* p) {
         return reinterpret_cast<uintptr_t>(p);
     }
@@ -504,10 +559,10 @@ virtio_net_device::txq::post(packet p) {
 
     // Handle TCP checksum offload
     auto oi = p.offload_info();
-    if (_dev.hw_features().tx_csum_offload) {
+    if (_dev._dev->hw_features().tx_csum_offload) {
         auto eth_hdr_len = sizeof(eth_hdr);
         auto ip_hdr_len = oi.ip_hdr_len;
-        auto mtu = _dev.hw_features().mtu;
+        auto mtu = _dev._dev->hw_features().mtu;
         if (oi.protocol == ip_protocol_num::tcp) {
             auto tcp_hdr_len = oi.tcp_hdr_len;
             if (oi.needs_csum) {
@@ -516,7 +571,7 @@ virtio_net_device::txq::post(packet p) {
                 // TCP checksum filed's offset within the TCP header is 16 bytes
                 vhdr.csum_offset = 16;
             }
-            if (_dev.hw_features().tx_tso && p.len() > mtu + eth_hdr_len) {
+            if (_dev._dev->hw_features().tx_tso && p.len() > mtu + eth_hdr_len) {
                 // IPv4 TCP TSO
                 vhdr.gso_type = net_hdr::gso_tcpv4;
                 // Sum of Ethernet, IP and TCP header size
@@ -532,7 +587,7 @@ virtio_net_device::txq::post(packet p) {
                 // UDP checksum filed's offset within the UDP header is 6 bytes
                 vhdr.csum_offset = 6;
             }
-            if (_dev.hw_features().tx_ufo && p.len() > mtu + eth_hdr_len) {
+            if (_dev._dev->hw_features().tx_ufo && p.len() > mtu + eth_hdr_len) {
                 vhdr.gso_type = net_hdr::gso_udp;
                 vhdr.hdr_len = eth_hdr_len + ip_hdr_len + udp_hdr_len;
                 vhdr.gso_size = mtu - ip_hdr_len - udp_hdr_len;
@@ -624,7 +679,7 @@ virtio_net_device::rxq::prepare_buffers() {
                         del = make_deleter(deleter(), [deleters = std::move(_deleters)] {});
                     }
                     packet p(_fragments.begin(), _fragments.end(), std::move(del));
-                    _dev.l2inject(std::move(p));
+                    _dev._dev->l2receive(std::move(p));
                     _ring.available_descriptors().signal(_fragments.size());
                 }
             });
@@ -646,49 +701,13 @@ static std::unique_ptr<char[], free_deleter> virtio_buffer(size_t size) {
     return std::unique_ptr<char[], free_deleter>(reinterpret_cast<char*>(ret));
 }
 
-virtio_net_device::virtio_net_device(boost::program_options::variables_map opts,
-        size_t rx_ring_size, size_t tx_ring_size)
-    : _opts(opts)
+virtio_net_device::virtio_net_device(virtio_distributed_device* dev, size_t rx_ring_size, size_t tx_ring_size)
+    : _dev(dev)
     , _txq_storage(virtio_buffer(vring_storage_size(tx_ring_size)))
     , _rxq_storage(virtio_buffer(vring_storage_size(rx_ring_size)))
-    , _features(setup_features())
     , _txq(*this, txq_config(tx_ring_size))
     , _rxq(*this, rxq_config(rx_ring_size)) {
 }
-
-uint64_t virtio_net_device::setup_features() {
-    int64_t seastar_supported_features = VIRTIO_RING_F_INDIRECT_DESC | VIRTIO_NET_F_MRG_RXBUF;
-
-    if (!(_opts.count("event-index") && _opts["event-index"].as<std::string>() == "off")) {
-        seastar_supported_features |= VIRTIO_RING_F_EVENT_IDX;
-    }
-    if (!(_opts.count("csum-offload") && _opts["csum-offload"].as<std::string>() == "off")) {
-        seastar_supported_features |= VIRTIO_NET_F_CSUM | VIRTIO_NET_F_GUEST_CSUM;
-        _hw_features.tx_csum_offload = true;
-        _hw_features.rx_csum_offload = true;
-    } else {
-        _hw_features.tx_csum_offload = false;
-        _hw_features.rx_csum_offload = false;
-    }
-    if (!(_opts.count("tso") && _opts["tso"].as<std::string>() == "off")) {
-        seastar_supported_features |= VIRTIO_NET_F_HOST_TSO4;
-        seastar_supported_features |= VIRTIO_NET_F_GUEST_TSO4;
-        _hw_features.tx_tso = true;
-    } else {
-        _hw_features.tx_tso = false;
-    }
-    if (!(_opts.count("ufo") && _opts["ufo"].as<std::string>() == "off")) {
-        seastar_supported_features |= VIRTIO_NET_F_HOST_UFO;
-        seastar_supported_features |= VIRTIO_NET_F_GUEST_UFO;
-        _hw_features.tx_ufo = true;
-    } else {
-        _hw_features.tx_ufo = false;
-    }
-
-    seastar_supported_features |= VIRTIO_NET_F_MAC;
-    return seastar_supported_features;
-}
-
 
 size_t virtio_net_device::vring_storage_size(size_t ring_size) {
     // overestimate, but not by much.
@@ -698,7 +717,7 @@ size_t virtio_net_device::vring_storage_size(size_t ring_size) {
 void virtio_net_device::common_config(vring::config& r) {
     r.avail = r.descs + 16 * r.size;
     r.used = align_up(r.avail + 2 * r.size + 6, 4096);
-    r.event_index = (_features & VIRTIO_RING_F_EVENT_IDX) != 0;
+    r.event_index = (_dev->features() & VIRTIO_RING_F_EVENT_IDX) != 0;
     r.indirect = false;
 }
 
@@ -720,20 +739,14 @@ vring::config virtio_net_device::rxq_config(size_t rx_ring_size) {
     return r;
 }
 
-subscription<packet>
-virtio_net_device::receive(std::function<future<> (packet)> next) {
-    auto sub = net::device::receive(next);
+void
+virtio_net_device::rx_start() {
     _rxq.run();
-    return std::move(sub);
 }
 
 future<>
 virtio_net_device::send(packet p) {
     return _txq.post(std::move(p));
-}
-
-net::hw_features virtio_net_device::hw_features() {
-    return _hw_features;
 }
 
 boost::program_options::options_description
@@ -767,13 +780,8 @@ private:
     // this driver, as as soon as we close it, vhost stops servicing us.
     file_desc _vhost_fd;
 public:
-    virtio_net_device_vhost(sstring tap_device, boost::program_options::variables_map opts);
-    virtual ethernet_address hw_address() override;
+    virtio_net_device_vhost(virtio_distributed_device* dev, boost::program_options::variables_map opts);
 };
-
-ethernet_address virtio_net_device_vhost::hw_address() {
-    return { 0x12, 0x23, 0x34, 0x56, 0x67, 0x78 };
-}
 
 static size_t config_ring_size(boost::program_options::variables_map &opts) {
     if (opts.count("event-index")) {
@@ -783,14 +791,14 @@ static size_t config_ring_size(boost::program_options::variables_map &opts) {
     }
 }
 
-virtio_net_device_vhost::virtio_net_device_vhost(sstring tap_device,
-        boost::program_options::variables_map opts)
-    : virtio_net_device(opts, config_ring_size(opts), config_ring_size(opts))
+virtio_net_device_vhost::virtio_net_device_vhost(virtio_distributed_device *dev, boost::program_options::variables_map opts)
+    : virtio_net_device(dev, config_ring_size(opts), config_ring_size(opts))
     , _vhost_fd(file_desc::open("/dev/vhost-net", O_RDWR))
 {
+    auto tap_device = opts["tap-device"].as<std::string>();
     int64_t vhost_supported_features;
     _vhost_fd.ioctl(VHOST_GET_FEATURES, vhost_supported_features);
-    vhost_supported_features &= _features;
+    vhost_supported_features &= _dev->features();
     _vhost_fd.ioctl(VHOST_SET_FEATURES, vhost_supported_features);
     if (vhost_supported_features & VIRTIO_NET_F_MRG_RXBUF) {
         _header_len = sizeof(net_hdr_mrg);
@@ -889,7 +897,7 @@ virtio_net_device_osv::virtio_net_device_osv(osv::assigned_virtio &virtio,
 {
     // Read the host's virtio supported feature bitmask, AND it with the
     // features we want to use, and tell the host of the result:
-    uint32_t subset = _virtio.init_features(_features);
+    uint32_t subset = _virtio.init_features(_dev->features());
     if (subset & VIRTIO_NET_F_MRG_RXBUF) {
         _header_len = sizeof(net_hdr_mrg);
     } else {
@@ -950,28 +958,36 @@ virtio_net_device_osv::virtio_net_device_osv(osv::assigned_virtio &virtio,
 }
 #endif
 
-// FIXME: no real reason why the tap_device needs to be a separate option -
-// can be opts["tap-device"] (this is what we do anyway in net/stack.cc)
-net::device_placement create_virtio_net_device(sstring tap_device, boost::program_options::variables_map opts) {
-    virtio_net_device *ptr = nullptr;
-    std::set<unsigned> slaves;
+void virtio_distributed_device::init_local_queue(boost::program_options::variables_map opts) {
+    std::unique_ptr<device> ptr;
 
     if (engine.cpu_id() == 0) {
 #ifdef HAVE_OSV
         if (osv::assigned_virtio::get && osv::assigned_virtio::get()) {
             std::cout << "In OSv and assigned host's virtio device\n";
-            ptr = new virtio_net_device_osv(*osv::assigned_virtio::get(), opts);
+            ptr = std::make_unique<virtio_net_device_osv>(*osv::assigned_virtio::get(), opts);
         } else
 #endif
-        ptr = new virtio_net_device_vhost(tap_device, opts);
+        ptr = std::make_unique<virtio_net_device_vhost>(this, opts);
 
         for (unsigned i = 0; i < smp::count; i++) {
             if (i != engine.cpu_id()) {
-                slaves.insert(i);
+                ptr->add_proxy(i);
             }
         }
+    } else {
+        ptr = create_proxy_net_device(0, this);
     }
-    return net::device_placement{std::unique_ptr<net::master_device>(ptr), std::move(slaves)};
+    set_local_queue(std::move(ptr));
+}
+
+std::unique_ptr<net::distributed_device> create_virtio_net_device(boost::program_options::variables_map opts) {
+
+    if (engine.cpu_id() == 0) {
+        return std::make_unique<virtio_distributed_device>(opts);
+    } else {
+        return nullptr;
+    }
 }
 
 // Locks the shared object in memory and forces on-load function resolution.

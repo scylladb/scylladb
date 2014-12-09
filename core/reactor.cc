@@ -367,10 +367,10 @@ void reactor::stop() {
     assert(engine._id == 0);
     run_exit_tasks().then([this] {
         auto sem = new semaphore(0);
-            for (unsigned i = 1; i < smp::count; i++) {
+        for (unsigned i = 1; i < smp::count; i++) {
             smp::submit_to<>(i, []() {
                 return engine.run_exit_tasks().then([] {
-                    engine._stopped = true;
+                        engine._stopped = true;
                 });
             }).then([sem, i]() {
                 sem->signal();
