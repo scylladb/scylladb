@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <array>
 #include <map>
+#include <list>
+#include <chrono>
 #include "core/array_map.hh"
 #include "byteorder.hh"
 #include "arp.hh"
@@ -184,6 +186,7 @@ struct ipv4_frag_id::hash : private std::hash<ipv4_address>,
 
 class ipv4 {
 public:
+    using clock_type = std::chrono::high_resolution_clock;
     using address_type = ipv4_address;
     using proto_type = uint16_t;
     static address_type broadcast_address() { return ipv4_address(0xffffffff); }
@@ -204,18 +207,29 @@ private:
     struct frag {
         packet header;
         packet_merger<uint32_t> data;
-        uint32_t rx_time;
-        void merge(ip_hdr &h, uint16_t offset, packet p);
-        bool is_complete();
+        clock_type::time_point rx_time;
+        uint32_t mem_size = 0;
         // fragment with MF == 0 inidates it is the last fragment
         bool last_frag_received = false;
+
         packet get_assembled_packet(ethernet_address from, ethernet_address to);
+        int32_t merge(ip_hdr &h, uint16_t offset, packet p);
+        bool is_complete();
     };
     std::unordered_map<ipv4_frag_id, frag, ipv4_frag_id::hash> _frags;
+    std::list<ipv4_frag_id> _frags_age;
+    static constexpr std::chrono::seconds _frag_timeout{30};
+    static constexpr uint32_t _frag_low_thresh{3 * 1024 * 1024};
+    static constexpr uint32_t _frag_high_thresh{4 * 1024 * 1024};
+    uint32_t _frag_mem{0};
+    timer _frag_timer;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
     unsigned handle_on_cpu(packet& p, size_t off);
     bool in_my_netmask(ipv4_address a) const;
+    void frag_limit_mem();
+    void frag_timeout();
+    void frag_drop(ipv4_frag_id frag_id, uint32_t dropped_size);
 public:
     explicit ipv4(interface* netif);
     void set_host_address(ipv4_address ip);

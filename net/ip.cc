@@ -19,6 +19,10 @@ std::ostream& operator<<(std::ostream& os, ipv4_address a) {
             (ip >> 0) & 0xff);
 }
 
+constexpr std::chrono::seconds ipv4::_frag_timeout;
+constexpr uint32_t ipv4::_frag_low_thresh;
+constexpr uint32_t ipv4::_frag_high_thresh;
+
 ipv4::ipv4(interface* netif)
     : _netif(netif)
     , _global_arp(netif)
@@ -31,6 +35,7 @@ ipv4::ipv4(interface* netif)
     , _tcp(*this)
     , _icmp(*this)
     , _l4({ { uint8_t(ip_protocol_num::tcp), &_tcp }, { uint8_t(ip_protocol_num::icmp), &_icmp }}) {
+    _frag_timer.set_callback([this] { frag_timeout(); });
 }
 
 unsigned ipv4::handle_on_cpu(packet& p, size_t off)
@@ -131,14 +136,22 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
     // Does this IP datagram need reassembly
     auto mf = h.mf();
     if (mf == true || offset != 0) {
+        frag_limit_mem();
         auto frag_id = ipv4_frag_id{h.src_ip, h.dst_ip, h.id, h.ip_proto};
         auto& frag = _frags[frag_id];
         if (mf == false) {
             frag.last_frag_received = true;
         }
-        frag.merge(h, offset, std::move(p));
+        // This is a newly created frag_id
+        if (frag.mem_size == 0) {
+            _frags_age.push_back(frag_id);
+            frag.rx_time = clock_type::now();
+        }
+        auto added_size = frag.merge(h, offset, std::move(p));
+        _frag_mem += added_size;
         if (frag.is_complete()) {
             // All the fragments are received
+            auto dropped_size = frag.mem_size;
             auto& ip_data = frag.data.map.begin()->second;
             // Choose a cpu to forward this packet
             auto cpu_id = engine.cpu_id();
@@ -157,11 +170,14 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
                 _netif->forward(cpu_id, std::move(pkt));
             }
 
-            // Delete this frag from _frags
-            _frags.erase(frag_id);
+            // Delete this frag from _frags and _frags_age
+            frag_drop(frag_id, dropped_size);
+            _frags_age.remove(frag_id);
         } else {
             // Some of the fragments are missing
-            // TODO: Update the fragment timeout timer
+            if (!_frag_timer.armed()) {
+                _frag_timer.arm(_frag_timeout);
+            }
         }
         return make_ready_future<>();
     }
@@ -291,7 +307,61 @@ void ipv4::register_l4(ipv4::proto_type id, ip_protocol *protocol) {
     _l4.at(id) = protocol;
 }
 
-void ipv4::frag::merge(ip_hdr &h, uint16_t offset, packet p) {
+void ipv4::frag_limit_mem() {
+    if (_frag_mem <= _frag_high_thresh) {
+        return;
+    }
+    auto drop = _frag_mem - _frag_low_thresh;
+    while (drop) {
+        if (_frags_age.empty()) {
+            return;
+        }
+        // Drop the oldest frag (first element) from _frags_age
+        auto frag_id = _frags_age.front();
+        _frags_age.pop_front();
+
+        // Drop from _frags as well
+        auto& frag = _frags[frag_id];
+        auto dropped_size = frag.mem_size;
+        frag_drop(frag_id, dropped_size);
+
+        drop -= std::min(drop, dropped_size);
+    }
+}
+
+void ipv4::frag_timeout() {
+    if (_frags.empty()) {
+        return;
+    }
+    auto now = clock_type::now();
+    for (auto it = _frags_age.begin(); it != _frags_age.end();) {
+        auto frag_id = *it;
+        auto& frag = _frags[frag_id];
+        if (now > frag.rx_time + _frag_timeout) {
+            auto dropped_size = frag.mem_size;
+            // Drop from _frags
+            frag_drop(frag_id, dropped_size);
+            // Drop from _frags_age
+            it = _frags_age.erase(it);
+        } else {
+            // The further items can only be younger
+            break;
+        }
+    }
+    if (_frags.size() != 0) {
+        _frag_timer.arm(now + _frag_timeout);
+    } else {
+        _frag_mem = 0;
+    }
+}
+
+void ipv4::frag_drop(ipv4_frag_id frag_id, uint32_t dropped_size) {
+    _frags.erase(frag_id);
+    _frag_mem -= dropped_size;
+}
+
+int32_t ipv4::frag::merge(ip_hdr &h, uint16_t offset, packet p) {
+    uint32_t old = mem_size;
     unsigned ip_hdr_len = h.ihl * 4;
     // Store IP header
     if (offset == 0) {
@@ -300,6 +370,13 @@ void ipv4::frag::merge(ip_hdr &h, uint16_t offset, packet p) {
     // Sotre IP payload
     p.trim_front(ip_hdr_len);
     data.merge(offset, std::move(p));
+    // Update mem size
+    mem_size = header.memory();
+    for (const auto& x : data.map) {
+        mem_size += x.second.memory();
+    }
+    auto added_size = mem_size - old;
+    return added_size;
 }
 
 bool ipv4::frag::is_complete() {
