@@ -818,12 +818,13 @@ virtio_net_device_vhost::virtio_net_device_vhost(virtio_distributed_device *dev,
     strcpy(ifr.ifr_ifrn.ifrn_name, tap_device.c_str());
     tap_fd.ioctl(TUNSETIFF, ifr);
     unsigned int offload = 0;
-    if (hw_features().tx_csum_offload && hw_features().rx_csum_offload) {
+    auto hw_features = _dev->hw_features();
+    if (hw_features.tx_csum_offload && hw_features.rx_csum_offload) {
         offload = TUN_F_CSUM;
-        if (hw_features().tx_tso) {
+        if (hw_features.tx_tso) {
             offload |= TUN_F_TSO4;
         }
-        if (hw_features().tx_ufo) {
+        if (hw_features.tx_ufo) {
             offload |= TUN_F_UFO;
         }
     }
