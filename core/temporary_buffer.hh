@@ -19,7 +19,11 @@ class temporary_buffer {
 public:
     explicit temporary_buffer(size_t size)
         : _buffer(static_cast<CharType*>(malloc(size * sizeof(CharType)))), _size(size)
-        , _deleter(make_free_deleter(_buffer)) {}
+        , _deleter(make_free_deleter(_buffer)) {
+        if (!_buffer) {
+            throw std::bad_alloc();
+        }
+    }
     //explicit temporary_buffer(CharType* borrow, size_t size) : _buffer(borrow), _size(size) {}
     temporary_buffer()
         : _buffer(nullptr)

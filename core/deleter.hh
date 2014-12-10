@@ -10,7 +10,7 @@
 #include <assert.h>
 #include <type_traits>
 
-class deleter {
+class deleter final {
 public:
     struct impl;
     struct raw_object_tag {};
@@ -27,10 +27,6 @@ public:
     ~deleter();
     deleter& operator=(deleter&& x);
     deleter& operator=(deleter&) = delete;
-    impl& operator*() const { return *_impl; }
-    impl* operator->() const { return _impl; }
-    impl* get() const { return _impl; }
-    void unshare();
     deleter share();
     explicit operator bool() const { return bool(_impl); }
     void reset(impl* i) {
@@ -165,6 +161,9 @@ void deleter::append(deleter d) {
 inline
 deleter
 make_free_deleter(void* obj) {
+    if (!obj) {
+        return deleter();
+    }
     return deleter(deleter::raw_object_tag(), obj);
 }
 
