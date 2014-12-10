@@ -36,6 +36,7 @@
 
 #include "bitops.hh"
 #include "align.hh"
+#include "posix.hh"
 #include <new>
 #include <cstdint>
 #include <algorithm>
@@ -43,6 +44,8 @@
 #include <cassert>
 #include <atomic>
 #include <mutex>
+#include <experimental/optional>
+#include <functional>
 #include <cstring>
 #include <boost/intrusive/list.hpp>
 #include <sys/mman.h>
@@ -63,6 +66,11 @@ class page_list;
 
 static thread_local uint64_t g_allocs;
 static thread_local uint64_t g_frees;
+
+using std::experimental::optional;
+
+using allocate_system_memory_fn
+        = std::function<mmap_area (optional<void*> where, size_t how_much)>;
 
 namespace bi = boost::intrusive;
 
@@ -266,8 +274,8 @@ struct cpu_pages {
     bool initialize();
     void reclaim();
     void set_reclaim_hook(std::function<void (std::function<void ()>)> hook);
-    void resize(size_t new_size);
-    void do_resize(size_t new_size);
+    void resize(size_t new_size, allocate_system_memory_fn alloc_sys_mem);
+    void do_resize(size_t new_size, allocate_system_memory_fn alloc_sys_mem);
 };
 
 static thread_local cpu_pages cpu_mem;
@@ -460,7 +468,15 @@ bool cpu_pages::initialize() {
     return true;
 }
 
-void cpu_pages::do_resize(size_t new_size) {
+mmap_area
+allocate_anonymous_memory(optional<void*> where, size_t how_much) {
+    return mmap_anonymous(where.value_or(nullptr),
+            how_much,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | (where ? MAP_FIXED : 0));
+}
+
+void cpu_pages::do_resize(size_t new_size, allocate_system_memory_fn alloc_sys_mem) {
     auto new_pages = new_size / page_size;
     if (new_pages <= nr_pages) {
         return;
@@ -468,13 +484,8 @@ void cpu_pages::do_resize(size_t new_size) {
     auto old_size = nr_pages * page_size;
     auto mmap_start = memory + old_size;
     auto mmap_size = new_size - old_size;
-    auto r = ::mmap(mmap_start, mmap_size,
-            PROT_READ | PROT_WRITE,
-            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
-            -1, 0);
-    if (r == MAP_FAILED) {
-        abort();
-    }
+    auto mem = alloc_sys_mem({mmap_start}, mmap_size);
+    mem.release();
     ::madvise(mmap_start, mmap_size, MADV_HUGEPAGE);
     // one past last page structure is a sentinel
     auto new_page_array_pages = align_up(sizeof(page[new_pages + 1]), page_size) / page_size;
@@ -498,13 +509,13 @@ void cpu_pages::do_resize(size_t new_size) {
     free_span(old_nr_pages, new_pages - old_nr_pages);
 }
 
-void cpu_pages::resize(size_t new_size) {
+void cpu_pages::resize(size_t new_size, allocate_system_memory_fn alloc_memory) {
     new_size = align_down(new_size, page_size);
     while (nr_pages * page_size < new_size) {
         // don't reallocate all at once, since there might not
         // be enough free memory available to relocate the pages array
         auto tmp_size = std::min(new_size, 4 * nr_pages * page_size);
-        do_resize(tmp_size);
+        do_resize(tmp_size, alloc_memory);
     }
 }
 
@@ -696,7 +707,7 @@ void configure(std::vector<resource::memory> m) {
     for (auto&& x : m) {
         total += x.bytes;
     }
-    cpu_mem.resize(total);
+    cpu_mem.resize(total, allocate_anonymous_memory);
     size_t pos = 0;
     for (auto&& x : m) {
 #ifdef HAVE_NUMA

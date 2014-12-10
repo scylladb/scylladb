@@ -195,7 +195,7 @@ deps = {
     'tests/tcp_server': ['tests/tcp_server.cc'] + core + libnet,
     'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
     'tests/sstring_test': ['tests/sstring_test.cc'] + core,
-    'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc'],
+    'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc', 'core/posix.cc'],
     'tests/output_stream_test': ['tests/output_stream_test.cc'] + core + libnet,
     'tests/udp_zero_copy': ['tests/udp_zero_copy.cc'] + core + libnet,
 }
