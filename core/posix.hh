@@ -85,6 +85,7 @@ public:
         throw_system_error_on(fd == -1);
         return file_desc(fd);
     }
+    static file_desc temporary(sstring directory);
     file_desc dup() const {
         int fd = ::dup(get());
         throw_system_error_on(fd == -1);
