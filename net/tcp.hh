@@ -473,7 +473,7 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
 
     checksummer csum;
     InetTraits::tcp_pseudo_header_checksum(csum, local_ip, foreign_ip, sizeof(*th));
-    if (hw_features().tx_csum_offload) {
+    if (hw_features().tx_csum_l4_offload) {
         th->checksum = ~csum.get();
     } else {
         csum.sum(p);
@@ -826,8 +826,9 @@ void tcp<InetTraits>::tcb::output() {
         offload_info oi;
         checksummer csum;
         InetTraits::tcp_pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + options_size + len);
-        if (_tcp.hw_features().tx_csum_offload) {
-            // virtio-net's VIRTIO_NET_F_CSUM feature requires th->checksum to be
+        if (_tcp.hw_features().tx_csum_l4_offload) {
+            // tx checksum offloading - both virtio-net's VIRTIO_NET_F_CSUM
+            // dpdk's PKT_TX_TCP_CKSUM - requires th->checksum to be
             // initialized to ones' complement sum of the pseudo header.
             th->checksum = ~csum.get();
             oi.needs_csum = true;

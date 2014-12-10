@@ -90,7 +90,7 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
     }
 
     // Skip checking csum of reassembled IP datagram
-    if (p.offload_info().needs_ip_csum) {
+    if (!hw_features().rx_csum_offload && !p.offload_info_ref().reassembled) {
         checksummer csum;
         csum.sum(reinterpret_cast<char*>(iph), sizeof(*iph));
         if (csum.get() != 0) {
@@ -230,9 +230,14 @@ future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
         iph->dst_ip = to;
         *iph = hton(*iph);
 
-        checksummer csum;
-        csum.sum(reinterpret_cast<char*>(iph), sizeof(*iph));
-        iph->csum = csum.get();
+        if (hw_features().tx_csum_ip_offload) {
+            iph->csum = 0;
+            pkt.offload_info_ref().needs_ip_csum = true;
+        } else {
+            checksummer csum;
+            csum.sum(reinterpret_cast<char*>(iph), sizeof(*iph));
+            iph->csum = csum.get();
+        }
 
         return _arp.lookup(dst).then([this, pkt = std::move(pkt)] (ethernet_address e_dst) mutable {
             return send_raw(e_dst, std::move(pkt));
@@ -407,7 +412,7 @@ packet ipv4::frag::get_assembled_packet(ethernet_address from, ethernet_address 
     // Since each fragment's csum is checked, no need to csum
     // again for the assembled datagram
     offload_info oi;
-    oi.needs_ip_csum = false;
+    oi.reassembled = true;
     pkt.set_offload_info(oi);
     return pkt;
 }

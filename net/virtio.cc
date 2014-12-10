@@ -45,10 +45,10 @@ private:
         }
         if (!(_opts.count("csum-offload") && _opts["csum-offload"].as<std::string>() == "off")) {
             seastar_supported_features |= VIRTIO_NET_F_CSUM | VIRTIO_NET_F_GUEST_CSUM;
-            _hw_features.tx_csum_offload = true;
+            _hw_features.tx_csum_l4_offload = true;
             _hw_features.rx_csum_offload = true;
         } else {
-            _hw_features.tx_csum_offload = false;
+            _hw_features.tx_csum_l4_offload = false;
             _hw_features.rx_csum_offload = false;
         }
         if (!(_opts.count("tso") && _opts["tso"].as<std::string>() == "off")) {
@@ -559,7 +559,7 @@ virtio_net_device::txq::post(packet p) {
 
     // Handle TCP checksum offload
     auto oi = p.offload_info();
-    if (_dev._dev->hw_features().tx_csum_offload) {
+    if (_dev._dev->hw_features().tx_csum_l4_offload) {
         auto eth_hdr_len = sizeof(eth_hdr);
         auto ip_hdr_len = oi.ip_hdr_len;
         auto mtu = _dev._dev->hw_features().mtu;
@@ -819,7 +819,7 @@ virtio_net_device_vhost::virtio_net_device_vhost(virtio_distributed_device *dev,
     tap_fd.ioctl(TUNSETIFF, ifr);
     unsigned int offload = 0;
     auto hw_features = _dev->hw_features();
-    if (hw_features.tx_csum_offload && hw_features.rx_csum_offload) {
+    if (hw_features.tx_csum_l4_offload && hw_features.rx_csum_offload) {
         offload = TUN_F_CSUM;
         if (hw_features.tx_tso) {
             offload |= TUN_F_TSO4;

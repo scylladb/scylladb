@@ -26,7 +26,8 @@ struct offload_info {
     uint8_t ip_hdr_len = 20;
     uint8_t tcp_hdr_len = 20;
     uint8_t udp_hdr_len = 8;
-    bool needs_ip_csum = true;
+    bool needs_ip_csum = false;
+    bool reassembled = false;
     bool hw_vlan = false; // if true, there is a HW stripped VLAN in vlan_tci
     uint16_t vlan_tci = 0;// valid iff hw_vlan == true (CPU order)
 };
@@ -262,6 +263,7 @@ private:
     bool allocate_headroom(size_t size);
 public:
     class offload_info offload_info() { return _impl->_offload_info; }
+    class offload_info& offload_info_ref() { return _impl->_offload_info; }
     void set_offload_info(class offload_info oi) { _impl->_offload_info = oi; }
 };
 

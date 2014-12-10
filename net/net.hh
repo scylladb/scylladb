@@ -23,8 +23,10 @@ class device;
 class l3_protocol;
 
 struct hw_features {
-    // Enable tx checksum offload
-    bool tx_csum_offload = false;
+    // Enable tx ip header checksum offload
+    bool tx_csum_ip_offload = false;
+    // Enable tx l4 (TCP or UDP) checksum offload
+    bool tx_csum_l4_offload = false;
     // Enable rx checksum offload
     bool rx_csum_offload = false;
     // Enable tx TCP segment offload

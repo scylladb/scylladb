@@ -272,6 +272,16 @@ int dpdk_distributed_device::init_port()
         _hw_features.rx_csum_offload = 1;
     }
 
+    if ((_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_IPV4_CKSUM)) {
+        printf("TX ip checksum offload supported\n");
+        _hw_features.tx_csum_ip_offload = 1;
+    }
+    if (  (_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_CKSUM) &&
+          (_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM)) {
+        printf("TX TCP&UDP checksum offload supported\n");
+        _hw_features.tx_csum_l4_offload = 1;
+    }
+
     int retval;
 
     printf("Port %u init ... ", _port_idx);
@@ -401,14 +411,9 @@ void net_device::process_packets(struct rte_mbuf **bufs, uint16_t count)
                 // Packet with bad checksum, just drop it.
                 continue;
             }
-            // Tell our code not to bother to calculate and check the IP and
-            // L4 (TCP or UDP) checksums later.
-            // TODO: Currently, ipv4::handle_received_packet() tests this
-            // oi.needs_ip_csum, while tcp<InetTraits>::received() instead
-            // tests _hw_features.rx_csum_offload directly (and there is
-            // a third variable, oi.needs_csum, which isn't used on rx, and
-            // doesn't even default to true). Need to clean up...
-            oi.needs_ip_csum = false;
+            // Note that when _hw_features.rx_csum_offload is on, the receive
+            // code for ip, tcp and udp will assume they don't need to check
+            // the checksum again, because we did this here.
         }
 
         p.set_offload_info(oi);
@@ -542,6 +547,25 @@ future<> net_device::send(packet p)
     // Update the HEAD buffer with the packet info
     head->pkt.pkt_len = p.len();
     head->pkt.nb_segs = total_nsegs;
+
+    // Handle TCP checksum offload
+    auto oi = p.offload_info();
+    if (oi.needs_ip_csum) {
+        head->ol_flags |= PKT_TX_IP_CKSUM;
+        head->pkt.vlan_macip.f.l2_len = sizeof(struct ether_hdr);
+        head->pkt.vlan_macip.f.l3_len = oi.ip_hdr_len;
+    }
+    if (_dev->hw_features().tx_csum_l4_offload) {
+        if (oi.protocol == ip_protocol_num::tcp) {
+            head->ol_flags |= PKT_TX_TCP_CKSUM;
+            head->pkt.vlan_macip.f.l2_len = sizeof(struct ether_hdr);
+            head->pkt.vlan_macip.f.l3_len = oi.ip_hdr_len;
+        } else if (oi.protocol == ip_protocol_num::udp) {
+            head->ol_flags |= PKT_TX_UDP_CKSUM;
+            head->pkt.vlan_macip.f.l2_len = sizeof(struct ether_hdr);
+            head->pkt.vlan_macip.f.l3_len = oi.ip_hdr_len;
+        }
+    }
 
     //
     // Currently we will spin till completion.

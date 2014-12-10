@@ -52,7 +52,7 @@ public:
     , _device_str("device/vif/" + std::to_string(opts["vif"].as<unsigned>()))
     , _userspace(userspace) {
         _hw_features.rx_csum_offload = true;
-        _hw_features.tx_csum_offload = true;
+        _hw_features.tx_csum_l4_offload = true;
     }
 
     std::string path(std::string s) { return _device_str + "/" + s; }

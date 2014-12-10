@@ -127,7 +127,7 @@ future<> udp_v4::send(uint16_t src_port, ipv4_addr dst, packet &&p)
     checksummer csum;
     ipv4_traits::udp_pseudo_header_checksum(csum, src, dst, p.len());
     bool needs_frag = ipv4::needs_frag(p, ip_protocol_num::udp, hw_features());
-    if (hw_features().tx_csum_offload && !needs_frag) {
+    if (hw_features().tx_csum_l4_offload && !needs_frag) {
         hdr->cksum = ~csum.get();
         oi.needs_csum = true;
     } else {
