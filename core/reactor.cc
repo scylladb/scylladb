@@ -848,6 +848,7 @@ smp::get_options_description()
         ("smp,c", bpo::value<unsigned>()->default_value(cpus), "number of threads")
         ("memory,m", bpo::value<std::string>(), "memory to use, in bytes (ex: 4G) (default: all)")
         ("reserve-memory", bpo::value<std::string>()->default_value("512M"), "memory reserved to OS")
+        ("hugepages", bpo::value<std::string>(), "path to accessible hugetlbfs mount (typically /dev/hugepages/something)")
         ;
     return opts;
 }
@@ -885,10 +886,14 @@ void smp::configure(boost::program_options::variables_map configuration)
     if (configuration.count("reserve-memory")) {
         rc.reserve_memory = parse_memory_size(configuration["reserve-memory"].as<std::string>());
     }
+    std::experimental::optional<std::string> hugepages_path;
+    if (configuration.count("hugepages")) {
+        hugepages_path = configuration["hugepages"].as<std::string>();
+    }
     rc.cpus = smp::count;
     std::vector<resource::cpu> allocations = resource::allocate(rc);
     pin_this_thread(allocations[0].cpu_id);
-    memory::configure(allocations[0].mem);
+    memory::configure(allocations[0].mem, hugepages_path);
     smp::_qs = new smp_message_queue* [smp::count];
     for(unsigned i = 0; i < smp::count; i++) {
         smp::_qs[i] = new smp_message_queue[smp::count];
@@ -900,9 +905,9 @@ void smp::configure(boost::program_options::variables_map configuration)
 
     for (unsigned i = 1; i < smp::count; i++) {
         auto allocation = allocations[i];
-        _threads.emplace_back([configuration, i, allocation] {
+        _threads.emplace_back([configuration, hugepages_path, i, allocation] {
             pin_this_thread(allocation.cpu_id);
-            memory::configure(allocation.mem);
+            memory::configure(allocation.mem, hugepages_path);
             sigset_t mask;
             sigfillset(&mask);
             auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
