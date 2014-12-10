@@ -12,7 +12,8 @@
 
 namespace memory {
 
-void configure(std::vector<resource::memory> m);
+void configure(std::vector<resource::memory> m,
+        std::experimental::optional<std::string> hugetlbfs_path = {});
 
 void* allocate_reclaimable(size_t size);
 

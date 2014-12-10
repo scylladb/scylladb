@@ -37,6 +37,7 @@
 #include "bitops.hh"
 #include "align.hh"
 #include "posix.hh"
+#include "shared_ptr.hh"
 #include <new>
 #include <cstdint>
 #include <algorithm>
@@ -57,6 +58,7 @@ namespace memory {
 
 static constexpr const size_t page_bits = 12;
 static constexpr const size_t page_size = 1 << page_bits;
+static constexpr const size_t huge_page_size = 512 * page_size;
 static constexpr const unsigned cpu_id_shift = 36; // FIXME: make dynamic
 
 using pageidx = uint32_t;
@@ -276,6 +278,7 @@ struct cpu_pages {
     void set_reclaim_hook(std::function<void (std::function<void ()>)> hook);
     void resize(size_t new_size, allocate_system_memory_fn alloc_sys_mem);
     void do_resize(size_t new_size, allocate_system_memory_fn alloc_sys_mem);
+    void replace_memory_backing(allocate_system_memory_fn alloc_sys_mem);
 };
 
 static thread_local cpu_pages cpu_mem;
@@ -476,6 +479,33 @@ allocate_anonymous_memory(optional<void*> where, size_t how_much) {
             MAP_PRIVATE | (where ? MAP_FIXED : 0));
 }
 
+mmap_area
+allocate_hugetlbfs_memory(file_desc& fd, optional<void*> where, size_t how_much) {
+    auto pos = fd.size();
+    fd.truncate(pos + how_much);
+    auto ret = fd.map(
+            how_much,
+            PROT_READ | PROT_WRITE,
+            MAP_SHARED | (where ? MAP_FIXED : 0),
+            pos,
+            where.value_or(nullptr));
+    return ret;
+}
+
+void cpu_pages::replace_memory_backing(allocate_system_memory_fn alloc_sys_mem) {
+    // We would like to use ::mremap() to atomically replace the old anonymous
+    // memory with hugetlbfs backed memory, but mremap() does not support hugetlbfs
+    // (for no reason at all).  So we must copy the anonymous memory to some other
+    // place, map hugetlbfs in place, and copy it back, without modifying it during
+    // the operation.
+    auto bytes = nr_pages * page_size;
+    auto old_mem = mem();
+    auto relocated_old_mem = mmap_anonymous(nullptr, bytes, PROT_READ|PROT_WRITE, MAP_PRIVATE);
+    std::memcpy(relocated_old_mem.get(), old_mem, bytes);
+    alloc_sys_mem({old_mem}, bytes).release();
+    std::memcpy(old_mem, relocated_old_mem.get(), bytes);
+}
+
 void cpu_pages::do_resize(size_t new_size, allocate_system_memory_fn alloc_sys_mem) {
     auto new_pages = new_size / page_size;
     if (new_pages <= nr_pages) {
@@ -510,7 +540,7 @@ void cpu_pages::do_resize(size_t new_size, allocate_system_memory_fn alloc_sys_m
 }
 
 void cpu_pages::resize(size_t new_size, allocate_system_memory_fn alloc_memory) {
-    new_size = align_down(new_size, page_size);
+    new_size = align_down(new_size, huge_page_size);
     while (nr_pages * page_size < new_size) {
         // don't reallocate all at once, since there might not
         // be enough free memory available to relocate the pages array
@@ -702,12 +732,23 @@ reclaimer::~reclaimer() {
     r.erase(std::find(r.begin(), r.end(), this));
 }
 
-void configure(std::vector<resource::memory> m) {
+void configure(std::vector<resource::memory> m,
+        optional<std::string> hugetlbfs_path) {
     size_t total = 0;
     for (auto&& x : m) {
         total += x.bytes;
     }
-    cpu_mem.resize(total, allocate_anonymous_memory);
+    allocate_system_memory_fn sys_alloc = allocate_anonymous_memory;
+    if (hugetlbfs_path) {
+        // std::function is copyable, but file_desc is not, so we must use
+        // a shared_ptr to allow sys_alloc to be copied around
+        auto fdp = make_shared<file_desc>(file_desc::temporary(*hugetlbfs_path));
+        sys_alloc = [fdp] (optional<void*> where, size_t how_much) {
+            return allocate_hugetlbfs_memory(*fdp, where, how_much);
+        };
+        cpu_mem.replace_memory_backing(sys_alloc);
+    }
+    cpu_mem.resize(total, sys_alloc);
     size_t pos = 0;
     for (auto&& x : m) {
 #ifdef HAVE_NUMA
@@ -961,7 +1002,7 @@ reclaimer::~reclaimer() {
 void set_reclaim_hook(std::function<void (std::function<void ()>)> hook) {
 }
 
-void configure(std::vector<resource::memory> m) {
+void configure(std::vector<resource::memory> m, std::experimental::optional<std::string> hugepages_path) {
 }
 
 statistics stats() {
