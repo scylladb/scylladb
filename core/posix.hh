@@ -96,6 +96,10 @@ public:
         throw_system_error_on(ret == -1);
         return file_desc(ret);
     }
+    void truncate(size_t size) {
+        auto ret = ::ftruncate(_fd, size);
+        throw_system_error_on(ret);
+    }
     int ioctl(int request) {
         return ioctl(request, 0);
     }
