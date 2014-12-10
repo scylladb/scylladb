@@ -73,14 +73,22 @@ void create_native_net_device(boost::program_options::variables_map opts) {
 #endif
     dev = create_virtio_net_device(opts);
 
-    if (dev) {
-        std::shared_ptr<device> sdev(dev.release());
-        for (unsigned i = 0; i < smp::count; i++) {
-            smp::submit_to(i, [opts, sdev] {
-                sdev->init_local_queue(opts);
-                create_native_stack(opts, sdev);
-            });
-        }
+    std::shared_ptr<device> sdev(dev.release());
+    for (unsigned i = 0; i < smp::count; i++) {
+        smp::submit_to(i, [opts, sdev] {
+            uint16_t qid = engine.cpu_id();
+            if (qid < sdev->hw_queues_count()) {
+                auto qp = sdev->init_local_queue(opts, qid);
+                for (unsigned i = sdev->hw_queues_count() + qid % sdev->hw_queues_count(); i < smp::count; i+= sdev->hw_queues_count()) {
+                    qp->add_proxy(i);
+                }
+                sdev->set_local_queue(std::move(qp));
+            } else {
+                auto master = qid % sdev->hw_queues_count();
+                sdev->set_local_queue(create_proxy_net_device(master, sdev.get()));
+            }
+            create_native_stack(opts, sdev);
+        });
     }
 }
 
@@ -107,7 +115,9 @@ public:
     virtual udp_channel make_udp_channel(ipv4_addr addr) override;
     virtual future<> initialize() override;
     static future<std::unique_ptr<network_stack>> create(boost::program_options::variables_map opts) {
-        create_native_net_device(opts);
+        if (engine.cpu_id() == 0) {
+            create_native_net_device(opts);
+        }
         return ready_promise.get_future();
     }
     virtual bool has_per_core_namespace() override { return true; };

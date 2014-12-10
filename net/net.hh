@@ -117,6 +117,7 @@ public:
 class device {
 protected:
     std::unique_ptr<qp*[]> _queues;
+    size_t _rss_table_bits = 0;
 public:
     device() {
         _queues = std::make_unique<qp*[]>(smp::count);
@@ -132,11 +133,22 @@ public:
     }
     virtual ethernet_address hw_address() = 0;
     virtual net::hw_features hw_features() = 0;
-    virtual void init_local_queue(boost::program_options::variables_map opts) = 0;
-protected:
+    virtual uint16_t hw_queues_count() { return 1; }
+    virtual std::unique_ptr<qp> init_local_queue(boost::program_options::variables_map opts, uint16_t qid) = 0;
     void set_local_queue(std::unique_ptr<qp> dev) {
+        assert(!_queues[engine.cpu_id()]);
         _queues[engine.cpu_id()] = dev.get();
         engine.at_exit([dev = std::move(dev)] {});
+    }
+    template <typename Func>
+    unsigned forward_dst(packet& p, Func&& hashfn) {
+        auto& qp = local_queue();
+        if (!qp.may_forward()) {
+            return engine.cpu_id();
+        }
+        uint32_t hash = hashfn(p) >> _rss_table_bits;
+        auto idx = hash % (qp.proxies.size() + 1);
+        return idx ? qp.proxies[idx - 1] : engine.cpu_id();
     }
 };
 

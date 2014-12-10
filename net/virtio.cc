@@ -21,7 +21,6 @@
 #include <linux/if_tun.h>
 #include "ip.hh"
 #include "const.hh"
-#include "net/proxy.hh"
 #include "net/native-stack.hh"
 
 #ifdef HAVE_OSV
@@ -104,7 +103,7 @@ public:
         return _features;
     }
 
-    virtual void init_local_queue(boost::program_options::variables_map opts) override;
+    virtual std::unique_ptr<net::qp> init_local_queue(boost::program_options::variables_map opts, uint16_t qid) override;
 };
 
 /* The virtio_notifier class determines how to do host-to-guest and guest-to-
@@ -1013,27 +1012,19 @@ qp_osv::qp_osv(osv::assigned_virtio &virtio,
 }
 #endif
 
-void device::init_local_queue(boost::program_options::variables_map opts) {
-    std::unique_ptr<net::qp> ptr;
+std::unique_ptr<net::qp> device::init_local_queue(boost::program_options::variables_map opts, uint16_t qid) {
+    static bool called = false;
+    assert(!qid);
+    assert(!called);
+    called = true;
 
-    if (engine.cpu_id() == 0) {
 #ifdef HAVE_OSV
-        if (osv::assigned_virtio::get && osv::assigned_virtio::get()) {
-            std::cout << "In OSv and assigned host's virtio device\n";
-            ptr = std::make_unique<qp_osv>(*osv::assigned_virtio::get(), opts);
-        } else
-#endif
-        ptr = std::make_unique<qp_vhost>(this, opts);
-
-        for (unsigned i = 0; i < smp::count; i++) {
-            if (i != engine.cpu_id()) {
-                ptr->add_proxy(i);
-            }
-        }
-    } else {
-        ptr = create_proxy_net_device(0, this);
+    if (osv::assigned_virtio::get && osv::assigned_virtio::get()) {
+        std::cout << "In OSv and assigned host's virtio device\n";
+        return std::make_unique<qp_osv>(*osv::assigned_virtio::get(), opts);
     }
-    set_local_queue(std::move(ptr));
+#endif
+    return std::make_unique<qp_vhost>(this, opts);
 }
 
 }
@@ -1067,12 +1058,7 @@ get_virtio_net_options_description()
 }
 
 std::unique_ptr<net::device> create_virtio_net_device(boost::program_options::variables_map opts) {
-
-    if (engine.cpu_id() == 0) {
-        return std::make_unique<virtio::device>(opts);
-    } else {
-        return nullptr;
-    }
+    return std::make_unique<virtio::device>(opts);
 }
 
 // Locks the shared object in memory and forces on-load function resolution.

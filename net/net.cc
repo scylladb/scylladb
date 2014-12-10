@@ -62,13 +62,13 @@ future<> interface::dispatch_packet(packet p) {
         auto i = _proto_map.find(ntoh(eh->eth_proto));
         if (i != _proto_map.end()) {
             l3_rx_stream& l3 = i->second;
-            unsigned fw = engine.cpu_id();
-            if (_dev->local_queue().may_forward()) {
+            auto fw = _dev->forward_dst(p, [&l3] (packet& p) {
                 forward_hash data;
                 if (l3.forward(data, p, sizeof(eth_hdr))) {
-                    fw = toeplitz_hash(rsskey, data) % smp::count;
+                    return toeplitz_hash(rsskey, data);
                 }
-            }
+                return 0u;
+            });
             if (fw != engine.cpu_id()) {
                 forward(fw, std::move(p));
             } else {

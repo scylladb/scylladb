@@ -20,7 +20,6 @@
 #include "ip.hh"
 #include "const.hh"
 #include "dpdk.hh"
-#include "proxy.hh"
 
 #include <getopt.h>
 
@@ -97,6 +96,7 @@ class dpdk_device : public device {
     uint16_t _num_queues;
     net::hw_features _hw_features;
     uint8_t _queues_ready = 0;
+    unsigned _home_cpu;
 
 public:
     rte_eth_dev_info _dev_info = {};
@@ -125,7 +125,9 @@ public:
     dpdk_device(boost::program_options::variables_map opts,
                         uint8_t port_idx, uint16_t num_queues)
         : _port_idx(port_idx)
-        , _num_queues(num_queues) {
+        , _num_queues(num_queues)
+        , _home_cpu(engine.cpu_id()) {
+        _rss_table_bits = 7;
         _rx_conf_default.rx_thresh.pthresh = default_pthresh;
         _rx_conf_default.rx_thresh.hthresh = default_rx_hthresh;
         _rx_conf_default.rx_thresh.wthresh = default_wthresh;
@@ -164,7 +166,8 @@ public:
     net::hw_features hw_features() override {
         return _hw_features;
     }
-    virtual void init_local_queue(boost::program_options::variables_map opts) override;
+    virtual uint16_t hw_queues_count() override { return _num_queues; }
+    virtual std::unique_ptr<qp> init_local_queue(boost::program_options::variables_map opts, uint16_t qid) override;
     uint8_t port_idx() { return _port_idx; }
 };
 
@@ -602,29 +605,16 @@ void dpdk_eal::init(boost::program_options::variables_map opts)
     _initialized = true;
 }
 
-void dpdk_device::init_local_queue(boost::program_options::variables_map opts) {
-    std::unique_ptr<qp> ptr;
-
-    if (engine.cpu_id() < smp::count) {
-        ptr = std::make_unique<dpdk_qp>(this, engine.cpu_id());
-
-        // TODO: device reset of the cpus between queues
-        for (unsigned i = _num_queues; i < smp::count; i++) {
-            if (i != engine.cpu_id()) {
-                ptr->add_proxy(i);
+std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variables_map opts, uint16_t qid) {
+    auto qp = std::make_unique<dpdk_qp>(this, qid);
+    smp::submit_to(_home_cpu, [this] () mutable {
+        if (++_queues_ready == _num_queues) {
+            if (rte_eth_dev_start(_port_idx) < 0) {
+                rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
             }
         }
-        smp::submit_to(0, [this] () mutable {
-            if (++_queues_ready == _num_queues) {
-                if (rte_eth_dev_start(_port_idx) < 0) {
-                    rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
-                }
-            }
-        });
-    } else {
-        ptr = create_proxy_net_device(0, this);
-    }
-    set_local_queue(std::move(ptr));
+    });
+    return std::move(qp);
 }
 } // namespace dpdk
 
@@ -635,14 +625,12 @@ std::unique_ptr<net::device> create_dpdk_net_device(
                                     uint8_t port_idx,
                                     uint8_t num_queues)
 {
-    if (engine.cpu_id() == 0) {
-        // Init a DPDK EAL
-        dpdk::eal.init(opts);
-
-        return std::make_unique<dpdk::dpdk_device>(opts, port_idx, num_queues);
-    } else {
-        return nullptr;
-    }
+    static bool called = false;
+    assert(!called);
+    called = true;
+    // Init a DPDK EAL
+    dpdk::eal.init(opts);
+    return std::make_unique<dpdk::dpdk_device>(opts, port_idx, num_queues);
 }
 
 boost::program_options::options_description
