@@ -20,7 +20,7 @@ public:
     explicit temporary_buffer(size_t size)
         : _buffer(static_cast<CharType*>(malloc(size * sizeof(CharType)))), _size(size)
         , _deleter(make_free_deleter(_buffer)) {
-        if (!_buffer) {
+        if (size && !_buffer) {
             throw std::bad_alloc();
         }
     }
