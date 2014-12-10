@@ -476,7 +476,6 @@ void cpu_pages::do_resize(size_t new_size) {
         abort();
     }
     ::madvise(mmap_start, mmap_size, MADV_HUGEPAGE);
-    ::madvise(mmap_start, mmap_size, MADV_HUGEPAGE);
     // one past last page structure is a sentinel
     auto new_page_array_pages = align_up(sizeof(page[new_pages + 1]), page_size) / page_size;
     auto new_page_array
