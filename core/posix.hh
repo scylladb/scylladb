@@ -226,25 +226,25 @@ public:
         throw_system_error_on(r == -1);
     }
 
-    void *map(size_t size, unsigned prot, bool shared, size_t offset) {
-        void *x = mmap(NULL, size, prot, shared ? MAP_SHARED : MAP_PRIVATE, _fd, offset);
+    void *map(size_t size, unsigned prot, unsigned flags, size_t offset) {
+        void *x = mmap(NULL, size, prot, flags, _fd, offset);
         throw_system_error_on(x == MAP_FAILED);
         return x;
     }
 
     void *map_shared_rw(size_t size, size_t offset) {
-        return map(size, PROT_READ | PROT_WRITE, true, offset);
+        return map(size, PROT_READ | PROT_WRITE, MAP_SHARED, offset);
     }
 
     void *map_shared_ro(size_t size, size_t offset) {
-        return map(size, PROT_READ, true, offset);
+        return map(size, PROT_READ, MAP_SHARED, offset);
     }
 
     void *map_private_rw(size_t size, size_t offset) {
-        return map(size, PROT_READ | PROT_WRITE, false, offset);
+        return map(size, PROT_READ | PROT_WRITE, MAP_PRIVATE, offset);
     }
     void *map_private_ro(size_t size, size_t offset) {
-        return map(size, PROT_READ, false, offset);
+        return map(size, PROT_READ, MAP_PRIVATE, offset);
     }
 
 private:
