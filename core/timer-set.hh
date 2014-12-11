@@ -30,17 +30,17 @@ namespace bi = boost::intrusive;
  * expire. That's especially the case for TCP timers.
  *
  * The template type "Timer" should have a method named
- * get_timeout() which returns Clock::time_point which denotes
+ * get_timeout() which returns Timer::time_point which denotes
  * timer's expiration.
  */
-template<typename Timer, bi::list_member_hook<> Timer::*link, typename Clock>
+template<typename Timer, bi::list_member_hook<> Timer::*link>
 class timer_set {
 public:
-    using time_point = typename Clock::time_point;
+    using time_point = typename Timer::time_point;
     using timer_list_t = bi::list<Timer, bi::member_hook<Timer, bi::list_member_hook<>, link>>;
 private:
-    using duration = typename Clock::duration;
-    using timestamp_t = typename Clock::duration::rep;
+    using duration = typename Timer::duration;
+    using timestamp_t = typename Timer::duration::rep;
 
     static constexpr timestamp_t max_timestamp = std::numeric_limits<timestamp_t>::max();
     static constexpr int ulong_bits = std::numeric_limits<unsigned long>::digits;

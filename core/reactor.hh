@@ -100,7 +100,7 @@ public:
     bool cancel();
     time_point get_timeout();
     friend class reactor;
-    friend class timer_set<timer, &timer::_link, Clock>;
+    friend class timer_set<timer, &timer::_link>;
 };
 
 class pollable_fd_state {
@@ -580,8 +580,8 @@ private:
     semaphore _cpu_started;
     uint64_t _timers_completed;
     uint64_t _tasks_processed = 0;
-    timer_set<timer<>, &timer<>::_link, clock_type> _timers;
-    timer_set<timer<>, &timer<>::_link, clock_type>::timer_list_t _expired_timers;
+    timer_set<timer<>, &timer<>::_link> _timers;
+    timer_set<timer<>, &timer<>::_link>::timer_list_t _expired_timers;
     readable_eventfd _io_eventfd;
     io_context_t _io_context;
     semaphore _io_context_available;
