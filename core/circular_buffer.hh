@@ -58,6 +58,7 @@ public:
     bool empty() const;
     size_t size() const;
     size_t capacity() const;
+    T& operator[](size_t idx);
     template <typename Func>
     void for_each(Func func);
 private:
@@ -296,6 +297,17 @@ circular_buffer<T, Alloc>::pop_back() {
     }
     --_impl.end;
     --_impl.size;
+}
+
+template <typename T, typename Alloc>
+inline
+T&
+circular_buffer<T, Alloc>::operator[](size_t idx) {
+    auto p = _impl.begin + idx;
+    if (p >= _impl.storage + _impl.capacity) {
+        p -= _impl.capacity;
+    }
+    return *p;
 }
 
 #endif /* CIRCULAR_BUFFER_HH_ */
