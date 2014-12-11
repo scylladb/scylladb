@@ -136,6 +136,12 @@ public:
         throw_system_error_on(r == -1);
         return r;
     }
+    size_t size() {
+        struct stat buf;
+        auto r = ::fstat(_fd, &buf);
+        throw_system_error_on(r == -1);
+        return buf.st_size;
+    }
     boost::optional<size_t> read(void* buffer, size_t len) {
         auto r = ::read(_fd, buffer, len);
         if (r == -1 && errno == EAGAIN) {
