@@ -6,6 +6,18 @@
 #include "align.hh"
 #include <sys/mman.h>
 
+file_desc
+file_desc::temporary(sstring directory) {
+    // FIXME: add O_TMPFILE support one day
+    directory += "/XXXXXX";
+    std::vector<char> templat(directory.c_str(), directory.c_str() + directory.size() + 1);
+    int fd = ::mkstemp(templat.data());
+    throw_system_error_on(fd == -1);
+    int r = ::unlink(templat.data());
+    throw_system_error_on(r == -1); // leaks created file, but what can we do?
+    return file_desc(fd);
+}
+
 void mmap_deleter::operator()(void* ptr) const {
     ::munmap(ptr, _size);
 }

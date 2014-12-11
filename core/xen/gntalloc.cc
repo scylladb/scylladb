@@ -27,6 +27,7 @@ public:
 
 class userspace_gntalloc : public gntalloc {
     file_desc _gntalloc;
+    mmap_area _gntmap;
     struct ioctl_gntalloc_alloc_gref *get_gref(unsigned nr_ents);
 
 public:
@@ -60,7 +61,8 @@ grant_head *userspace_gntalloc::alloc_ref(unsigned nr_ents) {
 
     auto gref = get_gref(nr_ents);
 
-    char *addr = (char *)_gntalloc.map_shared_rw(4096 * nr_ents, gref->index);
+    _gntmap = _gntalloc.map_shared_rw(4096 * nr_ents, gref->index);
+    char *addr = _gntmap.get();
 
     std::vector<gntref> v;
     for (unsigned i = 0; i < nr_ents; ++i) {
@@ -77,7 +79,8 @@ gntref userspace_gntalloc::alloc_ref() {
 
     auto gref = get_gref(1);
 
-    void *addr = _gntalloc.map_shared_rw(4096, gref->index);
+    // FIXME: unmap?
+    void *addr = _gntalloc.map_shared_rw(4096, gref->index).release();
     auto p = gntref{int(gref->gref_ids[0]), addr};
     free(gref);
     return p;

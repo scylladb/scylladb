@@ -30,6 +30,14 @@ inline void throw_system_error_on(bool condition);
 template <typename T>
 inline void throw_kernel_error(T r);
 
+struct mmap_deleter {
+    size_t _size;
+    void operator()(void* ptr) const;
+};
+
+using mmap_area = std::unique_ptr<char[], mmap_deleter>;
+
+mmap_area mmap_anonymous(void* addr, size_t length, int prot, int flags);
 
 class file_desc {
     int _fd;
@@ -85,6 +93,7 @@ public:
         throw_system_error_on(fd == -1);
         return file_desc(fd);
     }
+    static file_desc temporary(sstring directory);
     file_desc dup() const {
         int fd = ::dup(get());
         throw_system_error_on(fd == -1);
@@ -94,6 +103,10 @@ public:
         auto ret = ::accept4(_fd, &sa, &sl, flags);
         throw_system_error_on(ret == -1);
         return file_desc(ret);
+    }
+    void truncate(size_t size) {
+        auto ret = ::ftruncate(_fd, size);
+        throw_system_error_on(ret);
     }
     int ioctl(int request) {
         return ioctl(request, 0);
@@ -130,6 +143,12 @@ public:
         int r = ::setsockopt(_fd, level, optname, data, strlen(data) + 1);
         throw_system_error_on(r == -1);
         return r;
+    }
+    size_t size() {
+        struct stat buf;
+        auto r = ::fstat(_fd, &buf);
+        throw_system_error_on(r == -1);
+        return buf.st_size;
     }
     boost::optional<size_t> read(void* buffer, size_t len) {
         auto r = ::read(_fd, buffer, len);
@@ -215,39 +234,32 @@ public:
         throw_system_error_on(r == -1);
     }
 
-    void *map(size_t size, unsigned flags, bool shared, size_t offset) {
-        void *x = mmap(NULL, size, flags, shared ? MAP_SHARED : MAP_PRIVATE, _fd, offset);
-        throw_system_error_on(x == nullptr);
-        return x;
+    mmap_area map(size_t size, unsigned prot, unsigned flags, size_t offset,
+            void* addr = nullptr) {
+        void *x = mmap(addr, size, prot, flags, _fd, offset);
+        throw_system_error_on(x == MAP_FAILED);
+        return mmap_area(static_cast<char*>(x), mmap_deleter{size});
     }
 
-    void *map_shared_rw(size_t size, size_t offset) {
-        return map(size, PROT_READ | PROT_WRITE, true, offset);
+    mmap_area map_shared_rw(size_t size, size_t offset) {
+        return map(size, PROT_READ | PROT_WRITE, MAP_SHARED, offset);
     }
 
-    void *map_shared_ro(size_t size, size_t offset) {
-        return map(size, PROT_READ, true, offset);
+    mmap_area map_shared_ro(size_t size, size_t offset) {
+        return map(size, PROT_READ, MAP_SHARED, offset);
     }
 
-    void *map_private_rw(size_t size, size_t offset) {
-        return map(size, PROT_READ | PROT_WRITE, false, offset);
+    mmap_area map_private_rw(size_t size, size_t offset) {
+        return map(size, PROT_READ | PROT_WRITE, MAP_PRIVATE, offset);
     }
-    void *map_private_ro(size_t size, size_t offset) {
-        return map(size, PROT_READ, false, offset);
+
+    mmap_area map_private_ro(size_t size, size_t offset) {
+        return map(size, PROT_READ, MAP_PRIVATE, offset);
     }
 
 private:
     file_desc(int fd) : _fd(fd) {}
  };
-
-struct mmap_deleter {
-    size_t _size;
-    void operator()(void* ptr) const;
-};
-
-using mmap_area = std::unique_ptr<char[], mmap_deleter>;
-
-mmap_area mmap_anonymous(void* addr, size_t length, int prot, int flags);
 
 class posix_thread {
 public:
