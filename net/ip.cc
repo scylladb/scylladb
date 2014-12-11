@@ -42,14 +42,6 @@ unsigned ipv4::handle_on_cpu(packet& p, size_t off)
 {
     auto iph = ntoh(*p.get_header<ip_hdr>(off));
 
-    if (_packet_filter) {
-        bool h = false;
-        auto r = _packet_filter->forward(p, off + sizeof(ip_hdr), iph.src_ip, iph.dst_ip, h);
-        if (h) {
-            return r;
-        }
-    }
-
     auto l4 = _l4[iph.ip_proto];
     if (!l4) {
         return engine.cpu_id();

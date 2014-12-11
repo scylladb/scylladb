@@ -257,9 +257,45 @@ public:
        : _stack(stack)
     {}
 
-    unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to, bool & handled) override {
-        handled = true;
-        return engine.cpu_id();
+    future<> process_packet(packet p, dhcp_payload* dhp, size_t opt_off) {
+        _retry_timer.cancel();
+
+        auto h = ntoh(*dhp);
+
+        ip_info info;
+
+        info.ip = h.bootp.yiaddr;
+        info.parse_options(p, opt_off);
+
+        switch (_state) {
+        case state::DISCOVER:
+            if (info.type != msg_type::OFFER) {
+                // TODO: log?
+                break;
+            }
+            log() << "Got offer for " << info.ip << std::endl;
+            // TODO, check for minimum valid/required fields sent back?
+            return send_request(info);
+        case state::REQUEST:
+            if (info.type == msg_type::NAK) {
+                log() << "Got nak on request" << std::endl;
+                _state = state::NONE;
+                return send_discover();
+            }
+            if (info.type != msg_type::ACK) {
+                break;
+            }
+            log() << "Got ack on request" << std::endl;
+            log() << " ip: " << info.ip << std::endl;
+            log() << " nm: " << info.netmask << std::endl;
+            log() << " gw: " << info.gateway << std::endl;
+            _state = state::DONE;
+            _result.set_value(true, info);
+            break;
+        default:
+            break;
+        }
+        return make_ready_future<>();
     }
 
     future<> handle(packet& p, ip_hdr* iph, ethernet_address from, bool & handled) override {
@@ -280,46 +316,14 @@ public:
                 || dhp->magic != options_magic) {
             return make_ready_future<>();
         }
-
-        _retry_timer.cancel();
-
-        auto h = ntoh(*dhp);
-
-        ip_info info;
-
-        info.ip = h.bootp.yiaddr;
-        info.parse_options(p, opt_off);
-
-        switch (_state) {
-        case state::DISCOVER:
-            if (info.type != msg_type::OFFER) {
-                // TODO: log?
-                break;
-            }
-            log() << "Got offer for " << info.ip << std::endl;
-            // TODO, check for minimum valid/required fields sent back?
-            handled = true;
-            return send_request(info);
-        case state::REQUEST:
-            if (info.type == msg_type::NAK) {
-                log() << "Got nak on request" << std::endl;
-                _state = state::NONE;
-                return send_discover();
-            }
-            if (info.type != msg_type::ACK) {
-                break;
-            }
-            log() << "Got ack on request" << std::endl;
-            log() << " ip: " << info.ip << std::endl;
-            log() << " nm: " << info.netmask << std::endl;
-            log() << " gw: " << info.gateway << std::endl;
-            handled = true;
-            _state = state::DONE;
-            _result.set_value(true, info);
-            break;
-        default:
-            break;
+        handled = true;
+        auto src_cpu = engine.cpu_id();
+        if (src_cpu == 0) {
+            return process_packet(std::move(p), dhp, opt_off);
         }
+        smp::submit_to(0, [this, p = std::move(p), src_cpu, dhp, opt_off]() mutable {
+            process_packet(p.free_on_cpu(src_cpu), dhp, opt_off);
+        });
         return make_ready_future<>();
     }
 
@@ -334,9 +338,6 @@ public:
             _result.set_value(false, lease());
         });
 
-        // Hijack the ip-stack.
-        _stack.set_packet_filter(this);
-
         send_discover(l.ip); // FIXME: ignoring return
         if (timeout.count()) {
             _timer.arm(timeout);
@@ -345,10 +346,7 @@ public:
             send_discover(l.ip);
         });
         _retry_timer.arm_periodic(1s);
-        return _result.get_future().finally([this]() {
-            assert(_stack.packet_filter() == this);
-            _stack.set_packet_filter(nullptr);
-        });
+        return _result.get_future();
     }
 
     template<typename T>
@@ -480,4 +478,8 @@ net::dhcp::result_type net::dhcp::discover(const clock_type::duration & timeout)
 
 net::dhcp::result_type net::dhcp::renew(const lease & l, const clock_type::duration & timeout) {
     return _impl->run(l, timeout);
+}
+
+net::ip_packet_filter* net::dhcp::get_ipv4_filter() {
+    return _impl.get();
 }

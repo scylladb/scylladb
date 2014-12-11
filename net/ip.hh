@@ -152,9 +152,6 @@ struct ip_hdr;
 struct ip_packet_filter {
     virtual ~ip_packet_filter() {};
     virtual future<> handle(packet& p, ip_hdr* iph, ethernet_address from, bool & handled) = 0;
-    virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to, bool & handled) {
-        return engine.cpu_id();
-    }
 };
 
 struct ipv4_frag_id {

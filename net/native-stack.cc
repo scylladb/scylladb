@@ -97,7 +97,9 @@ private:
     timer _timer;
 
     void on_dhcp(bool, const dhcp::lease &, bool);
-
+    void set_ipv4_packet_filter(ip_packet_filter* filter) {
+        _inet.set_packet_filter(filter);
+    }
     using tcp4 = tcp<ipv4_traits>;
 public:
     explicit native_network_stack(boost::program_options::variables_map opts, std::shared_ptr<device> dev);
@@ -167,7 +169,7 @@ void native_network_stack::on_dhcp(bool success, const dhcp::lease & res, bool i
         _config.set_value();
     }
 
-    if (smp::main_thread()) {
+    if (engine.cpu_id() == 0) {
         // And the other cpus, which, in the case of initial discovery,
         // will be waiting for us.
         for (unsigned i = 1; i < smp::count; i++) {
@@ -198,11 +200,27 @@ future<> native_network_stack::initialize() {
         if (!_dhcp) {
             return make_ready_future();
         }
+
         // Only run actual discover on main cpu.
         // All other cpus must simply for main thread to complete and signal them.
-        if (smp::main_thread()) {
+        if (engine.cpu_id() == 0) {
             shared_ptr<dhcp> d = make_shared<dhcp>(_inet);
+
+            // Hijack the ip-stack.
+            for (unsigned i = 0; i < smp::count; i++) {
+                smp::submit_to(i, [d] {
+                    auto & ns = static_cast<native_network_stack&>(engine.net());
+                    ns.set_ipv4_packet_filter(d->get_ipv4_filter());
+                });
+            }
+
             return d->discover().then([this, d](bool success, const dhcp::lease & res) {
+                for (unsigned i = 0; i < smp::count; i++) {
+                    smp::submit_to(i, [] {
+                        auto & ns = static_cast<native_network_stack&>(engine.net());
+                        ns.set_ipv4_packet_filter(nullptr);
+                    });
+                }
                 on_dhcp(success, res, false);
             });
         }
