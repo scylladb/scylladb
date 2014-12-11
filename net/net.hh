@@ -116,10 +116,6 @@ protected:
     }
 };
 
-struct device_placement {
-    std::unique_ptr<net::device> device;
-    std::set<unsigned> slaves_placement;
-};
 }
 
 #endif /* NET_HH_ */
