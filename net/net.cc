@@ -42,6 +42,10 @@ interface::register_l3(eth_protocol_num proto_num,
     return l3_rx.packet_stream.listen(std::move(next));
 }
 
+unsigned interface::hash2qid(uint32_t hash) {
+    return _dev->hash2qid(hash);
+}
+
 void interface::forward(unsigned cpuid, packet p) {
     static __thread unsigned queue_depth;
 

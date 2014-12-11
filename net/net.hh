@@ -99,6 +99,7 @@ public:
             std::function<future<> (packet p, ethernet_address from)> next,
             std::function<bool (forward_hash&, packet&, size_t)> forward);
     void forward(unsigned cpuid, packet p);
+    unsigned hash2qid(uint32_t hash);
     friend class l3_protocol;
 };
 
@@ -135,6 +136,9 @@ public:
     virtual net::hw_features hw_features() = 0;
     virtual uint16_t hw_queues_count() { return 1; }
     virtual std::unique_ptr<qp> init_local_queue(boost::program_options::variables_map opts, uint16_t qid) = 0;
+    virtual unsigned hash2qid(uint32_t hash) {
+        return hash % hw_queues_count();
+    }
     void set_local_queue(std::unique_ptr<qp> dev) {
         assert(!_queues[engine.cpu_id()]);
         _queues[engine.cpu_id()] = dev.get();

@@ -155,7 +155,7 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
                 hash_data.push_back(hton(h.src_ip.ip));
                 hash_data.push_back(hton(h.dst_ip.ip));
                 l4->forward(hash_data, ip_data, l4_offset);
-                cpu_id = toeplitz_hash(rsskey, hash_data) % smp::count;
+                cpu_id = _netif->hash2qid(toeplitz_hash(rsskey, hash_data));
             }
 
             // No need to forward if the dst cpu is the current cpu

@@ -169,6 +169,9 @@ public:
     }
     virtual uint16_t hw_queues_count() override { return _num_queues; }
     virtual std::unique_ptr<qp> init_local_queue(boost::program_options::variables_map opts, uint16_t qid) override;
+    virtual unsigned hash2qid(uint32_t hash) override {
+        return _redir_table[hash & (_redir_table.size() - 1)];
+    }
     uint8_t port_idx() { return _port_idx; }
 };
 
