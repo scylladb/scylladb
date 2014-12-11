@@ -97,6 +97,7 @@ class dpdk_device : public device {
     net::hw_features _hw_features;
     uint8_t _queues_ready = 0;
     unsigned _home_cpu;
+    std::array<uint8_t, ETH_RSS_RETA_NUM_ENTRIES> _redir_table;
 
 public:
     rte_eth_dev_info _dev_info = {};
@@ -612,6 +613,12 @@ std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variab
             if (rte_eth_dev_start(_port_idx) < 0) {
                 rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
             }
+            rte_eth_rss_reta reta_conf { ~0ull, ~0ull };
+            if (rte_eth_dev_rss_reta_query(_port_idx, &reta_conf)) {
+                rte_exit(EXIT_FAILURE, "Cannot get redirection table for pot %d\n", _port_idx);
+            }
+            assert(sizeof(reta_conf.reta) == _redir_table.size());
+            std::copy(reta_conf.reta, reta_conf.reta + _redir_table.size(), _redir_table.begin());
         }
     });
     return std::move(qp);
