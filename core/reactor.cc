@@ -712,11 +712,15 @@ void smp_message_queue::complete() {
 }
 
 size_t smp_message_queue::process_incoming() {
-    return _pending.consume_all([this] (smp_message_queue::work_item* wi) {
+    work_item* items[queue_length];
+    auto nr = _pending.pop(items);
+    for (unsigned i = 0; i < nr; ++i) {
+        auto wi = items[i];
         wi->process().then([this, wi] {
             respond(wi);
         });
-    });
+    }
+    return nr;
 }
 
 void smp_message_queue::start() {
