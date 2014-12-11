@@ -61,6 +61,9 @@ public:
     T& operator[](size_t idx);
     template <typename Func>
     void for_each(Func func);
+    // access an element, may return wrong or destroyed element
+    // only useful if you do not rely on data accuracy (e.g. prefetch)
+    T& access_element_unsafe(size_t idx);
 private:
     void expand();
     void maybe_expand(size_t nr = 1);
@@ -284,6 +287,13 @@ template <typename T, typename Alloc>
 inline
 T&
 circular_buffer<T, Alloc>::operator[](size_t idx) {
+    return _impl.storage[mask(_impl.begin + idx)];
+}
+
+template <typename T, typename Alloc>
+inline
+T&
+circular_buffer<T, Alloc>::access_element_unsafe(size_t idx) {
     return _impl.storage[mask(_impl.begin + idx)];
 }
 
