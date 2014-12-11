@@ -305,13 +305,13 @@ void reactor_backend_epoll::enable_timer(clock_type::time_point when)
     _timerfd.get_file_desc().timerfd_settime(TFD_TIMER_ABSTIME, its);
 }
 
-void reactor::add_timer(timer* tmr) {
+void reactor::add_timer(timer<>* tmr) {
     if (_timers.insert(*tmr)) {
         enable_timer(_timers.get_next_timeout());
     }
 }
 
-void reactor::del_timer(timer* tmr) {
+void reactor::del_timer(timer<>* tmr) {
     if (tmr->_expired) {
         _expired_timers.erase(_expired_timers.iterator_to(*tmr));
         tmr->_expired = false;

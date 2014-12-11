@@ -23,7 +23,7 @@ typename Duration::rep to_seconds(Duration d) {
 class server {
 private:
     udp_channel _chan;
-    timer _stats_timer;
+    timer<> _stats_timer;
     uint64_t _n_sent {};
     size_t _chunk_size;
     bool _copy;

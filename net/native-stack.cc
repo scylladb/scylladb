@@ -94,7 +94,7 @@ private:
     udp_v4 _udp;
     bool _dhcp = false;
     promise<> _config;
-    timer _timer;
+    timer<> _timer;
 
     void on_dhcp(bool, const dhcp::lease &, bool);
 

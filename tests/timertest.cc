@@ -18,11 +18,11 @@ using namespace std::chrono_literals;
     } while (0)
 
 struct timer_test {
-    timer t1;
-    timer t2;
-    timer t3;
-    timer t4;
-    timer t5;
+    timer<> t1;
+    timer<> t2;
+    timer<> t3;
+    timer<> t4;
+    timer<> t5;
 
     void run() {
         t1.set_callback([this] {
@@ -50,7 +50,7 @@ struct timer_test {
     }
 
     void test_timer_cancelling() {
-        timer& t1 = *new timer();
+        timer<>& t1 = *new timer<>();
         t1.set_callback([] { BUG(); });
         t1.arm(100ms);
         t1.cancel();

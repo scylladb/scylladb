@@ -222,7 +222,7 @@ private:
     static constexpr uint32_t _frag_low_thresh{3 * 1024 * 1024};
     static constexpr uint32_t _frag_high_thresh{4 * 1024 * 1024};
     uint32_t _frag_mem{0};
-    timer _frag_timer;
+    timer<> _frag_timer;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
     unsigned handle_on_cpu(packet& p, size_t off);

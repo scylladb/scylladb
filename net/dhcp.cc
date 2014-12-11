@@ -445,8 +445,8 @@ public:
 private:
     promise<bool, lease> _result;
     state _state = state::NONE;
-    timer _timer;
-    timer _retry_timer;
+    timer<> _timer;
+    timer<> _retry_timer;
     ipv4 & _stack;
     uint32_t _xid = 0;
 };

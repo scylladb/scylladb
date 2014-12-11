@@ -24,7 +24,7 @@ using namespace std::chrono_literals;
 
 class scollectd::impl {
     net::udp_channel _chan;
-    timer _timer;
+    timer<> _timer;
 
     std::string _host = "localhost";
     ipv4_addr _addr = default_addr;

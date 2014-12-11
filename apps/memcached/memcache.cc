@@ -721,8 +721,8 @@ private:
     cache_bucket* _buckets;
     cache_type _cache;
     timer_set<item_type, &item_type::_timer_link, clock_type> _alive;
-    timer _timer;
-    timer _flush_timer;
+    timer<> _timer;
+    timer<> _flush_timer;
     memory::reclaimer _reclaimer;
 private:
     size_t item_footprint(item_type& item_ref) {
@@ -1741,7 +1741,7 @@ public:
 template <bool WithFlashCache>
 class stats_printer {
 private:
-    timer _timer;
+    timer<> _timer;
     sharded_cache<WithFlashCache>& _cache;
 public:
     stats_printer(sharded_cache<WithFlashCache>& cache)

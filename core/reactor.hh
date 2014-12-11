@@ -73,12 +73,18 @@ std::unique_ptr<CharType[], free_deleter> allocate_aligned_buffer(size_t size, s
 
 using clock_type = std::chrono::high_resolution_clock;
 
+template <typename Clock = std::chrono::high_resolution_clock>
 class timer {
+public:
+    typedef typename Clock::time_point time_point;
+    typedef typename Clock::duration duration;
+    typedef Clock clock;
+private:
     using callback_t = std::function<void()>;
     boost::intrusive::list_member_hook<> _link;
     callback_t _callback;
-    clock_type::time_point _expiry;
-    boost::optional<clock_type::duration> _period;
+    time_point _expiry;
+    boost::optional<duration> _period;
     bool _armed = false;
     bool _queued = false;
     bool _expired = false;
@@ -86,15 +92,15 @@ public:
     ~timer();
     future<> expired();
     void set_callback(callback_t&& callback);
-    void arm(clock_type::time_point until, boost::optional<clock_type::duration> period = {});
-    void rearm(clock_type::time_point until, boost::optional<clock_type::duration> period = {});
-    void arm(clock_type::duration delta);
-    void arm_periodic(clock_type::duration delta);
+    void arm(time_point until, boost::optional<duration> period = {});
+    void rearm(time_point until, boost::optional<duration> period = {});
+    void arm(duration delta);
+    void arm_periodic(duration delta);
     bool armed() const { return _armed; }
     bool cancel();
-    clock_type::time_point get_timeout();
+    time_point get_timeout();
     friend class reactor;
-    friend class timer_set<timer, &timer::_link, clock_type>;
+    friend class timer_set<timer, &timer::_link, Clock>;
 };
 
 class pollable_fd_state {
@@ -574,8 +580,8 @@ private:
     semaphore _cpu_started;
     uint64_t _timers_completed;
     uint64_t _tasks_processed = 0;
-    timer_set<timer, &timer::_link, clock_type> _timers;
-    timer_set<timer, &timer::_link, clock_type>::timer_list_t _expired_timers;
+    timer_set<timer<>, &timer<>::_link, clock_type> _timers;
+    timer_set<timer<>, &timer<>::_link, clock_type>::timer_list_t _expired_timers;
     readable_eventfd _io_eventfd;
     io_context_t _io_context;
     semaphore _io_context_available;
@@ -660,8 +666,8 @@ private:
 
     void process_io(size_t count);
 
-    void add_timer(timer* tmr);
-    void del_timer(timer* tmr);
+    void add_timer(timer<>* tmr);
+    void del_timer(timer<>* tmr);
 
     future<> run_exit_tasks();
     void stop();
@@ -670,7 +676,7 @@ private:
     friend class posix_file_impl;
     friend class blockdev_file_impl;
     friend class readable_eventfd;
-    friend class timer;
+    friend class timer<>;
     friend class smp;
     friend class smp_message_queue;
     friend class poller;
@@ -1300,20 +1306,23 @@ future<size_t> pollable_fd::sendto(socket_address addr, const void* buf, size_t 
     });
 }
 
+template <typename Clock>
 inline
-timer::~timer() {
+timer<Clock>::~timer() {
     if (_queued) {
         engine.del_timer(this);
     }
 }
 
+template <typename Clock>
 inline
-void timer::set_callback(callback_t&& callback) {
+void timer<Clock>::set_callback(callback_t&& callback) {
     _callback = std::move(callback);
 }
 
+template <typename Clock>
 inline
-void timer::arm(clock_type::time_point until, boost::optional<clock_type::duration> period) {
+void timer<Clock>::arm(time_point until, boost::optional<duration> period) {
     assert(!_armed);
     _period = period;
     _armed = true;
@@ -1323,26 +1332,30 @@ void timer::arm(clock_type::time_point until, boost::optional<clock_type::durati
     _queued = true;
 }
 
+template <typename Clock>
 inline
-void timer::rearm(clock_type::time_point until, boost::optional<clock_type::duration> period) {
+void timer<Clock>::rearm(time_point until, boost::optional<duration> period) {
     if (_armed) {
         cancel();
     }
     arm(until, period);
 }
 
+template <typename Clock>
 inline
-void timer::arm(clock_type::duration delta) {
-    return arm(clock_type::now() + delta);
+void timer<Clock>::arm(duration delta) {
+    return arm(Clock::now() + delta);
 }
 
+template <typename Clock>
 inline
-void timer::arm_periodic(clock_type::duration delta) {
-    arm(clock_type::now() + delta, {delta});
+void timer<Clock>::arm_periodic(duration delta) {
+    arm(Clock::now() + delta, {delta});
 }
 
+template <typename Clock>
 inline
-bool timer::cancel() {
+bool timer<Clock>::cancel() {
     if (!_armed) {
         return false;
     }
@@ -1354,8 +1367,9 @@ bool timer::cancel() {
     return true;
 }
 
+template <typename Clock>
 inline
-clock_type::time_point timer::get_timeout() {
+typename timer<Clock>::time_point timer<Clock>::get_timeout() {
     return _expiry;
 }
 

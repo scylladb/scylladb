@@ -214,7 +214,7 @@ private:
             std::experimental::optional<promise<>> _data_received_promise;
         } _rcv;
         tcp_option _option;
-        timer _delayed_ack;
+        timer<> _delayed_ack;
         // Retransmission timeout
         std::chrono::milliseconds _rto{1000};
         static constexpr std::chrono::milliseconds _rto_min{1000};
@@ -222,7 +222,7 @@ private:
         // Clock granularity
         static constexpr std::chrono::milliseconds _rto_clk_granularity{1};
         static constexpr uint16_t _max_nr_retransmit{5};
-        timer _retransmit;
+        timer<> _retransmit;
         uint16_t _nr_full_seg_received = 0;
         struct isn_secret {
             // 512 bits secretkey for ISN generating
