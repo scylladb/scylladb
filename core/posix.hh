@@ -228,7 +228,7 @@ public:
 
     void *map(size_t size, unsigned flags, bool shared, size_t offset) {
         void *x = mmap(NULL, size, flags, shared ? MAP_SHARED : MAP_PRIVATE, _fd, offset);
-        throw_system_error_on(x == nullptr);
+        throw_system_error_on(x == MAP_FAILED);
         return x;
     }
 
