@@ -335,7 +335,7 @@ future<> reactor_backend_epoll::timers_completed() {
 void reactor::complete_timers() {
     timers_completed().then(
             [this] () {
-        _expired_timers = _timers.expire(clock_type::now());
+        _expired_timers = _timers.expire(_timers.now());
         for (auto& t : _expired_timers) {
             t._expired = true;
         }

@@ -237,6 +237,10 @@ public:
     {
         return _non_empty_buckets.none();
     }
+
+    time_point now() {
+        return Timer::clock::now();
+    }
 };
 
 #endif
