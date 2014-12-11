@@ -37,7 +37,7 @@ namespace xen {
 
 using phys = uint64_t;
 
-class xenfront_distributed_device : public distributed_device {
+class xenfront_device : public device {
     net::hw_features _hw_features;
     ethernet_address _hw_address;
     std::string _device_str;
@@ -47,7 +47,7 @@ public:
     bool _userspace;
 
 public:
-    xenfront_distributed_device(boost::program_options::variables_map opts, bool userspace)
+    xenfront_device(boost::program_options::variables_map opts, bool userspace)
     : _hw_address(net::parse_ethernet_address(_xenstore->read(path("mac"))))
     , _device_str("device/vif/" + std::to_string(opts["vif"].as<unsigned>()))
     , _userspace(userspace) {
@@ -68,7 +68,7 @@ public:
 
 class xenfront_qp : public net::qp {
 private:
-    xenfront_distributed_device* _dev;
+    xenfront_device* _dev;
 
     unsigned _otherend;
     std::string _backend;
@@ -97,7 +97,7 @@ private:
     std::string path(std::string s) { return _dev->path(s); }
 
 public:
-    explicit xenfront_qp(xenfront_distributed_device* dev, boost::program_options::variables_map opts);
+    explicit xenfront_qp(xenfront_device* dev, boost::program_options::variables_map opts);
     ~xenfront_qp();
     virtual void rx_start() override;
     virtual future<> send(packet p) override;
@@ -288,7 +288,7 @@ port xenfront_qp::bind_rx_evtchn(bool split) {
     return _evtchn->bind(_tx_evtchn.number());
 }
 
-xenfront_qp::xenfront_qp(xenfront_distributed_device* dev, boost::program_options::variables_map opts)
+xenfront_qp::xenfront_qp(xenfront_device* dev, boost::program_options::variables_map opts)
     : _dev(dev)
     , _otherend(_dev->_xenstore->read<int>(path("backend-id")))
     , _backend(_dev->_xenstore->read(path("backend")))
@@ -389,7 +389,7 @@ get_xenfront_net_options_description() {
     return opts;
 }
 
-void xenfront_distributed_device::init_local_queue(boost::program_options::variables_map opts) {
+void xenfront_device::init_local_queue(boost::program_options::variables_map opts) {
     std::unique_ptr<qp> ptr;
 
     if (engine.cpu_id() == 0) {
@@ -406,9 +406,9 @@ void xenfront_distributed_device::init_local_queue(boost::program_options::varia
     set_local_queue(std::move(ptr));
 }
 
-std::unique_ptr<net::distributed_device> create_xenfront_net_device(boost::program_options::variables_map opts, bool userspace) {
+std::unique_ptr<net::device> create_xenfront_net_device(boost::program_options::variables_map opts, bool userspace) {
     if (engine.cpu_id() == 0) {
-        return std::make_unique<xenfront_distributed_device>(opts, userspace);
+        return std::make_unique<xenfront_device>(opts, userspace);
     } else {
         return nullptr;
     }

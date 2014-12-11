@@ -30,7 +30,7 @@
 
 using namespace net;
 
-class virtio_distributed_device : public distributed_device {
+class virtio_device : public device {
 private:
     boost::program_options::variables_map _opts;
     net::hw_features _hw_features;
@@ -71,7 +71,7 @@ private:
     }
 
 public:
-    virtio_distributed_device(boost::program_options::variables_map opts)
+    virtio_device(boost::program_options::variables_map opts)
        : _opts(opts), _features(setup_features())
        {}
     ethernet_address hw_address() override {
@@ -529,7 +529,7 @@ protected:
         future<> prepare_buffers();
     };
 protected:
-    virtio_distributed_device* _dev;
+    virtio_device* _dev;
     size_t _header_len;
     std::unique_ptr<char[], free_deleter> _txq_storage;
     std::unique_ptr<char[], free_deleter> _rxq_storage;
@@ -541,7 +541,7 @@ protected:
     void common_config(vring::config& r);
     size_t vring_storage_size(size_t ring_size);
 public:
-    explicit virtio_qp(virtio_distributed_device* dev, size_t rx_ring_size, size_t tx_ring_size);
+    explicit virtio_qp(virtio_device* dev, size_t rx_ring_size, size_t tx_ring_size);
     virtual future<> send(packet p) override;
     virtual void rx_start() override;
     virtual phys virt_to_phys(void* p) {
@@ -701,7 +701,7 @@ static std::unique_ptr<char[], free_deleter> virtio_buffer(size_t size) {
     return std::unique_ptr<char[], free_deleter>(reinterpret_cast<char*>(ret));
 }
 
-virtio_qp::virtio_qp(virtio_distributed_device* dev, size_t rx_ring_size, size_t tx_ring_size)
+virtio_qp::virtio_qp(virtio_device* dev, size_t rx_ring_size, size_t tx_ring_size)
     : _dev(dev)
     , _txq_storage(virtio_buffer(vring_storage_size(tx_ring_size)))
     , _rxq_storage(virtio_buffer(vring_storage_size(rx_ring_size)))
@@ -780,7 +780,7 @@ private:
     // this driver, as as soon as we close it, vhost stops servicing us.
     file_desc _vhost_fd;
 public:
-    virtio_qp_vhost(virtio_distributed_device* dev, boost::program_options::variables_map opts);
+    virtio_qp_vhost(virtio_device* dev, boost::program_options::variables_map opts);
 };
 
 static size_t config_ring_size(boost::program_options::variables_map &opts) {
@@ -791,7 +791,7 @@ static size_t config_ring_size(boost::program_options::variables_map &opts) {
     }
 }
 
-virtio_qp_vhost::virtio_qp_vhost(virtio_distributed_device *dev, boost::program_options::variables_map opts)
+virtio_qp_vhost::virtio_qp_vhost(virtio_device *dev, boost::program_options::variables_map opts)
     : virtio_qp(dev, config_ring_size(opts), config_ring_size(opts))
     , _vhost_fd(file_desc::open("/dev/vhost-net", O_RDWR))
 {
@@ -959,7 +959,7 @@ virtio_qp_osv::virtio_qp_osv(osv::assigned_virtio &virtio,
 }
 #endif
 
-void virtio_distributed_device::init_local_queue(boost::program_options::variables_map opts) {
+void virtio_device::init_local_queue(boost::program_options::variables_map opts) {
     std::unique_ptr<qp> ptr;
 
     if (engine.cpu_id() == 0) {
@@ -982,10 +982,10 @@ void virtio_distributed_device::init_local_queue(boost::program_options::variabl
     set_local_queue(std::move(ptr));
 }
 
-std::unique_ptr<net::distributed_device> create_virtio_net_device(boost::program_options::variables_map opts) {
+std::unique_ptr<net::device> create_virtio_net_device(boost::program_options::variables_map opts) {
 
     if (engine.cpu_id() == 0) {
-        return std::make_unique<virtio_distributed_device>(opts);
+        return std::make_unique<virtio_device>(opts);
     } else {
         return nullptr;
     }

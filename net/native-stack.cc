@@ -55,12 +55,12 @@ static xen_info is_xen()
 #endif
 
 void create_native_net_device(boost::program_options::variables_map opts) {
-    std::unique_ptr<distributed_device> device;
+    std::unique_ptr<device> dev;
 
 #ifdef HAVE_XEN
     auto xen = is_xen();
     if (xen != xen_info::nonxen) {
-        device = xen::create_xenfront_net_device(opts, xen == xen_info::userspace);
+        dev = xen::create_xenfront_net_device(opts, xen == xen_info::userspace);
     } else
 #endif
 
@@ -68,13 +68,13 @@ void create_native_net_device(boost::program_options::variables_map opts) {
     if (opts["dpdk-pmd"].as<bool>()) {
         // Hardcoded port index 0.
         // TODO: Inherit it from the opts
-        device = create_dpdk_net_device(opts, 0, smp::count);
+        dev = create_dpdk_net_device(opts, 0, smp::count);
     } else
 #endif
-    device = create_virtio_net_device(opts);
+    dev = create_virtio_net_device(opts);
 
-    if (device) {
-        std::shared_ptr<distributed_device> sdev(device.release());
+    if (dev) {
+        std::shared_ptr<device> sdev(dev.release());
         for (unsigned i = 0; i < smp::count; i++) {
             smp::submit_to(i, [opts, sdev] {
                 sdev->init_local_queue(opts);
@@ -100,7 +100,7 @@ private:
 
     using tcp4 = tcp<ipv4_traits>;
 public:
-    explicit native_network_stack(boost::program_options::variables_map opts, std::shared_ptr<distributed_device> dev);
+    explicit native_network_stack(boost::program_options::variables_map opts, std::shared_ptr<device> dev);
     virtual server_socket listen(socket_address sa, listen_options opt) override;
     virtual udp_channel make_udp_channel(ipv4_addr addr) override;
     virtual future<> initialize() override;
@@ -135,7 +135,7 @@ add_native_net_options_description(boost::program_options::options_description &
 #endif
 }
 
-native_network_stack::native_network_stack(boost::program_options::variables_map opts, std::shared_ptr<distributed_device> dev)
+native_network_stack::native_network_stack(boost::program_options::variables_map opts, std::shared_ptr<device> dev)
     : _netif(std::move(dev))
     , _inet(&_netif)
     , _udp(_inet) {
@@ -210,7 +210,7 @@ future<> native_network_stack::initialize() {
     });
 }
 
-void create_native_stack(boost::program_options::variables_map opts, std::shared_ptr<distributed_device> dev) {
+void create_native_stack(boost::program_options::variables_map opts, std::shared_ptr<device> dev) {
     native_network_stack::ready_promise.set_value(std::unique_ptr<network_stack>(std::make_unique<native_network_stack>(opts, std::move(dev))));
 }
 

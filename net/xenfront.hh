@@ -13,7 +13,7 @@
 
 namespace xen {
 
-std::unique_ptr<net::distributed_device> create_xenfront_net_device(boost::program_options::variables_map opts, bool userspace);
+std::unique_ptr<net::device> create_xenfront_net_device(boost::program_options::variables_map opts, bool userspace);
 boost::program_options::options_description get_xenfront_net_options_description();
 
 struct netif_tx_request {

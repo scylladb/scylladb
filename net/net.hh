@@ -18,7 +18,7 @@ namespace net {
 
 class packet;
 class interface;
-class distributed_device;
+class device;
 class qp;
 class l3_protocol;
 
@@ -60,7 +60,7 @@ class interface {
         l3_rx_stream(std::function<unsigned (packet&, size_t)>&& fw) : ready(packet_stream.started()), forward(fw) {}
     };
     std::unordered_map<uint16_t, l3_rx_stream> _proto_map;
-    std::shared_ptr<distributed_device> _dev;
+    std::shared_ptr<device> _dev;
     subscription<packet> _rx;
     ethernet_address _hw_address;
     net::hw_features _hw_features;
@@ -68,7 +68,7 @@ private:
     future<> dispatch_packet(packet p);
     future<> send(eth_protocol_num proto_num, ethernet_address to, packet p);
 public:
-    explicit interface(std::shared_ptr<distributed_device> dev);
+    explicit interface(std::shared_ptr<device> dev);
     ethernet_address hw_address() { return _hw_address; }
     net::hw_features hw_features() { return _hw_features; }
     subscription<packet, ethernet_address> register_l3(eth_protocol_num proto_num,
@@ -87,17 +87,17 @@ public:
     virtual void rx_start() {};
     bool may_forward() { return !proxies.empty(); }
     void add_proxy(unsigned cpu) { proxies.push_back(cpu); }
-    friend class distributed_device;
+    friend class device;
 };
 
-class distributed_device {
+class device {
 protected:
     std::unique_ptr<qp*[]> _queues;
 public:
-    distributed_device() {
+    device() {
         _queues = std::make_unique<qp*[]>(smp::count);
     }
-    virtual ~distributed_device() {};
+    virtual ~device() {};
     qp& queue_for_cpu(unsigned cpu) { return *_queues[cpu]; }
     qp& local_queue() { return queue_for_cpu(engine.cpu_id()); }
     void l2receive(packet p) { _queues[engine.cpu_id()]->_rx_stream.produce(std::move(p)); }

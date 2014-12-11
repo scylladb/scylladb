@@ -92,7 +92,7 @@ private:
     uint8_t _num_ports;
 } eal;
 
-class dpdk_distributed_device : public distributed_device {
+class dpdk_device : public device {
     uint8_t _port_idx;
     uint8_t _num_queues;
     net::hw_features _hw_features;
@@ -122,7 +122,7 @@ private:
     void check_port_link_status();
 
 public:
-    dpdk_distributed_device(boost::program_options::variables_map opts,
+    dpdk_device(boost::program_options::variables_map opts,
                         uint8_t port_idx, uint8_t num_queues)
         : _port_idx(port_idx)
         , _num_queues(num_queues) {
@@ -170,7 +170,7 @@ public:
 
 class dpdk_qp : public net::qp {
 public:
-    explicit dpdk_qp(dpdk_distributed_device* dev, uint8_t qid);
+    explicit dpdk_qp(dpdk_device* dev, uint8_t qid);
 
     virtual future<> send(packet p) override;
 
@@ -221,13 +221,13 @@ private:
     size_t copy_one_data_buf(rte_mbuf*& m, char* data, size_t l);
 
 private:
-    dpdk_distributed_device* _dev;
+    dpdk_device* _dev;
     uint8_t _qid;
     rte_mempool* _pktmbuf_pool;
     reactor::poller _rx_poller;
 };
 
-int dpdk_distributed_device::init_port()
+int dpdk_device::init_port()
 {
     eal.get_port_hw_info(_port_idx, &_dev_info);
 
@@ -324,7 +324,7 @@ bool dpdk_qp::init_mbuf_pools()
     return _pktmbuf_pool != NULL;
 }
 
-void dpdk_distributed_device::check_port_link_status()
+void dpdk_device::check_port_link_status()
 {
     using namespace std::literals::chrono_literals;
     constexpr auto check_interval = 100ms;
@@ -360,7 +360,7 @@ void dpdk_distributed_device::check_port_link_status()
 }
 
 
-dpdk_qp::dpdk_qp(dpdk_distributed_device* dev, uint8_t qid)
+dpdk_qp::dpdk_qp(dpdk_device* dev, uint8_t qid)
      : _dev(dev), _qid(qid), _rx_poller([&] { poll_rx_once(); return true; })
 {
     if (!init_mbuf_pools()) {
@@ -608,7 +608,7 @@ void dpdk_eal::init(boost::program_options::variables_map opts)
     _initialized = true;
 }
 
-void dpdk_distributed_device::init_local_queue(boost::program_options::variables_map opts) {
+void dpdk_device::init_local_queue(boost::program_options::variables_map opts) {
     std::unique_ptr<qp> ptr;
 
     if (engine.cpu_id() < smp::count) {
@@ -636,7 +636,7 @@ void dpdk_distributed_device::init_local_queue(boost::program_options::variables
 
 /******************************** Interface functions *************************/
 
-std::unique_ptr<net::distributed_device> create_dpdk_net_device(
+std::unique_ptr<net::device> create_dpdk_net_device(
                                     boost::program_options::variables_map opts,
                                     uint8_t port_idx,
                                     uint8_t num_queues)
@@ -645,7 +645,7 @@ std::unique_ptr<net::distributed_device> create_dpdk_net_device(
         // Init a DPDK EAL
         dpdk::eal.init(opts);
 
-        return std::make_unique<dpdk::dpdk_distributed_device>(opts, port_idx, num_queues);
+        return std::make_unique<dpdk::dpdk_device>(opts, port_idx, num_queues);
     } else {
         return nullptr;
     }

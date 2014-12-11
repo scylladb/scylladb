@@ -70,7 +70,7 @@ void usage()
 #endif
 
 int main(int ac, char** av) {
-    std::unique_ptr<net::distributed_device> dnet;
+    std::unique_ptr<net::device> dnet;
     net::qp* vnet;
 
     boost::program_options::variables_map opts;

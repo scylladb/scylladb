@@ -10,13 +10,13 @@ private:
     size_t _send_depth = 0;
     promise<> _send_promise;
     unsigned _cpu;
-    distributed_device* _dev;
+    device* _dev;
 public:
-    explicit proxy_net_device(unsigned cpu, distributed_device* dev);
+    explicit proxy_net_device(unsigned cpu, device* dev);
     virtual future<> send(packet p) override;
 };
 
-proxy_net_device::proxy_net_device(unsigned cpu, distributed_device* dev) :
+proxy_net_device::proxy_net_device(unsigned cpu, device* dev) :
         _cpu(cpu),
         _dev(dev)
 {
@@ -46,7 +46,7 @@ future<> proxy_net_device::send(packet p)
     return make_ready_future();
 }
 
-std::unique_ptr<qp> create_proxy_net_device(unsigned master_cpu, distributed_device* dev) {
+std::unique_ptr<qp> create_proxy_net_device(unsigned master_cpu, device* dev) {
     return std::make_unique<proxy_net_device>(master_cpu, dev);
 }
 }

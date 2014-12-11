@@ -24,7 +24,7 @@ future<> l3_protocol::send(ethernet_address to, packet p) {
     return _netif->send(_proto_num, to, std::move(p));
 }
 
-interface::interface(std::shared_ptr<distributed_device> dev)
+interface::interface(std::shared_ptr<device> dev)
     : _dev(dev)
     , _rx(_dev->receive([this] (packet p) { return dispatch_packet(std::move(p)); }))
     , _hw_address(_dev->hw_address())
