@@ -30,6 +30,14 @@ inline void throw_system_error_on(bool condition);
 template <typename T>
 inline void throw_kernel_error(T r);
 
+struct mmap_deleter {
+    size_t _size;
+    void operator()(void* ptr) const;
+};
+
+using mmap_area = std::unique_ptr<char[], mmap_deleter>;
+
+mmap_area mmap_anonymous(void* addr, size_t length, int prot, int flags);
 
 class file_desc {
     int _fd;
@@ -226,40 +234,32 @@ public:
         throw_system_error_on(r == -1);
     }
 
-    void *map(size_t size, unsigned prot, unsigned flags, size_t offset,
+    mmap_area map(size_t size, unsigned prot, unsigned flags, size_t offset,
             void* addr = nullptr) {
         void *x = mmap(addr, size, prot, flags, _fd, offset);
         throw_system_error_on(x == MAP_FAILED);
-        return x;
+        return mmap_area(static_cast<char*>(x), mmap_deleter{size});
     }
 
-    void *map_shared_rw(size_t size, size_t offset) {
+    mmap_area map_shared_rw(size_t size, size_t offset) {
         return map(size, PROT_READ | PROT_WRITE, MAP_SHARED, offset);
     }
 
-    void *map_shared_ro(size_t size, size_t offset) {
+    mmap_area map_shared_ro(size_t size, size_t offset) {
         return map(size, PROT_READ, MAP_SHARED, offset);
     }
 
-    void *map_private_rw(size_t size, size_t offset) {
+    mmap_area map_private_rw(size_t size, size_t offset) {
         return map(size, PROT_READ | PROT_WRITE, MAP_PRIVATE, offset);
     }
-    void *map_private_ro(size_t size, size_t offset) {
+
+    mmap_area map_private_ro(size_t size, size_t offset) {
         return map(size, PROT_READ, MAP_PRIVATE, offset);
     }
 
 private:
     file_desc(int fd) : _fd(fd) {}
  };
-
-struct mmap_deleter {
-    size_t _size;
-    void operator()(void* ptr) const;
-};
-
-using mmap_area = std::unique_ptr<char[], mmap_deleter>;
-
-mmap_area mmap_anonymous(void* addr, size_t length, int prot, int flags);
 
 class posix_thread {
 public:
