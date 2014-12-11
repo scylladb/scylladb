@@ -686,10 +686,14 @@ void smp_message_queue::flush_response_batch() {
 }
 
 size_t smp_message_queue::process_completions() {
-    auto nr = _completed.consume_all([this] (work_item* wi) {
-        wi->complete();
-        delete wi;
-    });
+    // copy batch to local memory in order to minimize
+    // time in which cross-cpu data is accessed
+    work_item* items[queue_length];
+    auto nr = _completed.pop(items);
+    for (unsigned i = 0; i < nr; ++i) {
+        items[i]->complete();
+        delete items[i];
+    }
 
     _current_queue_length -= nr;
 
