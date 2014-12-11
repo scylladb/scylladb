@@ -226,8 +226,9 @@ public:
         throw_system_error_on(r == -1);
     }
 
-    void *map(size_t size, unsigned prot, unsigned flags, size_t offset) {
-        void *x = mmap(NULL, size, prot, flags, _fd, offset);
+    void *map(size_t size, unsigned prot, unsigned flags, size_t offset,
+            void* addr = nullptr) {
+        void *x = mmap(addr, size, prot, flags, _fd, offset);
         throw_system_error_on(x == MAP_FAILED);
         return x;
     }
