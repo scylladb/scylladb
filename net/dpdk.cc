@@ -168,9 +168,9 @@ public:
     uint8_t port_idx() { return _port_idx; }
 };
 
-class net_device : public net::device {
+class dpdk_qp : public net::qp {
 public:
-    explicit net_device(dpdk_distributed_device* dev, uint8_t qid);
+    explicit dpdk_qp(dpdk_distributed_device* dev, uint8_t qid);
 
     virtual future<> send(packet p) override;
 
@@ -302,7 +302,7 @@ int dpdk_distributed_device::init_port()
     return 0;
 }
 
-bool net_device::init_mbuf_pools()
+bool dpdk_qp::init_mbuf_pools()
 {
     // Allocate the same amount of buffers for Rx and Tx.
     const unsigned num_mbufs = 2 * mbufs_per_queue;
@@ -360,7 +360,7 @@ void dpdk_distributed_device::check_port_link_status()
 }
 
 
-net_device::net_device(dpdk_distributed_device* dev, uint8_t qid)
+dpdk_qp::dpdk_qp(dpdk_distributed_device* dev, uint8_t qid)
      : _dev(dev), _qid(qid), _rx_poller([&] { poll_rx_once(); return true; })
 {
     if (!init_mbuf_pools()) {
@@ -383,7 +383,7 @@ net_device::net_device(dpdk_distributed_device* dev, uint8_t qid)
     }
 }
 
-void net_device::process_packets(struct rte_mbuf **bufs, uint16_t count)
+void dpdk_qp::process_packets(struct rte_mbuf **bufs, uint16_t count)
 {
     for (uint16_t i = 0; i < count; i++) {
         struct rte_mbuf *m = bufs[i];
@@ -422,7 +422,7 @@ void net_device::process_packets(struct rte_mbuf **bufs, uint16_t count)
     }
 }
 
-void net_device::poll_rx_once()
+void dpdk_qp::poll_rx_once()
 {
     struct rte_mbuf *buf[packet_read_size];
 
@@ -436,7 +436,7 @@ void net_device::poll_rx_once()
     }
 }
 
-size_t net_device::copy_one_data_buf(rte_mbuf*& m, char* data, size_t l)
+size_t dpdk_qp::copy_one_data_buf(rte_mbuf*& m, char* data, size_t l)
 {
     m = rte_pktmbuf_alloc(_pktmbuf_pool);
     if (!m) {
@@ -455,7 +455,7 @@ size_t net_device::copy_one_data_buf(rte_mbuf*& m, char* data, size_t l)
 }
 
 
-bool net_device::copy_one_frag(fragment& frag, rte_mbuf*& head,
+bool dpdk_qp::copy_one_frag(fragment& frag, rte_mbuf*& head,
                                rte_mbuf*& last_seg, unsigned& nsegs)
 {
     size_t len, left_to_copy = frag.size;
@@ -500,7 +500,7 @@ bool net_device::copy_one_frag(fragment& frag, rte_mbuf*& head,
     return true;
 }
 
-future<> net_device::send(packet p)
+future<> dpdk_qp::send(packet p)
 {
     // sanity
     if (!p.len()) {
@@ -609,10 +609,10 @@ void dpdk_eal::init(boost::program_options::variables_map opts)
 }
 
 void dpdk_distributed_device::init_local_queue(boost::program_options::variables_map opts) {
-    std::unique_ptr<device> ptr;
+    std::unique_ptr<qp> ptr;
 
     if (engine.cpu_id() < smp::count) {
-        ptr = std::make_unique<net_device>(this, engine.cpu_id());
+        ptr = std::make_unique<dpdk_qp>(this, engine.cpu_id());
 
         // TODO: device reset of the cpus between queues
         for (unsigned i = _num_queues; i < smp::count; i++) {

@@ -66,7 +66,7 @@ public:
     void init_local_queue(boost::program_options::variables_map opts) override;
 };
 
-class xenfront_net_device : public net::device {
+class xenfront_qp : public net::qp {
 private:
     xenfront_distributed_device* _dev;
 
@@ -97,20 +97,20 @@ private:
     std::string path(std::string s) { return _dev->path(s); }
 
 public:
-    explicit xenfront_net_device(xenfront_distributed_device* dev, boost::program_options::variables_map opts);
-    ~xenfront_net_device();
+    explicit xenfront_qp(xenfront_distributed_device* dev, boost::program_options::variables_map opts);
+    ~xenfront_qp();
     virtual void rx_start() override;
     virtual future<> send(packet p) override;
 };
 
 std::unordered_map<std::string, std::string>
-xenfront_net_device::_supported_features = {
+xenfront_qp::_supported_features = {
     { "feature-split-event-channels", "feature-split-event-channels" },
     { "feature-rx-copy", "request-rx-copy" }
 };
 
 void
-xenfront_net_device::rx_start() {
+xenfront_qp::rx_start() {
     keep_doing([this] {
         return _rx_evtchn.pending().then([this] {
             return queue_rx_packet();
@@ -119,7 +119,7 @@ xenfront_net_device::rx_start() {
 }
 
 future<>
-xenfront_net_device::send(packet _p) {
+xenfront_qp::send(packet _p) {
 
     uint32_t frag = 0;
     // There doesn't seem to be a way to tell xen, when using the userspace
@@ -226,7 +226,7 @@ future<> front_ring<T>::process_ring(std::function<bool (gntref &entry, T& el)> 
     return make_ready_future<>();
 }
 
-future<> xenfront_net_device::queue_rx_packet()
+future<> xenfront_qp::queue_rx_packet()
 {
     return _rx_ring.process_ring([this] (gntref &entry, rx &rx) {
         packet p(static_cast<char *>(entry.page) + rx.rsp.offset, rx.rsp.status);
@@ -235,7 +235,7 @@ future<> xenfront_net_device::queue_rx_packet()
     }, _rx_refs);
 }
 
-void xenfront_net_device::alloc_one_rx_reference(unsigned index) {
+void xenfront_qp::alloc_one_rx_reference(unsigned index) {
 
     _rx_ring.entries[index] = _rx_refs->new_ref();
 
@@ -245,7 +245,7 @@ void xenfront_net_device::alloc_one_rx_reference(unsigned index) {
     req->gref = _rx_ring.entries[index].xen_id;
 }
 
-future<> xenfront_net_device::alloc_rx_references() {
+future<> xenfront_qp::alloc_rx_references() {
     return _rx_ring.entries.has_room().then([this] () {
         unsigned i = _rx_ring.entries.get_index();
 
@@ -260,7 +260,7 @@ future<> xenfront_net_device::alloc_rx_references() {
     });
 }
 
-future<> xenfront_net_device::handle_tx_completions() {
+future<> xenfront_qp::handle_tx_completions() {
 
     return _tx_ring.process_ring([this] (gntref &entry, tx &tx) {
         if (tx.rsp.status == 1) {
@@ -276,11 +276,11 @@ future<> xenfront_net_device::handle_tx_completions() {
     }, _tx_refs);
 }
 
-port xenfront_net_device::bind_tx_evtchn(bool split) {
+port xenfront_qp::bind_tx_evtchn(bool split) {
     return _evtchn->bind();
 }
 
-port xenfront_net_device::bind_rx_evtchn(bool split) {
+port xenfront_qp::bind_rx_evtchn(bool split) {
 
     if (split) {
         return _evtchn->bind();
@@ -288,7 +288,7 @@ port xenfront_net_device::bind_rx_evtchn(bool split) {
     return _evtchn->bind(_tx_evtchn.number());
 }
 
-xenfront_net_device::xenfront_net_device(xenfront_distributed_device* dev, boost::program_options::variables_map opts)
+xenfront_qp::xenfront_qp(xenfront_distributed_device* dev, boost::program_options::variables_map opts)
     : _dev(dev)
     , _otherend(_dev->_xenstore->read<int>(path("backend-id")))
     , _backend(_dev->_xenstore->read(path("backend")))
@@ -354,7 +354,7 @@ xenfront_net_device::xenfront_net_device(xenfront_distributed_device* dev, boost
     _tx_evtchn.umask();
 }
 
-xenfront_net_device::~xenfront_net_device() {
+xenfront_qp::~xenfront_qp() {
 
     {
         auto t = xenstore::xenstore_transaction();
@@ -390,10 +390,10 @@ get_xenfront_net_options_description() {
 }
 
 void xenfront_distributed_device::init_local_queue(boost::program_options::variables_map opts) {
-    std::unique_ptr<device> ptr;
+    std::unique_ptr<qp> ptr;
 
     if (engine.cpu_id() == 0) {
-        ptr = std::make_unique<xenfront_net_device>(this, opts);
+        ptr = std::make_unique<xenfront_qp>(this, opts);
 
         for (unsigned i = 0; i < smp::count; i++) {
             if (i != engine.cpu_id()) {

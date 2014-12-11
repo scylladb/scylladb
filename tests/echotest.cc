@@ -24,7 +24,7 @@ void dump_packet(const packet& p) {
     std::cout << "\n";
 }
 
-future<> echo_packet(net::device& netif, packet p) {
+future<> echo_packet(net::qp& netif, packet p) {
     auto f = p.frag(0);
     if (f.size < sizeof(eth_hdr)) {
         return make_ready_future<>();
@@ -71,7 +71,7 @@ void usage()
 
 int main(int ac, char** av) {
     std::unique_ptr<net::distributed_device> dnet;
-    net::device* vnet;
+    net::qp* vnet;
 
     boost::program_options::variables_map opts;
     opts.insert(std::make_pair("tap-device", boost::program_options::variable_value(std::string("tap0"), false)));

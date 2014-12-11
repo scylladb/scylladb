@@ -19,7 +19,7 @@ namespace net {
 class packet;
 class interface;
 class distributed_device;
-class device;
+class qp;
 class l3_protocol;
 
 struct hw_features {
@@ -78,11 +78,11 @@ public:
     friend class l3_protocol;
 };
 
-class device {
+class qp {
     std::vector<unsigned> proxies;
     stream<packet> _rx_stream;
 public:
-    virtual ~device() {}
+    virtual ~qp() {}
     virtual future<> send(packet p) = 0;
     virtual void rx_start() {};
     bool may_forward() { return !proxies.empty(); }
@@ -92,14 +92,14 @@ public:
 
 class distributed_device {
 protected:
-    std::unique_ptr<device*[]> _queues;
+    std::unique_ptr<qp*[]> _queues;
 public:
     distributed_device() {
-        _queues = std::make_unique<device*[]>(smp::count);
+        _queues = std::make_unique<qp*[]>(smp::count);
     }
     virtual ~distributed_device() {};
-    device& queue_for_cpu(unsigned cpu) { return *_queues[cpu]; }
-    device& local_queue() { return queue_for_cpu(engine.cpu_id()); }
+    qp& queue_for_cpu(unsigned cpu) { return *_queues[cpu]; }
+    qp& local_queue() { return queue_for_cpu(engine.cpu_id()); }
     void l2receive(packet p) { _queues[engine.cpu_id()]->_rx_stream.produce(std::move(p)); }
     subscription<packet> receive(std::function<future<> (packet)> next_packet) {
         auto sub = _queues[engine.cpu_id()]->_rx_stream.listen(std::move(next_packet));
@@ -110,7 +110,7 @@ public:
     virtual net::hw_features hw_features() = 0;
     virtual void init_local_queue(boost::program_options::variables_map opts) = 0;
 protected:
-    void set_local_queue(std::unique_ptr<device> dev) {
+    void set_local_queue(std::unique_ptr<qp> dev) {
         _queues[engine.cpu_id()] = dev.get();
         engine.at_exit([dev = std::move(dev)] {});
     }

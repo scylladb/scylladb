@@ -7,7 +7,7 @@
 
 namespace net {
 
-std::unique_ptr<device> create_proxy_net_device(unsigned master_cpu, distributed_device* dev);
+std::unique_ptr<qp> create_proxy_net_device(unsigned master_cpu, distributed_device* dev);
 
 }
 #endif
