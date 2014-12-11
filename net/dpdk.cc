@@ -94,7 +94,7 @@ private:
 
 class dpdk_device : public device {
     uint8_t _port_idx;
-    uint8_t _num_queues;
+    uint16_t _num_queues;
     net::hw_features _hw_features;
     uint8_t _queues_ready = 0;
 
@@ -123,7 +123,7 @@ private:
 
 public:
     dpdk_device(boost::program_options::variables_map opts,
-                        uint8_t port_idx, uint8_t num_queues)
+                        uint8_t port_idx, uint16_t num_queues)
         : _port_idx(port_idx)
         , _num_queues(num_queues) {
         _rx_conf_default.rx_thresh.pthresh = default_pthresh;
@@ -237,13 +237,7 @@ int dpdk_device::init_port()
     printf("Port %d: max_rx_queues %d max_tx_queues %d\n",
            _port_idx, _dev_info.max_rx_queues, _dev_info.max_tx_queues);
 
-    if (_num_queues > _dev_info.max_rx_queues) {
-        _num_queues = _dev_info.max_rx_queues;
-    }
-
-    if (_num_queues > _dev_info.max_tx_queues) {
-        _num_queues = _dev_info.max_tx_queues;
-    }
+    _num_queues = std::min({_num_queues, _dev_info.max_rx_queues, _dev_info.max_tx_queues});
 
     printf("Port %d: using %d %s\n", _port_idx, _num_queues,
            (_num_queues > 1) ? "queues" : "queue");
