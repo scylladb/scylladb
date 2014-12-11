@@ -281,6 +281,7 @@ template <typename T, typename Alloc>
 inline
 void
 circular_buffer<T, Alloc>::pop_front() {
+    _impl.destroy(&front());
     ++_impl.begin;
     if (_impl.begin == _impl.storage + _impl.capacity) {
         _impl.begin = _impl.storage;
@@ -292,6 +293,7 @@ template <typename T, typename Alloc>
 inline
 void
 circular_buffer<T, Alloc>::pop_back() {
+    _impl.destroy(&back());
     if (_impl.end == _impl.begin) {
         _impl.end = _impl.storage + _impl.capacity;
     }
