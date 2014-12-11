@@ -20,6 +20,7 @@
 #include "ip.hh"
 #include "const.hh"
 #include "dpdk.hh"
+#include "toeplitz.hh"
 
 #include <getopt.h>
 
@@ -254,7 +255,7 @@ int dpdk_device::init_port()
     if (_num_queues > 1) {
         port_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
         port_conf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IPV4 | ETH_RSS_IPV4_UDP | ETH_RSS_IPV4_TCP;
-        port_conf.rx_adv_conf.rss_conf.rss_key = NULL;
+        port_conf.rx_adv_conf.rss_conf.rss_key = const_cast<uint8_t*>(rsskey.data());
     } else {
         port_conf.rxmode.mq_mode = ETH_MQ_RX_NONE;
     }
