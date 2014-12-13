@@ -652,42 +652,56 @@ void smp_message_queue::complete_kick() {
 }
 
 void smp_message_queue::move_pending() {
-    bool kick = false;
-
-    while (_current_queue_length < queue_length && !_pending_fifo.empty()) {
-        _pending.push(_pending_fifo.front());
-        _pending_fifo.pop();
-        _current_queue_length++;
-        kick = true;
+    auto queue_room = queue_length - _current_queue_length;
+    auto nr = std::min(queue_room, _tx.a.pending_fifo.size());
+    if (!nr) {
+        return;
     }
-
-    if (kick) {
-        submit_kick();
-    }
+    auto begin = _tx.a.pending_fifo.begin();
+    auto end = begin + nr;
+    _pending.push(begin, end);
+    _tx.a.pending_fifo.erase(begin, end);
+    _current_queue_length += nr;
+    submit_kick();
 }
 
 void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
-    _pending_fifo.push(item);
-    move_pending();
+    _tx.a.pending_fifo.push_back(item);
+    if (_tx.a.pending_fifo.size() >= batch_size) {
+        move_pending();
+    }
 }
 
 void smp_message_queue::respond(work_item* item) {
-    // FIXME: batcing
-    _completed.push(item);
+    _completed_fifo.push_back(item);
+    if (_completed_fifo.size() >= batch_size) {
+        flush_response_batch();
+    }
+}
+
+void smp_message_queue::flush_response_batch() {
+    _completed.push(_completed_fifo.begin(), _completed_fifo.end());
+    _completed_fifo.clear();
     complete_kick();
 }
 
 size_t smp_message_queue::process_completions() {
-    auto nr = _completed.consume_all([this] (work_item* wi) {
-        wi->complete();
-        delete wi;
-    });
+    // copy batch to local memory in order to minimize
+    // time in which cross-cpu data is accessed
+    work_item* items[queue_length];
+    auto nr = _completed.pop(items);
+    for (unsigned i = 0; i < nr; ++i) {
+        items[i]->complete();
+        delete items[i];
+    }
 
     _current_queue_length -= nr;
 
-    move_pending();
-
     return nr;
+}
+
+void smp_message_queue::flush_request_batch() {
+    move_pending();
 }
 
 void smp_message_queue::complete() {
@@ -698,14 +712,19 @@ void smp_message_queue::complete() {
 }
 
 size_t smp_message_queue::process_incoming() {
-    return _pending.consume_all([this] (smp_message_queue::work_item* wi) {
+    work_item* items[queue_length];
+    auto nr = _pending.pop(items);
+    for (unsigned i = 0; i < nr; ++i) {
+        auto wi = items[i];
         wi->process().then([this, wi] {
             respond(wi);
         });
-    });
+    }
+    return nr;
 }
 
 void smp_message_queue::start() {
+    _tx.init();
     _complete_peer = &engine;
     complete();
 }

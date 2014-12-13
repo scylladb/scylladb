@@ -347,6 +347,7 @@ private:
 
 class smp_message_queue {
     static constexpr size_t queue_length = 128;
+    static constexpr size_t batch_size = 16;
     struct work_item;
     using lf_queue = boost::lockfree::spsc_queue<work_item*,
                             boost::lockfree::capacity<queue_length>>;
@@ -395,7 +396,15 @@ class smp_message_queue {
         }
         Future get_future() { return _promise.get_future(); }
     };
-    std::queue<work_item*, circular_buffer<work_item*>> _pending_fifo;
+    union tx_side {
+        tx_side() {}
+        ~tx_side() {}
+        void init() { new (&a) aa; }
+        struct aa {
+            std::deque<work_item*> pending_fifo;
+        } a;
+    } _tx;
+    std::vector<work_item*> _completed_fifo;
 public:
     smp_message_queue();
     template <typename Func>
@@ -418,6 +427,8 @@ private:
     void submit_kick();
     void complete_kick();
     void move_pending();
+    void flush_request_batch();
+    void flush_response_batch();
 
     friend class smp;
 };
@@ -749,8 +760,12 @@ public:
         size_t got = 0;
         for (unsigned i = 0; i < count; i++) {
             if (engine.cpu_id() != i) {
-                got += _qs[engine.cpu_id()][i].process_incoming();
-                got += _qs[i][engine._id].process_completions();
+                auto& rxq = _qs[engine.cpu_id()][i];
+                rxq.flush_response_batch();
+                got += rxq.process_incoming();
+                auto& txq = _qs[i][engine._id];
+                txq.flush_request_batch();
+                got += txq.process_completions();
             }
         }
         return got != 0;
