@@ -23,9 +23,9 @@ template <typename T, typename Alloc = std::allocator<T>>
 class circular_buffer {
     struct impl : Alloc {
         T* storage = nullptr;
-        T* begin = nullptr;
-        T* end = nullptr;  // never points at storage+capacity
-        size_t size = 0;
+        // begin, end interpreted (mod capacity)
+        size_t begin = 0;
+        size_t end = 0;
         size_t capacity = 0;
     };
     impl _impl;
@@ -58,16 +58,28 @@ public:
     bool empty() const;
     size_t size() const;
     size_t capacity() const;
+    T& operator[](size_t idx);
     template <typename Func>
     void for_each(Func func);
+    // access an element, may return wrong or destroyed element
+    // only useful if you do not rely on data accuracy (e.g. prefetch)
+    T& access_element_unsafe(size_t idx);
 private:
     void expand();
     void maybe_expand(size_t nr = 1);
     T* pre_push_front();
     T* pre_push_back();
-    void post_push_front(T* p);
-    void post_push_back(T* p);
+    void post_push_front();
+    void post_push_back();
+    size_t mask(size_t idx) const;
 };
+
+template <typename T, typename Alloc>
+inline
+size_t
+circular_buffer<T, Alloc>::mask(size_t idx) const {
+    return idx & (_impl.capacity - 1);
+}
 
 template <typename T, typename Alloc>
 inline
@@ -80,15 +92,14 @@ template <typename T, typename Alloc>
 inline
 size_t
 circular_buffer<T, Alloc>::size() const {
-    return _impl.size;
+    return _impl.end - _impl.begin;
 }
 
 template <typename T, typename Alloc>
 inline
 size_t
 circular_buffer<T, Alloc>::capacity() const {
-    // we never use all of the elements, since end == begin means empty
-    return _impl.capacity ? _impl.capacity - 1 : 0;
+    return _impl.capacity;
 }
 
 template <typename T, typename Alloc>
@@ -103,16 +114,10 @@ template <typename Func>
 inline
 void
 circular_buffer<T, Alloc>::for_each(Func func) {
-    auto p = _impl.begin;
-    auto e = _impl.storage + _impl.capacity;
-    if (p > _impl.end) {
-        while (p < e) {
-            func(*p++);
-        }
-        p = _impl.storage;
-    }
-    while (p < _impl.end) {
-        func(*p++);
+    auto s = _impl.storage;
+    auto m = _impl.capacity - 1;
+    for (auto i = _impl.begin; i != _impl.end; ++i) {
+        func(s[i & m]);
     }
 }
 
@@ -128,7 +133,7 @@ circular_buffer<T, Alloc>::~circular_buffer() {
 template <typename T, typename Alloc>
 void
 circular_buffer<T, Alloc>::expand() {
-    auto new_cap = std::max<size_t>(_impl.capacity * 2, 2);
+    auto new_cap = std::max<size_t>(_impl.capacity * 2, 1);
     auto new_storage = _impl.allocate(new_cap);
     auto p = new_storage;
     try {
@@ -148,8 +153,8 @@ circular_buffer<T, Alloc>::expand() {
     });
     std::swap(_impl.storage, new_storage);
     std::swap(_impl.capacity, new_cap);
-    _impl.begin = _impl.storage;
-    _impl.end = p;
+    _impl.begin = 0;
+    _impl.end = p - _impl.storage;
     _impl.deallocate(new_storage, new_cap);
 }
 
@@ -157,8 +162,7 @@ template <typename T, typename Alloc>
 inline
 void
 circular_buffer<T, Alloc>::maybe_expand(size_t nr) {
-    // one item is always unused
-    if (_impl.size + nr >= _impl.capacity) {
+    if (_impl.end - _impl.begin + nr > _impl.capacity) {
         expand();
     }
 }
@@ -168,19 +172,14 @@ inline
 T*
 circular_buffer<T, Alloc>::pre_push_front() {
     maybe_expand();
-    if (_impl.begin == _impl.storage) {
-        return _impl.storage + _impl.capacity - 1;
-    } else {
-        return _impl.begin - 1;
-    }
+    return &_impl.storage[mask(_impl.begin - 1)];
 }
 
 template <typename T, typename Alloc>
 inline
 void
-circular_buffer<T, Alloc>::post_push_front(T* p) {
-    _impl.begin = p;
-    ++_impl.size;
+circular_buffer<T, Alloc>::post_push_front() {
+    --_impl.begin;
 }
 
 template <typename T, typename Alloc>
@@ -188,18 +187,14 @@ inline
 T*
 circular_buffer<T, Alloc>::pre_push_back() {
     maybe_expand();
-    return _impl.end;
+    return &_impl.storage[mask(_impl.end)];
 }
 
 template <typename T, typename Alloc>
 inline
 void
-circular_buffer<T, Alloc>::post_push_back(T* p) {
-    if (++p == _impl.storage + _impl.capacity) {
-        p = _impl.storage;
-    }
-    _impl.end = p;
-    ++_impl.size;
+circular_buffer<T, Alloc>::post_push_back() {
+    ++_impl.end;
 }
 
 template <typename T, typename Alloc>
@@ -208,7 +203,7 @@ void
 circular_buffer<T, Alloc>::push_front(const T& data) {
     auto p = pre_push_front();
     _impl.construct(p, data);
-    post_push_front(p);
+    post_push_front();
 }
 
 template <typename T, typename Alloc>
@@ -217,7 +212,7 @@ void
 circular_buffer<T, Alloc>::push_front(T&& data) {
     auto p = pre_push_front();
     _impl.construct(p, std::move(data));
-    post_push_front(p);
+    post_push_front();
 }
 
 template <typename T, typename Alloc>
@@ -227,7 +222,7 @@ void
 circular_buffer<T, Alloc>::emplace_front(Args... args) {
     auto p = pre_push_front();
     _impl.construct(p, std::forward<Args>(args)...);
-    post_push_front(p);
+    post_push_front();
 }
 
 template <typename T, typename Alloc>
@@ -236,7 +231,7 @@ void
 circular_buffer<T, Alloc>::push_back(const T& data) {
     auto p = pre_push_back();
     _impl.construct(p, data);
-    post_push_back(p);
+    post_push_back();
 }
 
 template <typename T, typename Alloc>
@@ -245,7 +240,7 @@ void
 circular_buffer<T, Alloc>::push_back(T&& data) {
     auto p = pre_push_back();
     _impl.construct(p, std::move(data));
-    post_push_back(p);
+    post_push_back();
 }
 
 template <typename T, typename Alloc>
@@ -255,47 +250,51 @@ void
 circular_buffer<T, Alloc>::emplace_back(Args... args) {
     auto p = pre_push_back();
     _impl.construct(p, std::forward<Args>(args)...);
-    post_push_back(p);
+    post_push_back();
 }
 
 template <typename T, typename Alloc>
 inline
 T&
 circular_buffer<T, Alloc>::front() {
-    return *_impl.begin;
+    return _impl.storage[mask(_impl.begin)];
 }
 
 template <typename T, typename Alloc>
 inline
 T&
 circular_buffer<T, Alloc>::back() {
-    if (_impl.end == _impl.storage) {
-        return *(_impl.storage + _impl.capacity - 1);
-    } else {
-        return *_impl.end;
-    }
+    return _impl.storage[mask(_impl.end - 1)];
 }
 
 template <typename T, typename Alloc>
 inline
 void
 circular_buffer<T, Alloc>::pop_front() {
+    _impl.destroy(&front());
     ++_impl.begin;
-    if (_impl.begin == _impl.storage + _impl.capacity) {
-        _impl.begin = _impl.storage;
-    }
-    --_impl.size;
 }
 
 template <typename T, typename Alloc>
 inline
 void
 circular_buffer<T, Alloc>::pop_back() {
-    if (_impl.end == _impl.begin) {
-        _impl.end = _impl.storage + _impl.capacity;
-    }
+    _impl.destroy(&back());
     --_impl.end;
-    --_impl.size;
+}
+
+template <typename T, typename Alloc>
+inline
+T&
+circular_buffer<T, Alloc>::operator[](size_t idx) {
+    return _impl.storage[mask(_impl.begin + idx)];
+}
+
+template <typename T, typename Alloc>
+inline
+T&
+circular_buffer<T, Alloc>::access_element_unsafe(size_t idx) {
+    return _impl.storage[mask(_impl.begin + idx)];
 }
 
 #endif /* CIRCULAR_BUFFER_HH_ */
