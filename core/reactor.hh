@@ -672,6 +672,7 @@ private:
     friend class readable_eventfd;
     friend class timer;
     friend class smp;
+    friend class smp_message_queue;
     friend class poller;
 public:
     void wait_and_process(bool block, std::function<void()>& pre_process) {

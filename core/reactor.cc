@@ -642,13 +642,13 @@ smp_message_queue::smp_message_queue()
 }
 
 void smp_message_queue::submit_kick() {
-    if (_pending_peer->idle()) {
+    if (!_complete_peer->_poll && _pending_peer->idle()) {
         _start_event->signal();
     }
 }
 
 void smp_message_queue::complete_kick() {
-    if (_complete_peer->idle()) {
+    if (!_pending_peer->_poll && _complete_peer->idle()) {
         _complete_event->signal();
     }
 }
