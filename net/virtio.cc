@@ -598,16 +598,18 @@ protected:
         future<> post(packet p);
     };
     class rxq  {
-        struct single_buffer_and_completion : std::array<buffer, 1> {
-            promise<size_t> completed;
+        struct buffer_and_virt : buffer {
+            std::unique_ptr<char[], free_deleter> buf;
         };
+        using single_buffer = std::array<buffer_and_virt, 1>;
         struct complete {
-            void operator()(single_buffer_and_completion&& bc, size_t len) {
-                bc.completed.set_value(len);
+            rxq& q;
+            void operator()(single_buffer&& bc, size_t len) {
+                q.complete_buffer(std::move(bc), len);
             }
         };
         qp& _dev;
-        vring<single_buffer_and_completion, complete> _ring;
+        vring<single_buffer, complete> _ring;
         unsigned _remaining_buffers = 0;
         std::vector<fragment> _fragments;
         std::vector<std::unique_ptr<char[], free_deleter>> _deleters;
@@ -628,6 +630,7 @@ protected:
         }
     private:
         future<> prepare_buffers();
+        void complete_buffer(single_buffer&& b, size_t len);
     };
 protected:
     device* _dev;
@@ -705,7 +708,7 @@ qp::txq::post(packet p) {
 }
 
 qp::rxq::rxq(qp& dev, ring_config config, bool poll_mode)
-    : _dev(dev), _ring(config, complete(), poll_mode) {
+    : _dev(dev), _ring(config, complete{*this}, poll_mode) {
 }
 
 future<>
@@ -718,52 +721,57 @@ qp::rxq::prepare_buffers() {
             count += opportunistic;
         }
         auto make_buffer_chain = [this] {
-            single_buffer_and_completion bc;
+            single_buffer bc;
             std::unique_ptr<char[], free_deleter> buf(reinterpret_cast<char*>(malloc(4096)));
-            buffer& b = bc[0];
+            buffer_and_virt& b = bc[0];
             b.addr = virt_to_phys(buf.get());
             b.len = 4096;
             b.writeable = true;
-            bc.completed.get_future().then([this, buf = std::move(buf)] (size_t len) mutable {
-                auto frag_buf = buf.get();
-                auto frag_len = len;
-                // First buffer
-                if (_remaining_buffers == 0) {
-                    auto hdr = reinterpret_cast<net_hdr_mrg*>(frag_buf);
-                    assert(hdr->num_buffers >= 1);
-                    // TODO: special-case for num_buffers == 1
-                    _remaining_buffers = hdr->num_buffers;
-                    frag_buf += _dev._header_len;
-                    frag_len -= _dev._header_len;
-                    _fragments.clear();
-                    _deleters.clear();
-                };
-
-                // Append current buffer
-                _fragments.emplace_back(fragment{frag_buf, frag_len});
-                _deleters.push_back(std::move(buf));
-                _remaining_buffers--;
-
-                // Last buffer
-                if (_remaining_buffers == 0) {
-                    deleter del;
-                    if (_deleters.size() == 1) {
-                        del = make_free_deleter(_deleters[0].release());
-                        _deleters.clear();
-                    } else {
-                        del = make_deleter(deleter(), [deleters = std::move(_deleters)] {});
-                    }
-                    packet p(_fragments.begin(), _fragments.end(), std::move(del));
-                    _dev._dev->l2receive(std::move(p));
-                    _ring.available_descriptors().signal(_fragments.size());
-                }
-            });
+            b.buf = std::move(buf);
             return bc;
         };
         auto start = make_function_input_iterator(make_buffer_chain, 0U);
         auto finish = make_function_input_iterator(make_buffer_chain, count);
         _ring.post(start, finish);
     });
+}
+
+void
+qp::rxq::complete_buffer(single_buffer&& bc, size_t len) {
+    auto&& sb = bc[0];
+    auto&& buf = sb.buf;
+    auto frag_buf = buf.get();
+    auto frag_len = len;
+    // First buffer
+    if (_remaining_buffers == 0) {
+        auto hdr = reinterpret_cast<net_hdr_mrg*>(frag_buf);
+        assert(hdr->num_buffers >= 1);
+        // TODO: special-case for num_buffers == 1
+        _remaining_buffers = hdr->num_buffers;
+        frag_buf += _dev._header_len;
+        frag_len -= _dev._header_len;
+        _fragments.clear();
+        _deleters.clear();
+    };
+
+    // Append current buffer
+    _fragments.emplace_back(fragment{frag_buf, frag_len});
+    _deleters.push_back(std::move(buf));
+    _remaining_buffers--;
+
+    // Last buffer
+    if (_remaining_buffers == 0) {
+        deleter del;
+        if (_deleters.size() == 1) {
+            del = make_free_deleter(_deleters[0].release());
+            _deleters.clear();
+        } else {
+            del = make_deleter(deleter(), [deleters = std::move(_deleters)] {});
+        }
+        packet p(_fragments.begin(), _fragments.end(), std::move(del));
+        _dev._dev->l2receive(std::move(p));
+        _ring.available_descriptors().signal(_fragments.size());
+    }
 }
 
 // Allocate and zero-initialize a buffer which is page-aligned and can be
