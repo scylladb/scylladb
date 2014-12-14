@@ -12,7 +12,7 @@ void dump_arp_packets(l3_protocol& proto) {
     proto.receive([&proto] (packet p, ethernet_address from) {
         std::cout << "seen arp packet\n";
         return make_ready_future<>();
-    }, [] (packet& p, size_t off) {return 0;});
+    }, [] (forward_hash& out_hash_data, packet& p, size_t off) {return false;});
 }
 
 int main(int ac, char** av) {

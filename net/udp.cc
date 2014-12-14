@@ -89,18 +89,15 @@ udp_v4::udp_v4(ipv4& inet)
     _inet.register_l4(uint8_t(ip_protocol_num::udp), this);
 }
 
-unsigned udp_v4::forward(packet& p, size_t off, ipv4_address from, ipv4_address to)
+bool udp_v4::forward(forward_hash& out_hash_data, packet& p, size_t off)
 {
     auto uh = p.get_header<udp_hdr>(off);
 
     if (!uh) {
-        return engine.cpu_id();
+        out_hash_data.push_back(uh->src_port);
+        out_hash_data.push_back(uh->dst_port);
     }
-
-    auto dst = ntoh(uh->dst_port);
-    auto src = ntoh(uh->src_port);
-
-    return connid_hash()(connid{to, from, dst, src}) % smp::count;
+    return true;
 }
 
 void udp_v4::received(packet p, ipv4_address from, ipv4_address to)

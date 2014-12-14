@@ -28,7 +28,7 @@ public:
     arp_for_protocol(arp& a, uint16_t proto_num);
     virtual ~arp_for_protocol();
     virtual future<> received(packet p) = 0;
-    virtual unsigned forward(packet& p, size_t off) { return engine.cpu_id(); }
+    virtual bool forward(forward_hash& out_hash_data, packet& p, size_t off) { return false; }
 };
 
 class arp {
@@ -51,7 +51,7 @@ public:
 private:
     ethernet_address l2self() { return _netif->hw_address(); }
     future<> process_packet(packet p, ethernet_address from);
-    unsigned handle_on_cpu(packet& p, size_t off);
+    bool forward(forward_hash& out_hash_data, packet& p, size_t off);
     template <class l3_proto>
     friend class arp_for;
 };
@@ -94,7 +94,6 @@ private:
 private:
     packet make_query_packet(l3addr paddr);
     virtual future<> received(packet p) override;
-    virtual unsigned forward(packet& p, size_t off) override;
     future<> handle_request(arp_hdr* ah);
     l2addr l2self() { return _arp.l2self(); }
 public:
@@ -189,12 +188,6 @@ arp_for<L3>::learn(l2addr hwaddr, l3addr paddr) {
         }
         _in_progress.erase(i);
     }
-}
-
-template <typename L3>
-unsigned arp_for<L3>::forward(packet& p, size_t off)
-{
-    return engine.cpu_id();
 }
 
 template <typename L3>

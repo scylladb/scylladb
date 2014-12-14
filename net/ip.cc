@@ -7,6 +7,7 @@
 #include "core/print.hh"
 #include "core/future-util.hh"
 #include "core/shared_ptr.hh"
+#include "toeplitz.hh"
 
 namespace net {
 
@@ -30,31 +31,31 @@ ipv4::ipv4(interface* netif)
     , _l3(netif, eth_protocol_num::ipv4)
     , _rx_packets(_l3.receive([this] (packet p, ethernet_address ea) {
         return handle_received_packet(std::move(p), ea); },
-      [this] (packet& p, size_t off) {
-        return handle_on_cpu(p, off);}))
+      [this] (forward_hash& out_hash_data, packet& p, size_t off) {
+        return forward(out_hash_data, p, off);}))
     , _tcp(*this)
     , _icmp(*this)
     , _l4({ { uint8_t(ip_protocol_num::tcp), &_tcp }, { uint8_t(ip_protocol_num::icmp), &_icmp }}) {
     _frag_timer.set_callback([this] { frag_timeout(); });
 }
 
-unsigned ipv4::handle_on_cpu(packet& p, size_t off)
+bool ipv4::forward(forward_hash& out_hash_data, packet& p, size_t off)
 {
-    auto iph = ntoh(*p.get_header<ip_hdr>(off));
+    auto iph = p.get_header<ip_hdr>(off);
 
-    auto l4 = _l4[iph.ip_proto];
-    if (!l4) {
-        return engine.cpu_id();
-    }
+    out_hash_data.push_back(iph->src_ip.ip);
+    out_hash_data.push_back(iph->dst_ip.ip);
 
-    if (iph.mf() == false && iph.offset() == 0) {
-        // This IP datagram is atomic, forward according to tcp or udp connection hash
-        return l4->forward(p, off + sizeof(ip_hdr), iph.src_ip, iph.dst_ip);
-    } else {
-        // otherwise, forward according to frag_id hash
-        auto frag_id = ipv4_frag_id{iph.src_ip, iph.dst_ip, iph.id, iph.ip_proto};
-        return ipv4_frag_id::hash()(frag_id) % smp::count;
+    auto h = ntoh(*iph);
+    auto l4 = _l4[h.ip_proto];
+    if (l4) {
+        if (h.mf() == false && h.offset() == 0) {
+            // This IP datagram is atomic, forward according to tcp or udp connection hash
+            l4->forward(out_hash_data, p, off + sizeof(ip_hdr));
+        }
+        // else forward according to ip fields only
     }
+    return true;
 }
 
 bool ipv4::in_my_netmask(ipv4_address a) const {
@@ -150,7 +151,11 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
             auto l4 = _l4[h.ip_proto];
             if (l4) {
                 size_t l4_offset = 0;
-                cpu_id = l4->forward(ip_data, l4_offset, h.src_ip, h.dst_ip);
+                forward_hash hash_data;
+                hash_data.push_back(hton(h.src_ip.ip));
+                hash_data.push_back(hton(h.dst_ip.ip));
+                l4->forward(hash_data, ip_data, l4_offset);
+                cpu_id = toeplitz_hash(rsskey, hash_data) % smp::count;
             }
 
             // No need to forward if the dst cpu is the current cpu

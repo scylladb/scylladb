@@ -96,7 +96,7 @@ class ip_protocol {
 public:
     virtual ~ip_protocol() {}
     virtual void received(packet p, ipv4_address from, ipv4_address to) = 0;
-    virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to) { return engine.cpu_id(); }
+    virtual bool forward(forward_hash& out_hash_data, packet& p, size_t off) { return true; }
 };
 
 class ipv4_tcp final : public ip_protocol {
@@ -106,7 +106,7 @@ public:
     ipv4_tcp(ipv4& inet);
     ~ipv4_tcp();
     virtual void received(packet p, ipv4_address from, ipv4_address to);
-    virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to) override;
+    virtual bool forward(forward_hash& out_hash_data, packet& p, size_t off) override;
     friend class ipv4;
 };
 
@@ -222,7 +222,7 @@ private:
     timer _frag_timer;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
-    unsigned handle_on_cpu(packet& p, size_t off);
+    bool forward(forward_hash& out_hash_data, packet& p, size_t off);
     bool in_my_netmask(ipv4_address a) const;
     void frag_limit_mem();
     void frag_timeout();

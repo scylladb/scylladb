@@ -5,6 +5,7 @@
 
 #include "net.hh"
 #include <utility>
+#include "toeplitz.hh"
 
 using std::move;
 
@@ -16,7 +17,7 @@ l3_protocol::l3_protocol(interface* netif, eth_protocol_num proto_num)
 
 subscription<packet, ethernet_address> l3_protocol::receive(
         std::function<future<> (packet p, ethernet_address from)> rx_fn,
-        std::function<unsigned (packet&, size_t)> forward) {
+        std::function<bool (forward_hash&, packet&, size_t)> forward) {
     return _netif->register_l3(_proto_num, std::move(rx_fn), std::move(forward));
 };
 
@@ -34,7 +35,7 @@ interface::interface(std::shared_ptr<device> dev)
 subscription<packet, ethernet_address>
 interface::register_l3(eth_protocol_num proto_num,
         std::function<future<> (packet p, ethernet_address from)> next,
-        std::function<unsigned (packet&, size_t)> forward) {
+        std::function<bool (forward_hash&, packet& p, size_t)> forward) {
     auto i = _proto_map.emplace(std::piecewise_construct, std::make_tuple(uint16_t(proto_num)), std::forward_as_tuple(std::move(forward)));
     assert(i.second);
     l3_rx_stream& l3_rx = i.first->second;
@@ -61,7 +62,13 @@ future<> interface::dispatch_packet(packet p) {
         auto i = _proto_map.find(ntoh(eh->eth_proto));
         if (i != _proto_map.end()) {
             l3_rx_stream& l3 = i->second;
-            auto fw = _dev->local_queue().may_forward() ? l3.forward(p, sizeof(eth_hdr)) : engine.cpu_id();
+            unsigned fw = engine.cpu_id();
+            if (_dev->local_queue().may_forward()) {
+                forward_hash data;
+                if (l3.forward(data, p, sizeof(eth_hdr))) {
+                    fw = toeplitz_hash(rsskey, data) % smp::count;
+                }
+            }
             if (fw != engine.cpu_id()) {
                 forward(fw, std::move(p));
             } else {
