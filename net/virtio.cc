@@ -788,38 +788,6 @@ qp::send(packet p) {
     return _txq.post(std::move(p));
 }
 
-}
-
-boost::program_options::options_description
-get_virtio_net_options_description()
-{
-    boost::program_options::options_description opts(
-            "Virtio net options");
-    opts.add_options()
-        ("event-index",
-                boost::program_options::value<std::string>()->default_value("on"),
-                "Enable event-index feature (on / off)")
-        ("csum-offload",
-                boost::program_options::value<std::string>()->default_value("on"),
-                "Enable checksum offload feature (on / off)")
-        ("tso",
-                boost::program_options::value<std::string>()->default_value("on"),
-                "Enable TCP segment offload feature (on / off)")
-        ("ufo",
-                boost::program_options::value<std::string>()->default_value("on"),
-                "Enable UDP fragmentation offload feature (on / off)")
-        ("virtio-ring-size",
-                boost::program_options::value<unsigned>()->default_value(256),
-                "Virtio ring size (must be power-of-two)")
-        ("virtio-poll-mode",
-                boost::program_options::value<bool>()->default_value(false),
-                "Poll virtio rings instead of using interrupts")
-        ;
-    return opts;
-}
-
-namespace virtio {
-
 class qp_vhost : public qp {
 private:
     // The vhost file descriptor needs to remain open throughout the life of
@@ -1028,6 +996,34 @@ void device::init_local_queue(boost::program_options::variables_map opts) {
     set_local_queue(std::move(ptr));
 }
 
+}
+
+boost::program_options::options_description
+get_virtio_net_options_description()
+{
+    boost::program_options::options_description opts(
+            "Virtio net options");
+    opts.add_options()
+        ("event-index",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable event-index feature (on / off)")
+        ("csum-offload",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable checksum offload feature (on / off)")
+        ("tso",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable TCP segment offload feature (on / off)")
+        ("ufo",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable UDP fragmentation offload feature (on / off)")
+        ("virtio-ring-size",
+                boost::program_options::value<unsigned>()->default_value(256),
+                "Virtio ring size (must be power-of-two)")
+        ("virtio-poll-mode",
+                boost::program_options::value<bool>()->default_value(false),
+                "Poll virtio rings instead of using interrupts")
+        ;
+    return opts;
 }
 
 std::unique_ptr<net::device> create_virtio_net_device(boost::program_options::variables_map opts) {
