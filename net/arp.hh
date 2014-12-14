@@ -194,10 +194,6 @@ arp_for<L3>::learn(l2addr hwaddr, l3addr paddr) {
 template <typename L3>
 unsigned arp_for<L3>::forward(packet& p, size_t off)
 {
-    auto ah = p.get_header<arp_hdr>(off);
-    if (ntoh(ah->oper) == op_reply) {
-        return std::numeric_limits<unsigned>::max(); // broadcast reply
-    }
     return engine.cpu_id();
 }
 
@@ -216,7 +212,7 @@ arp_for<L3>::received(packet p) {
     case op_request:
         return handle_request(&h);
     case op_reply:
-        learn(h.sender_hwaddr, h.sender_paddr);
+        arp_learn(h.sender_hwaddr, h.sender_paddr);
         return make_ready_future<>();
     default:
         return make_ready_future<>();

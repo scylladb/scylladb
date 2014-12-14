@@ -111,6 +111,9 @@ public:
         return ready_promise.get_future();
     }
     virtual bool has_per_core_namespace() override { return true; };
+    void arp_learn(ethernet_address l2, ipv4_address l3) {
+        _inet.learn(l2, l3);
+    }
     friend class native_server_socket_impl<tcp4>;
 };
 
@@ -226,6 +229,16 @@ future<> native_network_stack::initialize() {
         }
         return _config.get_future();
     });
+}
+
+void arp_learn(ethernet_address l2, ipv4_address l3)
+{
+    for (unsigned i = 0; i < smp::count; i++) {
+        smp::submit_to(i, [l2, l3] {
+            auto & ns = static_cast<native_network_stack&>(engine.net());
+            ns.arp_learn(l2, l3);
+        });
+    }
 }
 
 void create_native_stack(boost::program_options::variables_map opts, std::shared_ptr<device> dev) {

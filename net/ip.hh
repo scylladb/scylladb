@@ -249,6 +249,9 @@ public:
     void register_l4(proto_type id, ip_protocol* handler);
     net::hw_features hw_features() { return _netif->hw_features(); }
     static bool needs_frag(packet& p, ip_protocol_num proto_num, net::hw_features hw_features);
+    void learn(ethernet_address l2, ipv4_address l3) {
+        _arp.learn(l2, l3);
+    }
 };
 
 template <ip_protocol_num ProtoNum>
@@ -311,6 +314,8 @@ struct l4connid<InetTraits>::connid_hash : private std::hash<ipaddr>, private st
             ^ h2::operator()(id.foreign_port);
     }
 };
+
+void arp_learn(ethernet_address l2, ipv4_address l3);
 
 }
 
