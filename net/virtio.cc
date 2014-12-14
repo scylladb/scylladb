@@ -565,19 +565,20 @@ protected:
             return b;
         };
         struct packet_as_buffer_chain {
-            fragment* start;
-            fragment* finish;
-            promise<size_t> completed;
+            packet p;
             auto begin() {
-                return make_transform_iterator(start, fragment_to_buffer);
+                return make_transform_iterator(p.fragments().begin(), fragment_to_buffer);
             }
             auto end() {
-                return make_transform_iterator(finish, fragment_to_buffer);
+                return make_transform_iterator(p.fragments().end(), fragment_to_buffer);
             }
         };
         struct complete {
+            txq& q;
             void operator()(packet_as_buffer_chain&& bc, size_t len) {
-                bc.completed.set_value(len);
+                // move the packet here, to be destroyed on scope exit
+                auto p = std::move(bc.p);
+                q._ring.available_descriptors().signal(p.nr_frags());
             }
         };
         qp& _dev;
@@ -647,7 +648,7 @@ public:
 };
 
 qp::txq::txq(qp& dev, ring_config config, bool poll_mode)
-    : _dev(dev), _ring(config, complete(), poll_mode) {
+    : _dev(dev), _ring(config, complete{*this}, poll_mode) {
 }
 
 future<>
@@ -698,11 +699,7 @@ qp::txq::post(packet p) {
 
     auto nr_frags = q.nr_frags();
     return _ring.available_descriptors().wait(nr_frags).then([this, nr_frags, p = std::move(q)] () mutable {
-        packet_as_buffer_chain vbc[1] { { p.fragments().begin(), p.fragments().end() } };
-        // schedule packet destruction
-        vbc[0].completed.get_future().then([this, nr_frags, p = std::move(p)] (size_t) {
-            _ring.available_descriptors().signal(nr_frags);
-        });
+        packet_as_buffer_chain vbc[1] { { std::move(p) } };
         _ring.post(std::begin(vbc), std::end(vbc));
     });
 }
