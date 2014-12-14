@@ -471,6 +471,14 @@ int reactor::run() {
         smp_poller = poller(smp::poll_queues);
     }
 
+    std::function<void ()> update_idle = [this] {
+        if (_pending_tasks.empty()) {
+            _idle.store(false, std::memory_order_relaxed);
+        }
+        // else, _idle already false, no need to set it again and dirty
+        // cache line.
+    };
+
     complete_timers();
     while (true) {
         task_quota = _task_quota;
@@ -501,13 +509,7 @@ int reactor::run() {
             }
         }
 
-        wait_and_process(_idle.load(std::memory_order_relaxed), [this] {
-            if (_pending_tasks.empty()) {
-                _idle.store(false, std::memory_order_relaxed);
-            }
-            // else, _idle already false, no need to set it again and dirty
-            // cache line.
-        });
+        wait_and_process(_idle.load(std::memory_order_relaxed), update_idle);
     }
     return _return;
 }
@@ -559,7 +561,7 @@ reactor::poller::operator=(poller&& x) {
 }
 
 void
-reactor_backend_epoll::wait_and_process(bool block, std::function<void()> &&pre_process) {
+reactor_backend_epoll::wait_and_process(bool block, std::function<void()>& pre_process) {
     std::array<epoll_event, 128> eevt;
     int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(),
             block ? -1 : 0);
@@ -1042,7 +1044,7 @@ reactor_backend_osv::reactor_backend_osv() {
 }
 
 void
-reactor_backend_osv::wait_and_process(bool block, std::function<void()> &&pre_process) {
+reactor_backend_osv::wait_and_process(bool block, std::function<void()>& pre_process) {
     if (block) {
         _poller.wait();
     }

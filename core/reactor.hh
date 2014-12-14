@@ -466,7 +466,7 @@ public:
     // After the optional wait, just before processing the events, the
     // pre_process() function is called.
     virtual void wait_and_process(bool block,
-            std::function<void()> &&pre_process) = 0;
+            std::function<void()>& pre_process) = 0;
     // Methods that allow polling on file descriptors. This will only work on
     // reactor_backend_epoll. Other reactor_backend will probably abort if
     // they are called (which is fine if no file descriptors are waited on):
@@ -510,7 +510,7 @@ private:
 public:
     reactor_backend_epoll();
     virtual ~reactor_backend_epoll() override { }
-    virtual void wait_and_process(bool block, std::function<void()> &&pre_process) override;
+    virtual void wait_and_process(bool block, std::function<void()>& pre_process) override;
     virtual future<> readable(pollable_fd_state& fd) override;
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
@@ -674,8 +674,8 @@ private:
     friend class smp;
     friend class poller;
 public:
-    void wait_and_process(bool block, std::function<void()> &&pre_process) {
-        _backend.wait_and_process(block, std::move(pre_process));
+    void wait_and_process(bool block, std::function<void()>& pre_process) {
+        _backend.wait_and_process(block, pre_process);
     }
 
     future<> readable(pollable_fd_state& fd) {
