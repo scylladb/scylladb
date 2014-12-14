@@ -67,10 +67,6 @@ public:
 private:
     void expand();
     void maybe_expand(size_t nr = 1);
-    T* pre_push_front();
-    T* pre_push_back();
-    void post_push_front();
-    void post_push_back();
     size_t mask(size_t idx) const;
 };
 
@@ -169,50 +165,22 @@ circular_buffer<T, Alloc>::maybe_expand(size_t nr) {
 
 template <typename T, typename Alloc>
 inline
-T*
-circular_buffer<T, Alloc>::pre_push_front() {
-    maybe_expand();
-    return &_impl.storage[mask(_impl.begin - 1)];
-}
-
-template <typename T, typename Alloc>
-inline
-void
-circular_buffer<T, Alloc>::post_push_front() {
-    --_impl.begin;
-}
-
-template <typename T, typename Alloc>
-inline
-T*
-circular_buffer<T, Alloc>::pre_push_back() {
-    maybe_expand();
-    return &_impl.storage[mask(_impl.end)];
-}
-
-template <typename T, typename Alloc>
-inline
-void
-circular_buffer<T, Alloc>::post_push_back() {
-    ++_impl.end;
-}
-
-template <typename T, typename Alloc>
-inline
 void
 circular_buffer<T, Alloc>::push_front(const T& data) {
-    auto p = pre_push_front();
+    maybe_expand();
+    auto p = &_impl.storage[mask(_impl.begin - 1)];
     _impl.construct(p, data);
-    post_push_front();
+    --_impl.begin;
 }
 
 template <typename T, typename Alloc>
 inline
 void
 circular_buffer<T, Alloc>::push_front(T&& data) {
-    auto p = pre_push_front();
+    maybe_expand();
+    auto p = &_impl.storage[mask(_impl.begin - 1)];
     _impl.construct(p, std::move(data));
-    post_push_front();
+    --_impl.begin;
 }
 
 template <typename T, typename Alloc>
@@ -220,27 +188,30 @@ template <typename... Args>
 inline
 void
 circular_buffer<T, Alloc>::emplace_front(Args... args) {
-    auto p = pre_push_front();
+    maybe_expand();
+    auto p = &_impl.storage[mask(_impl.begin - 1)];
     _impl.construct(p, std::forward<Args>(args)...);
-    post_push_front();
+    --_impl.begin;
 }
 
 template <typename T, typename Alloc>
 inline
 void
 circular_buffer<T, Alloc>::push_back(const T& data) {
-    auto p = pre_push_back();
+    maybe_expand();
+    auto p = &_impl.storage[mask(_impl.end)];
     _impl.construct(p, data);
-    post_push_back();
+    ++_impl.end;
 }
 
 template <typename T, typename Alloc>
 inline
 void
 circular_buffer<T, Alloc>::push_back(T&& data) {
-    auto p = pre_push_back();
+    maybe_expand();
+    auto p = &_impl.storage[mask(_impl.end)];
     _impl.construct(p, std::move(data));
-    post_push_back();
+    ++_impl.end;
 }
 
 template <typename T, typename Alloc>
@@ -248,9 +219,10 @@ template <typename... Args>
 inline
 void
 circular_buffer<T, Alloc>::emplace_back(Args... args) {
-    auto p = pre_push_back();
+    maybe_expand();
+    auto p = &_impl.storage[mask(_impl.end)];
     _impl.construct(p, std::forward<Args>(args)...);
-    post_push_back();
+    ++_impl.end;
 }
 
 template <typename T, typename Alloc>
