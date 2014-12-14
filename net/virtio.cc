@@ -160,6 +160,12 @@ public:
 
 using phys = uint64_t;
 
+// The 'buffer_chain' concept, used in vring, is a container of vring::buffer
+// with an added 'promise<> completed' member, as in:
+//
+//   struct buffer_chain : std::vector<buffer> {
+//      promise<size_t> completed;
+//   };
 class vring {
 public:
     struct config {
@@ -175,9 +181,6 @@ public:
         phys addr;
         uint32_t len;
         bool writeable;
-    };
-    struct buffer_chain : std::vector<buffer> {
-        promise<size_t> completed;
     };
 private:
     class desc {
