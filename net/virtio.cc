@@ -160,28 +160,29 @@ public:
 
 using phys = uint64_t;
 
-// The 'buffer_chain' concept, used in vring, is a container of vring::buffer
+struct ring_config {
+    char* descs;
+    char* avail;
+    char* used;
+    unsigned size;
+    bool event_index;
+    bool indirect;
+    bool mergable_buffers;
+};
+
+struct buffer {
+    phys addr;
+    uint32_t len;
+    bool writeable;
+};
+
+// The 'buffer_chain' concept, used in vring, is a container of buffer
 // with an added 'promise<> completed' member, as in:
 //
 //   struct buffer_chain : std::vector<buffer> {
 //      promise<size_t> completed;
 //   };
 class vring {
-public:
-    struct config {
-        char* descs;
-        char* avail;
-        char* used;
-        unsigned size;
-        bool event_index;
-        bool indirect;
-        bool mergable_buffers;
-    };
-    struct buffer {
-        phys addr;
-        uint32_t len;
-        bool writeable;
-    };
 private:
     class desc {
     public:
@@ -253,18 +254,18 @@ private:
     };
 
     struct avail {
-        explicit avail(config conf);
+        explicit avail(ring_config conf);
         avail_layout* _shared;
         uint16_t _head = 0;
         uint16_t _avail_added_since_kick = 0;
     };
     struct used {
-        explicit used(config conf);
+        explicit used(ring_config conf);
         used_layout* _shared;
         uint16_t _tail = 0;
     };
 private:
-    config _config;
+    ring_config _config;
     std::unique_ptr<notifier> _notifier;
     std::unique_ptr<promise<size_t>[]> _completions;
     desc* _descs;
@@ -280,11 +281,11 @@ private:
     bool _poll_mode = false;
 public:
 
-    explicit vring(config conf, bool poll_mode);
+    explicit vring(ring_config conf, bool poll_mode);
     void set_notifier(std::unique_ptr<notifier> notifier) {
         _notifier = std::move(notifier);
     }
-    const config& getconfig() {
+    const ring_config& getconfig() {
         return _config;
     }
     void wake_notifier_wait() {
@@ -373,11 +374,11 @@ private:
     void setup();
 };
 
-vring::avail::avail(config conf)
+vring::avail::avail(ring_config conf)
     : _shared(reinterpret_cast<avail_layout*>(conf.avail)) {
 }
 
-vring::used::used(config conf)
+vring::used::used(ring_config conf)
     : _shared(reinterpret_cast<used_layout*>(conf.used)) {
 }
 
@@ -393,7 +394,7 @@ unsigned vring::allocate_desc() {
     return desc;
 }
 
-vring::vring(config conf, bool poll_mode)
+vring::vring(ring_config conf, bool poll_mode)
     : _config(conf)
     , _completions(new promise<size_t>[_config.size])
     , _descs(reinterpret_cast<desc*>(conf.descs))
@@ -533,11 +534,11 @@ protected:
         qp& _dev;
         vring _ring;
     public:
-        txq(qp& dev, vring::config config, bool poll_mode);
+        txq(qp& dev, ring_config config, bool poll_mode);
         void set_notifier(std::unique_ptr<notifier> notifier) {
             _ring.set_notifier(std::move(notifier));
         }
-        const vring::config& getconfig() {
+        const ring_config& getconfig() {
             return _ring.getconfig();
         }
         void wake_notifier_wait() {
@@ -553,11 +554,11 @@ protected:
         std::vector<fragment> _fragments;
         std::vector<std::unique_ptr<char[], free_deleter>> _deleters;
     public:
-        rxq(qp& _if, vring::config config, bool poll_mode);
+        rxq(qp& _if, ring_config config, bool poll_mode);
         void set_notifier(std::unique_ptr<notifier> notifier) {
             _ring.set_notifier(std::move(notifier));
         }
-        const vring::config& getconfig() {
+        const ring_config& getconfig() {
             return _ring.getconfig();
         }
         void run() {
@@ -578,9 +579,9 @@ protected:
     txq _txq;
     rxq _rxq;
 protected:
-    vring::config txq_config(size_t txq_ring_size);
-    vring::config rxq_config(size_t rxq_ring_size);
-    void common_config(vring::config& r);
+    ring_config txq_config(size_t txq_ring_size);
+    ring_config rxq_config(size_t rxq_ring_size);
+    void common_config(ring_config& r);
     size_t vring_storage_size(size_t ring_size);
 public:
     explicit qp(device* dev, size_t rx_ring_size, size_t tx_ring_size, bool poll_mode);
@@ -591,7 +592,7 @@ public:
     }
 };
 
-qp::txq::txq(qp& dev, vring::config config, bool poll_mode)
+qp::txq::txq(qp& dev, ring_config config, bool poll_mode)
     : _dev(dev), _ring(config, poll_mode) {
 }
 
@@ -644,7 +645,7 @@ qp::txq::post(packet p) {
     auto nr_frags = q.nr_frags();
     return _ring.available_descriptors().wait(nr_frags).then([this, nr_frags, p = std::move(q)] () mutable {
         static auto fragment_to_buffer = [this] (fragment f) {
-            vring::buffer b;
+            buffer b;
             b.addr = _dev.virt_to_phys(f.base);
             b.len = f.size;
             b.writeable = false;
@@ -669,7 +670,7 @@ qp::txq::post(packet p) {
     });
 }
 
-qp::rxq::rxq(qp& dev, vring::config config, bool poll_mode)
+qp::rxq::rxq(qp& dev, ring_config config, bool poll_mode)
     : _dev(dev), _ring(config, poll_mode) {
 }
 
@@ -683,11 +684,11 @@ qp::rxq::prepare_buffers() {
             count += opportunistic;
         }
         auto make_buffer_chain = [this] {
-            struct single_buffer_and_completion : std::array<vring::buffer, 1> {
+            struct single_buffer_and_completion : std::array<buffer, 1> {
                 promise<size_t> completed;
             } bc;
             std::unique_ptr<char[], free_deleter> buf(reinterpret_cast<char*>(malloc(4096)));
-            vring::buffer& b = bc[0];
+            buffer& b = bc[0];
             b.addr = _dev.virt_to_phys(buf.get());
             b.len = 4096;
             b.writeable = true;
@@ -756,15 +757,15 @@ size_t qp::vring_storage_size(size_t ring_size) {
     return 3 * 4096 + ring_size * (16 + 2 + 8);
 }
 
-void qp::common_config(vring::config& r) {
+void qp::common_config(ring_config& r) {
     r.avail = r.descs + 16 * r.size;
     r.used = align_up(r.avail + 2 * r.size + 6, 4096);
     r.event_index = (_dev->features() & VIRTIO_RING_F_EVENT_IDX) != 0;
     r.indirect = false;
 }
 
-vring::config qp::txq_config(size_t tx_ring_size) {
-    vring::config r;
+ring_config qp::txq_config(size_t tx_ring_size) {
+    ring_config r;
     r.size = tx_ring_size;
     r.descs = _txq_storage.get();
     r.mergable_buffers = false;
@@ -772,8 +773,8 @@ vring::config qp::txq_config(size_t tx_ring_size) {
     return r;
 }
 
-vring::config qp::rxq_config(size_t rx_ring_size) {
-    vring::config r;
+ring_config qp::rxq_config(size_t rx_ring_size) {
+    ring_config r;
     r.size = rx_ring_size;
     r.descs = _rxq_storage.get();
     r.mergable_buffers = true;
@@ -936,7 +937,7 @@ qp_osv::qp_osv(osv::assigned_virtio &virtio,
     // Get the MAC address set by the host
     assert(subset & VIRTIO_NET_F_MAC);
     struct net_config {
-        /* The config defining mac address (if VIRTIO_NET_F_MAC) */
+        /* The ring_config defining mac address (if VIRTIO_NET_F_MAC) */
         uint8_t mac[6];
         /* See VIRTIO_NET_F_STATUS and VIRTIO_NET_S_* */
         uint16_t status;
