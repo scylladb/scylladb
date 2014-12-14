@@ -32,6 +32,22 @@ using namespace net;
 
 namespace virtio {
 
+using phys = uint64_t;
+
+#ifndef HAVE_OSV
+
+phys virt_to_phys(void* p) {
+    return reinterpret_cast<uintptr_t>(p);
+}
+
+#else
+
+phys virt_to_phys(void* p) {
+    return osv::assigned_virtio::virt_to_phys(p);
+}
+
+#endif
+
 class device : public net::device {
 private:
     boost::program_options::variables_map _opts;
@@ -157,8 +173,6 @@ public:
     }
 };
 #endif
-
-using phys = uint64_t;
 
 struct ring_config {
     char* descs;
@@ -587,9 +601,6 @@ public:
     explicit qp(device* dev, size_t rx_ring_size, size_t tx_ring_size, bool poll_mode);
     virtual future<> send(packet p) override;
     virtual void rx_start() override;
-    virtual phys virt_to_phys(void* p) {
-        return reinterpret_cast<uintptr_t>(p);
-    }
 };
 
 qp::txq::txq(qp& dev, ring_config config, bool poll_mode)
@@ -646,7 +657,7 @@ qp::txq::post(packet p) {
     return _ring.available_descriptors().wait(nr_frags).then([this, nr_frags, p = std::move(q)] () mutable {
         static auto fragment_to_buffer = [this] (fragment f) {
             buffer b;
-            b.addr = _dev.virt_to_phys(f.base);
+            b.addr = virt_to_phys(f.base);
             b.len = f.size;
             b.writeable = false;
             return b;
@@ -689,7 +700,7 @@ qp::rxq::prepare_buffers() {
             } bc;
             std::unique_ptr<char[], free_deleter> buf(reinterpret_cast<char*>(malloc(4096)));
             buffer& b = bc[0];
-            b.addr = _dev.virt_to_phys(buf.get());
+            b.addr = virt_to_phys(buf.get());
             b.len = 4096;
             b.writeable = true;
             bc.completed.get_future().then([this, buf = std::move(buf)] (size_t len) mutable {
@@ -903,9 +914,6 @@ public:
             boost::program_options::variables_map opts);
     virtual ethernet_address hw_address() override {
         return _mac;
-    }
-    virtual phys virt_to_phys(void* p) override {
-        return osv::assigned_virtio::virt_to_phys(p);
     }
 };
 
