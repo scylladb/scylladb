@@ -586,8 +586,8 @@ public:
     }
 };
 
-    virtio_qp::txq::txq(virtio_qp& dev, vring::config config, bool poll_mode)
-        : _dev(dev), _ring(config, poll_mode) {
+virtio_qp::txq::txq(virtio_qp& dev, vring::config config, bool poll_mode)
+    : _dev(dev), _ring(config, poll_mode) {
 }
 
 future<>
@@ -664,8 +664,8 @@ virtio_qp::txq::post(packet p) {
     });
 }
 
-    virtio_qp::rxq::rxq(virtio_qp& dev, vring::config config, bool poll_mode)
-        : _dev(dev), _ring(config, poll_mode) {
+virtio_qp::rxq::rxq(virtio_qp& dev, vring::config config, bool poll_mode)
+    : _dev(dev), _ring(config, poll_mode) {
 }
 
 future<>
