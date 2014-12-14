@@ -62,16 +62,9 @@ future<> interface::dispatch_packet(packet p) {
         if (i != _proto_map.end()) {
             l3_rx_stream& l3 = i->second;
             auto fw = _dev->local_queue().may_forward() ? l3.forward(p, sizeof(eth_hdr)) : engine.cpu_id();
-            if (fw != engine.cpu_id() && fw < smp::count) {
+            if (fw != engine.cpu_id()) {
                 forward(fw, std::move(p));
             } else {
-                if (fw != engine.cpu_id()) { // broadcast to all cpus
-                    for (unsigned i = 0; i< smp::count; i++) {
-                        if (i != engine.cpu_id()) {
-                            forward(i, p.share());
-                        }
-                    }
-                }
                 auto h = ntoh(*eh);
                 auto from = h.src_mac;
                 p.trim_front(sizeof(*eh));
