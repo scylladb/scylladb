@@ -190,12 +190,15 @@ struct buffer {
     bool writeable;
 };
 
-// The 'buffer_chain' concept, used in vring, is a container of buffer
-// with an added 'promise<> completed' member, as in:
+// The 'buffer_chain' concept, used in vring, is a container of buffers, as in:
 //
-//   struct buffer_chain : std::vector<buffer> {
-//      promise<size_t> completed;
-//   };
+//   using buffer_chain = std::vector<buffer>;
+//
+// The 'Completion' concept is a functor with the signature:
+//
+//     void (buffer_chain&, size_t len);
+//
+template <typename BufferChain, typename Completion>
 class vring {
 private:
     class desc {
@@ -280,8 +283,9 @@ private:
     };
 private:
     ring_config _config;
+    Completion _complete;
     std::unique_ptr<notifier> _notifier;
-    std::unique_ptr<promise<size_t>[]> _completions;
+    std::unique_ptr<BufferChain[]> _buffer_chains;
     desc* _descs;
     avail _avail;
     used _used;
@@ -295,7 +299,7 @@ private:
     bool _poll_mode = false;
 public:
 
-    explicit vring(ring_config conf, bool poll_mode);
+    explicit vring(ring_config conf, Completion complete, bool poll_mode);
     void set_notifier(std::unique_ptr<notifier> notifier) {
         _notifier = std::move(notifier);
     }
@@ -388,16 +392,20 @@ private:
     void setup();
 };
 
-vring::avail::avail(ring_config conf)
+template <typename BufferChain, typename Completion>
+vring<BufferChain, Completion>::avail::avail(ring_config conf)
     : _shared(reinterpret_cast<avail_layout*>(conf.avail)) {
 }
 
-vring::used::used(ring_config conf)
+template <typename BufferChain, typename Completion>
+vring<BufferChain, Completion>::used::used(ring_config conf)
     : _shared(reinterpret_cast<used_layout*>(conf.used)) {
 }
 
+template <typename BufferChain, typename Completion>
 inline
-unsigned vring::allocate_desc() {
+unsigned
+vring<BufferChain, Completion>::allocate_desc() {
     assert(_free_head != -1);
     auto desc = _free_head;
     if (desc == _free_last) {
@@ -408,9 +416,11 @@ unsigned vring::allocate_desc() {
     return desc;
 }
 
-vring::vring(ring_config conf, bool poll_mode)
+template <typename BufferChain, typename Completion>
+vring<BufferChain, Completion>::vring(ring_config conf, Completion complete, bool poll_mode)
     : _config(conf)
-    , _completions(new promise<size_t>[_config.size])
+    , _complete(complete)
+    , _buffer_chains(new BufferChain[_config.size])
     , _descs(reinterpret_cast<desc*>(conf.descs))
     , _avail(conf)
     , _used(conf)
@@ -421,7 +431,8 @@ vring::vring(ring_config conf, bool poll_mode)
     setup();
 }
 
-void vring::setup() {
+template <typename BufferChain, typename Completion>
+void vring<BufferChain, Completion>::setup() {
     for (unsigned i = 0; i < _config.size; ++i) {
         _descs[i]._next = i + 1;
     }
@@ -430,7 +441,8 @@ void vring::setup() {
     _available_descriptors.signal(_config.size);
 }
 
-void vring::run() {
+template <typename BufferChain, typename Completion>
+void vring<BufferChain, Completion>::run() {
     if (!_poll_mode) {
         complete();
     } else {
@@ -442,7 +454,8 @@ void vring::run() {
     }
 }
 
-void vring::flush_batch() {
+template <typename BufferChain, typename Completion>
+void vring<BufferChain, Completion>::flush_batch() {
     if (_batch.empty()) {
         return;
     }
@@ -454,15 +467,12 @@ void vring::flush_batch() {
     kick();
 }
 
+// Iterator: points at a buffer_chain
+template <typename BufferChain, typename Completion>
 template <typename Iterator>
-void vring::post(Iterator begin, Iterator end) {
-    // Note: buffer_chain here is any container of buffer, not
-    //       necessarily vector<buffer>.
-    //       buffer_chain should also include a promise<size_t> completed
-    //       member, signifying the action to take when the request
-    //       completes.
-    using buffer_chain = decltype(*begin);
-    std::for_each(begin, end, [this] (buffer_chain bc) {
+void vring<BufferChain, Completion>::post(Iterator begin, Iterator end) {
+    for (auto bci = begin; bci!= end; ++bci) {
+        auto&& bc = *bci;
         desc pseudo_head = {};
         desc* prev = &pseudo_head;
         for (auto i = bc.begin(); i != bc.end(); ++i) {
@@ -471,21 +481,21 @@ void vring::post(Iterator begin, Iterator end) {
             prev->_next = desc_idx;
             desc &d = _descs[desc_idx];
             d._flags = {};
-            auto b = *i;
+            auto&& b = *i;
             d._flags.writeable = b.writeable;
             d._paddr = b.addr;
             d._len = b.len;
             prev = &d;
         }
         auto desc_head = pseudo_head._next;
-        _completions[desc_head] = std::move(bc.completed);
+        _buffer_chains[desc_head] = std::move(bc);
         if (!_poll_mode) {
             _avail._shared->_ring[masked(_avail._head++)] = desc_head;
         } else {
             _batch.push_back(desc_head);
         }
         _avail._avail_added_since_kick++;
-    });
+    }
     if (!_poll_mode) {
         _avail._shared->_idx.store(_avail._head, std::memory_order_release);
         kick();
@@ -495,13 +505,14 @@ void vring::post(Iterator begin, Iterator end) {
     }
 }
 
-void vring::do_complete() {
+template <typename BufferChain, typename Completion>
+void vring<BufferChain, Completion>::do_complete() {
     do {
         disable_interrupts();
         auto used_head = _used._shared->_idx.load(std::memory_order_acquire);
         while (used_head != _used._tail) {
             auto ue = _used._shared->_used_elements[masked(_used._tail++)];
-            _completions[ue._id].set_value(ue._len);
+            _complete(std::move(_buffer_chains[ue._id]), ue._len);
             auto id = ue._id;
             if (_free_last != -1) {
                 _descs[_free_last]._next = id;
@@ -522,7 +533,8 @@ void vring::do_complete() {
     } while (enable_interrupts());
 }
 
-void vring::complete() {
+template <typename BufferChain, typename Completion>
+void vring<BufferChain, Completion>::complete() {
     do_complete();
     _notifier->wait().then([this] {
         complete();
@@ -545,8 +557,31 @@ protected:
         uint16_t num_buffers;
     };
     class txq {
+        static buffer fragment_to_buffer(fragment f) {
+            buffer b;
+            b.addr = virt_to_phys(f.base);
+            b.len = f.size;
+            b.writeable = false;
+            return b;
+        };
+        struct packet_as_buffer_chain {
+            fragment* start;
+            fragment* finish;
+            promise<size_t> completed;
+            auto begin() {
+                return make_transform_iterator(start, fragment_to_buffer);
+            }
+            auto end() {
+                return make_transform_iterator(finish, fragment_to_buffer);
+            }
+        };
+        struct complete {
+            void operator()(packet_as_buffer_chain&& bc, size_t len) {
+                bc.completed.set_value(len);
+            }
+        };
         qp& _dev;
-        vring _ring;
+        vring<packet_as_buffer_chain, complete> _ring;
     public:
         txq(qp& dev, ring_config config, bool poll_mode);
         void set_notifier(std::unique_ptr<notifier> notifier) {
@@ -562,8 +597,16 @@ protected:
         future<> post(packet p);
     };
     class rxq  {
+        struct single_buffer_and_completion : std::array<buffer, 1> {
+            promise<size_t> completed;
+        };
+        struct complete {
+            void operator()(single_buffer_and_completion&& bc, size_t len) {
+                bc.completed.set_value(len);
+            }
+        };
         qp& _dev;
-        vring _ring;
+        vring<single_buffer_and_completion, complete> _ring;
         unsigned _remaining_buffers = 0;
         std::vector<fragment> _fragments;
         std::vector<std::unique_ptr<char[], free_deleter>> _deleters;
@@ -604,7 +647,7 @@ public:
 };
 
 qp::txq::txq(qp& dev, ring_config config, bool poll_mode)
-    : _dev(dev), _ring(config, poll_mode) {
+    : _dev(dev), _ring(config, complete(), poll_mode) {
 }
 
 future<>
@@ -655,24 +698,7 @@ qp::txq::post(packet p) {
 
     auto nr_frags = q.nr_frags();
     return _ring.available_descriptors().wait(nr_frags).then([this, nr_frags, p = std::move(q)] () mutable {
-        static auto fragment_to_buffer = [this] (fragment f) {
-            buffer b;
-            b.addr = virt_to_phys(f.base);
-            b.len = f.size;
-            b.writeable = false;
-            return b;
-        };
-        struct packet_as_buffer_chain {
-            fragment* start;
-            fragment* finish;
-            promise<size_t> completed;
-            auto begin() {
-                return make_transform_iterator(start, fragment_to_buffer);
-            }
-            auto end() {
-                return make_transform_iterator(finish, fragment_to_buffer);
-            }
-        } vbc[1] { { p.fragments().begin(), p.fragments().end() } };
+        packet_as_buffer_chain vbc[1] { { p.fragments().begin(), p.fragments().end() } };
         // schedule packet destruction
         vbc[0].completed.get_future().then([this, nr_frags, p = std::move(p)] (size_t) {
             _ring.available_descriptors().signal(nr_frags);
@@ -682,7 +708,7 @@ qp::txq::post(packet p) {
 }
 
 qp::rxq::rxq(qp& dev, ring_config config, bool poll_mode)
-    : _dev(dev), _ring(config, poll_mode) {
+    : _dev(dev), _ring(config, complete(), poll_mode) {
 }
 
 future<>
@@ -695,9 +721,7 @@ qp::rxq::prepare_buffers() {
             count += opportunistic;
         }
         auto make_buffer_chain = [this] {
-            struct single_buffer_and_completion : std::array<buffer, 1> {
-                promise<size_t> completed;
-            } bc;
+            single_buffer_and_completion bc;
             std::unique_ptr<char[], free_deleter> buf(reinterpret_cast<char*>(malloc(4096)));
             buffer& b = bc[0];
             b.addr = virt_to_phys(buf.get());
