@@ -186,7 +186,7 @@ struct ipv4_frag_id::hash : private std::hash<ipv4_address>,
 
 class ipv4 {
 public:
-    using clock_type = std::chrono::high_resolution_clock;
+    using clock_type = lowres_clock;
     using address_type = ipv4_address;
     using proto_type = uint16_t;
     static address_type broadcast_address() { return ipv4_address(0xffffffff); }
@@ -222,7 +222,7 @@ private:
     static constexpr uint32_t _frag_low_thresh{3 * 1024 * 1024};
     static constexpr uint32_t _frag_high_thresh{4 * 1024 * 1024};
     uint32_t _frag_mem{0};
-    timer<> _frag_timer;
+    timer<lowres_clock> _frag_timer;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
     unsigned handle_on_cpu(packet& p, size_t off);
@@ -230,6 +230,14 @@ private:
     void frag_limit_mem();
     void frag_timeout();
     void frag_drop(ipv4_frag_id frag_id, uint32_t dropped_size);
+    void frag_arm(clock_type::time_point now) {
+        auto tp = now + _frag_timeout;
+        _frag_timer.arm(tp);
+    }
+    void frag_arm() {
+        auto now = clock_type::now();
+        frag_arm(now);
+    }
 public:
     explicit ipv4(interface* netif);
     void set_host_address(ipv4_address ip);
