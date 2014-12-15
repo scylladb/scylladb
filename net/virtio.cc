@@ -612,7 +612,7 @@ protected:
         vring<single_buffer, complete> _ring;
         unsigned _remaining_buffers = 0;
         std::vector<fragment> _fragments;
-        std::vector<std::unique_ptr<char[], free_deleter>> _deleters;
+        std::vector<std::unique_ptr<char[], free_deleter>> _buffers;
     public:
         rxq(qp& _if, ring_config config, bool poll_mode);
         void set_notifier(std::unique_ptr<notifier> notifier) {
@@ -750,22 +750,22 @@ qp::rxq::complete_buffer(single_buffer&& bc, size_t len) {
         frag_buf += _dev._header_len;
         frag_len -= _dev._header_len;
         _fragments.clear();
-        _deleters.clear();
+        _buffers.clear();
     };
 
     // Append current buffer
     _fragments.emplace_back(fragment{frag_buf, frag_len});
-    _deleters.push_back(std::move(buf));
+    _buffers.push_back(std::move(buf));
     _remaining_buffers--;
 
     // Last buffer
     if (_remaining_buffers == 0) {
         deleter del;
-        if (_deleters.size() == 1) {
-            del = make_free_deleter(_deleters[0].release());
-            _deleters.clear();
+        if (_buffers.size() == 1) {
+            del = make_free_deleter(_buffers[0].release());
+            _buffers.clear();
         } else {
-            del = make_deleter(deleter(), [deleters = std::move(_deleters)] {});
+            del = make_deleter(deleter(), [deleters = std::move(_buffers)] {});
         }
         packet p(_fragments.begin(), _fragments.end(), std::move(del));
         _dev._dev->l2receive(std::move(p));
