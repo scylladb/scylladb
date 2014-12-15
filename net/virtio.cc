@@ -746,7 +746,6 @@ qp::rxq::complete_buffer(single_buffer&& bc, size_t len) {
     if (_remaining_buffers == 0) {
         auto hdr = reinterpret_cast<net_hdr_mrg*>(frag_buf);
         assert(hdr->num_buffers >= 1);
-        // TODO: special-case for num_buffers == 1
         _remaining_buffers = hdr->num_buffers;
         frag_buf += _dev._header_len;
         frag_len -= _dev._header_len;
