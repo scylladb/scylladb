@@ -43,7 +43,6 @@ private:
     using timestamp_t = typename Timer::duration::rep;
 
     static constexpr timestamp_t max_timestamp = std::numeric_limits<timestamp_t>::max();
-    static constexpr int ulong_bits = std::numeric_limits<unsigned long>::digits;
     static constexpr int timestamp_bits = std::numeric_limits<timestamp_t>::digits;
 
     // The last bucket is reserved for active timers with timeout <= _last.
