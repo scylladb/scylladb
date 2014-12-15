@@ -30,7 +30,25 @@
 
 using namespace net;
 
-class virtio_device : public device {
+namespace virtio {
+
+using phys = uint64_t;
+
+#ifndef HAVE_OSV
+
+phys virt_to_phys(void* p) {
+    return reinterpret_cast<uintptr_t>(p);
+}
+
+#else
+
+phys virt_to_phys(void* p) {
+    return osv::assigned_virtio::virt_to_phys(p);
+}
+
+#endif
+
+class device : public net::device {
 private:
     boost::program_options::variables_map _opts;
     net::hw_features _hw_features;
@@ -71,7 +89,7 @@ private:
     }
 
 public:
-    virtio_device(boost::program_options::variables_map opts)
+    device(boost::program_options::variables_map opts)
        : _opts(opts), _features(setup_features())
        {}
     ethernet_address hw_address() override {
@@ -94,7 +112,7 @@ public:
  * (where both notifications occur through eventfds) and one for an assigned
  * virtio device from OSv.
  */
-class virtio_notifier {
+class notifier {
 public:
     // Notify the host
     virtual void notify() = 0;
@@ -107,11 +125,11 @@ public:
     virtual void wake_wait() {
         abort();
     }
-    virtual ~virtio_notifier() {
+    virtual ~notifier() {
     }
 };
 
-class virtio_notifier_vhost : public virtio_notifier {
+class notifier_vhost : public notifier {
 private:
     readable_eventfd _notified;
     writeable_eventfd _kick;
@@ -125,14 +143,14 @@ public:
             return make_ready_future<>();
         });
     }
-    virtio_notifier_vhost(readable_eventfd &&notified,
+    notifier_vhost(readable_eventfd &&notified,
             writeable_eventfd &&kick)
         : _notified(std::move(notified))
         , _kick(std::move(kick)) {}
 };
 
 #ifdef HAVE_OSV
-class virtio_notifier_osv : public virtio_notifier {
+class notifier_osv : public notifier {
 private:
     std::unique_ptr<reactor_notifier> _notified;
     uint16_t _q_index;
@@ -147,7 +165,7 @@ public:
     virtual void wake_wait() override {
         _notified->signal();
     }
-    virtio_notifier_osv(osv::assigned_virtio &virtio, uint16_t q_index)
+    notifier_osv(osv::assigned_virtio &virtio, uint16_t q_index)
         : _notified(engine.make_reactor_notifier())
         , _q_index(q_index)
         , _virtio(virtio)
@@ -156,27 +174,32 @@ public:
 };
 #endif
 
-using phys = uint64_t;
+struct ring_config {
+    char* descs;
+    char* avail;
+    char* used;
+    unsigned size;
+    bool event_index;
+    bool indirect;
+    bool mergable_buffers;
+};
 
+struct buffer {
+    phys addr;
+    uint32_t len;
+    bool writeable;
+};
+
+// The 'buffer_chain' concept, used in vring, is a container of buffers, as in:
+//
+//   using buffer_chain = std::vector<buffer>;
+//
+// The 'Completion' concept is a functor with the signature:
+//
+//     void (buffer_chain&, size_t len);
+//
+template <typename BufferChain, typename Completion>
 class vring {
-public:
-    struct config {
-        char* descs;
-        char* avail;
-        char* used;
-        unsigned size;
-        bool event_index;
-        bool indirect;
-        bool mergable_buffers;
-    };
-    struct buffer {
-        phys addr;
-        uint32_t len;
-        bool writeable;
-    };
-    struct buffer_chain : std::vector<buffer> {
-        promise<size_t> completed;
-    };
 private:
     class desc {
     public:
@@ -248,20 +271,21 @@ private:
     };
 
     struct avail {
-        explicit avail(config conf);
+        explicit avail(ring_config conf);
         avail_layout* _shared;
         uint16_t _head = 0;
         uint16_t _avail_added_since_kick = 0;
     };
     struct used {
-        explicit used(config conf);
+        explicit used(ring_config conf);
         used_layout* _shared;
         uint16_t _tail = 0;
     };
 private:
-    config _config;
-    std::unique_ptr<virtio_notifier> _notifier;
-    std::unique_ptr<promise<size_t>[]> _completions;
+    ring_config _config;
+    Completion _complete;
+    std::unique_ptr<notifier> _notifier;
+    std::unique_ptr<BufferChain[]> _buffer_chains;
     desc* _descs;
     avail _avail;
     used _used;
@@ -275,11 +299,11 @@ private:
     bool _poll_mode = false;
 public:
 
-    explicit vring(config conf, bool poll_mode);
-    void set_notifier(std::unique_ptr<virtio_notifier> notifier) {
+    explicit vring(ring_config conf, Completion complete, bool poll_mode);
+    void set_notifier(std::unique_ptr<notifier> notifier) {
         _notifier = std::move(notifier);
     }
-    const config& getconfig() {
+    const ring_config& getconfig() {
         return _config;
     }
     void wake_notifier_wait() {
@@ -368,16 +392,20 @@ private:
     void setup();
 };
 
-vring::avail::avail(config conf)
+template <typename BufferChain, typename Completion>
+vring<BufferChain, Completion>::avail::avail(ring_config conf)
     : _shared(reinterpret_cast<avail_layout*>(conf.avail)) {
 }
 
-vring::used::used(config conf)
+template <typename BufferChain, typename Completion>
+vring<BufferChain, Completion>::used::used(ring_config conf)
     : _shared(reinterpret_cast<used_layout*>(conf.used)) {
 }
 
+template <typename BufferChain, typename Completion>
 inline
-unsigned vring::allocate_desc() {
+unsigned
+vring<BufferChain, Completion>::allocate_desc() {
     assert(_free_head != -1);
     auto desc = _free_head;
     if (desc == _free_last) {
@@ -388,9 +416,11 @@ unsigned vring::allocate_desc() {
     return desc;
 }
 
-vring::vring(config conf, bool poll_mode)
+template <typename BufferChain, typename Completion>
+vring<BufferChain, Completion>::vring(ring_config conf, Completion complete, bool poll_mode)
     : _config(conf)
-    , _completions(new promise<size_t>[_config.size])
+    , _complete(complete)
+    , _buffer_chains(new BufferChain[_config.size])
     , _descs(reinterpret_cast<desc*>(conf.descs))
     , _avail(conf)
     , _used(conf)
@@ -401,7 +431,8 @@ vring::vring(config conf, bool poll_mode)
     setup();
 }
 
-void vring::setup() {
+template <typename BufferChain, typename Completion>
+void vring<BufferChain, Completion>::setup() {
     for (unsigned i = 0; i < _config.size; ++i) {
         _descs[i]._next = i + 1;
     }
@@ -410,7 +441,8 @@ void vring::setup() {
     _available_descriptors.signal(_config.size);
 }
 
-void vring::run() {
+template <typename BufferChain, typename Completion>
+void vring<BufferChain, Completion>::run() {
     if (!_poll_mode) {
         complete();
     } else {
@@ -422,7 +454,8 @@ void vring::run() {
     }
 }
 
-void vring::flush_batch() {
+template <typename BufferChain, typename Completion>
+void vring<BufferChain, Completion>::flush_batch() {
     if (_batch.empty()) {
         return;
     }
@@ -434,15 +467,12 @@ void vring::flush_batch() {
     kick();
 }
 
+// Iterator: points at a buffer_chain
+template <typename BufferChain, typename Completion>
 template <typename Iterator>
-void vring::post(Iterator begin, Iterator end) {
-    // Note: buffer_chain here is any container of buffer, not
-    //       necessarily vector<buffer>.
-    //       buffer_chain should also include a promise<size_t> completed
-    //       member, signifying the action to take when the request
-    //       completes.
-    using buffer_chain = decltype(*begin);
-    std::for_each(begin, end, [this] (buffer_chain bc) {
+void vring<BufferChain, Completion>::post(Iterator begin, Iterator end) {
+    for (auto bci = begin; bci!= end; ++bci) {
+        auto&& bc = *bci;
         desc pseudo_head = {};
         desc* prev = &pseudo_head;
         for (auto i = bc.begin(); i != bc.end(); ++i) {
@@ -451,21 +481,21 @@ void vring::post(Iterator begin, Iterator end) {
             prev->_next = desc_idx;
             desc &d = _descs[desc_idx];
             d._flags = {};
-            auto b = *i;
+            auto&& b = *i;
             d._flags.writeable = b.writeable;
             d._paddr = b.addr;
             d._len = b.len;
             prev = &d;
         }
         auto desc_head = pseudo_head._next;
-        _completions[desc_head] = std::move(bc.completed);
+        _buffer_chains[desc_head] = std::move(bc);
         if (!_poll_mode) {
             _avail._shared->_ring[masked(_avail._head++)] = desc_head;
         } else {
             _batch.push_back(desc_head);
         }
         _avail._avail_added_since_kick++;
-    });
+    }
     if (!_poll_mode) {
         _avail._shared->_idx.store(_avail._head, std::memory_order_release);
         kick();
@@ -475,13 +505,14 @@ void vring::post(Iterator begin, Iterator end) {
     }
 }
 
-void vring::do_complete() {
+template <typename BufferChain, typename Completion>
+void vring<BufferChain, Completion>::do_complete() {
     do {
         disable_interrupts();
         auto used_head = _used._shared->_idx.load(std::memory_order_acquire);
         while (used_head != _used._tail) {
             auto ue = _used._shared->_used_elements[masked(_used._tail++)];
-            _completions[ue._id].set_value(ue._len);
+            _complete(std::move(_buffer_chains[ue._id]), ue._len);
             auto id = ue._id;
             if (_free_last != -1) {
                 _descs[_free_last]._next = id;
@@ -502,14 +533,15 @@ void vring::do_complete() {
     } while (enable_interrupts());
 }
 
-void vring::complete() {
+template <typename BufferChain, typename Completion>
+void vring<BufferChain, Completion>::complete() {
     do_complete();
     _notifier->wait().then([this] {
         complete();
     });
 }
 
-class virtio_qp : public net::qp {
+class qp : public net::qp {
 protected:
     struct net_hdr {
         uint8_t needs_csum : 1;
@@ -525,14 +557,38 @@ protected:
         uint16_t num_buffers;
     };
     class txq {
-        virtio_qp& _dev;
-        vring _ring;
+        static buffer fragment_to_buffer(fragment f) {
+            buffer b;
+            b.addr = virt_to_phys(f.base);
+            b.len = f.size;
+            b.writeable = false;
+            return b;
+        };
+        struct packet_as_buffer_chain {
+            packet p;
+            auto begin() {
+                return make_transform_iterator(p.fragments().begin(), fragment_to_buffer);
+            }
+            auto end() {
+                return make_transform_iterator(p.fragments().end(), fragment_to_buffer);
+            }
+        };
+        struct complete {
+            txq& q;
+            void operator()(packet_as_buffer_chain&& bc, size_t len) {
+                // move the packet here, to be destroyed on scope exit
+                auto p = std::move(bc.p);
+                q._ring.available_descriptors().signal(p.nr_frags());
+            }
+        };
+        qp& _dev;
+        vring<packet_as_buffer_chain, complete> _ring;
     public:
-        txq(virtio_qp& dev, vring::config config, bool poll_mode);
-        void set_notifier(std::unique_ptr<virtio_notifier> notifier) {
+        txq(qp& dev, ring_config config, bool poll_mode);
+        void set_notifier(std::unique_ptr<notifier> notifier) {
             _ring.set_notifier(std::move(notifier));
         }
-        const vring::config& getconfig() {
+        const ring_config& getconfig() {
             return _ring.getconfig();
         }
         void wake_notifier_wait() {
@@ -542,17 +598,27 @@ protected:
         future<> post(packet p);
     };
     class rxq  {
-        virtio_qp& _dev;
-        vring _ring;
+        struct buffer_and_virt : buffer {
+            std::unique_ptr<char[], free_deleter> buf;
+        };
+        using single_buffer = std::array<buffer_and_virt, 1>;
+        struct complete {
+            rxq& q;
+            void operator()(single_buffer&& bc, size_t len) {
+                q.complete_buffer(std::move(bc), len);
+            }
+        };
+        qp& _dev;
+        vring<single_buffer, complete> _ring;
         unsigned _remaining_buffers = 0;
         std::vector<fragment> _fragments;
         std::vector<std::unique_ptr<char[], free_deleter>> _deleters;
     public:
-        rxq(virtio_qp& _if, vring::config config, bool poll_mode);
-        void set_notifier(std::unique_ptr<virtio_notifier> notifier) {
+        rxq(qp& _if, ring_config config, bool poll_mode);
+        void set_notifier(std::unique_ptr<notifier> notifier) {
             _ring.set_notifier(std::move(notifier));
         }
-        const vring::config& getconfig() {
+        const ring_config& getconfig() {
             return _ring.getconfig();
         }
         void run() {
@@ -564,34 +630,32 @@ protected:
         }
     private:
         future<> prepare_buffers();
+        void complete_buffer(single_buffer&& b, size_t len);
     };
 protected:
-    virtio_device* _dev;
+    device* _dev;
     size_t _header_len;
     std::unique_ptr<char[], free_deleter> _txq_storage;
     std::unique_ptr<char[], free_deleter> _rxq_storage;
     txq _txq;
     rxq _rxq;
 protected:
-    vring::config txq_config(size_t txq_ring_size);
-    vring::config rxq_config(size_t rxq_ring_size);
-    void common_config(vring::config& r);
+    ring_config txq_config(size_t txq_ring_size);
+    ring_config rxq_config(size_t rxq_ring_size);
+    void common_config(ring_config& r);
     size_t vring_storage_size(size_t ring_size);
 public:
-    explicit virtio_qp(virtio_device* dev, size_t rx_ring_size, size_t tx_ring_size, bool poll_mode);
+    explicit qp(device* dev, size_t rx_ring_size, size_t tx_ring_size, bool poll_mode);
     virtual future<> send(packet p) override;
     virtual void rx_start() override;
-    virtual phys virt_to_phys(void* p) {
-        return reinterpret_cast<uintptr_t>(p);
-    }
 };
 
-virtio_qp::txq::txq(virtio_qp& dev, vring::config config, bool poll_mode)
-    : _dev(dev), _ring(config, poll_mode) {
+qp::txq::txq(qp& dev, ring_config config, bool poll_mode)
+    : _dev(dev), _ring(config, complete{*this}, poll_mode) {
 }
 
 future<>
-virtio_qp::txq::post(packet p) {
+qp::txq::post(packet p) {
     net_hdr_mrg vhdr = {};
 
     // Handle TCP checksum offload
@@ -638,38 +702,17 @@ virtio_qp::txq::post(packet p) {
 
     auto nr_frags = q.nr_frags();
     return _ring.available_descriptors().wait(nr_frags).then([this, nr_frags, p = std::move(q)] () mutable {
-        static auto fragment_to_buffer = [this] (fragment f) {
-            vring::buffer b;
-            b.addr = _dev.virt_to_phys(f.base);
-            b.len = f.size;
-            b.writeable = false;
-            return b;
-        };
-        struct packet_as_buffer_chain {
-            fragment* start;
-            fragment* finish;
-            promise<size_t> completed;
-            auto begin() {
-                return make_transform_iterator(start, fragment_to_buffer);
-            }
-            auto end() {
-                return make_transform_iterator(finish, fragment_to_buffer);
-            }
-        } vbc[1] { { p.fragments().begin(), p.fragments().end() } };
-        // schedule packet destruction
-        vbc[0].completed.get_future().then([this, nr_frags, p = std::move(p)] (size_t) {
-            _ring.available_descriptors().signal(nr_frags);
-        });
+        packet_as_buffer_chain vbc[1] { { std::move(p) } };
         _ring.post(std::begin(vbc), std::end(vbc));
     });
 }
 
-virtio_qp::rxq::rxq(virtio_qp& dev, vring::config config, bool poll_mode)
-    : _dev(dev), _ring(config, poll_mode) {
+qp::rxq::rxq(qp& dev, ring_config config, bool poll_mode)
+    : _dev(dev), _ring(config, complete{*this}, poll_mode) {
 }
 
 future<>
-virtio_qp::rxq::prepare_buffers() {
+qp::rxq::prepare_buffers() {
     auto& available = _ring.available_descriptors();
     return available.wait(1).then([this, &available] {
         unsigned count = 1;
@@ -678,54 +721,57 @@ virtio_qp::rxq::prepare_buffers() {
             count += opportunistic;
         }
         auto make_buffer_chain = [this] {
-            struct single_buffer_and_completion : std::array<vring::buffer, 1> {
-                promise<size_t> completed;
-            } bc;
+            single_buffer bc;
             std::unique_ptr<char[], free_deleter> buf(reinterpret_cast<char*>(malloc(4096)));
-            vring::buffer& b = bc[0];
-            b.addr = _dev.virt_to_phys(buf.get());
+            buffer_and_virt& b = bc[0];
+            b.addr = virt_to_phys(buf.get());
             b.len = 4096;
             b.writeable = true;
-            bc.completed.get_future().then([this, buf = std::move(buf)] (size_t len) mutable {
-                auto frag_buf = buf.get();
-                auto frag_len = len;
-                // First buffer
-                if (_remaining_buffers == 0) {
-                    auto hdr = reinterpret_cast<net_hdr_mrg*>(frag_buf);
-                    assert(hdr->num_buffers >= 1);
-                    // TODO: special-case for num_buffers == 1
-                    _remaining_buffers = hdr->num_buffers;
-                    frag_buf += _dev._header_len;
-                    frag_len -= _dev._header_len;
-                    _fragments.clear();
-                    _deleters.clear();
-                };
-
-                // Append current buffer
-                _fragments.emplace_back(fragment{frag_buf, frag_len});
-                _deleters.push_back(std::move(buf));
-                _remaining_buffers--;
-
-                // Last buffer
-                if (_remaining_buffers == 0) {
-                    deleter del;
-                    if (_deleters.size() == 1) {
-                        del = make_free_deleter(_deleters[0].release());
-                        _deleters.clear();
-                    } else {
-                        del = make_deleter(deleter(), [deleters = std::move(_deleters)] {});
-                    }
-                    packet p(_fragments.begin(), _fragments.end(), std::move(del));
-                    _dev._dev->l2receive(std::move(p));
-                    _ring.available_descriptors().signal(_fragments.size());
-                }
-            });
+            b.buf = std::move(buf);
             return bc;
         };
         auto start = make_function_input_iterator(make_buffer_chain, 0U);
         auto finish = make_function_input_iterator(make_buffer_chain, count);
         _ring.post(start, finish);
     });
+}
+
+void
+qp::rxq::complete_buffer(single_buffer&& bc, size_t len) {
+    auto&& sb = bc[0];
+    auto&& buf = sb.buf;
+    auto frag_buf = buf.get();
+    auto frag_len = len;
+    // First buffer
+    if (_remaining_buffers == 0) {
+        auto hdr = reinterpret_cast<net_hdr_mrg*>(frag_buf);
+        assert(hdr->num_buffers >= 1);
+        // TODO: special-case for num_buffers == 1
+        _remaining_buffers = hdr->num_buffers;
+        frag_buf += _dev._header_len;
+        frag_len -= _dev._header_len;
+        _fragments.clear();
+        _deleters.clear();
+    };
+
+    // Append current buffer
+    _fragments.emplace_back(fragment{frag_buf, frag_len});
+    _deleters.push_back(std::move(buf));
+    _remaining_buffers--;
+
+    // Last buffer
+    if (_remaining_buffers == 0) {
+        deleter del;
+        if (_deleters.size() == 1) {
+            del = make_free_deleter(_deleters[0].release());
+            _deleters.clear();
+        } else {
+            del = make_deleter(deleter(), [deleters = std::move(_deleters)] {});
+        }
+        packet p(_fragments.begin(), _fragments.end(), std::move(del));
+        _dev._dev->l2receive(std::move(p));
+        _ring.available_descriptors().signal(_fragments.size());
+    }
 }
 
 // Allocate and zero-initialize a buffer which is page-aligned and can be
@@ -738,7 +784,7 @@ static std::unique_ptr<char[], free_deleter> virtio_buffer(size_t size) {
     return std::unique_ptr<char[], free_deleter>(reinterpret_cast<char*>(ret));
 }
 
-virtio_qp::virtio_qp(virtio_device* dev, size_t rx_ring_size, size_t tx_ring_size, bool poll_mode)
+qp::qp(device* dev, size_t rx_ring_size, size_t tx_ring_size, bool poll_mode)
     : _dev(dev)
     , _txq_storage(virtio_buffer(vring_storage_size(tx_ring_size)))
     , _rxq_storage(virtio_buffer(vring_storage_size(rx_ring_size)))
@@ -746,20 +792,20 @@ virtio_qp::virtio_qp(virtio_device* dev, size_t rx_ring_size, size_t tx_ring_siz
     , _rxq(*this, rxq_config(rx_ring_size), poll_mode) {
 }
 
-size_t virtio_qp::vring_storage_size(size_t ring_size) {
+size_t qp::vring_storage_size(size_t ring_size) {
     // overestimate, but not by much.
     return 3 * 4096 + ring_size * (16 + 2 + 8);
 }
 
-void virtio_qp::common_config(vring::config& r) {
+void qp::common_config(ring_config& r) {
     r.avail = r.descs + 16 * r.size;
     r.used = align_up(r.avail + 2 * r.size + 6, 4096);
     r.event_index = (_dev->features() & VIRTIO_RING_F_EVENT_IDX) != 0;
     r.indirect = false;
 }
 
-vring::config virtio_qp::txq_config(size_t tx_ring_size) {
-    vring::config r;
+ring_config qp::txq_config(size_t tx_ring_size) {
+    ring_config r;
     r.size = tx_ring_size;
     r.descs = _txq_storage.get();
     r.mergable_buffers = false;
@@ -767,8 +813,8 @@ vring::config virtio_qp::txq_config(size_t tx_ring_size) {
     return r;
 }
 
-vring::config virtio_qp::rxq_config(size_t rx_ring_size) {
-    vring::config r;
+ring_config qp::rxq_config(size_t rx_ring_size) {
+    ring_config r;
     r.size = rx_ring_size;
     r.descs = _rxq_storage.get();
     r.mergable_buffers = true;
@@ -777,50 +823,22 @@ vring::config virtio_qp::rxq_config(size_t rx_ring_size) {
 }
 
 void
-virtio_qp::rx_start() {
+qp::rx_start() {
     _rxq.run();
 }
 
 future<>
-virtio_qp::send(packet p) {
+qp::send(packet p) {
     return _txq.post(std::move(p));
 }
 
-boost::program_options::options_description
-get_virtio_net_options_description()
-{
-    boost::program_options::options_description opts(
-            "Virtio net options");
-    opts.add_options()
-        ("event-index",
-                boost::program_options::value<std::string>()->default_value("on"),
-                "Enable event-index feature (on / off)")
-        ("csum-offload",
-                boost::program_options::value<std::string>()->default_value("on"),
-                "Enable checksum offload feature (on / off)")
-        ("tso",
-                boost::program_options::value<std::string>()->default_value("on"),
-                "Enable TCP segment offload feature (on / off)")
-        ("ufo",
-                boost::program_options::value<std::string>()->default_value("on"),
-                "Enable UDP fragmentation offload feature (on / off)")
-        ("virtio-ring-size",
-                boost::program_options::value<unsigned>()->default_value(256),
-                "Virtio ring size (must be power-of-two)")
-        ("virtio-poll-mode",
-                boost::program_options::value<bool>()->default_value(false),
-                "Poll virtio rings instead of using interrupts")
-        ;
-    return opts;
-}
-
-class virtio_qp_vhost : public virtio_qp {
+class qp_vhost : public qp {
 private:
     // The vhost file descriptor needs to remain open throughout the life of
     // this driver, as as soon as we close it, vhost stops servicing us.
     file_desc _vhost_fd;
 public:
-    virtio_qp_vhost(virtio_device* dev, boost::program_options::variables_map opts);
+    qp_vhost(device* dev, boost::program_options::variables_map opts);
 };
 
 static size_t config_ring_size(boost::program_options::variables_map &opts) {
@@ -831,8 +849,8 @@ static size_t config_ring_size(boost::program_options::variables_map &opts) {
     }
 }
 
-virtio_qp_vhost::virtio_qp_vhost(virtio_device *dev, boost::program_options::variables_map opts)
-    : virtio_qp(dev, config_ring_size(opts), config_ring_size(opts), opts["virtio-poll-mode"].as<bool>())
+qp_vhost::qp_vhost(device *dev, boost::program_options::variables_map opts)
+    : qp(dev, config_ring_size(opts), config_ring_size(opts), opts["virtio-poll-mode"].as<bool>())
     , _vhost_fd(file_desc::open("/dev/vhost-net", O_RDWR))
 {
     auto tap_device = opts["tap-device"].as<std::string>();
@@ -904,9 +922,9 @@ virtio_qp_vhost::virtio_qp_vhost(virtio_device *dev, boost::program_options::var
     _vhost_fd.ioctl(VHOST_SET_VRING_CALL, vhost_vring_file{0, _rxq_notify.get_write_fd()});
     _vhost_fd.ioctl(VHOST_SET_VRING_KICK, vhost_vring_file{1, _txq_kick.get_read_fd()});
     _vhost_fd.ioctl(VHOST_SET_VRING_CALL, vhost_vring_file{1, _txq_notify.get_write_fd()});
-    _rxq.set_notifier(std::make_unique<virtio_notifier_vhost>(
+    _rxq.set_notifier(std::make_unique<notifier_vhost>(
             std::move(_rxq_notify), std::move(_rxq_kick)));
-    _txq.set_notifier(std::make_unique<virtio_notifier_vhost>(
+    _txq.set_notifier(std::make_unique<notifier_vhost>(
             std::move(_txq_notify), std::move(_txq_kick)));
 
     _vhost_fd.ioctl(VHOST_NET_SET_BACKEND, vhost_vring_file{0, tap_fd.get()});
@@ -916,24 +934,21 @@ virtio_qp_vhost::virtio_qp_vhost(virtio_device *dev, boost::program_options::var
 }
 
 #ifdef HAVE_OSV
-class virtio_qp_osv : public virtio_qp {
+class qp_osv : public qp {
 private:
     ethernet_address _mac;
     osv::assigned_virtio &_virtio;
 public:
-    virtio_qp_osv(osv::assigned_virtio &virtio,
+    qp_osv(osv::assigned_virtio &virtio,
             boost::program_options::variables_map opts);
     virtual ethernet_address hw_address() override {
         return _mac;
     }
-    virtual phys virt_to_phys(void* p) override {
-        return osv::assigned_virtio::virt_to_phys(p);
-    }
 };
 
-virtio_qp_osv::virtio_qp_osv(osv::assigned_virtio &virtio,
+qp_osv::qp_osv(osv::assigned_virtio &virtio,
         boost::program_options::variables_map opts)
-        : virtio_qp(opts, virtio.queue_size(0), virtio.queue_size(1), opts["virtio-poll-mode"].as<bool>())
+        : qp(opts, virtio.queue_size(0), virtio.queue_size(1), opts["virtio-poll-mode"].as<bool>())
         , _virtio(virtio)
 {
     // Read the host's virtio supported feature bitmask, AND it with the
@@ -959,7 +974,7 @@ virtio_qp_osv::virtio_qp_osv(osv::assigned_virtio &virtio,
     // Get the MAC address set by the host
     assert(subset & VIRTIO_NET_F_MAC);
     struct net_config {
-        /* The config defining mac address (if VIRTIO_NET_F_MAC) */
+        /* The ring_config defining mac address (if VIRTIO_NET_F_MAC) */
         uint8_t mac[6];
         /* See VIRTIO_NET_F_STATUS and VIRTIO_NET_S_* */
         uint16_t status;
@@ -974,8 +989,8 @@ virtio_qp_osv::virtio_qp_osv(osv::assigned_virtio &virtio,
              host_config.mac[3], host_config.mac[4], host_config.mac[5] };
 
     // Setup notifiers
-    _rxq.set_notifier(std::make_unique<virtio_notifier_osv>(_virtio, 0));
-    _txq.set_notifier(std::make_unique<virtio_notifier_osv>(_virtio, 1));
+    _rxq.set_notifier(std::make_unique<notifier_osv>(_virtio, 0));
+    _txq.set_notifier(std::make_unique<notifier_osv>(_virtio, 1));
 
 
     // Tell the host where we put the rings (we already allocated them earlier)
@@ -999,17 +1014,17 @@ virtio_qp_osv::virtio_qp_osv(osv::assigned_virtio &virtio,
 }
 #endif
 
-void virtio_device::init_local_queue(boost::program_options::variables_map opts) {
-    std::unique_ptr<qp> ptr;
+void device::init_local_queue(boost::program_options::variables_map opts) {
+    std::unique_ptr<net::qp> ptr;
 
     if (engine.cpu_id() == 0) {
 #ifdef HAVE_OSV
         if (osv::assigned_virtio::get && osv::assigned_virtio::get()) {
             std::cout << "In OSv and assigned host's virtio device\n";
-            ptr = std::make_unique<virtio_qp_osv>(*osv::assigned_virtio::get(), opts);
+            ptr = std::make_unique<qp_osv>(*osv::assigned_virtio::get(), opts);
         } else
 #endif
-        ptr = std::make_unique<virtio_qp_vhost>(this, opts);
+        ptr = std::make_unique<qp_vhost>(this, opts);
 
         for (unsigned i = 0; i < smp::count; i++) {
             if (i != engine.cpu_id()) {
@@ -1022,10 +1037,40 @@ void virtio_device::init_local_queue(boost::program_options::variables_map opts)
     set_local_queue(std::move(ptr));
 }
 
+}
+
+boost::program_options::options_description
+get_virtio_net_options_description()
+{
+    boost::program_options::options_description opts(
+            "Virtio net options");
+    opts.add_options()
+        ("event-index",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable event-index feature (on / off)")
+        ("csum-offload",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable checksum offload feature (on / off)")
+        ("tso",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable TCP segment offload feature (on / off)")
+        ("ufo",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable UDP fragmentation offload feature (on / off)")
+        ("virtio-ring-size",
+                boost::program_options::value<unsigned>()->default_value(256),
+                "Virtio ring size (must be power-of-two)")
+        ("virtio-poll-mode",
+                boost::program_options::value<bool>()->default_value(false),
+                "Poll virtio rings instead of using interrupts")
+        ;
+    return opts;
+}
+
 std::unique_ptr<net::device> create_virtio_net_device(boost::program_options::variables_map opts) {
 
     if (engine.cpu_id() == 0) {
-        return std::make_unique<virtio_device>(opts);
+        return std::make_unique<virtio::device>(opts);
     } else {
         return nullptr;
     }
