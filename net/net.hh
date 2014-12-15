@@ -150,7 +150,14 @@ public:
         if (!qp.may_forward()) {
             return engine.cpu_id();
         }
-        uint32_t hash = hashfn(p) >> _rss_table_bits;
+        auto hwrss = p.rss_hash();
+        uint32_t hash;
+        if (hwrss) {
+            hash = hwrss.value();
+        } else {
+            hash = hashfn(p);
+        }
+        hash >>= _rss_table_bits;
         auto idx = hash % (qp.proxies.size() + 1);
         return idx ? qp.proxies[idx - 1] : engine.cpu_id();
     }

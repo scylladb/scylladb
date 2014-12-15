@@ -12,6 +12,7 @@
 #include <cassert>
 #include <algorithm>
 #include <iosfwd>
+#include <experimental/optional>
 
 namespace net {
 
@@ -77,6 +78,7 @@ class packet final {
         uint16_t _nr_frags = 0;
         uint16_t _allocated_frags;
         offload_info _offload_info;
+        std::experimental::optional<uint32_t> _rss_hash;
         char _data[internal_data_size]; // only _frags[0] may use
         unsigned _headroom = internal_data_size; // in _data
         // FIXME: share _data/_frags space
@@ -101,6 +103,7 @@ class packet final {
             n->_nr_frags = old->_nr_frags;
             n->_headroom = old->_headroom;
             n->_offload_info = old->_offload_info;
+            n->_rss_hash = old->_rss_hash;
             std::copy(old->_frags, old->_frags + old->_nr_frags, n->_frags);
             old->copy_internal_fragment_to(n.get());
             return std::move(n);
@@ -257,6 +260,12 @@ public:
             auto extra = n_frags - _impl->_nr_frags;
             _impl = impl::allocate_if_needed(std::move(_impl), extra);
         }
+    }
+    std::experimental::optional<uint32_t> rss_hash() {
+        return _impl->_rss_hash;
+    }
+    std::experimental::optional<uint32_t> set_rss_hash(uint32_t hash) {
+        return _impl->_rss_hash = hash;
     }
 private:
     void linearize(size_t at_frag, size_t desired_size);

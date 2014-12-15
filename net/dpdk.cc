@@ -419,6 +419,9 @@ void dpdk_qp::process_packets(struct rte_mbuf **bufs, uint16_t count)
         }
 
         p.set_offload_info(oi);
+        if (m->ol_flags & PKT_RX_RSS_HASH) {
+            p.set_rss_hash(m->pkt.hash.rss);
+        }
 
         _dev->l2receive(std::move(p));
     }
