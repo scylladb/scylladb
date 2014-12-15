@@ -24,6 +24,7 @@
 #include <thread>
 #include <system_error>
 #include <chrono>
+#include <ratio>
 #include <atomic>
 #include <experimental/optional>
 #include <boost/lockfree/spsc_queue.hpp>
@@ -50,6 +51,7 @@
 class reactor;
 class pollable_fd;
 class pollable_fd_state;
+class lowres_clock;
 
 template <typename CharType>
 class input_stream;
@@ -101,6 +103,31 @@ public:
     time_point get_timeout();
     friend class reactor;
     friend class timer_set<timer, &timer::_link>;
+};
+
+class lowres_clock {
+public:
+    typedef int64_t rep;
+    // The lowres_clock's resolution is 10ms. However, to make it is easier to
+    // do calcuations with std::chrono::milliseconds, we make the clock's
+    // period to 1ms instead of 10ms.
+    typedef std::ratio<1, 1000> period;
+    typedef std::chrono::duration<rep, period> duration;
+    typedef std::chrono::time_point<lowres_clock, duration> time_point;
+    lowres_clock();
+    static time_point now() {
+        auto nr = _now.load(std::memory_order_relaxed);
+        return time_point(duration(nr));
+    }
+private:
+    static void update();
+    // _now is updated by cpu0 and read by other cpus. Make _now on its own
+    // cache line to avoid false sharing.
+    static std::atomic<rep> _now [[gnu::aligned(64)]];
+    // High resolution timer to drive this low resolution clock
+    static timer<> _timer [[gnu::aligned(64)]];
+    // High resolution timer expires every 10 milliseconds
+    static constexpr std::chrono::milliseconds _granularity{10};
 };
 
 class pollable_fd_state {
@@ -582,6 +609,8 @@ private:
     uint64_t _tasks_processed = 0;
     timer_set<timer<>, &timer<>::_link> _timers;
     timer_set<timer<>, &timer<>::_link>::timer_list_t _expired_timers;
+    timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link> _lowres_timers;
+    timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link>::timer_list_t _expired_lowres_timers;
     readable_eventfd _io_eventfd;
     io_context_t _io_context;
     semaphore _io_context_available;
@@ -589,9 +618,14 @@ private:
     thread_pool _thread_pool;
     size_t _task_quota;
     std::unique_ptr<network_stack> _network_stack;
+    // _lowres_clock will only be created on cpu 0
+    std::unique_ptr<lowres_clock> _lowres_clock;
+    lowres_clock::time_point _lowres_next_timeout;
+    promise<> _lowres_timer_promise;
 private:
     void abort_on_error(int ret);
-    void complete_timers();
+    template <typename T, typename E>
+    void complete_timers(T&, E&, std::function<future<> ()>, std::function<void ()>);
 
     /**
      * Returns TRUE if all pollers allow blocking.
@@ -666,8 +700,10 @@ private:
 
     void process_io(size_t count);
 
-    void add_timer(timer<>* tmr);
-    void del_timer(timer<>* tmr);
+    void add_timer(timer<>*);
+    void del_timer(timer<>*);
+    void add_timer(timer<lowres_clock>*);
+    void del_timer(timer<lowres_clock>*);
 
     future<> run_exit_tasks();
     void stop();
@@ -677,6 +713,7 @@ private:
     friend class blockdev_file_impl;
     friend class readable_eventfd;
     friend class timer<>;
+    friend class timer<lowres_clock>;
     friend class smp;
     friend class smp_message_queue;
     friend class poller;
@@ -705,6 +742,9 @@ public:
     }
     future<> timers_completed() {
         return _backend.timers_completed();
+    }
+    future<> lowres_timers_completed() {
+        return _lowres_timer_promise.get_future();
     }
     std::unique_ptr<reactor_notifier> make_reactor_notifier() {
         return _backend.make_reactor_notifier();
@@ -1029,6 +1069,33 @@ future<>
 reactor::write_all(pollable_fd_state& fd, const void* buffer, size_t len) {
     assert(len);
     return write_all_part(fd, buffer, len, 0);
+}
+
+template <typename T, typename E>
+void reactor::complete_timers(T& timers, E& expired_timers,
+                              std::function<future<> ()> completed_fn,
+                              std::function<void ()> enable_fn) {
+    completed_fn().then([this, &timers, &expired_timers, completed_fn,
+            enable_fn = std::move(enable_fn)] () mutable {
+        expired_timers = timers.expire(timers.now());
+        for (auto& t : expired_timers) {
+            t._expired = true;
+        }
+        while (!expired_timers.empty()) {
+            auto t = &*expired_timers.begin();
+            expired_timers.pop_front();
+            t->_queued = false;
+            if (t->_armed) {
+                t->_armed = false;
+                if (t->_period) {
+                    t->arm_periodic(*t->_period);
+                }
+                t->_callback();
+            }
+        }
+        enable_fn();
+        complete_timers(timers, expired_timers, std::move(completed_fn), std::move(enable_fn));
+    });
 }
 
 template <typename CharType>
