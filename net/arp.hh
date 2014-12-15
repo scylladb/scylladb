@@ -85,7 +85,7 @@ private:
     };
     struct resolution {
         std::vector<promise<l2addr>> _waiters;
-        timer _timeout_timer;
+        timer<> _timeout_timer;
     };
 private:
     l3addr _l3self = L3::broadcast_address();

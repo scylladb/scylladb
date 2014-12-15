@@ -176,7 +176,7 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
         } else {
             // Some of the fragments are missing
             if (!_frag_timer.armed()) {
-                _frag_timer.arm(_frag_timeout);
+                frag_arm();
             }
         }
         return make_ready_future<>();
@@ -354,7 +354,7 @@ void ipv4::frag_timeout() {
         }
     }
     if (_frags.size() != 0) {
-        _frag_timer.arm(now + _frag_timeout);
+        frag_arm(now);
     } else {
         _frag_mem = 0;
     }

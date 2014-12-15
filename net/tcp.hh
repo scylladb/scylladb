@@ -149,7 +149,7 @@ private:
     class tcb;
 
     class tcb {
-        using clock_type = std::chrono::high_resolution_clock;
+        using clock_type = lowres_clock;
         // Instead of tracking state through an enum, track individual
         // bits of the state.  This reduces duplication in state handling.
         bool _local_syn_sent = false;
@@ -214,7 +214,7 @@ private:
             std::experimental::optional<promise<>> _data_received_promise;
         } _rcv;
         tcp_option _option;
-        timer _delayed_ack;
+        timer<lowres_clock> _delayed_ack;
         // Retransmission timeout
         std::chrono::milliseconds _rto{1000};
         static constexpr std::chrono::milliseconds _rto_min{1000};
@@ -222,7 +222,7 @@ private:
         // Clock granularity
         static constexpr std::chrono::milliseconds _rto_clk_granularity{1};
         static constexpr uint16_t _max_nr_retransmit{5};
-        timer _retransmit;
+        timer<lowres_clock> _retransmit;
         uint16_t _nr_full_seg_received = 0;
         struct isn_secret {
             // 512 bits secretkey for ISN generating
@@ -260,8 +260,14 @@ private:
         bool should_send_ack(uint16_t seg_len);
         void clear_delayed_ack();
         packet get_transmit_packet();
-        void start_retransmit_timer() { _retransmit.rearm(clock_type::now() + _rto); };
-        void start_retransmit_timer(clock_type::time_point now) { _retransmit.rearm(now + _rto); };
+        void start_retransmit_timer() {
+            auto now = clock_type::now();
+            start_retransmit_timer(now);
+        };
+        void start_retransmit_timer(clock_type::time_point now) {
+            auto tp = now + _rto;
+            _retransmit.rearm(tp);
+        };
         void stop_retransmit_timer() { _retransmit.cancel(); };
         void retransmit();
         void fast_retransmit();

@@ -217,6 +217,8 @@ class item : public std::conditional<WithFlashCache, flashcache_item_base, memca
 public:
     using item_type = item<WithFlashCache>;
     using version_type = uint64_t;
+    using time_point = clock_type::time_point;
+    using duration = clock_type::duration;
 private:
     using hook_type = bi::unordered_set_member_hook<>;
     // TODO: align shared data to cache line boundary
@@ -228,7 +230,7 @@ private:
     hook_type _cache_link;
     bi::list_member_hook<> _lru_link;
     bi::list_member_hook<> _timer_link;
-    clock_type::time_point _expiry;
+    time_point _expiry;
     template <bool>
     friend class cache;
     friend class memcache_cache_base;
@@ -720,9 +722,9 @@ private:
     size_t _resize_up_threshold = load_factor * initial_bucket_count;
     cache_bucket* _buckets;
     cache_type _cache;
-    timer_set<item_type, &item_type::_timer_link, clock_type> _alive;
-    timer _timer;
-    timer _flush_timer;
+    timer_set<item_type, &item_type::_timer_link> _alive;
+    timer<> _timer;
+    timer<> _flush_timer;
     memory::reclaimer _reclaimer;
 private:
     size_t item_footprint(item_type& item_ref) {
@@ -1741,7 +1743,7 @@ public:
 template <bool WithFlashCache>
 class stats_printer {
 private:
-    timer _timer;
+    timer<> _timer;
     sharded_cache<WithFlashCache>& _cache;
 public:
     stats_printer(sharded_cache<WithFlashCache>& cache)

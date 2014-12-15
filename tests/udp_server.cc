@@ -12,7 +12,7 @@ using namespace std::chrono_literals;
 class udp_server {
 private:
     udp_channel _chan;
-    timer _stats_timer;
+    timer<> _stats_timer;
     uint64_t _n_sent {};
 public:
     void start(uint16_t port) {

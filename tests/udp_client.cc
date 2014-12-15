@@ -14,7 +14,7 @@ private:
     uint64_t n_sent {};
     uint64_t n_received {};
     uint64_t n_failed {};
-    timer _stats_timer;
+    timer<> _stats_timer;
 public:
     void start(ipv4_addr server_addr) {
         std::cout << "Sending to " << server_addr << std::endl;

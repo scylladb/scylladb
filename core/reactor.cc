@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <sys/eventfd.h>
 #include <boost/thread/barrier.hpp>
+#include <atomic>
 
 #ifdef HAVE_OSV
 #include <osv/newpoll.hh>
@@ -22,10 +23,24 @@
 
 using namespace net;
 
+std::atomic<lowres_clock::rep> lowres_clock::_now;
+timer<> lowres_clock::_timer;
+constexpr std::chrono::milliseconds lowres_clock::_granularity;
+
 timespec to_timespec(clock_type::time_point t) {
     using ns = std::chrono::nanoseconds;
     auto n = std::chrono::duration_cast<ns>(t.time_since_epoch()).count();
     return { n / 1'000'000'000, n % 1'000'000'000 };
+}
+
+lowres_clock::lowres_clock() {
+    _timer.set_callback([this] { update(); });
+    _timer.arm_periodic(_granularity);
+}
+
+void lowres_clock::update() {
+    auto ticks = _granularity.count();
+    _now.fetch_add(ticks, std::memory_order_relaxed);
 }
 
 template <typename T>
@@ -305,18 +320,33 @@ void reactor_backend_epoll::enable_timer(clock_type::time_point when)
     _timerfd.get_file_desc().timerfd_settime(TFD_TIMER_ABSTIME, its);
 }
 
-void reactor::add_timer(timer* tmr) {
+void reactor::add_timer(timer<>* tmr) {
     if (_timers.insert(*tmr)) {
         enable_timer(_timers.get_next_timeout());
     }
 }
 
-void reactor::del_timer(timer* tmr) {
+void reactor::del_timer(timer<>* tmr) {
     if (tmr->_expired) {
         _expired_timers.erase(_expired_timers.iterator_to(*tmr));
         tmr->_expired = false;
     } else {
         _timers.remove(*tmr);
+    }
+}
+
+void reactor::add_timer(timer<lowres_clock>* tmr) {
+    if (_lowres_timers.insert(*tmr)) {
+        _lowres_next_timeout = _lowres_timers.get_next_timeout();
+    }
+}
+
+void reactor::del_timer(timer<lowres_clock>* tmr) {
+    if (tmr->_expired) {
+        _expired_lowres_timers.erase(_expired_lowres_timers.iterator_to(*tmr));
+        tmr->_expired = false;
+    } else {
+        _lowres_timers.remove(*tmr);
     }
 }
 
@@ -330,32 +360,6 @@ future<> reactor_backend_epoll::timers_completed() {
                 reinterpret_cast<char*>(&_timers_completed),
                 sizeof(_timers_completed))
             .then([] (size_t ignore) { return make_ready_future<>(); });
-}
-
-void reactor::complete_timers() {
-    timers_completed().then(
-            [this] () {
-        _expired_timers = _timers.expire(clock_type::now());
-        for (auto& t : _expired_timers) {
-            t._expired = true;
-        }
-        while (!_expired_timers.empty()) {
-            auto t = &*_expired_timers.begin();
-            _expired_timers.pop_front();
-            t->_queued = false;
-            if (t->_armed) {
-                t->_armed = false;
-                if (t->_period) {
-                    t->arm_periodic(*t->_period);
-                }
-                t->_callback();
-            }
-        }
-        if (!_timers.empty()) {
-            enable_timer(_timers.get_next_timeout());
-        }
-        complete_timers();
-    });
 }
 
 future<> reactor::run_exit_tasks() {
@@ -479,7 +483,37 @@ int reactor::run() {
         // cache line.
     };
 
-    complete_timers();
+    complete_timers(_timers, _expired_timers,
+        [this] { return timers_completed(); },
+        [this] {
+            if (!_timers.empty()) {
+                enable_timer(_timers.get_next_timeout());
+            }
+        }
+    );
+    complete_timers(_lowres_timers, _expired_lowres_timers,
+        [this] { return lowres_timers_completed(); },
+        [this] {
+            if (!_lowres_timers.empty()) {
+                _lowres_next_timeout = _lowres_timers.get_next_timeout();
+            } else {
+                _lowres_next_timeout = lowres_clock::time_point();
+            }
+        }
+    );
+
+    poller expire_lowres_timers([this] {
+        if (_lowres_next_timeout == lowres_clock::time_point()) {
+            return true;
+        }
+        auto now = lowres_clock::now();
+        if (now > _lowres_next_timeout) {
+            _lowres_timer_promise.set_value();
+            _lowres_timer_promise = promise<>();
+        }
+        return true;
+    });
+
     while (true) {
         task_quota = _task_quota;
         while (!_pending_tasks.empty() && task_quota) {
@@ -943,6 +977,7 @@ void smp::configure(boost::program_options::variables_map configuration)
     start_all_queues();
     inited.wait();
     engine.configure(configuration);
+    engine._lowres_clock = std::make_unique<lowres_clock>();
 }
 
 void smp::join_all()
