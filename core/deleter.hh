@@ -98,6 +98,7 @@ struct object_deleter_impl final : deleter::impl {
 };
 
 template <typename Object>
+inline
 object_deleter_impl<Object>* make_object_deleter_impl(deleter next, Object obj) {
     return new object_deleter_impl<Object>(std::move(next), std::move(obj));
 }
@@ -171,6 +172,20 @@ inline
 deleter
 make_free_deleter(deleter next, void* obj) {
     return make_deleter(std::move(next), [obj] () mutable { std::free(obj); });
+}
+
+template <typename T>
+inline
+deleter
+make_object_deleter(T&& obj) {
+    return deleter{make_object_deleter_impl(deleter(), std::move(obj))};
+}
+
+template <typename T>
+inline
+deleter
+make_object_deleter(deleter d, T&& obj) {
+    return deleter{make_object_deleter_impl(std::move(d), std::move(obj))};
 }
 
 #endif /* DELETER_HH_ */
