@@ -357,7 +357,7 @@ public:
 public:
     explicit tcp(inet_type& inet) : _inet(inet) {}
     void received(packet p, ipaddr from, ipaddr to);
-    unsigned forward(packet& p, size_t off, ipaddr from, ipaddr to);
+    bool forward(forward_hash& out_hash_data, packet& p, size_t off);
     listener listen(uint16_t port, size_t queue_length = 100);
     net::hw_features hw_features() { return _inet._inet.hw_features(); }
 private:
@@ -372,14 +372,13 @@ auto tcp<InetTraits>::listen(uint16_t port, size_t queue_length) -> listener {
 }
 
 template <typename InetTraits>
-unsigned tcp<InetTraits>::forward(packet& p, size_t off, ipaddr from, ipaddr to) {
+bool tcp<InetTraits>::forward(forward_hash& out_hash_data, packet& p, size_t off) {
     auto th = p.get_header<tcp_hdr>(off);
-    if (!th) {
-        return engine.cpu_id();
+    if (th) {
+        out_hash_data.push_back(th->src_port);
+        out_hash_data.push_back(th->dst_port);
     }
-    auto dst = ntohs(uint16_t(th->dst_port));
-    auto src = ntohs(uint16_t(th->src_port));
-    return connid_hash()(connid{to, from, dst, src}) % smp::count;
+    return true;
 }
 
 template <typename InetTraits>

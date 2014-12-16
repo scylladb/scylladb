@@ -114,8 +114,9 @@ void ipv4_tcp::received(packet p, ipv4_address from, ipv4_address to) {
     _tcp->received(std::move(p), from, to);
 }
 
-unsigned ipv4_tcp::forward(packet& p, size_t off, ipv4_address from, ipv4_address to) {
-    return _tcp->forward(p, off, from, to);
+bool ipv4_tcp::forward(forward_hash& out_hash_data, packet& p, size_t off) {
+
+    return _tcp->forward(out_hash_data, p, off);
 }
 
 server_socket

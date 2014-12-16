@@ -96,7 +96,7 @@ class ip_protocol {
 public:
     virtual ~ip_protocol() {}
     virtual void received(packet p, ipv4_address from, ipv4_address to) = 0;
-    virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to) { return engine.cpu_id(); }
+    virtual bool forward(forward_hash& out_hash_data, packet& p, size_t off) { return true; }
 };
 
 class ipv4_tcp final : public ip_protocol {
@@ -106,7 +106,7 @@ public:
     ipv4_tcp(ipv4& inet);
     ~ipv4_tcp();
     virtual void received(packet p, ipv4_address from, ipv4_address to);
-    virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to) override;
+    virtual bool forward(forward_hash& out_hash_data, packet& p, size_t off) override;
     friend class ipv4;
 };
 
@@ -152,9 +152,6 @@ struct ip_hdr;
 struct ip_packet_filter {
     virtual ~ip_packet_filter() {};
     virtual future<> handle(packet& p, ip_hdr* iph, ethernet_address from, bool & handled) = 0;
-    virtual unsigned forward(packet& p, size_t off, ipv4_address from, ipv4_address to, bool & handled) {
-        return engine.cpu_id();
-    }
 };
 
 struct ipv4_frag_id {
@@ -225,7 +222,7 @@ private:
     timer<lowres_clock> _frag_timer;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
-    unsigned handle_on_cpu(packet& p, size_t off);
+    bool forward(forward_hash& out_hash_data, packet& p, size_t off);
     bool in_my_netmask(ipv4_address a) const;
     void frag_limit_mem();
     void frag_timeout();
@@ -260,6 +257,9 @@ public:
     void register_l4(proto_type id, ip_protocol* handler);
     net::hw_features hw_features() { return _netif->hw_features(); }
     static bool needs_frag(packet& p, ip_protocol_num proto_num, net::hw_features hw_features);
+    void learn(ethernet_address l2, ipv4_address l3) {
+        _arp.learn(l2, l3);
+    }
 };
 
 template <ip_protocol_num ProtoNum>
@@ -322,6 +322,8 @@ struct l4connid<InetTraits>::connid_hash : private std::hash<ipaddr>, private st
             ^ h2::operator()(id.foreign_port);
     }
 };
+
+void arp_learn(ethernet_address l2, ipv4_address l3);
 
 }
 

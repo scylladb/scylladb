@@ -456,12 +456,12 @@ int reactor::run() {
         receive_signal(SIGINT).then([this] { stop(); });
     }
     _cpu_started.wait(smp::count).then([this] {
+        _network_stack->initialize().then([this] {
             _start_promise.set_value();
+        });
     });
     _network_stack_ready_promise.get_future().then([this] (std::unique_ptr<network_stack> stack) {
         _network_stack = std::move(stack);
-        return _network_stack->initialize();
-    }).then([this] {
         for (unsigned c = 0; c < smp::count; c++) {
             smp::submit_to(c, [] {
                     engine._cpu_started.signal();

@@ -18,7 +18,6 @@
 #include <linux/if_tun.h>
 #include "ip.hh"
 #include "net/native-stack.hh"
-#include "net/proxy.hh"
 
 #include <xen/xen.h>
 
@@ -63,7 +62,7 @@ public:
     net::hw_features hw_features() override {
         return _hw_features;
     }
-    void init_local_queue(boost::program_options::variables_map opts) override;
+    virtual std::unique_ptr<qp> init_local_queue(boost::program_options::variables_map opts, uint16_t qid) override;
 };
 
 class xenfront_qp : public net::qp {
@@ -389,29 +388,17 @@ get_xenfront_net_options_description() {
     return opts;
 }
 
-void xenfront_device::init_local_queue(boost::program_options::variables_map opts) {
-    std::unique_ptr<qp> ptr;
-
-    if (engine.cpu_id() == 0) {
-        ptr = std::make_unique<xenfront_qp>(this, opts);
-
-        for (unsigned i = 0; i < smp::count; i++) {
-            if (i != engine.cpu_id()) {
-                ptr->add_proxy(i);
-            }
-        }
-    } else {
-        ptr = create_proxy_net_device(0, this);
-    }
-    set_local_queue(std::move(ptr));
+std::unique_ptr<qp> xenfront_device::init_local_queue(boost::program_options::variables_map opts, uint16_t qid) {
+    assert(!qid);
+    return std::make_unique<xenfront_qp>(this, opts);
 }
 
 std::unique_ptr<net::device> create_xenfront_net_device(boost::program_options::variables_map opts, bool userspace) {
-    if (engine.cpu_id() == 0) {
-        return std::make_unique<xenfront_device>(opts, userspace);
-    } else {
-        return nullptr;
-    }
+    static bool called = false;
+    assert(!called);
+    called = true;
+
+    return std::make_unique<xenfront_device>(opts, userspace);
 }
 
 }

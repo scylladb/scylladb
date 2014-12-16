@@ -22,6 +22,30 @@ class device;
 class qp;
 class l3_protocol;
 
+class forward_hash {
+    uint8_t data[64];
+    size_t end_idx = 0;
+public:
+    size_t size() const {
+        return end_idx;
+    }
+    void push_back(uint8_t b) {
+        assert(end_idx < sizeof(data));
+        data[end_idx++] = b;
+    }
+    void push_back(uint16_t b) {
+        push_back(uint8_t(b));
+        push_back(uint8_t(b >> 8));
+    }
+    void push_back(uint32_t b) {
+        push_back(uint16_t(b));
+        push_back(uint16_t(b >> 16));
+    }
+    const uint8_t& operator[](size_t idx) const {
+        return data[idx];
+    }
+};
+
 struct hw_features {
     // Enable tx ip header checksum offload
     bool tx_csum_ip_offload = false;
@@ -46,7 +70,7 @@ public:
     explicit l3_protocol(interface* netif, eth_protocol_num proto_num);
     subscription<packet, ethernet_address> receive(
             std::function<future<> (packet, ethernet_address)> rx_fn,
-            std::function<unsigned (packet&, size_t)> forward);
+            std::function<bool (forward_hash&, packet&, size_t)> forward);
     future<> send(ethernet_address to, packet p);
 private:
     friend class interface;
@@ -56,8 +80,8 @@ class interface {
     struct l3_rx_stream {
         stream<packet, ethernet_address> packet_stream;
         future<> ready;
-        std::function<unsigned (packet&, size_t)> forward;
-        l3_rx_stream(std::function<unsigned (packet&, size_t)>&& fw) : ready(packet_stream.started()), forward(fw) {}
+        std::function<bool (forward_hash&, packet&, size_t)> forward;
+        l3_rx_stream(std::function<bool (forward_hash&, packet&, size_t)>&& fw) : ready(packet_stream.started()), forward(fw) {}
     };
     std::unordered_map<uint16_t, l3_rx_stream> _proto_map;
     std::shared_ptr<device> _dev;
@@ -73,8 +97,9 @@ public:
     net::hw_features hw_features() { return _hw_features; }
     subscription<packet, ethernet_address> register_l3(eth_protocol_num proto_num,
             std::function<future<> (packet p, ethernet_address from)> next,
-            std::function<unsigned (packet&, size_t)> forward);
+            std::function<bool (forward_hash&, packet&, size_t)> forward);
     void forward(unsigned cpuid, packet p);
+    unsigned hash2qid(uint32_t hash);
     friend class l3_protocol;
 };
 
@@ -93,6 +118,7 @@ public:
 class device {
 protected:
     std::unique_ptr<qp*[]> _queues;
+    size_t _rss_table_bits = 0;
 public:
     device() {
         _queues = std::make_unique<qp*[]>(smp::count);
@@ -108,11 +134,32 @@ public:
     }
     virtual ethernet_address hw_address() = 0;
     virtual net::hw_features hw_features() = 0;
-    virtual void init_local_queue(boost::program_options::variables_map opts) = 0;
-protected:
+    virtual uint16_t hw_queues_count() { return 1; }
+    virtual std::unique_ptr<qp> init_local_queue(boost::program_options::variables_map opts, uint16_t qid) = 0;
+    virtual unsigned hash2qid(uint32_t hash) {
+        return hash % hw_queues_count();
+    }
     void set_local_queue(std::unique_ptr<qp> dev) {
+        assert(!_queues[engine.cpu_id()]);
         _queues[engine.cpu_id()] = dev.get();
         engine.at_exit([dev = std::move(dev)] {});
+    }
+    template <typename Func>
+    unsigned forward_dst(packet& p, Func&& hashfn) {
+        auto& qp = local_queue();
+        if (!qp.may_forward()) {
+            return engine.cpu_id();
+        }
+        auto hwrss = p.rss_hash();
+        uint32_t hash;
+        if (hwrss) {
+            hash = hwrss.value();
+        } else {
+            hash = hashfn(p);
+        }
+        hash >>= _rss_table_bits;
+        auto idx = hash % (qp.proxies.size() + 1);
+        return idx ? qp.proxies[idx - 1] : engine.cpu_id();
     }
 };
 

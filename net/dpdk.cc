@@ -20,7 +20,7 @@
 #include "ip.hh"
 #include "const.hh"
 #include "dpdk.hh"
-#include "proxy.hh"
+#include "toeplitz.hh"
 
 #include <getopt.h>
 
@@ -97,6 +97,8 @@ class dpdk_device : public device {
     uint16_t _num_queues;
     net::hw_features _hw_features;
     uint8_t _queues_ready = 0;
+    unsigned _home_cpu;
+    std::array<uint8_t, ETH_RSS_RETA_NUM_ENTRIES> _redir_table;
 
 public:
     rte_eth_dev_info _dev_info = {};
@@ -125,7 +127,9 @@ public:
     dpdk_device(boost::program_options::variables_map opts,
                         uint8_t port_idx, uint16_t num_queues)
         : _port_idx(port_idx)
-        , _num_queues(num_queues) {
+        , _num_queues(num_queues)
+        , _home_cpu(engine.cpu_id()) {
+        _rss_table_bits = 7;
         _rx_conf_default.rx_thresh.pthresh = default_pthresh;
         _rx_conf_default.rx_thresh.hthresh = default_rx_hthresh;
         _rx_conf_default.rx_thresh.wthresh = default_wthresh;
@@ -164,7 +168,11 @@ public:
     net::hw_features hw_features() override {
         return _hw_features;
     }
-    virtual void init_local_queue(boost::program_options::variables_map opts) override;
+    virtual uint16_t hw_queues_count() override { return _num_queues; }
+    virtual std::unique_ptr<qp> init_local_queue(boost::program_options::variables_map opts, uint16_t qid) override;
+    virtual unsigned hash2qid(uint32_t hash) override {
+        return _redir_table[hash & (_redir_table.size() - 1)];
+    }
     uint8_t port_idx() { return _port_idx; }
 };
 
@@ -247,7 +255,7 @@ int dpdk_device::init_port()
     if (_num_queues > 1) {
         port_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
         port_conf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IPV4 | ETH_RSS_IPV4_UDP | ETH_RSS_IPV4_TCP;
-        port_conf.rx_adv_conf.rss_conf.rss_key = NULL;
+        port_conf.rx_adv_conf.rss_conf.rss_key = const_cast<uint8_t*>(rsskey.data());
     } else {
         port_conf.rxmode.mq_mode = ETH_MQ_RX_NONE;
     }
@@ -411,6 +419,9 @@ void dpdk_qp::process_packets(struct rte_mbuf **bufs, uint16_t count)
         }
 
         p.set_offload_info(oi);
+        if (m->ol_flags & PKT_RX_RSS_HASH) {
+            p.set_rss_hash(m->pkt.hash.rss);
+        }
 
         _dev->l2receive(std::move(p));
     }
@@ -602,29 +613,22 @@ void dpdk_eal::init(boost::program_options::variables_map opts)
     _initialized = true;
 }
 
-void dpdk_device::init_local_queue(boost::program_options::variables_map opts) {
-    std::unique_ptr<qp> ptr;
-
-    if (engine.cpu_id() < smp::count) {
-        ptr = std::make_unique<dpdk_qp>(this, engine.cpu_id());
-
-        // TODO: device reset of the cpus between queues
-        for (unsigned i = _num_queues; i < smp::count; i++) {
-            if (i != engine.cpu_id()) {
-                ptr->add_proxy(i);
+std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variables_map opts, uint16_t qid) {
+    auto qp = std::make_unique<dpdk_qp>(this, qid);
+    smp::submit_to(_home_cpu, [this] () mutable {
+        if (++_queues_ready == _num_queues) {
+            if (rte_eth_dev_start(_port_idx) < 0) {
+                rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
             }
+            rte_eth_rss_reta reta_conf { ~0ull, ~0ull };
+            if (rte_eth_dev_rss_reta_query(_port_idx, &reta_conf)) {
+                rte_exit(EXIT_FAILURE, "Cannot get redirection table for pot %d\n", _port_idx);
+            }
+            assert(sizeof(reta_conf.reta) == _redir_table.size());
+            std::copy(reta_conf.reta, reta_conf.reta + _redir_table.size(), _redir_table.begin());
         }
-        smp::submit_to(0, [this] () mutable {
-            if (++_queues_ready == _num_queues) {
-                if (rte_eth_dev_start(_port_idx) < 0) {
-                    rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
-                }
-            }
-        });
-    } else {
-        ptr = create_proxy_net_device(0, this);
-    }
-    set_local_queue(std::move(ptr));
+    });
+    return std::move(qp);
 }
 } // namespace dpdk
 
@@ -635,14 +639,12 @@ std::unique_ptr<net::device> create_dpdk_net_device(
                                     uint8_t port_idx,
                                     uint8_t num_queues)
 {
-    if (engine.cpu_id() == 0) {
-        // Init a DPDK EAL
-        dpdk::eal.init(opts);
-
-        return std::make_unique<dpdk::dpdk_device>(opts, port_idx, num_queues);
-    } else {
-        return nullptr;
-    }
+    static bool called = false;
+    assert(!called);
+    called = true;
+    // Init a DPDK EAL
+    dpdk::eal.init(opts);
+    return std::make_unique<dpdk::dpdk_device>(opts, port_idx, num_queues);
 }
 
 boost::program_options::options_description

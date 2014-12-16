@@ -55,6 +55,7 @@ public:
      */
     result_type discover(const clock_type::duration & = default_timeout);
     result_type renew(const lease &, const clock_type::duration & = default_timeout);
+    ip_packet_filter* get_ipv4_filter();
 private:
     class impl;
     std::unique_ptr<impl> _impl;

@@ -73,14 +73,22 @@ void create_native_net_device(boost::program_options::variables_map opts) {
 #endif
     dev = create_virtio_net_device(opts);
 
-    if (dev) {
-        std::shared_ptr<device> sdev(dev.release());
-        for (unsigned i = 0; i < smp::count; i++) {
-            smp::submit_to(i, [opts, sdev] {
-                sdev->init_local_queue(opts);
-                create_native_stack(opts, sdev);
-            });
-        }
+    std::shared_ptr<device> sdev(dev.release());
+    for (unsigned i = 0; i < smp::count; i++) {
+        smp::submit_to(i, [opts, sdev] {
+            uint16_t qid = engine.cpu_id();
+            if (qid < sdev->hw_queues_count()) {
+                auto qp = sdev->init_local_queue(opts, qid);
+                for (unsigned i = sdev->hw_queues_count() + qid % sdev->hw_queues_count(); i < smp::count; i+= sdev->hw_queues_count()) {
+                    qp->add_proxy(i);
+                }
+                sdev->set_local_queue(std::move(qp));
+            } else {
+                auto master = qid % sdev->hw_queues_count();
+                sdev->set_local_queue(create_proxy_net_device(master, sdev.get()));
+            }
+            create_native_stack(opts, sdev);
+        });
     }
 }
 
@@ -97,7 +105,9 @@ private:
     timer<> _timer;
 
     void on_dhcp(bool, const dhcp::lease &, bool);
-
+    void set_ipv4_packet_filter(ip_packet_filter* filter) {
+        _inet.set_packet_filter(filter);
+    }
     using tcp4 = tcp<ipv4_traits>;
 public:
     explicit native_network_stack(boost::program_options::variables_map opts, std::shared_ptr<device> dev);
@@ -105,10 +115,15 @@ public:
     virtual udp_channel make_udp_channel(ipv4_addr addr) override;
     virtual future<> initialize() override;
     static future<std::unique_ptr<network_stack>> create(boost::program_options::variables_map opts) {
-        create_native_net_device(opts);
+        if (engine.cpu_id() == 0) {
+            create_native_net_device(opts);
+        }
         return ready_promise.get_future();
     }
     virtual bool has_per_core_namespace() override { return true; };
+    void arp_learn(ethernet_address l2, ipv4_address l3) {
+        _inet.learn(l2, l3);
+    }
     friend class native_server_socket_impl<tcp4>;
 };
 
@@ -167,7 +182,7 @@ void native_network_stack::on_dhcp(bool success, const dhcp::lease & res, bool i
         _config.set_value();
     }
 
-    if (smp::main_thread()) {
+    if (engine.cpu_id() == 0) {
         // And the other cpus, which, in the case of initial discovery,
         // will be waiting for us.
         for (unsigned i = 1; i < smp::count; i++) {
@@ -198,16 +213,42 @@ future<> native_network_stack::initialize() {
         if (!_dhcp) {
             return make_ready_future();
         }
+
         // Only run actual discover on main cpu.
         // All other cpus must simply for main thread to complete and signal them.
-        if (smp::main_thread()) {
+        if (engine.cpu_id() == 0) {
             shared_ptr<dhcp> d = make_shared<dhcp>(_inet);
+
+            // Hijack the ip-stack.
+            for (unsigned i = 0; i < smp::count; i++) {
+                smp::submit_to(i, [d] {
+                    auto & ns = static_cast<native_network_stack&>(engine.net());
+                    ns.set_ipv4_packet_filter(d->get_ipv4_filter());
+                });
+            }
+
             return d->discover().then([this, d](bool success, const dhcp::lease & res) {
+                for (unsigned i = 0; i < smp::count; i++) {
+                    smp::submit_to(i, [] {
+                        auto & ns = static_cast<native_network_stack&>(engine.net());
+                        ns.set_ipv4_packet_filter(nullptr);
+                    });
+                }
                 on_dhcp(success, res, false);
             });
         }
         return _config.get_future();
     });
+}
+
+void arp_learn(ethernet_address l2, ipv4_address l3)
+{
+    for (unsigned i = 0; i < smp::count; i++) {
+        smp::submit_to(i, [l2, l3] {
+            auto & ns = static_cast<native_network_stack&>(engine.net());
+            ns.arp_learn(l2, l3);
+        });
+    }
 }
 
 void create_native_stack(boost::program_options::variables_map opts, std::shared_ptr<device> dev) {

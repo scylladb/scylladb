@@ -94,8 +94,9 @@ int main(int ac, char** av) {
     dnet = create_virtio_net_device(opts);
 #endif // HAVE_DPDK
 
-    dnet->init_local_queue(opts);
-    vnet = &dnet->local_queue();
+    auto qp = dnet->init_local_queue(opts, 0);
+    vnet = qp.get();
+    dnet->set_local_queue(std::move(qp));
     subscription<packet> rx =
         dnet->receive([vnet, &rx] (packet p) {
             return echo_packet(*vnet, std::move(p));
