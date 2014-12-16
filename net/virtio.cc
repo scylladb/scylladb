@@ -764,7 +764,7 @@ qp::rxq::complete_buffer(single_buffer&& bc, size_t len) {
             del = make_free_deleter(_buffers[0].release());
             _buffers.clear();
         } else {
-            del = make_deleter(deleter(), [deleters = std::move(_buffers)] {});
+            del = make_object_deleter(std::move(_buffers));
         }
         packet p(_fragments.begin(), _fragments.end(), std::move(del));
         _dev._dev->l2receive(std::move(p));
