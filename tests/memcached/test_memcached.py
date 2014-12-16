@@ -319,11 +319,18 @@ class TestCommands(MemcacheTest):
         self.set('key1', key1_data)
         self.set('key2', key2_data)
         self.set('key3', key3_data)
-        self.assertEqual(call('get key1 key2 key3\r\n').decode(),
-            'VALUE key1 0 %d\r\n%s\r\n' \
-            'VALUE key2 0 %d\r\n%s\r\n' \
-            'VALUE key3 0 %d\r\n%s\r\n' \
-            'END\r\n' % (len(key1_data), key1_data, len(key2_data), key2_data, len(key3_data), key3_data))
+
+        resp = call('get key1 key2 key3\r\n').decode()
+
+        pattern = '^VALUE (?P<v1>.*?\r\n.*?)\r\nVALUE (?P<v2>.*?\r\n.*?)\r\nVALUE (?P<v3>.*?\r\n.*?)\r\nEND\r\n$'
+        self.assertRegexpMatches(resp, pattern)
+
+        m = re.match(pattern, resp)
+        self.assertEqual(set([m.group('v1'), m.group('v2'), m.group('v3')]),
+            set(['key1 0 %d\r\n%s' % (len(key1_data), key1_data),
+                'key2 0 %d\r\n%s' % (len(key2_data), key2_data),
+                'key3 0 %d\r\n%s' % (len(key3_data), key3_data)]))
+
         self.delete('key1')
         self.delete('key2')
         self.delete('key3')
