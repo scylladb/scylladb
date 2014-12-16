@@ -56,7 +56,10 @@ public:
             u.internal = x.u.internal;
         } else {
             u.internal.size = -1;
-            u.external.str = new char[x.u.external.size + 1];
+            u.external.str = reinterpret_cast<char*>(std::malloc(x.u.external.size + 1));
+            if (!u.external.str) {
+                throw std::bad_alloc();
+            }
             std::copy(x.u.external.str, x.u.external.str + x.u.external.size + 1, u.external.str);
             u.external.size = x.u.external.size;
         }
@@ -75,7 +78,10 @@ public:
             u.internal.size = size;
         } else {
             u.internal.size = -1;
-            u.external.str = new char[size + 1];
+            u.external.str = reinterpret_cast<char*>(std::malloc(size + 1));
+            if (!u.external.str) {
+                throw std::bad_alloc();
+            }
             u.external.size = size;
             u.external.str[size] = '\0';
         }
@@ -90,7 +96,10 @@ public:
             u.internal.size = size;
         } else {
             u.internal.size = -1;
-            u.external.str = new char[size + 1];
+            u.external.str = reinterpret_cast<char*>(std::malloc(size + 1));
+            if (!u.external.str) {
+                throw std::bad_alloc();
+            }
             u.external.size = size;
             std::copy(x, x + size, u.external.str);
             u.external.str[size] = '\0';
@@ -104,7 +113,7 @@ public:
         : basic_sstring(s.data(), s.size()) {}
     ~basic_sstring() noexcept {
         if (is_external()) {
-            delete[] u.external.str;
+            std::free(u.external.str);
         }
     }
     basic_sstring& operator=(const basic_sstring& x) {
@@ -130,7 +139,7 @@ public:
     }
     void reset() noexcept {
         if (is_external()) {
-            delete[] u.external.str;
+            std::free(u.external.str);
         }
         u.internal.size = 0;
         u.internal.str[0] = '\0';
@@ -141,7 +150,7 @@ public:
             auto size = u.external.size;
             u.external.str = nullptr;
             u.external.size = 0;
-            return temporary_buffer<char_type>(ptr, size, make_deleter([ptr] { delete[] ptr; }));
+            return temporary_buffer<char_type>(ptr, size, make_free_deleter(ptr));
         } else {
             auto buf = temporary_buffer<char_type>(u.internal.size);
             std::copy(u.internal.str, u.internal.str + u.internal.size, buf.get_write());
