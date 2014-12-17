@@ -586,13 +586,17 @@ class reactor {
 public:
     class poller;
 private:
+    struct pollfn {
+        virtual ~pollfn() {}
+        virtual bool poll_and_check_more_work() = 0;
+    };
     // FIXME: make _backend a unique_ptr<reactor_backend>, not a compile-time #ifdef.
 #ifdef HAVE_OSV
     reactor_backend_osv _backend;
 #else
     reactor_backend_epoll _backend;
 #endif
-    std::vector<poller*> _pollers;
+    std::vector<pollfn*> _pollers;
     static constexpr size_t max_aio = 128;
     promise<> _exit_promise;
     future<> _exit_future;
@@ -634,6 +638,8 @@ private:
      *         execution.
      */
     bool poll_once();
+    template <typename Func> // signature: bool ()
+    static std::unique_ptr<pollfn> make_pollfn(Func&& func);
 public:
     class poller;
     static boost::program_options::options_description get_options_description();
@@ -692,8 +698,8 @@ private:
      *
      * @param fn a new "poller" function to register
      */
-    void register_poller(poller* p);
-    void unregister_poller(poller* p);
+    void register_poller(pollfn* p);
+    void unregister_poller(pollfn* p);
     struct collectd_registrations;
     collectd_registrations register_collectd_metrics();
     future<> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
@@ -751,13 +757,32 @@ public:
     }
 };
 
+template <typename Func> // signature: bool ()
+inline
+std::unique_ptr<reactor::pollfn>
+reactor::make_pollfn(Func&& func) {
+    struct the_pollfn : pollfn {
+        the_pollfn(Func&& func) : func(std::forward<Func>(func)) {}
+        Func func;
+        virtual bool poll_and_check_more_work() override {
+            return func();
+        }
+    };
+    return std::make_unique<the_pollfn>(std::forward<Func>(func));
+}
+
 class reactor::poller {
-    std::function<bool ()> _poll_and_check_more_work;
+    std::unique_ptr<pollfn> _pollfn;
 public:
-    explicit poller(std::function<bool ()> poll_and_check_more_work);
+    template <typename Func> // signature: bool ()
+    explicit poller(Func&& poll_and_check_more_work)
+            : _pollfn(make_pollfn(std::forward<Func>(poll_and_check_more_work))) {
+        do_register();
+    }
     ~poller();
-    poller(poller&& x);
-    poller& operator=(poller&& x);
+    poller(poller&& x) = default;
+    poller& operator=(poller&& x) = default;
+    void do_register();
     friend class reactor;
 };
 
