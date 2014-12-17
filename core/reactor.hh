@@ -700,6 +700,7 @@ private:
      */
     void register_poller(pollfn* p);
     void unregister_poller(pollfn* p);
+    void replace_poller(pollfn* old, pollfn* neww);
     struct collectd_registrations;
     collectd_registrations register_collectd_metrics();
     future<> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
@@ -773,6 +774,9 @@ reactor::make_pollfn(Func&& func) {
 
 class reactor::poller {
     std::unique_ptr<pollfn> _pollfn;
+    class registration_task;
+    class deregistration_task;
+    registration_task* _registration_task;
 public:
     template <typename Func> // signature: bool ()
     explicit poller(Func&& poll_and_check_more_work)
@@ -780,8 +784,8 @@ public:
         do_register();
     }
     ~poller();
-    poller(poller&& x) = default;
-    poller& operator=(poller&& x) = default;
+    poller(poller&& x);
+    poller& operator=(poller&& x);
     void do_register();
     friend class reactor;
 };

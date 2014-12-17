@@ -558,6 +558,35 @@ reactor::poll_once() {
     return work;
 }
 
+class reactor::poller::registration_task : public task {
+private:
+    poller* _p;
+public:
+    explicit registration_task(poller* p) : _p(p) {}
+    virtual void run() noexcept override {
+        if (_p) {
+            engine.register_poller(_p->_pollfn.get());
+            _p->_registration_task = nullptr;
+        }
+    }
+    void cancel() {
+        _p = nullptr;
+    }
+    void moved(poller* p) {
+        _p = p;
+    }
+};
+
+class reactor::poller::deregistration_task : public task {
+private:
+    std::unique_ptr<pollfn> _p;
+public:
+    explicit deregistration_task(std::unique_ptr<pollfn>&& p) : _p(std::move(p)) {}
+    virtual void run() noexcept override {
+        engine.unregister_poller(_p.get());
+    }
+};
+
 void reactor::register_poller(pollfn* p) {
     _pollers.push_back(p);
 }
@@ -566,14 +595,58 @@ void reactor::unregister_poller(pollfn* p) {
     _pollers.erase(std::find(_pollers.begin(), _pollers.end(), p));
 }
 
+void reactor::replace_poller(pollfn* old, pollfn* neww) {
+    std::replace(_pollers.begin(), _pollers.end(), old, neww);
+}
+
+reactor::poller::poller(poller&& x)
+        : _pollfn(std::move(x._pollfn)), _registration_task(x._registration_task) {
+    if (_pollfn && _registration_task) {
+        _registration_task->moved(this);
+    }
+}
+
+reactor::poller&
+reactor::poller::operator=(poller&& x) {
+    if (this != &x) {
+        this->~poller();
+        new (this) poller(std::move(x));
+    }
+    return *this;
+}
+
 void
 reactor::poller::do_register() {
-    engine.register_poller(_pollfn.get());
+    // We can't just insert a poller into reactor::_pollers, because we
+    // may be running inside a poller ourselves, and so in the middle of
+    // iterating reactor::_pollers itself.  So we schedule a task to add
+    // the poller instead.
+    auto task = std::make_unique<registration_task>(this);
+    auto tmp = task.get();
+    engine.add_task(std::move(task));
+    _registration_task = tmp;
 }
 
 reactor::poller::~poller() {
+    // We can't just remove the poller from reactor::_pollers, because we
+    // may be running inside a poller ourselves, and so in the middle of
+    // iterating reactor::_pollers itself.  So we schedule a task to remove
+    // the poller instead.
+    //
+    // Since we don't want to call the poller after we exit the destructor,
+    // we replace it atomically with another one, and schedule a task to
+    // delete the replacement.
     if (_pollfn) {
-        engine.unregister_poller(_pollfn.get());
+        if (_registration_task) {
+            // not added yet, so don't do it at all.
+            _registration_task->cancel();
+        } else {
+            auto dummy = make_pollfn([] { return false; });
+            auto dummy_p = dummy.get();
+            auto task = std::make_unique<deregistration_task>(std::move(dummy));
+            engine.add_task(std::move(task));
+            engine.replace_poller(_pollfn.get(), dummy_p);
+        }
     }
 }
 
