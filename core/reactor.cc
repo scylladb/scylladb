@@ -16,6 +16,12 @@
 #include <sys/eventfd.h>
 #include <boost/thread/barrier.hpp>
 #include <atomic>
+#ifdef HAVE_DPDK
+#include <rte_common.h>
+#include <rte_eal.h>
+#include <rte_lcore.h>
+#include <rte_launch.h>
+#endif
 
 #ifdef HAVE_OSV
 #include <osv/newpoll.hh>
@@ -964,7 +970,7 @@ smp::get_options_description()
     return opts;
 }
 
-std::vector<posix_thread> smp::_threads;
+std::vector<smp::thread_adaptor> smp::_threads;
 smp_message_queue** smp::_qs;
 std::thread::id smp::_tmain;
 unsigned smp::count = 1;
@@ -985,6 +991,60 @@ void smp::start_all_queues()
     listen_all(_qs[engine.cpu_id()]);
 }
 
+#if HAVE_DPDK
+void smp::dpdk_eal_init(smp::dpdk_cpuset cpus, std::experimental::optional<std::string> hugepages_path)
+{
+    std::stringstream mask;
+    mask << std::hex << cpus.to_ulong();
+
+    // TODO: Inherit these from the app parameters - "opts"
+    std::vector<std::vector<char>> args {string2vector("dpdk_args"), string2vector("-c"), string2vector(mask.str()),  string2vector("-n"), string2vector("1")};
+
+    if (hugepages_path) {
+        args.push_back(string2vector("--huge-dir"));
+        args.push_back(string2vector(hugepages_path.value()));
+    } else {
+        args.push_back(string2vector("--no-huge"));
+    }
+
+    std::vector<char*> cargs;
+
+    for (auto&& a: args) {
+        cargs.push_back(a.data());
+    }
+    /* initialise the EAL for all */
+    int ret = rte_eal_init(cargs.size(), cargs.data());
+    if (ret < 0) {
+        rte_exit(EXIT_FAILURE, "Cannot init EAL\n");
+    }
+}
+
+int dpdk_thread_adaptor(void* f)
+{
+    (*static_cast<std::function<void ()>*>(f))();
+    return 0;
+}
+
+void smp::join_all()
+{
+    rte_eal_mp_wait_lcore();
+}
+
+void smp::pin(unsigned cpu_id) {
+}
+#else
+void smp::join_all()
+{
+    for (auto&& t: smp::_threads) {
+        t.join();
+    }
+}
+
+void smp::pin(unsigned cpu_id) {
+    pin_this_thread(cpu_id);
+}
+#endif
+
 void smp::configure(boost::program_options::variables_map configuration)
 {
     smp::count = 1;
@@ -1003,21 +1063,30 @@ void smp::configure(boost::program_options::variables_map configuration)
     }
     rc.cpus = smp::count;
     std::vector<resource::cpu> allocations = resource::allocate(rc);
-    pin_this_thread(allocations[0].cpu_id);
+    smp::pin(allocations[0].cpu_id);
     memory::configure(allocations[0].mem, hugepages_path);
     smp::_qs = new smp_message_queue* [smp::count];
     for(unsigned i = 0; i < smp::count; i++) {
         smp::_qs[i] = new smp_message_queue[smp::count];
     }
 
+#if HAVE_DPDK
+    smp::dpdk_cpuset cpus;
+    for (auto&& a : allocations) {
+        cpus[a.cpu_id] = true;
+    }
+    dpdk_eal_init(cpus, hugepages_path);
+#endif
+
     // Better to put it into the smp class, but at smp construction time
     // correct smp::count is not known.
     static boost::barrier inited(smp::count);
 
-    for (unsigned i = 1; i < smp::count; i++) {
+    unsigned i;
+    for (i = 1; i < smp::count; i++) {
         auto allocation = allocations[i];
         _threads.emplace_back([configuration, hugepages_path, i, allocation] {
-            pin_this_thread(allocation.cpu_id);
+            smp::pin(allocation.cpu_id);
             memory::configure(allocation.mem, hugepages_path);
             sigset_t mask;
             sigfillset(&mask);
@@ -1030,17 +1099,18 @@ void smp::configure(boost::program_options::variables_map configuration)
             engine.run();
         });
     }
+
+#if HAVE_DPDK
+    auto it = _threads.begin();
+    RTE_LCORE_FOREACH_SLAVE(i) {
+        rte_eal_remote_launch(dpdk_thread_adaptor, static_cast<void*>(&*(it++)), i);
+    }
+#endif
+
     start_all_queues();
     inited.wait();
     engine.configure(configuration);
     engine._lowres_clock = std::make_unique<lowres_clock>();
-}
-
-void smp::join_all()
-{
-    for (auto&& t: smp::_threads) {
-        t.join();
-    }
 }
 
 __thread size_t future_avail_count = 0;

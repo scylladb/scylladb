@@ -587,16 +587,6 @@ void dpdk_eal::init(boost::program_options::variables_map opts)
         return;
     }
 
-    // TODO: Inherit these from the app parameters - "opts"
-    const char *argv[] = {"dpdk_args", "-c", "0x1",  "-n", "1"};
-    int argc = sizeof(argv) / sizeof(char*);
-
-    /* initialise the EAL for all */
-    int ret = rte_eal_init(argc, const_cast<char**>(argv));
-    if (ret < 0) {
-        rte_exit(EXIT_FAILURE, "Cannot init EAL\n");
-    }
-
     /* probe to determine the NIC devices available */
     if (rte_eal_pci_probe() < 0) {
         rte_exit(EXIT_FAILURE, "Cannot probe PCI\n");

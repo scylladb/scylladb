@@ -30,6 +30,9 @@
 #include <boost/lockfree/spsc_queue.hpp>
 #include <boost/optional.hpp>
 #include <boost/program_options.hpp>
+#ifdef HAVE_DPDK
+#include <rte_config.h>
+#endif
 #include "util/eclipse.hh"
 #include "future.hh"
 #include "posix.hh"
@@ -794,7 +797,14 @@ extern thread_local reactor engine;
 extern __thread size_t task_quota;
 
 class smp {
-    static std::vector<posix_thread> _threads;
+#if HAVE_DPDK
+    using thread_adaptor = std::function<void ()>;
+    using dpdk_cpuset = std::bitset<RTE_MAX_LCORE>;
+    static void dpdk_eal_init(dpdk_cpuset cpus, std::experimental::optional<std::string> hugepages_path);
+#else
+    using thread_adaptor = posix_thread;
+#endif
+    static std::vector<thread_adaptor> _threads;
     static smp_message_queue** _qs;
     static std::thread::id _tmain;
 
@@ -849,6 +859,7 @@ public:
 private:
     static void listen_all(smp_message_queue* qs);
     static void start_all_queues();
+    static void pin(unsigned cpu_id);
 public:
     static unsigned count;
 };
