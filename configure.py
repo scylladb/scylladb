@@ -47,6 +47,26 @@ def debug_flag(compiler):
         print('Note: debug information disabled; upgrade your compiler')
         return ''
 
+class Thrift(object):
+    def __init__(self, source, service):
+        self.source = source
+        self.service = service
+    def generated(self, gen_dir):
+        basename = os.path.splitext(os.path.basename(self.source))[0]
+        files = [basename + '_' + ext
+                 for ext in ['types.cpp', 'types.h', 'constants.cpp', 'constants.h']]
+        files += [self.service + ext
+                  for ext in ['.cpp', '.h']]
+        return [os.path.join(gen_dir, file) for file in files]
+    def headers(self, gen_dir):
+        return [x for x in self.generated(gen_dir) if x.endswith('.h')]
+    def sources(self, gen_dir):
+        return [x for x in self.generated(gen_dir) if x.endswith('.cpp')]
+    def objects(self, gen_dir):
+        return [x.replace('.cpp', '.o') for x in self.sources(gen_dir)]
+    def endswith(self, end):
+        return self.source.endswith(end)
+
 modes = {
     'debug': {
         'sanitize': '-fsanitize=address -fsanitize=leak -fsanitize=undefined',
@@ -289,17 +309,28 @@ with open(buildfile, 'w') as f:
             rule link.{mode}
               command = $cxx  $cxxflags_{mode} $ldflags -o $out $in $libs $libs_{mode}
               description = LINK $out
+            rule thrift.{mode}
+                command = thrift -gen cpp:cob_style -out $builddir/{mode}/gen $in
+                description = THRIFT $in
             ''').format(mode = mode, **modeval))
         f.write('build {mode}: phony {artifacts}\n'.format(mode = mode,
             artifacts = str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))))
         compiles = {}
         ragels = {}
+        thrifts = []
         for binary in build_artifacts:
             srcs = deps[binary]
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
                     for src in srcs
                     if src.endswith('.cc')]
+            has_thrift = False
+            for dep in deps[binary]:
+                if isinstance(dep, Thrift):
+                    has_thrift = True
+                    objs += dep.objects('$builddir/' + mode + '/gen')
             f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
+            if has_thrift:
+                f.write('   libs =  -lthrift -lboost_system $libs\n')
             for src in srcs:
                 if src.endswith('.cc'):
                     obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
@@ -307,15 +338,25 @@ with open(buildfile, 'w') as f:
                 elif src.endswith('.rl'):
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.rl', '.hh')
                     ragels[hh] = src
+                elif src.endswith('.thrift'):
+                    thrifts += [src]
                 else:
                     raise Exeception('No rule for ' + src)
         for obj in compiles:
             src = compiles[obj]
-            gen_headers = ragels.keys()
+            gen_headers = list(ragels.keys())
+            for th in thrifts:
+                gen_headers += th.headers('$builddir/{}/gen'.format(mode))
             f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
         for hh in ragels:
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))
+        for thrift in thrifts:
+            outs = ' '.join(thrift.generated('$builddir/{}/gen'.format(mode)))
+            f.write('build {}: thrift.{} {}\n'.format(outs, mode, thrift.source))
+            for cc in thrift.sources('$builddir/{}/gen'.format(mode)):
+                obj = cc.replace('.cpp', '.o')
+                f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
     f.write(textwrap.dedent('''\
         rule configure
           command = python3 configure.py $configure_args
