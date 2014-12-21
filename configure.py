@@ -199,7 +199,12 @@ memcache = [
 cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'Cassandra')
 
 deps = {
-    'apps/seastar/seastar': ['apps/seastar/main.cc'] + core + [Thrift('interface/cassandra.thrift', 'Cassandra')],
+    'apps/seastar/seastar': (['apps/seastar/main.cc',
+                              'apps/seastar/thrift/handler.cc',
+                              ]
+                              + [Thrift('interface/cassandra.thrift', 'Cassandra')]
+                              + core
+                              ),
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['apps/httpd/httpd.cc', 'apps/httpd/request_parser.rl'] + libnet + core,
     'apps/memcached/memcached': ['apps/memcached/memcached.cc'] + memcache,
