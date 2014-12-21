@@ -201,6 +201,7 @@ cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'C
 deps = {
     'apps/seastar/seastar': (['apps/seastar/main.cc',
                               'apps/seastar/thrift/handler.cc',
+                              'apps/seastar/thrift/server.cc',
                               ]
                               + [Thrift('interface/cassandra.thrift', 'Cassandra')]
                               + core
