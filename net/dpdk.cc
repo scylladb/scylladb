@@ -111,12 +111,14 @@ private:
     void check_port_link_status();
 
 public:
-    dpdk_device(boost::program_options::variables_map opts,
-                        uint8_t port_idx, uint16_t num_queues)
+    dpdk_device(uint8_t port_idx, uint16_t num_queues)
         : _port_idx(port_idx)
         , _num_queues(num_queues)
         , _home_cpu(engine.cpu_id()) {
+
+        // This comes from the ETH_RSS_RETA_NUM_ENTRIES being 128
         _rss_table_bits = 7;
+
         _rx_conf_default.rx_thresh.pthresh = default_pthresh;
         _rx_conf_default.rx_thresh.hthresh = default_rx_hthresh;
         _rx_conf_default.rx_thresh.wthresh = default_wthresh;
@@ -592,16 +594,24 @@ std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variab
 /******************************** Interface functions *************************/
 
 std::unique_ptr<net::device> create_dpdk_net_device(
-                                    boost::program_options::variables_map opts,
                                     uint8_t port_idx,
                                     uint8_t num_queues)
 {
     static bool called = false;
+
     assert(!called);
+    assert(dpdk::eal::initialized);
+
     called = true;
-    // Init a DPDK EAL
-    dpdk::eal::init(opts);
-    return std::make_unique<dpdk::dpdk_device>(opts, port_idx, num_queues);
+
+    // Check that we have at least one DPDK-able port
+    if (rte_eth_dev_count() == 0) {
+        rte_exit(EXIT_FAILURE, "No Ethernet ports - bye\n");
+    } else {
+        printf("ports number: %d\n", rte_eth_dev_count());
+    }
+
+    return std::make_unique<dpdk::dpdk_device>(port_idx, num_queues);
 }
 
 boost::program_options::options_description

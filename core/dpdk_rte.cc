@@ -9,21 +9,48 @@ namespace dpdk {
 
 bool eal::initialized = false;
 
-void eal::init(boost::program_options::variables_map opts)
+void eal::init(cpuset cpus, boost::program_options::variables_map opts)
 {
     if (initialized) {
         return;
     }
 
-    /* probe to determine the NIC devices available */
-    if (rte_eal_pci_probe() < 0) {
-        rte_exit(EXIT_FAILURE, "Cannot probe PCI\n");
+    std::stringstream mask;
+    mask << std::hex << cpus.to_ulong();
+
+    // TODO: Inherit these from the app parameters - "opts"
+    std::vector<std::vector<char>> args {
+        string2vector("dpdk_args"),
+        string2vector("-c"), string2vector(mask.str()),
+        string2vector("-n"), string2vector("1")
+    };
+
+    std::experimental::optional<std::string> hugepages_path;
+    if (opts.count("hugepages")) {
+        hugepages_path = opts["hugepages"].as<std::string>();
     }
 
-    if (rte_eth_dev_count() == 0) {
-        rte_exit(EXIT_FAILURE, "No Ethernet ports - bye\n");
+    if (hugepages_path) {
+        args.push_back(string2vector("--huge-dir"));
+        args.push_back(string2vector(hugepages_path.value()));
     } else {
-        printf("ports number: %d\n", rte_eth_dev_count());
+        args.push_back(string2vector("--no-huge"));
+    }
+
+    std::vector<char*> cargs;
+
+    for (auto&& a: args) {
+        cargs.push_back(a.data());
+    }
+    /* initialise the EAL for all */
+    int ret = rte_eal_init(cargs.size(), cargs.data());
+    if (ret < 0) {
+        rte_exit(EXIT_FAILURE, "Cannot init EAL\n");
+    }
+
+    /* probe the PCI devices in case we need to use DPDK drivers */
+    if (rte_eal_pci_probe() < 0) {
+        rte_exit(EXIT_FAILURE, "Cannot probe PCI\n");
     }
 
     initialized = true;

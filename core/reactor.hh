@@ -30,9 +30,6 @@
 #include <boost/lockfree/spsc_queue.hpp>
 #include <boost/optional.hpp>
 #include <boost/program_options.hpp>
-#ifdef HAVE_DPDK
-#include <rte_config.h>
-#endif
 #include "util/eclipse.hh"
 #include "future.hh"
 #include "posix.hh"
@@ -799,8 +796,6 @@ extern __thread size_t task_quota;
 class smp {
 #if HAVE_DPDK
     using thread_adaptor = std::function<void ()>;
-    using dpdk_cpuset = std::bitset<RTE_MAX_LCORE>;
-    static void dpdk_eal_init(dpdk_cpuset cpus, std::experimental::optional<std::string> hugepages_path);
 #else
     using thread_adaptor = posix_thread;
 #endif

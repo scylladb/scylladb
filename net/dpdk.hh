@@ -12,8 +12,6 @@
 #include "core/sstring.hh"
 
 std::unique_ptr<net::device> create_dpdk_net_device(
-                                    boost::program_options::variables_map opts =
-                                        boost::program_options::variables_map(),
                                     uint8_t port_idx = 0,
                                     uint8_t num_queues = 1);
 
