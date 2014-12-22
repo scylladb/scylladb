@@ -419,7 +419,7 @@ void dpdk_device::check_port_link_status()
     int count;
     struct rte_eth_link link;
 
-    printf("\nChecking link status");
+    printf("\nChecking link status ");
     fflush(stdout);
     for (count = 0; count <= max_check_time; count++) {
             memset(&link, 0, sizeof(link));
