@@ -94,16 +94,33 @@ public:
 
 private:
     /**
-     * Initialise an individual port:
-     * - configure number of rx and tx rings
-     * - set up each rx ring, to pull from the main mbuf pool
-     * - set up each tx ring
-     * - start the port and report its status to stdout
+     * Port initialization consists of 3 main stages:
+     * 1) General port initialization which ends with a call to
+     *    rte_eth_dev_configure() where we request the needed number of Rx and
+     *    Tx queues.
+     * 2) Individual queues initialization. This is done in the constructor of
+     *    dpdk_qp class. In particular the memory pools for queues are allocated
+     *    in this stage.
+     * 3) The final stage of the initialization which starts with the call of
+     *    rte_eth_dev_start() after which the port becomes fully functional. We
+     *    will also wait for a link to get up in this stage.
+     */
+
+
+    /**
+     * First stage of the port initialization.
      *
      * @return 0 in case of success and an appropriate error code in case of an
      *         error.
      */
-    int init_port();
+    int init_port_start();
+
+    /**
+     * The final stage of a port initialization.
+     * @note Must be called *after* all queues from stage (2) have been
+     *       initialized.
+     */
+    void init_port_fini();
 
     /**
      * Check the link status of out port in up to 9s, and print them finally.
@@ -129,18 +146,13 @@ public:
         _tx_conf_default.tx_rs_thresh   = 0; /* Use PMD default values */
 
         /* now initialise the port we will use */
-        int ret = init_port();
+        int ret = init_port_start();
         if (ret != 0) {
             rte_exit(EXIT_FAILURE, "Cannot initialise port %u\n", _port_idx);
         }
 
         // Print the MAC
         hw_address();
-
-        // Wait for a link
-        check_port_link_status();
-
-        printf("Created DPDK device\n");
     }
     ethernet_address hw_address() override {
         struct ether_addr mac;
@@ -229,7 +241,7 @@ private:
     reactor::poller _rx_poller;
 };
 
-int dpdk_device::init_port()
+int dpdk_device::init_port_start()
 {
     assert(_port_idx < rte_eth_dev_count());
 
@@ -318,6 +330,22 @@ int dpdk_device::init_port()
     printf("done: \n");
 
     return 0;
+}
+
+void dpdk_device::init_port_fini()
+{
+    if (rte_eth_dev_start(_port_idx) < 0) {
+        rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
+    }
+
+    if (_num_queues > 1) {
+        get_rss_table();
+    }
+
+    // Wait for a link
+    check_port_link_status();
+
+    printf("Created DPDK device\n");
 }
 
 bool dpdk_qp::init_mbuf_pools()
@@ -641,13 +669,7 @@ std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variab
     auto qp = std::make_unique<dpdk_qp>(this, qid);
     smp::submit_to(_home_cpu, [this] () mutable {
         if (++_queues_ready == _num_queues) {
-            if (rte_eth_dev_start(_port_idx) < 0) {
-                rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
-            }
-
-            if (_num_queues > 1) {
-                get_rss_table();
-            }
+            init_port_fini();
         }
     });
     return std::move(qp);
