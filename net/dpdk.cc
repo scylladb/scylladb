@@ -313,6 +313,17 @@ int dpdk_device::init_port_start()
         port_conf.rxmode.hw_vlan_strip = 1;
     }
 
+    // Check that all CSUM features are either all set all together or not set
+    // all together. If this assumption breaks we need to rework the below logic
+    // by splitting the csum offload feature bit into separate bits for IPv4,
+    // TCP and UDP.
+    assert(((_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_IPV4_CKSUM) &&
+            (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_UDP_CKSUM) &&
+            (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_TCP_CKSUM)) ||
+           (!(_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_IPV4_CKSUM) &&
+            !(_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_UDP_CKSUM) &&
+            !(_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_TCP_CKSUM)));
+
     // Set Rx checksum checking
     if (  (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_IPV4_CKSUM) &&
           (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_UDP_CKSUM) &&
@@ -326,6 +337,16 @@ int dpdk_device::init_port_start()
         printf("TX ip checksum offload supported\n");
         _hw_features.tx_csum_ip_offload = 1;
     }
+
+    // Check that Tx TCP and UDP CSUM features are either all set all together
+    // or not set all together. If this assumption breaks we need to rework the
+    // below logic by splitting the csum offload feature bit into separate bits
+    // for TCP and UDP.
+    assert(((_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_CKSUM) &&
+            (_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM)) ||
+           (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_CKSUM) &&
+            !(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM)));
+
     if (  (_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_CKSUM) &&
           (_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM)) {
         printf("TX TCP&UDP checksum offload supported\n");
