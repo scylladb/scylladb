@@ -85,7 +85,7 @@ class dpdk_device : public device {
     net::hw_features _hw_features;
     uint8_t _queues_ready = 0;
     unsigned _home_cpu;
-    std::array<uint8_t, ETH_RSS_RETA_NUM_ENTRIES> _redir_table;
+    std::vector<uint8_t> _redir_table;
 
 public:
     rte_eth_dev_info _dev_info = {};
@@ -115,9 +115,6 @@ public:
         : _port_idx(port_idx)
         , _num_queues(num_queues)
         , _home_cpu(engine.cpu_id()) {
-
-        // This comes from the ETH_RSS_RETA_NUM_ENTRIES being 128
-        _rss_table_bits = 7;
 
         _rx_conf_default.rx_thresh.pthresh = default_pthresh;
         _rx_conf_default.rx_thresh.hthresh = default_rx_hthresh;
@@ -157,6 +154,14 @@ public:
     net::hw_features hw_features() override {
         return _hw_features;
     }
+
+    /**
+    *  Read the RSS table from the device and store it in the internal vector.
+    *  We will need it when we forward the reassembled IP frames
+     * (after IP fragmentation) to the correct HW queue.
+     */
+    void get_rss_table();
+
     virtual uint16_t hw_queues_count() override { return _num_queues; }
     virtual std::unique_ptr<qp> init_local_queue(boost::program_options::variables_map opts, uint16_t qid) override;
     virtual unsigned hash2qid(uint32_t hash) override {
@@ -249,6 +254,26 @@ int dpdk_device::init_port()
         port_conf.rx_adv_conf.rss_conf.rss_key = const_cast<uint8_t*>(rsskey.data());
     } else {
         port_conf.rxmode.mq_mode = ETH_MQ_RX_NONE;
+    }
+
+    if (_num_queues > 1) {
+#ifdef RTE_VERSION_1_7
+        _redir_table.resize(ETH_RSS_RETA_NUM_ENTRIES);
+        // This comes from the ETH_RSS_RETA_NUM_ENTRIES being 128
+        _rss_table_bits = 7;
+#else
+        // Check that the returned RETA size is sane:
+        // greater than 0 and is a power of 2.
+        assert(_dev_info.reta_size &&
+               (_dev_info.reta_size & (_dev_info.reta_size - 1)) == 0);
+
+        // Set the RSS table to the correct size
+        _redir_table.resize(_dev_info.reta_size);
+        _rss_table_bits = std::lround(std::log2(_dev_info.reta_size));
+        printf("Port %d: RSS table size is %d\n",
+               _port_idx, _dev_info.reta_size);
+
+#endif
     }
 
     // Set Rx VLAN stripping
@@ -396,7 +421,7 @@ void dpdk_qp::process_packets(struct rte_mbuf **bufs, uint16_t count)
             (m->ol_flags & PKT_RX_VLAN_PKT)) {
 
             oi.hw_vlan = true;
-            oi.vlan_tci = m->pkt.vlan_macip.f.vlan_tci;
+            oi.vlan_tci = rte_mbuf_vlan_tci(m);
         }
 
         if (_dev->hw_features().rx_csum_offload) {
@@ -411,7 +436,7 @@ void dpdk_qp::process_packets(struct rte_mbuf **bufs, uint16_t count)
 
         p.set_offload_info(oi);
         if (m->ol_flags & PKT_RX_RSS_HASH) {
-            p.set_rss_hash(m->pkt.hash.rss);
+            p.set_rss_hash(rte_mbuf_rss_hash(m));
         }
 
         _dev->l2receive(std::move(p));
@@ -442,8 +467,8 @@ size_t dpdk_qp::copy_one_data_buf(rte_mbuf*& m, char* data, size_t l)
     size_t len = std::min(l, mbuf_data_size);
 
     // mbuf_put()
-    m->pkt.data_len += len;
-    m->pkt.pkt_len += len;
+    rte_mbuf_data_len(m) += len;
+    rte_mbuf_pkt_len(m) += len;
 
     rte_memcpy(rte_pktmbuf_mtod(m, void*), data, len);
 
@@ -486,7 +511,7 @@ bool dpdk_qp::copy_one_frag(fragment& frag, rte_mbuf*& head,
         base += len;
         nsegs++;
 
-        prev_seg->pkt.next = m;
+        rte_mbuf_next(prev_seg) = m;
         prev_seg = m;
     }
 
@@ -536,30 +561,30 @@ future<> dpdk_qp::send(packet p)
         total_nsegs += nsegs;
 
         // Attach a new buffers' chain to the packet chain
-        last_seg->pkt.next = h;
+        rte_mbuf_next(last_seg) = h;
         last_seg = new_last_seg;
     }
 
     // Update the HEAD buffer with the packet info
-    head->pkt.pkt_len = p.len();
-    head->pkt.nb_segs = total_nsegs;
+    rte_mbuf_pkt_len(head) = p.len();
+    rte_mbuf_nb_segs(head) = total_nsegs;
 
     // Handle TCP checksum offload
     auto oi = p.offload_info();
     if (oi.needs_ip_csum) {
         head->ol_flags |= PKT_TX_IP_CKSUM;
-        head->pkt.vlan_macip.f.l2_len = sizeof(struct ether_hdr);
-        head->pkt.vlan_macip.f.l3_len = oi.ip_hdr_len;
+        rte_mbuf_l2_len(head) = sizeof(struct ether_hdr);
+        rte_mbuf_l3_len(head) = oi.ip_hdr_len;
     }
     if (_dev->hw_features().tx_csum_l4_offload) {
         if (oi.protocol == ip_protocol_num::tcp) {
             head->ol_flags |= PKT_TX_TCP_CKSUM;
-            head->pkt.vlan_macip.f.l2_len = sizeof(struct ether_hdr);
-            head->pkt.vlan_macip.f.l3_len = oi.ip_hdr_len;
+            rte_mbuf_l2_len(head) = sizeof(struct ether_hdr);
+            rte_mbuf_l3_len(head) = oi.ip_hdr_len;
         } else if (oi.protocol == ip_protocol_num::udp) {
             head->ol_flags |= PKT_TX_UDP_CKSUM;
-            head->pkt.vlan_macip.f.l2_len = sizeof(struct ether_hdr);
-            head->pkt.vlan_macip.f.l3_len = oi.ip_hdr_len;
+            rte_mbuf_l2_len(head) = sizeof(struct ether_hdr);
+            rte_mbuf_l3_len(head) = oi.ip_hdr_len;
         }
     }
 
@@ -572,6 +597,46 @@ future<> dpdk_qp::send(packet p)
     return make_ready_future<>();
 }
 
+#ifdef RTE_VERSION_1_7
+void dpdk_device::get_rss_table()
+{
+    rte_eth_rss_reta reta_conf { ~0ULL, ~0ULL };
+    if (rte_eth_dev_rss_reta_query(_port_idx, &reta_conf)) {
+        rte_exit(EXIT_FAILURE, "Cannot get redirection table for pot %d\n",
+                               _port_idx);
+    }
+    assert(sizeof(reta_conf.reta) == _redir_table.size());
+    std::copy(reta_conf.reta,
+              reta_conf.reta + _redir_table.size(),
+              _redir_table.begin());
+}
+#else
+void dpdk_device::get_rss_table()
+{
+    assert(_dev_info.reta_size);
+
+    int i, reta_conf_size =
+        std::max(1, _dev_info.reta_size / RTE_RETA_GROUP_SIZE);
+    rte_eth_rss_reta_entry64 reta_conf[reta_conf_size];
+
+    for (i = 0; i < reta_conf_size; i++) {
+        reta_conf[i].mask = ~0ULL;
+    }
+
+    if (rte_eth_dev_rss_reta_query(_port_idx, reta_conf,
+                                   _dev_info.reta_size)) {
+        rte_exit(EXIT_FAILURE, "Cannot get redirection table for "
+                               "port %d\n", _port_idx);
+    }
+
+    for (int i = 0; i < reta_conf_size; i++) {
+        std::copy(reta_conf[i].reta,
+                  reta_conf[i].reta + RTE_RETA_GROUP_SIZE,
+                  _redir_table.begin() + i * RTE_RETA_GROUP_SIZE);
+    }
+}
+#endif
+
 std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variables_map opts, uint16_t qid) {
     auto qp = std::make_unique<dpdk_qp>(this, qid);
     smp::submit_to(_home_cpu, [this] () mutable {
@@ -579,12 +644,10 @@ std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variab
             if (rte_eth_dev_start(_port_idx) < 0) {
                 rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
             }
-            rte_eth_rss_reta reta_conf { ~0ull, ~0ull };
-            if (rte_eth_dev_rss_reta_query(_port_idx, &reta_conf)) {
-                rte_exit(EXIT_FAILURE, "Cannot get redirection table for pot %d\n", _port_idx);
+
+            if (_num_queues > 1) {
+                get_rss_table();
             }
-            assert(sizeof(reta_conf.reta) == _redir_table.size());
-            std::copy(reta_conf.reta, reta_conf.reta + _redir_table.size(), _redir_table.begin());
         }
     });
     return std::move(qp);

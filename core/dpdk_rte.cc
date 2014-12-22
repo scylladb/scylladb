@@ -50,10 +50,13 @@ void eal::init(cpuset cpus, boost::program_options::variables_map opts)
         rte_exit(EXIT_FAILURE, "Cannot init EAL\n");
     }
 
+    // For 1.8 rte_eal_pci_probe() has been moved into the rte_eal_init().
+#ifdef RTE_VERSION_1_7
     /* probe the PCI devices in case we need to use DPDK drivers */
     if (rte_eal_pci_probe() < 0) {
         rte_exit(EXIT_FAILURE, "Cannot probe PCI\n");
     }
+#endif
 
     initialized = true;
 }
