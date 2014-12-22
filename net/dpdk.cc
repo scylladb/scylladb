@@ -53,6 +53,7 @@ static constexpr uint16_t mbuf_size            = mbuf_data_size + mbuf_overhead;
 static constexpr uint16_t default_rx_ring_size   = 512;
 static constexpr uint16_t default_tx_ring_size   = 512;
 
+#ifdef RTE_VERSION_1_7
 /*
  * RX and TX Prefetch, Host, and Write-back threshold values should be
  * carefully set for optimal performance. Consult the network
@@ -69,6 +70,7 @@ static constexpr uint8_t default_pthresh         = 36;
 static constexpr uint8_t default_rx_hthresh      = 8;
 static constexpr uint8_t default_tx_hthresh      = 0;
 static constexpr uint8_t default_wthresh         = 0;
+#endif
 
 static constexpr const char* pktmbuf_pool_name   = "dpdk_net_pktmbuf_pool";
 
@@ -86,11 +88,13 @@ class dpdk_device : public device {
     uint8_t _queues_ready = 0;
     unsigned _home_cpu;
     std::vector<uint8_t> _redir_table;
+#ifdef RTE_VERSION_1_7
+    struct rte_eth_rxconf _rx_conf_default = {};
+    struct rte_eth_txconf _tx_conf_default = {};
+#endif
 
 public:
     rte_eth_dev_info _dev_info = {};
-    struct rte_eth_rxconf _rx_conf_default = {};
-    struct rte_eth_txconf _tx_conf_default = {};
 
 private:
     /**
@@ -133,18 +137,6 @@ public:
         , _num_queues(num_queues)
         , _home_cpu(engine.cpu_id()) {
 
-        _rx_conf_default.rx_thresh.pthresh = default_pthresh;
-        _rx_conf_default.rx_thresh.hthresh = default_rx_hthresh;
-        _rx_conf_default.rx_thresh.wthresh = default_wthresh;
-
-
-        _tx_conf_default.tx_thresh.pthresh = default_pthresh;
-        _tx_conf_default.tx_thresh.hthresh = default_tx_hthresh;
-        _tx_conf_default.tx_thresh.wthresh = default_wthresh;
-
-        _tx_conf_default.tx_free_thresh = 0; /* Use PMD default values */
-        _tx_conf_default.tx_rs_thresh   = 0; /* Use PMD default values */
-
         /* now initialise the port we will use */
         int ret = init_port_start();
         if (ret != 0) {
@@ -159,6 +151,22 @@ public:
     }
     net::hw_features hw_features() override {
         return _hw_features;
+    }
+
+    const rte_eth_rxconf* def_rx_conf() const {
+#ifdef RTE_VERSION_1_7
+        return &_rx_conf_default;
+#else
+        return &_dev_info.default_rxconf;
+#endif
+    }
+
+    const rte_eth_txconf* def_tx_conf() const {
+#ifdef RTE_VERSION_1_7
+        return &_tx_conf_default;
+#else
+        return &_dev_info.default_txconf;
+#endif
     }
 
     /**
@@ -240,6 +248,23 @@ int dpdk_device::init_port_start()
     assert(_port_idx < rte_eth_dev_count());
 
     rte_eth_dev_info_get(_port_idx, &_dev_info);
+
+#ifdef RTE_VERSION_1_7
+    _rx_conf_default.rx_thresh.pthresh = default_pthresh;
+    _rx_conf_default.rx_thresh.hthresh = default_rx_hthresh;
+    _rx_conf_default.rx_thresh.wthresh = default_wthresh;
+
+
+    _tx_conf_default.tx_thresh.pthresh = default_pthresh;
+    _tx_conf_default.tx_thresh.hthresh = default_tx_hthresh;
+    _tx_conf_default.tx_thresh.wthresh = default_wthresh;
+
+    _tx_conf_default.tx_free_thresh = 0; /* Use PMD default values */
+    _tx_conf_default.tx_rs_thresh   = 0; /* Use PMD default values */
+#else
+    // Clear txq_flags - we want to support all available offload features.
+    _dev_info.default_txconf.txq_flags = 0;
+#endif
 
     /* for port configuration all features are off by default */
     rte_eth_conf port_conf = { 0 };
@@ -412,13 +437,12 @@ dpdk_qp::dpdk_qp(dpdk_device* dev, uint8_t qid)
 
     if (rte_eth_rx_queue_setup(_dev->port_idx(), _qid, rx_ring_size,
             rte_eth_dev_socket_id(_dev->port_idx()),
-            &_dev->_rx_conf_default, _pktmbuf_pool) < 0) {
+            _dev->def_rx_conf(), _pktmbuf_pool) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot initialize rx queue\n");
     }
 
     if (rte_eth_tx_queue_setup(_dev->port_idx(), _qid, tx_ring_size,
-            rte_eth_dev_socket_id(_dev->port_idx()),
-            &_dev->_tx_conf_default) < 0) {
+            rte_eth_dev_socket_id(_dev->port_idx()), _dev->def_tx_conf()) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot initialize tx queue\n");
     }
 }
