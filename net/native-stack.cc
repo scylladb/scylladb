@@ -65,7 +65,7 @@ void create_native_net_device(boost::program_options::variables_map opts) {
 #endif
 
 #ifdef HAVE_DPDK
-    if (opts["dpdk-pmd"].as<bool>()) {
+    if (opts.count("dpdk-pmd")) {
         // Hardcoded port index 0.
         // TODO: Inherit it from the opts
         dev = create_dpdk_net_device(0, smp::count);
@@ -278,9 +278,7 @@ boost::program_options::options_description nns_options() {
                 boost::program_options::value<bool>()->default_value(true),
                         "Use DHCP discovery")
 #ifdef HAVE_DPDK
-        ("dpdk-pmd",
-                boost::program_options::value<bool>()->default_value(false),
-                        "Use DPDK PMD drivers")
+        ("dpdk-pmd", "Use DPDK PMD drivers")
 #endif
         ;
 
