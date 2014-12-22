@@ -150,16 +150,10 @@ public:
         if (ret != 0) {
             rte_exit(EXIT_FAILURE, "Cannot initialise port %u\n", _port_idx);
         }
-
-        // Print the MAC
-        hw_address();
     }
     ethernet_address hw_address() override {
         struct ether_addr mac;
         rte_eth_macaddr_get(_port_idx, &mac);
-        printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
-            mac.addr_bytes[0], mac.addr_bytes[1], mac.addr_bytes[2],
-            mac.addr_bytes[3], mac.addr_bytes[4], mac.addr_bytes[5]);
 
         return mac.addr_bytes;
     }
