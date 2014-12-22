@@ -137,6 +137,7 @@ core = [
     'core/resource.cc',
     'core/scollectd.cc',
     'core/app-template.cc',
+    'core/dpdk_rte.cc',
     'util/conversions.cc',
     'net/packet.cc',
     'net/posix-stack.cc',

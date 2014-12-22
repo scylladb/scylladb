@@ -19,6 +19,7 @@
 #include <queue>
 #include "ip.hh"
 #include "const.hh"
+#include "core/dpdk_rte.hh"
 #include "dpdk.hh"
 #include "toeplitz.hh"
 
@@ -77,20 +78,6 @@ static constexpr const char* pktmbuf_pool_name   = "dpdk_net_pktmbuf_pool";
 static constexpr uint8_t packet_read_size        = 32;
 /******************************************************************************/
 
-// DPDK Environment Abstraction Layer object
-class dpdk_eal {
-public:
-    dpdk_eal() : _num_ports(0) {}
-    void init(boost::program_options::variables_map opts);
-    uint8_t get_port_num() const { return _num_ports; }
-    void get_port_hw_info(uint8_t port_idx, rte_eth_dev_info* info) {
-        assert(port_idx < _num_ports);
-        rte_eth_dev_info_get(port_idx, info);
-    }
-private:
-    bool _initialized = false;
-    uint8_t _num_ports;
-} eal;
 
 class dpdk_device : public device {
     uint8_t _port_idx;
@@ -237,7 +224,9 @@ private:
 
 int dpdk_device::init_port()
 {
-    eal.get_port_hw_info(_port_idx, &_dev_info);
+    assert(_port_idx < rte_eth_dev_count());
+
+    rte_eth_dev_info_get(_port_idx, &_dev_info);
 
     /* for port configuration all features are off by default */
     rte_eth_conf port_conf = { 0 };
@@ -581,28 +570,6 @@ future<> dpdk_qp::send(packet p)
     return make_ready_future<>();
 }
 
-void dpdk_eal::init(boost::program_options::variables_map opts)
-{
-    if (_initialized) {
-        return;
-    }
-
-    /* probe to determine the NIC devices available */
-    if (rte_eal_pci_probe() < 0) {
-        rte_exit(EXIT_FAILURE, "Cannot probe PCI\n");
-    }
-
-    _num_ports = rte_eth_dev_count();
-    assert(_num_ports <= RTE_MAX_ETHPORTS);
-    if (_num_ports == 0) {
-        rte_exit(EXIT_FAILURE, "No Ethernet ports - bye\n");
-    } else {
-        printf("ports number: %d\n", _num_ports);
-    }
-
-    _initialized = true;
-}
-
 std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variables_map opts, uint16_t qid) {
     auto qp = std::make_unique<dpdk_qp>(this, qid);
     smp::submit_to(_home_cpu, [this] () mutable {
@@ -633,7 +600,7 @@ std::unique_ptr<net::device> create_dpdk_net_device(
     assert(!called);
     called = true;
     // Init a DPDK EAL
-    dpdk::eal.init(opts);
+    dpdk::eal::init(opts);
     return std::make_unique<dpdk::dpdk_device>(opts, port_idx, num_queues);
 }
 

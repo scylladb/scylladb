@@ -17,8 +17,7 @@
 #include <boost/thread/barrier.hpp>
 #include <atomic>
 #ifdef HAVE_DPDK
-#include <rte_common.h>
-#include <rte_eal.h>
+#include <core/dpdk_rte.hh>
 #include <rte_lcore.h>
 #include <rte_launch.h>
 #endif
