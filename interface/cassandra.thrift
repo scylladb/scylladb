@@ -15,6 +15,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+#
+# Copyright 2014, Cloudius Systems
+#
+
+#
+# This file has been modified from the Apache distribution
+# by Cloudius Systems
+#
+
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # *** PLEASE REMEMBER TO EDIT THE VERSION CONSTANT WHEN MAKING CHANGES ***
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
