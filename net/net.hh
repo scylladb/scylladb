@@ -99,7 +99,7 @@ public:
             std::function<future<> (packet p, ethernet_address from)> next,
             std::function<bool (forward_hash&, packet&, size_t)> forward);
     void forward(unsigned cpuid, packet p);
-    unsigned hash2qid(uint32_t hash);
+    unsigned hash2cpu(uint32_t hash);
     friend class l3_protocol;
 };
 
@@ -145,21 +145,19 @@ public:
         engine.at_exit([dev = std::move(dev)] {});
     }
     template <typename Func>
-    unsigned forward_dst(packet& p, Func&& hashfn) {
-        auto& qp = local_queue();
+    unsigned forward_dst(unsigned src_cpuid, Func&& hashfn) {
+        auto& qp = queue_for_cpu(src_cpuid);
         if (!qp.may_forward()) {
-            return engine.cpu_id();
+            return src_cpuid;
         }
-        auto hwrss = p.rss_hash();
-        uint32_t hash;
-        if (hwrss) {
-            hash = hwrss.value();
-        } else {
-            hash = hashfn(p);
-        }
-        hash >>= _rss_table_bits;
+        auto hash = hashfn() >> _rss_table_bits;
         auto idx = hash % (qp.proxies.size() + 1);
-        return idx ? qp.proxies[idx - 1] : engine.cpu_id();
+        return idx ? qp.proxies[idx - 1] : src_cpuid;
+    }
+    virtual unsigned hash2cpu(uint32_t hash) {
+        // there is an assumption here that qid == cpu_id which will
+        // not necessary be true in the future
+        return forward_dst(hash2qid(hash), [hash] { return hash; });
     }
 };
 
