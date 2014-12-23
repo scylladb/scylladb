@@ -104,6 +104,7 @@ private:
     promise<> _config;
     timer<> _timer;
 
+    future<> run_dhcp(bool is_renew = false, const dhcp::lease & res = dhcp::lease());
     void on_dhcp(bool, const dhcp::lease &, bool);
     void set_ipv4_packet_filter(ip_packet_filter* filter) {
         _inet.set_packet_filter(filter);
@@ -171,6 +172,30 @@ native_network_stack::listen(socket_address sa, listen_options opts) {
 
 using namespace std::chrono_literals;
 
+future<> native_network_stack::run_dhcp(bool is_renew, const dhcp::lease& res) {
+    shared_ptr<dhcp> d = make_shared<dhcp>(_inet);
+
+    // Hijack the ip-stack.
+    for (unsigned i = 0; i < smp::count; i++) {
+        smp::submit_to(i, [d] {
+            auto & ns = static_cast<native_network_stack&>(engine.net());
+            ns.set_ipv4_packet_filter(d->get_ipv4_filter());
+        });
+    }
+
+    net::dhcp::result_type fut = is_renew ? d->renew(res) : d->discover();
+
+    return fut.then([this, d, is_renew](bool success, const dhcp::lease & res) {
+        for (unsigned i = 0; i < smp::count; i++) {
+            smp::submit_to(i, [] {
+                auto & ns = static_cast<native_network_stack&>(engine.net());
+                ns.set_ipv4_packet_filter(nullptr);
+            });
+        }
+        on_dhcp(success, res, is_renew);
+    });
+}
+
 void native_network_stack::on_dhcp(bool success, const dhcp::lease & res, bool is_renew) {
     if (success) {
         _inet.set_host_address(res.ip);
@@ -196,10 +221,7 @@ void native_network_stack::on_dhcp(bool success, const dhcp::lease & res, bool i
             _timer.set_callback(
                     [this, res]() {
                         _config = promise<>();
-                        shared_ptr<dhcp> d = make_shared<dhcp>(_inet);
-                        d->renew(res).then([this, d](bool success, const dhcp::lease & res) {
-                                    on_dhcp(success, res, true);
-                                });
+                        run_dhcp(true, res);
                     });
             _timer.arm(
                     std::chrono::duration_cast<clock_type::duration>(
@@ -217,25 +239,7 @@ future<> native_network_stack::initialize() {
         // Only run actual discover on main cpu.
         // All other cpus must simply for main thread to complete and signal them.
         if (engine.cpu_id() == 0) {
-            shared_ptr<dhcp> d = make_shared<dhcp>(_inet);
-
-            // Hijack the ip-stack.
-            for (unsigned i = 0; i < smp::count; i++) {
-                smp::submit_to(i, [d] {
-                    auto & ns = static_cast<native_network_stack&>(engine.net());
-                    ns.set_ipv4_packet_filter(d->get_ipv4_filter());
-                });
-            }
-
-            return d->discover().then([this, d](bool success, const dhcp::lease & res) {
-                for (unsigned i = 0; i < smp::count; i++) {
-                    smp::submit_to(i, [] {
-                        auto & ns = static_cast<native_network_stack&>(engine.net());
-                        ns.set_ipv4_packet_filter(nullptr);
-                    });
-                }
-                on_dhcp(success, res, false);
-            });
+            run_dhcp();
         }
         return _config.get_future();
     });
