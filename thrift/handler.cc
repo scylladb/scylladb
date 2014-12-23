@@ -4,6 +4,7 @@
 
 #include "Cassandra.h"
 #include "database.hh"
+#include "core/sstring.hh"
 #include <thrift/protocol/TBinaryProtocol.h>
 
 using namespace ::apache::thrift;
@@ -26,6 +27,7 @@ void unimplemented(const tcxx::function<void(::apache::thrift::TDelayedException
 
 class CassandraAsyncHandler : public CassandraCobSvIf {
     database& _db;
+    sstring _cql_version;
 public:
     explicit CassandraAsyncHandler(database& db) : _db(db) {}
     void login(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const AuthenticationRequest& auth_request) {
@@ -283,8 +285,8 @@ public:
     }
 
     void set_cql_version(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& version) {
-        // FIXME: implement
-        return unimplemented(exn_cob);
+        _cql_version = version;
+        cob();
     }
 };
 
