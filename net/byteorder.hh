@@ -47,13 +47,13 @@ struct packed {
 } __attribute__((packed));
 
 template <typename T>
-inline T ntoh(packed<T>& x) {
+inline T ntoh(const packed<T>& x) {
     T v = x;
     return ntoh(v);
 }
 
 template <typename T>
-inline T hton(packed<T>& x) {
+inline T hton(const packed<T>& x) {
     T v = x;
     return hton(v);
 }
@@ -85,17 +85,17 @@ void hton_inplace(First& first, Rest&... rest) {
 
 template <class T>
 inline
-T ntoh(T& x) {
+T ntoh(const T& x) {
     T tmp = x;
-    tmp.adjust_endianness([] (auto&... what) { ntoh_inplace(std::forward<decltype(what)&>(what)...); });
+    tmp.adjust_endianness([] (auto&&... what) { ntoh_inplace(std::forward<decltype(what)&>(what)...); });
     return tmp;
 }
 
 template <class T>
 inline
-T hton(T& x) {
+T hton(const T& x) {
     T tmp = x;
-    tmp.adjust_endianness([] (auto&... what) { hton_inplace(std::forward<decltype(what)&>(what)...); });
+    tmp.adjust_endianness([] (auto&&... what) { hton_inplace(std::forward<decltype(what)&>(what)...); });
     return tmp;
 }
 
