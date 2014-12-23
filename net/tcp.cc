@@ -91,15 +91,17 @@ uint8_t tcp_option::fill(tcp_hdr* th, uint8_t options_size) {
     return size;
 }
 
-uint8_t tcp_option::get_size() {
+uint8_t tcp_option::get_size(bool foreign_syn_received) {
     uint8_t size = 0;
-    if (_mss_received)
+    if (_mss_received || !foreign_syn_received)
         size += option_len::mss;
-    if (_win_scale_received)
+    if (_win_scale_received || !foreign_syn_received)
         size += option_len::win_scale;
-    size += option_len::eol;
-    // Insert NOP option to align on 32-bit
-    size = align_up(size, tcp_option::align);
+    if (size > 0) {
+        size += option_len::eol;
+        // Insert NOP option to align on 32-bit
+        size = align_up(size, tcp_option::align);
+    }
     return size;
 }
 

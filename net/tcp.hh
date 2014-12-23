@@ -67,7 +67,7 @@ struct tcp_option {
 
     void parse(uint8_t* beg, uint8_t* end);
     uint8_t fill(tcp_hdr* th, uint8_t option_size);
-    uint8_t get_size();
+    uint8_t get_size(bool foreign_syn_received);
 
     // For option negotiattion
     bool _mss_received = false;
@@ -813,7 +813,7 @@ void tcp<InetTraits>::tcb::output() {
         uint16_t len = p.len();
 
         if (!_local_syn_acked) {
-            options_size = _option.get_size();
+            options_size = _option.get_size(_foreign_syn_received);
         }
         auto th = p.prepend_header<tcp_hdr>(options_size);
         th->src_port = _local_port;
