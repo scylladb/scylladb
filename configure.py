@@ -201,6 +201,7 @@ cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'C
 
 deps = {
     'seastar': (['main.cc',
+                 'database.cc',
                  'thrift/handler.cc',
                  'thrift/server.cc',
                  ]
