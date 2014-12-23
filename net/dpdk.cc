@@ -277,9 +277,10 @@ int dpdk_device::init_port_start()
     printf("Port %d: using %d %s\n", _port_idx, _num_queues,
            (_num_queues > 1) ? "queues" : "queue");
 
-    // Set RSS mode: enable RSS only if there are more than 1 Rx queues
-    // available.
-    if (_num_queues > 1) {
+    // Set RSS mode: enable RSS if seastar is configured with more than 1 CPU.
+    // Even if port has a single queue we still want the RSS feature to be
+    // available in order to make HW calculate RSS hash for us.
+    if (smp::count > 1) {
         port_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
         port_conf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IPV4 | ETH_RSS_IPV4_UDP | ETH_RSS_IPV4_TCP;
         port_conf.rx_adv_conf.rss_conf.rss_key = const_cast<uint8_t*>(rsskey.data());
