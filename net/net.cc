@@ -42,8 +42,8 @@ interface::register_l3(eth_protocol_num proto_num,
     return l3_rx.packet_stream.listen(std::move(next));
 }
 
-unsigned interface::hash2qid(uint32_t hash) {
-    return _dev->hash2qid(hash);
+unsigned interface::hash2cpu(uint32_t hash) {
+    return _dev->hash2cpu(hash);
 }
 
 void interface::forward(unsigned cpuid, packet p) {
@@ -66,12 +66,17 @@ future<> interface::dispatch_packet(packet p) {
         auto i = _proto_map.find(ntoh(eh->eth_proto));
         if (i != _proto_map.end()) {
             l3_rx_stream& l3 = i->second;
-            auto fw = _dev->forward_dst(p, [&l3] (packet& p) {
-                forward_hash data;
-                if (l3.forward(data, p, sizeof(eth_hdr))) {
-                    return toeplitz_hash(rsskey, data);
+            auto fw = _dev->forward_dst(engine.cpu_id(), [&p, &l3] () {
+                auto hwrss = p.rss_hash();
+                if (hwrss) {
+                    return hwrss.value();
+                } else {
+                    forward_hash data;
+                    if (l3.forward(data, p, sizeof(eth_hdr))) {
+                        return toeplitz_hash(rsskey, data);
+                    }
+                    return 0u;
                 }
-                return 0u;
             });
             if (fw != engine.cpu_id()) {
                 forward(fw, std::move(p));

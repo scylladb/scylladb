@@ -19,6 +19,7 @@
 #include <queue>
 #include "ip.hh"
 #include "const.hh"
+#include "core/dpdk_rte.hh"
 #include "dpdk.hh"
 #include "toeplitz.hh"
 
@@ -52,6 +53,7 @@ static constexpr uint16_t mbuf_size            = mbuf_data_size + mbuf_overhead;
 static constexpr uint16_t default_rx_ring_size   = 512;
 static constexpr uint16_t default_tx_ring_size   = 512;
 
+#ifdef RTE_VERSION_1_7
 /*
  * RX and TX Prefetch, Host, and Write-back threshold values should be
  * carefully set for optimal performance. Consult the network
@@ -68,6 +70,7 @@ static constexpr uint8_t default_pthresh         = 36;
 static constexpr uint8_t default_rx_hthresh      = 8;
 static constexpr uint8_t default_tx_hthresh      = 0;
 static constexpr uint8_t default_wthresh         = 0;
+#endif
 
 static constexpr const char* pktmbuf_pool_name   = "dpdk_net_pktmbuf_pool";
 
@@ -77,20 +80,6 @@ static constexpr const char* pktmbuf_pool_name   = "dpdk_net_pktmbuf_pool";
 static constexpr uint8_t packet_read_size        = 32;
 /******************************************************************************/
 
-// DPDK Environment Abstraction Layer object
-class dpdk_eal {
-public:
-    dpdk_eal() : _num_ports(0) {}
-    void init(boost::program_options::variables_map opts);
-    uint8_t get_port_num() const { return _num_ports; }
-    void get_port_hw_info(uint8_t port_idx, rte_eth_dev_info* info) {
-        assert(port_idx < _num_ports);
-        rte_eth_dev_info_get(port_idx, info);
-    }
-private:
-    bool _initialized = false;
-    uint8_t _num_ports;
-} eal;
 
 class dpdk_device : public device {
     uint8_t _port_idx;
@@ -98,25 +87,44 @@ class dpdk_device : public device {
     net::hw_features _hw_features;
     uint8_t _queues_ready = 0;
     unsigned _home_cpu;
-    std::array<uint8_t, ETH_RSS_RETA_NUM_ENTRIES> _redir_table;
+    std::vector<uint8_t> _redir_table;
+#ifdef RTE_VERSION_1_7
+    struct rte_eth_rxconf _rx_conf_default = {};
+    struct rte_eth_txconf _tx_conf_default = {};
+#endif
 
 public:
     rte_eth_dev_info _dev_info = {};
-    struct rte_eth_rxconf _rx_conf_default = {};
-    struct rte_eth_txconf _tx_conf_default = {};
 
 private:
     /**
-     * Initialise an individual port:
-     * - configure number of rx and tx rings
-     * - set up each rx ring, to pull from the main mbuf pool
-     * - set up each tx ring
-     * - start the port and report its status to stdout
+     * Port initialization consists of 3 main stages:
+     * 1) General port initialization which ends with a call to
+     *    rte_eth_dev_configure() where we request the needed number of Rx and
+     *    Tx queues.
+     * 2) Individual queues initialization. This is done in the constructor of
+     *    dpdk_qp class. In particular the memory pools for queues are allocated
+     *    in this stage.
+     * 3) The final stage of the initialization which starts with the call of
+     *    rte_eth_dev_start() after which the port becomes fully functional. We
+     *    will also wait for a link to get up in this stage.
+     */
+
+
+    /**
+     * First stage of the port initialization.
      *
      * @return 0 in case of success and an appropriate error code in case of an
      *         error.
      */
-    int init_port();
+    int init_port_start();
+
+    /**
+     * The final stage of a port initialization.
+     * @note Must be called *after* all queues from stage (2) have been
+     *       initialized.
+     */
+    void init_port_fini();
 
     /**
      * Check the link status of out port in up to 9s, and print them finally.
@@ -124,50 +132,50 @@ private:
     void check_port_link_status();
 
 public:
-    dpdk_device(boost::program_options::variables_map opts,
-                        uint8_t port_idx, uint16_t num_queues)
+    dpdk_device(uint8_t port_idx, uint16_t num_queues)
         : _port_idx(port_idx)
         , _num_queues(num_queues)
         , _home_cpu(engine.cpu_id()) {
-        _rss_table_bits = 7;
-        _rx_conf_default.rx_thresh.pthresh = default_pthresh;
-        _rx_conf_default.rx_thresh.hthresh = default_rx_hthresh;
-        _rx_conf_default.rx_thresh.wthresh = default_wthresh;
-
-
-        _tx_conf_default.tx_thresh.pthresh = default_pthresh;
-        _tx_conf_default.tx_thresh.hthresh = default_tx_hthresh;
-        _tx_conf_default.tx_thresh.wthresh = default_wthresh;
-
-        _tx_conf_default.tx_free_thresh = 0; /* Use PMD default values */
-        _tx_conf_default.tx_rs_thresh   = 0; /* Use PMD default values */
 
         /* now initialise the port we will use */
-        int ret = init_port();
+        int ret = init_port_start();
         if (ret != 0) {
             rte_exit(EXIT_FAILURE, "Cannot initialise port %u\n", _port_idx);
         }
-
-        // Print the MAC
-        hw_address();
-
-        // Wait for a link
-        check_port_link_status();
-
-        printf("Created DPDK device\n");
     }
     ethernet_address hw_address() override {
         struct ether_addr mac;
         rte_eth_macaddr_get(_port_idx, &mac);
-        printf("%02x:%02x:%02x:%02x:%02x:%02x\n",
-            mac.addr_bytes[0], mac.addr_bytes[1], mac.addr_bytes[2],
-            mac.addr_bytes[3], mac.addr_bytes[4], mac.addr_bytes[5]);
 
         return mac.addr_bytes;
     }
     net::hw_features hw_features() override {
         return _hw_features;
     }
+
+    const rte_eth_rxconf* def_rx_conf() const {
+#ifdef RTE_VERSION_1_7
+        return &_rx_conf_default;
+#else
+        return &_dev_info.default_rxconf;
+#endif
+    }
+
+    const rte_eth_txconf* def_tx_conf() const {
+#ifdef RTE_VERSION_1_7
+        return &_tx_conf_default;
+#else
+        return &_dev_info.default_txconf;
+#endif
+    }
+
+    /**
+    *  Read the RSS table from the device and store it in the internal vector.
+    *  We will need it when we forward the reassembled IP frames
+     * (after IP fragmentation) to the correct HW queue.
+     */
+    void get_rss_table();
+
     virtual uint16_t hw_queues_count() override { return _num_queues; }
     virtual std::unique_ptr<qp> init_local_queue(boost::program_options::variables_map opts, uint16_t qid) override;
     virtual unsigned hash2qid(uint32_t hash) override {
@@ -235,9 +243,28 @@ private:
     reactor::poller _rx_poller;
 };
 
-int dpdk_device::init_port()
+int dpdk_device::init_port_start()
 {
-    eal.get_port_hw_info(_port_idx, &_dev_info);
+    assert(_port_idx < rte_eth_dev_count());
+
+    rte_eth_dev_info_get(_port_idx, &_dev_info);
+
+#ifdef RTE_VERSION_1_7
+    _rx_conf_default.rx_thresh.pthresh = default_pthresh;
+    _rx_conf_default.rx_thresh.hthresh = default_rx_hthresh;
+    _rx_conf_default.rx_thresh.wthresh = default_wthresh;
+
+
+    _tx_conf_default.tx_thresh.pthresh = default_pthresh;
+    _tx_conf_default.tx_thresh.hthresh = default_tx_hthresh;
+    _tx_conf_default.tx_thresh.wthresh = default_wthresh;
+
+    _tx_conf_default.tx_free_thresh = 0; /* Use PMD default values */
+    _tx_conf_default.tx_rs_thresh   = 0; /* Use PMD default values */
+#else
+    // Clear txq_flags - we want to support all available offload features.
+    _dev_info.default_txconf.txq_flags = 0;
+#endif
 
     /* for port configuration all features are off by default */
     rte_eth_conf port_conf = { 0 };
@@ -250,20 +277,52 @@ int dpdk_device::init_port()
     printf("Port %d: using %d %s\n", _port_idx, _num_queues,
            (_num_queues > 1) ? "queues" : "queue");
 
-    // Set RSS mode: enable RSS only if there are more than 1 Rx queues
-    // available.
-    if (_num_queues > 1) {
+    // Set RSS mode: enable RSS if seastar is configured with more than 1 CPU.
+    // Even if port has a single queue we still want the RSS feature to be
+    // available in order to make HW calculate RSS hash for us.
+    if (smp::count > 1) {
         port_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
-        port_conf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_IPV4 | ETH_RSS_IPV4_UDP | ETH_RSS_IPV4_TCP;
+        port_conf.rx_adv_conf.rss_conf.rss_hf = ETH_RSS_PROTO_MASK;
         port_conf.rx_adv_conf.rss_conf.rss_key = const_cast<uint8_t*>(rsskey.data());
     } else {
         port_conf.rxmode.mq_mode = ETH_MQ_RX_NONE;
+    }
+
+    if (_num_queues > 1) {
+#ifdef RTE_VERSION_1_7
+        _redir_table.resize(ETH_RSS_RETA_NUM_ENTRIES);
+        // This comes from the ETH_RSS_RETA_NUM_ENTRIES being 128
+        _rss_table_bits = 7;
+#else
+        // Check that the returned RETA size is sane:
+        // greater than 0 and is a power of 2.
+        assert(_dev_info.reta_size &&
+               (_dev_info.reta_size & (_dev_info.reta_size - 1)) == 0);
+
+        // Set the RSS table to the correct size
+        _redir_table.resize(_dev_info.reta_size);
+        _rss_table_bits = std::lround(std::log2(_dev_info.reta_size));
+        printf("Port %d: RSS table size is %d\n",
+               _port_idx, _dev_info.reta_size);
+
+#endif
     }
 
     // Set Rx VLAN stripping
     if (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_STRIP) {
         port_conf.rxmode.hw_vlan_strip = 1;
     }
+
+    // Check that all CSUM features are either all set all together or not set
+    // all together. If this assumption breaks we need to rework the below logic
+    // by splitting the csum offload feature bit into separate bits for IPv4,
+    // TCP and UDP.
+    assert(((_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_IPV4_CKSUM) &&
+            (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_UDP_CKSUM) &&
+            (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_TCP_CKSUM)) ||
+           (!(_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_IPV4_CKSUM) &&
+            !(_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_UDP_CKSUM) &&
+            !(_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_TCP_CKSUM)));
 
     // Set Rx checksum checking
     if (  (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_IPV4_CKSUM) &&
@@ -278,6 +337,16 @@ int dpdk_device::init_port()
         printf("TX ip checksum offload supported\n");
         _hw_features.tx_csum_ip_offload = 1;
     }
+
+    // Check that Tx TCP and UDP CSUM features are either all set all together
+    // or not set all together. If this assumption breaks we need to rework the
+    // below logic by splitting the csum offload feature bit into separate bits
+    // for TCP and UDP.
+    assert(((_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_CKSUM) &&
+            (_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM)) ||
+           (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_CKSUM) &&
+            !(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM)));
+
     if (  (_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_CKSUM) &&
           (_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM)) {
         printf("TX TCP&UDP checksum offload supported\n");
@@ -302,6 +371,22 @@ int dpdk_device::init_port()
     printf("done: \n");
 
     return 0;
+}
+
+void dpdk_device::init_port_fini()
+{
+    if (rte_eth_dev_start(_port_idx) < 0) {
+        rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
+    }
+
+    if (_num_queues > 1) {
+        get_rss_table();
+    }
+
+    // Wait for a link
+    check_port_link_status();
+
+    printf("Created DPDK device\n");
 }
 
 bool dpdk_qp::init_mbuf_pools()
@@ -334,7 +419,7 @@ void dpdk_device::check_port_link_status()
     int count;
     struct rte_eth_link link;
 
-    printf("\nChecking link status");
+    printf("\nChecking link status ");
     fflush(stdout);
     for (count = 0; count <= max_check_time; count++) {
             memset(&link, 0, sizeof(link));
@@ -374,13 +459,12 @@ dpdk_qp::dpdk_qp(dpdk_device* dev, uint8_t qid)
 
     if (rte_eth_rx_queue_setup(_dev->port_idx(), _qid, rx_ring_size,
             rte_eth_dev_socket_id(_dev->port_idx()),
-            &_dev->_rx_conf_default, _pktmbuf_pool) < 0) {
+            _dev->def_rx_conf(), _pktmbuf_pool) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot initialize rx queue\n");
     }
 
     if (rte_eth_tx_queue_setup(_dev->port_idx(), _qid, tx_ring_size,
-            rte_eth_dev_socket_id(_dev->port_idx()),
-            &_dev->_tx_conf_default) < 0) {
+            rte_eth_dev_socket_id(_dev->port_idx()), _dev->def_tx_conf()) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot initialize tx queue\n");
     }
 }
@@ -404,8 +488,7 @@ void dpdk_qp::process_packets(struct rte_mbuf **bufs, uint16_t count)
         if ((_dev->_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_STRIP) &&
             (m->ol_flags & PKT_RX_VLAN_PKT)) {
 
-            oi.hw_vlan = true;
-            oi.vlan_tci = m->pkt.vlan_macip.f.vlan_tci;
+            oi.vlan_tci = rte_mbuf_vlan_tci(m);
         }
 
         if (_dev->hw_features().rx_csum_offload) {
@@ -420,7 +503,7 @@ void dpdk_qp::process_packets(struct rte_mbuf **bufs, uint16_t count)
 
         p.set_offload_info(oi);
         if (m->ol_flags & PKT_RX_RSS_HASH) {
-            p.set_rss_hash(m->pkt.hash.rss);
+            p.set_rss_hash(rte_mbuf_rss_hash(m));
         }
 
         _dev->l2receive(std::move(p));
@@ -451,8 +534,8 @@ size_t dpdk_qp::copy_one_data_buf(rte_mbuf*& m, char* data, size_t l)
     size_t len = std::min(l, mbuf_data_size);
 
     // mbuf_put()
-    m->pkt.data_len += len;
-    m->pkt.pkt_len += len;
+    rte_mbuf_data_len(m) += len;
+    rte_mbuf_pkt_len(m) += len;
 
     rte_memcpy(rte_pktmbuf_mtod(m, void*), data, len);
 
@@ -495,7 +578,7 @@ bool dpdk_qp::copy_one_frag(fragment& frag, rte_mbuf*& head,
         base += len;
         nsegs++;
 
-        prev_seg->pkt.next = m;
+        rte_mbuf_next(prev_seg) = m;
         prev_seg = m;
     }
 
@@ -545,30 +628,30 @@ future<> dpdk_qp::send(packet p)
         total_nsegs += nsegs;
 
         // Attach a new buffers' chain to the packet chain
-        last_seg->pkt.next = h;
+        rte_mbuf_next(last_seg) = h;
         last_seg = new_last_seg;
     }
 
     // Update the HEAD buffer with the packet info
-    head->pkt.pkt_len = p.len();
-    head->pkt.nb_segs = total_nsegs;
+    rte_mbuf_pkt_len(head) = p.len();
+    rte_mbuf_nb_segs(head) = total_nsegs;
 
     // Handle TCP checksum offload
     auto oi = p.offload_info();
     if (oi.needs_ip_csum) {
         head->ol_flags |= PKT_TX_IP_CKSUM;
-        head->pkt.vlan_macip.f.l2_len = sizeof(struct ether_hdr);
-        head->pkt.vlan_macip.f.l3_len = oi.ip_hdr_len;
+        rte_mbuf_l2_len(head) = sizeof(struct ether_hdr);
+        rte_mbuf_l3_len(head) = oi.ip_hdr_len;
     }
     if (_dev->hw_features().tx_csum_l4_offload) {
         if (oi.protocol == ip_protocol_num::tcp) {
             head->ol_flags |= PKT_TX_TCP_CKSUM;
-            head->pkt.vlan_macip.f.l2_len = sizeof(struct ether_hdr);
-            head->pkt.vlan_macip.f.l3_len = oi.ip_hdr_len;
+            rte_mbuf_l2_len(head) = sizeof(struct ether_hdr);
+            rte_mbuf_l3_len(head) = oi.ip_hdr_len;
         } else if (oi.protocol == ip_protocol_num::udp) {
             head->ol_flags |= PKT_TX_UDP_CKSUM;
-            head->pkt.vlan_macip.f.l2_len = sizeof(struct ether_hdr);
-            head->pkt.vlan_macip.f.l3_len = oi.ip_hdr_len;
+            rte_mbuf_l2_len(head) = sizeof(struct ether_hdr);
+            rte_mbuf_l3_len(head) = oi.ip_hdr_len;
         }
     }
 
@@ -581,41 +664,51 @@ future<> dpdk_qp::send(packet p)
     return make_ready_future<>();
 }
 
-void dpdk_eal::init(boost::program_options::variables_map opts)
+#ifdef RTE_VERSION_1_7
+void dpdk_device::get_rss_table()
 {
-    if (_initialized) {
-        return;
+    rte_eth_rss_reta reta_conf { ~0ULL, ~0ULL };
+    if (rte_eth_dev_rss_reta_query(_port_idx, &reta_conf)) {
+        rte_exit(EXIT_FAILURE, "Cannot get redirection table for pot %d\n",
+                               _port_idx);
     }
-
-    /* probe to determine the NIC devices available */
-    if (rte_eal_pci_probe() < 0) {
-        rte_exit(EXIT_FAILURE, "Cannot probe PCI\n");
-    }
-
-    _num_ports = rte_eth_dev_count();
-    assert(_num_ports <= RTE_MAX_ETHPORTS);
-    if (_num_ports == 0) {
-        rte_exit(EXIT_FAILURE, "No Ethernet ports - bye\n");
-    } else {
-        printf("ports number: %d\n", _num_ports);
-    }
-
-    _initialized = true;
+    assert(sizeof(reta_conf.reta) == _redir_table.size());
+    std::copy(reta_conf.reta,
+              reta_conf.reta + _redir_table.size(),
+              _redir_table.begin());
 }
+#else
+void dpdk_device::get_rss_table()
+{
+    assert(_dev_info.reta_size);
+
+    int i, reta_conf_size =
+        std::max(1, _dev_info.reta_size / RTE_RETA_GROUP_SIZE);
+    rte_eth_rss_reta_entry64 reta_conf[reta_conf_size];
+
+    for (i = 0; i < reta_conf_size; i++) {
+        reta_conf[i].mask = ~0ULL;
+    }
+
+    if (rte_eth_dev_rss_reta_query(_port_idx, reta_conf,
+                                   _dev_info.reta_size)) {
+        rte_exit(EXIT_FAILURE, "Cannot get redirection table for "
+                               "port %d\n", _port_idx);
+    }
+
+    for (int i = 0; i < reta_conf_size; i++) {
+        std::copy(reta_conf[i].reta,
+                  reta_conf[i].reta + RTE_RETA_GROUP_SIZE,
+                  _redir_table.begin() + i * RTE_RETA_GROUP_SIZE);
+    }
+}
+#endif
 
 std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variables_map opts, uint16_t qid) {
     auto qp = std::make_unique<dpdk_qp>(this, qid);
     smp::submit_to(_home_cpu, [this] () mutable {
         if (++_queues_ready == _num_queues) {
-            if (rte_eth_dev_start(_port_idx) < 0) {
-                rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
-            }
-            rte_eth_rss_reta reta_conf { ~0ull, ~0ull };
-            if (rte_eth_dev_rss_reta_query(_port_idx, &reta_conf)) {
-                rte_exit(EXIT_FAILURE, "Cannot get redirection table for pot %d\n", _port_idx);
-            }
-            assert(sizeof(reta_conf.reta) == _redir_table.size());
-            std::copy(reta_conf.reta, reta_conf.reta + _redir_table.size(), _redir_table.begin());
+            init_port_fini();
         }
     });
     return std::move(qp);
@@ -625,16 +718,24 @@ std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variab
 /******************************** Interface functions *************************/
 
 std::unique_ptr<net::device> create_dpdk_net_device(
-                                    boost::program_options::variables_map opts,
                                     uint8_t port_idx,
                                     uint8_t num_queues)
 {
     static bool called = false;
+
     assert(!called);
+    assert(dpdk::eal::initialized);
+
     called = true;
-    // Init a DPDK EAL
-    dpdk::eal.init(opts);
-    return std::make_unique<dpdk::dpdk_device>(opts, port_idx, num_queues);
+
+    // Check that we have at least one DPDK-able port
+    if (rte_eth_dev_count() == 0) {
+        rte_exit(EXIT_FAILURE, "No Ethernet ports - bye\n");
+    } else {
+        printf("ports number: %d\n", rte_eth_dev_count());
+    }
+
+    return std::make_unique<dpdk::dpdk_device>(port_idx, num_queues);
 }
 
 boost::program_options::options_description
