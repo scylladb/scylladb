@@ -467,7 +467,6 @@ void dpdk_qp::process_packets(struct rte_mbuf **bufs, uint16_t count)
         if ((_dev->_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_STRIP) &&
             (m->ol_flags & PKT_RX_VLAN_PKT)) {
 
-            oi.hw_vlan = true;
             oi.vlan_tci = rte_mbuf_vlan_tci(m);
         }
 
