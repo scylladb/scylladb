@@ -5,6 +5,7 @@
 #include "Cassandra.h"
 #include "database.hh"
 #include "core/sstring.hh"
+#include "core/print.hh"
 #include <thrift/protocol/TBinaryProtocol.h>
 
 using namespace ::apache::thrift;
@@ -225,9 +226,27 @@ public:
     }
 
     void system_add_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
-        std::string _return;
-        // FIXME: implement
-        return unimplemented(exn_cob);
+        std::string schema_id = "schema-id";  // FIXME: make meaningful
+        if (_db.keyspaces.count(ks_def.name)) {
+            InvalidRequestException ire;
+            ire.why = sprint("Keyspace %s already exists", ks_def.name);
+            exn_cob(TDelayedException::delayException(ire));
+        }
+        keyspace& ks = _db.keyspaces[ks_def.name];
+        for (const CfDef& cf_def : ks_def.cf_defs) {
+            column_family& cf = ks.column_families[cf_def.name];
+            // FIXME: look at key_alias and key_validator first
+            cf.partition_key.push_back(column_definition{"key", blob_type});
+            // FIXME: guess clustering keys
+            for (const ColumnDef& col_def : cf_def.column_metadata) {
+                // FIXME: look at all fields, not just name
+                cf.column_defs.push_back(column_definition{
+                    col_def.name,
+                    blob_type,
+                });
+            }
+        }
+        cob(schema_id);
     }
 
     void system_drop_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
