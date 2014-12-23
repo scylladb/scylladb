@@ -3,6 +3,7 @@
  */
 
 #include "Cassandra.h"
+#include "database.hh"
 #include <thrift/protocol/TBinaryProtocol.h>
 
 using namespace ::apache::thrift;
@@ -24,7 +25,9 @@ void unimplemented(const tcxx::function<void(::apache::thrift::TDelayedException
 }
 
 class CassandraAsyncHandler : public CassandraCobSvIf {
+    database& _db;
 public:
+    explicit CassandraAsyncHandler(database& db) : _db(db) {}
     void login(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const AuthenticationRequest& auth_request) {
         // FIXME: implement
         return unimplemented(exn_cob);
@@ -286,10 +289,12 @@ public:
 };
 
 class handler_factory : public CassandraCobSvIfFactory {
+    database& _db;
 public:
+    explicit handler_factory(database& db) : _db(db) {}
     typedef CassandraCobSvIf Handler;
     virtual CassandraCobSvIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) {
-        return new CassandraAsyncHandler;
+        return new CassandraAsyncHandler(_db);
     }
     virtual void releaseHandler(CassandraCobSvIf* handler) {
         delete handler;
@@ -297,6 +302,6 @@ public:
 };
 
 std::unique_ptr<CassandraCobSvIfFactory>
-create_handler_factory() {
-    return std::make_unique<handler_factory>();
+create_handler_factory(database& db) {
+    return std::make_unique<handler_factory>(db);
 }

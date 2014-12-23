@@ -11,6 +11,7 @@
 
 class thrift_server;
 class thrift_stats;
+struct database;
 
 namespace org { namespace apache { namespace cassandra {
 
@@ -41,7 +42,7 @@ class thrift_server {
     uint64_t _current_connections = 0;
     uint64_t _requests_served = 0;
 public:
-    thrift_server();
+    thrift_server(database& db);
     future<> listen(ipv4_addr addr);
     void do_accepts(int which);
     class connection;
