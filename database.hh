@@ -17,8 +17,6 @@
 #include <iostream>
 #include <boost/functional/hash.hpp>
 
-using bytes = basic_sstring<uint8_t, uint32_t, 31>;
-
 // FIXME: should be int8_t
 using bytes = basic_sstring<char, uint32_t, 31>;
 
