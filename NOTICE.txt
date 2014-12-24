@@ -1,0 +1,2 @@
+This project includes code developed by the Apache Software Foundation (http://www.apache.org/),
+especially Apache Cassandra.
