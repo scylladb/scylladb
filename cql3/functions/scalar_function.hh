@@ -15,18 +15,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.functions;
 
-import java.nio.ByteBuffer;
-import java.util.List;
-
-import org.apache.cassandra.exceptions.InvalidRequestException;
-
-/**
- * Determines a single output value based on a single input value.
+/*
+ * Copyright 2014 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
  */
-public interface ScalarFunction extends Function
-{
+
+#ifndef CQL3_FUNCTIONS_SCALAR_FUNCTION_HH
+#define CQL3_FUNCTIONS_SCALAR_FUNCTION_HH
+
+#include "database.hh"
+#include <vector>
+
+namespace cql3 {
+
+namespace functions {
+
+class scalar_function : public function {
     /**
      * Applies this function to the specified parameter.
      *
@@ -35,5 +41,11 @@ public interface ScalarFunction extends Function
      * @return the result of applying this function to the parameter
      * @throws InvalidRequestException if this function cannot not be applied to the parameter
      */
-    public ByteBuffer execute(int protocolVersion, List<ByteBuffer> parameters) throws InvalidRequestException;
+    virtual bytes execute(int protocol_version, const std::vector<bytes>& parameters) = 0;
+};
+
+
 }
+}
+
+#endif
