@@ -615,7 +615,6 @@ private:
     timer_set<timer<>, &timer<>::_link>::timer_list_t _expired_timers;
     timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link> _lowres_timers;
     timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link>::timer_list_t _expired_lowres_timers;
-    readable_eventfd _io_eventfd;
     io_context_t _io_context;
     semaphore _io_context_available;
     circular_buffer<std::unique_ptr<task>> _pending_tasks;
@@ -715,7 +714,7 @@ private:
     collectd_registrations register_collectd_metrics();
     future<> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
 
-    void process_io(size_t count);
+    void process_io();
 
     void add_timer(timer<>*);
     void del_timer(timer<>*);

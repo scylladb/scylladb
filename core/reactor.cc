@@ -77,7 +77,6 @@ reactor::reactor()
     , _exit_future(_exit_promise.get_future())
     ,  _idle(false)
     , _cpu_started(0)
-    , _io_eventfd()
     , _io_context(0)
     , _io_context_available(max_aio) {
     auto r = ::io_setup(max_aio, &_io_context);
@@ -181,7 +180,6 @@ reactor::submit_io(Func prepare_io) {
         iocb io;
         prepare_io(io);
         io.data = pr.get();
-        io_set_eventfd(&io, _io_eventfd.get_write_fd());
         iocb* p = &io;
         auto r = ::io_submit(_io_context, 1, &p);
         throw_kernel_error(r);
@@ -189,20 +187,18 @@ reactor::submit_io(Func prepare_io) {
     });
 }
 
-void reactor::process_io(size_t count)
+void reactor::process_io()
 {
     io_event ev[max_aio];
-    auto n = ::io_getevents(_io_context, count, count, ev, NULL);
-    assert(n >= 0 && size_t(n) == count);
+    struct timespec timeout = {0, 0};
+    auto n = ::io_getevents(_io_context, 1, max_aio, ev, &timeout);
+    assert(n >= 0);
     for (size_t i = 0; i < size_t(n); ++i) {
         auto pr = reinterpret_cast<promise<io_event>*>(ev[i].data);
         pr->set_value(ev[i]);
         delete pr;
     }
     _io_context_available.signal(n);
-    _io_eventfd.wait().then([this] (size_t count) {
-        process_io(count);
-    });
 }
 
 future<size_t>
@@ -452,11 +448,11 @@ reactor::register_collectd_metrics() {
 
 int reactor::run() {
     auto collectd_metrics = register_collectd_metrics();
+
 #ifndef HAVE_OSV
-    _io_eventfd.wait().then([this] (size_t count) {
-        process_io(count);
-    });
+    poller io_poller([&] { process_io(); return true; });
 #endif
+
     if (_handle_sigint && _id == 0) {
         receive_signal(SIGINT).then([this] { stop(); });
     }
