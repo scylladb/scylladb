@@ -8,3 +8,4 @@
 #include "functions/function_name.hh"
 #include "functions/function.hh"
 #include "functions/scalar_function.hh"
+#include "functions/abstract_function.hh"
