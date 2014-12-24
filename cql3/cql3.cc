@@ -6,5 +6,5 @@
 // out-of-line implementations.
 
 #include "functions/function_name.hh"
-
+#include "functions/function.hh"
 

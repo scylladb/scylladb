@@ -15,44 +15,55 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.functions;
 
-import java.util.List;
+/*
+ * Copyright 2014 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import org.apache.cassandra.db.marshal.AbstractType;
+#ifndef CQL3_FUNCTIONS_FUNCTION_HH
+#define CQL3_FUNCTIONS_FUNCTION_HH
 
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.github.jamm.Unmetered;
+#include "database.hh"
+#include <vector>
 
-@Unmetered
-public interface Function
-{
-    public FunctionName name();
-    public List<AbstractType<?>> argTypes();
-    public AbstractType<?> returnType();
+namespace cql3 {
+namespace functions {
+
+class function {
+public:
+    virtual ~function() {}
+    virtual function_name name() = 0;
+    virtual std::vector<data_type> arg_types() = 0;
+    virtual data_type return_type() = 0;
 
     /**
      * Checks whether the function is a pure function (as in doesn't depend on, nor produce side effects) or not.
      *
      * @return <code>true</code> if the function is a pure function, <code>false</code> otherwise.
      */
-    public boolean isPure();
+    virtual bool is_pure() = 0;
 
     /**
      * Checks whether the function is a native/hard coded one or not.
      *
      * @return <code>true</code> if the function is a native/hard coded one, <code>false</code> otherwise.
      */
-    public boolean isNative();
+    virtual bool is_native() = 0;
 
     /**
      * Checks whether the function is an aggregate function or not.
      *
      * @return <code>true</code> if the function is an aggregate function, <code>false</code> otherwise.
      */
-    public boolean isAggregate();
+    virtual bool is_aggregate() = 0;
+protected:
+    virtual bool uses_function(sstring ks_name, sstring function_name) = 0;
+    virtual bool has_reference_to(function& f) = 0;
+};
 
-    boolean usesFunction(String ksName, String functionName);
-
-    boolean hasReferenceTo(Function function);
 }
+}
+
+#endif
