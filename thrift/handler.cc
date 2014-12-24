@@ -3,6 +3,9 @@
  */
 
 #include "Cassandra.h"
+#include "database.hh"
+#include "core/sstring.hh"
+#include "core/print.hh"
 #include <thrift/protocol/TBinaryProtocol.h>
 
 using namespace ::apache::thrift;
@@ -24,15 +27,25 @@ void unimplemented(const tcxx::function<void(::apache::thrift::TDelayedException
 }
 
 class CassandraAsyncHandler : public CassandraCobSvIf {
+    database& _db;
+    keyspace* _ks = nullptr;  // FIXME: reference counting for in-use detection?
+    sstring _cql_version;
 public:
+    explicit CassandraAsyncHandler(database& db) : _db(db) {}
     void login(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const AuthenticationRequest& auth_request) {
         // FIXME: implement
         return unimplemented(exn_cob);
     }
 
     void set_keyspace(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
-        // FIXME: implement
-        return unimplemented(exn_cob);
+        try {
+            _ks = &_db.keyspaces.at(keyspace);
+            cob();
+        } catch (std::out_of_range& e) {
+            InvalidRequestException ire;
+            ire.why = sprint("keyspace %s does not exist", keyspace);
+            exn_cob(TDelayedException::delayException(ire));
+        }
     }
 
     void get(tcxx::function<void(ColumnOrSuperColumn const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnPath& column_path, const ConsistencyLevel::type consistency_level) {
@@ -220,9 +233,27 @@ public:
     }
 
     void system_add_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
-        std::string _return;
-        // FIXME: implement
-        return unimplemented(exn_cob);
+        std::string schema_id = "schema-id";  // FIXME: make meaningful
+        if (_db.keyspaces.count(ks_def.name)) {
+            InvalidRequestException ire;
+            ire.why = sprint("Keyspace %s already exists", ks_def.name);
+            exn_cob(TDelayedException::delayException(ire));
+        }
+        keyspace& ks = _db.keyspaces[ks_def.name];
+        for (const CfDef& cf_def : ks_def.cf_defs) {
+            column_family& cf = ks.column_families[cf_def.name];
+            // FIXME: look at key_alias and key_validator first
+            cf.partition_key.push_back(column_definition{"key", blob_type});
+            // FIXME: guess clustering keys
+            for (const ColumnDef& col_def : cf_def.column_metadata) {
+                // FIXME: look at all fields, not just name
+                cf.column_defs.push_back(column_definition{
+                    col_def.name,
+                    blob_type,
+                });
+            }
+        }
+        cob(schema_id);
     }
 
     void system_drop_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
@@ -280,16 +311,18 @@ public:
     }
 
     void set_cql_version(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& version) {
-        // FIXME: implement
-        return unimplemented(exn_cob);
+        _cql_version = version;
+        cob();
     }
 };
 
 class handler_factory : public CassandraCobSvIfFactory {
+    database& _db;
 public:
+    explicit handler_factory(database& db) : _db(db) {}
     typedef CassandraCobSvIf Handler;
     virtual CassandraCobSvIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) {
-        return new CassandraAsyncHandler;
+        return new CassandraAsyncHandler(_db);
     }
     virtual void releaseHandler(CassandraCobSvIf* handler) {
         delete handler;
@@ -297,6 +330,6 @@ public:
 };
 
 std::unique_ptr<CassandraCobSvIfFactory>
-create_handler_factory() {
-    return std::make_unique<handler_factory>();
+create_handler_factory(database& db) {
+    return std::make_unique<handler_factory>(db);
 }

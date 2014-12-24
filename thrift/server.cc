@@ -36,9 +36,9 @@ public:
     thrift_stats(thrift_server& server);
 };
 
-thrift_server::thrift_server()
+thrift_server::thrift_server(database& db)
         : _stats(new thrift_stats(*this))
-        , _handler_factory(create_handler_factory().release())
+        , _handler_factory(create_handler_factory(db).release())
         , _protocol_factory(new TBinaryProtocolFactoryT<TMemoryBuffer>())
         , _processor_factory(new CassandraAsyncProcessorFactory(_handler_factory)) {
 }
