@@ -39,7 +39,16 @@ namespace dpdk {
 
 /******************* Net device related constatns *****************************/
 
-static constexpr uint16_t mbufs_per_queue        = 1536;
+static constexpr uint16_t default_ring_size      = 512;
+
+static constexpr uint16_t mbufs_per_queue_rx     = 3 * default_ring_size;
+
+//
+// No need to keep more descriptors in the air than can be sent in a single
+// rte_eth_tx_burst() call.
+//
+static constexpr uint16_t mbufs_per_queue_tx     = 2 * default_ring_size;
+
 static constexpr uint16_t mbuf_cache_size        = 512;
 static constexpr uint16_t mbuf_overhead          =
                                  sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM;
@@ -49,9 +58,6 @@ static constexpr size_t   mbuf_data_size         = 2048;
 static constexpr uint8_t  max_frags              = 32;
 
 static constexpr uint16_t mbuf_size            = mbuf_data_size + mbuf_overhead;
-
-static constexpr uint16_t default_rx_ring_size   = 512;
-static constexpr uint16_t default_tx_ring_size   = 512;
 
 #ifdef RTE_VERSION_1_7
 /*
@@ -245,7 +251,7 @@ private:
 private:
     dpdk_device* _dev;
     uint8_t _qid;
-    rte_mempool* _pktmbuf_pool;
+    rte_mempool *_pktmbuf_pool_rx, *_pktmbuf_pool_tx;
     reactor::poller _rx_poller;
     std::vector<rte_mbuf*> _tx_burst;
     uint16_t _tx_burst_idx = 0;
@@ -400,24 +406,30 @@ void dpdk_device::init_port_fini()
 
 bool dpdk_qp::init_mbuf_pools()
 {
-    // Allocate the same amount of buffers for Rx and Tx.
-    const unsigned num_mbufs = 2 * mbufs_per_queue;
     sstring name = to_sstring(pktmbuf_pool_name) + to_sstring(_qid);
     /* don't pass single-producer/single-consumer flags to mbuf create as it
      * seems faster to use a cache instead */
-    printf("Creating mbuf pool '%s' [%u mbufs] ...\n", name.c_str(), num_mbufs);
+    printf("Creating mbuf pools '%s_rx/_tx' [%u and %u mbufs respectively] ...\n",
+           name.c_str(), mbufs_per_queue_rx, mbufs_per_queue_tx);
 
-    //
-    // We currently allocate a one big mempool on the current CPU to fit all
-    // requested queues.
-    // TODO: Allocate a separate pool for each queue on the appropriate CPU.
-    //
-    _pktmbuf_pool = rte_mempool_create(name.c_str(), num_mbufs,
-        mbuf_size, mbuf_cache_size,
-        sizeof(struct rte_pktmbuf_pool_private), rte_pktmbuf_pool_init,
-        NULL, rte_pktmbuf_init, NULL, rte_socket_id(), 0);
+    _pktmbuf_pool_rx =
+            rte_mempool_create((name + to_sstring("_rx")).c_str(),
+                               mbufs_per_queue_rx,
+                               mbuf_size, mbuf_cache_size,
+                               sizeof(struct rte_pktmbuf_pool_private),
+                               rte_pktmbuf_pool_init, NULL,
+                               rte_pktmbuf_init, NULL,
+                               rte_socket_id(), 0);
+    _pktmbuf_pool_tx =
+            rte_mempool_create((name + to_sstring("_tx")).c_str(),
+                               mbufs_per_queue_tx,
+                               mbuf_size, mbuf_cache_size,
+                               sizeof(struct rte_pktmbuf_pool_private),
+                               rte_pktmbuf_pool_init, NULL,
+                               rte_pktmbuf_init, NULL,
+                               rte_socket_id(), 0);
 
-    return _pktmbuf_pool != NULL;
+    return _pktmbuf_pool_rx != NULL && _pktmbuf_pool_tx != NULL;
 }
 
 void dpdk_device::check_port_link_status()
@@ -462,16 +474,13 @@ dpdk_qp::dpdk_qp(dpdk_device* dev, uint8_t qid)
         rte_exit(EXIT_FAILURE, "Cannot initialize mbuf pools\n");
     }
 
-    const uint16_t rx_ring_size = default_rx_ring_size;
-    const uint16_t tx_ring_size = default_tx_ring_size;
-
-    if (rte_eth_rx_queue_setup(_dev->port_idx(), _qid, rx_ring_size,
+    if (rte_eth_rx_queue_setup(_dev->port_idx(), _qid, default_ring_size,
             rte_eth_dev_socket_id(_dev->port_idx()),
-            _dev->def_rx_conf(), _pktmbuf_pool) < 0) {
+            _dev->def_rx_conf(), _pktmbuf_pool_rx) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot initialize rx queue\n");
     }
 
-    if (rte_eth_tx_queue_setup(_dev->port_idx(), _qid, tx_ring_size,
+    if (rte_eth_tx_queue_setup(_dev->port_idx(), _qid, default_ring_size,
             rte_eth_dev_socket_id(_dev->port_idx()), _dev->def_tx_conf()) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot initialize tx queue\n");
     }
@@ -537,7 +546,7 @@ bool dpdk_qp::poll_rx_once()
 
 size_t dpdk_qp::copy_one_data_buf(rte_mbuf*& m, char* data, size_t l)
 {
-    m = rte_pktmbuf_alloc(_pktmbuf_pool);
+    m = rte_pktmbuf_alloc(_pktmbuf_pool_tx);
     if (!m) {
         return 0;
     }
