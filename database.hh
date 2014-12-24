@@ -16,6 +16,8 @@
 #include <vector>
 #include <iostream>
 
+using bytes = basic_sstring<uint8_t, uint32_t, 31>;
+
 struct row {
     std::vector<boost::any> cells;
 };
