@@ -15,6 +15,9 @@
 #include <set>
 #include <vector>
 #include <iostream>
+#include <boost/functional/hash.hpp>
+
+using bytes = basic_sstring<uint8_t, uint32_t, 31>;
 
 struct row {
     std::vector<boost::any> cells;
@@ -58,6 +61,9 @@ public:
     bool operator!=(const data_type& x) const {
         return _impl != x._impl;
     }
+    friend size_t hash_value(const data_type& x) {
+        return std::hash<impl*>()(x._impl);
+    }
 };
 
 // FIXME: add missing types
@@ -90,5 +96,13 @@ struct keyspace {
 struct database {
     std::unordered_map<sstring, keyspace> keyspaces;
 };
+
+namespace std {
+
+template <>
+struct hash<data_type> : boost::hash<data_type> {
+};
+
+}
 
 #endif /* DATABASE_HH_ */
