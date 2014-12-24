@@ -15,59 +15,76 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.functions;
 
-import com.google.common.base.Objects;
+/*
+ * Copyright 2014 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import org.apache.cassandra.db.SystemKeyspace;
+#ifndef CQL3_FUNCTION_NAME_HH
+#define CQL3_FUNCTION_NAME_HH
 
-public final class FunctionName
-{
-    public final String keyspace;
-    public final String name;
+#include "core/sstring.hh"
+#include <iostream>
+#include <functional>
 
+namespace cql3 {
+
+namespace functions {
+
+class function_name final {
+public:
+    sstring keyspace;
+    sstring name;
+
+#if 0
     public static FunctionName nativeFunction(String name)
     {
         return new FunctionName(SystemKeyspace.NAME, name);
     }
+#endif
 
-    public FunctionName(String keyspace, String name)
-    {
-        assert name != null : "Name parameter must not be null";
-        this.keyspace = keyspace != null ? keyspace : null;
-        this.name = name;
+    function_name(sstring keyspace, sstring name)
+            : keyspace(keyspace), name(name) {
+        assert(!name.empty());
     }
 
+#if 0
     public FunctionName asNativeFunction()
     {
         return FunctionName.nativeFunction(name);
     }
+#endif
 
-    public boolean hasKeyspace()
-    {
-        return keyspace != null;
+    bool has_keyspace() const {
+        return !keyspace.empty();
     }
 
-    @Override
-    public final int hashCode()
-    {
-        return Objects.hashCode(keyspace, name);
+    bool operator==(const function_name& x) const {
+        return keyspace == x.keyspace && name == x.name;
     }
+};
 
-    @Override
-    public final boolean equals(Object o)
-    {
-        if (!(o instanceof FunctionName))
-            return false;
-
-        FunctionName that = (FunctionName)o;
-        return Objects.equal(this.keyspace, that.keyspace)
-            && Objects.equal(this.name, that.name);
+std::ostream& operator<<(std::ostream& os, const function_name& fn) {
+    if (!fn.keyspace.empty()) {
+        os << fn.keyspace << ".";
     }
-
-    @Override
-    public String toString()
-    {
-        return keyspace == null ? name : keyspace + "." + name;
-    }
+    return os << fn.name;
 }
+
+}
+}
+
+namespace std {
+
+template <>
+struct hash<cql3::functions::function_name> {
+    size_t operator()(const cql3::functions::function_name& x) const {
+        return std::hash<sstring>()(x.keyspace) ^ std::hash<sstring>()(x.name);
+    }
+};
+
+}
+
+#endif
