@@ -510,10 +510,6 @@ public:
     // used only for reactor_backend_osv, but in the future it should really
     // replace the above functions.
     virtual future<> notified(reactor_notifier *n) = 0;
-    // Method for enabling a single timer (reactor multiplexes on this
-    // multiple timers).
-    virtual void enable_timer(clock_type::time_point when) = 0;
-    virtual future<> timers_completed() = 0;
     // Methods for allowing sending notifications events between threads.
     virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() = 0;
 };
@@ -529,8 +525,6 @@ private:
             promise<> pollable_fd_state::* pr, int event);
     void complete_epoll_event(pollable_fd_state& fd,
             promise<> pollable_fd_state::* pr, int events, int event);
-    uint64_t _timers_completed;
-    pollable_fd _timerfd = file_desc::timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC | TFD_NONBLOCK);
 public:
     reactor_backend_epoll();
     virtual ~reactor_backend_epoll() override { }
@@ -539,8 +533,6 @@ public:
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
     virtual future<> notified(reactor_notifier *n) override;
-    virtual void enable_timer(clock_type::time_point when) override;
-    virtual future<> timers_completed() override;
     virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
 };
 
@@ -564,8 +556,6 @@ public:
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
     virtual future<> notified(reactor_notifier *n) override;
-    virtual void enable_timer(clock_type::time_point when) override;
-    virtual future<> timers_completed() override;
     virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
     friend class reactor_notifier_osv;
 };
@@ -596,9 +586,9 @@ private:
     bool _poll = false;
     promise<std::unique_ptr<network_stack>> _network_stack_ready_promise;
     int _return = 0;
+    timer_t _timer;
     promise<> _start_promise;
     semaphore _cpu_started;
-    uint64_t _timers_completed;
     uint64_t _tasks_processed = 0;
     timer_set<timer<>, &timer<>::_link> _timers;
     timer_set<timer<>, &timer<>::_link>::timer_list_t _expired_timers;
@@ -614,6 +604,7 @@ private:
     std::unique_ptr<lowres_clock> _lowres_clock;
     lowres_clock::time_point _lowres_next_timeout;
     promise<> _lowres_timer_promise;
+    promise<> _timer_promise;
 private:
     void abort_on_error(int ret);
     template <typename T, typename E>
@@ -750,11 +741,9 @@ public:
     future<> notified(reactor_notifier *n) {
         return _backend.notified(n);
     }
-    void enable_timer(clock_type::time_point when) {
-        _backend.enable_timer(when);
-    }
+    void enable_timer(clock_type::time_point when);
     future<> timers_completed() {
-        return _backend.timers_completed();
+        return _timer_promise.get_future();
     }
     future<> lowres_timers_completed() {
         return _lowres_timer_promise.get_future();

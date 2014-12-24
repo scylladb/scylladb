@@ -2,6 +2,7 @@
  * Copyright 2014 Cloudius Systems
  */
 
+#include <sys/syscall.h>
 #include "reactor.hh"
 #include "memory.hh"
 #include "core/posix.hh"
@@ -10,6 +11,7 @@
 #include "print.hh"
 #include "scollectd.hh"
 #include "util/conversions.hh"
+#include "core/future-util.hh"
 #include <cassert>
 #include <unistd.h>
 #include <fcntl.h>
@@ -81,6 +83,18 @@ reactor::reactor()
     , _io_context_available(max_aio) {
     auto r = ::io_setup(max_aio, &_io_context);
     assert(r >= 0);
+    struct sigevent sev;
+    sev.sigev_notify = SIGEV_THREAD_ID;
+    sev._sigev_un._tid = syscall(SYS_gettid);
+    sev.sigev_signo = SIGALRM;
+    r = timer_create(CLOCK_REALTIME, &sev, &_timer);
+    assert(r >= 0);
+    keep_doing([this] {
+        return receive_signal(SIGALRM).then([this] {
+            _timer_promise.set_value();
+            _timer_promise =  promise<>();
+        });
+    });
     memory::set_reclaim_hook([this] (std::function<void ()> reclaim_fn) {
         // push it in the front of the queue so we reclaim memory quickly
         _pending_tasks.push_front(make_task([fn = std::move(reclaim_fn)] {
@@ -313,12 +327,13 @@ blockdev_file_impl::size(void) {
     });
 }
 
-void reactor_backend_epoll::enable_timer(clock_type::time_point when)
+void reactor::enable_timer(clock_type::time_point when)
 {
     itimerspec its;
     its.it_interval = {};
     its.it_value = to_timespec(when);
-    _timerfd.get_file_desc().timerfd_settime(TFD_TIMER_ABSTIME, its);
+    auto ret = timer_settime(_timer, TIMER_ABSTIME, &its, NULL);
+    throw_system_error_on(ret == -1);
 }
 
 void reactor::add_timer(timer<>* tmr) {
@@ -349,18 +364,6 @@ void reactor::del_timer(timer<lowres_clock>* tmr) {
     } else {
         _lowres_timers.remove(*tmr);
     }
-}
-
-future<> reactor_backend_epoll::timers_completed() {
-    // TODO: The following idiom converts a future<size_t>, to a future<>.
-    // Is there a more efficient way? Or maybe need a variant of read_some()
-    // that returns future<>? It would also be nice to have a variant of
-    // read_some<> that reads the data into temporary storage (inside the
-    // future), so we don't need the "_timers_completed" variable here.
-    return _timerfd.read_some(
-                reinterpret_cast<char*>(&_timers_completed),
-                sizeof(_timers_completed))
-            .then([] (size_t ignore) { return make_ready_future<>(); });
 }
 
 future<> reactor::run_exit_tasks() {
@@ -1247,11 +1250,4 @@ reactor_backend_osv::enable_timer(clock_type::time_point when) {
     _poller.set_timer(when);
 }
 
-future<>
-reactor_backend_osv::timers_completed() {
-    if (_poller.expired()) {
-        return make_ready_future<>();
-    }
-    return _timer_promise.get_future();
-}
 #endif
