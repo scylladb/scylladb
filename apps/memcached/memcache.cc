@@ -290,6 +290,11 @@ public:
         }
     }
 
+    // needed by timer_set
+    bool cancel() {
+        return false;
+    }
+
     friend bool operator==(const item_type &a, const item_type &b) {
          return a._key == b._key;
     }
