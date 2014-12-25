@@ -771,7 +771,7 @@ void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
 
 void smp_message_queue::respond(work_item* item) {
     _completed_fifo.push_back(item);
-    if (_completed_fifo.size() >= batch_size) {
+    if (_completed_fifo.size() >= batch_size || engine._stopped) {
         flush_response_batch();
     }
 }
