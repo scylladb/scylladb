@@ -31,6 +31,11 @@ public:
         virtual ~impl() {}
         virtual void serialize(const boost::any& value, std::ostream& out) = 0;
         virtual boost::any deserialize(std::istream& in) = 0;
+        boost::any deserialize(const bytes& v) {
+            // FIXME: optimize
+            std::istringstream iss(v);
+            return deserialize(iss);
+        }
     };
 private:
     impl* _impl;
@@ -43,6 +48,9 @@ public:
     }
     boost::any deserialize(std::istream& in) {
         return _impl->deserialize(in);
+    }
+    boost::any deserialize(const bytes& v) {
+        return _impl->deserialize(v);
     }
     bool operator==(const data_type& x) const {
         return _impl == x._impl;
