@@ -20,18 +20,6 @@
 // FIXME: should be int8_t
 using bytes = basic_sstring<char, uint32_t, 31>;
 
-struct row {
-    std::vector<boost::any> cells;
-};
-
-using key_compare = std::function<bool (const boost::any&, const boost::any&)>;
-
-struct partition {
-    row static_columns;
-    // row key within partition -> row
-    std::map<boost::any, row, key_compare> rows;
-};
-
 class data_type {
 public:
     // Hide the virtual stuff behind an impl class.  This allows us to treat
@@ -65,6 +53,18 @@ public:
     friend size_t hash_value(const data_type& x) {
         return std::hash<impl*>()(x._impl);
     }
+};
+
+struct row {
+    std::vector<boost::any> cells;
+};
+
+using key_compare = std::function<bool (const boost::any&, const boost::any&)>;
+
+struct partition {
+    row static_columns;
+    // row key within partition -> row
+    std::map<boost::any, row, key_compare> rows;
 };
 
 // FIXME: add missing types
