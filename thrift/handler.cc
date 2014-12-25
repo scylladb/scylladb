@@ -26,6 +26,20 @@ void unimplemented(const tcxx::function<void(::apache::thrift::TDelayedException
     exn_cob(::apache::thrift::TDelayedException::delayException(unimplemented_exception()));
 }
 
+template <typename Ex, typename... Args>
+Ex
+make_exception(const char* fmt, Args&&... args) {
+    Ex ex;
+    ex.why = sprint(fmt, std::forward<Args>(args)...);
+    return ex;
+}
+
+template <typename Ex, typename... Args>
+void complete_with_exception(tcxx::function<void (::apache::thrift::TDelayedException* _throw)>&& exn_cob,
+        const char* fmt, Args&&... args) {
+    exn_cob(TDelayedException::delayException(make_exception<Ex>(fmt, std::forward<Args>(args)...)));
+}
+
 class CassandraAsyncHandler : public CassandraCobSvIf {
     database& _db;
     keyspace* _ks = nullptr;  // FIXME: reference counting for in-use detection?
@@ -42,9 +56,8 @@ public:
             _ks = &_db.keyspaces.at(keyspace);
             cob();
         } catch (std::out_of_range& e) {
-            InvalidRequestException ire;
-            ire.why = sprint("keyspace %s does not exist", keyspace);
-            exn_cob(TDelayedException::delayException(ire));
+            return complete_with_exception<InvalidRequestException>(std::move(exn_cob),
+                    "keyspace %s does not exist", keyspace);
         }
     }
 
