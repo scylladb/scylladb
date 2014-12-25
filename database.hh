@@ -106,4 +106,22 @@ struct hash<data_type> : boost::hash<data_type> {
 
 }
 
+inline
+bytes
+to_bytes(const char* x) {
+    return bytes(reinterpret_cast<const char*>(x), std::strlen(x));
+}
+
+inline
+bytes
+to_bytes(const std::string& x) {
+    return bytes(reinterpret_cast<const char*>(x.data()), x.size());
+}
+
+inline
+bytes
+to_bytes(const sstring& x) {
+    return bytes(reinterpret_cast<const char*>(x.c_str()), x.size());
+}
+
 #endif /* DATABASE_HH_ */
