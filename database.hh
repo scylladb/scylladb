@@ -31,6 +31,7 @@ public:
         virtual ~impl() {}
         virtual void serialize(const boost::any& value, std::ostream& out) = 0;
         virtual boost::any deserialize(std::istream& in) = 0;
+        virtual bool less(const bytes& v1, const bytes& v2) = 0;
         boost::any deserialize(const bytes& v) {
             // FIXME: optimize
             std::istringstream iss(v);
@@ -57,6 +58,9 @@ public:
     }
     bool operator!=(const data_type& x) const {
         return _impl != x._impl;
+    }
+    bool less(const bytes& v1, const bytes& v2) const {
+        return _impl->less(v1, v2);
     }
     friend size_t hash_value(const data_type& x) {
         return std::hash<impl*>()(x._impl);
