@@ -135,8 +135,56 @@ public:
     }
 
     void batch_mutate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::map<std::string, std::map<std::string, std::vector<Mutation> > > & mutation_map, const ConsistencyLevel::type consistency_level) {
-        // FIXME: implement
-        return unimplemented(exn_cob);
+        if (!_ks) {
+            return complete_with_exception<InvalidRequestException>(std::move(exn_cob), "keyspace not set");
+        }
+        static bytes null_clustering_key = to_bytes("");
+        try {
+            for (auto&& key_cf : mutation_map) {
+                bytes key = to_bytes(key_cf.first);
+                const std::map<std::string, std::vector<Mutation>>& cf_mutations_map = key_cf.second;
+                for (auto&& cf_mutations : cf_mutations_map) {
+                    sstring cf_name = cf_mutations.first;
+                    const std::vector<Mutation>& mutations = cf_mutations.second;
+                    auto& cf = lookup_column_family(cf_name);
+                    auto& row = cf.find_or_create_row(key, null_clustering_key);
+                    for (const Mutation& m : mutations) {
+                        if (m.__isset.column_or_supercolumn) {
+                            auto&& cosc = m.column_or_supercolumn;
+                            if (cosc.__isset.column) {
+                                auto&& col = cosc.column;
+                                sstring cname = col.name;
+                                // FIXME: use a lookup map
+                                size_t idx = std::find_if(cf.column_defs.begin(), cf.column_defs.end(),
+                                        [&] (const column_definition& cd) { return cname == cd.name; }) - cf.column_defs.begin();
+                                if (idx == cf.column_defs.size()) {
+                                    throw make_exception<InvalidRequestException>("column %s not found", col.name);
+                                }
+                                auto& cells = row.cells;
+                                cells.resize(cf.column_defs.size());
+                                cells[idx] = to_bytes(col.value);
+                            } else if (cosc.__isset.super_column) {
+                                // FIXME: implement
+                            } else if (cosc.__isset.counter_column) {
+                                // FIXME: implement
+                            } else if (cosc.__isset.counter_super_column) {
+                                // FIXME: implement
+                            } else {
+                                throw make_exception<InvalidRequestException>("Empty ColumnOrSuperColumn");
+                            }
+                        } else if (m.__isset.deletion) {
+                            // FIXME: implement
+                            abort();
+                        } else {
+                            throw make_exception<InvalidRequestException>("Mutation must have either column or deletion");
+                        }
+                    }
+                }
+            }
+        } catch (std::exception& ex) {
+            return exn_cob(TDelayedException::delayException(ex));
+        }
+        cob();
     }
 
     void atomic_batch_mutate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::map<std::string, std::map<std::string, std::vector<Mutation> > > & mutation_map, const ConsistencyLevel::type consistency_level) {
@@ -331,6 +379,15 @@ public:
     void set_cql_version(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& version) {
         _cql_version = version;
         cob();
+    }
+
+private:
+    column_family& lookup_column_family(const sstring& cf_name) {
+        try {
+            return _ks->column_families.at(cf_name);
+        } catch (std::out_of_range&) {
+            throw make_exception<InvalidRequestException>("column family %s not found", cf_name);
+        }
     }
 };
 
