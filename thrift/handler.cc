@@ -295,9 +295,13 @@ public:
     }
 
     void execute_cql3_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression, const ConsistencyLevel::type consistency) {
+        print("warning: ignoring query %s\n", query);
+        cob({});
+#if 0
         CqlResult _return;
         // FIXME: implement
         return unimplemented(exn_cob);
+#endif
     }
 
     void prepare_cql_query(tcxx::function<void(CqlPreparedResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
