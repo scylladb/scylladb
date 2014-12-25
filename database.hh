@@ -113,6 +113,8 @@ struct column_family {
     std::vector<column_definition> clustering_key;
     std::vector<column_definition> column_defs;
     std::unordered_map<sstring, unsigned> column_names;
+    partition& find_or_create_partition(const bytes& key);
+    row& find_or_create_row(const bytes& partition_key, const bytes& clustering_key);
     // partition key -> partition
     std::map<bytes, partition, key_compare> partitions;
 };

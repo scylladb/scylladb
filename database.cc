@@ -101,3 +101,24 @@ column_family::column_family(data_type partition_key_type,
         , clustering_key_type(std::move(clustering_key_type))
         , partitions(key_compare(partition_key_type)) {
 }
+
+partition&
+column_family::find_or_create_partition(const bytes& key) {
+    // call lower_bound so we have a hint for the insert, just in case.
+    auto i = partitions.lower_bound(key);
+    if (i == partitions.end() || key != i->first) {
+        i = partitions.emplace_hint(i, std::make_pair(std::move(key), partition(*this)));
+    }
+    return i->second;
+}
+
+row&
+column_family::find_or_create_row(const bytes& partition_key, const bytes& clustering_key) {
+    partition& p = find_or_create_partition(partition_key);
+    // call lower_bound so we have a hint for the insert, just in case.
+    auto i = p.rows.lower_bound(clustering_key);
+    if (i == p.rows.end() || clustering_key != i->first) {
+        i = p.rows.emplace_hint(i, std::make_pair(std::move(clustering_key), row()));
+    }
+    return i->second;
+}
