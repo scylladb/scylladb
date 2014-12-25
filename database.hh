@@ -67,16 +67,28 @@ public:
     }
 };
 
-struct row {
-    std::vector<boost::any> cells;
+class key_compare {
+    data_type _type;
+public:
+    key_compare(data_type type) : _type(type) {}
+    bool operator()(const bytes& v1, const bytes& v2) const {
+        return _type.less(v1, v2);
+    }
 };
 
-using key_compare = std::function<bool (const boost::any&, const boost::any&)>;
+struct row;
+struct paritition;
+struct column_family;
+
+struct row {
+    std::vector<bytes> cells;
+};
 
 struct partition {
+    explicit partition(column_family& cf);
     row static_columns;
     // row key within partition -> row
-    std::map<boost::any, row, key_compare> rows;
+    std::map<bytes, row, key_compare> rows;
 };
 
 // FIXME: add missing types
@@ -93,13 +105,16 @@ struct column_definition {
 };
 
 struct column_family {
+    column_family(data_type partition_key_type, data_type clustering_key_type);
     // primary key = paritition key + clustering_key
+    data_type partition_key_type;
+    data_type clustering_key_type;
     std::vector<column_definition> partition_key;
     std::vector<column_definition> clustering_key;
     std::vector<column_definition> column_defs;
     std::unordered_map<sstring, unsigned> column_names;
     // partition key -> partition
-    std::map<boost::any, partition, key_compare> partitions;
+    std::map<bytes, partition, key_compare> partitions;
 };
 
 struct keyspace {

@@ -241,7 +241,7 @@ public:
         }
         keyspace& ks = _db.keyspaces[ks_def.name];
         for (const CfDef& cf_def : ks_def.cf_defs) {
-            column_family& cf = ks.column_families[cf_def.name];
+            column_family cf(blob_type, blob_type);
             // FIXME: look at key_alias and key_validator first
             cf.partition_key.push_back(column_definition{"key", blob_type});
             // FIXME: guess clustering keys
@@ -252,6 +252,7 @@ public:
                     blob_type,
                 });
             }
+            ks.column_families.emplace(cf_def.name, std::move(cf));
         }
         cob(schema_id);
     }

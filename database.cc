@@ -90,3 +90,14 @@ data_type ascii_type(new string_type_impl("ascii"));
 data_type blob_type(new blob_type_impl);
 data_type varchar_type(new string_type_impl("varchar"));
 data_type text_type(new string_type_impl("text"));
+
+partition::partition(column_family& cf)
+        : rows(key_compare(cf.clustering_key_type)) {
+}
+
+column_family::column_family(data_type partition_key_type,
+                             data_type clustering_key_type)
+        : partition_key_type(std::move(partition_key_type))
+        , clustering_key_type(std::move(clustering_key_type))
+        , partitions(key_compare(partition_key_type)) {
+}
