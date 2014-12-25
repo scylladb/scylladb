@@ -392,6 +392,44 @@ void reactor::exit(int ret) {
     smp::submit_to(0, [this, ret] { _return = ret; stop(); });
 }
 
+future<>
+reactor::receive_signal(int signo) {
+    auto i = _signal_handlers.emplace(signo, signo).first;
+    signal_handler& sh = i->second;
+    return sh._promise.get_future();
+}
+
+thread_local std::atomic<uint64_t> reactor::signal_handler::pending;
+
+void sigaction(int signo, siginfo_t* siginfo, void* ignore) {
+    reactor::signal_handler::pending.fetch_or(1ull << signo, std::memory_order_relaxed);
+}
+
+void reactor::poll_signal() {
+    auto signals = reactor::signal_handler::pending.load(std::memory_order_relaxed);
+    if (signals) {
+        reactor::signal_handler::pending.fetch_and(~signals, std::memory_order_relaxed);
+        for (size_t i = 0; i < sizeof(signals)*8; i++) {
+            if (signals & (1ull << i)) {
+               _signal_handlers.at(i)._promise.set_value();
+               _signal_handlers.at(i)._promise = promise<>();
+            }
+        }
+    }
+}
+
+reactor::signal_handler::signal_handler(int signo) {
+    auto mask = make_sigset_mask(signo);
+    auto r = ::sigprocmask(SIG_UNBLOCK, &mask, NULL);
+    throw_system_error_on(r == -1);
+    struct sigaction sa;
+    sa.sa_sigaction = sigaction;
+    sa.sa_mask = make_empty_sigset_mask();
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    r = ::sigaction(signo, &sa, nullptr);
+    throw_system_error_on(r == -1);
+}
+
 struct reactor::collectd_registrations {
     std::vector<scollectd::registration> regs;
 };
@@ -452,6 +490,8 @@ int reactor::run() {
 #ifndef HAVE_OSV
     poller io_poller([&] { process_io(); return true; });
 #endif
+
+    poller sig_poller([&] { poll_signal(); return true; } );
 
     if (_handle_sigint && _id == 0) {
         receive_signal(SIGINT).then([this] { stop(); });
@@ -679,24 +719,6 @@ reactor_backend_epoll::wait_and_process(bool block, std::function<void()>& pre_p
             ::epoll_ctl(_epollfd.get(), op, pfd->fd.get(), &evt);
         }
     }
-}
-
-future<>
-reactor_backend_epoll::receive_signal(int signo) {
-    auto i = _signal_handlers.emplace(signo, signo).first;
-    signal_handler& sh = i->second;
-    return sh._signalfd.read_some(reinterpret_cast<char*>(&sh._siginfo), sizeof(sh._siginfo)).then([&sh] (size_t ignore) {
-        sh._promise.set_value();
-        sh._promise = promise<>();
-        return make_ready_future<>();
-    });
-}
-
-reactor_backend_epoll::signal_handler::signal_handler(int signo)
-    : _signalfd(file_desc::signalfd(make_sigset_mask(signo), SFD_CLOEXEC | SFD_NONBLOCK)) {
-    auto mask = make_sigset_mask(signo);
-    auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
-    throw_system_error_on(r == -1);
 }
 
 syscall_work_queue::syscall_work_queue()
@@ -1217,12 +1239,6 @@ reactor_backend_osv::writeable(pollable_fd_state& fd) {
 void
 reactor_backend_osv::forget(pollable_fd_state& fd) {
     std::cout << "reactor_backend_osv does not support file descriptors - forget() shouldn't have been called!\n";
-    abort();
-}
-
-future<>
-reactor_backend_osv::receive_signal(int signo) {
-    std::cout << "reactor_backend_osv::receive_signal() not yet implemented\n";
     abort();
 }
 

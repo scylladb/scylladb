@@ -510,8 +510,6 @@ public:
     // used only for reactor_backend_osv, but in the future it should really
     // replace the above functions.
     virtual future<> notified(reactor_notifier *n) = 0;
-    // Methods that allow capturing Unix signals.
-    virtual future<> receive_signal(int signo) = 0;
     // Method for enabling a single timer (reactor multiplexes on this
     // multiple timers).
     virtual void enable_timer(clock_type::time_point when) = 0;
@@ -533,13 +531,6 @@ private:
             promise<> pollable_fd_state::* pr, int events, int event);
     uint64_t _timers_completed;
     pollable_fd _timerfd = file_desc::timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC | TFD_NONBLOCK);
-    struct signal_handler {
-        signal_handler(int signo);
-        promise<> _promise;
-        pollable_fd _signalfd;
-        signalfd_siginfo _siginfo;
-    };
-    std::unordered_map<int, signal_handler> _signal_handlers;
 public:
     reactor_backend_epoll();
     virtual ~reactor_backend_epoll() override { }
@@ -548,7 +539,6 @@ public:
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
     virtual future<> notified(reactor_notifier *n) override;
-    virtual future<> receive_signal(int signo) override;
     virtual void enable_timer(clock_type::time_point when) override;
     virtual future<> timers_completed() override;
     virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
@@ -574,7 +564,6 @@ public:
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
     virtual future<> notified(reactor_notifier *n) override;
-    virtual future<> receive_signal(int signo) override;
     virtual void enable_timer(clock_type::time_point when) override;
     virtual future<> timers_completed() override;
     virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
@@ -639,6 +628,15 @@ private:
     bool poll_once();
     template <typename Func> // signature: bool ()
     static std::unique_ptr<pollfn> make_pollfn(Func&& func);
+
+    struct signal_handler {
+        signal_handler(int signo);
+        promise<> _promise;
+        static thread_local std::atomic<uint64_t> pending;
+    };
+    std::unordered_map<int, signal_handler> _signal_handlers;
+    void poll_signal();
+    friend void sigaction(int signo, siginfo_t* siginfo, void* ignore);
 public:
     class poller;
     static boost::program_options::options_description get_options_description();
@@ -675,6 +673,8 @@ public:
 
     template <typename Func>
     future<io_event> submit_io(Func prepare_io);
+
+    future<> receive_signal(int signo);
 
     int run();
     void exit(int ret);
@@ -749,9 +749,6 @@ public:
     }
     future<> notified(reactor_notifier *n) {
         return _backend.notified(n);
-    }
-    future<> receive_signal(int signo) {
-        return _backend.receive_signal(signo);
     }
     void enable_timer(clock_type::time_point when) {
         _backend.enable_timer(when);
