@@ -733,7 +733,7 @@ private:
     memory::reclaimer _reclaimer;
 private:
     size_t item_footprint(item_type& item_ref) {
-        return sizeof(item_type) + item_ref._data.size() + item_ref.key().size();
+        return sizeof(item_type) + item_ref._data.size() + item_ref._ascii_prefix.size() + item_ref.key().size();
     }
 
     template <bool IsInCache = true, bool IsInTimerList = true>
