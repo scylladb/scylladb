@@ -495,8 +495,6 @@ int reactor::run() {
 
     poller sig_poller([&] { poll_signal(); return true; } );
 
-    poller threadpool_poller([&] { _thread_pool.complete(); return true; });
-
     if (_handle_sigint && _id == 0) {
         receive_signal(SIGINT).then([this] { stop(); });
     }
@@ -796,6 +794,13 @@ void smp_message_queue::start() {
 
 /* not yet implemented for OSv. TODO: do the notification like we do class smp. */
 #ifndef HAVE_OSV
+thread_pool::thread_pool() : _worker_thread([this] { work(); }), _notify(pthread_self()) {
+    inter_thread_wq.start();
+    keep_doing([this] {
+        return engine.receive_signal(SIGUSR1).then([this] { inter_thread_wq.complete(); });
+    });
+}
+
 void thread_pool::work() {
     sigset_t mask;
     sigfillset(&mask);
@@ -812,6 +817,7 @@ void thread_pool::work() {
             wi->process();
             inter_thread_wq._completed.push(wi);
         });
+        pthread_kill(_notify, SIGUSR1);
     }
 }
 

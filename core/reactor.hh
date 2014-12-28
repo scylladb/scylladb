@@ -465,17 +465,16 @@ class thread_pool {
     syscall_work_queue inter_thread_wq;
     posix_thread _worker_thread;
     std::atomic<bool> _stopped = { false };
+    pthread_t _notify;
 public:
-    thread_pool() : _worker_thread([this] { work(); }) { inter_thread_wq.start(); }
+    thread_pool();
     ~thread_pool();
     template <typename T, typename Func>
     future<T> submit(Func func) {return inter_thread_wq.submit<T>(std::move(func));}
-    void complete() { inter_thread_wq.complete(); }
 #else
 public:
     template <typename T, typename Func>
     future<T> submit(Func func) { std::cout << "thread_pool not yet implemented on osv\n"; abort(); }
-    void complete() {}
 #endif
 private:
     void work();
@@ -607,7 +606,6 @@ private:
     io_context_t _io_context;
     semaphore _io_context_available;
     circular_buffer<std::unique_ptr<task>> _pending_tasks;
-    thread_pool _thread_pool;
     size_t _task_quota;
     std::unique_ptr<network_stack> _network_stack;
     // _lowres_clock will only be created on cpu 0
@@ -639,6 +637,8 @@ private:
     std::unordered_map<int, signal_handler> _signal_handlers;
     void poll_signal();
     friend void sigaction(int signo, siginfo_t* siginfo, void* ignore);
+
+    thread_pool _thread_pool;
 public:
     static boost::program_options::options_description get_options_description();
     reactor();
