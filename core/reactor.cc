@@ -2,6 +2,7 @@
  * Copyright 2014 Cloudius Systems
  */
 
+#include <sys/syscall.h>
 #include "reactor.hh"
 #include "memory.hh"
 #include "core/posix.hh"
@@ -10,6 +11,7 @@
 #include "print.hh"
 #include "scollectd.hh"
 #include "util/conversions.hh"
+#include "core/future-util.hh"
 #include <cassert>
 #include <unistd.h>
 #include <fcntl.h>
@@ -75,13 +77,23 @@ reactor_backend_epoll::reactor_backend_epoll()
 reactor::reactor()
     : _backend()
     , _exit_future(_exit_promise.get_future())
-    ,  _idle(false)
     , _cpu_started(0)
-    , _io_eventfd()
     , _io_context(0)
     , _io_context_available(max_aio) {
     auto r = ::io_setup(max_aio, &_io_context);
     assert(r >= 0);
+    struct sigevent sev;
+    sev.sigev_notify = SIGEV_THREAD_ID;
+    sev._sigev_un._tid = syscall(SYS_gettid);
+    sev.sigev_signo = SIGALRM;
+    r = timer_create(CLOCK_REALTIME, &sev, &_timer);
+    assert(r >= 0);
+    keep_doing([this] {
+        return receive_signal(SIGALRM).then([this] {
+            _timer_promise.set_value();
+            _timer_promise =  promise<>();
+        });
+    });
     memory::set_reclaim_hook([this] (std::function<void ()> reclaim_fn) {
         // push it in the front of the queue so we reclaim memory quickly
         _pending_tasks.push_front(make_task([fn = std::move(reclaim_fn)] {
@@ -100,7 +112,6 @@ void reactor::configure(boost::program_options::variables_map vm) {
 
     _handle_sigint = !vm.count("no-handle-interrupt");
     _task_quota = vm["task-quota"].as<int>();
-    _poll = vm.count("poll");
 }
 
 future<> reactor_backend_epoll::get_epoll_future(pollable_fd_state& pfd,
@@ -118,6 +129,7 @@ future<> reactor_backend_epoll::get_epoll_future(pollable_fd_state& pfd,
         eevt.data.ptr = &pfd;
         int r = ::epoll_ctl(_epollfd.get(), ctl, pfd.fd.get(), &eevt);
         assert(r == 0);
+        engine.start_epoll();
     }
     pfd.*pr = promise<>();
     return (pfd.*pr).get_future();
@@ -181,7 +193,6 @@ reactor::submit_io(Func prepare_io) {
         iocb io;
         prepare_io(io);
         io.data = pr.get();
-        io_set_eventfd(&io, _io_eventfd.get_write_fd());
         iocb* p = &io;
         auto r = ::io_submit(_io_context, 1, &p);
         throw_kernel_error(r);
@@ -189,20 +200,18 @@ reactor::submit_io(Func prepare_io) {
     });
 }
 
-void reactor::process_io(size_t count)
+void reactor::process_io()
 {
     io_event ev[max_aio];
-    auto n = ::io_getevents(_io_context, count, count, ev, NULL);
-    assert(n >= 0 && size_t(n) == count);
+    struct timespec timeout = {0, 0};
+    auto n = ::io_getevents(_io_context, 1, max_aio, ev, &timeout);
+    assert(n >= 0);
     for (size_t i = 0; i < size_t(n); ++i) {
         auto pr = reinterpret_cast<promise<io_event>*>(ev[i].data);
         pr->set_value(ev[i]);
         delete pr;
     }
     _io_context_available.signal(n);
-    _io_eventfd.wait().then([this] (size_t count) {
-        process_io(count);
-    });
 }
 
 future<size_t>
@@ -317,12 +326,13 @@ blockdev_file_impl::size(void) {
     });
 }
 
-void reactor_backend_epoll::enable_timer(clock_type::time_point when)
+void reactor::enable_timer(clock_type::time_point when)
 {
     itimerspec its;
     its.it_interval = {};
     its.it_value = to_timespec(when);
-    _timerfd.get_file_desc().timerfd_settime(TFD_TIMER_ABSTIME, its);
+    auto ret = timer_settime(_timer, TIMER_ABSTIME, &its, NULL);
+    throw_system_error_on(ret == -1);
 }
 
 void reactor::add_timer(timer<>* tmr) {
@@ -355,18 +365,6 @@ void reactor::del_timer(timer<lowres_clock>* tmr) {
     }
 }
 
-future<> reactor_backend_epoll::timers_completed() {
-    // TODO: The following idiom converts a future<size_t>, to a future<>.
-    // Is there a more efficient way? Or maybe need a variant of read_some()
-    // that returns future<>? It would also be nice to have a variant of
-    // read_some<> that reads the data into temporary storage (inside the
-    // future), so we don't need the "_timers_completed" variable here.
-    return _timerfd.read_some(
-                reinterpret_cast<char*>(&_timers_completed),
-                sizeof(_timers_completed))
-            .then([] (size_t ignore) { return make_ready_future<>(); });
-}
-
 future<> reactor::run_exit_tasks() {
     _exit_promise.set_value();
     return std::move(_exit_future);
@@ -394,6 +392,44 @@ void reactor::stop() {
 
 void reactor::exit(int ret) {
     smp::submit_to(0, [this, ret] { _return = ret; stop(); });
+}
+
+future<>
+reactor::receive_signal(int signo) {
+    auto i = _signal_handlers.emplace(signo, signo).first;
+    signal_handler& sh = i->second;
+    return sh._promise.get_future();
+}
+
+thread_local std::atomic<uint64_t> reactor::signal_handler::pending;
+
+void sigaction(int signo, siginfo_t* siginfo, void* ignore) {
+    reactor::signal_handler::pending.fetch_or(1ull << signo, std::memory_order_relaxed);
+}
+
+void reactor::poll_signal() {
+    auto signals = reactor::signal_handler::pending.load(std::memory_order_relaxed);
+    if (signals) {
+        reactor::signal_handler::pending.fetch_and(~signals, std::memory_order_relaxed);
+        for (size_t i = 0; i < sizeof(signals)*8; i++) {
+            if (signals & (1ull << i)) {
+               _signal_handlers.at(i)._promise.set_value();
+               _signal_handlers.at(i)._promise = promise<>();
+            }
+        }
+    }
+}
+
+reactor::signal_handler::signal_handler(int signo) {
+    auto mask = make_sigset_mask(signo);
+    auto r = ::sigprocmask(SIG_UNBLOCK, &mask, NULL);
+    throw_system_error_on(r == -1);
+    struct sigaction sa;
+    sa.sa_sigaction = sigaction;
+    sa.sa_mask = make_empty_sigset_mask();
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    r = ::sigaction(signo, &sa, nullptr);
+    throw_system_error_on(r == -1);
 }
 
 struct reactor::collectd_registrations {
@@ -452,11 +488,15 @@ reactor::register_collectd_metrics() {
 
 int reactor::run() {
     auto collectd_metrics = register_collectd_metrics();
+
 #ifndef HAVE_OSV
-    _io_eventfd.wait().then([this] (size_t count) {
-        process_io(count);
-    });
+    poller io_poller([&] { process_io(); return true; });
 #endif
+
+    poller sig_poller([&] { poll_signal(); return true; } );
+
+    poller threadpool_poller([&] { _thread_pool.complete(); return true; });
+
     if (_handle_sigint && _id == 0) {
         receive_signal(SIGINT).then([this] { stop(); });
     }
@@ -479,14 +519,6 @@ int reactor::run() {
     if (smp::count > 1) {
         smp_poller = poller(smp::poll_queues);
     }
-
-    std::function<void ()> update_idle = [this] {
-        if (_pending_tasks.empty()) {
-            _idle.store(false, std::memory_order_relaxed);
-        }
-        // else, _idle already false, no need to set it again and dirty
-        // cache line.
-    };
 
     complete_timers(_timers, _expired_timers,
         [this] { return timers_completed(); },
@@ -536,19 +568,7 @@ int reactor::run() {
             break;
         }
 
-        if (!poll_once() && !_poll) {
-            if (_pending_tasks.empty()) {
-                _idle.store(true, std::memory_order_seq_cst);
-
-                if (poll_once()) {
-                    _idle.store(false, std::memory_order_relaxed);
-                } else {
-                    assert(_pending_tasks.empty());
-                }
-            }
-        }
-
-        wait_and_process(_idle.load(std::memory_order_relaxed), update_idle);
+        poll_once();
     }
     return _return;
 }
@@ -656,11 +676,9 @@ reactor::poller::~poller() {
 }
 
 void
-reactor_backend_epoll::wait_and_process(bool block, std::function<void()>& pre_process) {
+reactor_backend_epoll::wait_and_process() {
     std::array<epoll_event, 128> eevt;
-    int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(),
-            block ? -1 : 0);
-    pre_process();
+    int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(), 0);
     if (nr == -1 && errno == EINTR) {
         return; // gdb can cause this
     }
@@ -669,10 +687,6 @@ reactor_backend_epoll::wait_and_process(bool block, std::function<void()>& pre_p
         auto& evt = eevt[i];
         auto pfd = reinterpret_cast<pollable_fd_state*>(evt.data.ptr);
         auto events = evt.events & (EPOLLIN | EPOLLOUT);
-        // FIXME: it is enough to check that pfd's task is not in _pending_tasks here
-        if (block) {
-            pfd->events_known |= events;
-        }
         auto events_to_remove = events & ~pfd->events_requested;
         complete_epoll_event(*pfd, &pollable_fd_state::pollin, events, EPOLLIN);
         complete_epoll_event(*pfd, &pollable_fd_state::pollout, events, EPOLLOUT);
@@ -685,29 +699,10 @@ reactor_backend_epoll::wait_and_process(bool block, std::function<void()>& pre_p
     }
 }
 
-future<>
-reactor_backend_epoll::receive_signal(int signo) {
-    auto i = _signal_handlers.emplace(signo, signo).first;
-    signal_handler& sh = i->second;
-    return sh._signalfd.read_some(reinterpret_cast<char*>(&sh._siginfo), sizeof(sh._siginfo)).then([&sh] (size_t ignore) {
-        sh._promise.set_value();
-        sh._promise = promise<>();
-        return make_ready_future<>();
-    });
-}
-
-reactor_backend_epoll::signal_handler::signal_handler(int signo)
-    : _signalfd(file_desc::signalfd(make_sigset_mask(signo), SFD_CLOEXEC | SFD_NONBLOCK)) {
-    auto mask = make_sigset_mask(signo);
-    auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
-    throw_system_error_on(r == -1);
-}
-
 syscall_work_queue::syscall_work_queue()
     : _pending()
     , _completed()
-    , _start_eventfd(0)
-    , _complete_eventfd(0) {
+    , _start_eventfd(0) {
 }
 
 void syscall_work_queue::submit_item(syscall_work_queue::work_item* item) {
@@ -718,34 +713,17 @@ void syscall_work_queue::submit_item(syscall_work_queue::work_item* item) {
 }
 
 void syscall_work_queue::complete() {
-    _complete_eventfd.wait().then([this] (size_t count) {
-        auto nr = _completed.consume_all([this] (work_item* wi) {
-            wi->complete();
-            delete wi;
-        });
-        _queue_has_room.signal(nr);
-        complete();
+    auto nr = _completed.consume_all([this] (work_item* wi) {
+        wi->complete();
+        delete wi;
     });
+    _queue_has_room.signal(nr);
 }
 
 smp_message_queue::smp_message_queue()
     : _pending()
     , _completed()
-    , _start_event(engine.make_reactor_notifier())
-    , _complete_event(engine.make_reactor_notifier())
 {
-}
-
-void smp_message_queue::submit_kick() {
-    if (!_complete_peer->_poll && _pending_peer->idle()) {
-        _start_event->signal();
-    }
-}
-
-void smp_message_queue::complete_kick() {
-    if (!_pending_peer->_poll && _complete_peer->idle()) {
-        _complete_event->signal();
-    }
 }
 
 void smp_message_queue::move_pending() {
@@ -759,7 +737,6 @@ void smp_message_queue::move_pending() {
     _pending.push(begin, end);
     _tx.a.pending_fifo.erase(begin, end);
     _current_queue_length += nr;
-    submit_kick();
 }
 
 void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
@@ -771,7 +748,7 @@ void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
 
 void smp_message_queue::respond(work_item* item) {
     _completed_fifo.push_back(item);
-    if (_completed_fifo.size() >= batch_size) {
+    if (_completed_fifo.size() >= batch_size || engine._stopped) {
         flush_response_batch();
     }
 }
@@ -779,7 +756,6 @@ void smp_message_queue::respond(work_item* item) {
 void smp_message_queue::flush_response_batch() {
     _completed.push(_completed_fifo.begin(), _completed_fifo.end());
     _completed_fifo.clear();
-    complete_kick();
 }
 
 size_t smp_message_queue::process_completions() {
@@ -801,13 +777,6 @@ void smp_message_queue::flush_request_batch() {
     move_pending();
 }
 
-void smp_message_queue::complete() {
-    _complete_event->wait().then([this] {
-        process_completions();
-        complete();
-    });
-}
-
 size_t smp_message_queue::process_incoming() {
     work_item* items[queue_length];
     auto nr = _pending.pop(items);
@@ -823,14 +792,6 @@ size_t smp_message_queue::process_incoming() {
 void smp_message_queue::start() {
     _tx.init();
     _complete_peer = &engine;
-    complete();
-}
-
-void smp_message_queue::listen() {
-    _start_event->wait().then([this] () mutable {
-        process_incoming();
-        listen();
-    });
 }
 
 /* not yet implemented for OSv. TODO: do the notification like we do class smp. */
@@ -847,13 +808,10 @@ void thread_pool::work() {
         if (_stopped.load(std::memory_order_relaxed)) {
             break;
         }
-        auto nr = inter_thread_wq._pending.consume_all([this] (syscall_work_queue::work_item* wi) {
+        inter_thread_wq._pending.consume_all([this] (syscall_work_queue::work_item* wi) {
             wi->process();
             inter_thread_wq._completed.push(wi);
         });
-        count = nr;
-        r = ::write(inter_thread_wq._complete_eventfd.get_write_fd(), &count, sizeof(count));
-        assert(r == sizeof(count));
     }
 }
 
@@ -948,7 +906,6 @@ reactor::get_options_description() {
                         format_separated(net_stack_names.begin(), net_stack_names.end(), ", ")).c_str())
         ("no-handle-interrupt", "ignore SIGINT (for gdb)")
         ("task-quota", bpo::value<int>()->default_value(200), "Max number of tasks executed between polls and in loops")
-        ("poll", "never sleep, poll for the next event")
         ;
     opts.add(network_stack_registry::options_description());
     return opts;
@@ -978,7 +935,6 @@ void smp::listen_all(smp_message_queue* qs)
 {
     for (unsigned i = 0; i < smp::count; i++) {
         qs[i]._pending_peer = &engine;
-        qs[i].listen();
     }
 }
 
@@ -1178,11 +1134,7 @@ reactor_backend_osv::reactor_backend_osv() {
 }
 
 void
-reactor_backend_osv::wait_and_process(bool block, std::function<void()>& pre_process) {
-    if (block) {
-        _poller.wait();
-    }
-    pre_process();
+reactor_backend_osv::wait_and_process() {
     _poller.process();
     // osv::poller::process runs pollable's callbacks, but does not currently
     // have a timer expiration callback - instead if gives us an expired()
@@ -1224,22 +1176,9 @@ reactor_backend_osv::forget(pollable_fd_state& fd) {
     abort();
 }
 
-future<>
-reactor_backend_osv::receive_signal(int signo) {
-    std::cout << "reactor_backend_osv::receive_signal() not yet implemented\n";
-    abort();
-}
-
 void
 reactor_backend_osv::enable_timer(clock_type::time_point when) {
     _poller.set_timer(when);
 }
 
-future<>
-reactor_backend_osv::timers_completed() {
-    if (_poller.expired()) {
-        return make_ready_future<>();
-    }
-    return _timer_promise.get_future();
-}
 #endif

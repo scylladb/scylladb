@@ -14,7 +14,6 @@
 #include <sys/ioctl.h>
 #include <sys/eventfd.h>
 #include <sys/timerfd.h>
-#include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <sys/mman.h>
@@ -85,11 +84,6 @@ public:
     }
     static file_desc timerfd_create(int clockid, int flags) {
         int fd = ::timerfd_create(clockid, flags);
-        throw_system_error_on(fd == -1);
-        return file_desc(fd);
-    }
-    static file_desc signalfd(const sigset_t& mask, int flags) {
-        int fd = ::signalfd(-1, &mask, flags);
         throw_system_error_on(fd == -1);
         return file_desc(fd);
     }
@@ -322,6 +316,20 @@ sigset_t make_sigset_mask(int signo) {
     sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, signo);
+    return set;
+}
+
+inline
+sigset_t make_full_sigset_mask() {
+    sigset_t set;
+    sigfillset(&set);
+    return set;
+}
+
+inline
+sigset_t make_empty_sigset_mask() {
+    sigset_t set;
+    sigemptyset(&set);
     return set;
 }
 
