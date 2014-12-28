@@ -795,7 +795,6 @@ void smp_message_queue::start() {
 /* not yet implemented for OSv. TODO: do the notification like we do class smp. */
 #ifndef HAVE_OSV
 thread_pool::thread_pool() : _worker_thread([this] { work(); }), _notify(pthread_self()) {
-    inter_thread_wq.start();
     keep_doing([this] {
         return engine.receive_signal(SIGUSR1).then([this] { inter_thread_wq.complete(); });
     });

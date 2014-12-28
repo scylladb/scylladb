@@ -368,7 +368,6 @@ public:
         submit_item(wi);
         return fut;
     }
-    void start() { complete(); }
 private:
     void work();
     void complete();
