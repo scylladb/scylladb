@@ -26,6 +26,20 @@ void unimplemented(const tcxx::function<void(::apache::thrift::TDelayedException
     exn_cob(::apache::thrift::TDelayedException::delayException(unimplemented_exception()));
 }
 
+template <typename Ex, typename... Args>
+Ex
+make_exception(const char* fmt, Args&&... args) {
+    Ex ex;
+    ex.why = sprint(fmt, std::forward<Args>(args)...);
+    return ex;
+}
+
+template <typename Ex, typename... Args>
+void complete_with_exception(tcxx::function<void (::apache::thrift::TDelayedException* _throw)>&& exn_cob,
+        const char* fmt, Args&&... args) {
+    exn_cob(TDelayedException::delayException(make_exception<Ex>(fmt, std::forward<Args>(args)...)));
+}
+
 class CassandraAsyncHandler : public CassandraCobSvIf {
     database& _db;
     keyspace* _ks = nullptr;  // FIXME: reference counting for in-use detection?
@@ -42,9 +56,8 @@ public:
             _ks = &_db.keyspaces.at(keyspace);
             cob();
         } catch (std::out_of_range& e) {
-            InvalidRequestException ire;
-            ire.why = sprint("keyspace %s does not exist", keyspace);
-            exn_cob(TDelayedException::delayException(ire));
+            return complete_with_exception<InvalidRequestException>(std::move(exn_cob),
+                    "keyspace %s does not exist", keyspace);
         }
     }
 
@@ -122,8 +135,56 @@ public:
     }
 
     void batch_mutate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::map<std::string, std::map<std::string, std::vector<Mutation> > > & mutation_map, const ConsistencyLevel::type consistency_level) {
-        // FIXME: implement
-        return unimplemented(exn_cob);
+        if (!_ks) {
+            return complete_with_exception<InvalidRequestException>(std::move(exn_cob), "keyspace not set");
+        }
+        static bytes null_clustering_key = to_bytes("");
+        try {
+            for (auto&& key_cf : mutation_map) {
+                bytes key = to_bytes(key_cf.first);
+                const std::map<std::string, std::vector<Mutation>>& cf_mutations_map = key_cf.second;
+                for (auto&& cf_mutations : cf_mutations_map) {
+                    sstring cf_name = cf_mutations.first;
+                    const std::vector<Mutation>& mutations = cf_mutations.second;
+                    auto& cf = lookup_column_family(cf_name);
+                    auto& row = cf.find_or_create_row(key, null_clustering_key);
+                    for (const Mutation& m : mutations) {
+                        if (m.__isset.column_or_supercolumn) {
+                            auto&& cosc = m.column_or_supercolumn;
+                            if (cosc.__isset.column) {
+                                auto&& col = cosc.column;
+                                sstring cname = col.name;
+                                // FIXME: use a lookup map
+                                size_t idx = std::find_if(cf.column_defs.begin(), cf.column_defs.end(),
+                                        [&] (const column_definition& cd) { return cname == cd.name; }) - cf.column_defs.begin();
+                                if (idx == cf.column_defs.size()) {
+                                    throw make_exception<InvalidRequestException>("column %s not found", col.name);
+                                }
+                                auto& cells = row.cells;
+                                cells.resize(cf.column_defs.size());
+                                cells[idx] = to_bytes(col.value);
+                            } else if (cosc.__isset.super_column) {
+                                // FIXME: implement
+                            } else if (cosc.__isset.counter_column) {
+                                // FIXME: implement
+                            } else if (cosc.__isset.counter_super_column) {
+                                // FIXME: implement
+                            } else {
+                                throw make_exception<InvalidRequestException>("Empty ColumnOrSuperColumn");
+                            }
+                        } else if (m.__isset.deletion) {
+                            // FIXME: implement
+                            abort();
+                        } else {
+                            throw make_exception<InvalidRequestException>("Mutation must have either column or deletion");
+                        }
+                    }
+                }
+            }
+        } catch (std::exception& ex) {
+            return exn_cob(TDelayedException::delayException(ex));
+        }
+        cob();
     }
 
     void atomic_batch_mutate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::map<std::string, std::map<std::string, std::vector<Mutation> > > & mutation_map, const ConsistencyLevel::type consistency_level) {
@@ -241,7 +302,7 @@ public:
         }
         keyspace& ks = _db.keyspaces[ks_def.name];
         for (const CfDef& cf_def : ks_def.cf_defs) {
-            column_family& cf = ks.column_families[cf_def.name];
+            column_family cf(blob_type, blob_type);
             // FIXME: look at key_alias and key_validator first
             cf.partition_key.push_back(column_definition{"key", blob_type});
             // FIXME: guess clustering keys
@@ -252,6 +313,7 @@ public:
                     blob_type,
                 });
             }
+            ks.column_families.emplace(cf_def.name, std::move(cf));
         }
         cob(schema_id);
     }
@@ -281,9 +343,13 @@ public:
     }
 
     void execute_cql3_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression, const ConsistencyLevel::type consistency) {
+        print("warning: ignoring query %s\n", query);
+        cob({});
+#if 0
         CqlResult _return;
         // FIXME: implement
         return unimplemented(exn_cob);
+#endif
     }
 
     void prepare_cql_query(tcxx::function<void(CqlPreparedResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
@@ -313,6 +379,15 @@ public:
     void set_cql_version(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& version) {
         _cql_version = version;
         cob();
+    }
+
+private:
+    column_family& lookup_column_family(const sstring& cf_name) {
+        try {
+            return _ks->column_families.at(cf_name);
+        } catch (std::out_of_range&) {
+            throw make_exception<InvalidRequestException>("column family %s not found", cf_name);
+        }
     }
 };
 

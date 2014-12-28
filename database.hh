@@ -17,19 +17,8 @@
 #include <iostream>
 #include <boost/functional/hash.hpp>
 
-using bytes = basic_sstring<uint8_t, uint32_t, 31>;
-
-struct row {
-    std::vector<boost::any> cells;
-};
-
-using key_compare = std::function<bool (const boost::any&, const boost::any&)>;
-
-struct partition {
-    row static_columns;
-    // row key within partition -> row
-    std::map<boost::any, row, key_compare> rows;
-};
+// FIXME: should be int8_t
+using bytes = basic_sstring<char, uint32_t, 31>;
 
 class data_type {
 public:
@@ -42,6 +31,12 @@ public:
         virtual ~impl() {}
         virtual void serialize(const boost::any& value, std::ostream& out) = 0;
         virtual boost::any deserialize(std::istream& in) = 0;
+        virtual bool less(const bytes& v1, const bytes& v2) = 0;
+        boost::any deserialize(const bytes& v) {
+            // FIXME: optimize
+            std::istringstream iss(v);
+            return deserialize(iss);
+        }
     };
 private:
     impl* _impl;
@@ -55,15 +50,45 @@ public:
     boost::any deserialize(std::istream& in) {
         return _impl->deserialize(in);
     }
+    boost::any deserialize(const bytes& v) {
+        return _impl->deserialize(v);
+    }
     bool operator==(const data_type& x) const {
         return _impl == x._impl;
     }
     bool operator!=(const data_type& x) const {
         return _impl != x._impl;
     }
+    bool less(const bytes& v1, const bytes& v2) const {
+        return _impl->less(v1, v2);
+    }
     friend size_t hash_value(const data_type& x) {
         return std::hash<impl*>()(x._impl);
     }
+};
+
+class key_compare {
+    data_type _type;
+public:
+    key_compare(data_type type) : _type(type) {}
+    bool operator()(const bytes& v1, const bytes& v2) const {
+        return _type.less(v1, v2);
+    }
+};
+
+struct row;
+struct paritition;
+struct column_family;
+
+struct row {
+    std::vector<bytes> cells;
+};
+
+struct partition {
+    explicit partition(column_family& cf);
+    row static_columns;
+    // row key within partition -> row
+    std::map<bytes, row, key_compare> rows;
 };
 
 // FIXME: add missing types
@@ -80,13 +105,18 @@ struct column_definition {
 };
 
 struct column_family {
+    column_family(data_type partition_key_type, data_type clustering_key_type);
     // primary key = paritition key + clustering_key
+    data_type partition_key_type;
+    data_type clustering_key_type;
     std::vector<column_definition> partition_key;
     std::vector<column_definition> clustering_key;
     std::vector<column_definition> column_defs;
     std::unordered_map<sstring, unsigned> column_names;
+    partition& find_or_create_partition(const bytes& key);
+    row& find_or_create_row(const bytes& partition_key, const bytes& clustering_key);
     // partition key -> partition
-    std::map<boost::any, partition, key_compare> partitions;
+    std::map<bytes, partition, key_compare> partitions;
 };
 
 struct keyspace {
@@ -103,6 +133,24 @@ template <>
 struct hash<data_type> : boost::hash<data_type> {
 };
 
+}
+
+inline
+bytes
+to_bytes(const char* x) {
+    return bytes(reinterpret_cast<const char*>(x), std::strlen(x));
+}
+
+inline
+bytes
+to_bytes(const std::string& x) {
+    return bytes(reinterpret_cast<const char*>(x.data()), x.size());
+}
+
+inline
+bytes
+to_bytes(const sstring& x) {
+    return bytes(reinterpret_cast<const char*>(x.c_str()), x.size());
 }
 
 #endif /* DATABASE_HH_ */
