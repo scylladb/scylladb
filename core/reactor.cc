@@ -129,6 +129,7 @@ future<> reactor_backend_epoll::get_epoll_future(pollable_fd_state& pfd,
         eevt.data.ptr = &pfd;
         int r = ::epoll_ctl(_epollfd.get(), ctl, pfd.fd.get(), &eevt);
         assert(r == 0);
+        engine.start_epoll();
     }
     pfd.*pr = promise<>();
     return (pfd.*pr).get_future();
@@ -568,7 +569,6 @@ int reactor::run() {
         }
 
         poll_once();
-        wait_and_process();
     }
     return _return;
 }

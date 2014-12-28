@@ -555,13 +555,32 @@ public:
 #endif /* HAVE_OSV */
 
 class reactor {
-public:
-    class poller;
 private:
     struct pollfn {
         virtual ~pollfn() {}
         virtual bool poll_and_check_more_work() = 0;
     };
+
+public:
+    class poller {
+        std::unique_ptr<pollfn> _pollfn;
+        class registration_task;
+        class deregistration_task;
+        registration_task* _registration_task;
+    public:
+        template <typename Func> // signature: bool ()
+        explicit poller(Func&& poll_and_check_more_work)
+                : _pollfn(make_pollfn(std::forward<Func>(poll_and_check_more_work))) {
+            do_register();
+        }
+        ~poller();
+        poller(poller&& x);
+        poller& operator=(poller&& x);
+        void do_register();
+        friend class reactor;
+    };
+
+private:
     // FIXME: make _backend a unique_ptr<reactor_backend>, not a compile-time #ifdef.
 #ifdef HAVE_OSV
     reactor_backend_osv _backend;
@@ -596,6 +615,7 @@ private:
     lowres_clock::time_point _lowres_next_timeout;
     promise<> _lowres_timer_promise;
     promise<> _timer_promise;
+    std::experimental::optional<poller> _epoll_poller;
 private:
     void abort_on_error(int ret);
     template <typename T, typename E>
@@ -620,7 +640,6 @@ private:
     void poll_signal();
     friend void sigaction(int signo, siginfo_t* siginfo, void* ignore);
 public:
-    class poller;
     static boost::program_options::options_description get_options_description();
     reactor();
     reactor(const reactor&) = delete;
@@ -672,6 +691,13 @@ public:
     network_stack& net() { return *_network_stack; }
     unsigned cpu_id() const { return _id; }
 
+    void start_epoll() {
+        if (!_epoll_poller) {
+            _epoll_poller = poller([this] {
+                wait_and_process(); return true;
+            });
+        }
+    }
 private:
     /**
      * Add a new "poller" - a non-blocking function returning a boolean, that
@@ -749,24 +775,6 @@ reactor::make_pollfn(Func&& func) {
     };
     return std::make_unique<the_pollfn>(std::forward<Func>(func));
 }
-
-class reactor::poller {
-    std::unique_ptr<pollfn> _pollfn;
-    class registration_task;
-    class deregistration_task;
-    registration_task* _registration_task;
-public:
-    template <typename Func> // signature: bool ()
-    explicit poller(Func&& poll_and_check_more_work)
-            : _pollfn(make_pollfn(std::forward<Func>(poll_and_check_more_work))) {
-        do_register();
-    }
-    ~poller();
-    poller(poller&& x);
-    poller& operator=(poller&& x);
-    void do_register();
-    friend class reactor;
-};
 
 extern thread_local reactor engine;
 extern __thread size_t task_quota;
