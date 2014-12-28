@@ -385,8 +385,6 @@ class smp_message_queue {
                             boost::lockfree::capacity<queue_length>>;
     lf_queue _pending;
     lf_queue _completed;
-    std::unique_ptr<reactor_notifier> _start_event;
-    std::unique_ptr<reactor_notifier> _complete_event;
     size_t _current_queue_length = 0;
     reactor* _pending_peer;
     reactor* _complete_peer;
@@ -448,16 +446,12 @@ public:
         return fut;
     }
     void start();
-    void listen();
     size_t process_incoming();
     size_t process_completions();
 private:
     void work();
-    void complete();
     void submit_item(work_item* wi);
     void respond(work_item* wi);
-    void submit_kick();
-    void complete_kick();
     void move_pending();
     void flush_request_batch();
     void flush_response_batch();
@@ -499,8 +493,7 @@ public:
     // and just processes events that have already happened, if any.
     // After the optional wait, just before processing the events, the
     // pre_process() function is called.
-    virtual void wait_and_process(bool block,
-            std::function<void()>& pre_process) = 0;
+    virtual void wait_and_process() = 0;
     // Methods that allow polling on file descriptors. This will only work on
     // reactor_backend_epoll. Other reactor_backend will probably abort if
     // they are called (which is fine if no file descriptors are waited on):
@@ -529,7 +522,7 @@ private:
 public:
     reactor_backend_epoll();
     virtual ~reactor_backend_epoll() override { }
-    virtual void wait_and_process(bool block, std::function<void()>& pre_process) override;
+    virtual void wait_and_process() override;
     virtual future<> readable(pollable_fd_state& fd) override;
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
@@ -551,8 +544,7 @@ private:
 public:
     reactor_backend_osv();
     virtual ~reactor_backend_osv() override { }
-    virtual void wait_and_process(bool block,
-            std::function<void()> &&pre_process) override;
+    virtual void wait_and_process() override;
     virtual future<> readable(pollable_fd_state& fd) override;
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
@@ -580,11 +572,9 @@ private:
     static constexpr size_t max_aio = 128;
     promise<> _exit_promise;
     future<> _exit_future;
-    std::atomic<bool> _idle;
     unsigned _id = 0;
     bool _stopped = false;
     bool _handle_sigint = true;
-    bool _poll = false;
     promise<std::unique_ptr<network_stack>> _network_stack_ready_promise;
     int _return = 0;
     timer_t _timer;
@@ -681,14 +671,6 @@ public:
 
     network_stack& net() { return *_network_stack; }
     unsigned cpu_id() const { return _id; }
-    bool idle() {
-        if (_poll) {
-            return false;
-        } else {
-            std::atomic_thread_fence(std::memory_order_seq_cst);
-            return _idle.load(std::memory_order_relaxed);
-        }
-    }
 
 private:
     /**
@@ -726,8 +708,8 @@ private:
     friend class smp_message_queue;
     friend class poller;
 public:
-    void wait_and_process(bool block, std::function<void()>& pre_process) {
-        _backend.wait_and_process(block, pre_process);
+    void wait_and_process() {
+        _backend.wait_and_process();
     }
 
     future<> readable(pollable_fd_state& fd) {
