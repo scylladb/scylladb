@@ -10,3 +10,4 @@
 #include "functions/scalar_function.hh"
 #include "functions/abstract_function.hh"
 #include "functions/native_function.hh"
+#include "functions/aggregate_function.hh"
