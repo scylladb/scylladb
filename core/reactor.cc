@@ -496,6 +496,8 @@ int reactor::run() {
 
     poller sig_poller([&] { poll_signal(); return true; } );
 
+    poller threadpool_poller([&] { _thread_pool.complete(); return true; });
+
     if (_handle_sigint && _id == 0) {
         receive_signal(SIGINT).then([this] { stop(); });
     }
@@ -727,8 +729,7 @@ reactor_backend_epoll::wait_and_process(bool block, std::function<void()>& pre_p
 syscall_work_queue::syscall_work_queue()
     : _pending()
     , _completed()
-    , _start_eventfd(0)
-    , _complete_eventfd(0) {
+    , _start_eventfd(0) {
 }
 
 void syscall_work_queue::submit_item(syscall_work_queue::work_item* item) {
@@ -739,14 +740,11 @@ void syscall_work_queue::submit_item(syscall_work_queue::work_item* item) {
 }
 
 void syscall_work_queue::complete() {
-    _complete_eventfd.wait().then([this] (size_t count) {
-        auto nr = _completed.consume_all([this] (work_item* wi) {
-            wi->complete();
-            delete wi;
-        });
-        _queue_has_room.signal(nr);
-        complete();
+    auto nr = _completed.consume_all([this] (work_item* wi) {
+        wi->complete();
+        delete wi;
     });
+    _queue_has_room.signal(nr);
 }
 
 smp_message_queue::smp_message_queue()
@@ -868,13 +866,10 @@ void thread_pool::work() {
         if (_stopped.load(std::memory_order_relaxed)) {
             break;
         }
-        auto nr = inter_thread_wq._pending.consume_all([this] (syscall_work_queue::work_item* wi) {
+        inter_thread_wq._pending.consume_all([this] (syscall_work_queue::work_item* wi) {
             wi->process();
             inter_thread_wq._completed.push(wi);
         });
-        count = nr;
-        r = ::write(inter_thread_wq._complete_eventfd.get_write_fd(), &count, sizeof(count));
-        assert(r == sizeof(count));
     }
 }
 

@@ -343,7 +343,6 @@ class syscall_work_queue {
     lf_queue _pending;
     lf_queue _completed;
     writeable_eventfd _start_eventfd;
-    readable_eventfd _complete_eventfd;
     semaphore _queue_has_room = { queue_length };
     struct work_item {
         virtual ~work_item() {}
@@ -477,10 +476,12 @@ public:
     ~thread_pool();
     template <typename T, typename Func>
     future<T> submit(Func func) {return inter_thread_wq.submit<T>(std::move(func));}
+    void complete() { inter_thread_wq.complete(); }
 #else
 public:
     template <typename T, typename Func>
     future<T> submit(Func func) { std::cout << "thread_pool not yet implemented on osv\n"; abort(); }
+    void complete() {}
 #endif
 private:
     void work();
