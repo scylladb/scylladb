@@ -313,6 +313,7 @@ public:
                     blob_type,
                 });
             }
+            std::sort(cf.column_defs.begin(), cf.column_defs.end(), column_definition::name_compare());
             ks.column_families.emplace(cf_def.name, std::move(cf));
         }
         cob(schema_id);
