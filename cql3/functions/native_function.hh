@@ -15,30 +15,43 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.functions;
 
-import java.util.Arrays;
+/*
+ * Modified by Cloudius Systems
+ *
+ * Copyright 2014 Cloudius Systems
+ */
 
-import org.apache.cassandra.db.marshal.AbstractType;
+#ifndef CQL3_FUNCTIONS_NATIVE_FUNCTION_HH
+#define CQL3_FUNCTIONS_NATIVE_FUNCTION_HH
+
+#include "abstract_function.hh"
+
+namespace cql3 {
+namespace functions {
 
 /**
  * Base class for our native/hardcoded functions.
  */
-public abstract class NativeFunction extends AbstractFunction
-{
-    protected NativeFunction(String name, AbstractType<?> returnType, AbstractType<?>... argTypes)
-    {
-        super(FunctionName.nativeFunction(name), Arrays.asList(argTypes), returnType);
+class native_function : public abstract_function {
+protected:
+    native_function(sstring name, data_type return_type, std::vector<data_type> arg_types)
+        : abstract_function(function_name::native_function(std::move(name)),
+                std::move(arg_types), std::move(return_type)) {
     }
 
+public:
     // Most of our functions are pure, the other ones should override this
-    public boolean isPure()
-    {
+    virtual bool is_pure() override {
         return true;
     }
 
-    public boolean isNative()
-    {
+    virtual bool is_native() override {
         return true;
     }
+};
+
 }
+}
+
+#endif
