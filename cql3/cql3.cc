@@ -12,3 +12,4 @@
 #include "functions/native_function.hh"
 #include "functions/aggregate_function.hh"
 #include "functions/native_aggregate_function.hh"
+#include "functions/native_scalar_function.hh"

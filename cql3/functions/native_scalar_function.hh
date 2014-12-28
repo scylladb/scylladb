@@ -15,22 +15,38 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.functions;
 
-import org.apache.cassandra.db.marshal.AbstractType;
+/*
+ * Modified by Cloudius Systems
+ *
+ * Copyright 2014 Cloudius Systems
+ */
+
+#ifndef CQL3_FUNCTIONS_NATIVE_SCALAR_FUNCTION_HH_
+#define CQL3_FUNCTIONS_NATIVE_SCALAR_FUNCTION_HH_
+
+#include "native_function.hh"
+#include "scalar_function.hh"
+
+namespace cql3 {
+namespace functions {
 
 /**
  * Base class for the <code>ScalarFunction</code> native classes.
  */
-public abstract class NativeScalarFunction extends NativeFunction implements ScalarFunction
-{
-    protected NativeScalarFunction(String name, AbstractType<?> returnType, AbstractType<?>... argsType)
-    {
-        super(name, returnType, argsType);
+class native_scalar_function : public native_function, public scalar_function {
+protected:
+    native_scalar_function(sstring name, data_type return_type, std::vector<data_type> args_type)
+            : native_function(std::move(name), std::move(return_type), std::move(args_type)) {
     }
 
-    public final boolean isAggregate()
-    {
+public:
+    virtual bool is_aggregate() override {
         return false;
     }
+};
+
 }
+}
+
+#endif /* CQL3_FUNCTIONS_NATIVE_SCALAR_FUNCTION_HH_ */
