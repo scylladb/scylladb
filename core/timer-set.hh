@@ -17,6 +17,7 @@
 #include <chrono>
 #include <limits>
 #include <bitset>
+#include <array>
 #include <boost/intrusive/list.hpp>
 #include "bitset-iter.hh"
 
@@ -48,7 +49,7 @@ private:
     // The last bucket is reserved for active timers with timeout <= _last.
     static constexpr int n_buckets = timestamp_bits + 1;
 
-    timer_list_t _buckets[n_buckets];
+    std::array<timer_list_t, n_buckets> _buckets;
     timestamp_t _last;
     timestamp_t _next;
 
@@ -90,6 +91,15 @@ public:
         , _next(max_timestamp)
         , _non_empty_buckets(0)
     {
+    }
+
+    ~timer_set() {
+        for (auto&& list : _buckets) {
+            while (!list.empty()) {
+                auto& timer = *list.begin();
+                timer.cancel();
+            }
+        }
     }
 
     /**

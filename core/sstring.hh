@@ -129,7 +129,7 @@ public:
         return *this;
     }
     operator std::string() const {
-        return str();
+        return { str(), size() };
     }
     size_t size() const noexcept {
         return is_internal() ? u.internal.size : u.external.size;
