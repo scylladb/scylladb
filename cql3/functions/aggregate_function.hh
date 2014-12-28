@@ -34,7 +34,7 @@ namespace functions {
 /**
  * Performs a calculation on a set of values and return a single value.
  */
-class aggregate_function : public function {
+class aggregate_function : public virtual function {
 public:
     class aggregate;
 
