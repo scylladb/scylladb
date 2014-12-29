@@ -95,6 +95,7 @@ class dpdk_device : public device {
 
 public:
     rte_eth_dev_info _dev_info = {};
+    promise<> _link_ready_promise;
 
 private:
     /**
@@ -177,6 +178,7 @@ public:
     void get_rss_table();
 
     virtual uint16_t hw_queues_count() override { return _num_queues; }
+    virtual future<> link_ready() { return _link_ready_promise.get_future(); }
     virtual std::unique_ptr<qp> init_local_queue(boost::program_options::variables_map opts, uint16_t qid) override;
     virtual unsigned hash2qid(uint32_t hash) override {
         return _redir_table[hash & (_redir_table.size() - 1)];
@@ -414,36 +416,35 @@ bool dpdk_qp::init_mbuf_pools()
 void dpdk_device::check_port_link_status()
 {
     using namespace std::literals::chrono_literals;
+    int count = 0;
     constexpr auto check_interval = 100ms;
-    const int max_check_time = 90;  /* 9s (90 * 100ms) in total */
-    int count;
-    struct rte_eth_link link;
 
-    printf("\nChecking link status ");
-    fflush(stdout);
-    for (count = 0; count <= max_check_time; count++) {
-            memset(&link, 0, sizeof(link));
-            rte_eth_link_get_nowait(_port_idx, &link);
+    std::cout << "\nChecking link status " << std::endl;
+    auto t = new timer<>;
+    t->set_callback([this, count, t] () mutable {
+        const int max_check_time = 90;  /* 9s (90 * 100ms) in total */
+        struct rte_eth_link link;
+        memset(&link, 0, sizeof(link));
+        rte_eth_link_get_nowait(_port_idx, &link);
 
-            if (link.link_status == 0) {
-                printf(".");
-                fflush(stdout);
-                std::this_thread::sleep_for(check_interval);
-            } else {
-                break;
-            }
-    }
-
-    /* print link status */
-    if (link.link_status) {
-        printf("done\nPort %d Link Up - speed %u "
-            "Mbps - %s\n", _port_idx,
-            (unsigned)link.link_speed,
-            (link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-            ("full-duplex") : ("half-duplex\n"));
-    } else {
-        printf("done\nPort %d Link Down\n", _port_idx);
-    }
+        if (link.link_status) {
+            std::cout <<
+                "done\nPort " << static_cast<unsigned>(_port_idx) <<
+                " Link Up - speed " << link.link_speed <<
+                " Mbps - " << ((link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
+                          ("full-duplex") : ("half-duplex\n")) <<
+                std::endl;
+            _link_ready_promise.set_value();
+        } else if (count++ < max_check_time) {
+             std::cout << "." << std::flush;
+             return;
+        } else {
+            std::cout << "done\nPort " << _port_idx << " Link Down" << std::endl;
+        }
+        t->cancel();
+        delete t;
+    });
+    t->arm_periodic(check_interval);
 }
 
 
