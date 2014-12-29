@@ -73,6 +73,7 @@ void create_native_net_device(boost::program_options::variables_map opts) {
 #endif
     dev = create_virtio_net_device(opts);
 
+    auto sem = std::make_shared<semaphore>(0);
     std::shared_ptr<device> sdev(dev.release());
     for (unsigned i = 0; i < smp::count; i++) {
         smp::submit_to(i, [opts, sdev] {
@@ -87,9 +88,19 @@ void create_native_net_device(boost::program_options::variables_map opts) {
                 auto master = qid % sdev->hw_queues_count();
                 sdev->set_local_queue(create_proxy_net_device(master, sdev.get()));
             }
-            create_native_stack(opts, sdev);
+        }).then([sem] {
+            sem->signal();
         });
     }
+    sem->wait(smp::count).then([opts, sdev] {
+        sdev->link_ready().then([opts, sdev] {
+            for (unsigned i = 0; i < smp::count; i++) {
+                smp::submit_to(i, [opts, sdev] {
+                    create_native_stack(opts, sdev);
+                });
+            }
+        });
+    });
 }
 
 // native_network_stack
