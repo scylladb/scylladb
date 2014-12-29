@@ -21,12 +21,12 @@ template <typename char_type, typename size_type, size_type max_size>
 class basic_sstring {
     union contents {
         struct external_type {
-            char* str;
+            char_type* str;
             size_type size;
             int8_t pad;
         } external;
         struct internal_type {
-            char str[max_size];
+            char_type str[max_size];
             int8_t size;
         } internal;
         static_assert(sizeof(external_type) <= sizeof(internal_type), "max_size too small");
@@ -38,10 +38,10 @@ class basic_sstring {
     bool is_external() const noexcept {
         return !is_internal();
     }
-    const char* str() const {
+    const char_type* str() const {
         return is_internal() ? u.internal.str : u.external.str;
     }
-    char* str() {
+    char_type* str() {
         return is_internal() ? u.internal.str : u.external.str;
     }
 public:
@@ -56,7 +56,7 @@ public:
             u.internal = x.u.internal;
         } else {
             u.internal.size = -1;
-            u.external.str = reinterpret_cast<char*>(std::malloc(x.u.external.size + 1));
+            u.external.str = reinterpret_cast<char_type*>(std::malloc(x.u.external.size + 1));
             if (!u.external.str) {
                 throw std::bad_alloc();
             }
@@ -78,7 +78,7 @@ public:
             u.internal.size = size;
         } else {
             u.internal.size = -1;
-            u.external.str = reinterpret_cast<char*>(std::malloc(size + 1));
+            u.external.str = reinterpret_cast<char_type*>(std::malloc(size + 1));
             if (!u.external.str) {
                 throw std::bad_alloc();
             }
@@ -96,7 +96,7 @@ public:
             u.internal.size = size;
         } else {
             u.internal.size = -1;
-            u.external.str = reinterpret_cast<char*>(std::malloc(size + 1));
+            u.external.str = reinterpret_cast<char_type*>(std::malloc(size + 1));
             if (!u.external.str) {
                 throw std::bad_alloc();
             }
@@ -165,7 +165,7 @@ public:
         x.u = u;
         u = tmp;
     }
-    const char* c_str() const {
+    const char_type* c_str() const {
         return str();
     }
     const char_type* begin() const { return str(); }
