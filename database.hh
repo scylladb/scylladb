@@ -102,6 +102,14 @@ extern data_type text_type;
 struct column_definition {
     sstring name;
     data_type type;
+    struct name_compare {
+        bool operator()(const column_definition& cd1, const column_definition& cd2) const {
+            return std::lexicographical_compare(
+                    cd1.name.begin(), cd1.name.end(),
+                    cd2.name.begin(), cd2.name.end(),
+                    [] (char c1, char c2) { return uint8_t(c1) < uint8_t(c1); });
+        }
+    };
 };
 
 struct column_family {
@@ -111,10 +119,11 @@ struct column_family {
     data_type clustering_key_type;
     std::vector<column_definition> partition_key;
     std::vector<column_definition> clustering_key;
-    std::vector<column_definition> column_defs;
-    std::unordered_map<sstring, unsigned> column_names;
+    std::vector<column_definition> column_defs; // sorted by name
     partition& find_or_create_partition(const bytes& key);
     row& find_or_create_row(const bytes& partition_key, const bytes& clustering_key);
+    partition* find_partition(const bytes& key);
+    row* find_row(const bytes& partition_key, const bytes& clustering_key);
     // partition key -> partition
     std::map<bytes, partition, key_compare> partitions;
 };

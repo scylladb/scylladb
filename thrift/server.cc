@@ -123,11 +123,12 @@ public:
         uint32_t len;
         _output->getBuffer(&data, &len);
         net::packed<uint32_t> plen = { net::hton(len) };
-        scattered_message<char> msg;
-        msg.append(sstring(reinterpret_cast<char*>(&plen), 4));
-        // _output protects data until the write is complete
-        msg.append_static(reinterpret_cast<char*>(data), len);
-        return _write_buf.write(std::move(msg));
+        return _write_buf.write(reinterpret_cast<char*>(&plen), 4).then([this, data, len] {
+            // FIXME: zero-copy
+            return _write_buf.write(reinterpret_cast<char*>(data), len);
+        }).then([this] {
+            return _write_buf.flush();
+        });
     }
 };
 

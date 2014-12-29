@@ -68,9 +68,65 @@ public:
     }
 
     void get_slice(tcxx::function<void(std::vector<ColumnOrSuperColumn>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
-        std::vector<ColumnOrSuperColumn>  _return;
-        // FIXME: implement
-        return unimplemented(exn_cob);
+        try {
+            std::vector<ColumnOrSuperColumn> ret;
+            auto keyb = to_bytes(key);
+            if (!column_parent.super_column.empty()) {
+                throw unimplemented_exception();
+            }
+            auto& cf = lookup_column_family(column_parent.column_family);
+            if (predicate.__isset.column_names) {
+                throw unimplemented_exception();
+            } else if (predicate.__isset.slice_range) {
+                auto&& range = predicate.slice_range;
+                row* rw = cf.find_row(keyb, bytes());
+                if (rw) {
+                    size_t beg = 0;
+                    if (!range.start.empty()) {
+                        beg = std::distance(
+                                std::lower_bound(cf.column_defs.begin(),
+                                                 cf.column_defs.end(),
+                                                 column_definition{range.start, blob_type},
+                                                 column_definition::name_compare()),
+                                cf.column_defs.begin());
+                    }
+                    size_t end = cf.column_defs.size();
+                    if (!range.finish.empty()) {
+                        end = std::distance(
+                                std::upper_bound(cf.column_defs.begin(),
+                                                 cf.column_defs.end(),
+                                                 column_definition{range.finish, blob_type},
+                                                 column_definition::name_compare()),
+                                 cf.column_defs.end());
+                    }
+                    ssize_t step = 1;
+                    if (range.reversed) {
+                        std::swap(beg, end);
+                        step = -1;
+                        --beg;
+                        --end;
+                    }
+                    auto count = range.count;
+                    // FIXME: force limit count?
+                    while (beg != end && count--) {
+                        Column col;
+                        col.__set_name(cf.column_defs[beg].name);
+                        col.__set_value(rw->cells[beg]);
+                        ColumnOrSuperColumn v;
+                        v.__set_column(std::move(col));
+                        ret.push_back(std::move(v));
+                        beg += step;
+                    }
+                }
+            } else {
+                throw make_exception<InvalidRequestException>("empty SlicePredicate");
+            }
+            cob(std::move(ret));
+        } catch (InvalidRequestException& ex) {
+            exn_cob(TDelayedException::delayException(ex));
+        } catch (std::exception& ex) {
+            exn_cob(TDelayedException::delayException(ex));
+        }
     }
 
     void get_count(tcxx::function<void(int32_t const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
@@ -313,6 +369,7 @@ public:
                     blob_type,
                 });
             }
+            std::sort(cf.column_defs.begin(), cf.column_defs.end(), column_definition::name_compare());
             ks.column_families.emplace(cf_def.name, std::move(cf));
         }
         cob(schema_id);

@@ -102,6 +102,22 @@ column_family::column_family(data_type partition_key_type,
         , partitions(key_compare(partition_key_type)) {
 }
 
+partition*
+column_family::find_partition(const bytes& key) {
+    auto i = partitions.find(key);
+    return i == partitions.end() ? nullptr : &i->second;
+}
+
+row*
+column_family::find_row(const bytes& partition_key, const bytes& clustering_key) {
+    partition* p = find_partition(partition_key);
+    if (!p) {
+        return nullptr;
+    }
+    auto i = p->rows.find(clustering_key);
+    return i == p->rows.end() ? nullptr : &i->second;
+}
+
 partition&
 column_family::find_or_create_partition(const bytes& key) {
     // call lower_bound so we have a hint for the insert, just in case.
