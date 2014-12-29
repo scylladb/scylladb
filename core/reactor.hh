@@ -343,7 +343,6 @@ class syscall_work_queue {
     lf_queue _pending;
     lf_queue _completed;
     writeable_eventfd _start_eventfd;
-    readable_eventfd _complete_eventfd;
     semaphore _queue_has_room = { queue_length };
     struct work_item {
         virtual ~work_item() {}
@@ -369,7 +368,6 @@ public:
         submit_item(wi);
         return fut;
     }
-    void start() { complete(); }
 private:
     void work();
     void complete();
@@ -386,8 +384,6 @@ class smp_message_queue {
                             boost::lockfree::capacity<queue_length>>;
     lf_queue _pending;
     lf_queue _completed;
-    std::unique_ptr<reactor_notifier> _start_event;
-    std::unique_ptr<reactor_notifier> _complete_event;
     size_t _current_queue_length = 0;
     reactor* _pending_peer;
     reactor* _complete_peer;
@@ -449,16 +445,12 @@ public:
         return fut;
     }
     void start();
-    void listen();
     size_t process_incoming();
     size_t process_completions();
 private:
     void work();
-    void complete();
     void submit_item(work_item* wi);
     void respond(work_item* wi);
-    void submit_kick();
-    void complete_kick();
     void move_pending();
     void flush_request_batch();
     void flush_response_batch();
@@ -472,8 +464,9 @@ class thread_pool {
     syscall_work_queue inter_thread_wq;
     posix_thread _worker_thread;
     std::atomic<bool> _stopped = { false };
+    pthread_t _notify;
 public:
-    thread_pool() : _worker_thread([this] { work(); }) { inter_thread_wq.start(); }
+    thread_pool();
     ~thread_pool();
     template <typename T, typename Func>
     future<T> submit(Func func) {return inter_thread_wq.submit<T>(std::move(func));}
@@ -498,8 +491,7 @@ public:
     // and just processes events that have already happened, if any.
     // After the optional wait, just before processing the events, the
     // pre_process() function is called.
-    virtual void wait_and_process(bool block,
-            std::function<void()>& pre_process) = 0;
+    virtual void wait_and_process() = 0;
     // Methods that allow polling on file descriptors. This will only work on
     // reactor_backend_epoll. Other reactor_backend will probably abort if
     // they are called (which is fine if no file descriptors are waited on):
@@ -510,12 +502,6 @@ public:
     // used only for reactor_backend_osv, but in the future it should really
     // replace the above functions.
     virtual future<> notified(reactor_notifier *n) = 0;
-    // Methods that allow capturing Unix signals.
-    virtual future<> receive_signal(int signo) = 0;
-    // Method for enabling a single timer (reactor multiplexes on this
-    // multiple timers).
-    virtual void enable_timer(clock_type::time_point when) = 0;
-    virtual future<> timers_completed() = 0;
     // Methods for allowing sending notifications events between threads.
     virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() = 0;
 };
@@ -531,26 +517,14 @@ private:
             promise<> pollable_fd_state::* pr, int event);
     void complete_epoll_event(pollable_fd_state& fd,
             promise<> pollable_fd_state::* pr, int events, int event);
-    uint64_t _timers_completed;
-    pollable_fd _timerfd = file_desc::timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC | TFD_NONBLOCK);
-    struct signal_handler {
-        signal_handler(int signo);
-        promise<> _promise;
-        pollable_fd _signalfd;
-        signalfd_siginfo _siginfo;
-    };
-    std::unordered_map<int, signal_handler> _signal_handlers;
 public:
     reactor_backend_epoll();
     virtual ~reactor_backend_epoll() override { }
-    virtual void wait_and_process(bool block, std::function<void()>& pre_process) override;
+    virtual void wait_and_process() override;
     virtual future<> readable(pollable_fd_state& fd) override;
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
     virtual future<> notified(reactor_notifier *n) override;
-    virtual future<> receive_signal(int signo) override;
-    virtual void enable_timer(clock_type::time_point when) override;
-    virtual future<> timers_completed() override;
     virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
 };
 
@@ -568,28 +542,43 @@ private:
 public:
     reactor_backend_osv();
     virtual ~reactor_backend_osv() override { }
-    virtual void wait_and_process(bool block,
-            std::function<void()> &&pre_process) override;
+    virtual void wait_and_process() override;
     virtual future<> readable(pollable_fd_state& fd) override;
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
     virtual future<> notified(reactor_notifier *n) override;
-    virtual future<> receive_signal(int signo) override;
-    virtual void enable_timer(clock_type::time_point when) override;
-    virtual future<> timers_completed() override;
     virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
     friend class reactor_notifier_osv;
 };
 #endif /* HAVE_OSV */
 
 class reactor {
-public:
-    class poller;
 private:
     struct pollfn {
         virtual ~pollfn() {}
         virtual bool poll_and_check_more_work() = 0;
     };
+
+public:
+    class poller {
+        std::unique_ptr<pollfn> _pollfn;
+        class registration_task;
+        class deregistration_task;
+        registration_task* _registration_task;
+    public:
+        template <typename Func> // signature: bool ()
+        explicit poller(Func&& poll_and_check_more_work)
+                : _pollfn(make_pollfn(std::forward<Func>(poll_and_check_more_work))) {
+            do_register();
+        }
+        ~poller();
+        poller(poller&& x);
+        poller& operator=(poller&& x);
+        void do_register();
+        friend class reactor;
+    };
+
+private:
     // FIXME: make _backend a unique_ptr<reactor_backend>, not a compile-time #ifdef.
 #ifdef HAVE_OSV
     reactor_backend_osv _backend;
@@ -600,32 +589,30 @@ private:
     static constexpr size_t max_aio = 128;
     promise<> _exit_promise;
     future<> _exit_future;
-    std::atomic<bool> _idle;
     unsigned _id = 0;
     bool _stopped = false;
     bool _handle_sigint = true;
-    bool _poll = false;
     promise<std::unique_ptr<network_stack>> _network_stack_ready_promise;
     int _return = 0;
+    timer_t _timer;
     promise<> _start_promise;
     semaphore _cpu_started;
-    uint64_t _timers_completed;
     uint64_t _tasks_processed = 0;
     timer_set<timer<>, &timer<>::_link> _timers;
     timer_set<timer<>, &timer<>::_link>::timer_list_t _expired_timers;
     timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link> _lowres_timers;
     timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link>::timer_list_t _expired_lowres_timers;
-    readable_eventfd _io_eventfd;
     io_context_t _io_context;
     semaphore _io_context_available;
     circular_buffer<std::unique_ptr<task>> _pending_tasks;
-    thread_pool _thread_pool;
     size_t _task_quota;
     std::unique_ptr<network_stack> _network_stack;
     // _lowres_clock will only be created on cpu 0
     std::unique_ptr<lowres_clock> _lowres_clock;
     lowres_clock::time_point _lowres_next_timeout;
     promise<> _lowres_timer_promise;
+    promise<> _timer_promise;
+    std::experimental::optional<poller> _epoll_poller;
 private:
     void abort_on_error(int ret);
     template <typename T, typename E>
@@ -640,8 +627,18 @@ private:
     bool poll_once();
     template <typename Func> // signature: bool ()
     static std::unique_ptr<pollfn> make_pollfn(Func&& func);
+
+    struct signal_handler {
+        signal_handler(int signo);
+        promise<> _promise;
+        static thread_local std::atomic<uint64_t> pending;
+    };
+    std::unordered_map<int, signal_handler> _signal_handlers;
+    void poll_signal();
+    friend void sigaction(int signo, siginfo_t* siginfo, void* ignore);
+
+    thread_pool _thread_pool;
 public:
-    class poller;
     static boost::program_options::options_description get_options_description();
     reactor();
     reactor(const reactor&) = delete;
@@ -677,6 +674,8 @@ public:
     template <typename Func>
     future<io_event> submit_io(Func prepare_io);
 
+    future<> receive_signal(int signo);
+
     int run();
     void exit(int ret);
     future<> when_started() { return _start_promise.get_future(); }
@@ -690,15 +689,14 @@ public:
 
     network_stack& net() { return *_network_stack; }
     unsigned cpu_id() const { return _id; }
-    bool idle() {
-        if (_poll) {
-            return false;
-        } else {
-            std::atomic_thread_fence(std::memory_order_seq_cst);
-            return _idle.load(std::memory_order_relaxed);
+
+    void start_epoll() {
+        if (!_epoll_poller) {
+            _epoll_poller = poller([this] {
+                wait_and_process(); return true;
+            });
         }
     }
-
 private:
     /**
      * Add a new "poller" - a non-blocking function returning a boolean, that
@@ -715,7 +713,7 @@ private:
     collectd_registrations register_collectd_metrics();
     future<> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
 
-    void process_io(size_t count);
+    void process_io();
 
     void add_timer(timer<>*);
     void del_timer(timer<>*);
@@ -735,8 +733,8 @@ private:
     friend class smp_message_queue;
     friend class poller;
 public:
-    void wait_and_process(bool block, std::function<void()>& pre_process) {
-        _backend.wait_and_process(block, pre_process);
+    void wait_and_process() {
+        _backend.wait_and_process();
     }
 
     future<> readable(pollable_fd_state& fd) {
@@ -751,14 +749,9 @@ public:
     future<> notified(reactor_notifier *n) {
         return _backend.notified(n);
     }
-    future<> receive_signal(int signo) {
-        return _backend.receive_signal(signo);
-    }
-    void enable_timer(clock_type::time_point when) {
-        _backend.enable_timer(when);
-    }
+    void enable_timer(clock_type::time_point when);
     future<> timers_completed() {
-        return _backend.timers_completed();
+        return _timer_promise.get_future();
     }
     future<> lowres_timers_completed() {
         return _lowres_timer_promise.get_future();
@@ -781,24 +774,6 @@ reactor::make_pollfn(Func&& func) {
     };
     return std::make_unique<the_pollfn>(std::forward<Func>(func));
 }
-
-class reactor::poller {
-    std::unique_ptr<pollfn> _pollfn;
-    class registration_task;
-    class deregistration_task;
-    registration_task* _registration_task;
-public:
-    template <typename Func> // signature: bool ()
-    explicit poller(Func&& poll_and_check_more_work)
-            : _pollfn(make_pollfn(std::forward<Func>(poll_and_check_more_work))) {
-        do_register();
-    }
-    ~poller();
-    poller(poller&& x);
-    poller& operator=(poller&& x);
-    void do_register();
-    friend class reactor;
-};
 
 extern thread_local reactor engine;
 extern __thread size_t task_quota;
