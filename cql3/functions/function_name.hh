@@ -35,8 +35,8 @@ namespace functions {
 
 class function_name final {
 public:
-    sstring keyspace;
-    sstring name;
+    const sstring keyspace;
+    const sstring name;
 
 #if 0
     public static FunctionName nativeFunction(String name)
@@ -47,7 +47,6 @@ public:
 
     function_name(sstring keyspace, sstring name)
             : keyspace(keyspace), name(name) {
-        assert(!name.empty());
     }
 
 #if 0
