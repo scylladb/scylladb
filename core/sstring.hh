@@ -105,7 +105,7 @@ public:
             u.external.str[size] = '\0';
         }
     }
-    basic_sstring(const char_type* x) : basic_sstring(x, std::strlen(x)) {}
+    basic_sstring(const char* x) : basic_sstring(reinterpret_cast<const char_type*>(x), std::strlen(x)) {}
     basic_sstring(std::basic_string<char_type>& x) : basic_sstring(x.c_str(), x.size()) {}
     basic_sstring(std::initializer_list<char_type> x) : basic_sstring(x.begin(), x.end() - x.begin()) {}
     basic_sstring(const char_type* b, const char_type* e) : basic_sstring(b, e - b) {}
