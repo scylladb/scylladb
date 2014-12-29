@@ -187,6 +187,12 @@ public:
     basic_sstring& operator+=(const basic_sstring& x) {
         return *this = *this + x;
     }
+    char_type& operator[](size_type pos) {
+        return str()[pos];
+    }
+    const char_type& operator[](size_type pos) const {
+        return str()[pos];
+    }
 
     operator std::experimental::string_view() const {
         return std::experimental::string_view(str(), size());
