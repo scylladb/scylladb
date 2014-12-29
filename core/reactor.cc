@@ -486,6 +486,18 @@ reactor::register_collectd_metrics() {
     return { regs };
 }
 
+void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks, size_t quota) {
+    task_quota = quota;
+    while (!tasks.empty() && task_quota) {
+        --task_quota;
+        auto tsk = std::move(tasks.front());
+        tasks.pop_front();
+        tsk->run();
+        tsk.reset();
+        ++_tasks_processed;
+    }
+}
+
 int reactor::run() {
     auto collectd_metrics = register_collectd_metrics();
 
@@ -550,16 +562,9 @@ int reactor::run() {
     });
 
     while (true) {
-        task_quota = _task_quota;
-        while (!_pending_tasks.empty() && task_quota) {
-            --task_quota;
-            auto tsk = std::move(_pending_tasks.front());
-            _pending_tasks.pop_front();
-            tsk->run();
-            tsk.reset();
-            ++_tasks_processed;
-        }
+        run_tasks(_pending_tasks, _task_quota);
         if (_stopped) {
+            run_tasks(_at_destroy_tasks, _at_destroy_tasks.size());
             if (_id == 0) {
                 smp::join_all();
             }
