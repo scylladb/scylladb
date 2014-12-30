@@ -109,6 +109,15 @@ class qp {
 public:
     virtual ~qp() {}
     virtual future<> send(packet p) = 0;
+    virtual uint32_t send(circular_buffer<packet>& p) {
+        uint32_t sent = 0;
+        while (!p.empty()) {
+            send(std::move(p.front()));
+            p.pop_front();
+            sent++;
+        }
+        return sent;
+    }
     virtual void rx_start() {};
     bool may_forward() { return !proxies.empty(); }
     void add_proxy(unsigned cpu) { proxies.push_back(cpu); }
