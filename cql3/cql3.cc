@@ -15,3 +15,5 @@
 #include "functions/native_scalar_function.hh"
 
 #include "cql_statement.hh"
+
+#include "variable_specifications.hh"

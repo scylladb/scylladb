@@ -15,23 +15,41 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
+/*
+ * Copyright 2014 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-public class VariableSpecifications
-{
-    private final List<ColumnIdentifier> variableNames;
-    private final ColumnSpecification[] specs;
+#ifndef CQL3_VARIABLE_SPECIFICATIONS_HH
+#define CQL3_VARIABLE_SPECIFICATIONS_HH
 
-    public VariableSpecifications(List<ColumnIdentifier> variableNames)
+#include "cql3/column_specification.hh"
+#include "cql3/column_identifier.hh"
+
+#include <vector>
+#include <list>
+
+namespace cql3 {
+
+class variable_specifications {
+private:
+    const std::list<column_identifier> _variable_names;
+    const std::vector<column_specification> _specs;
+
+public:
+    variable_specifications(const std::list<column_identifier>& variable_names)
+        : _variable_names(variable_names)
+    { }
+#if 0
     {
         this.variableNames = variableNames;
         this.specs = new ColumnSpecification[variableNames.size()];
     }
+#endif
 
+#if 0
     /**
      * Returns an empty instance of <code>VariableSpecifications</code>.
      * @return an empty instance of <code>VariableSpecifications</code>
@@ -45,12 +63,14 @@ public class VariableSpecifications
     {
         return variableNames.size();
     }
+#endif
 
-    public List<ColumnSpecification> getSpecifications()
+    std::list<column_specification> get_specifications() const
     {
-        return Arrays.asList(specs);
+        return std::list<column_specification>(_specs.begin(), _specs.end());
     }
 
+#if 0
     public void add(int bindIndex, ColumnSpecification spec)
     {
         ColumnIdentifier name = variableNames.get(bindIndex);
@@ -65,4 +85,9 @@ public class VariableSpecifications
     {
         return Arrays.toString(specs);
     }
+#endif
+};
+
 }
+
+#endif
