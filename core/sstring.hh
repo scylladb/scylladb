@@ -326,6 +326,24 @@ string_type to_sstring(unsigned long long value, void* = nullptr) {
 
 template <typename string_type = sstring>
 inline
+string_type to_sstring(float value, void* = nullptr) {
+    return to_sstring_sprintf(value, "%f");
+}
+
+template <typename string_type = sstring>
+inline
+string_type to_sstring(double value, void* = nullptr) {
+    return to_sstring_sprintf(value, "%f");
+}
+
+template <typename string_type = sstring>
+inline
+string_type to_sstring(long double value, void* = nullptr) {
+    return to_sstring_sprintf(value, "%Lf");
+}
+
+template <typename string_type = sstring>
+inline
 string_type to_sstring(const char* value, void* = nullptr) {
     return string_type(value);
 }
