@@ -13,3 +13,5 @@
 #include "functions/aggregate_function.hh"
 #include "functions/native_aggregate_function.hh"
 #include "functions/native_scalar_function.hh"
+
+#include "cql_statement.hh"

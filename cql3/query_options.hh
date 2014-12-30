@@ -15,29 +15,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.EnumSet;
-import java.util.List;
+/*
+ * Copyright 2014 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import io.netty.buffer.ByteBuf;
+#ifndef CQL3_CQL_QUERY_OPTIONS_HH
+#define CQL3_CQL_QUERY_OPTIONS_HH
 
-import org.apache.cassandra.db.ConsistencyLevel;
-import org.apache.cassandra.service.QueryState;
-import org.apache.cassandra.service.pager.PagingState;
-import org.apache.cassandra.transport.CBCodec;
-import org.apache.cassandra.transport.CBUtil;
-import org.apache.cassandra.transport.ProtocolException;
-import org.apache.cassandra.utils.Pair;
+namespace cql3 {
 
 /**
  * Options for a query.
  */
-public abstract class QueryOptions
-{
+class query_options {
+#if 0
     public static final QueryOptions DEFAULT = new DefaultQueryOptions(ConsistencyLevel.ONE,
                                                                        Collections.<ByteBuffer>emptyList(),
                                                                        false,
@@ -407,4 +401,9 @@ public abstract class QueryOptions
             return flags;
         }
     }
+#endif
+};
+
 }
+
+#endif

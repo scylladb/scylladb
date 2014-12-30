@@ -15,26 +15,36 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
-import org.apache.cassandra.transport.messages.ResultMessage;
-import org.apache.cassandra.service.ClientState;
-import org.apache.cassandra.service.QueryState;
-import org.apache.cassandra.exceptions.*;
+/*
+ * Copyright 2014 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-public interface CQLStatement
-{
-    /**
-     * Returns the number of bound terms in this statement.
-     */
-    public int getBoundTerms();
+#ifndef CQL3_CQL_STATEMENT_HH
+#define CQL3_CQL_STATEMENT_HH
+
+#include "transport/messages/result_message.hh"
+#include "service/client_state.hh"
+#include "service/query_state.hh"
+#include "cql3/query_options.hh"
+#include "database.hh"
+
+namespace cql3 {
+
+class cql_statement {
+public:
+    virtual ~cql_statement();
+
+    virtual int get_bound_terms() = 0;
 
     /**
      * Perform any access verification necessary for the statement.
      *
      * @param state the current client state
      */
-    public void checkAccess(ClientState state) throws UnauthorizedException, InvalidRequestException;
+    virtual void check_access(const service::client_state& state) = 0;
 
     /**
      * Perform additional validation required by the statment.
@@ -42,7 +52,7 @@ public interface CQLStatement
      *
      * @param state the current client state
      */
-    public void validate(ClientState state) throws RequestValidationException;
+    virtual void validate(const service::client_state& state) = 0;
 
     /**
      * Execute the statement and return the resulting result or null if there is no result.
@@ -50,14 +60,18 @@ public interface CQLStatement
      * @param state the current query state
      * @param options options for this query (consistency, variables, pageSize, ...)
      */
-    public ResultMessage execute(QueryState state, QueryOptions options) throws RequestValidationException, RequestExecutionException;
+    virtual transport::messages::result_message execute(service::query_state& state, const query_options& options) = 0;
 
     /**
-     * Variante of execute used for internal query against the system tables, and thus only query the local node.
+     * Variante of execute used for internal query against the system tables, and thus only query the local node = 0.
      *
      * @param state the current query state
      */
-    public ResultMessage executeInternal(QueryState state, QueryOptions options) throws RequestValidationException, RequestExecutionException;
+    virtual transport::messages::result_message execute_internal(service::query_state& state, const query_options& options);
 
-    boolean usesFunction(String ksName, String functionName);
+    virtual bool uses_function(sstring ks_name, sstring function_name) = 0;
+};
+
 }
+
+#endif
