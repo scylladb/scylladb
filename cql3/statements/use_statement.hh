@@ -45,8 +45,8 @@ public:
         return 0;
     }
 
-    virtual prepared prepare() override {
-        return parsed_statement::prepared(*this);
+    virtual std::unique_ptr<prepared> prepare(std::unique_ptr<cql_statement>&& stmt) override {
+        return std::make_unique<parsed_statement::prepared>(std::move(stmt));
     }
 
     virtual void check_access(const service::client_state& state) override {

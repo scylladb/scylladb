@@ -56,24 +56,24 @@ public:
 
     class prepared {
     public:
-        const cql_statement& statement;
+        const std::unique_ptr<cql_statement> statement;
         const std::list<column_specification> bound_names;
 
-        prepared(const cql_statement& statement_, const std::list<column_specification>& bound_names_)
-            : statement(statement_)
+        prepared(std::unique_ptr<cql_statement>&& statement_, const std::list<column_specification>& bound_names_)
+            : statement(std::move(statement_))
             , bound_names(bound_names_)
         { }
 
-        prepared(const cql_statement& statement_, const variable_specifications& names)
-            : prepared(statement_, names.get_specifications())
+        prepared(std::unique_ptr<cql_statement>&& statement_, const variable_specifications& names)
+            : prepared(std::move(statement_), names.get_specifications())
         { }
 
-        prepared(const cql_statement& statement_)
-            : prepared(statement_, std::list<column_specification>())
+        prepared(std::unique_ptr<cql_statement>&& statement_)
+            : prepared(std::move(statement_), std::list<column_specification>())
         { }
     };
 
-    virtual prepared prepare() = 0;
+    virtual std::unique_ptr<prepared> prepare(std::unique_ptr<cql_statement>&& stmt) = 0;
 
     virtual bool uses_function(sstring ks_name, sstring function_name) {
         return false;
