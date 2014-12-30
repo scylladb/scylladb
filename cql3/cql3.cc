@@ -17,3 +17,4 @@
 #include "cql_statement.hh"
 
 #include "variable_specifications.hh"
+#include "column_identifier.hh"
