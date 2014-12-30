@@ -37,7 +37,7 @@ namespace functions {
 /**
  * Base class for our native/hardcoded functions.
  */
-class abstract_function : public function {
+class abstract_function : public virtual function {
 protected:
     function_name _name;
     std::vector<data_type> _arg_types;
