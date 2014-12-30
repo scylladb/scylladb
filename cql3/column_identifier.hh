@@ -15,8 +15,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
+/*
+ * Copyright 2014 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_COLUMN_IDENTIFIER_HH
+#define CQL3_COLUMN_IDENTIFIER_HH
+
+namespace cql3 {
+
+#if 0
 import java.util.List;
 import java.util.Locale;
 import java.nio.ByteBuffer;
@@ -34,13 +45,15 @@ import org.apache.cassandra.db.marshal.UTF8Type;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.ObjectSizes;
 import org.apache.cassandra.utils.memory.AbstractAllocator;
+#endif
 
 /**
  * Represents an identifer for a CQL column definition.
  * TODO : should support light-weight mode without text representation for when not interned
  */
-public class ColumnIdentifier extends org.apache.cassandra.cql3.selection.Selectable implements IMeasurableMemory
+class column_identifier /*extends org.apache.cassandra.cql3.selection.Selectable implements IMeasurableMemory*/
 {
+#if 0
     public final ByteBuffer bytes;
     private final String text;
 
@@ -179,4 +192,9 @@ public class ColumnIdentifier extends org.apache.cassandra.cql3.selection.Select
             return text;
         }
     }
+#endif
+};
+
 }
+
+#endif

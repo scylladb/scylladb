@@ -81,41 +81,31 @@ public:
                 auto&& range = predicate.slice_range;
                 row* rw = cf.find_row(keyb, bytes());
                 if (rw) {
-                    size_t beg = 0;
+                    auto beg = cf.column_defs.begin();
                     if (!range.start.empty()) {
-                        beg = std::distance(
-                                std::lower_bound(cf.column_defs.begin(),
-                                                 cf.column_defs.end(),
-                                                 column_definition{range.start, blob_type},
-                                                 column_definition::name_compare()),
-                                cf.column_defs.begin());
+                        beg = std::lower_bound(cf.column_defs.begin(),
+                                               cf.column_defs.end(),
+                                               column_definition{range.start, blob_type},
+                                               column_definition::name_compare());
                     }
-                    size_t end = cf.column_defs.size();
+                    auto end = cf.column_defs.end();
                     if (!range.finish.empty()) {
-                        end = std::distance(
-                                std::upper_bound(cf.column_defs.begin(),
-                                                 cf.column_defs.end(),
-                                                 column_definition{range.finish, blob_type},
-                                                 column_definition::name_compare()),
-                                 cf.column_defs.end());
-                    }
-                    ssize_t step = 1;
-                    if (range.reversed) {
-                        std::swap(beg, end);
-                        step = -1;
-                        --beg;
-                        --end;
+                        end = std::upper_bound(cf.column_defs.begin(),
+                                               cf.column_defs.end(),
+                                               column_definition{range.finish, blob_type},
+                                               column_definition::name_compare());
                     }
                     auto count = range.count;
                     // FIXME: force limit count?
                     while (beg != end && count--) {
+                        auto& col_def = range.reversed ? *--end : *beg++;
+                        auto idx = &col_def - cf.column_defs.data();
                         Column col;
-                        col.__set_name(cf.column_defs[beg].name);
-                        col.__set_value(rw->cells[beg]);
+                        col.__set_name(col_def.name);
+                        col.__set_value(rw->cells[idx]);
                         ColumnOrSuperColumn v;
                         v.__set_column(std::move(col));
                         ret.push_back(std::move(v));
-                        beg += step;
                     }
                 }
             } else {

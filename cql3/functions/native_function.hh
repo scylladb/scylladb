@@ -15,43 +15,43 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
-import java.util.Locale;
+/*
+ * Modified by Cloudius Systems
+ *
+ * Copyright 2014 Cloudius Systems
+ */
 
-public class CFName
-{
-    private String ksName;
-    private String cfName;
+#ifndef CQL3_FUNCTIONS_NATIVE_FUNCTION_HH
+#define CQL3_FUNCTIONS_NATIVE_FUNCTION_HH
 
-    public void setKeyspace(String ks, boolean keepCase)
-    {
-        ksName = keepCase ? ks : ks.toLowerCase(Locale.US);
+#include "abstract_function.hh"
+
+namespace cql3 {
+namespace functions {
+
+/**
+ * Base class for our native/hardcoded functions.
+ */
+class native_function : public abstract_function {
+protected:
+    native_function(sstring name, data_type return_type, std::vector<data_type> arg_types)
+        : abstract_function(function_name::native_function(std::move(name)),
+                std::move(arg_types), std::move(return_type)) {
     }
 
-    public void setColumnFamily(String cf, boolean keepCase)
-    {
-        cfName = keepCase ? cf : cf.toLowerCase(Locale.US);
+public:
+    // Most of our functions are pure, the other ones should override this
+    virtual bool is_pure() override {
+        return true;
     }
 
-    public boolean hasKeyspace()
-    {
-        return ksName != null;
+    virtual bool is_native() override {
+        return true;
     }
+};
 
-    public String getKeyspace()
-    {
-        return ksName;
-    }
-
-    public String getColumnFamily()
-    {
-        return cfName;
-    }
-
-    @Override
-    public String toString()
-    {
-        return (hasKeyspace() ? (ksName + ".") : "") + cfName;
-    }
 }
+}
+
+#endif

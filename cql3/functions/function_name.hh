@@ -38,12 +38,12 @@ public:
     const sstring keyspace;
     const sstring name;
 
+    static function_name native_function(sstring name) {
+        abort();
 #if 0
-    public static FunctionName nativeFunction(String name)
-    {
         return new FunctionName(SystemKeyspace.NAME, name);
-    }
 #endif
+    }
 
     function_name(sstring keyspace, sstring name)
             : keyspace(keyspace), name(name) {

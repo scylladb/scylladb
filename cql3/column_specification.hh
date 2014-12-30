@@ -15,13 +15,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2014 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_COLUMN_SPECIFICATION_HH
+#define CQL3_COLUMN_SPECIFICATION_HH
+
+namespace cql3 {
+
+#if 0
 package org.apache.cassandra.cql3;
 
 import org.apache.cassandra.db.marshal.AbstractType;
 import org.apache.cassandra.db.marshal.ReversedType;
+#endif
 
-public class ColumnSpecification
-{
+class column_specification {
+#if 0
     public final String ksName;
     public final String cfName;
     public final ColumnIdentifier name;
@@ -50,4 +64,9 @@ public class ColumnSpecification
     {
         return type instanceof ReversedType;
     }
+#endif
+};
+
 }
+
+#endif

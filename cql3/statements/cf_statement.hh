@@ -15,50 +15,63 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.statements;
 
-import org.apache.cassandra.cql3.CFName;
-import org.apache.cassandra.service.ClientState;
-import org.apache.cassandra.exceptions.InvalidRequestException;
+/*
+ * Copyright 2014 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_STATEMENTS_CF_STATEMENT_HH
+#define CQL3_STATEMENTS_CF_STATEMENT_HH
+
+#include "cql3/statements/parsed_statement.hh"
+#include "cql3/cf_name.hh"
+
+namespace cql3 {
+
+namespace statements {
 
 /**
  * Abstract class for statements that apply on a given column family.
  */
-public abstract class CFStatement extends ParsedStatement
-{
-    protected final CFName cfName;
+class cf_statement : public parsed_statement {
+protected:
+    cf_name _cf_name;
 
-    protected CFStatement(CFName cfName)
-    {
-        this.cfName = cfName;
-    }
+    cf_statement(const cf_name& cf_name)
+        : _cf_name(cf_name)
+    { }
 
-    public void prepareKeyspace(ClientState state) throws InvalidRequestException
-    {
-        if (!cfName.hasKeyspace())
-        {
+public:
+    virtual void prepare_keyspace(service::client_state& state) {
+        if (!_cf_name.has_keyspace()) {
             // XXX: We explicitely only want to call state.getKeyspace() in this case, as we don't want to throw
             // if not logged in any keyspace but a keyspace is explicitely set on the statement. So don't move
             // the call outside the 'if' or replace the method by 'prepareKeyspace(state.getKeyspace())'
-            cfName.setKeyspace(state.getKeyspace(), true);
+            _cf_name.set_keyspace(state.get_keyspace(), true);
         }
     }
 
     // Only for internal calls, use the version with ClientState for user queries
-    public void prepareKeyspace(String keyspace)
-    {
-        if (!cfName.hasKeyspace())
-            cfName.setKeyspace(keyspace, true);
+    virtual void prepare_keyspace(sstring keyspace) {
+        if (!_cf_name.has_keyspace()) {
+            _cf_name.set_keyspace(keyspace, true);
+        }
     }
 
-    public String keyspace()
-    {
-        assert cfName.hasKeyspace() : "The statement hasn't be prepared correctly";
-        return cfName.getKeyspace();
+    virtual sstring keyspace() const {
+        assert(_cf_name.has_keyspace()); // "The statement hasn't be prepared correctly";
+        return _cf_name.get_keyspace();
     }
 
-    public String columnFamily()
-    {
-        return cfName.getColumnFamily();
+    virtual sstring column_family() const {
+        return _cf_name.get_column_family();
     }
+};
+
 }
+
+}
+
+#endif
