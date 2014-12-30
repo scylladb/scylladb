@@ -143,7 +143,7 @@ public:
     void set_local_queue(std::unique_ptr<qp> dev) {
         assert(!_queues[engine.cpu_id()]);
         _queues[engine.cpu_id()] = dev.get();
-        engine.at_exit([dev = std::move(dev)] {});
+        engine.at_destroy([dev = std::move(dev)] {});
     }
     template <typename Func>
     unsigned forward_dst(unsigned src_cpuid, Func&& hashfn) {

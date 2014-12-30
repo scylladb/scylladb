@@ -41,6 +41,7 @@ public:
     stream() = default;
     stream(const stream&) = delete;
     stream(stream&&) = delete;
+    ~stream();
     void operator=(const stream&) = delete;
     void operator=(stream&&) = delete;
 
@@ -92,6 +93,15 @@ public:
 
     friend class stream<T...>;
 };
+
+
+template <typename... T>
+inline
+stream<T...>::~stream() {
+    if (_sub) {
+        _sub->_stream = nullptr;
+    }
+}
 
 template <typename... T>
 inline

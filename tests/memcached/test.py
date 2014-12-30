@@ -17,6 +17,8 @@ def run(args, cmd):
     finally:
         print('Killing memcached...')
         mc.kill()
+        mc.wait()
+        print('Memcached killed.')
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Seastar test runner")
