@@ -14,6 +14,7 @@
 #include "functions/native_aggregate_function.hh"
 #include "functions/native_scalar_function.hh"
 
+#include "statements/cf_statement.hh"
 #include "statements/use_statement.hh"
 #include "statements/parsed_statement.hh"
 #include "cql_statement.hh"
