@@ -21,3 +21,4 @@
 #include "variable_specifications.hh"
 #include "column_identifier.hh"
 #include "column_specification.hh"
+#include "cf_name.hh"
