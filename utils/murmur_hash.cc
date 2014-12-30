@@ -22,7 +22,7 @@
 
 #include "murmur_hash.hh"
 
-namespace util {
+namespace utils {
 
 namespace murmur_hash {
 

@@ -35,7 +35,7 @@
  * a translation of Cassandra's Java version back to C.
  **/
 
-namespace util {
+namespace utils {
 
 namespace murmur_hash
 {
