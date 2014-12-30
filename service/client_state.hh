@@ -4,7 +4,11 @@
 namespace service {
 
 class client_state {
+public:
     // FIXME: stub
+
+    void validate_login() const {
+    }
 };
 
 }
