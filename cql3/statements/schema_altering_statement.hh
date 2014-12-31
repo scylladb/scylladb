@@ -15,54 +15,57 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.statements;
 
-import org.apache.cassandra.cql3.CFName;
-import org.apache.cassandra.cql3.CQLStatement;
-import org.apache.cassandra.cql3.QueryOptions;
-import org.apache.cassandra.exceptions.*;
-import org.apache.cassandra.service.ClientState;
-import org.apache.cassandra.service.QueryState;
-import org.apache.cassandra.transport.Event;
-import org.apache.cassandra.transport.messages.ResultMessage;
+/*
+ * Copyright 2014 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_STATEMENTS_SCHEMA_ALTERING_STATEMENT_HH
+#define CQL3_STATEMENTS_SCHEMA_ALTERING_STATEMENT_HH
+
+#include "cql3/statements/cf_statement.hh"
+#include "cql3/cql_statement.hh"
+
+namespace cql3 {
+
+namespace statements {
 
 /**
  * Abstract class for statements that alter the schema.
  */
-public abstract class SchemaAlteringStatement extends CFStatement implements CQLStatement
-{
-    private final boolean isColumnFamilyLevel;
+class schema_altering_statement : public cf_statement, public virtual cql_statement {
+private:
+    const bool _is_column_family_level;
 
-    protected SchemaAlteringStatement()
-    {
-        super(null);
-        this.isColumnFamilyLevel = false;
-    }
+protected:
+    schema_altering_statement()
+        : cf_statement{nullptr}
+        , _is_column_family_level{false}
+    { }
 
-    protected SchemaAlteringStatement(CFName name)
-    {
-        super(name);
-        this.isColumnFamilyLevel = true;
-    }
+    schema_altering_statement(std::unique_ptr<cf_name>&& name)
+        : cf_statement{std::move(name)}
+        , _is_column_family_level{true}
+    { }
 
-    public int getBoundTerms()
-    {
+
+    virtual int get_bound_terms() override {
         return 0;
     }
 
-    @Override
-    public void prepareKeyspace(ClientState state) throws InvalidRequestException
-    {
-        if (isColumnFamilyLevel)
-            super.prepareKeyspace(state);
+    virtual void prepare_keyspace(service::client_state& state) override {
+        if (_is_column_family_level) {
+            cf_statement::prepare_keyspace(state);
+        }
     }
 
-    @Override
-    public Prepared prepare()
-    {
-        return new Prepared(this);
+    virtual std::unique_ptr<prepared> prepare(std::unique_ptr<cql_statement>&& stmt) override {
+        return std::make_unique<parsed_statement::prepared>(std::move(stmt));
     }
 
+#if 0
     public abstract Event.SchemaChange changeEvent();
 
     /**
@@ -72,9 +75,11 @@ public abstract class SchemaAlteringStatement extends CFStatement implements CQL
      * @throws RequestValidationException
      */
     public abstract boolean announceMigration(boolean isLocalOnly) throws RequestValidationException;
+#endif
 
-    public ResultMessage execute(QueryState state, QueryOptions options) throws RequestValidationException
-    {
+    virtual transport::messages::result_message execute(service::query_state& state, const query_options& options) override {
+        throw std::runtime_error("not implemented");
+#if 0
         // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
         // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
         boolean didChangeSchema = announceMigration(false);
@@ -83,10 +88,12 @@ public abstract class SchemaAlteringStatement extends CFStatement implements CQL
 
         Event.SchemaChange ce = changeEvent();
         return ce == null ? new ResultMessage.Void() : new ResultMessage.SchemaChange(ce);
+#endif
     }
 
-    public ResultMessage executeInternal(QueryState state, QueryOptions options)
-    {
+    virtual transport::messages::result_message execute_internal(service::query_state& state, const query_options& options) override {
+        throw std::runtime_error("unsupported operation");
+#if 0
         try
         {
             boolean didChangeSchema = announceMigration(true);
@@ -100,5 +107,12 @@ public abstract class SchemaAlteringStatement extends CFStatement implements CQL
         {
             throw new RuntimeException(e);
         }
+#endif
     }
+};
+
 }
+
+}
+
+#endif
