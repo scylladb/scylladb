@@ -88,6 +88,7 @@ class interface {
     subscription<packet> _rx;
     ethernet_address _hw_address;
     net::hw_features _hw_features;
+    circular_buffer<packet> _packetq;
 private:
     future<> dispatch_packet(packet p);
     future<> send(eth_protocol_num proto_num, ethernet_address to, packet p);
@@ -104,9 +105,14 @@ public:
 };
 
 class qp {
+    using packet_provider_type = std::function<std::experimental::optional<packet> ()>;
+    std::vector<packet_provider_type> _pkt_providers;
     std::vector<unsigned> proxies;
     stream<packet> _rx_stream;
+    reactor::poller _tx_poller;
+    circular_buffer<packet> _tx_packetq;
 public:
+    qp() : _tx_poller([this] { poll_tx(); return true; }) {}
     virtual ~qp() {}
     virtual future<> send(packet p) = 0;
     virtual uint32_t send(circular_buffer<packet>& p) {
@@ -121,6 +127,32 @@ public:
     virtual void rx_start() {};
     bool may_forward() { return !proxies.empty(); }
     void add_proxy(unsigned cpu) { proxies.push_back(cpu); }
+    void register_packet_provider(packet_provider_type func) {
+        _pkt_providers.push_back(std::move(func));
+    }
+    void poll_tx() {
+        if (_tx_packetq.size() < 16) {
+            // refill send queue from upper layers
+            uint32_t work;
+            do {
+                work = 0;
+                for (auto&& pr : _pkt_providers) {
+                    auto p = pr();
+                    if (p) {
+                        work++;
+                        _tx_packetq.push_back(std::move(p.value()));
+                        if (_tx_packetq.size() == 128) {
+                            break;
+                        }
+                    }
+                }
+            } while (work && _tx_packetq.size() < 128);
+
+        }
+        if (!_tx_packetq.empty()) {
+            send(_tx_packetq);
+        }
+    }
     friend class device;
 };
 

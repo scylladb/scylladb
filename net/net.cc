@@ -30,6 +30,14 @@ interface::interface(std::shared_ptr<device> dev)
     , _rx(_dev->receive([this] (packet p) { return dispatch_packet(std::move(p)); }))
     , _hw_address(_dev->hw_address())
     , _hw_features(_dev->hw_features()) {
+    dev->local_queue().register_packet_provider([this] {
+            std::experimental::optional<packet> p;
+            if(!_packetq.empty()) {
+                p = std::move(_packetq.front());
+                _packetq.pop_front();
+            }
+            return p;
+        });
 }
 
 subscription<packet, ethernet_address>
@@ -101,7 +109,8 @@ future<> interface::send(eth_protocol_num proto_num, ethernet_address to, packet
     eh->src_mac = _hw_address;
     eh->eth_proto = uint16_t(proto_num);
     *eh = hton(*eh);
-    return _dev->local_queue().send(std::move(p));
+    _packetq.push_back(std::move(p));
+    return make_ready_future<>();
 }
 
 }
