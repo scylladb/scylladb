@@ -27,12 +27,14 @@
 
 #include "database.hh"
 #include <vector>
+#include <experimental/optional>
 
 namespace cql3 {
 namespace functions {
 
 class function {
 public:
+    using opt_bytes = std::experimental::optional<bytes>;
     virtual ~function() {}
     virtual function_name name() = 0;
     virtual std::vector<data_type> arg_types() = 0;
