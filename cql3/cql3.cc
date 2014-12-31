@@ -23,3 +23,5 @@
 #include "column_identifier.hh"
 #include "column_specification.hh"
 #include "cf_name.hh"
+
+#include "assignment_testable.hh"
