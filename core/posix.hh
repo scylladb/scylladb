@@ -138,6 +138,18 @@ public:
         throw_system_error_on(r == -1);
         return r;
     }
+    template <class X>
+    int getsockopt(int level, int optname, X&& data) {
+        socklen_t len = sizeof(data);
+        int r = ::getsockopt(_fd, level, optname, &data, &len);
+        throw_system_error_on(r == -1);
+        return r;
+    }
+    int getsockopt(int level, int optname, char* data, socklen_t len) {
+        int r = ::getsockopt(_fd, level, optname, data, &len);
+        throw_system_error_on(r == -1);
+        return r;
+    }
     size_t size() {
         struct stat buf;
         auto r = ::fstat(_fd, &buf);
