@@ -32,3 +32,4 @@
 #include "assignment_testable.hh"
 #include "term.hh"
 #include "cql3_row.hh"
+#include "attributes.hh"
