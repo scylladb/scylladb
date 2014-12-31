@@ -28,7 +28,7 @@ ipv4::ipv4(interface* netif)
     : _netif(netif)
     , _global_arp(netif)
     , _arp(_global_arp)
-    , _l3(netif, eth_protocol_num::ipv4)
+    , _l3(netif, eth_protocol_num::ipv4, [this] { return get_packet(); })
     , _rx_packets(_l3.receive([this] (packet p, ethernet_address ea) {
         return handle_received_packet(std::move(p), ea); },
       [this] (forward_hash& out_hash_data, packet& p, size_t off) {
@@ -269,7 +269,17 @@ future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
 }
 
 future<> ipv4::send_raw(ethernet_address dst, packet p) {
-    return _l3.send(dst, std::move(p));
+    _packetq.push_back(l3_protocol::l3packet{eth_protocol_num::ipv4, dst, std::move(p)});
+    return make_ready_future<>();
+}
+
+std::experimental::optional<l3_protocol::l3packet> ipv4::get_packet() {
+    std::experimental::optional<l3_protocol::l3packet> p;
+    if (!_packetq.empty()) {
+        p = std::move(_packetq.front());
+        _packetq.pop_front();
+    }
+    return p;
 }
 
 void ipv4::set_host_address(ipv4_address ip) {

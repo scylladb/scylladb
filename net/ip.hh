@@ -220,9 +220,11 @@ private:
     static constexpr uint32_t _frag_high_thresh{4 * 1024 * 1024};
     uint32_t _frag_mem{0};
     timer<lowres_clock> _frag_timer;
+    circular_buffer<l3_protocol::l3packet> _packetq;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
     bool forward(forward_hash& out_hash_data, packet& p, size_t off);
+    std::experimental::optional<l3_protocol::l3packet> get_packet();
     bool in_my_netmask(ipv4_address a) const;
     void frag_limit_mem();
     void frag_timeout();

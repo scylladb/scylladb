@@ -36,6 +36,7 @@ class arp {
     l3_protocol _proto;
     subscription<packet, ethernet_address> _rx_packets;
     std::unordered_map<uint16_t, arp_for_protocol*> _arp_for_protocol;
+    circular_buffer<l3_protocol::l3packet> _packetq;
 private:
     struct arp_hdr {
         packed<uint16_t> htype;
@@ -52,6 +53,7 @@ private:
     ethernet_address l2self() { return _netif->hw_address(); }
     future<> process_packet(packet p, ethernet_address from);
     bool forward(forward_hash& out_hash_data, packet& p, size_t off);
+    std::experimental::optional<l3_protocol::l3packet> get_packet();
     template <class l3_proto>
     friend class arp_for;
 };
@@ -96,6 +98,7 @@ private:
     virtual future<> received(packet p) override;
     future<> handle_request(arp_hdr* ah);
     l2addr l2self() { return _arp.l2self(); }
+    void send(l2addr to, packet p);
 public:
     future<> send_query(const l3addr& paddr);
     explicit arp_for(arp& a) : arp_for_protocol(a, L3::arp_protocol_type()) {}
@@ -124,9 +127,15 @@ arp_for<L3>::make_query_packet(l3addr paddr) {
 }
 
 template <typename L3>
+void arp_for<L3>::send(l2addr to, packet p) {
+    _arp._packetq.push_back(l3_protocol::l3packet{eth_protocol_num::arp, to, std::move(p)});
+}
+
+template <typename L3>
 future<>
 arp_for<L3>::send_query(const l3addr& paddr) {
-    return _arp._proto.send(ethernet::broadcast_address(), make_query_packet(paddr));
+    send(ethernet::broadcast_address(), make_query_packet(paddr));
+    return make_ready_future<>();
 }
 
 class arp_error : public std::runtime_error {
@@ -223,11 +232,9 @@ arp_for<L3>::handle_request(arp_hdr* ah) {
         ah->sender_hwaddr = l2self();
         ah->sender_paddr = _l3self;
         *ah = hton(*ah);
-        packet p(reinterpret_cast<char*>(ah), sizeof(*ah));
-        return _arp._proto.send(ah->target_hwaddr, std::move(p));
-    } else {
-        return make_ready_future<>();
+        send(ah->target_hwaddr, packet(reinterpret_cast<char*>(ah), sizeof(*ah)));
     }
+    return make_ready_future<>();
 }
 
 }

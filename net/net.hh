@@ -64,14 +64,21 @@ struct hw_features {
 };
 
 class l3_protocol {
+public:
+    struct l3packet {
+        eth_protocol_num proto_num;
+        ethernet_address to;
+        packet p;
+    };
+    using packet_provider_type = std::function<std::experimental::optional<l3packet> ()>;
+private:
     interface* _netif;
     eth_protocol_num _proto_num;
 public:
-    explicit l3_protocol(interface* netif, eth_protocol_num proto_num);
+    explicit l3_protocol(interface* netif, eth_protocol_num proto_num, packet_provider_type func);
     subscription<packet, ethernet_address> receive(
             std::function<future<> (packet, ethernet_address)> rx_fn,
             std::function<bool (forward_hash&, packet&, size_t)> forward);
-    future<> send(ethernet_address to, packet p);
 private:
     friend class interface;
 };
@@ -88,10 +95,9 @@ class interface {
     subscription<packet> _rx;
     ethernet_address _hw_address;
     net::hw_features _hw_features;
-    circular_buffer<packet> _packetq;
+    std::vector<l3_protocol::packet_provider_type> _pkt_providers;
 private:
     future<> dispatch_packet(packet p);
-    future<> send(eth_protocol_num proto_num, ethernet_address to, packet p);
 public:
     explicit interface(std::shared_ptr<device> dev);
     ethernet_address hw_address() { return _hw_address; }
@@ -101,6 +107,9 @@ public:
             std::function<bool (forward_hash&, packet&, size_t)> forward);
     void forward(unsigned cpuid, packet p);
     unsigned hash2cpu(uint32_t hash);
+    void register_packet_provider(l3_protocol::packet_provider_type func) {
+        _pkt_providers.push_back(std::move(func));
+    }
     friend class l3_protocol;
 };
 
