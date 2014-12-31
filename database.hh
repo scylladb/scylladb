@@ -47,6 +47,13 @@ public:
     void serialize(const boost::any& value, std::ostream& out) {
         return _impl->serialize(value, out);
     }
+    bytes decompose(const boost::any& value) {
+        // FIXME: optimize
+        std::ostringstream oss;
+        _impl->serialize(value, oss);
+        auto s = oss.str();
+        return bytes(s.data(), s.size());
+    }
     boost::any deserialize(std::istream& in) {
         return _impl->deserialize(in);
     }
