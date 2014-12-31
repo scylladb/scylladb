@@ -34,7 +34,7 @@ namespace functions {
 /**
  * Base class for the <code>AggregateFunction</code> native classes.
  */
-class native_aggregate_function : public native_function, aggregate_function {
+class native_aggregate_function : public native_function, public aggregate_function {
 protected:
     native_aggregate_function(sstring name, data_type return_type,
             std::vector<data_type> arg_types)
