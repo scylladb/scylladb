@@ -48,15 +48,15 @@ protected:
     }
 
 public:
-    const function_name& name() const {
+    virtual const function_name& name() const override {
         return _name;
     }
 
-    const std::vector<data_type>&  arg_types() const {
+    virtual const std::vector<data_type>&  arg_types() const override {
         return _arg_types;
     }
 
-    data_type return_type() const {
+    virtual data_type return_type() const {
         return _return_type;
     }
 
