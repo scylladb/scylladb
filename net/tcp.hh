@@ -148,7 +148,7 @@ public:
 private:
     class tcb;
 
-    class tcb {
+    class tcb : public enable_shared_from_this<tcb> {
         using clock_type = lowres_clock;
         // Instead of tracking state through an enum, track individual
         // bits of the state.  This reduces duplication in state handling.
@@ -867,9 +867,7 @@ future<> tcp<InetTraits>::tcb::wait_for_data() {
         return make_ready_future<>();
     }
     _rcv._data_received_promise = promise<>();
-    return _rcv._data_received_promise->get_future().then([this] {
-        return make_ready_future<>();
-    });
+    return _rcv._data_received_promise->get_future();
 }
 
 template <typename InetTraits>
@@ -878,9 +876,7 @@ future<> tcp<InetTraits>::tcb::wait_for_all_data_acked() {
         return make_ready_future<>();
     }
     _snd._all_data_acked_promise = promise<>();
-    return _snd._all_data_acked_promise->get_future().then([this] {
-        return make_ready_future<>();
-    });
+    return _snd._all_data_acked_promise->get_future();
 }
 
 template <typename InetTraits>
@@ -897,7 +893,7 @@ template <typename InetTraits>
 future<> tcp<InetTraits>::tcb::send(packet p) {
     // TODO: Handle p.len() > max user_queue_space case
     auto len = p.len();
-    return _snd.user_queue_space.wait(len).then([this, p = std::move(p)] () mutable {
+    return _snd.user_queue_space.wait(len).then([this, zis = this->shared_from_this(), p = std::move(p)] () mutable {
         _snd.unsent_len += p.len();
         _snd.unsent.push_back(std::move(p));
         if (can_send() > 0)
@@ -912,7 +908,7 @@ void tcp<InetTraits>::tcb::close() {
         return;
     }
     // TODO: We should return a future to upper layer
-    wait_for_all_data_acked().then([this]{
+    wait_for_all_data_acked().then([this, zis = this->shared_from_this()] () mutable {
         _snd.closed = true;
         if (_snd.unsent_len == 0) {
             output();
