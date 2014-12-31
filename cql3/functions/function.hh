@@ -27,16 +27,18 @@
 
 #include "database.hh"
 #include <vector>
+#include <experimental/optional>
 
 namespace cql3 {
 namespace functions {
 
 class function {
 public:
+    using opt_bytes = std::experimental::optional<bytes>;
     virtual ~function() {}
-    virtual function_name name() = 0;
-    virtual std::vector<data_type> arg_types() = 0;
-    virtual data_type return_type() = 0;
+    virtual const function_name& name() const = 0;
+    virtual const std::vector<data_type>& arg_types() const = 0;
+    virtual data_type return_type() const = 0;
 
     /**
      * Checks whether the function is a pure function (as in doesn't depend on, nor produce side effects) or not.

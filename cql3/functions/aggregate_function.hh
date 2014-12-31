@@ -26,6 +26,7 @@
 #define CQL3_FUNCTIONS_AGGREGATE_FUNCTION_HH_
 
 #include "function.hh"
+#include <experimental/optional>
 
 namespace cql3 {
 namespace functions {
@@ -50,6 +51,8 @@ public:
      */
     class aggregate {
     public:
+        using opt_bytes = aggregate_function::opt_bytes;
+
         virtual ~aggregate() {}
 
         /**
@@ -58,7 +61,7 @@ public:
          * @param protocol_version native protocol version
          * @param values the values to add to the aggregate.
          */
-        virtual void add_input(int protocol_version, const std::vector<bytes>& values) = 0;
+        virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) = 0;
 
         /**
          * Computes and returns the aggregate current value.
@@ -66,7 +69,7 @@ public:
          * @param protocol_version native protocol version
          * @return the aggregate current value.
          */
-        virtual bytes compute(int protocol_version) = 0;
+        virtual opt_bytes compute(int protocol_version) = 0;
 
         /**
          * Reset this aggregate.
