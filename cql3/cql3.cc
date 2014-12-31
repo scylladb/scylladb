@@ -18,6 +18,7 @@
 #include "statements/cf_statement.hh"
 #include "statements/use_statement.hh"
 #include "statements/parsed_statement.hh"
+#include "statements/truncate_statement.hh"
 #include "cql_statement.hh"
 
 #include "variable_specifications.hh"
