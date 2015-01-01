@@ -127,5 +127,11 @@ tcpv4_listen(tcp<ipv4_traits>& tcpv4, uint16_t port, listen_options opts) {
 			tcpv4, port, opts));
 }
 
+connected_socket
+tcpv4_connect(tcp<ipv4_traits>& tcpv4, socket_address sa) {
+    return connected_socket(std::make_unique<native_connected_socket_impl<tcp<ipv4_traits>>>(
+        tcpv4.connect(sa)));
+}
+
 }
 

@@ -19,6 +19,7 @@
 #include <deque>
 #include <chrono>
 #include <experimental/optional>
+#include <random>
 
 #define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
 #include <cryptopp/md5.h>
@@ -300,6 +301,9 @@ private:
     inet_type& _inet;
     std::unordered_map<connid, lw_shared_ptr<tcb>, connid_hash> _tcbs;
     std::unordered_map<uint16_t, listener*> _listening;
+    std::random_device _rd;
+    std::default_random_engine _e;
+    std::uniform_int_distribution<uint16_t> _port_dist{41952, 65535};
 public:
     class connection {
         lw_shared_ptr<tcb> _tcb;
@@ -358,10 +362,11 @@ public:
         friend class tcp;
     };
 public:
-    explicit tcp(inet_type& inet) : _inet(inet) {}
+    explicit tcp(inet_type& inet) : _inet(inet), _e(_rd()) {}
     void received(packet p, ipaddr from, ipaddr to);
     bool forward(forward_hash& out_hash_data, packet& p, size_t off);
     listener listen(uint16_t port, size_t queue_length = 100);
+    connection connect(socket_address sa);
     net::hw_features hw_features() { return _inet._inet.hw_features(); }
 private:
     void send(ipaddr from, ipaddr to, packet p);
@@ -372,6 +377,27 @@ private:
 template <typename InetTraits>
 auto tcp<InetTraits>::listen(uint16_t port, size_t queue_length) -> listener {
     return listener(*this, port, queue_length);
+}
+
+template <typename InetTraits>
+auto tcp<InetTraits>::connect(socket_address sa) -> connection {
+    uint16_t src_port;
+    connid id;
+    auto src_ip = _inet._inet.host_address();
+    auto dst_ip = ipv4_address(sa);
+    auto dst_port = net::ntoh(sa.u.in.sin_port);
+
+    do {
+        src_port = _port_dist(_e);
+        id = connid{src_ip, dst_ip, src_port, dst_port};
+    } while (_inet._inet.netif()->hash2cpu(id.hash()) != engine.cpu_id()
+            || _tcbs.find(id) != _tcbs.end());
+
+    auto tcbp = make_lw_shared<tcb>(*this, id);
+    _tcbs.insert({id, tcbp});
+    tcbp->output();
+
+    return connection(tcbp);
 }
 
 template <typename InetTraits>
