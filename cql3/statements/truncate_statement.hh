@@ -15,49 +15,56 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.statements;
 
-import java.io.IOException;
-import java.util.concurrent.TimeoutException;
+/*
+ * Copyright 2014 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import org.apache.cassandra.auth.Permission;
-import org.apache.cassandra.cql3.*;
-import org.apache.cassandra.exceptions.*;
-import org.apache.cassandra.transport.messages.ResultMessage;
-import org.apache.cassandra.service.ClientState;
-import org.apache.cassandra.service.QueryState;
-import org.apache.cassandra.service.StorageProxy;
-import org.apache.cassandra.thrift.ThriftValidation;
+#ifndef CQL3_STATEMENTS_TRUNCATE_STATEMENT_HH
+#define CQL3_STATEMENTS_TRUNCATE_STATEMENT_HH
 
-public class TruncateStatement extends CFStatement implements CQLStatement
-{
-    public TruncateStatement(CFName name)
-    {
-        super(name);
-    }
+#include "cql3/statements/cf_statement.hh"
+#include "cql3/cql_statement.hh"
 
-    public int getBoundTerms()
-    {
+#include <memory>
+
+namespace cql3 {
+
+namespace statements {
+
+class truncate_statement : public cf_statement, public virtual cql_statement {
+public:
+    truncate_statement(std::unique_ptr<cf_name>&& name)
+        : cf_statement{std::move(name)}
+    { }
+
+    virtual int get_bound_terms() override {
         return 0;
     }
 
-    public Prepared prepare() throws InvalidRequestException
-    {
-        return new Prepared(this);
+    virtual std::unique_ptr<prepared> prepare(std::unique_ptr<cql_statement>&& stmt) override {
+        return std::make_unique<parsed_statement::prepared>(std::move(stmt));
     }
 
-    public void checkAccess(ClientState state) throws InvalidRequestException, UnauthorizedException
-    {
+    virtual void check_access(const service::client_state& state) override {
+        throw std::runtime_error("not implemented");
+#if 0
         state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.MODIFY);
+#endif
     }
 
-    public void validate(ClientState state) throws InvalidRequestException
-    {
+    virtual void validate(const service::client_state& state) override {
+        throw std::runtime_error("not implemented");
+#if 0
         ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
+#endif
     }
 
-    public ResultMessage execute(QueryState state, QueryOptions options) throws InvalidRequestException, TruncateException
-    {
+    virtual transport::messages::result_message execute(service::query_state& state, const query_options& options) override {
+        throw std::runtime_error("not implemented");
+#if 0
         try
         {
             StorageProxy.truncateBlocking(keyspace(), columnFamily());
@@ -75,10 +82,16 @@ public class TruncateStatement extends CFStatement implements CQLStatement
             throw new TruncateException(e);
         }
         return null;
+#endif
     }
 
-    public ResultMessage executeInternal(QueryState state, QueryOptions options)
-    {
-        throw new UnsupportedOperationException();
+    virtual transport::messages::result_message execute_internal(service::query_state& state, const query_options& options) override {
+        throw std::runtime_error("unsupported operation");
     }
+};
+
 }
+
+}
+
+#endif

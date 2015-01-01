@@ -56,7 +56,7 @@ public:
     virtual void validate(const service::client_state& state) override {
     }
 
-    virtual transport::messages::result_message execute(service::query_state& state, const query_options& options) {
+    virtual transport::messages::result_message execute(service::query_state& state, const query_options& options) override {
         throw std::runtime_error("not implemented");
 #if 0
         state.getClientState().setKeyspace(keyspace);

@@ -47,6 +47,13 @@ public:
     void serialize(const boost::any& value, std::ostream& out) {
         return _impl->serialize(value, out);
     }
+    bytes decompose(const boost::any& value) {
+        // FIXME: optimize
+        std::ostringstream oss;
+        _impl->serialize(value, oss);
+        auto s = oss.str();
+        return bytes(s.data(), s.size());
+    }
     boost::any deserialize(std::istream& in) {
         return _impl->deserialize(in);
     }
@@ -66,6 +73,9 @@ public:
         return std::hash<impl*>()(x._impl);
     }
 };
+
+template <typename Type>
+data_type data_type_for();
 
 class key_compare {
     data_type _type;
@@ -98,6 +108,24 @@ extern data_type ascii_type;
 extern data_type blob_type;
 extern data_type varchar_type;
 extern data_type text_type;
+
+template <>
+inline
+data_type data_type_for<int32_t>() {
+    return int_type;
+}
+
+template <>
+inline
+data_type data_type_for<int64_t>() {
+    return bigint_type;
+}
+
+template <>
+inline
+data_type data_type_for<sstring>() {
+    return varchar_type;
+}
 
 struct column_definition {
     sstring name;

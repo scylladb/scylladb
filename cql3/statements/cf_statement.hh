@@ -28,6 +28,8 @@
 #include "cql3/statements/parsed_statement.hh"
 #include "cql3/cf_name.hh"
 
+#include <memory>
+
 namespace cql3 {
 
 namespace statements {
@@ -37,36 +39,36 @@ namespace statements {
  */
 class cf_statement : public parsed_statement {
 protected:
-    cf_name _cf_name;
+    std::unique_ptr<cf_name> _cf_name;
 
-    cf_statement(const cf_name& cf_name)
-        : _cf_name(cf_name)
+    cf_statement(std::unique_ptr<cf_name>&& cf_name)
+        : _cf_name(std::move(cf_name))
     { }
 
 public:
     virtual void prepare_keyspace(service::client_state& state) {
-        if (!_cf_name.has_keyspace()) {
+        if (!_cf_name->has_keyspace()) {
             // XXX: We explicitely only want to call state.getKeyspace() in this case, as we don't want to throw
             // if not logged in any keyspace but a keyspace is explicitely set on the statement. So don't move
             // the call outside the 'if' or replace the method by 'prepareKeyspace(state.getKeyspace())'
-            _cf_name.set_keyspace(state.get_keyspace(), true);
+            _cf_name->set_keyspace(state.get_keyspace(), true);
         }
     }
 
     // Only for internal calls, use the version with ClientState for user queries
     virtual void prepare_keyspace(sstring keyspace) {
-        if (!_cf_name.has_keyspace()) {
-            _cf_name.set_keyspace(keyspace, true);
+        if (!_cf_name->has_keyspace()) {
+            _cf_name->set_keyspace(keyspace, true);
         }
     }
 
     virtual sstring keyspace() const {
-        assert(_cf_name.has_keyspace()); // "The statement hasn't be prepared correctly";
-        return _cf_name.get_keyspace();
+        assert(_cf_name->has_keyspace()); // "The statement hasn't be prepared correctly";
+        return _cf_name->get_keyspace();
     }
 
     virtual sstring column_family() const {
-        return _cf_name.get_column_family();
+        return _cf_name->get_column_family();
     }
 };
 
