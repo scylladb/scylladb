@@ -44,7 +44,7 @@ shared_ptr<T> make_shared(T& a);
 // CRTP from this to enable shared_from_this:
 template <typename T>
 class enable_shared_from_this {
-    long _count;
+    long _count = 0;
     using ctor = T;
     T* to_value() { return static_cast<T*>(this); }
     T* to_internal_object() { return static_cast<T*>(this); }
