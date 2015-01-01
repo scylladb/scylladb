@@ -158,6 +158,8 @@ private:
         bool _local_fin_sent = false;
         bool _local_fin_acked = false;
         bool _foreign_fin_received = false;
+        // Connection was reset by peer
+        bool _nuked = false;
         tcp& _tcp;
         connection* _conn = nullptr;
         ipaddr _local_ip;
@@ -506,7 +508,19 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     auto seg_len = p.len();
 
     if (th->f_rst) {
+        // Fake end-of-connection so reads return immediately
+        _nuked = true;
         cleanup();
+        if (_rcv._data_received_promise) {
+            // FIXME: set_exception() instead?
+            _rcv._data_received_promise->set_value();
+            _rcv._data_received_promise = {};
+        }
+        if (_snd._all_data_acked_promise) {
+            // FIXME: set_exception() instead?
+            _snd._all_data_acked_promise->set_value();
+            _snd._all_data_acked_promise = {};
+        }
         return;
     }
     if (th->f_syn) {
@@ -791,6 +805,9 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::output() {
+    if (_nuked) {
+        return;
+    }
     do {
         uint8_t options_size = 0;
         packet p = get_transmit_packet();
@@ -863,7 +880,7 @@ void tcp<InetTraits>::tcb::output() {
 
 template <typename InetTraits>
 future<> tcp<InetTraits>::tcb::wait_for_data() {
-    if (!_rcv.data.empty() || _foreign_fin_received) {
+    if (!_rcv.data.empty() || _foreign_fin_received || _nuked) {
         return make_ready_future<>();
     }
     _rcv._data_received_promise = promise<>();
