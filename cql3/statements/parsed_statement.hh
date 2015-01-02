@@ -30,7 +30,7 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/cql_statement.hh"
 
-#include <memory>
+#include "core/shared_ptr.hh"
 
 namespace cql3 {
 
@@ -38,20 +38,20 @@ namespace statements {
 
 class parsed_statement {
 private:
-    std::shared_ptr<variable_specifications> _variables;
+    shared_ptr<variable_specifications> _variables;
 
 public:
     virtual ~parsed_statement()
     { }
 
-    std::shared_ptr<variable_specifications> get_bound_variables() {
+    shared_ptr<variable_specifications> get_bound_variables() {
         return _variables;
     }
 
     // Used by the parser and preparable statement
     void set_bound_variables(const std::list<column_identifier>& bound_names)
     {
-        _variables = std::make_shared<variable_specifications>(bound_names);
+        _variables = ::make_shared<variable_specifications>(bound_names);
     }
 
     class prepared {
