@@ -28,3 +28,4 @@
 #include "cf_name.hh"
 
 #include "assignment_testable.hh"
+#include "term.hh"

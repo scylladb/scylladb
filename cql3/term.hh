@@ -15,12 +15,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
-import java.nio.ByteBuffer;
-import java.util.List;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import org.apache.cassandra.exceptions.InvalidRequestException;
+#ifndef CQL3_TERM_HH
+#define CQL3_TERM_HH
+
+#include <memory>
+
+namespace cql3 {
+
+class terminal;
+
+class term;
 
 /**
  * A CQL3 term, i.e. a column value with or without bind variables.
@@ -29,8 +40,8 @@ import org.apache.cassandra.exceptions.InvalidRequestException;
  * from a raw term (Term.Raw) by poviding the actual receiver to which the term is supposed to be a
  * value of.
  */
-public interface Term
-{
+class term {
+public:
     /**
      * Collects the column specification for the bind variables in this Term.
      * This is obviously a no-op if the term is Terminal.
@@ -38,7 +49,7 @@ public interface Term
      * @param boundNames the variables specification where to collect the
      * bind variables of this term in.
      */
-    public void collectMarkerSpecification(VariableSpecifications boundNames);
+    virtual void collect_marker_specification(std::shared_ptr<variable_specifications> bound_names) = 0;
 
     /**
      * Bind the values in this term to the values contained in {@code values}.
@@ -48,7 +59,7 @@ public interface Term
      * @return the result of binding all the variables of this NonTerminal (or
      * 'this' if the term is terminal).
      */
-    public Terminal bind(QueryOptions options) throws InvalidRequestException;
+    virtual std::shared_ptr<terminal> bind(std::shared_ptr<terminal> term, const query_options& options) = 0;
 
     /**
      * A shorter for bind(values).get().
@@ -56,7 +67,7 @@ public interface Term
      * object between the bind and the get (note that we still want to be able
      * to separate bind and get for collections).
      */
-    public ByteBuffer bindAndGet(QueryOptions options) throws InvalidRequestException;
+    virtual bytes bind_and_get(std::shared_ptr<terminal> term, const query_options& options) = 0;
 
     /**
      * Whether or not that term contains at least one bind marker.
@@ -65,9 +76,9 @@ public interface Term
      * because calls to non pure functions will be NonTerminal (see #5616)
      * even if they don't have bind markers.
      */
-    public abstract boolean containsBindMarker();
+    virtual bool contains_bind_marker() = 0;
 
-    boolean usesFunction(String ksName, String functionName);
+    virtual bool uses_function(sstring ks_name, sstring function_name) const = 0;
 
     /**
      * A parsed, non prepared (thus untyped) term.
@@ -78,8 +89,8 @@ public interface Term
      *   - a function call
      *   - a marker
      */
-    public interface Raw extends AssignmentTestable
-    {
+    class raw : public virtual assignment_testable {
+    public:
         /**
          * This method validates this RawTerm is valid for provided column
          * specification and "prepare" this RawTerm, returning the resulting
@@ -90,13 +101,14 @@ public interface Term
          * case this RawTerm describe a list index or a map key, etc...
          * @return the prepared term.
          */
-        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException;
-    }
+        virtual std::unique_ptr<term> prepare(sstring keyspace, const column_specification& receiver) = 0;
+    };
 
-    public interface MultiColumnRaw extends Raw
-    {
-        public Term prepare(String keyspace, List<? extends ColumnSpecification> receiver) throws InvalidRequestException;
-    }
+    class multi_column_raw : public virtual raw {
+    public:
+        virtual std::unique_ptr<term> prepare(sstring keyspace, const std::vector<column_specification>& receiver) = 0;
+    };
+};
 
     /**
      * A terminal term, one that can be reduced to a byte buffer directly.
@@ -112,44 +124,45 @@ public interface Term
      * Note that a terminal term will always have been type checked, and thus
      * consumer can (and should) assume so.
      */
-    public abstract class Terminal implements Term
-    {
-        public void collectMarkerSpecification(VariableSpecifications boundNames) {}
-        public Terminal bind(QueryOptions options) { return this; }
+    class terminal : public virtual term {
+    public:
+        virtual void collect_marker_specification(std::shared_ptr<variable_specifications> bound_names) {
+        }
 
-        public boolean usesFunction(String ksName, String functionName)
-        {
+        virtual std::shared_ptr<terminal> bind(std::shared_ptr<terminal> term, const query_options& options) override {
+            return std::move(term);
+        }
+
+        virtual bool uses_function(sstring ks_name, sstring function_name) const override {
             return false;
         }
 
         // While some NonTerminal may not have bind markers, no Term can be Terminal
         // with a bind marker
-        public boolean containsBindMarker()
-        {
+        virtual bool contains_bind_marker() const {
             return false;
         }
 
         /**
          * @return the serialized value of this terminal.
          */
-        public abstract ByteBuffer get(QueryOptions options);
+        virtual bytes get(std::shared_ptr<terminal> term, const query_options& options) = 0;
 
-        public ByteBuffer bindAndGet(QueryOptions options) throws InvalidRequestException
-        {
-            return get(options);
+        virtual bytes bind_and_get(std::shared_ptr<terminal> term, const query_options& options) override {
+            return get(term, options);
         }
-    }
+    };
 
-    public abstract class MultiItemTerminal extends Terminal
-    {
-        public abstract List<ByteBuffer> getElements();
-    }
+    class multi_item_terminal : public terminal {
+    public:
+        virtual std::vector<bytes> get_elements() = 0;
+    };
 
-    public interface CollectionTerminal
-    {
+    class collection_terminal {
+    public:
         /** Gets the value of the collection when serialized with the given protocol version format */
-        public ByteBuffer getWithProtocolVersion(int protocolVersion);
-    }
+        virtual bytes get_with_protocol_version(int protocol_version) = 0;
+    };
 
     /**
      * A non terminal term, i.e. a term that can only be reduce to a byte buffer
@@ -161,17 +174,17 @@ public interface Term
      *   - a function having bind marker
      *   - a non pure function (even if it doesn't have bind marker - see #5616)
      */
-    public abstract class NonTerminal implements Term
-    {
-        public boolean usesFunction(String ksName, String functionName)
-        {
+    class non_terminal : public virtual term {
+    public:
+        virtual bool uses_function(sstring ks_name, sstring function_name) const override {
             return false;
         }
 
-        public ByteBuffer bindAndGet(QueryOptions options) throws InvalidRequestException
-        {
-            Terminal t = bind(options);
-            return t == null ? null : t.get(options);
+        virtual bytes bind_and_get(std::shared_ptr<terminal> term, const query_options& options) override{
+            auto t = bind(term, options);
+            return t == nullptr ? nullptr : t->get(term, options);
         }
-    }
+    };
 }
+
+#endif
