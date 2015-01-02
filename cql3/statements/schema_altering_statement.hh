@@ -28,6 +28,8 @@
 #include "cql3/statements/cf_statement.hh"
 #include "cql3/cql_statement.hh"
 
+#include <experimental/optional>
+
 namespace cql3 {
 
 namespace statements {
@@ -41,11 +43,11 @@ private:
 
 protected:
     schema_altering_statement()
-        : cf_statement{nullptr}
+        : cf_statement{std::experimental::optional<cf_name>{}}
         , _is_column_family_level{false}
     { }
 
-    schema_altering_statement(std::unique_ptr<cf_name>&& name)
+    schema_altering_statement(std::experimental::optional<cf_name>&& name)
         : cf_statement{std::move(name)}
         , _is_column_family_level{true}
     { }

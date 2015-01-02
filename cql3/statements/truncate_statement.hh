@@ -28,7 +28,7 @@
 #include "cql3/statements/cf_statement.hh"
 #include "cql3/cql_statement.hh"
 
-#include <memory>
+#include <experimental/optional>
 
 namespace cql3 {
 
@@ -36,7 +36,7 @@ namespace statements {
 
 class truncate_statement : public cf_statement, public virtual cql_statement {
 public:
-    truncate_statement(std::unique_ptr<cf_name>&& name)
+    truncate_statement(std::experimental::optional<cf_name>&& name)
         : cf_statement{std::move(name)}
     { }
 
