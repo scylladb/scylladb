@@ -207,6 +207,7 @@ deps = {
                  'thrift/handler.cc',
                  'thrift/server.cc',
                  'utils/murmur_hash.cc',
+		 'db/db.cc',
                  ]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
                 + core
