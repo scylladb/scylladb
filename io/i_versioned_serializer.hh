@@ -15,15 +15,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.io;
 
-import java.io.DataInput;
-import java.io.IOException;
+/*
+ * Modified by Cloudius Systems
+ *
+ * Copyright 2015 Cloudius Systems
+ */
 
-import org.apache.cassandra.io.util.DataOutputPlus;
+#pragma once
 
-public interface IVersionedSerializer<T>
-{
+#include <cstdint>
+
+namespace io {
+
+// FIXME
+class DataOutputPlus;
+class DataInput;
+
+template<typename T>
+class i_versioned_serializer {
+public:
     /**
      * Serialize the specified type into the specified DataOutputStream instance.
      *
@@ -32,7 +43,7 @@ public interface IVersionedSerializer<T>
      * @param version protocol version
      * @throws java.io.IOException if serialization fails
      */
-    public void serialize(T t, DataOutputPlus out, int version) throws IOException;
+    virtual void serialize(T& t, DataOutputPlus out, int32_t version) = 0;
 
     /**
      * Deserialize into the specified DataInputStream instance.
@@ -41,7 +52,7 @@ public interface IVersionedSerializer<T>
      * @return the type that was deserialized
      * @throws IOException if deserialization fails
      */
-    public T deserialize(DataInput in, int version) throws IOException;
+    virtual T& deserialize(DataInput in, int32_t version) = 0;
 
     /**
      * Calculate serialized size of object without actually serializing.
@@ -49,5 +60,7 @@ public interface IVersionedSerializer<T>
      * @param version protocol version
      * @return serialized size of object t
      */
-    public long serializedSize(T t, int version);
+    virtual uint64_t serialized_size(T& t, int32_t version) = 0;
+};
+
 }
