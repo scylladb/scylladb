@@ -189,7 +189,6 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
 }
 
 future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
-    uint16_t remaining = p.len();
     uint16_t offset = 0;
     auto needs_frag = this->needs_frag(p, proto_num, hw_features());
 
@@ -243,11 +242,11 @@ future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
 
     if (needs_frag) {
         struct send_info {
-            packet p;
             uint16_t remaining;
+            packet p;
             uint16_t offset;
         };
-        auto si = make_lw_shared<send_info>({std::move(p), remaining, offset});
+        auto si = make_lw_shared<send_info>({uint16_t(p.len()), std::move(p), offset});
         auto stop = [si] { return si->remaining == 0; };
         auto send_frag = [this, send_pkt, si] () mutable {
             auto& remaining = si->remaining;
@@ -263,8 +262,7 @@ future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
         return do_until(stop, send_frag);
     } else {
         // The whole packet can be send in one shot
-        remaining = 0;
-        return send_pkt(p, remaining, offset);
+        return send_pkt(p, 0, offset);
     }
 }
 
