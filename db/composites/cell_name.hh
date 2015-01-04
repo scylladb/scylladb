@@ -15,13 +15,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db.composites;
 
-import java.nio.ByteBuffer;
+/*
+ * Modified by Cloudius Systems
+ *
+ * Copyright 2014 Cloudius Systems
+ */
 
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.cql3.ColumnIdentifier;
-import org.apache.cassandra.utils.memory.AbstractAllocator;
+#pragma once
+#include "database.hh"
+
+namespace db {
+namespace composites {
+
+// FIXME
+class CellNameType;
+class ColumnIdentifier;
+class CFMetaData;
 
 /**
  * A CellName is a Composite, but for which, for the sake of CQL3, we
@@ -38,8 +48,8 @@ import org.apache.cassandra.utils.memory.AbstractAllocator;
  * Lastly, if the cell is part of a CQL3 collection, we'll have a last
  * component (a UUID for lists, an element for sets and a key for maps).
  */
-public interface CellName extends Composite
-{
+class cell_name : public composite {
+public:
     /**
      * The number of clustering components.
      *
@@ -47,7 +57,7 @@ public interface CellName extends Composite
      * equal to size() if the table is dense() (in which case cql3ColumnName()
      * will be null).
      */
-    public int clusteringSize();
+    virtual int32_t clustering_size() = 0;
 
     /**
      * The name of the CQL3 column this cell represents.
@@ -55,24 +65,30 @@ public interface CellName extends Composite
      * Will be null for cells of "dense" tables.
      * @param metadata
      */
-    public ColumnIdentifier cql3ColumnName(CFMetaData metadata);
+    virtual ColumnIdentifier cql3_column_name(CFMetaData metadata) = 0;
 
     /**
      * The value of the collection element, or null if the cell is not part
      * of a collection (i.e. if !isCollectionCell()).
      */
-    public ByteBuffer collectionElement();
-    public boolean isCollectionCell();
+    virtual bytes collection_element() = 0 ;
+    virtual bool is_collection_cell() = 0;
 
     /**
      * Whether this cell is part of the same CQL3 row as the other cell.
      */
-    public boolean isSameCQL3RowAs(CellNameType type, CellName other);
+    virtual bool is_same_cql3_row_as(CellNameType type, cell_name& other) = 0;
 
     // If cellnames were sharing some prefix components, this will break it, so
     // we might want to try to do better.
-    @Override
-    public CellName copy(CFMetaData cfm, AbstractAllocator allocator);
+    // @Override
+#if 0
+    // FIXME
+    virtual cell_name copy(CFMetaData cfm, AbstractAllocator allocator) = 0;
+#endif
 
-    public long unsharedHeapSizeExcludingData();
-}
+    virtual int64_t unshared_heap_size_excluding_data() = 0;
+};
+
+} // composites
+} // db
