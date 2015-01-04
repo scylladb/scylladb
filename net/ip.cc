@@ -188,7 +188,7 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
     return make_ready_future<>();
 }
 
-future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
+void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_completion complete) {
     uint16_t offset = 0;
     auto needs_frag = this->needs_frag(p, proto_num, hw_features());
 
@@ -201,8 +201,7 @@ future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
         dst = _gw_address;
     }
 
-
-    auto send_pkt = [this, to, dst, proto_num, needs_frag] (packet& pkt, uint16_t remaining, uint16_t offset) {
+    auto send_pkt = [this, to, dst, proto_num, needs_frag, complete = std::move(complete)] (packet& pkt, uint16_t remaining, uint16_t offset) mutable  {
         auto iph = pkt.prepend_header<ip_hdr>();
         iph->ihl = sizeof(*iph) / 4;
         iph->ver = 4;
@@ -235,8 +234,8 @@ future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
             iph->csum = csum.get();
         }
 
-        return _arp.lookup(dst).then([this, pkt = std::move(pkt)] (ethernet_address e_dst) mutable {
-            return send_raw(e_dst, std::move(pkt));
+        _arp.lookup(dst).then([this, pkt = std::move(pkt), complete = remaining ? l4send_completion() : std::move(complete)] (ethernet_address e_dst) mutable {
+             send_raw(e_dst, std::move(pkt), std::move(complete));
         });
     };
 
@@ -248,34 +247,35 @@ future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
         };
         auto si = make_lw_shared<send_info>({uint16_t(p.len()), std::move(p), offset});
         auto stop = [si] { return si->remaining == 0; };
-        auto send_frag = [this, send_pkt, si] () mutable {
+        auto send_frag = [this, send_pkt = std::move(send_pkt), si] () mutable {
             auto& remaining = si->remaining;
             auto& offset = si->offset;
             auto mtu = hw_features().mtu;
             auto can_send = std::min(uint16_t(mtu - net::ipv4_hdr_len_min), remaining);
             remaining -= can_send;
             auto pkt = si->p.share(offset, can_send);
-            auto ret = send_pkt(pkt, remaining, offset);
+            send_pkt(pkt, remaining, offset);
             offset += can_send;
-            return ret;
+            return make_ready_future<>();
         };
-        return do_until(stop, send_frag);
+        do_until(stop, std::move(send_frag));
     } else {
         // The whole packet can be send in one shot
-        return send_pkt(p, 0, offset);
+        send_pkt(p, 0, offset);
     }
 }
 
-future<> ipv4::send_raw(ethernet_address dst, packet p) {
-    _packetq.push_back(l3_protocol::l3packet{eth_protocol_num::ipv4, dst, std::move(p)});
-    return make_ready_future<>();
+void ipv4::send_raw(ethernet_address dst, packet p, l4send_completion complete) {
+    _packetq.push_back(ipv4packet{l3_protocol::l3packet{eth_protocol_num::ipv4, dst, std::move(p)}, std::move(complete)});
 }
 
 std::experimental::optional<l3_protocol::l3packet> ipv4::get_packet() {
     std::experimental::optional<l3_protocol::l3packet> p;
     if (!_packetq.empty()) {
-        p = std::move(_packetq.front());
+        auto ipv4p = std::move(_packetq.front());
         _packetq.pop_front();
+        p = std::move(ipv4p.l3packet);
+        ipv4p.complete();
     }
     return p;
 }

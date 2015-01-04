@@ -20,6 +20,7 @@
 #include "ip_checksum.hh"
 #include "const.hh"
 #include "packet-util.hh"
+#include "core/shared_ptr.hh"
 
 namespace net {
 
@@ -89,7 +90,7 @@ public:
     ipv4& _inet;
 public:
     ipv4_l4(ipv4& inet) : _inet(inet) {}
-    future<> send(ipv4_address from, ipv4_address to, packet p);
+    void send(ipv4_address from, ipv4_address to, packet p);
 };
 
 class ip_protocol {
@@ -181,6 +182,21 @@ struct ipv4_frag_id::hash : private std::hash<ipv4_address>,
     }
 };
 
+class l4send_completion {
+    lw_shared_ptr<semaphore> _stream;
+    size_t _len = 0;
+public:
+    l4send_completion() = default;
+    l4send_completion(lw_shared_ptr<semaphore> s, size_t l) : _stream(std::move(s)), _len(l) {}
+    l4send_completion(l4send_completion&) = delete;
+    l4send_completion(l4send_completion&& v) : _stream(std::move(v._stream)), _len(v._len) {}
+    void operator()() {
+        if (_len) {
+            _stream->signal(_len);
+        }
+    }
+};
+
 class ipv4 {
 public:
     using clock_type = lowres_clock;
@@ -220,7 +236,13 @@ private:
     static constexpr uint32_t _frag_high_thresh{4 * 1024 * 1024};
     uint32_t _frag_mem{0};
     timer<lowres_clock> _frag_timer;
-    circular_buffer<l3_protocol::l3packet> _packetq;
+    struct ipv4packet {
+        l3_protocol::l3packet l3packet;
+        l4send_completion complete;
+        ipv4packet(ipv4packet&& v) noexcept : l3packet(std::move(v.l3packet)), complete(std::move(v.complete)) {}
+        ipv4packet(l3_protocol::l3packet&& p, l4send_completion&& c) : l3packet(std::move(p)), complete(std::move(c)) {}
+    };
+    circular_buffer<ipv4packet> _packetq;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
     bool forward(forward_hash& out_hash_data, packet& p, size_t off);
@@ -253,8 +275,8 @@ public:
     // But for now, a simple single raw pointer suffices
     void set_packet_filter(ip_packet_filter *);
     ip_packet_filter * packet_filter() const;
-    future<> send(ipv4_address to, ip_protocol_num proto_num, packet p);
-    future<> send_raw(ethernet_address, packet);
+    void send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_completion complete = l4send_completion());
+    void send_raw(ethernet_address, packet, l4send_completion completion = l4send_completion());
     tcp<ipv4_traits>& get_tcp() { return *_tcp._tcp; }
     void register_l4(proto_type id, ip_protocol* handler);
     net::hw_features hw_features() { return _netif->hw_features(); }
@@ -266,8 +288,8 @@ public:
 
 template <ip_protocol_num ProtoNum>
 inline
-future<> ipv4_l4<ProtoNum>::send(ipv4_address from, ipv4_address to, packet p) {
-    return _inet.send(/* from, */ to, ProtoNum, std::move(p));
+void ipv4_l4<ProtoNum>::send(ipv4_address from, ipv4_address to, packet p) {
+    _inet.send(/* from, */ to, ProtoNum, std::move(p));
 }
 
 struct ip_hdr {

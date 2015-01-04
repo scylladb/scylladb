@@ -60,11 +60,13 @@ public:
     }
 
     virtual future<> send(ipv4_addr dst, const char* msg) override {
-        return _proto.send(_reg.port(), dst, packet::from_static_data(msg, strlen(msg)));
+        _proto.send(_reg.port(), dst, packet::from_static_data(msg, strlen(msg)));
+        return make_ready_future<>();
     }
 
     virtual future<> send(ipv4_addr dst, packet p) override {
-        return _proto.send(_reg.port(), dst, std::move(p));
+        _proto.send(_reg.port(), dst, std::move(p));
+        return make_ready_future<>();
     }
 
     virtual bool is_closed() const {
@@ -111,7 +113,7 @@ void udp_v4::received(packet p, ipv4_address from, ipv4_address to)
     }
 }
 
-future<> udp_v4::send(uint16_t src_port, ipv4_addr dst, packet &&p)
+void udp_v4::send(uint16_t src_port, ipv4_addr dst, packet &&p)
 {
     auto src = _inet.host_address();
     auto hdr = p.prepend_header<udp_hdr>();
@@ -135,7 +137,7 @@ future<> udp_v4::send(uint16_t src_port, ipv4_addr dst, packet &&p)
     oi.protocol = ip_protocol_num::udp;
     p.set_offload_info(oi);
 
-    return _inet.send(dst, ip_protocol_num::udp, std::move(p));
+    _inet.send(dst, ip_protocol_num::udp, std::move(p));
 }
 
 uint16_t udp_v4::next_port(uint16_t port) {
