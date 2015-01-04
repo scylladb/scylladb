@@ -169,6 +169,7 @@ private:
         struct unacked_segment {
             packet p;
             uint16_t data_len;
+            uint16_t data_remaining;
             unsigned nr_transmits;
             clock_type::time_point tx_time;
         };
@@ -291,7 +292,7 @@ private:
         }
         uint32_t flight_size() {
             uint32_t size = 0;
-            std::for_each(_snd.data.begin(), _snd.data.end(), [&] (unacked_segment& seg) { size += seg.data_len; });
+            std::for_each(_snd.data.begin(), _snd.data.end(), [&] (unacked_segment& seg) { size += seg.data_remaining; });
             return size;
         }
         friend class connection;
@@ -678,14 +679,15 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
         if (data_ack > _snd.unacknowledged && data_ack <= _snd.next) {
             // Full ACK of segment
             while (!_snd.data.empty()
-                    && (_snd.unacknowledged + _snd.data.front().data_len <= data_ack)) {
-                auto acked_bytes = _snd.data.front().data_len;
+                    && (_snd.unacknowledged + _snd.data.front().data_remaining <= data_ack)) {
+                auto acked_bytes = _snd.data.front().data_remaining;
                 _snd.unacknowledged += acked_bytes;
                 // Ignore retransmitted segments when setting the RTO
                 if (_snd.data.front().nr_transmits == 0) {
                     update_rto(_snd.data.front().tx_time);
                 }
                 update_cwnd(acked_bytes);
+                _snd.user_queue_space.signal(_snd.data.front().data_len);
                 _snd.data.pop_front();
             }
 
@@ -697,7 +699,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 // is that we will retransmit the whole segment although part
                 // of them are already acked.
                 auto acked_bytes = data_ack - _snd.unacknowledged;
-                _snd.data.front().data_len -= acked_bytes;
+                _snd.data.front().data_remaining -= acked_bytes;
                 _snd.unacknowledged = data_ack;
                 update_cwnd(acked_bytes);
             }
@@ -772,7 +774,6 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
         auto p = std::move(_snd.unsent.front());
         _snd.unsent.pop_front();
         _snd.unsent_len -= p.len();
-        _snd.user_queue_space.signal(p.len());
         return p;
     }
     // moderate case: need to split one packet
@@ -780,7 +781,6 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
         auto p = _snd.unsent.front().share(0, can_send);
         _snd.unsent.front().trim_front(can_send);
         _snd.unsent_len -= p.len();
-        _snd.user_queue_space.signal(p.len());
         return p;
     }
     // hard case: merge some packets, possibly split last
@@ -799,7 +799,6 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
         q.trim_front(can_send);
     }
     _snd.unsent_len -= p.len();
-    _snd.user_queue_space.signal(p.len());
     return p;
 }
 
@@ -866,7 +865,7 @@ void tcp<InetTraits>::tcb::output() {
         if (len) {
             unsigned nr_transmits = 0;
             auto now = clock_type::now();
-            _snd.data.emplace_back(unacked_segment{p.share(), len, nr_transmits, now});
+            _snd.data.emplace_back(unacked_segment{p.share(), len, len, nr_transmits, now});
             if (!_retransmit.armed()) {
                 start_retransmit_timer(now);
             }
