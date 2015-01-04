@@ -6,3 +6,4 @@
 // out-of-line implementations.
 
 #include "io/i_versioned_serializer.hh"
+#include "io/i_serializer.hh"

@@ -15,16 +15,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.io;
+/*
+ * Modified by Cloudius Systems
+ *
+ * Copyright 2015 Cloudius Systems
+ */
 
-import java.io.DataInput;
-import java.io.IOException;
+#pragma once
 
-import org.apache.cassandra.db.TypeSizes;
-import org.apache.cassandra.io.util.DataOutputPlus;
+#include <cstdint>
 
-public interface ISerializer<T>
-{
+namespace io {
+class TypeSizes;
+
+template<typename T>
+class i_serializer {
+public:
     /**
      * Serialize the specified type into the specified DataOutput instance.
      *
@@ -33,7 +39,7 @@ public interface ISerializer<T>
      * @param out DataOutput into which serialization needs to happen.
      * @throws java.io.IOException
      */
-    public void serialize(T t, DataOutputPlus out) throws IOException;
+    virtual void serialize(T& t, DataOutputPlus out) = 0;
 
     /**
      * Deserialize from the specified DataInput instance.
@@ -41,7 +47,9 @@ public interface ISerializer<T>
      * @throws IOException
      * @return the type that was deserialized
      */
-    public T deserialize(DataInput in) throws IOException;
+    virtual T& deserialize(DataInput in) = 0;
 
-    public long serializedSize(T t, TypeSizes type);
+    virtual uint64_t serializedSize(T& t, TypeSizes type) = 0;
+};
+
 }
