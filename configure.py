@@ -211,6 +211,7 @@ deps = {
 		 'db/db.cc',
 		 'io/io.cc',
                  'utils/utils.cc',
+                 'utils/UUID_gen.cc',
 		 'gms/version_generator.cc',
                  'dht/dht.cc',
                  ]
