@@ -15,14 +15,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db.composites;
 
-import java.nio.ByteBuffer;
+/*
+ * Modified by Cloudius Systems
+ *
+ * Copyright 2014 Cloudius Systems
+ */
 
-import org.apache.cassandra.cache.IMeasurableMemory;
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.db.filter.ColumnSlice;
-import org.apache.cassandra.utils.memory.AbstractAllocator;
+#pragma once
+
+#include "database.hh"
+
+namespace db {
+namespace composites {
+
+// FIXME
+class CType;
+class CFMetaData;
+class ColumnSlice;
+class AbstractAllocator;
+
 
 /**
  * A composite value.
@@ -35,44 +47,47 @@ import org.apache.cassandra.utils.memory.AbstractAllocator;
  * size() == 1 in the way they are stored. Most code shouldn't have to care about the
  * difference.
  */
-public interface Composite extends IMeasurableMemory
-{
-    public enum EOC
-    {
-        START(-1), NONE(-1), END(1);
+class composite /* extends IMeasurableMemory */ {
+public:
+    class EOC {
+    public:
+        static const EOC START;
+        static const EOC NONE;
+        static const EOC END;
 
         // If composite p has this EOC and is a strict prefix of composite c, then this
         // the result of the comparison of p and c. Basically, p sorts before c unless
         // it's EOC is END.
-        public final int prefixComparisonResult;
+        EOC(int32_t prefix_comparison_result_)
+            : prefix_comparison_result(prefix_comparison_result_)
+        { }
 
-        private EOC(int prefixComparisonResult)
-        {
-            this.prefixComparisonResult = prefixComparisonResult;
-        }
-
-        public static EOC from(int eoc)
+        static const EOC& from(int32_t eoc)
         {
             return eoc == 0 ? NONE : (eoc < 0 ? START : END);
         }
-    }
+        int32_t prefix_comparison_result;
+    };
 
-    public int size();
-    public boolean isEmpty();
-    public ByteBuffer get(int i);
+    virtual int32_t size() = 0;
+    virtual bool is_empty() = 0;
+    virtual bytes get(int32_t i) = 0;
 
-    public EOC eoc();
-    public Composite withEOC(EOC eoc);
-    public Composite start();
-    public Composite end();
-    public ColumnSlice slice();
+    virtual EOC eoc() = 0;
+    virtual composite& with_eoc(EOC eoc) = 0;
+    virtual composite& start() = 0;
+    virtual composite& end() = 0;
+    virtual ColumnSlice slice() = 0;
 
-    public boolean isStatic();
+    virtual bool is_static() = 0;
 
-    public boolean isPrefixOf(CType type, Composite other);
+    virtual bool is_prefix_of(CType type, composite& other) = 0;
 
-    public ByteBuffer toByteBuffer();
+    virtual bytes to_byte_buffer() = 0;
 
-    public int dataSize();
-    public Composite copy(CFMetaData cfm, AbstractAllocator allocator);
-}
+    virtual int32_t data_size() = 0;
+    virtual composite& copy(CFMetaData cfm, AbstractAllocator allocator) = 0;
+};
+
+} // composites
+} // db
