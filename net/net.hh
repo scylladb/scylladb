@@ -117,6 +117,7 @@ class qp {
     using packet_provider_type = std::function<std::experimental::optional<packet> ()>;
     std::vector<packet_provider_type> _pkt_providers;
     std::vector<unsigned> proxies;
+    circular_buffer<packet> _proxy_packetq;
     stream<packet> _rx_stream;
     reactor::poller _tx_poller;
     circular_buffer<packet> _tx_packetq;
@@ -135,7 +136,22 @@ public:
     }
     virtual void rx_start() {};
     bool may_forward() { return !proxies.empty(); }
-    void add_proxy(unsigned cpu) { proxies.push_back(cpu); }
+    void add_proxy(unsigned cpu) {
+        if(proxies.empty()) {
+            register_packet_provider([this] {
+                std::experimental::optional<packet> p;
+                if (!_proxy_packetq.empty()) {
+                    p = std::move(_proxy_packetq.front());
+                    _proxy_packetq.pop_front();
+                }
+                return p;
+            });
+        }
+        proxies.push_back(cpu);
+    }
+    void proxy_send(packet p) {
+        _proxy_packetq.push_back(std::move(p));
+    }
     void register_packet_provider(packet_provider_type func) {
         _pkt_providers.push_back(std::move(func));
     }
