@@ -8,6 +8,7 @@
 #include "composites/composite.hh"
 #include "composites/c_builder.hh"
 #include "composites/cell_name.hh"
+#include "on_disk_atom.hh"
 
 const db::composites::composite::EOC db::composites::composite::EOC::START{-1};
 const db::composites::composite::EOC db::composites::composite::EOC::NONE{-1};
