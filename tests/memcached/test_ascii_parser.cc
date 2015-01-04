@@ -37,7 +37,7 @@ static auto parse(packet&& p) {
     auto parser = make_shared<parser_type>();
     parser->init();
     return is->consume(*parser).then([is, parser] {
-        return make_ready_future<shared_ptr<parser_type>>(parser);
+        return make_ready_future<lw_shared_ptr<parser_type>>(parser);
     });
 }
 

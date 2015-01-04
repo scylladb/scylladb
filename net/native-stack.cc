@@ -184,7 +184,7 @@ native_network_stack::listen(socket_address sa, listen_options opts) {
 using namespace std::chrono_literals;
 
 future<> native_network_stack::run_dhcp(bool is_renew, const dhcp::lease& res) {
-    shared_ptr<dhcp> d = make_shared<dhcp>(_inet);
+    lw_shared_ptr<dhcp> d = make_lw_shared<dhcp>(_inet);
 
     // Hijack the ip-stack.
     for (unsigned i = 0; i < smp::count; i++) {

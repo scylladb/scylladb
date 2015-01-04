@@ -156,7 +156,7 @@ template <typename T>
 struct reducer_with_get_traits {
     using result_type = decltype(std::declval<T>().get());
     using future_type = future<result_type>;
-    static future_type maybe_call_get(future<> f, shared_ptr<T> r) {
+    static future_type maybe_call_get(future<> f, lw_shared_ptr<T> r) {
         return f.then([r = std::move(r)] () mutable {
             return make_ready_future<result_type>(std::move(*r).get());
         });
@@ -166,7 +166,7 @@ struct reducer_with_get_traits {
 template <typename T, typename V = void>
 struct reducer_traits {
     using future_type = future<>;
-    static future_type maybe_call_get(future<> f, shared_ptr<T> r) {
+    static future_type maybe_call_get(future<> f, lw_shared_ptr<T> r) {
         return f.then([r = std::move(r)] {});
     }
 };

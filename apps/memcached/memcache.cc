@@ -63,13 +63,13 @@ public:
 };
 
 class subdevice {
-    foreign_ptr<shared_ptr<flashcache::devfile>> _dev;
+    foreign_ptr<lw_shared_ptr<flashcache::devfile>> _dev;
     uint64_t _offset;
     uint64_t _end;
     std::queue<block> _free_blocks;
     semaphore _par = { 1000 };
 public:
-    subdevice(foreign_ptr<shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length)
+    subdevice(foreign_ptr<lw_shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length)
         : _dev(std::move(dev))
         , _offset(offset)
         , _end(offset + length)
@@ -417,7 +417,7 @@ private:
     item_lru_list _lru;
     cache_stats _stats;
 public:
-    void do_setup(foreign_ptr<shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length) {}
+    void do_setup(foreign_ptr<lw_shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length) {}
 
     void do_erase(item_type& item_ref) {
         _lru.erase(_lru.iterator_to(item_ref));
@@ -462,7 +462,7 @@ public:
         return subdev_ref;
     }
 
-    void do_setup(foreign_ptr<shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length) {
+    void do_setup(foreign_ptr<lw_shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length) {
         _subdev = std::make_unique<flashcache::subdevice>(std::move(dev), offset, length);
     }
 
@@ -878,7 +878,7 @@ public:
         _flush_timer.set_callback([this] { flush_all(); });
     }
 
-    future<> setup(foreign_ptr<shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length) {
+    future<> setup(foreign_ptr<lw_shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length) {
         this->do_setup(std::move(dev), offset, length);
         return make_ready_future<>();
     }
@@ -1058,7 +1058,7 @@ public:
         return decr<remote_origin_tag>(key, delta);
     }
 
-    std::pair<unsigned, foreign_ptr<shared_ptr<std::string>>> print_hash_stats() {
+    std::pair<unsigned, foreign_ptr<lw_shared_ptr<std::string>>> print_hash_stats() {
         static constexpr unsigned bits = sizeof(size_t) * 8;
         size_t histo[bits + 1] {};
         size_t max_size = 0;
@@ -1195,7 +1195,7 @@ public:
     }
 
     future<> print_hash_stats(output_stream<char>& out) {
-        return _peers.map_reduce([&out] (std::pair<unsigned, foreign_ptr<shared_ptr<std::string>>> data) mutable {
+        return _peers.map_reduce([&out] (std::pair<unsigned, foreign_ptr<lw_shared_ptr<std::string>>> data) mutable {
             return out.write("=== CPU " + std::to_string(data.first) + " ===\r\n")
                 .then([&out, str = std::move(data.second)] {
                     return out.write(*str);
@@ -1693,7 +1693,7 @@ public:
 template <bool WithFlashCache>
 class tcp_server {
 private:
-    shared_ptr<server_socket> _listener;
+    lw_shared_ptr<server_socket> _listener;
     sharded_cache<WithFlashCache>& _cache;
     distributed<system_stats>& _system_stats;
     uint16_t _port;

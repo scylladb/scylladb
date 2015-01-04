@@ -46,9 +46,9 @@ private:
     udp_v4& _proto;
     udp_v4::registration _reg;
     bool _closed;
-    shared_ptr<udp_channel_state> _state;
+    lw_shared_ptr<udp_channel_state> _state;
 public:
-    native_channel(udp_v4 &proto, udp_v4::registration reg, shared_ptr<udp_channel_state> state)
+    native_channel(udp_v4 &proto, udp_v4::registration reg, lw_shared_ptr<udp_channel_state> state)
             : _proto(proto)
             , _reg(reg)
             , _closed(false)
@@ -168,7 +168,7 @@ udp_v4::make_channel(ipv4_addr addr) {
         _next_anonymous_port = next_port(_next_anonymous_port);
     }
 
-    auto chan_state = make_shared<udp_channel_state>(_queue_size);
+    auto chan_state = make_lw_shared<udp_channel_state>(_queue_size);
     _channels[bind_port] = chan_state;
     return udp_channel(std::make_unique<native_channel>(*this, registration(*this, bind_port), chan_state));
 }

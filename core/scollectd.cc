@@ -286,7 +286,7 @@ private:
         typedef value_list_map::iterator iterator;
         typedef std::tuple<iterator, cpwriter> context;
 
-        auto ctxt = make_shared<context>();
+        auto ctxt = make_lw_shared<context>();
 
         // note we're doing this unsynced since we assume
         // all registrations to this instance will be done on the

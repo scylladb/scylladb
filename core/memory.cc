@@ -742,7 +742,7 @@ void configure(std::vector<resource::memory> m,
     if (hugetlbfs_path) {
         // std::function is copyable, but file_desc is not, so we must use
         // a shared_ptr to allow sys_alloc to be copied around
-        auto fdp = make_shared<file_desc>(file_desc::temporary(*hugetlbfs_path));
+        auto fdp = make_lw_shared<file_desc>(file_desc::temporary(*hugetlbfs_path));
         sys_alloc = [fdp] (optional<void*> where, size_t how_much) {
             return allocate_hugetlbfs_memory(*fdp, where, how_much);
         };

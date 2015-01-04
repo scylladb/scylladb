@@ -49,7 +49,7 @@ public:
 private:
     static const uint16_t min_anonymous_port = 32768;
     ipv4 &_inet;
-    std::unordered_map<uint16_t, shared_ptr<udp_channel_state>> _channels;
+    std::unordered_map<uint16_t, lw_shared_ptr<udp_channel_state>> _channels;
     int _queue_size = default_queue_size;
     uint16_t _next_anonymous_port = min_anonymous_port;
 private:

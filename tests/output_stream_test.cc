@@ -37,7 +37,7 @@ struct stream_maker {
         return std::move(*this);
     }
 
-    shared_ptr<output_stream<char>> operator()(data_sink sink) {
+    lw_shared_ptr<output_stream<char>> operator()(data_sink sink) {
         return make_shared<output_stream<char>>(std::move(sink), _size, _trim);
     }
 };

@@ -9,19 +9,19 @@
 #include <type_traits>
 
 template <typename T>
-class shared_ptr;
+class lw_shared_ptr;
 
 template <typename T>
-class enable_shared_from_this;
+class enable_lw_shared_from_this;
 
 template <typename T, typename... A>
-shared_ptr<T> make_shared(A&&... a);
+lw_shared_ptr<T> make_lw_shared(A&&... a);
 
 template <typename T>
-shared_ptr<T> make_shared(T&& a);
+lw_shared_ptr<T> make_lw_shared(T&& a);
 
 template <typename T>
-shared_ptr<T> make_shared(T& a);
+lw_shared_ptr<T> make_lw_shared(T& a);
 
 // We want to support two use cases for shared_ptr<T>:
 //
@@ -43,18 +43,18 @@ shared_ptr<T> make_shared(T& a);
 
 // CRTP from this to enable shared_from_this:
 template <typename T>
-class enable_shared_from_this {
+class enable_lw_shared_from_this {
     long _count = 0;
     using ctor = T;
     T* to_value() { return static_cast<T*>(this); }
     T* to_internal_object() { return static_cast<T*>(this); }
 protected:
-    enable_shared_from_this& operator=(const enable_shared_from_this&) { return *this; }
-    enable_shared_from_this& operator=(enable_shared_from_this&&) { return *this; }
+    enable_lw_shared_from_this& operator=(const enable_lw_shared_from_this&) { return *this; }
+    enable_lw_shared_from_this& operator=(enable_lw_shared_from_this&&) { return *this; }
 public:
-    shared_ptr<T> shared_from_this();
+    lw_shared_ptr<T> shared_from_this();
     template <typename X>
-    friend class shared_ptr;
+    friend class lw_shared_ptr;
 };
 
 template <typename T>
@@ -71,64 +71,64 @@ struct shared_ptr_no_esft {
     template <typename... A>
     shared_ptr_no_esft(A&&... a) : _value(std::forward<A>(a)...) {}
     template <typename X>
-    friend class shared_ptr;
+    friend class lw_shared_ptr;
 };
 
 template <typename T>
 using shared_ptr_impl
     = std::conditional_t<
-        std::is_base_of<enable_shared_from_this<T>, T>::value,
-        enable_shared_from_this<T>,
+        std::is_base_of<enable_lw_shared_from_this<T>, T>::value,
+        enable_lw_shared_from_this<T>,
         shared_ptr_no_esft<T>
       >;
 
 template <typename T>
-class shared_ptr {
+class lw_shared_ptr {
     mutable shared_ptr_impl<T>* _p = nullptr;
 private:
-    shared_ptr(shared_ptr_impl<T>* p) : _p(p) {
+    lw_shared_ptr(shared_ptr_impl<T>* p) : _p(p) {
         if (_p) {
             ++_p->_count;
         }
     }
     template <typename... A>
-    static shared_ptr make(A&&... a) {
-        return shared_ptr(new typename shared_ptr_impl<T>::ctor(std::forward<A>(a)...));
+    static lw_shared_ptr make(A&&... a) {
+        return lw_shared_ptr(new typename shared_ptr_impl<T>::ctor(std::forward<A>(a)...));
     }
 public:
     using element_type = T;
 
-    shared_ptr() = default;
-    shared_ptr(const shared_ptr& x) : _p(x._p) {
+    lw_shared_ptr() = default;
+    lw_shared_ptr(const lw_shared_ptr& x) : _p(x._p) {
         if (_p) {
             ++_p->_count;
         }
     }
-    shared_ptr(shared_ptr&& x) : _p(x._p) {
+    lw_shared_ptr(lw_shared_ptr&& x) : _p(x._p) {
         x._p = nullptr;
     }
-    ~shared_ptr() {
+    ~lw_shared_ptr() {
         if (_p && !--_p->_count) {
             delete _p->to_internal_object();
         }
     }
-    shared_ptr& operator=(const shared_ptr& x) {
+    lw_shared_ptr& operator=(const lw_shared_ptr& x) {
         if (_p != x._p) {
-            this->~shared_ptr();
-            new (this) shared_ptr(x);
+            this->~lw_shared_ptr();
+            new (this) lw_shared_ptr(x);
         }
         return *this;
     }
-    shared_ptr& operator=(shared_ptr&& x) {
+    lw_shared_ptr& operator=(lw_shared_ptr&& x) {
         if (_p != x._p) {
-            this->~shared_ptr();
-            new (this) shared_ptr(std::move(x));
+            this->~lw_shared_ptr();
+            new (this) lw_shared_ptr(std::move(x));
         }
         return *this;
     }
-    shared_ptr& operator=(T&& x) {
-        this->~shared_ptr();
-        new (this) shared_ptr(make_shared<T>(std::move(x)));
+    lw_shared_ptr& operator=(T&& x) {
+        this->~lw_shared_ptr();
+        new (this) lw_shared_ptr(make_lw_shared<T>(std::move(x)));
         return *this;
     }
 
@@ -144,8 +144,8 @@ public:
         }
     }
 
-    operator shared_ptr<const T>() const {
-        return shared_ptr<const T>(_p);
+    operator lw_shared_ptr<const T>() const {
+        return lw_shared_ptr<const T>(_p);
     }
 
     explicit operator bool() const {
@@ -157,41 +157,41 @@ public:
     }
 
     template <typename X, typename... A>
-    friend shared_ptr<X> make_shared(A&&...);
+    friend lw_shared_ptr<X> make_lw_shared(A&&...);
 
     template <typename U>
-    friend shared_ptr<U> make_shared(U&&);
+    friend lw_shared_ptr<U> make_lw_shared(U&&);
 
     template <typename U>
-    friend shared_ptr<U> make_shared(U&);
+    friend lw_shared_ptr<U> make_lw_shared(U&);
 
     template <typename U>
-    friend class enable_shared_from_this;
+    friend class enable_lw_shared_from_this;
 };
 
 template <typename T, typename... A>
 inline
-shared_ptr<T> make_shared(A&&... a) {
-    return shared_ptr<T>::make(std::forward<A>(a)...);
+lw_shared_ptr<T> make_lw_shared(A&&... a) {
+    return lw_shared_ptr<T>::make(std::forward<A>(a)...);
 }
 
 template <typename T>
 inline
-shared_ptr<T> make_shared(T&& a) {
-    return shared_ptr<T>::make(std::move(a));
+lw_shared_ptr<T> make_lw_shared(T&& a) {
+    return lw_shared_ptr<T>::make(std::move(a));
 }
 
 template <typename T>
 inline
-shared_ptr<T> make_shared(T& a) {
-    return shared_ptr<T>::make(a);
+lw_shared_ptr<T> make_lw_shared(T& a) {
+    return lw_shared_ptr<T>::make(a);
 }
 
 template <typename T>
 inline
-shared_ptr<T>
-enable_shared_from_this<T>::shared_from_this() {
-    return shared_ptr<T>(this);
+lw_shared_ptr<T>
+enable_lw_shared_from_this<T>::shared_from_this() {
+    return lw_shared_ptr<T>(this);
 }
 
 #endif /* SHARED_PTR_HH_ */
