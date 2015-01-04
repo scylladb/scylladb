@@ -74,7 +74,7 @@ public:
     udp_v4(ipv4& inet);
     udp_channel make_channel(ipv4_addr addr);
     virtual void received(packet p, ipv4_address from, ipv4_address to) override;
-    void send(uint16_t src_port, ipv4_addr dst, packet &&p);
+    void send(uint16_t src_port, ipv4_addr dst, packet &&p, l4send_completion completion);
     bool forward(forward_hash& out_hash_data, packet& p, size_t off) override;
     void set_queue_size(int size) { _queue_size = size; }
     net::hw_features hw_features() { return _inet.hw_features(); }

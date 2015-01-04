@@ -47,26 +47,32 @@ private:
     udp_v4::registration _reg;
     bool _closed;
     lw_shared_ptr<udp_channel_state> _state;
+    // Limit number of data queued into send queue
+    lw_shared_ptr<semaphore> _user_queue_space;
+
 public:
     native_channel(udp_v4 &proto, udp_v4::registration reg, lw_shared_ptr<udp_channel_state> state)
             : _proto(proto)
             , _reg(reg)
             , _closed(false)
             , _state(state)
-    {}
+    {
+        _user_queue_space = make_lw_shared<semaphore>(212992);
+    }
 
     virtual future<udp_datagram> receive() override {
         return _state->_queue.pop_eventually();
     }
 
     virtual future<> send(ipv4_addr dst, const char* msg) override {
-        _proto.send(_reg.port(), dst, packet::from_static_data(msg, strlen(msg)));
-        return make_ready_future<>();
+        return send(dst, packet::from_static_data(msg, strlen(msg)));
     }
 
     virtual future<> send(ipv4_addr dst, packet p) override {
-        _proto.send(_reg.port(), dst, std::move(p));
-        return make_ready_future<>();
+        auto len = p.len();
+        return _user_queue_space->wait(len).then([this, dst, p = std::move(p), len] () mutable {
+            _proto.send(_reg.port(), dst, std::move(p), l4send_completion(_user_queue_space, len));
+        });
     }
 
     virtual bool is_closed() const {
@@ -113,7 +119,7 @@ void udp_v4::received(packet p, ipv4_address from, ipv4_address to)
     }
 }
 
-void udp_v4::send(uint16_t src_port, ipv4_addr dst, packet &&p)
+void udp_v4::send(uint16_t src_port, ipv4_addr dst, packet &&p, l4send_completion completion)
 {
     auto src = _inet.host_address();
     auto hdr = p.prepend_header<udp_hdr>();
@@ -137,7 +143,7 @@ void udp_v4::send(uint16_t src_port, ipv4_addr dst, packet &&p)
     oi.protocol = ip_protocol_num::udp;
     p.set_offload_info(oi);
 
-    _inet.send(dst, ip_protocol_num::udp, std::move(p));
+    _inet.send(dst, ip_protocol_num::udp, std::move(p), std::move(completion));
 }
 
 uint16_t udp_v4::next_port(uint16_t port) {
