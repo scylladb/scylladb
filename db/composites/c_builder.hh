@@ -15,22 +15,36 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db.composites;
 
-import java.nio.ByteBuffer;
-import java.util.List;
+/*
+ * Modified by Cloudius Systems
+ *
+ * Copyright 2014 Cloudius Systems
+ */
+
+#pragma once
+
+#include "database.hh"
+#include "composite.hh"
+#include <boost/any.hpp>
+
+namespace db {
+namespace composites {
 
 /**
  * A builder of Composite.
  */
-public interface CBuilder
+class c_builder
 {
-    public int remainingCount();
+public:
+    virtual int32_t remaining_count() = 0;
 
-    public CBuilder add(ByteBuffer value);
-    public CBuilder add(Object value);
+    virtual c_builder* add(bytes value) = 0;
+    virtual c_builder* add(boost::any value) = 0;
+    virtual std::unique_ptr<composite> build() = 0;
+    virtual std::unique_ptr<composite> build_with(bytes value) = 0;
+    virtual std::unique_ptr<composite> build_with(std::vector<bytes> values) = 0;
+};
 
-    public Composite build();
-    public Composite buildWith(ByteBuffer value);
-    public Composite buildWith(List<ByteBuffer> values);
-}
+} // composites
+} // db
