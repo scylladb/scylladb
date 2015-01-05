@@ -190,4 +190,12 @@ to_bytes(const sstring& x) {
     return bytes(reinterpret_cast<const char*>(x.c_str()), x.size());
 }
 
+// This follows java.util.Comparator
+// FIXME: Choose a better place than database.hh
+template <typename T>
+struct comparator {
+    virtual ~comparator() {}
+    virtual bool operator()(const T& v1, const T& v2) const = 0;
+};
+
 #endif /* DATABASE_HH_ */
