@@ -6,6 +6,7 @@
 #define DATABASE_HH_
 
 #include "core/sstring.hh"
+#include "core/shared_ptr.hh"
 #include <functional>
 #include <boost/any.hpp>
 #include <cstdint>
@@ -39,9 +40,9 @@ public:
         }
     };
 private:
-    impl* _impl;
+    shared_ptr<impl> _impl;
 public:
-    explicit data_type(impl* impl) : _impl(impl) {}
+    explicit data_type(shared_ptr<impl> impl) : _impl(std::move(impl)) {}
     static data_type find(const sstring& name);
     const sstring& name() const { return _impl->name; }
     void serialize(const boost::any& value, std::ostream& out) {
@@ -70,7 +71,7 @@ public:
         return _impl->less(v1, v2);
     }
     friend size_t hash_value(const data_type& x) {
-        return std::hash<impl*>()(x._impl);
+        return std::hash<impl*>()(x._impl.get());
     }
 };
 
@@ -102,12 +103,12 @@ struct partition {
 };
 
 // FIXME: add missing types
-extern data_type int_type;
-extern data_type bigint_type;
-extern data_type ascii_type;
-extern data_type blob_type;
-extern data_type varchar_type;
-extern data_type text_type;
+extern thread_local data_type int_type;
+extern thread_local data_type bigint_type;
+extern thread_local data_type ascii_type;
+extern thread_local data_type blob_type;
+extern thread_local data_type varchar_type;
+extern thread_local data_type text_type;
 
 template <>
 inline

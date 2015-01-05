@@ -84,12 +84,12 @@ struct blob_type_impl : public data_type::impl {
     }
 };
 
-data_type int_type(new int_type_impl);
-data_type bigint_type(new bigint_type_impl);
-data_type ascii_type(new string_type_impl("ascii"));
-data_type blob_type(new blob_type_impl);
-data_type varchar_type(new string_type_impl("varchar"));
-data_type text_type(new string_type_impl("text"));
+thread_local data_type int_type(make_shared<int_type_impl>());
+thread_local data_type bigint_type(make_shared<bigint_type_impl>());
+thread_local data_type ascii_type(make_shared<string_type_impl>("ascii"));
+thread_local data_type blob_type(make_shared<blob_type_impl>());
+thread_local data_type varchar_type(make_shared<string_type_impl>("varchar"));
+thread_local data_type text_type(make_shared<string_type_impl>("text"));
 
 partition::partition(column_family& cf)
         : rows(key_compare(cf.clustering_key_type)) {
