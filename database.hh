@@ -21,15 +21,11 @@
 // FIXME: should be int8_t
 using bytes = basic_sstring<char, uint32_t, 31>;
 
-class data_type {
+class abstract_type {
+        sstring _name;
 public:
-    // Hide the virtual stuff behind an impl class.  This allows us to treat
-    // data_type as a normal value - we can copy, assign, and destroy it
-    // without worrying about the destructor.
-    struct impl {
-        sstring name;
-        impl(sstring name) : name(name) {}
-        virtual ~impl() {}
+        abstract_type(sstring name) : _name(name) {}
+        virtual ~abstract_type() {}
         virtual void serialize(const boost::any& value, std::ostream& out) = 0;
         virtual boost::any deserialize(std::istream& in) = 0;
         virtual bool less(const bytes& v1, const bytes& v2) = 0;
@@ -38,54 +34,34 @@ public:
             std::istringstream iss(v);
             return deserialize(iss);
         }
-    };
-private:
-    shared_ptr<impl> _impl;
-public:
-    explicit data_type(shared_ptr<impl> impl) : _impl(std::move(impl)) {}
-    static data_type find(const sstring& name);
-    const sstring& name() const { return _impl->name; }
-    void serialize(const boost::any& value, std::ostream& out) {
-        return _impl->serialize(value, out);
-    }
-    bytes decompose(const boost::any& value) {
-        // FIXME: optimize
-        std::ostringstream oss;
-        _impl->serialize(value, oss);
-        auto s = oss.str();
-        return bytes(s.data(), s.size());
-    }
-    boost::any deserialize(std::istream& in) {
-        return _impl->deserialize(in);
-    }
-    boost::any deserialize(const bytes& v) {
-        return _impl->deserialize(v);
-    }
-    bool operator==(const data_type& x) const {
-        return _impl == x._impl;
-    }
-    bool operator!=(const data_type& x) const {
-        return _impl != x._impl;
-    }
-    bool less(const bytes& v1, const bytes& v2) const {
-        return _impl->less(v1, v2);
-    }
-    friend size_t hash_value(const data_type& x) {
-        return std::hash<impl*>()(x._impl.get());
-    }
+        bytes decompose(const boost::any& value) {
+            // FIXME: optimize
+            std::ostringstream oss;
+            serialize(value, oss);
+            auto s = oss.str();
+            return bytes(s.data(), s.size());
+        }
+        sstring name() const {
+            return _name;
+        }
 };
 
-using abstract_type = data_type;
+using data_type = shared_ptr<abstract_type>;
+
+inline
+size_t hash_value(const shared_ptr<abstract_type>& x) {
+    return std::hash<abstract_type*>()(x.get());
+}
 
 template <typename Type>
-data_type data_type_for();
+shared_ptr<abstract_type> data_type_for();
 
 class key_compare {
-    data_type _type;
+    shared_ptr<abstract_type> _type;
 public:
-    key_compare(data_type type) : _type(type) {}
+    key_compare(shared_ptr<abstract_type> type) : _type(type) {}
     bool operator()(const bytes& v1, const bytes& v2) const {
-        return _type.less(v1, v2);
+        return _type->less(v1, v2);
     }
 };
 
@@ -105,33 +81,33 @@ struct partition {
 };
 
 // FIXME: add missing types
-extern thread_local data_type int32_type;
-extern thread_local data_type long_type;
-extern thread_local data_type ascii_type;
-extern thread_local data_type bytes_type;
-extern thread_local data_type utf8_type;
+extern thread_local shared_ptr<abstract_type> int32_type;
+extern thread_local shared_ptr<abstract_type> long_type;
+extern thread_local shared_ptr<abstract_type> ascii_type;
+extern thread_local shared_ptr<abstract_type> bytes_type;
+extern thread_local shared_ptr<abstract_type> utf8_type;
 
 template <>
 inline
-data_type data_type_for<int32_t>() {
+shared_ptr<abstract_type> data_type_for<int32_t>() {
     return int32_type;
 }
 
 template <>
 inline
-data_type data_type_for<int64_t>() {
+shared_ptr<abstract_type> data_type_for<int64_t>() {
     return long_type;
 }
 
 template <>
 inline
-data_type data_type_for<sstring>() {
+shared_ptr<abstract_type> data_type_for<sstring>() {
     return utf8_type;
 }
 
 struct column_definition {
     sstring name;
-    data_type type;
+    shared_ptr<abstract_type> type;
     struct name_compare {
         bool operator()(const column_definition& cd1, const column_definition& cd2) const {
             return std::lexicographical_compare(
@@ -143,10 +119,10 @@ struct column_definition {
 };
 
 struct column_family {
-    column_family(data_type partition_key_type, data_type clustering_key_type);
+    column_family(shared_ptr<abstract_type> partition_key_type, shared_ptr<abstract_type> clustering_key_type);
     // primary key = paritition key + clustering_key
-    data_type partition_key_type;
-    data_type clustering_key_type;
+    shared_ptr<abstract_type> partition_key_type;
+    shared_ptr<abstract_type> clustering_key_type;
     std::vector<column_definition> partition_key;
     std::vector<column_definition> clustering_key;
     std::vector<column_definition> column_defs; // sorted by name
@@ -169,7 +145,7 @@ struct database {
 namespace std {
 
 template <>
-struct hash<data_type> : boost::hash<data_type> {
+struct hash<shared_ptr<abstract_type>> : boost::hash<shared_ptr<abstract_type>> {
 };
 
 }

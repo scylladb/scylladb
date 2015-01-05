@@ -40,10 +40,10 @@ namespace functions {
 class abstract_function : public virtual function {
 protected:
     function_name _name;
-    std::vector<data_type> _arg_types;
-    data_type _return_type;
+    std::vector<shared_ptr<abstract_type>> _arg_types;
+    shared_ptr<abstract_type> _return_type;
 
-    abstract_function(function_name name, std::vector<data_type> arg_types, data_type return_type)
+    abstract_function(function_name name, std::vector<shared_ptr<abstract_type>> arg_types, shared_ptr<abstract_type> return_type)
             : _name(std::move(name)), _arg_types(std::move(arg_types)), _return_type(std::move(return_type)) {
     }
 
@@ -52,11 +52,11 @@ public:
         return _name;
     }
 
-    virtual const std::vector<data_type>&  arg_types() const override {
+    virtual const std::vector<shared_ptr<abstract_type>>&  arg_types() const override {
         return _arg_types;
     }
 
-    virtual data_type return_type() const {
+    virtual shared_ptr<abstract_type> return_type() const {
         return _return_type;
     }
 
@@ -84,9 +84,9 @@ operator<<(std::ostream& os, const abstract_function& f) {
         if (i > 0) {
             os << ", ";
         }
-        os << f._arg_types[i].name(); // FIXME: asCQL3Type()
+        os << f._arg_types[i]->name(); // FIXME: asCQL3Type()
     }
-    os << ") -> " << f._return_type.name(); // FIXME: asCQL3Type()
+    os << ") -> " << f._return_type->name(); // FIXME: asCQL3Type()
     return os;
 }
 
@@ -102,7 +102,8 @@ struct hash<cql3::functions::abstract_function> {
         size_t v = 0;
         boost::hash_combine(v, std::hash<function_name>()(f.name()));
         boost::hash_combine(v, boost::hash_value(f.arg_types()));
-        boost::hash_combine(v, std::hash<data_type>()(f.return_type()));
+        // FIXME: type hash
+        //boost::hash_combine(v, std::hash<shared_ptr<abstract_type>>()(f.return_type()));
         return v;
     }
 };

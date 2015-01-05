@@ -125,7 +125,7 @@ public:
      */
     // @Override
     // The orign code returns cell_name_type instead of c_type
-    virtual std::unique_ptr<c_type> set_subtype(int32_t position, data_type newtype) = 0;
+    virtual std::unique_ptr<c_type> set_subtype(int32_t position, shared_ptr<abstract_type> newtype) = 0;
 
     /**
      * Creates a row marker for the CQL3 having the provided clustering prefix.

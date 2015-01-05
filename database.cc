@@ -12,8 +12,8 @@ less_unsigned(const bytes& v1, const bytes& v2) {
 }
 
 template <typename T>
-struct simple_type_impl : data_type::impl {
-    simple_type_impl(sstring name) : impl(std::move(name)) {}
+struct simple_type_impl : abstract_type {
+    simple_type_impl(sstring name) : abstract_type(std::move(name)) {}
     virtual bool less(const bytes& v1, const bytes& v2) override {
         auto& x1 = boost::any_cast<const T&>(deserialize(v1));
         auto& x2 = boost::any_cast<const T&>(deserialize(v2));
@@ -22,7 +22,7 @@ struct simple_type_impl : data_type::impl {
 };
 
 struct int32_type_impl : simple_type_impl<int32_t> {
-    int32_type_impl() : simple_type_impl("int32") {}
+    int32_type_impl() : simple_type_impl<int32_t>("int32") {}
     virtual void serialize(const boost::any& value, std::ostream& out) override {
         auto v = boost::any_cast<const int32_t&>(value);
         auto u = net::hton(uint32_t(v));
@@ -37,7 +37,7 @@ struct int32_type_impl : simple_type_impl<int32_t> {
 };
 
 struct long_type_impl : simple_type_impl<int64_t> {
-    long_type_impl() : simple_type_impl("long") {}
+    long_type_impl() : simple_type_impl<int64_t>("long") {}
     virtual void serialize(const boost::any& value, std::ostream& out) override {
         auto v = boost::any_cast<const int64_t&>(value);
         auto u = net::hton(uint64_t(v));
@@ -51,8 +51,8 @@ struct long_type_impl : simple_type_impl<int64_t> {
     }
 };
 
-struct string_type_impl : public data_type::impl {
-    string_type_impl(sstring name) : impl(name) {}
+struct string_type_impl : public abstract_type {
+    string_type_impl(sstring name) : abstract_type(name) {}
     virtual void serialize(const boost::any& value, std::ostream& out) override {
         auto& v = boost::any_cast<const sstring&>(value);
         out.write(v.c_str(), v.size());
@@ -68,8 +68,8 @@ struct string_type_impl : public data_type::impl {
     }
 };
 
-struct bytes_type_impl : public data_type::impl {
-    bytes_type_impl() : impl("bytes") {}
+struct bytes_type_impl : public abstract_type {
+    bytes_type_impl() : abstract_type("bytes") {}
     virtual void serialize(const boost::any& value, std::ostream& out) override {
         auto& v = boost::any_cast<const bytes&>(value);
         out.write(v.c_str(), v.size());
@@ -84,18 +84,18 @@ struct bytes_type_impl : public data_type::impl {
     }
 };
 
-thread_local data_type int_type(make_shared<int32_type_impl>());
-thread_local data_type long_type(make_shared<long_type_impl>());
-thread_local data_type ascii_type(make_shared<string_type_impl>("ascii"));
-thread_local data_type bytes_type(make_shared<bytes_type_impl>());
-thread_local data_type utf8_type(make_shared<string_type_impl>("utf8"));
+thread_local shared_ptr<abstract_type> int_type(make_shared<int32_type_impl>());
+thread_local shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
+thread_local shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii"));
+thread_local shared_ptr<abstract_type> bytes_type(make_shared<bytes_type_impl>());
+thread_local shared_ptr<abstract_type> utf8_type(make_shared<string_type_impl>("utf8"));
 
 partition::partition(column_family& cf)
         : rows(key_compare(cf.clustering_key_type)) {
 }
 
-column_family::column_family(data_type partition_key_type,
-                             data_type clustering_key_type)
+column_family::column_family(shared_ptr<abstract_type> partition_key_type,
+                             shared_ptr<abstract_type> clustering_key_type)
         : partition_key_type(std::move(partition_key_type))
         , clustering_key_type(std::move(clustering_key_type))
         , partitions(key_compare(this->partition_key_type)) {

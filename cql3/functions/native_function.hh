@@ -35,7 +35,7 @@ namespace functions {
  */
 class native_function : public abstract_function {
 protected:
-    native_function(sstring name, data_type return_type, std::vector<data_type> arg_types)
+    native_function(sstring name, shared_ptr<abstract_type> return_type, std::vector<shared_ptr<abstract_type>> arg_types)
         : abstract_function(function_name::native_function(std::move(name)),
                 std::move(arg_types), std::move(return_type)) {
     }

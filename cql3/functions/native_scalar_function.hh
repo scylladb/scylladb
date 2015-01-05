@@ -36,7 +36,7 @@ namespace functions {
  */
 class native_scalar_function : public native_function, public scalar_function {
 protected:
-    native_scalar_function(sstring name, data_type return_type, std::vector<data_type> args_type)
+    native_scalar_function(sstring name, shared_ptr<abstract_type> return_type, std::vector<shared_ptr<abstract_type>> args_type)
             : native_function(std::move(name), std::move(return_type), std::move(args_type)) {
     }
 

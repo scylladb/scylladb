@@ -68,7 +68,7 @@ class c_type : public comparator<composite> {
     /**
      * Gets a subtype of this CType.
      */
-    virtual data_type subtype(int32_t i) = 0;
+    virtual shared_ptr<abstract_type> subtype(int32_t i) = 0;
 
     /**
      * A builder of Composite.
@@ -102,7 +102,7 @@ class c_type : public comparator<composite> {
      * Returns a new CType that is equivalent to this CType but with
      * one of the subtype replaced by the provided new type.
      */
-    virtual std::unique_ptr<c_type> set_subtype(int32_t position, data_type new_type) = 0;
+    virtual std::unique_ptr<c_type> set_subtype(int32_t position, shared_ptr<abstract_type> new_type) = 0;
 
     /**
      * Deserialize a Composite from a ByteBuffer.
@@ -121,7 +121,7 @@ class c_type : public comparator<composite> {
      * This is only meant to be use for backward compatibility (particularly for
      * thrift) but it's not meant to be used internally.
      */
-    virtual data_type as_abstract_type() = 0;
+    virtual shared_ptr<abstract_type> as_abstract_type() = 0;
 
     /**********************************************************/
 

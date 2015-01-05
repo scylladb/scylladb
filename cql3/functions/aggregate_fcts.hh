@@ -39,7 +39,7 @@ public:
         _count = 0;
     }
     virtual opt_bytes compute(int protocol_version) override {
-        return long_type.decompose(_count);
+        return long_type->decompose(_count);
     }
     virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
         ++_count;
@@ -63,13 +63,13 @@ public:
         _sum = {};
     }
     virtual opt_bytes compute() override {
-        return data_type_for<Type>().decompose(_sum);
+        return data_type_for<Type>()->decompose(_sum);
     }
     virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
-        _sum += boost::any_cast<Type>(data_type_for<Type>().compose(*values[0]));
+        _sum += boost::any_cast<Type>(data_type_for<Type>()->compose(*values[0]));
     }
 };
 
@@ -233,7 +233,7 @@ public:
         _count = 0;
     }
     virtual opt_bytes compute() override {
-        return long_type.decompose(_count);
+        return long_type->decompose(_count);
     }
     virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
