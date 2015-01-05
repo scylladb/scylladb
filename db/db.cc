@@ -12,6 +12,7 @@
 #include "deletion_info.hh"
 #include "range_tombstone.hh"
 #include "composites/c_type.hh"
+#include "composites/cell_name_type.hh"
 
 const db::composites::composite::EOC db::composites::composite::EOC::START{-1};
 const db::composites::composite::EOC db::composites::composite::EOC::NONE{-1};
