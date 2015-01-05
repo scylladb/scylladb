@@ -22,28 +22,28 @@
 using bytes = basic_sstring<char, uint32_t, 31>;
 
 class abstract_type {
-        sstring _name;
+    sstring _name;
 public:
-        abstract_type(sstring name) : _name(name) {}
-        virtual ~abstract_type() {}
-        virtual void serialize(const boost::any& value, std::ostream& out) = 0;
-        virtual boost::any deserialize(std::istream& in) = 0;
-        virtual bool less(const bytes& v1, const bytes& v2) = 0;
-        boost::any deserialize(const bytes& v) {
-            // FIXME: optimize
-            std::istringstream iss(v);
-            return deserialize(iss);
-        }
-        bytes decompose(const boost::any& value) {
-            // FIXME: optimize
-            std::ostringstream oss;
-            serialize(value, oss);
-            auto s = oss.str();
-            return bytes(s.data(), s.size());
-        }
-        sstring name() const {
-            return _name;
-        }
+    abstract_type(sstring name) : _name(name) {}
+    virtual ~abstract_type() {}
+    virtual void serialize(const boost::any& value, std::ostream& out) = 0;
+    virtual boost::any deserialize(std::istream& in) = 0;
+    virtual bool less(const bytes& v1, const bytes& v2) = 0;
+    boost::any deserialize(const bytes& v) {
+        // FIXME: optimize
+        std::istringstream iss(v);
+        return deserialize(iss);
+    }
+    bytes decompose(const boost::any& value) {
+        // FIXME: optimize
+        std::ostringstream oss;
+        serialize(value, oss);
+        auto s = oss.str();
+        return bytes(s.data(), s.size());
+    }
+    sstring name() const {
+        return _name;
+    }
 };
 
 using data_type = shared_ptr<abstract_type>;
