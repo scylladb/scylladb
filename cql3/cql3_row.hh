@@ -15,6 +15,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
+ */
+
+#pragma once
+
+namespace cql3 {
+// FIXME: stub
+class cql3_row {
+public:
+    class builder {
+    };
+    class row_iterator {
+    };
+};
+}
+
+#if 0
 package org.apache.cassandra.cql3;
 
 import java.nio.ByteBuffer;
@@ -39,3 +59,4 @@ public interface CQL3Row
         public CQL3Row getStaticRow();
     }
 }
+#endif
