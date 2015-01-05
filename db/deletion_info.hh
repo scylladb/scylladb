@@ -15,6 +15,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
+ */
+
+#pragma once
+
+namespace db {
+// FIXME: stub
+class deletion_info {
+public:
+    class serializer {
+    };
+};
+}
+#if 0
 package org.apache.cassandra.db;
 
 import java.io.DataInput;
@@ -467,3 +484,4 @@ public class DeletionInfo implements IMeasurableMemory
         }
     }
 }
+#endif
