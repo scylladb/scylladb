@@ -15,6 +15,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef DB_MARSHAL_REVERSED_TYPE_HH
+#define DB_MARSHAL_REVERSED_TYPE_HH
+
+#include "database.hh"
+
+namespace db {
+
+namespace marshal {
+
+#if 0
 package org.apache.cassandra.db.marshal;
 
 import java.nio.ByteBuffer;
@@ -26,9 +43,10 @@ import org.apache.cassandra.cql3.CQL3Type;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.exceptions.SyntaxException;
 import org.apache.cassandra.serializers.TypeSerializer;
+#endif
 
-public class ReversedType<T> extends AbstractType<T>
-{
+class reversed_type : public abstract_type {
+#if 0
     // interning instances
     private static final Map<AbstractType<?>, ReversedType> instances = new HashMap<AbstractType<?>, ReversedType>();
 
@@ -114,4 +132,11 @@ public class ReversedType<T> extends AbstractType<T>
     {
         return getClass().getName() + "(" + baseType + ")";
     }
+#endif
+};
+
 }
+
+}
+
+#endif
