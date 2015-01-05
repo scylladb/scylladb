@@ -75,6 +75,8 @@ public:
     }
 };
 
+using abstract_type = data_type;
+
 template <typename Type>
 data_type data_type_for();
 
