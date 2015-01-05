@@ -13,8 +13,6 @@ using namespace ::apache::thrift::protocol;
 using namespace ::apache::thrift::transport;
 using namespace ::apache::thrift::async;
 
-using boost::shared_ptr;
-
 using namespace  ::org::apache::cassandra;
 
 class unimplemented_exception : public std::exception {
