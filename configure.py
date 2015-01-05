@@ -100,6 +100,7 @@ tests = [
     'tests/allocator_test',
     'tests/output_stream_test',
     'tests/udp_zero_copy',
+    'tests/test-serialization'
     ]
 
 apps = [
@@ -235,6 +236,7 @@ deps = {
     'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc', 'core/posix.cc'],
     'tests/output_stream_test': ['tests/output_stream_test.cc'] + core + libnet,
     'tests/udp_zero_copy': ['tests/udp_zero_copy.cc'] + core + libnet,
+    'tests/test-serialization': ['tests/test-serialization.cc'],
 }
 
 warnings = [
