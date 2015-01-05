@@ -375,6 +375,9 @@ public:
 
     template <typename U, bool esft>
     friend struct shared_ptr_make_helper;
+
+    template <typename U>
+    friend class shared_ptr;
 };
 
 template <typename U, bool esft>
@@ -430,6 +433,132 @@ inline
 shared_ptr<T>
 enable_shared_from_this<T>::shared_from_this() {
     return shared_ptr<T>(this);
+}
+
+template <typename T, typename U>
+inline
+bool
+operator==(const shared_ptr<T>& x, const shared_ptr<U>& y) {
+    return x.get() == y.get();
+}
+
+template <typename T>
+inline
+bool
+operator==(const shared_ptr<T>& x, std::nullptr_t) {
+    return x.get() == nullptr;
+}
+
+template <typename T>
+inline
+bool
+operator==(std::nullptr_t, const shared_ptr<T>& y) {
+    return nullptr == y.get();
+}
+
+template <typename T, typename U>
+inline
+bool
+operator!=(const shared_ptr<T>& x, const shared_ptr<U>& y) {
+    return x.get() != y.get();
+}
+
+template <typename T>
+inline
+bool
+operator!=(const shared_ptr<T>& x, std::nullptr_t) {
+    return x.get() != nullptr;
+}
+
+template <typename T>
+inline
+bool
+operator!=(std::nullptr_t, const shared_ptr<T>& y) {
+    return nullptr != y.get();
+}
+
+template <typename T, typename U>
+inline
+bool
+operator<(const shared_ptr<T>& x, const shared_ptr<U>& y) {
+    return x.get() < y.get();
+}
+
+template <typename T>
+inline
+bool
+operator<(const shared_ptr<T>& x, std::nullptr_t) {
+    return x.get() < nullptr;
+}
+
+template <typename T>
+inline
+bool
+operator<(std::nullptr_t, const shared_ptr<T>& y) {
+    return nullptr < y.get();
+}
+
+template <typename T, typename U>
+inline
+bool
+operator<=(const shared_ptr<T>& x, const shared_ptr<U>& y) {
+    return x.get() <= y.get();
+}
+
+template <typename T>
+inline
+bool
+operator<=(const shared_ptr<T>& x, std::nullptr_t) {
+    return x.get() <= nullptr;
+}
+
+template <typename T>
+inline
+bool
+operator<=(std::nullptr_t, const shared_ptr<T>& y) {
+    return nullptr <= y.get();
+}
+
+template <typename T, typename U>
+inline
+bool
+operator>(const shared_ptr<T>& x, const shared_ptr<U>& y) {
+    return x.get() > y.get();
+}
+
+template <typename T>
+inline
+bool
+operator>(const shared_ptr<T>& x, std::nullptr_t) {
+    return x.get() > nullptr;
+}
+
+template <typename T>
+inline
+bool
+operator>(std::nullptr_t, const shared_ptr<T>& y) {
+    return nullptr > y.get();
+}
+
+template <typename T, typename U>
+inline
+bool
+operator>=(const shared_ptr<T>& x, const shared_ptr<U>& y) {
+    return x.get() >= y.get();
+}
+
+template <typename T>
+inline
+bool
+operator>=(const shared_ptr<T>& x, std::nullptr_t) {
+    return x.get() >= nullptr;
+}
+
+template <typename T>
+inline
+bool
+operator>=(std::nullptr_t, const shared_ptr<T>& y) {
+    return nullptr >= y.get();
 }
 
 #endif /* SHARED_PTR_HH_ */
