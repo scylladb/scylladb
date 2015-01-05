@@ -83,14 +83,14 @@ public:
                     if (!range.start.empty()) {
                         beg = std::lower_bound(cf.column_defs.begin(),
                                                cf.column_defs.end(),
-                                               column_definition{range.start, blob_type},
+                                               column_definition{range.start, bytes_type},
                                                column_definition::name_compare());
                     }
                     auto end = cf.column_defs.end();
                     if (!range.finish.empty()) {
                         end = std::upper_bound(cf.column_defs.begin(),
                                                cf.column_defs.end(),
-                                               column_definition{range.finish, blob_type},
+                                               column_definition{range.finish, bytes_type},
                                                column_definition::name_compare());
                     }
                     auto count = range.count;
@@ -346,15 +346,15 @@ public:
         }
         keyspace& ks = _db.keyspaces[ks_def.name];
         for (const CfDef& cf_def : ks_def.cf_defs) {
-            column_family cf(blob_type, blob_type);
+            column_family cf(bytes_type, bytes_type);
             // FIXME: look at key_alias and key_validator first
-            cf.partition_key.push_back(column_definition{"key", blob_type});
+            cf.partition_key.push_back(column_definition{"key", bytes_type});
             // FIXME: guess clustering keys
             for (const ColumnDef& col_def : cf_def.column_metadata) {
                 // FIXME: look at all fields, not just name
                 cf.column_defs.push_back(column_definition{
                     col_def.name,
-                    blob_type,
+                    bytes_type,
                 });
             }
             std::sort(cf.column_defs.begin(), cf.column_defs.end(), column_definition::name_compare());

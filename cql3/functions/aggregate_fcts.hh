@@ -39,7 +39,7 @@ public:
         _count = 0;
     }
     virtual opt_bytes compute(int protocol_version) override {
-        return bigint_type.decompose(_count);
+        return long_type.decompose(_count);
     }
     virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
         ++_count;
@@ -52,7 +52,7 @@ public:
      */
 std::unique_ptr<aggregate_function>
 make_count_rows_function() {
-    return make_native_aggregate_function_using<impl_count_function>("countRows", bigint_type);
+    return make_native_aggregate_function_using<impl_count_function>("countRows", long_type);
 }
 
 template <typename Type>
@@ -233,7 +233,7 @@ public:
         _count = 0;
     }
     virtual opt_bytes compute() override {
-        return bigint_type.decompose(_count);
+        return long_type.decompose(_count);
     }
     virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
@@ -246,7 +246,7 @@ public:
 template <typename Type>
 class count_function_for final : public native_aggregate_function {
 public:
-    count_function_for() : native_aggregate_function("count", bigint_type, { data_type_for<Type>() }) {}
+    count_function_for() : native_aggregate_function("count", long_type, { data_type_for<Type>() }) {}
     virtual std::unique_ptr<aggregate> new_aggregate() override {
         return std::make_unique<impl_count_function_for<Type>>();
     }

@@ -21,8 +21,8 @@ struct simple_type_impl : data_type::impl {
     }
 };
 
-struct int_type_impl : simple_type_impl<int32_t> {
-    int_type_impl() : simple_type_impl("int") {}
+struct int32_type_impl : simple_type_impl<int32_t> {
+    int32_type_impl() : simple_type_impl("int32") {}
     virtual void serialize(const boost::any& value, std::ostream& out) override {
         auto v = boost::any_cast<const int32_t&>(value);
         auto u = net::hton(uint32_t(v));
@@ -36,8 +36,8 @@ struct int_type_impl : simple_type_impl<int32_t> {
     }
 };
 
-struct bigint_type_impl : simple_type_impl<int64_t> {
-    bigint_type_impl() : simple_type_impl("bigint") {}
+struct long_type_impl : simple_type_impl<int64_t> {
+    long_type_impl() : simple_type_impl("long") {}
     virtual void serialize(const boost::any& value, std::ostream& out) override {
         auto v = boost::any_cast<const int64_t&>(value);
         auto u = net::hton(uint64_t(v));
@@ -68,8 +68,8 @@ struct string_type_impl : public data_type::impl {
     }
 };
 
-struct blob_type_impl : public data_type::impl {
-    blob_type_impl() : impl("blob") {}
+struct bytes_type_impl : public data_type::impl {
+    bytes_type_impl() : impl("bytes") {}
     virtual void serialize(const boost::any& value, std::ostream& out) override {
         auto& v = boost::any_cast<const bytes&>(value);
         out.write(v.c_str(), v.size());
@@ -84,12 +84,11 @@ struct blob_type_impl : public data_type::impl {
     }
 };
 
-thread_local data_type int_type(make_shared<int_type_impl>());
-thread_local data_type bigint_type(make_shared<bigint_type_impl>());
+thread_local data_type int_type(make_shared<int32_type_impl>());
+thread_local data_type long_type(make_shared<long_type_impl>());
 thread_local data_type ascii_type(make_shared<string_type_impl>("ascii"));
-thread_local data_type blob_type(make_shared<blob_type_impl>());
-thread_local data_type varchar_type(make_shared<string_type_impl>("varchar"));
-thread_local data_type text_type(make_shared<string_type_impl>("text"));
+thread_local data_type bytes_type(make_shared<bytes_type_impl>());
+thread_local data_type utf8_type(make_shared<string_type_impl>("utf8"));
 
 partition::partition(column_family& cf)
         : rows(key_compare(cf.clustering_key_type)) {

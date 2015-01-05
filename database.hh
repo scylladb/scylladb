@@ -105,29 +105,28 @@ struct partition {
 };
 
 // FIXME: add missing types
-extern thread_local data_type int_type;
-extern thread_local data_type bigint_type;
+extern thread_local data_type int32_type;
+extern thread_local data_type long_type;
 extern thread_local data_type ascii_type;
-extern thread_local data_type blob_type;
-extern thread_local data_type varchar_type;
-extern thread_local data_type text_type;
+extern thread_local data_type bytes_type;
+extern thread_local data_type utf8_type;
 
 template <>
 inline
 data_type data_type_for<int32_t>() {
-    return int_type;
+    return int32_type;
 }
 
 template <>
 inline
 data_type data_type_for<int64_t>() {
-    return bigint_type;
+    return long_type;
 }
 
 template <>
 inline
 data_type data_type_for<sstring>() {
-    return varchar_type;
+    return utf8_type;
 }
 
 struct column_definition {
