@@ -277,7 +277,6 @@ private:
     semaphore _available_descriptors = { 0 };
     int _free_head = -1;
     int _free_last = -1;
-    std::vector<uint16_t> _batch;
     reactor::poller _poller;
 public:
 
@@ -303,8 +302,6 @@ public:
 
     template <typename Iterator>
     void post(Iterator begin, Iterator end);
-
-    void flush_batch();
 
     semaphore& available_descriptors() { return _available_descriptors; }
 private:
@@ -373,7 +370,6 @@ vring<BufferChain, Completion>::vring(ring_config conf, Completion complete)
     , _avail_event(reinterpret_cast<std::atomic<uint16_t>*>(&_used._shared->_used_elements[conf.size]))
     , _used_event(reinterpret_cast<std::atomic<uint16_t>*>(&_avail._shared->_ring[conf.size]))
     , _poller([this] {
-        flush_batch();
         do_complete();
         return true;
     })
@@ -389,19 +385,6 @@ void vring<BufferChain, Completion>::setup() {
     _free_head = 0;
     _free_last = _config.size - 1;
     _available_descriptors.signal(_config.size);
-}
-
-template <typename BufferChain, typename Completion>
-void vring<BufferChain, Completion>::flush_batch() {
-    if (_batch.empty()) {
-        return;
-    }
-    for (auto desc_head : _batch) {
-        _avail._shared->_ring[masked(_avail._head++)] = desc_head;
-    }
-    _batch.clear();
-    _avail._shared->_idx.store(_avail._head, std::memory_order_release);
-    kick();
 }
 
 // Iterator: points at a buffer_chain
@@ -426,12 +409,11 @@ void vring<BufferChain, Completion>::post(Iterator begin, Iterator end) {
         }
         auto desc_head = pseudo_head._next;
         _buffer_chains[desc_head] = std::move(bc);
-        _batch.push_back(desc_head);
+        _avail._shared->_ring[masked(_avail._head++)] = desc_head;
         _avail._avail_added_since_kick++;
     }
-    if (_batch.size() >= 16) {
-        flush_batch();
-    }
+    _avail._shared->_idx.store(_avail._head, std::memory_order_release);
+    kick();
 }
 
 template <typename BufferChain, typename Completion>
