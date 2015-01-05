@@ -98,7 +98,7 @@ column_family::column_family(data_type partition_key_type,
                              data_type clustering_key_type)
         : partition_key_type(std::move(partition_key_type))
         , clustering_key_type(std::move(clustering_key_type))
-        , partitions(key_compare(partition_key_type)) {
+        , partitions(key_compare(this->partition_key_type)) {
 }
 
 partition*
