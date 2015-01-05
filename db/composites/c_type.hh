@@ -39,7 +39,7 @@ using namespace io;
 class DataInput;
 class ColumnSlice;
 class SliceQueryFilter;
-class IndexInfo;
+class index_info;
 
 /**
  * A type for a Composite.
@@ -133,15 +133,15 @@ public:
      */
 
     virtual std::shared_ptr<comparator<composite>> reverse_comparator() = 0;
-    virtual std::shared_ptr<comparator<IndexInfo>> index_comparator() = 0;
-    virtual std::shared_ptr<comparator<IndexInfo>> index_reverse_comparator() = 0;
+    virtual std::shared_ptr<comparator<index_info>> index_comparator() = 0;
+    virtual std::shared_ptr<comparator<index_info>> index_reverse_comparator() = 0;
 
     virtual std::unique_ptr<serializer> serializer() = 0;
 
     virtual std::unique_ptr<i_versioned_serializer<ColumnSlice>> slice_serializer() = 0;
     virtual std::unique_ptr<i_versioned_serializer<SliceQueryFilter>> slice_query_filter_serializer() = 0;
-    virtual std::unique_ptr<deletion_info::serializer> deletion_info_serializer() = 0;
-    virtual std::unique_ptr<range_tombstone::serializer> range_tombstone_serializer() = 0;
+    virtual std::shared_ptr<deletion_info::serializer> deletion_info_serializer() = 0;
+    virtual std::shared_ptr<range_tombstone::serializer> range_tombstone_serializer() = 0;
 
     class serializer : public i_serializer<composite> {
         virtual void skip(DataInput in) = 0;

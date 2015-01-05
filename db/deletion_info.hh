@@ -23,13 +23,25 @@
 
 #pragma once
 
+#include <memory>
+
 namespace db {
+
+// Avoid include db/composites/c_type.hh since it includes db/deletion_info.hh
+namespace composites {
+class c_type;
+}
+
 // FIXME: stub
 class deletion_info {
 public:
     class serializer {
+    public:
+        serializer(std::shared_ptr<db::composites::c_type> type) {
+        }
     };
 };
+
 }
 #if 0
 package org.apache.cassandra.db;

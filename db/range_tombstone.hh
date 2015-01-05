@@ -24,10 +24,18 @@
 #pragma once
 
 namespace db {
+
+// Avoid include db/composites/c_type.hh since it includes db/range_tombstone.hh
+namespace composites {
+class c_type;
+}
 // FIXME: stub
 class range_tombstone {
 public:
     class serializer {
+    public:
+        serializer(std::shared_ptr<db::composites::c_type> type) {
+        }
     };
 };
 }

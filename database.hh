@@ -247,8 +247,13 @@ to_bytes(const utils::UUID& uuid) {
 // FIXME: Choose a better place than database.hh
 template <typename T>
 struct comparator {
-    virtual ~comparator() {}
-    virtual bool operator()(const T& v1, const T& v2) const = 0;
+    comparator() = default;
+    comparator(std::function<int32_t (T& v1, T& v2)> fn)
+        : _compare_fn(std::move(fn))
+    { }
+    int32_t compare() { return _compare_fn(); }
+private:
+    std::function<int32_t (T& v1, T& v2)> _compare_fn;
 };
 
 inline bool
