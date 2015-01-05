@@ -101,12 +101,12 @@ public:
          * case this RawTerm describe a list index or a map key, etc...
          * @return the prepared term.
          */
-        virtual std::unique_ptr<term> prepare(sstring keyspace, const column_specification& receiver) = 0;
+        virtual ::shared_ptr<term> prepare(sstring keyspace, ::shared_ptr<column_specification> receiver) = 0;
     };
 
     class multi_column_raw : public virtual raw {
     public:
-        virtual std::unique_ptr<term> prepare(sstring keyspace, const std::vector<column_specification>& receiver) = 0;
+        virtual ::shared_ptr<term> prepare(sstring keyspace, const std::vector<column_specification>& receiver) = 0;
     };
 };
 
