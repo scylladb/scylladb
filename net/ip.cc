@@ -247,7 +247,7 @@ future<> ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p) {
             uint16_t remaining;
             uint16_t offset;
         };
-        auto si = make_shared<send_info>({std::move(p), remaining, offset});
+        auto si = make_lw_shared<send_info>({std::move(p), remaining, offset});
         auto stop = [si] { return si->remaining == 0; };
         auto send_frag = [this, send_pkt, si] () mutable {
             auto& remaining = si->remaining;

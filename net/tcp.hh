@@ -148,7 +148,7 @@ public:
 private:
     class tcb;
 
-    class tcb : public enable_shared_from_this<tcb> {
+    class tcb : public enable_lw_shared_from_this<tcb> {
         using clock_type = lowres_clock;
         // Instead of tracking state through an enum, track individual
         // bits of the state.  This reduces duplication in state handling.
@@ -298,13 +298,13 @@ private:
         friend class connection;
     };
     inet_type& _inet;
-    std::unordered_map<connid, shared_ptr<tcb>, connid_hash> _tcbs;
+    std::unordered_map<connid, lw_shared_ptr<tcb>, connid_hash> _tcbs;
     std::unordered_map<uint16_t, listener*> _listening;
 public:
     class connection {
-        shared_ptr<tcb> _tcb;
+        lw_shared_ptr<tcb> _tcb;
     public:
-        explicit connection(shared_ptr<tcb> tcbp) : _tcb(std::move(tcbp)) { _tcb->_conn = this; }
+        explicit connection(lw_shared_ptr<tcb> tcbp) : _tcb(std::move(tcbp)) { _tcb->_conn = this; }
         connection(const connection&) = delete;
         connection(connection&& x) noexcept : _tcb(std::move(x._tcb)) {
             _tcb->_conn = this;
@@ -406,14 +406,14 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
     auto h = ntoh(*th);
     auto id = connid{to, from, h.dst_port, h.src_port};
     auto tcbi = _tcbs.find(id);
-    shared_ptr<tcb> tcbp;
+    lw_shared_ptr<tcb> tcbp;
     if (tcbi == _tcbs.end()) {
         if (h.f_syn && !h.f_ack) {
             auto listener = _listening.find(id.local_port);
             if (listener == _listening.end() || listener->second->_q.full()) {
                 return respond_with_reset(&h, id.local_ip, id.foreign_ip);
             }
-            tcbp = make_shared<tcb>(*this, id);
+            tcbp = make_lw_shared<tcb>(*this, id);
             listener->second->_q.push(connection(tcbp));
             _tcbs.insert({id, tcbp});
         }
