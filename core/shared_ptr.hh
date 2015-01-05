@@ -8,6 +8,25 @@
 #include <utility>
 #include <type_traits>
 
+// This header defines two shared pointer facilities, lw_shared_ptr<> and
+// shared_ptr<>, both modeled after std::shared_ptr<>.
+//
+// Unlike std::shared_ptr<>, neither of these implementations are thread
+// safe, and two pointers sharing the same object must not be used in
+// different threads.
+//
+// lw_shared_ptr<> is the more lightweight variant, with a lw_shared_ptr<>
+// occupying just one machine word, and adding just one word to the shared
+// object.  However, it does not support polymorphism.
+//
+// shared_ptr<> is more expensive, with a pointer occupying two machine
+// words, and with two words of overhead in the shared object.  In return,
+// it does support polymorphism.
+//
+// Both variants support shared_from_this() via enable_shared_from_this<>
+// and lw_enable_shared_from_this<>().
+//
+
 template <typename T>
 class lw_shared_ptr;
 
