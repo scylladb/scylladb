@@ -375,6 +375,9 @@ public:
 
     template <typename U, bool esft>
     friend struct shared_ptr_make_helper;
+
+    template <typename U>
+    friend class shared_ptr;
 };
 
 template <typename U, bool esft>
