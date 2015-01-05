@@ -15,23 +15,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db.composites;
 
-import java.io.DataInput;
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.util.Comparator;
+/*
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
+ */
 
-import org.apache.cassandra.db.DeletionInfo;
-import org.apache.cassandra.db.RangeTombstone;
-import org.apache.cassandra.db.RowIndexEntry;
-import org.apache.cassandra.db.filter.ColumnSlice;
-import org.apache.cassandra.db.filter.SliceQueryFilter;
-import org.apache.cassandra.db.marshal.AbstractType;
-import org.apache.cassandra.io.ISerializer;
-import org.apache.cassandra.io.IVersionedSerializer;
+#pragma once
 
-import static org.apache.cassandra.io.sstable.IndexHelper.IndexInfo;
+#include "core/sstring.hh"
+#include "database.hh"
+#include "composite.hh"
+#include "c_builder.hh"
+#include "io/i_versioned_serializer.hh"
+#include "io/i_serializer.hh"
+#include "db/deletion_info.hh"
+#include "db/range_tombstone.hh"
+
+namespace db {
+namespace composites {
+
+using namespace io;
+class DataInput;
+class ColumnSlice;
+class SliceQueryFilter;
+class IndexInfo;
 
 /**
  * A type for a Composite.
@@ -43,29 +51,29 @@ import static org.apache.cassandra.io.sstable.IndexHelper.IndexInfo;
  * API-wise, a CType is simply a collection of AbstractType with a few utility
  * methods.
  */
-public interface CType extends Comparator<Composite>
-{
+class c_type : public comparator<composite> {
+    class serializer;
     /**
      * Returns whether this is a "truly-composite" underneath.
      */
-    public boolean isCompound();
+    virtual bool is_compound() = 0;
 
     /**
      * The number of subtypes for this CType.
      */
-    public int size();
+    virtual int32_t size() = 0;
 
-    int compare(Composite o1, Composite o2);
+    virtual int32_t compare(const composite& o1, const composite& o2) = 0;
 
     /**
      * Gets a subtype of this CType.
      */
-    public AbstractType<?> subtype(int i);
+    virtual data_type subtype(int32_t i) = 0;
 
     /**
      * A builder of Composite.
      */
-    public CBuilder builder();
+    virtual std::unique_ptr<c_builder> builder() = 0;
 
     /**
      * Convenience method to build composites from their component.
@@ -73,28 +81,28 @@ public interface CType extends Comparator<Composite>
      * The arguments can be either ByteBuffer or actual objects of the type
      * corresponding to their position.
      */
-    public Composite make(Object... components);
+    virtual std::unique_ptr<composite> make(std::initializer_list<boost::any> components) = 0;
 
     /**
      * Validates a composite.
      */
-    public void validate(Composite name);
+    virtual void validate(composite& name) = 0;
 
     /**
      * Converts a composite to a user-readable string.
      */
-    public String getString(Composite c);
+    virtual sstring get_string(composite& c) = 0;
 
     /**
      * See AbstractType#isCompatibleWith.
      */
-    public boolean isCompatibleWith(CType previous);
+    virtual bool is_compatible_with(c_type& previous) = 0;
 
     /**
      * Returns a new CType that is equivalent to this CType but with
      * one of the subtype replaced by the provided new type.
      */
-    public CType setSubtype(int position, AbstractType<?> newType);
+    virtual std::unique_ptr<c_type> set_subtype(int32_t position, data_type new_type) = 0;
 
     /**
      * Deserialize a Composite from a ByteBuffer.
@@ -102,7 +110,7 @@ public interface CType extends Comparator<Composite>
      * This is meant for thrift to convert the fully serialized buffer we
      * get from the clients to composites.
      */
-    public Composite fromByteBuffer(ByteBuffer bb);
+    virtual std::unique_ptr<composite> from_byte_buffer(bytes bb) = 0;
 
     /**
      * Returns a AbstractType corresponding to this CType for thrift sake.
@@ -113,8 +121,7 @@ public interface CType extends Comparator<Composite>
      * This is only meant to be use for backward compatibility (particularly for
      * thrift) but it's not meant to be used internally.
      */
-    public AbstractType<?> asAbstractType();
-
+    virtual data_type as_abstract_type() = 0;
 
     /**********************************************************/
 
@@ -124,19 +131,21 @@ public interface CType extends Comparator<Composite>
      * serializers, which means the following instances have to depend on the type too.
      */
 
-    public Comparator<Composite> reverseComparator();
-    public Comparator<IndexInfo> indexComparator();
-    public Comparator<IndexInfo> indexReverseComparator();
+    virtual std::shared_ptr<comparator<composite>> reverse_comparator() = 0;
+    virtual std::shared_ptr<comparator<IndexInfo>> index_comparator() = 0;
+    virtual std::shared_ptr<comparator<IndexInfo>> index_reverse_comparator() = 0;
 
-    public Serializer serializer();
+    virtual std::unique_ptr<serializer> serializer() = 0;
 
-    public IVersionedSerializer<ColumnSlice> sliceSerializer();
-    public IVersionedSerializer<SliceQueryFilter> sliceQueryFilterSerializer();
-    public DeletionInfo.Serializer deletionInfoSerializer();
-    public RangeTombstone.Serializer rangeTombstoneSerializer();
+    virtual std::unique_ptr<i_versioned_serializer<ColumnSlice>> slice_serializer() = 0;
+    virtual std::unique_ptr<i_versioned_serializer<SliceQueryFilter>> slice_query_filter_serializer() = 0;
+    virtual std::unique_ptr<deletion_info::serializer> deletion_info_serializer() = 0;
+    virtual std::unique_ptr<range_tombstone::serializer> range_tombstone_serializer() = 0;
 
-    public interface Serializer extends ISerializer<Composite>
-    {
-        public void skip(DataInput in) throws IOException;
-    }
-}
+    class serializer : public i_serializer<composite> {
+        virtual void skip(DataInput in) = 0;
+    };
+};
+
+} // composites
+} // db
