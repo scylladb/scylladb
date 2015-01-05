@@ -507,9 +507,13 @@ int reactor::run() {
 
     poller sig_poller([&] { poll_signal(); return true; } );
 
-    if (_handle_sigint && _id == 0) {
-        receive_signal(SIGINT).then([this] { stop(); });
+    if (_id == 0) {
+       if (_handle_sigint) {
+          receive_signal(SIGINT).then([this] { stop(); });
+       }
+       receive_signal(SIGTERM).then([this] { stop(); });
     }
+
     _cpu_started.wait(smp::count).then([this] {
         _network_stack->initialize().then([this] {
             _start_promise.set_value();

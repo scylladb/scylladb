@@ -85,7 +85,7 @@ public:
         keep_doing([this] {
             return _chan.receive().then([this] (udp_datagram dgram) {
                 auto chunk = next_chunk();
-                shared_ptr<sstring> item;
+                lw_shared_ptr<sstring> item;
                 if (_copy) {
                     _packets.clear();
                     _out->write(chunk, _chunk_size);

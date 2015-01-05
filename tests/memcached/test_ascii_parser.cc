@@ -33,11 +33,11 @@ static auto make_input_stream(packet&& p) {
 }
 
 static auto parse(packet&& p) {
-    auto is = make_shared(make_input_stream(std::move(p)));
-    auto parser = make_shared<parser_type>();
+    auto is = make_lw_shared<input_stream<char>>(make_input_stream(std::move(p)));
+    auto parser = make_lw_shared<parser_type>();
     parser->init();
     return is->consume(*parser).then([is, parser] {
-        return make_ready_future<shared_ptr<parser_type>>(parser);
+        return make_ready_future<lw_shared_ptr<parser_type>>(parser);
     });
 }
 
@@ -259,7 +259,7 @@ SEASTAR_TEST_CASE(test_catches_errors_in_get) {
 SEASTAR_TEST_CASE(test_parser_returns_eof_state_when_no_command_follows) {
     return for_each_fragment_size([] (auto make_packet) {
         auto p = make_shared<parser_type>();
-        auto is = make_shared(make_input_stream(make_packet({"get key\r\n"})));
+        auto is = make_shared<input_stream<char>>(make_input_stream(make_packet({"get key\r\n"})));
         p->init();
         return is->consume(*p).then([p] {
             BOOST_REQUIRE(p->_state == parser_type::state::cmd_get);
@@ -275,7 +275,7 @@ SEASTAR_TEST_CASE(test_parser_returns_eof_state_when_no_command_follows) {
 SEASTAR_TEST_CASE(test_incomplete_command_is_an_error) {
     return for_each_fragment_size([] (auto make_packet) {
         auto p = make_shared<parser_type>();
-        auto is = make_shared(make_input_stream(make_packet({"get"})));
+        auto is = make_shared<input_stream<char>>(make_input_stream(make_packet({"get"})));
         p->init();
         return is->consume(*p).then([p] {
             BOOST_REQUIRE(p->_state == parser_type::state::error);
@@ -291,7 +291,7 @@ SEASTAR_TEST_CASE(test_incomplete_command_is_an_error) {
 SEASTAR_TEST_CASE(test_multiple_requests_in_one_stream) {
     return for_each_fragment_size([] (auto make_packet) {
         auto p = make_shared<parser_type>();
-        auto is = make_shared(make_input_stream(make_packet({"set key1 1 1 5\r\ndata1\r\nset key2 2 2 6\r\ndata2+\r\n"})));
+        auto is = make_shared<input_stream<char>>(make_input_stream(make_packet({"set key1 1 1 5\r\ndata1\r\nset key2 2 2 6\r\ndata2+\r\n"})));
         p->init();
         return is->consume(*p).then([p] {
             BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);

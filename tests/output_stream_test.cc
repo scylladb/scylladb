@@ -37,8 +37,8 @@ struct stream_maker {
         return std::move(*this);
     }
 
-    shared_ptr<output_stream<char>> operator()(data_sink sink) {
-        return make_shared<output_stream<char>>(std::move(sink), _size, _trim);
+    lw_shared_ptr<output_stream<char>> operator()(data_sink sink) {
+        return make_lw_shared<output_stream<char>>(std::move(sink), _size, _trim);
     }
 };
 
@@ -47,8 +47,8 @@ future<> assert_split(StreamConstructor stream_maker, std::initializer_list<T> w
         std::vector<std::string> expected_split) {
     static int i = 0;
     BOOST_TEST_MESSAGE("checking split: " << i++);
-    auto sh_write_calls = make_shared(std::move(write_calls));
-    auto sh_expected_splits = make_shared(std::move(expected_split));
+    auto sh_write_calls = make_lw_shared<std::initializer_list<T>>(std::move(write_calls));
+    auto sh_expected_splits = make_lw_shared<std::vector<std::string>>(std::move(expected_split));
     auto v = make_shared<std::vector<packet>>();
     auto out = stream_maker(data_sink(std::make_unique<vector_data_sink>(*v)));
 

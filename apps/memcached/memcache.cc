@@ -63,13 +63,13 @@ public:
 };
 
 class subdevice {
-    foreign_ptr<shared_ptr<flashcache::devfile>> _dev;
+    foreign_ptr<lw_shared_ptr<flashcache::devfile>> _dev;
     uint64_t _offset;
     uint64_t _end;
     std::queue<block> _free_blocks;
     semaphore _par = { 1000 };
 public:
-    subdevice(foreign_ptr<shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length)
+    subdevice(foreign_ptr<lw_shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length)
         : _dev(std::move(dev))
         , _offset(offset)
         , _end(offset + length)
@@ -417,7 +417,7 @@ private:
     item_lru_list _lru;
     cache_stats _stats;
 public:
-    void do_setup(foreign_ptr<shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length) {}
+    void do_setup(foreign_ptr<lw_shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length) {}
 
     void do_erase(item_type& item_ref) {
         _lru.erase(_lru.iterator_to(item_ref));
@@ -462,7 +462,7 @@ public:
         return subdev_ref;
     }
 
-    void do_setup(foreign_ptr<shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length) {
+    void do_setup(foreign_ptr<lw_shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length) {
         _subdev = std::make_unique<flashcache::subdevice>(std::move(dev), offset, length);
     }
 
@@ -593,7 +593,7 @@ future<> flashcache_cache_base::load_item_data(boost::intrusive_ptr<item_type> i
         assert(item->get_state() == item_state::DISK);
 
         flashcache::subdevice& subdev = this->get_subdevice();
-        auto sem = make_shared<semaphore>({ 0 });
+        auto sem = make_lw_shared<semaphore>({ 0 });
         auto& item_data = item->data();
         auto item_size = item->size();
         auto blocks_to_load = item->used_blocks_size();
@@ -659,7 +659,7 @@ future<> flashcache_cache_base::store_item_data(boost::intrusive_ptr<item_type> 
     assert(item->get_state() == item_state::TO_MEM_DISK);
 
     flashcache::subdevice& subdev = this->get_subdevice();
-    auto sem = make_shared<semaphore>({ 0 });
+    auto sem = make_lw_shared<semaphore>({ 0 });
     auto& item_data = item->data();
     auto item_size = item->size();
     auto blocks_to_store = (item_size + (flashcache::block_size - 1)) / flashcache::block_size;
@@ -878,7 +878,7 @@ public:
         _flush_timer.set_callback([this] { flush_all(); });
     }
 
-    future<> setup(foreign_ptr<shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length) {
+    future<> setup(foreign_ptr<lw_shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length) {
         this->do_setup(std::move(dev), offset, length);
         return make_ready_future<>();
     }
@@ -1058,7 +1058,7 @@ public:
         return decr<remote_origin_tag>(key, delta);
     }
 
-    std::pair<unsigned, foreign_ptr<shared_ptr<std::string>>> print_hash_stats() {
+    std::pair<unsigned, foreign_ptr<lw_shared_ptr<std::string>>> print_hash_stats() {
         static constexpr unsigned bits = sizeof(size_t) * 8;
         size_t histo[bits + 1] {};
         size_t max_size = 0;
@@ -1096,7 +1096,7 @@ public:
             }
             ss << histo[i] << "\n";
         }
-        return {engine.cpu_id(), make_foreign(make_shared(ss.str()))};
+        return {engine.cpu_id(), make_foreign(make_lw_shared<std::string>(ss.str()))};
     }
 
     future<> stop() { return make_ready_future<>(); }
@@ -1195,7 +1195,7 @@ public:
     }
 
     future<> print_hash_stats(output_stream<char>& out) {
-        return _peers.map_reduce([&out] (std::pair<unsigned, foreign_ptr<shared_ptr<std::string>>> data) mutable {
+        return _peers.map_reduce([&out] (std::pair<unsigned, foreign_ptr<lw_shared_ptr<std::string>>> data) mutable {
             return out.write("=== CPU " + std::to_string(data.first) + " ===\r\n")
                 .then([&out, str = std::move(data.second)] {
                     return out.write(*str);
@@ -1667,7 +1667,7 @@ public:
 
                 auto request_id = hdr._request_id;
                 auto in = as_input_stream(std::move(p));
-                auto conn = make_shared<connection>(dgram.get_src(), request_id, std::move(in),
+                auto conn = make_lw_shared<connection>(dgram.get_src(), request_id, std::move(in),
                     _max_datagram_size - sizeof(header), _cache, _system_stats);
 
                 if (hdr._n != 1 || hdr._sequence_number != 0) {
@@ -1693,7 +1693,7 @@ public:
 template <bool WithFlashCache>
 class tcp_server {
 private:
-    shared_ptr<server_socket> _listener;
+    lw_shared_ptr<server_socket> _listener;
     sharded_cache<WithFlashCache>& _cache;
     distributed<system_stats>& _system_stats;
     uint16_t _port;
@@ -1732,7 +1732,7 @@ public:
         _listener = engine.listen(make_ipv4_address({_port}), lo);
         keep_doing([this] {
             return _listener->accept().then([this] (connected_socket fd, socket_address addr) mutable {
-                auto conn = make_shared<connection>(std::move(fd), addr, _cache, _system_stats);
+                auto conn = make_lw_shared<connection>(std::move(fd), addr, _cache, _system_stats);
                 do_until([conn] { return conn->_in.eof(); }, [this, conn] {
                     return conn->_proto.handle(conn->_in, conn->_out).then([conn] {
                         return conn->_out.flush();
@@ -1818,7 +1818,7 @@ int start_instance(int ac, char** av) {
             if (WithFlashCache) {
                 auto device_path = config["device"].as<std::string>();
                 return engine.open_file_dma(device_path).then([&] (file f) {
-                    auto dev = make_shared<flashcache::devfile>({std::move(f)});
+                    auto dev = make_lw_shared<flashcache::devfile>({std::move(f)});
                     return dev->f().stat().then([&, dev] (struct stat st) mutable {
                         assert(S_ISBLK(st.st_mode));
                         return dev->f().size().then([&, dev] (size_t device_size) mutable {

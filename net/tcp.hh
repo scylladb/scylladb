@@ -148,7 +148,7 @@ public:
 private:
     class tcb;
 
-    class tcb {
+    class tcb : public enable_lw_shared_from_this<tcb> {
         using clock_type = lowres_clock;
         // Instead of tracking state through an enum, track individual
         // bits of the state.  This reduces duplication in state handling.
@@ -158,6 +158,8 @@ private:
         bool _local_fin_sent = false;
         bool _local_fin_acked = false;
         bool _foreign_fin_received = false;
+        // Connection was reset by peer
+        bool _nuked = false;
         tcp& _tcp;
         connection* _conn = nullptr;
         ipaddr _local_ip;
@@ -167,6 +169,7 @@ private:
         struct unacked_segment {
             packet p;
             uint16_t data_len;
+            uint16_t data_remaining;
             unsigned nr_transmits;
             clock_type::time_point tx_time;
         };
@@ -289,19 +292,19 @@ private:
         }
         uint32_t flight_size() {
             uint32_t size = 0;
-            std::for_each(_snd.data.begin(), _snd.data.end(), [&] (unacked_segment& seg) { size += seg.data_len; });
+            std::for_each(_snd.data.begin(), _snd.data.end(), [&] (unacked_segment& seg) { size += seg.data_remaining; });
             return size;
         }
         friend class connection;
     };
     inet_type& _inet;
-    std::unordered_map<connid, shared_ptr<tcb>, connid_hash> _tcbs;
+    std::unordered_map<connid, lw_shared_ptr<tcb>, connid_hash> _tcbs;
     std::unordered_map<uint16_t, listener*> _listening;
 public:
     class connection {
-        shared_ptr<tcb> _tcb;
+        lw_shared_ptr<tcb> _tcb;
     public:
-        explicit connection(shared_ptr<tcb> tcbp) : _tcb(std::move(tcbp)) { _tcb->_conn = this; }
+        explicit connection(lw_shared_ptr<tcb> tcbp) : _tcb(std::move(tcbp)) { _tcb->_conn = this; }
         connection(const connection&) = delete;
         connection(connection&& x) noexcept : _tcb(std::move(x._tcb)) {
             _tcb->_conn = this;
@@ -403,14 +406,14 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
     auto h = ntoh(*th);
     auto id = connid{to, from, h.dst_port, h.src_port};
     auto tcbi = _tcbs.find(id);
-    shared_ptr<tcb> tcbp;
+    lw_shared_ptr<tcb> tcbp;
     if (tcbi == _tcbs.end()) {
         if (h.f_syn && !h.f_ack) {
             auto listener = _listening.find(id.local_port);
             if (listener == _listening.end() || listener->second->_q.full()) {
                 return respond_with_reset(&h, id.local_ip, id.foreign_ip);
             }
-            tcbp = make_shared<tcb>(*this, id);
+            tcbp = make_lw_shared<tcb>(*this, id);
             listener->second->_q.push(connection(tcbp));
             _tcbs.insert({id, tcbp});
         }
@@ -506,7 +509,19 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     auto seg_len = p.len();
 
     if (th->f_rst) {
+        // Fake end-of-connection so reads return immediately
+        _nuked = true;
         cleanup();
+        if (_rcv._data_received_promise) {
+            // FIXME: set_exception() instead?
+            _rcv._data_received_promise->set_value();
+            _rcv._data_received_promise = {};
+        }
+        if (_snd._all_data_acked_promise) {
+            // FIXME: set_exception() instead?
+            _snd._all_data_acked_promise->set_value();
+            _snd._all_data_acked_promise = {};
+        }
         return;
     }
     if (th->f_syn) {
@@ -664,14 +679,15 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
         if (data_ack > _snd.unacknowledged && data_ack <= _snd.next) {
             // Full ACK of segment
             while (!_snd.data.empty()
-                    && (_snd.unacknowledged + _snd.data.front().data_len <= data_ack)) {
-                auto acked_bytes = _snd.data.front().data_len;
+                    && (_snd.unacknowledged + _snd.data.front().data_remaining <= data_ack)) {
+                auto acked_bytes = _snd.data.front().data_remaining;
                 _snd.unacknowledged += acked_bytes;
                 // Ignore retransmitted segments when setting the RTO
                 if (_snd.data.front().nr_transmits == 0) {
                     update_rto(_snd.data.front().tx_time);
                 }
                 update_cwnd(acked_bytes);
+                _snd.user_queue_space.signal(_snd.data.front().data_len);
                 _snd.data.pop_front();
             }
 
@@ -683,7 +699,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
                 // is that we will retransmit the whole segment although part
                 // of them are already acked.
                 auto acked_bytes = data_ack - _snd.unacknowledged;
-                _snd.data.front().data_len -= acked_bytes;
+                _snd.data.front().data_remaining -= acked_bytes;
                 _snd.unacknowledged = data_ack;
                 update_cwnd(acked_bytes);
             }
@@ -758,7 +774,6 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
         auto p = std::move(_snd.unsent.front());
         _snd.unsent.pop_front();
         _snd.unsent_len -= p.len();
-        _snd.user_queue_space.signal(p.len());
         return p;
     }
     // moderate case: need to split one packet
@@ -766,7 +781,6 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
         auto p = _snd.unsent.front().share(0, can_send);
         _snd.unsent.front().trim_front(can_send);
         _snd.unsent_len -= p.len();
-        _snd.user_queue_space.signal(p.len());
         return p;
     }
     // hard case: merge some packets, possibly split last
@@ -785,12 +799,14 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
         q.trim_front(can_send);
     }
     _snd.unsent_len -= p.len();
-    _snd.user_queue_space.signal(p.len());
     return p;
 }
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::output() {
+    if (_nuked) {
+        return;
+    }
     do {
         uint8_t options_size = 0;
         packet p = get_transmit_packet();
@@ -849,7 +865,7 @@ void tcp<InetTraits>::tcb::output() {
         if (len) {
             unsigned nr_transmits = 0;
             auto now = clock_type::now();
-            _snd.data.emplace_back(unacked_segment{p.share(), len, nr_transmits, now});
+            _snd.data.emplace_back(unacked_segment{p.share(), len, len, nr_transmits, now});
             if (!_retransmit.armed()) {
                 start_retransmit_timer(now);
             }
@@ -863,13 +879,11 @@ void tcp<InetTraits>::tcb::output() {
 
 template <typename InetTraits>
 future<> tcp<InetTraits>::tcb::wait_for_data() {
-    if (!_rcv.data.empty() || _foreign_fin_received) {
+    if (!_rcv.data.empty() || _foreign_fin_received || _nuked) {
         return make_ready_future<>();
     }
     _rcv._data_received_promise = promise<>();
-    return _rcv._data_received_promise->get_future().then([this] {
-        return make_ready_future<>();
-    });
+    return _rcv._data_received_promise->get_future();
 }
 
 template <typename InetTraits>
@@ -878,9 +892,7 @@ future<> tcp<InetTraits>::tcb::wait_for_all_data_acked() {
         return make_ready_future<>();
     }
     _snd._all_data_acked_promise = promise<>();
-    return _snd._all_data_acked_promise->get_future().then([this] {
-        return make_ready_future<>();
-    });
+    return _snd._all_data_acked_promise->get_future();
 }
 
 template <typename InetTraits>
@@ -897,7 +909,7 @@ template <typename InetTraits>
 future<> tcp<InetTraits>::tcb::send(packet p) {
     // TODO: Handle p.len() > max user_queue_space case
     auto len = p.len();
-    return _snd.user_queue_space.wait(len).then([this, p = std::move(p)] () mutable {
+    return _snd.user_queue_space.wait(len).then([this, zis = this->shared_from_this(), p = std::move(p)] () mutable {
         _snd.unsent_len += p.len();
         _snd.unsent.push_back(std::move(p));
         if (can_send() > 0)
@@ -912,7 +924,7 @@ void tcp<InetTraits>::tcb::close() {
         return;
     }
     // TODO: We should return a future to upper layer
-    wait_for_all_data_acked().then([this]{
+    wait_for_all_data_acked().then([this, zis = this->shared_from_this()] () mutable {
         _snd.closed = true;
         if (_snd.unsent_len == 0) {
             output();

@@ -16,7 +16,7 @@ def run(args, cmd):
         subprocess.check_call(cmdline)
     finally:
         print('Killing memcached...')
-        mc.kill()
+        mc.terminate();
         mc.wait()
         print('Memcached killed.')
 
