@@ -11,21 +11,28 @@ less_unsigned(const bytes& v1, const bytes& v2) {
             [](int8_t v1, int8_t v2) { return uint8_t(v1) < uint8_t(v2); });
 }
 
+template <typename T, typename Compare>
+bool
+abstract_type::default_less(const bytes& v1, const bytes& v2, Compare compare) {
+    auto o1 = deserialize(v1);
+    auto o2 = deserialize(v2);
+    if (!o1) {
+        return bool(o2);
+    }
+    if (!o2) {
+        return false;
+    }
+    auto& x1 = boost::any_cast<const T&>(*o1);
+    auto& x2 = boost::any_cast<const T&>(*o2);
+    return compare(x1, x2);
+}
+
+
 template <typename T>
 struct simple_type_impl : abstract_type {
     simple_type_impl(sstring name) : abstract_type(std::move(name)) {}
     virtual bool less(const bytes& v1, const bytes& v2) override {
-        auto o1 = deserialize(v1);
-        auto o2 = deserialize(v2);
-        if (!o1) {
-            return bool(o2);
-        }
-        if (!o2) {
-            return false;
-        }
-        auto& x1 = boost::any_cast<const T&>(*o1);
-        auto& x2 = boost::any_cast<const T&>(*o2);
-        return x1 < x2;
+        return default_less<T>(v1, v2);
     }
 };
 
