@@ -15,13 +15,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db;
 
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.utils.concurrent.OpOrder;
-import org.apache.cassandra.utils.memory.AbstractAllocator;
-import org.apache.cassandra.utils.memory.MemtableAllocator;
+/*
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
+ */
 
+#pragma once
+
+#include "cell.hh"
+
+namespace db {
 /**
  * Alternative to Cell that have an expiring time.
  * ExpiringCell is immutable (as Cell is).
@@ -32,13 +36,14 @@ import org.apache.cassandra.utils.memory.MemtableAllocator;
  * we can't mix it with the timestamp field, which is client-supplied and whose resolution we
  * can't assume anything about.)
  */
-public interface ExpiringCell extends Cell
-{
-    public static final int MAX_TTL = 20 * 365 * 24 * 60 * 60; // 20 years in seconds
+class expiring_cell : public cell {
+public:
+    static const int32_t MAX_TTL = 20 * 365 * 24 * 60 * 60; // 20 years in seconds
 
-    public int getTimeToLive();
+    virtual int32_t get_time_to_live() = 0;
 
-    ExpiringCell localCopy(CFMetaData metadata, AbstractAllocator allocator);
+    virtual std::shared_ptr<cell> local_copy(CFMetaData metadata, AbstractAllocator allocator) = 0;
+    virtual std::shared_ptr<cell> local_copy(CFMetaData metaData, MemtableAllocator allocator, OpOrder::Group op_group) = 0;
+};
 
-    ExpiringCell localCopy(CFMetaData metaData, MemtableAllocator allocator, OpOrder.Group opGroup);
 }
