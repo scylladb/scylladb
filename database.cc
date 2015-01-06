@@ -15,8 +15,16 @@ template <typename T>
 struct simple_type_impl : abstract_type {
     simple_type_impl(sstring name) : abstract_type(std::move(name)) {}
     virtual bool less(const bytes& v1, const bytes& v2) override {
-        auto& x1 = boost::any_cast<const T&>(deserialize(v1));
-        auto& x2 = boost::any_cast<const T&>(deserialize(v2));
+        auto o1 = deserialize(v1);
+        auto o2 = deserialize(v2);
+        if (!o1) {
+            return bool(o2);
+        }
+        if (!o2) {
+            return false;
+        }
+        auto& x1 = boost::any_cast<const T&>(*o1);
+        auto& x2 = boost::any_cast<const T&>(*o2);
         return x1 < x2;
     }
 };
@@ -28,9 +36,15 @@ struct int32_type_impl : simple_type_impl<int32_t> {
         auto u = net::hton(uint32_t(v));
         out.write(reinterpret_cast<const char*>(&u), sizeof(u));
     }
-    virtual boost::any deserialize(std::istream& in) {
+    virtual object_opt deserialize(std::istream& in) {
         uint32_t u;
-        in.read(reinterpret_cast<char*>(&u), sizeof(u));
+        auto n = in.rdbuf()->sgetn(reinterpret_cast<char*>(&u), sizeof(u));
+        if (!n) {
+            return {};
+        }
+        if (n != 4) {
+            throw marshal_exception();
+        }
         auto v = int32_t(net::ntoh(u));
         return boost::any(v);
     }
@@ -43,9 +57,15 @@ struct long_type_impl : simple_type_impl<int64_t> {
         auto u = net::hton(uint64_t(v));
         out.write(reinterpret_cast<const char*>(&u), sizeof(u));
     }
-    virtual boost::any deserialize(std::istream& in) {
+    virtual object_opt deserialize(std::istream& in) {
         uint64_t u;
-        in.read(reinterpret_cast<char*>(&u), sizeof(u));
+        auto n = in.rdbuf()->sgetn(reinterpret_cast<char*>(&u), sizeof(u));
+        if (!n) {
+            return {};
+        }
+        if (n != 8) {
+            throw marshal_exception();
+        }
         auto v = int64_t(net::ntoh(u));
         return boost::any(v);
     }
@@ -57,7 +77,7 @@ struct string_type_impl : public abstract_type {
         auto& v = boost::any_cast<const sstring&>(value);
         out.write(v.c_str(), v.size());
     }
-    virtual boost::any deserialize(std::istream& in) {
+    virtual object_opt deserialize(std::istream& in) {
         std::vector<char> tmp(std::istreambuf_iterator<char>(in.rdbuf()),
                               std::istreambuf_iterator<char>());
         // FIXME: validation?
@@ -74,7 +94,7 @@ struct bytes_type_impl : public abstract_type {
         auto& v = boost::any_cast<const bytes&>(value);
         out.write(v.c_str(), v.size());
     }
-    virtual boost::any deserialize(std::istream& in) {
+    virtual object_opt deserialize(std::istream& in) {
         std::vector<char> tmp(std::istreambuf_iterator<char>(in.rdbuf()),
                               std::istreambuf_iterator<char>());
         return boost::any(bytes(reinterpret_cast<const char*>(tmp.data()), tmp.size()));
