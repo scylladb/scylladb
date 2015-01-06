@@ -15,6 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
+ */
+
+#pragma once
+
+#include <cstdint>
+
+namespace utils {
+// FIXME: stub
+class fb_utilities {
+public:
+   static const int32_t MAX_UNSIGNED_SHORT = 0xFFFF;
+};
+}
+
+#if 0
 package org.apache.cassandra.utils;
 
 import java.io.*;
@@ -748,3 +767,4 @@ public class FBUtilities
         digest.update((byte)  ((val >>> 0) & 0xFF));
     }
 }
+#endif
