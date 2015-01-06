@@ -387,15 +387,8 @@ public:
 
         packet p(reinterpret_cast<char *>(&pkt), sizeof(pkt));
 
-        return _stack.send_raw(ethernet::broadcast_address(), std::move(p)).rescue([this](auto get_ex) {
-            try {
-                get_ex();
-            } catch (std::exception & e) {
-                this->log() << e.what() << std::endl;
-                _state = state::FAIL;
-                _result.set_value(false, lease());
-            }
-        });
+        _stack.send_raw(ethernet::broadcast_address(), std::move(p));
+        return make_ready_future<>();
     }
 
     future<> send_discover(const ipv4_address & ip = ipv4_address()) {

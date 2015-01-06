@@ -249,7 +249,7 @@ public:
     // prepend a header (uninitialized!)
     char* prepend_uninitialized_header(size_t size);
 
-    packet free_on_cpu(unsigned cpu);
+    packet free_on_cpu(unsigned cpu, std::function<void()> cb = []{});
 
     void linearize() { return linearize(0, len()); }
 

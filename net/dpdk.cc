@@ -190,8 +190,10 @@ class dpdk_qp : public net::qp {
 public:
     explicit dpdk_qp(dpdk_device* dev, uint8_t qid);
 
-    virtual future<> send(packet p) override;
-
+    virtual future<> send(packet p) override {
+        abort();
+    }
+    virtual uint32_t send(circular_buffer<packet>& p) override;
 private:
 
     bool init_mbuf_pools();
@@ -238,11 +240,14 @@ private:
      */
     size_t copy_one_data_buf(rte_mbuf*& m, char* data, size_t l);
 
+    rte_mbuf* create_tx_mbuf(packet& p);
 private:
     dpdk_device* _dev;
     uint8_t _qid;
     rte_mempool* _pktmbuf_pool;
     reactor::poller _rx_poller;
+    std::vector<rte_mbuf*> _tx_burst;
+    uint16_t _tx_burst_idx;
 };
 
 int dpdk_device::init_port_start()
@@ -589,11 +594,10 @@ bool dpdk_qp::copy_one_frag(fragment& frag, rte_mbuf*& head,
     return true;
 }
 
-future<> dpdk_qp::send(packet p)
-{
+rte_mbuf* dpdk_qp::create_tx_mbuf(packet& p) {
     // sanity
     if (!p.len()) {
-        return make_ready_future<>();
+        return nullptr;
     }
 
     // Too fragmented - linearize
@@ -607,13 +611,13 @@ future<> dpdk_qp::send(packet p)
     // We will copy the data for now and will implement a zero-copy in the
     // future.
 
-    rte_mbuf *head = NULL, *last_seg = NULL;
+    rte_mbuf *head = nullptr, *last_seg = NULL;
     unsigned total_nsegs = 0, nsegs = 0;
 
     // Create a HEAD of the fragmented packet
     if (!copy_one_frag(p.frag(0), head, last_seg, nsegs)) {
         // Drop if we failed to allocate new mbuf
-        return make_ready_future<>();
+        return nullptr;
     }
 
     total_nsegs += nsegs;
@@ -623,7 +627,7 @@ future<> dpdk_qp::send(packet p)
         rte_mbuf *h = NULL, *new_last_seg = NULL;
         if (!copy_one_frag(p.frag(i), h, new_last_seg, nsegs)) {
             rte_pktmbuf_free(head);
-            return make_ready_future<>();
+            return nullptr;
         }
 
         total_nsegs += nsegs;
@@ -655,14 +659,37 @@ future<> dpdk_qp::send(packet p)
             rte_mbuf_l3_len(head) = oi.ip_hdr_len;
         }
     }
+    return head;
+}
 
-    //
-    // Currently we will spin till completion.
-    // TODO: implement a poller + xmit queue
-    //
-    while(rte_eth_tx_burst(_dev->port_idx(), _qid, &head, 1) < 1);
+uint32_t dpdk_qp::send(circular_buffer<packet>& pb)
+{
+    if (_tx_burst_idx == 0) {
+        pb.for_each([this, err = false] (packet& p) mutable {
+            if (!err) {
+                auto mbuf = create_tx_mbuf(p);
+                if (!mbuf) {
+                    err = true;
+                } else {
+                    _tx_burst.push_back(mbuf);
+                }
+            }
+        });
+    }
 
-    return make_ready_future<>();
+    auto sent = rte_eth_tx_burst(_dev->port_idx(), _qid, _tx_burst.data() + _tx_burst_idx, _tx_burst.size() - _tx_burst_idx);
+
+    for (int i = 0; i < sent; i++) {
+        pb.pop_front();
+    }
+
+    _tx_burst_idx += sent;
+
+    if (_tx_burst_idx == _tx_burst.size()) {
+        _tx_burst_idx = 0;
+        _tx_burst.clear();
+    }
+    return sent;
 }
 
 #ifdef RTE_VERSION_1_7

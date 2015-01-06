@@ -64,14 +64,21 @@ struct hw_features {
 };
 
 class l3_protocol {
+public:
+    struct l3packet {
+        eth_protocol_num proto_num;
+        ethernet_address to;
+        packet p;
+    };
+    using packet_provider_type = std::function<std::experimental::optional<l3packet> ()>;
+private:
     interface* _netif;
     eth_protocol_num _proto_num;
 public:
-    explicit l3_protocol(interface* netif, eth_protocol_num proto_num);
+    explicit l3_protocol(interface* netif, eth_protocol_num proto_num, packet_provider_type func);
     subscription<packet, ethernet_address> receive(
             std::function<future<> (packet, ethernet_address)> rx_fn,
             std::function<bool (forward_hash&, packet&, size_t)> forward);
-    future<> send(ethernet_address to, packet p);
 private:
     friend class interface;
 };
@@ -88,9 +95,9 @@ class interface {
     subscription<packet> _rx;
     ethernet_address _hw_address;
     net::hw_features _hw_features;
+    std::vector<l3_protocol::packet_provider_type> _pkt_providers;
 private:
     future<> dispatch_packet(packet p);
-    future<> send(eth_protocol_num proto_num, ethernet_address to, packet p);
 public:
     explicit interface(std::shared_ptr<device> dev);
     ethernet_address hw_address() { return _hw_address; }
@@ -100,18 +107,77 @@ public:
             std::function<bool (forward_hash&, packet&, size_t)> forward);
     void forward(unsigned cpuid, packet p);
     unsigned hash2cpu(uint32_t hash);
+    void register_packet_provider(l3_protocol::packet_provider_type func) {
+        _pkt_providers.push_back(std::move(func));
+    }
     friend class l3_protocol;
 };
 
 class qp {
+    using packet_provider_type = std::function<std::experimental::optional<packet> ()>;
+    std::vector<packet_provider_type> _pkt_providers;
     std::vector<unsigned> proxies;
+    circular_buffer<packet> _proxy_packetq;
     stream<packet> _rx_stream;
+    reactor::poller _tx_poller;
+    circular_buffer<packet> _tx_packetq;
 public:
+    qp() : _tx_poller([this] { poll_tx(); return true; }) {}
     virtual ~qp() {}
     virtual future<> send(packet p) = 0;
+    virtual uint32_t send(circular_buffer<packet>& p) {
+        uint32_t sent = 0;
+        while (!p.empty()) {
+            send(std::move(p.front()));
+            p.pop_front();
+            sent++;
+        }
+        return sent;
+    }
     virtual void rx_start() {};
     bool may_forward() { return !proxies.empty(); }
-    void add_proxy(unsigned cpu) { proxies.push_back(cpu); }
+    void add_proxy(unsigned cpu) {
+        if(proxies.empty()) {
+            register_packet_provider([this] {
+                std::experimental::optional<packet> p;
+                if (!_proxy_packetq.empty()) {
+                    p = std::move(_proxy_packetq.front());
+                    _proxy_packetq.pop_front();
+                }
+                return p;
+            });
+        }
+        proxies.push_back(cpu);
+    }
+    void proxy_send(packet p) {
+        _proxy_packetq.push_back(std::move(p));
+    }
+    void register_packet_provider(packet_provider_type func) {
+        _pkt_providers.push_back(std::move(func));
+    }
+    void poll_tx() {
+        if (_tx_packetq.size() < 16) {
+            // refill send queue from upper layers
+            uint32_t work;
+            do {
+                work = 0;
+                for (auto&& pr : _pkt_providers) {
+                    auto p = pr();
+                    if (p) {
+                        work++;
+                        _tx_packetq.push_back(std::move(p.value()));
+                        if (_tx_packetq.size() == 128) {
+                            break;
+                        }
+                    }
+                }
+            } while (work && _tx_packetq.size() < 128);
+
+        }
+        if (!_tx_packetq.empty()) {
+            send(_tx_packetq);
+        }
+    }
     friend class device;
 };
 
