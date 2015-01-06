@@ -210,6 +210,7 @@ deps = {
 		 'db/db.cc',
 		 'io/io.cc',
                  'utils/utils.cc',
+		 'gms/version_generator.cc',
                  ]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
                 + core
