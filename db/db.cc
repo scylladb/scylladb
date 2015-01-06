@@ -14,6 +14,7 @@
 #include "composites/c_type.hh"
 #include "composites/cell_name_type.hh"
 #include "cell.hh"
+#include "counter_update_cell.hh"
 
 const db::composites::composite::EOC db::composites::composite::EOC::START{-1};
 const db::composites::composite::EOC db::composites::composite::EOC::NONE{-1};

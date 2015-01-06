@@ -15,7 +15,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db;
+
+/*
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
+ */
+
+#pragma once
+
+#include "cell.hh"
+#include <cstdint>
+
+namespace db {
 
 /**
  * A counter update while it hasn't been applied yet by the leader replica.
@@ -24,7 +35,9 @@ package org.apache.cassandra.db;
  * is transformed to a relevant CounterCell. This Cell is a temporary data
  * structure that should never be stored inside a memtable or an sstable.
  */
-public interface CounterUpdateCell extends Cell
-{
-    public long delta();
+class counter_update_cell : public cell {
+public:
+    virtual int64_t delta() = 0;
+};
+
 }
