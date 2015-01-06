@@ -138,7 +138,11 @@ struct keyspace {
     std::unordered_map<sstring, column_family> column_families;
 };
 
-struct database {
+class database {
+private:
+    sstring _datadir;
+public:
+    explicit database(sstring datadir) : _datadir(datadir) {}
     std::unordered_map<sstring, keyspace> keyspaces;
 };
 

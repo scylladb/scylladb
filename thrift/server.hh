@@ -11,7 +11,7 @@
 
 class thrift_server;
 class thrift_stats;
-struct database;
+class database;
 
 namespace org { namespace apache { namespace cassandra {
 
