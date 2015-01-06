@@ -15,16 +15,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db;
 
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.utils.concurrent.OpOrder;
-import org.apache.cassandra.utils.memory.AbstractAllocator;
-import org.apache.cassandra.utils.memory.MemtableAllocator;
+/*
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
+ */
 
-public interface DeletedCell extends Cell
-{
-    DeletedCell localCopy(CFMetaData metadata, AbstractAllocator allocator);
+#pragma once
 
-    DeletedCell localCopy(CFMetaData metaData, MemtableAllocator allocator, OpOrder.Group opGroup);
+#include "cell.hh"
+
+namespace db {
+
+class deleted_cell : public cell {
+public:
+    // Note: The origin returns deleted_cell instead cell
+    virtual std::shared_ptr<cell> local_copy(CFMetaData metadata, AbstractAllocator allocator) = 0;
+    virtual std::shared_ptr<cell> local_copy(CFMetaData metaData, MemtableAllocator allocator, OpOrder::Group op_group) = 0;
+};
+
 }
