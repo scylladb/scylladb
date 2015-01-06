@@ -97,6 +97,7 @@ extern thread_local shared_ptr<abstract_type> long_type;
 extern thread_local shared_ptr<abstract_type> ascii_type;
 extern thread_local shared_ptr<abstract_type> bytes_type;
 extern thread_local shared_ptr<abstract_type> utf8_type;
+extern thread_local shared_ptr<abstract_type> boolean_type;
 
 template <>
 inline

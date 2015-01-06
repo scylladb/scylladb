@@ -104,11 +104,29 @@ struct bytes_type_impl : public abstract_type {
     }
 };
 
+struct boolean_type_impl : public simple_type_impl<bool> {
+    boolean_type_impl() : simple_type_impl<bool>("boolean") {}
+    virtual void serialize(const boost::any& value, std::ostream& out) override {
+        auto v = boost::any_cast<bool>(value);
+        char c = v;
+        out.put(c);
+    }
+    virtual object_opt deserialize(std::istream& in) override {
+        char tmp;
+        auto n = in.rdbuf()->sgetn(&tmp, 1);
+        if (n == 0) {
+            return {};
+        }
+        return boost::any(tmp != 0);
+    }
+};
+
 thread_local shared_ptr<abstract_type> int_type(make_shared<int32_type_impl>());
 thread_local shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
 thread_local shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii"));
 thread_local shared_ptr<abstract_type> bytes_type(make_shared<bytes_type_impl>());
 thread_local shared_ptr<abstract_type> utf8_type(make_shared<string_type_impl>("utf8"));
+thread_local shared_ptr<abstract_type> boolean_type(make_shared<boolean_type_impl>());
 
 partition::partition(column_family& cf)
         : rows(key_compare(cf.clustering_key_type)) {
