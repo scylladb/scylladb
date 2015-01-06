@@ -190,7 +190,6 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
 }
 
 void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_completion complete) {
-    uint16_t offset = 0;
     auto needs_frag = this->needs_frag(p, proto_num, hw_features());
 
     // Figure out where to send the packet to. If it is a directly connected
@@ -241,28 +240,20 @@ void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_com
     };
 
     if (needs_frag) {
-        struct send_info {
-            uint16_t remaining;
-            packet p;
-            uint16_t offset;
-        };
-        auto si = make_lw_shared<send_info>({uint16_t(p.len()), std::move(p), offset});
-        auto stop = [si] { return si->remaining == 0; };
-        auto send_frag = [this, send_pkt = std::move(send_pkt), si] () mutable {
-            auto& remaining = si->remaining;
-            auto& offset = si->offset;
-            auto mtu = hw_features().mtu;
+        uint16_t offset = 0;
+        uint16_t remaining = p.len();
+        auto mtu = hw_features().mtu;
+
+        while (remaining) {
             auto can_send = std::min(uint16_t(mtu - net::ipv4_hdr_len_min), remaining);
             remaining -= can_send;
-            auto pkt = si->p.share(offset, can_send);
+            auto pkt = p.share(offset, can_send);
             send_pkt(pkt, remaining, offset);
             offset += can_send;
-            return make_ready_future<>();
-        };
-        do_until(stop, std::move(send_frag));
+        }
     } else {
         // The whole packet can be send in one shot
-        send_pkt(p, 0, offset);
+        send_pkt(p, 0, 0);
     }
 }
 
