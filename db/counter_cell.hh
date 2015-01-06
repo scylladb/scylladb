@@ -15,30 +15,36 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db;
 
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.db.context.CounterContext;
-import org.apache.cassandra.utils.concurrent.OpOrder;
-import org.apache.cassandra.utils.memory.AbstractAllocator;
-import org.apache.cassandra.utils.memory.MemtableAllocator;
+/*
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
+ */
+
+#pragma once
+
+#include "cell.hh"
+
+namespace db {
 
 /**
  * A column that represents a partitioned counter.
  */
-public interface CounterCell extends Cell
-{
-    static final CounterContext contextManager = CounterContext.instance();
+class counter_cell : public cell {
+    // FIXME: CounterContext
+    //static final CounterContext contextManager = CounterContext.instance();
 
-    public long timestampOfLastDelete();
+    virtual int64_t timestamp_of_last_delete() = 0;
 
-    public long total();
+    virtual int64_t total() = 0;
 
-    public boolean hasLegacyShards();
+    virtual bool has_legacy_shards() = 0;
 
-    public Cell markLocalToBeCleared();
+    virtual std::shared_ptr<cell> mark_local_tobe_cleared() = 0;
 
-    CounterCell localCopy(CFMetaData metadata, AbstractAllocator allocator);
+    virtual std::shared_ptr<cell> local_copy(CFMetaData metadata, AbstractAllocator allocator) = 0;
 
-    CounterCell localCopy(CFMetaData metaData, MemtableAllocator allocator, OpOrder.Group opGroup);
+    virtual std::shared_ptr<cell> local_copy(CFMetaData metaData, MemtableAllocator allocator, OpOrder::Group op_group) = 0;
+};
+
 }

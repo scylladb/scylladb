@@ -17,6 +17,7 @@
 #include "counter_update_cell.hh"
 #include "deleted_cell.hh"
 #include "expiring_cell.hh"
+#include "counter_cell.hh"
 
 const db::composites::composite::EOC db::composites::composite::EOC::START{-1};
 const db::composites::composite::EOC db::composites::composite::EOC::NONE{-1};
