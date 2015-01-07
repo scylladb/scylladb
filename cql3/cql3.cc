@@ -22,6 +22,8 @@
 #include "statements/schema_altering_statement.hh"
 #include "cql_statement.hh"
 
+#include "selection/selectable.hh"
+
 #include "variable_specifications.hh"
 #include "column_identifier.hh"
 #include "column_specification.hh"

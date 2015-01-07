@@ -16,8 +16,21 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.cassandra.cql3.selection;
 
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_SELECTION_SELECTABLE_HH
+#define CQL3_SELECTION_SELECTABLE_HH
+
+namespace cql3 {
+
+namespace selection {
+
+#if 0
 import java.util.ArrayList;
 import java.util.List;
 
@@ -31,9 +44,10 @@ import org.apache.cassandra.db.marshal.AbstractType;
 import org.apache.cassandra.db.marshal.UserType;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.commons.lang3.text.StrBuilder;
+#endif
 
-public abstract class Selectable
-{
+class selectable {
+#if 0
     public abstract Selector.Factory newSelectorFactory(CFMetaData cfm, List<ColumnDefinition> defs)
             throws InvalidRequestException;
 
@@ -243,4 +257,11 @@ public abstract class Selectable
             }
         }
     }
+#endif
+};
+
 }
+
+}
+
+#endif
