@@ -19,7 +19,13 @@
 #include "expiring_cell.hh"
 #include "counter_cell.hh"
 #include "i_mutation.hh"
+#include "row_position.hh"
 
 const db::composites::composite::EOC db::composites::composite::EOC::START{-1};
 const db::composites::composite::EOC db::composites::composite::EOC::NONE{-1};
 const db::composites::composite::EOC db::composites::composite::EOC::END{1};
+
+const db::row_position::kind db::row_position::kind::ROW_KEY{0};
+const db::row_position::kind db::row_position::kind::MIN_BOUND{1};
+const db::row_position::kind db::row_position::kind::MAX_BOUND{2};
+std::unique_ptr<db::row_position::row_position_serializer> db::row_position::serializer(new db::row_position::row_position_serializer);
