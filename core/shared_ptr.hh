@@ -263,7 +263,7 @@ private:
     explicit shared_ptr(shared_ptr_count_for<T>* b) : _b(b), _p(&b->data) {
         ++_b->count;
     }
-    shared_ptr(shared_ptr_count_for<T>* b, T* p) : _b(b), _p(p) {
+    shared_ptr(shared_ptr_count_base* b, T* p) : _b(b), _p(p) {
         // test _p, not _b, since dynamic_pointer_cast<>() can zero p but not b
         if (_p) {
             ++_b->count;
@@ -411,21 +411,21 @@ template <typename T, typename U>
 inline
 shared_ptr<T>
 static_pointer_cast(const shared_ptr<U>& p) {
-    return shared_ptr<T>(p->_b, static_cast<T*>(p._p));
+    return shared_ptr<T>(p._b, static_cast<T*>(p._p));
 }
 
 template <typename T, typename U>
 inline
 shared_ptr<T>
 dynamic_pointer_cast(const shared_ptr<U>& p) {
-    return shared_ptr<T>(p->_b, dynamic_cast<T*>(p._p));
+    return shared_ptr<T>(p._b, dynamic_cast<T*>(p._p));
 }
 
 template <typename T, typename U>
 inline
 shared_ptr<T>
 const_pointer_cast(const shared_ptr<U>& p) {
-    return shared_ptr<T>(p->_b, const_cast<T*>(p._p));
+    return shared_ptr<T>(p._b, const_cast<T*>(p._p));
 }
 
 template <typename T>
