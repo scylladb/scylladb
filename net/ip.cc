@@ -189,9 +189,7 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
     return make_ready_future<>();
 }
 
-void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_completion complete, std::experimental::optional<ethernet_address> e_dst) {
-    auto needs_frag = this->needs_frag(p, proto_num, hw_features());
-
+future<ethernet_address> ipv4::get_l2_dst_address(ipv4_address to) {
     // Figure out where to send the packet to. If it is a directly connected
     // host, send to it directly, otherwise send to the default gateway.
     ipv4_address dst;
@@ -201,7 +199,13 @@ void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_com
         dst = _gw_address;
     }
 
-    auto send_pkt = [this, to, dst, proto_num, needs_frag, complete = std::move(complete), e_dst = std::move(e_dst)] (packet& pkt, uint16_t remaining, uint16_t offset) mutable  {
+    return _arp.lookup(dst);
+}
+
+void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_completion complete, std::experimental::optional<ethernet_address> e_dst) {
+    auto needs_frag = this->needs_frag(p, proto_num, hw_features());
+
+    auto send_pkt = [this, to, proto_num, needs_frag, complete = std::move(complete), e_dst = std::move(e_dst)] (packet& pkt, uint16_t remaining, uint16_t offset) mutable  {
         auto iph = pkt.prepend_header<ip_hdr>();
         iph->ihl = sizeof(*iph) / 4;
         iph->ver = 4;
@@ -236,7 +240,7 @@ void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_com
 
         auto&& send_complete = remaining ? l4send_completion() : std::move(complete);
         if (!e_dst) {
-            _arp.lookup(dst).then([this, pkt = std::move(pkt), send_complete = std::move(send_complete)] (ethernet_address e_dst) mutable {
+            get_l2_dst_address(to).then([this, pkt = std::move(pkt), send_complete = std::move(send_complete)] (ethernet_address e_dst) mutable {
                 send_raw(e_dst, std::move(pkt), std::move(send_complete));
             });
         } else {

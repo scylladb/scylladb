@@ -100,6 +100,8 @@ public:
 public:
     ipv4_l4(ipv4& inet) : _inet(inet) {}
     void send(ipv4_address from, ipv4_address to, packet p);
+    void register_packet_provider(ipv4_traits::packet_provider_type func);
+    future<ethernet_address> get_l2_dst_address(ipv4_address to);
 };
 
 class ip_protocol {
@@ -368,12 +370,31 @@ public:
     void register_packet_provider(ipv4_traits::packet_provider_type&& func) {
         _pkt_providers.push_back(std::move(func));
     }
+    future<ethernet_address> get_l2_dst_address(ipv4_address to);
 };
 
 template <ip_protocol_num ProtoNum>
 inline
 void ipv4_l4<ProtoNum>::send(ipv4_address from, ipv4_address to, packet p) {
     _inet.send(/* from, */ to, ProtoNum, std::move(p));
+}
+
+template <ip_protocol_num ProtoNum>
+inline
+void ipv4_l4<ProtoNum>::register_packet_provider(ipv4_traits::packet_provider_type func) {
+    _inet.register_packet_provider([func = std::move(func)] {
+        auto l4p = func();
+        if (l4p) {
+            l4p.value().proto_num = ProtoNum;
+        }
+        return l4p;
+    });
+}
+
+template <ip_protocol_num ProtoNum>
+inline
+future<ethernet_address> ipv4_l4<ProtoNum>::get_l2_dst_address(ipv4_address to) {
+    return _inet.get_l2_dst_address(to);
 }
 
 struct ip_hdr {
