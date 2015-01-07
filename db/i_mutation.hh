@@ -15,19 +15,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db;
 
-import java.nio.ByteBuffer;
-import java.util.Collection;
-import java.util.UUID;
+/*
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
+ */
 
-public interface IMutation
-{
-    public String getKeyspaceName();
-    public Collection<UUID> getColumnFamilyIds();
-    public ByteBuffer key();
-    public long getTimeout();
-    public String toString(boolean shallow);
-    public void addAll(IMutation m);
-    public Collection<ColumnFamily> getColumnFamilies();
+#pragma once
+
+#include "core/sstring.hh"
+
+namespace db {
+
+// FIXME: real UUID and ColumnFamily
+class UUID;
+class ColumnFamily;
+
+class i_mutation {
+public:
+    virtual sstring get_keyspace_name() =0;
+    virtual std::vector<UUID> get_column_family_ids() = 0;
+    virtual bytes key() = 0;
+    virtual int64_t get_timeout() = 0;
+    virtual sstring to_string(bool shallow) = 0;
+    virtual void add_all(i_mutation& m) = 0;
+    virtual std::vector<ColumnFamily> get_column_families() = 0;
+};
+
 }
