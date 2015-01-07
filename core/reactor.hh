@@ -178,6 +178,8 @@ public:
     future<> write_all(const uint8_t* buffer, size_t size);
     future<size_t> write_some(net::packet& p);
     future<> write_all(net::packet& p);
+    future<> readable();
+    future<> writeable();
     future<pollable_fd, socket_address> accept();
     future<size_t> sendmsg(struct msghdr *msg);
     future<size_t> recvmsg(struct msghdr *msg);
@@ -1345,6 +1347,16 @@ future<> pollable_fd::write_all(net::packet& p) {
         p.trim_front(size);
         return write_all(p);
     });
+}
+
+inline
+future<> pollable_fd::readable() {
+    return engine.readable(*_s);
+}
+
+inline
+future<> pollable_fd::writeable() {
+    return engine.writeable(*_s);
 }
 
 inline
