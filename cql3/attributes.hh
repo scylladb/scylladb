@@ -71,7 +71,7 @@ public:
         if (!_timestamp)
             return now;
 
-        bytes tval = _timestamp.value()->bind_and_get(_timestamp.value(), options);
+        bytes tval = _timestamp.value()->bind_and_get(options);
         if (tval == nullptr)
             throw exceptions::invalid_request_exception("Invalid null value of timestamp");
 
@@ -87,7 +87,7 @@ public:
         if (!_time_to_live)
             return 0;
 
-        bytes tval = _time_to_live.value()->bind_and_get(_time_to_live.value(), options);
+        bytes tval = _time_to_live.value()->bind_and_get(options);
         if (tval == nullptr)
             throw exceptions::invalid_request_exception("Invalid null value of TTL");
 

@@ -25,8 +25,6 @@
 #ifndef CQL3_TERM_HH
 #define CQL3_TERM_HH
 
-#include <memory>
-
 namespace cql3 {
 
 class terminal;
@@ -59,7 +57,7 @@ public:
      * @return the result of binding all the variables of this NonTerminal (or
      * 'this' if the term is terminal).
      */
-    virtual ::shared_ptr<terminal> bind(::shared_ptr<term> term, const query_options& options) = 0;
+    virtual ::shared_ptr<terminal> bind(const query_options& options) = 0;
 
     /**
      * A shorter for bind(values).get().
@@ -67,7 +65,7 @@ public:
      * object between the bind and the get (note that we still want to be able
      * to separate bind and get for collections).
      */
-    virtual bytes bind_and_get(::shared_ptr<term> term, const query_options& options) = 0;
+    virtual bytes bind_and_get(const query_options& options) = 0;
 
     /**
      * Whether or not that term contains at least one bind marker.
@@ -124,13 +122,13 @@ public:
      * Note that a terminal term will always have been type checked, and thus
      * consumer can (and should) assume so.
      */
-    class terminal : public term {
+    class terminal : public term, public ::enable_shared_from_this<terminal> {
     public:
         virtual void collect_marker_specification(::shared_ptr<variable_specifications> bound_names) {
         }
 
-        virtual ::shared_ptr<terminal> bind(::shared_ptr<term> term, const query_options& options) override {
-            return ::static_pointer_cast<terminal>(term);
+        virtual ::shared_ptr<terminal> bind(const query_options& options) override {
+            return this->shared_from_this();
         }
 
         virtual bool uses_function(sstring ks_name, sstring function_name) const override {
@@ -146,10 +144,10 @@ public:
         /**
          * @return the serialized value of this terminal.
          */
-        virtual bytes get(::shared_ptr<term> term, const query_options& options) = 0;
+        virtual bytes get(const query_options& options) = 0;
 
-        virtual bytes bind_and_get(::shared_ptr<term> term, const query_options& options) override {
-            return get(term, options);
+        virtual bytes bind_and_get(const query_options& options) override {
+            return get(options);
         }
     };
 
@@ -180,9 +178,9 @@ public:
             return false;
         }
 
-        virtual bytes bind_and_get(::shared_ptr<term> term, const query_options& options) override {
-            auto t = bind(term, options);
-            return t == nullptr ? nullptr : t->get(term, options);
+        virtual bytes bind_and_get(const query_options& options) override {
+            auto t = bind(options);
+            return t == nullptr ? nullptr : t->get(options);
         }
     };
 }
