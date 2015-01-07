@@ -20,6 +20,7 @@
 #include "counter_cell.hh"
 #include "i_mutation.hh"
 #include "row_position.hh"
+#include "marshal/reversed_type.hh"
 
 const db::composites::composite::EOC db::composites::composite::EOC::START{-1};
 const db::composites::composite::EOC db::composites::composite::EOC::NONE{-1};

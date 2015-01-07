@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright 2014 Cloudius Systems
+ * Copyright 2015 Cloudius Systems
  *
  * Modified by Cloudius Systems
  */
@@ -25,29 +25,25 @@
 #ifndef CQL3_COLUMN_SPECIFICATION_HH
 #define CQL3_COLUMN_SPECIFICATION_HH
 
+#include "cql3/column_identifier.hh"
+#include "db/marshal/reversed_type.hh"
+#include "database.hh"
+
 namespace cql3 {
 
-#if 0
-package org.apache.cassandra.cql3;
+class column_specification final {
+public:
+    const sstring ks_name;
+    const sstring cf_name;
+    const ::shared_ptr<column_identifier> name;
+    const ::shared_ptr<abstract_type> type;
 
-import org.apache.cassandra.db.marshal.AbstractType;
-import org.apache.cassandra.db.marshal.ReversedType;
-#endif
-
-class column_specification {
-#if 0
-    public final String ksName;
-    public final String cfName;
-    public final ColumnIdentifier name;
-    public final AbstractType<?> type;
-
-    public ColumnSpecification(String ksName, String cfName, ColumnIdentifier name, AbstractType<?> type)
-    {
-        this.ksName = ksName;
-        this.cfName = cfName;
-        this.name = name;
-        this.type = type;
-    }
+    column_specification(sstring ks_name_, sstring cf_name_, ::shared_ptr<column_identifier> name_, ::shared_ptr<abstract_type> type_)
+        : ks_name(ks_name_)
+        , cf_name(cf_name_)
+        , name(name_)
+        , type(type_)
+    { }
 
     /**
      * Returns a new <code>ColumnSpecification</code> for the same column but with the specified alias.
@@ -55,16 +51,13 @@ class column_specification {
      * @param alias the column alias
      * @return a new <code>ColumnSpecification</code> for the same column but with the specified alias.
      */
-    public ColumnSpecification withAlias(ColumnIdentifier alias)
-    {
-        return new ColumnSpecification(ksName, cfName, alias, type);
+    ::shared_ptr<column_specification> with_alias(::shared_ptr<column_identifier> alias) {
+        return ::make_shared<column_specification>(ks_name, cf_name, alias, type);
     }
     
-    public boolean isReversedType()
-    {
-        return type instanceof ReversedType;
+    bool is_reversed_type() const {
+        return ::dynamic_pointer_cast<db::marshal::reversed_type>(type) != nullptr;
     }
-#endif
 };
 
 }

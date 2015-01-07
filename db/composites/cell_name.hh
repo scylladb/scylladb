@@ -25,6 +25,8 @@
 #pragma once
 #include "database.hh"
 
+#include "db/composites/composite.hh"
+
 namespace db {
 namespace composites {
 

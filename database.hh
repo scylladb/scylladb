@@ -45,6 +45,12 @@ public:
         std::istringstream iss(v);
         return deserialize(iss);
     }
+    virtual void validate(const bytes& v) {
+        // FIXME
+    }
+    virtual object_opt compose(const bytes& v) {
+        return deserialize(v);
+    }
     bytes decompose(const boost::any& value) {
         // FIXME: optimize
         std::ostringstream oss;
