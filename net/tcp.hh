@@ -450,6 +450,7 @@ tcp<InetTraits>::tcb::tcb(tcp& t, connid id)
     , _foreign_port(id.foreign_port) {
         _delayed_ack.set_callback([this] { _nr_full_seg_received = 0; output(); });
         _retransmit.set_callback([this] { retransmit(); });
+        _snd.next = _snd.initial = get_isn();
 }
 
 template <typename InetTraits>
@@ -531,7 +532,6 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             _rcv.next = _rcv.initial + 1;
             _rcv.urgent = _rcv.next;
             _snd.wl1 = th->seq;
-            _snd.next = _snd.initial = get_isn();
             _option.parse(opt_start, opt_end);
             // Remote receive window scale factor
             _snd.window_scale = _option._remote_win_scale;
