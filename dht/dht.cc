@@ -6,3 +6,4 @@
 // out-of-line implementations.
 
 #include "ring_position.hh"
+#include "i_partitioner.hh"
