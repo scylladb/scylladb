@@ -42,7 +42,7 @@ void do_until_continued(StopCondition&& stop_cond, AsyncAction&& action, promise
         if (!f.available()) {
             f.then([action = std::forward<AsyncAction>(action),
                     stop_cond = std::forward<StopCondition>(stop_cond), p = std::move(p)]() mutable {
-                do_until_continued(stop_cond, action, std::move(p));
+                do_until_continued(stop_cond, std::forward<AsyncAction>(action), std::move(p));
             });
             return;
         }

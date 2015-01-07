@@ -11,8 +11,9 @@ using std::move;
 
 namespace net {
 
-l3_protocol::l3_protocol(interface* netif, eth_protocol_num proto_num)
-    : _netif(netif), _proto_num(proto_num) {
+l3_protocol::l3_protocol(interface* netif, eth_protocol_num proto_num, packet_provider_type func)
+    : _netif(netif), _proto_num(proto_num)  {
+        _netif->register_packet_provider(std::move(func));
 }
 
 subscription<packet, ethernet_address> l3_protocol::receive(
@@ -21,15 +22,30 @@ subscription<packet, ethernet_address> l3_protocol::receive(
     return _netif->register_l3(_proto_num, std::move(rx_fn), std::move(forward));
 };
 
-future<> l3_protocol::send(ethernet_address to, packet p) {
-    return _netif->send(_proto_num, to, std::move(p));
-}
-
 interface::interface(std::shared_ptr<device> dev)
     : _dev(dev)
     , _rx(_dev->receive([this] (packet p) { return dispatch_packet(std::move(p)); }))
     , _hw_address(_dev->hw_address())
     , _hw_features(_dev->hw_features()) {
+    dev->local_queue().register_packet_provider([this, idx = 0u] () mutable {
+            std::experimental::optional<packet> p;
+            for (size_t i = 0; i < _pkt_providers.size(); i++) {
+                auto l3p = _pkt_providers[idx++]();
+                if (idx == _pkt_providers.size())
+                    idx = 0;
+                if (l3p) {
+                    auto l3pv = std::move(l3p.value());
+                    auto eh = l3pv.p.prepend_header<eth_hdr>();
+                    eh->dst_mac = l3pv.to;
+                    eh->src_mac = _hw_address;
+                    eh->eth_proto = uint16_t(l3pv.proto_num);
+                    *eh = hton(*eh);
+                    p = std::move(l3pv.p);
+                    return p;
+                }
+            }
+            return p;
+        });
 }
 
 subscription<packet, ethernet_address>
@@ -93,15 +109,6 @@ future<> interface::dispatch_packet(packet p) {
         }
     }
     return make_ready_future<>();
-}
-
-future<> interface::send(eth_protocol_num proto_num, ethernet_address to, packet p) {
-    auto eh = p.prepend_header<eth_hdr>();
-    eh->dst_mac = to;
-    eh->src_mac = _hw_address;
-    eh->eth_proto = uint16_t(proto_num);
-    *eh = hton(*eh);
-    return _dev->local_queue().send(std::move(p));
 }
 
 }

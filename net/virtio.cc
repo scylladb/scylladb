@@ -277,7 +277,6 @@ private:
     semaphore _available_descriptors = { 0 };
     int _free_head = -1;
     int _free_last = -1;
-    std::vector<uint16_t> _batch;
     reactor::poller _poller;
 public:
 
@@ -303,8 +302,6 @@ public:
 
     template <typename Iterator>
     void post(Iterator begin, Iterator end);
-
-    void flush_batch();
 
     semaphore& available_descriptors() { return _available_descriptors; }
 private:
@@ -373,7 +370,6 @@ vring<BufferChain, Completion>::vring(ring_config conf, Completion complete)
     , _avail_event(reinterpret_cast<std::atomic<uint16_t>*>(&_used._shared->_used_elements[conf.size]))
     , _used_event(reinterpret_cast<std::atomic<uint16_t>*>(&_avail._shared->_ring[conf.size]))
     , _poller([this] {
-        flush_batch();
         do_complete();
         return true;
     })
@@ -389,19 +385,6 @@ void vring<BufferChain, Completion>::setup() {
     _free_head = 0;
     _free_last = _config.size - 1;
     _available_descriptors.signal(_config.size);
-}
-
-template <typename BufferChain, typename Completion>
-void vring<BufferChain, Completion>::flush_batch() {
-    if (_batch.empty()) {
-        return;
-    }
-    for (auto desc_head : _batch) {
-        _avail._shared->_ring[masked(_avail._head++)] = desc_head;
-    }
-    _batch.clear();
-    _avail._shared->_idx.store(_avail._head, std::memory_order_release);
-    kick();
 }
 
 // Iterator: points at a buffer_chain
@@ -426,12 +409,11 @@ void vring<BufferChain, Completion>::post(Iterator begin, Iterator end) {
         }
         auto desc_head = pseudo_head._next;
         _buffer_chains[desc_head] = std::move(bc);
-        _batch.push_back(desc_head);
+        _avail._shared->_ring[masked(_avail._head++)] = desc_head;
         _avail._avail_added_since_kick++;
     }
-    if (_batch.size() >= 16) {
-        flush_batch();
-    }
+    _avail._shared->_idx.store(_avail._head, std::memory_order_release);
+    kick();
 }
 
 template <typename BufferChain, typename Completion>
@@ -501,6 +483,7 @@ protected:
         };
         qp& _dev;
         vring<packet_as_buffer_chain, complete> _ring;
+        std::vector<packet_as_buffer_chain> _packets;
     public:
         txq(qp& dev, ring_config config);
         void set_notifier(std::unique_ptr<notifier> notifier) {
@@ -512,7 +495,7 @@ protected:
         void wake_notifier_wait() {
             _ring.wake_notifier_wait();
         }
-        future<> post(packet p);
+        uint32_t post(circular_buffer<packet>& p);
     };
     class rxq  {
         struct buffer_and_virt : buffer {
@@ -562,7 +545,10 @@ protected:
     size_t vring_storage_size(size_t ring_size);
 public:
     explicit qp(device* dev, size_t rx_ring_size, size_t tx_ring_size);
-    virtual future<> send(packet p) override;
+    virtual future<> send(packet p) override {
+        abort();
+    }
+    virtual uint32_t send(circular_buffer<packet>& p) override;
     virtual void rx_start() override;
 };
 
@@ -570,57 +556,60 @@ qp::txq::txq(qp& dev, ring_config config)
     : _dev(dev), _ring(config, complete{*this}) {
 }
 
-future<>
-qp::txq::post(packet p) {
+uint32_t
+qp::txq::post(circular_buffer<packet>& pb) {
     net_hdr_mrg vhdr = {};
+    _packets.clear();
 
-    // Handle TCP checksum offload
-    auto oi = p.offload_info();
-    if (_dev._dev->hw_features().tx_csum_l4_offload) {
-        auto eth_hdr_len = sizeof(eth_hdr);
-        auto ip_hdr_len = oi.ip_hdr_len;
-        auto mtu = _dev._dev->hw_features().mtu;
-        if (oi.protocol == ip_protocol_num::tcp) {
-            auto tcp_hdr_len = oi.tcp_hdr_len;
-            if (oi.needs_csum) {
-                vhdr.needs_csum = 1;
-                vhdr.csum_start = eth_hdr_len + ip_hdr_len;
-                // TCP checksum filed's offset within the TCP header is 16 bytes
-                vhdr.csum_offset = 16;
-            }
-            if (_dev._dev->hw_features().tx_tso && p.len() > mtu + eth_hdr_len) {
-                // IPv4 TCP TSO
-                vhdr.gso_type = net_hdr::gso_tcpv4;
-                // Sum of Ethernet, IP and TCP header size
-                vhdr.hdr_len = eth_hdr_len + ip_hdr_len + tcp_hdr_len;
-                // Maximum segment size of packet after the offload
-                vhdr.gso_size = mtu - ip_hdr_len - tcp_hdr_len;
-            }
-        } else if (oi.protocol == ip_protocol_num::udp) {
-            auto udp_hdr_len = oi.udp_hdr_len;
-            if (oi.needs_csum) {
-                vhdr.needs_csum = 1;
-                vhdr.csum_start = eth_hdr_len + ip_hdr_len;
-                // UDP checksum filed's offset within the UDP header is 6 bytes
-                vhdr.csum_offset = 6;
-            }
-            if (_dev._dev->hw_features().tx_ufo && p.len() > mtu + eth_hdr_len) {
-                vhdr.gso_type = net_hdr::gso_udp;
-                vhdr.hdr_len = eth_hdr_len + ip_hdr_len + udp_hdr_len;
-                vhdr.gso_size = mtu - ip_hdr_len - udp_hdr_len;
+    while (!pb.empty() && pb.front().nr_frags() + 1 <= _ring.available_descriptors().current()) {
+        auto p = std::move(pb.front());
+        pb.pop_front();
+        // Handle TCP checksum offload
+        auto oi = p.offload_info();
+        if (_dev._dev->hw_features().tx_csum_l4_offload) {
+            auto eth_hdr_len = sizeof(eth_hdr);
+            auto ip_hdr_len = oi.ip_hdr_len;
+            auto mtu = _dev._dev->hw_features().mtu;
+            if (oi.protocol == ip_protocol_num::tcp) {
+                auto tcp_hdr_len = oi.tcp_hdr_len;
+                if (oi.needs_csum) {
+                    vhdr.needs_csum = 1;
+                    vhdr.csum_start = eth_hdr_len + ip_hdr_len;
+                    // TCP checksum filed's offset within the TCP header is 16 bytes
+                    vhdr.csum_offset = 16;
+                }
+                if (_dev._dev->hw_features().tx_tso && p.len() > mtu + eth_hdr_len) {
+                    // IPv4 TCP TSO
+                    vhdr.gso_type = net_hdr::gso_tcpv4;
+                    // Sum of Ethernet, IP and TCP header size
+                    vhdr.hdr_len = eth_hdr_len + ip_hdr_len + tcp_hdr_len;
+                    // Maximum segment size of packet after the offload
+                    vhdr.gso_size = mtu - ip_hdr_len - tcp_hdr_len;
+                }
+            } else if (oi.protocol == ip_protocol_num::udp) {
+                auto udp_hdr_len = oi.udp_hdr_len;
+                if (oi.needs_csum) {
+                    vhdr.needs_csum = 1;
+                    vhdr.csum_start = eth_hdr_len + ip_hdr_len;
+                    // UDP checksum filed's offset within the UDP header is 6 bytes
+                    vhdr.csum_offset = 6;
+                }
+                if (_dev._dev->hw_features().tx_ufo && p.len() > mtu + eth_hdr_len) {
+                    vhdr.gso_type = net_hdr::gso_udp;
+                    vhdr.hdr_len = eth_hdr_len + ip_hdr_len + udp_hdr_len;
+                    vhdr.gso_size = mtu - ip_hdr_len - udp_hdr_len;
+                }
             }
         }
+        // prepend virtio-net header
+        packet q = packet(fragment{reinterpret_cast<char*>(&vhdr), _dev._header_len},
+                std::move(p));
+        auto fut = _ring.available_descriptors().wait(q.nr_frags());
+        assert(fut.available()); // how it cannot?
+        _packets.emplace_back(packet_as_buffer_chain{ std::move(q) });
     }
-
-    // prepend virtio-net header
-    packet q = packet(fragment{reinterpret_cast<char*>(&vhdr), _dev._header_len},
-            std::move(p));
-
-    auto nr_frags = q.nr_frags();
-    return _ring.available_descriptors().wait(nr_frags).then([this, nr_frags, p = std::move(q)] () mutable {
-        packet_as_buffer_chain vbc[1] { { std::move(p) } };
-        _ring.post(std::begin(vbc), std::end(vbc));
-    });
+    _ring.post(_packets.begin(), _packets.end());
+    return _packets.size();
 }
 
 qp::rxq::rxq(qp& dev, ring_config config)
@@ -742,9 +731,9 @@ qp::rx_start() {
     _rxq.run();
 }
 
-future<>
-qp::send(packet p) {
-    return _txq.post(std::move(p));
+uint32_t
+qp::send(circular_buffer<packet>& p) {
+    return _txq.post(p);
 }
 
 class qp_vhost : public qp {
