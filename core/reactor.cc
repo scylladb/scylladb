@@ -18,6 +18,7 @@
 #include <sys/eventfd.h>
 #include <boost/thread/barrier.hpp>
 #include <atomic>
+#include <dirent.h>
 #ifdef HAVE_DPDK
 #include <core/dpdk_rte.hh>
 #include <rte_lcore.h>
@@ -264,6 +265,16 @@ reactor::open_file_dma(sstring name) {
     });
 }
 
+future<file>
+reactor::open_directory(sstring name) {
+    return _thread_pool.submit<syscall_result<int>>([name] {
+        return wrap_syscall<int>(::open(name.c_str(), O_DIRECTORY | O_CLOEXEC | O_RDONLY));
+    }).then([] (syscall_result<int> sr) {
+        sr.throw_if_error();
+        return make_ready_future<file>(file(sr.result));
+    });
+}
+
 future<>
 posix_file_impl::flush(void) {
     return engine._thread_pool.submit<syscall_result<int>>([this] {
@@ -324,6 +335,91 @@ blockdev_file_impl::size(void) {
         throw_system_error_on(ret == -1);
         return size;
     });
+}
+
+subscription<directory_entry>
+posix_file_impl::list_directory(std::function<future<> (directory_entry de)> next) {
+    struct work {
+        stream<directory_entry> s;
+        unsigned current = 0;
+        unsigned total = 0;
+        bool eof = false;
+        int error = 0;
+        char buffer[8192];
+    };
+
+    // While it would be natural to use fdopendir()/readdir(),
+    // our syscall thread pool doesn't support malloc(), which is
+    // required for this to work.  So resort to using getdents()
+    // instead.
+
+    // From getdents(2):
+    struct linux_dirent {
+        unsigned long  d_ino;     /* Inode number */
+        unsigned long  d_off;     /* Offset to next linux_dirent */
+        unsigned short d_reclen;  /* Length of this linux_dirent */
+        char           d_name[];  /* Filename (null-terminated) */
+        /* length is actually (d_reclen - 2 -
+                             offsetof(struct linux_dirent, d_name)) */
+        /*
+        char           pad;       // Zero padding byte
+        char           d_type;    // File type (only since Linux
+                                  // 2.6.4); offset is (d_reclen - 1)
+         */
+    };
+
+    auto w = make_lw_shared<work>();
+    auto ret = w->s.listen(std::move(next));
+    w->s.started().then([w, this] {
+        auto eofcond = [w] { return w->eof; };
+        return do_until(eofcond, [w, this] {
+            if (w->current == w->total) {
+                return engine._thread_pool.submit<int>([w , this] () {
+                    auto ret = ::syscall(__NR_getdents, _fd, reinterpret_cast<linux_dirent*>(w->buffer), sizeof(w->buffer));
+                    throw_system_error_on(ret == -1);
+                    return ret;
+                }).then([w] (int ret) {
+                    if (ret == 0) {
+                        w->eof = true;
+                    } else {
+                        w->current = 0;
+                        w->total = ret;
+                    }
+                });
+            }
+            auto start = w->buffer + w->current;
+            auto de = reinterpret_cast<linux_dirent*>(start);
+            std::experimental::optional<directory_entry_type> type;
+            switch (start[de->d_reclen - 1]) {
+            case DT_BLK:
+                type = directory_entry_type::block_device;
+                break;
+            case DT_CHR:
+                type = directory_entry_type::char_device;
+                break;
+            case DT_DIR:
+                type = directory_entry_type::directory;
+                break;
+            case DT_FIFO:
+                type = directory_entry_type::fifo;
+                break;
+            case DT_REG:
+                type = directory_entry_type::regular;
+                break;
+            case DT_SOCK:
+                type = directory_entry_type::socket;
+                break;
+            default:
+                // unknown, ignore
+                ;
+            }
+            w->current += de->d_reclen;
+            return w->s.produce({de->d_name, type});
+        });
+    }).then([w] {
+        w->s.close();
+    });
+    return ret;
 }
 
 void reactor::enable_timer(clock_type::time_point when)
