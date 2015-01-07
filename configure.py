@@ -212,6 +212,7 @@ deps = {
 		 'io/io.cc',
                  'utils/utils.cc',
 		 'gms/version_generator.cc',
+                 'dht/dht.cc',
                  ]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
                 + core

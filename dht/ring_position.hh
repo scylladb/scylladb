@@ -15,17 +15,33 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.dht;
+
+/*
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
+ */
+
+#pragma once
+
+#include <memory>
+
+namespace dht {
+
+class Token;
+class IPartitioner;
 
 /**
  * Interface representing a position on the ring.
  * Both Token and DecoratedKey represent a position in the ring, a token being
  * less precise than a DecoratedKey (a token is really a range of keys).
  */
-public interface RingPosition<C extends RingPosition<C>> extends Comparable<C>
-{
-    public Token getToken();
-    public IPartitioner getPartitioner();
-    public boolean isMinimum();
-    public C minValue();
-}
+template <typename C>
+class ring_position /* <C extends RingPosition<C>> extends Comparable<C> */ {
+public:
+    virtual std::shared_ptr<Token> get_token() = 0;
+    virtual std::shared_ptr<IPartitioner> get_partitioner() = 0;
+    virtual bool is_minimum() = 0;
+    virtual std::shared_ptr<C> min_value() = 0;
+};
+
+} // dht
