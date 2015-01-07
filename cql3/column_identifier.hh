@@ -17,13 +17,17 @@
  */
 
 /*
- * Copyright 2014 Cloudius Systems
+ * Copyright 2015 Cloudius Systems
  *
  * Modified by Cloudius Systems
  */
 
 #ifndef CQL3_COLUMN_IDENTIFIER_HH
 #define CQL3_COLUMN_IDENTIFIER_HH
+
+#include "cql3/selection/selectable.hh"
+
+#include <algorithm>
 
 namespace cql3 {
 
@@ -51,20 +55,24 @@ import org.apache.cassandra.utils.memory.AbstractAllocator;
  * Represents an identifer for a CQL column definition.
  * TODO : should support light-weight mode without text representation for when not interned
  */
-class column_identifier /*extends org.apache.cassandra.cql3.selection.Selectable implements IMeasurableMemory*/
-{
+class column_identifier : public selection::selectable /* implements IMeasurableMemory*/ {
+public:
+    bytes bytes_;
+private:
+    sstring _text;
 #if 0
-    public final ByteBuffer bytes;
-    private final String text;
-
     private static final long EMPTY_SIZE = ObjectSizes.measure(new ColumnIdentifier("", true));
-
-    public ColumnIdentifier(String rawText, boolean keepCase)
-    {
-        this.text = keepCase ? rawText : rawText.toLowerCase(Locale.US);
-        this.bytes = ByteBufferUtil.bytes(this.text);
+#endif
+public:
+    column_identifier(sstring raw_text, bool keep_case) {
+        _text = raw_text;
+        if (!keep_case) {
+            std::transform(_text.begin(), _text.end(), _text.begin(), ::tolower);
+        }
+        bytes_ = to_bytes(_text);
     }
 
+#if 0
     public ColumnIdentifier(ByteBuffer bytes, AbstractType<?> type)
     {
         this.bytes = bytes;
