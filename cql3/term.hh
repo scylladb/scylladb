@@ -49,7 +49,7 @@ public:
      * @param boundNames the variables specification where to collect the
      * bind variables of this term in.
      */
-    virtual void collect_marker_specification(std::shared_ptr<variable_specifications> bound_names) = 0;
+    virtual void collect_marker_specification(::shared_ptr<variable_specifications> bound_names) = 0;
 
     /**
      * Bind the values in this term to the values contained in {@code values}.
@@ -59,7 +59,7 @@ public:
      * @return the result of binding all the variables of this NonTerminal (or
      * 'this' if the term is terminal).
      */
-    virtual std::shared_ptr<terminal> bind(std::shared_ptr<term> term, const query_options& options) = 0;
+    virtual ::shared_ptr<terminal> bind(::shared_ptr<term> term, const query_options& options) = 0;
 
     /**
      * A shorter for bind(values).get().
@@ -67,7 +67,7 @@ public:
      * object between the bind and the get (note that we still want to be able
      * to separate bind and get for collections).
      */
-    virtual bytes bind_and_get(std::shared_ptr<term> term, const query_options& options) = 0;
+    virtual bytes bind_and_get(::shared_ptr<term> term, const query_options& options) = 0;
 
     /**
      * Whether or not that term contains at least one bind marker.
@@ -126,11 +126,11 @@ public:
      */
     class terminal : public term {
     public:
-        virtual void collect_marker_specification(std::shared_ptr<variable_specifications> bound_names) {
+        virtual void collect_marker_specification(::shared_ptr<variable_specifications> bound_names) {
         }
 
-        virtual std::shared_ptr<terminal> bind(std::shared_ptr<term> term, const query_options& options) override {
-            return std::static_pointer_cast<terminal>(term);
+        virtual ::shared_ptr<terminal> bind(::shared_ptr<term> term, const query_options& options) override {
+            return ::static_pointer_cast<terminal>(term);
         }
 
         virtual bool uses_function(sstring ks_name, sstring function_name) const override {
@@ -146,9 +146,9 @@ public:
         /**
          * @return the serialized value of this terminal.
          */
-        virtual bytes get(std::shared_ptr<term> term, const query_options& options) = 0;
+        virtual bytes get(::shared_ptr<term> term, const query_options& options) = 0;
 
-        virtual bytes bind_and_get(std::shared_ptr<term> term, const query_options& options) override {
+        virtual bytes bind_and_get(::shared_ptr<term> term, const query_options& options) override {
             return get(term, options);
         }
     };
@@ -180,7 +180,7 @@ public:
             return false;
         }
 
-        virtual bytes bind_and_get(std::shared_ptr<term> term, const query_options& options) override {
+        virtual bytes bind_and_get(::shared_ptr<term> term, const query_options& options) override {
             auto t = bind(term, options);
             return t == nullptr ? nullptr : t->get(term, options);
         }

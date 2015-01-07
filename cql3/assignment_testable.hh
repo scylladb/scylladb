@@ -48,7 +48,7 @@ public:
 
     // Test all elements of toTest for assignment. If all are exact match, return exact match. If any is not assignable,
     // return not assignable. Otherwise, return weakly assignable.
-    static test_result test_all(sstring keyspace, const column_specification& receiver, const std::vector<std::shared_ptr<assignment_testable>>& to_test) {
+    static test_result test_all(sstring keyspace, const column_specification& receiver, const std::vector<::shared_ptr<assignment_testable>>& to_test) {
         test_result res = test_result::EXACT_MATCH;
         for (auto&& rt : to_test) {
             if (rt == nullptr) {
