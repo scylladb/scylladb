@@ -30,7 +30,6 @@ namespace cql3 {
 #include "exceptions/exceptions.hh"
 #include "db/expiring_cell.hh"
 #include "cql3/term.hh"
-#include "db.h"
 
 #include <experimental/optional>
 
