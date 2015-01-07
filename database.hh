@@ -17,9 +17,20 @@
 #include <vector>
 #include <iostream>
 #include <boost/functional/hash.hpp>
+#include <experimental/optional>
 
 // FIXME: should be int8_t
 using bytes = basic_sstring<char, uint32_t, 31>;
+
+using object_opt = std::experimental::optional<boost::any>;
+
+class marshal_exception : public std::exception {
+    sstring _why;
+public:
+    marshal_exception() : _why("marshalling error") {}
+    marshal_exception(sstring why) : _why(sstring("marshaling error: ") + why) {}
+    virtual const char* why() const { return _why.c_str(); }
+};
 
 class abstract_type {
     sstring _name;
@@ -27,9 +38,9 @@ public:
     abstract_type(sstring name) : _name(name) {}
     virtual ~abstract_type() {}
     virtual void serialize(const boost::any& value, std::ostream& out) = 0;
-    virtual boost::any deserialize(std::istream& in) = 0;
+    virtual object_opt deserialize(std::istream& in) = 0;
     virtual bool less(const bytes& v1, const bytes& v2) = 0;
-    boost::any deserialize(const bytes& v) {
+    object_opt deserialize(const bytes& v) {
         // FIXME: optimize
         std::istringstream iss(v);
         return deserialize(iss);
@@ -44,6 +55,9 @@ public:
     sstring name() const {
         return _name;
     }
+protected:
+    template <typename T, typename Compare = std::less<T>>
+    bool default_less(const bytes& b1, const bytes& b2, Compare compare = Compare());
 };
 
 using data_type = shared_ptr<abstract_type>;
@@ -86,6 +100,7 @@ extern thread_local shared_ptr<abstract_type> long_type;
 extern thread_local shared_ptr<abstract_type> ascii_type;
 extern thread_local shared_ptr<abstract_type> bytes_type;
 extern thread_local shared_ptr<abstract_type> utf8_type;
+extern thread_local shared_ptr<abstract_type> boolean_type;
 
 template <>
 inline
