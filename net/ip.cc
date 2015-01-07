@@ -189,7 +189,7 @@ ipv4::handle_received_packet(packet p, ethernet_address from) {
     return make_ready_future<>();
 }
 
-void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_completion complete) {
+void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_completion complete, std::experimental::optional<ethernet_address> e_dst) {
     auto needs_frag = this->needs_frag(p, proto_num, hw_features());
 
     // Figure out where to send the packet to. If it is a directly connected
@@ -201,7 +201,7 @@ void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_com
         dst = _gw_address;
     }
 
-    auto send_pkt = [this, to, dst, proto_num, needs_frag, complete = std::move(complete)] (packet& pkt, uint16_t remaining, uint16_t offset) mutable  {
+    auto send_pkt = [this, to, dst, proto_num, needs_frag, complete = std::move(complete), e_dst = std::move(e_dst)] (packet& pkt, uint16_t remaining, uint16_t offset) mutable  {
         auto iph = pkt.prepend_header<ip_hdr>();
         iph->ihl = sizeof(*iph) / 4;
         iph->ver = 4;
@@ -234,9 +234,14 @@ void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_com
             iph->csum = csum.get();
         }
 
-        _arp.lookup(dst).then([this, pkt = std::move(pkt), complete = remaining ? l4send_completion() : std::move(complete)] (ethernet_address e_dst) mutable {
-             send_raw(e_dst, std::move(pkt), std::move(complete));
-        });
+        auto&& send_complete = remaining ? l4send_completion() : std::move(complete);
+        if (!e_dst) {
+            _arp.lookup(dst).then([this, pkt = std::move(pkt), send_complete = std::move(send_complete)] (ethernet_address e_dst) mutable {
+                send_raw(e_dst, std::move(pkt), std::move(send_complete));
+            });
+        } else {
+            send_raw(e_dst.value(), std::move(pkt), std::move(send_complete));
+        }
     };
 
     if (needs_frag) {
@@ -262,6 +267,18 @@ void ipv4::send_raw(ethernet_address dst, packet p, l4send_completion complete) 
 }
 
 std::experimental::optional<l3_protocol::l3packet> ipv4::get_packet() {
+    for (size_t i = 0; i < _pkt_providers.size(); i++) {
+        auto l4p = _pkt_providers[_pkt_provider_idx++]();
+        if (_pkt_provider_idx == _pkt_providers.size()) {
+            _pkt_provider_idx = 0;
+        }
+        if (l4p) {
+            auto l4pv = std::move(l4p.value());
+            send(l4pv.to, l4pv.proto_num, std::move(l4pv.p), l4send_completion(), l4pv.e_dst);
+            break;
+        }
+    }
+
     std::experimental::optional<l3_protocol::l3packet> p;
     if (!_packetq.empty()) {
         auto ipv4p = std::move(_packetq.front());

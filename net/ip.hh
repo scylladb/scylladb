@@ -77,6 +77,13 @@ namespace net {
 struct ipv4_traits {
     using address_type = ipv4_address;
     using inet_type = ipv4_l4<ip_protocol_num::tcp>;
+    struct l4packet {
+        ipv4_address to;
+        packet p;
+        ethernet_address e_dst;
+        ip_protocol_num proto_num;
+    };
+    using packet_provider_type = std::function<std::experimental::optional<l4packet> ()>;
     static void tcp_pseudo_header_checksum(checksummer& csum, ipv4_address src, ipv4_address dst, uint16_t len) {
         csum.sum_many(src.ip.raw, dst.ip.raw, uint8_t(0), uint8_t(ip_protocol_num::tcp), len);
     }
@@ -275,6 +282,7 @@ public:
     static proto_type arp_protocol_type() { return proto_type(eth_protocol_num::ipv4); }
 private:
     interface* _netif;
+    std::vector<ipv4_traits::packet_provider_type> _pkt_providers;
     arp _global_arp;
     arp_for<ipv4> _arp;
     ipv4_address _host_address;
@@ -313,6 +321,7 @@ private:
         ipv4packet(l3_protocol::l3packet&& p, l4send_completion&& c) : l3packet(std::move(p)), complete(std::move(c)) {}
     };
     circular_buffer<ipv4packet> _packetq;
+    unsigned _pkt_provider_idx = 0;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
     bool forward(forward_hash& out_hash_data, packet& p, size_t off);
@@ -345,7 +354,8 @@ public:
     // But for now, a simple single raw pointer suffices
     void set_packet_filter(ip_packet_filter *);
     ip_packet_filter * packet_filter() const;
-    void send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_completion complete = l4send_completion());
+    void send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_completion complete = l4send_completion(),
+            std::experimental::optional<ethernet_address> e_dst = std::experimental::optional<ethernet_address>());
     void send_raw(ethernet_address, packet, l4send_completion completion = l4send_completion());
     tcp<ipv4_traits>& get_tcp() { return *_tcp._tcp; }
     udp_v4& get_udp() { return _udp; }
@@ -354,6 +364,9 @@ public:
     static bool needs_frag(packet& p, ip_protocol_num proto_num, net::hw_features hw_features);
     void learn(ethernet_address l2, ipv4_address l3) {
         _arp.learn(l2, l3);
+    }
+    void register_packet_provider(ipv4_traits::packet_provider_type&& func) {
+        _pkt_providers.push_back(std::move(func));
     }
 };
 
