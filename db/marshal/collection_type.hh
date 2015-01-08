@@ -15,6 +15,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef DB_MARSHAL_COLLECTION_TYPE_HH
+#define DB_MARSHAL_COLLECTION_TYPE_HH
+
+#include "database.hh"
+
+namespace db {
+
+namespace marshal {
+
+#if 0
 package org.apache.cassandra.db.marshal;
 
 import java.nio.ByteBuffer;
@@ -34,18 +51,22 @@ import org.apache.cassandra.cql3.Sets;
 import org.apache.cassandra.serializers.CollectionSerializer;
 import org.apache.cassandra.serializers.MarshalException;
 import org.apache.cassandra.utils.ByteBufferUtil;
+#endif
 
 /**
  * The abstract validator that is the base for maps, sets and lists (both frozen and non-frozen).
  *
  * Please note that this comparator shouldn't be used "manually" (through thrift for instance).
  */
-public abstract class CollectionType<T> extends AbstractType<T>
-{
+class collection_type : public abstract_type {
+public:
+#if 0
     private static final Logger logger = LoggerFactory.getLogger(CollectionType.class);
 
     public static final int MAX_ELEMENTS = 65535;
+#endif
 
+#if 0
     public enum Kind
     {
         MAP
@@ -72,14 +93,22 @@ public abstract class CollectionType<T> extends AbstractType<T>
 
         public abstract ColumnSpecification makeCollectionReceiver(ColumnSpecification collection, boolean isKey);
     }
+#endif
+    enum class collection_kind {
+        MAP,
+        SET,
+        LIST,
+    };
 
-    public final Kind kind;
+    const collection_kind kind;
 
-    protected CollectionType(Kind kind)
-    {
-        this.kind = kind;
-    }
+protected:
+    collection_type(collection_kind kind_)
+        : abstract_type{"collection"}
+        , kind{kind_}
+    { }
 
+#if 0
     public abstract AbstractType<?> nameComparator();
     public abstract AbstractType<?> valueComparator();
 
@@ -214,4 +243,11 @@ public abstract class CollectionType<T> extends AbstractType<T>
     {
         return this.toString(false);
     }
+#endif
+};
+
 }
+
+}
+
+#endif
