@@ -30,6 +30,7 @@
 #include "cf_name.hh"
 
 #include "assignment_testable.hh"
+#include "constants.hh"
 #include "term.hh"
 #include "cql3_row.hh"
 #include "attributes.hh"

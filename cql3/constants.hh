@@ -15,6 +15,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_CONSTANTS_HH
+#define CQL3_CONSTANTS_HH
+
+#include "cql3/abstract_marker.hh"
+
+namespace cql3 {
+
+#if 0
 package org.apache.cassandra.cql3;
 
 import java.nio.ByteBuffer;
@@ -34,12 +49,14 @@ import org.apache.cassandra.db.marshal.ReversedType;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.serializers.MarshalException;
 import org.apache.cassandra.utils.ByteBufferUtil;
+#endif
 
 /**
  * Static helper methods and classes for constants.
  */
-public abstract class Constants
-{
+class constants {
+public:
+#if 0
     private static final Logger logger = LoggerFactory.getLogger(Constants.class);
 
     public enum Type
@@ -270,15 +287,25 @@ public abstract class Constants
             return ByteBufferUtil.bytesToHex(bytes);
         }
     }
+#endif
 
-    public static class Marker extends AbstractMarker
-    {
+    class marker : public abstract_marker {
+    public:
+        marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
+            : abstract_marker{bind_index, std::move(receiver)}
+        { }
+#if 0
         protected Marker(int bindIndex, ColumnSpecification receiver)
         {
             super(bindIndex, receiver);
             assert !receiver.type.isCollection();
         }
+#endif
 
+        virtual ::shared_ptr<terminal> bind(const query_options& options) override {
+            throw std::runtime_error("");
+        }
+#if 0
         @Override
         public ByteBuffer bindAndGet(QueryOptions options) throws InvalidRequestException
         {
@@ -294,14 +321,18 @@ public abstract class Constants
                 throw new InvalidRequestException(e.getMessage());
             }
         }
+#endif
 
+#if 0
         public Value bind(QueryOptions options) throws InvalidRequestException
         {
             ByteBuffer bytes = bindAndGet(options);
             return bytes == null ? null : new Constants.Value(bytes);
         }
-    }
+#endif
+    };
 
+#if 0
     public static class Setter extends Operation
     {
         public Setter(ColumnDefinition column, Term t)
@@ -375,4 +406,9 @@ public abstract class Constants
                 cf.addColumn(params.makeTombstone(cname));
         }
     };
+#endif
+};
+
 }
+
+#endif
