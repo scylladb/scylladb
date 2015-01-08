@@ -77,7 +77,7 @@ public:
      * because calls to non pure functions will be NonTerminal (see #5616)
      * even if they don't have bind markers.
      */
-    virtual bool contains_bind_marker() = 0;
+    virtual bool contains_bind_marker() const = 0;
 
     virtual bool uses_function(sstring ks_name, sstring function_name) const = 0;
 
@@ -140,7 +140,7 @@ public:
 
         // While some NonTerminal may not have bind markers, no Term can be Terminal
         // with a bind marker
-        virtual bool contains_bind_marker() const {
+        virtual bool contains_bind_marker() const override {
             return false;
         }
 
