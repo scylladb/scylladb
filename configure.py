@@ -274,6 +274,8 @@ with open(buildfile, 'w') as f:
         cxxflags = -std=gnu++1y {dbgflag} {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags} {warnings} {defines}
         ldflags = {dbgflag} -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags}
         libs = {libs}
+        pool link_pool
+            depth = 1
         rule ragel
             command = ragel -G2 -o $out $in
             description = RAGEL $out
@@ -294,6 +296,7 @@ with open(buildfile, 'w') as f:
             rule link.{mode}
               command = $cxx  $cxxflags_{mode} $ldflags -o $out $in $libs $libs_{mode}
               description = LINK $out
+              pool = link_pool
             ''').format(mode = mode, **modeval))
         f.write('build {mode}: phony {artifacts}\n'.format(mode = mode,
             artifacts = str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))))
