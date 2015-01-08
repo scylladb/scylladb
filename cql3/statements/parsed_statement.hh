@@ -32,13 +32,16 @@
 
 #include "core/shared_ptr.hh"
 
+#include <experimental/optional>
+#include <vector>
+
 namespace cql3 {
 
 namespace statements {
 
 class parsed_statement {
 private:
-    shared_ptr<variable_specifications> _variables;
+    ::shared_ptr<variable_specifications> _variables;
 
 public:
     virtual ~parsed_statement()
@@ -49,7 +52,7 @@ public:
     }
 
     // Used by the parser and preparable statement
-    void set_bound_variables(const std::list<column_identifier>& bound_names)
+    void set_bound_variables(const std::vector<std::experimental::optional<::shared_ptr<column_identifier>>>& bound_names)
     {
         _variables = ::make_shared<variable_specifications>(bound_names);
     }
@@ -57,9 +60,9 @@ public:
     class prepared {
     public:
         const std::unique_ptr<cql_statement> statement;
-        const std::list<column_specification> bound_names;
+        const std::vector<::shared_ptr<column_specification>> bound_names;
 
-        prepared(std::unique_ptr<cql_statement>&& statement_, const std::list<column_specification>& bound_names_)
+        prepared(std::unique_ptr<cql_statement>&& statement_, const std::vector<::shared_ptr<column_specification>>& bound_names_)
             : statement(std::move(statement_))
             , bound_names(bound_names_)
         { }
@@ -69,7 +72,7 @@ public:
         { }
 
         prepared(std::unique_ptr<cql_statement>&& statement_)
-            : prepared(std::move(statement_), std::list<column_specification>())
+            : prepared(std::move(statement_), std::vector<::shared_ptr<column_specification>>())
         { }
     };
 

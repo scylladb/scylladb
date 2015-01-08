@@ -17,7 +17,7 @@
  */
 
 /*
- * Copyright 2014 Cloudius Systems
+ * Copyright 2015 Cloudius Systems
  *
  * Modified by Cloudius Systems
  */
@@ -28,58 +28,48 @@
 #include "cql3/column_specification.hh"
 #include "cql3/column_identifier.hh"
 
+#include <experimental/optional>
 #include <vector>
-#include <list>
 
 namespace cql3 {
 
-class variable_specifications {
+class variable_specifications final {
 private:
-    const std::list<column_identifier> _variable_names;
-    const std::vector<column_specification> _specs;
+    std::vector<std::experimental::optional<::shared_ptr<column_identifier>>> _variable_names;
+    std::vector<::shared_ptr<column_specification>> _specs;
 
 public:
-    variable_specifications(const std::list<column_identifier>& variable_names)
-        : _variable_names(variable_names)
+    variable_specifications(const std::vector<std::experimental::optional<::shared_ptr<column_identifier>>>& variable_names)
+        : _variable_names{variable_names}
+        , _specs{variable_names.size()}
     { }
-#if 0
-    {
-        this.variableNames = variableNames;
-        this.specs = new ColumnSpecification[variableNames.size()];
-    }
-#endif
 
-#if 0
     /**
      * Returns an empty instance of <code>VariableSpecifications</code>.
      * @return an empty instance of <code>VariableSpecifications</code>
      */
-    public static VariableSpecifications empty()
-    {
-        return new VariableSpecifications(Collections.<ColumnIdentifier> emptyList());
+    static ::shared_ptr<variable_specifications> empty() {
+        return ::make_shared<variable_specifications>(std::vector<std::experimental::optional<::shared_ptr<column_identifier>>>{});
     }
 
-    public int size()
-    {
-        return variableNames.size();
+    size_t size() const {
+        return _variable_names.size();
     }
-#endif
 
-    std::list<column_specification> get_specifications() const
-    {
-        return std::list<column_specification>(_specs.begin(), _specs.end());
+    std::vector<::shared_ptr<column_specification>> get_specifications() const {
+        return std::vector<::shared_ptr<column_specification>>(_specs.begin(), _specs.end());
+    }
+
+    void add(int32_t bind_index, ::shared_ptr<column_specification> spec) {
+        auto name = _variable_names[bind_index];
+        // Use the user name, if there is one
+        if (name) {
+            spec = ::make_shared<column_specification>(spec->ks_name, spec->cf_name, name.value(), spec->type);
+        }
+        _specs[bind_index] = spec;
     }
 
 #if 0
-    public void add(int bindIndex, ColumnSpecification spec)
-    {
-        ColumnIdentifier name = variableNames.get(bindIndex);
-        // Use the user name, if there is one
-        if (name != null)
-            spec = new ColumnSpecification(spec.ksName, spec.cfName, name, spec.type);
-        specs[bindIndex] = spec;
-    }
-
     @Override
     public String toString()
     {
