@@ -23,7 +23,7 @@
  */
 
 #ifndef CQL3_ASSIGNMENT_TESTABLE_HH
-#define CQL3_ASSIGMNENT_TESTABLE_HH
+#define CQL3_ASSIGNMENT_TESTABLE_HH
 
 #include <memory>
 #include <vector>
