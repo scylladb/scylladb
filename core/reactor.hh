@@ -165,7 +165,6 @@ size_t iovec_len(const std::vector<iovec>& iov)
 class pollable_fd {
 public:
     using speculation = pollable_fd_state::speculation;
-    std::unique_ptr<pollable_fd_state> _s;
     pollable_fd(file_desc fd, speculation speculate = speculation())
         : _s(std::make_unique<pollable_fd_state>(std::move(fd), speculate)) {}
 public:
@@ -191,6 +190,8 @@ protected:
     friend class reactor;
     friend class readable_eventfd;
     friend class writeable_eventfd;
+private:
+    std::unique_ptr<pollable_fd_state> _s;
 };
 
 class connected_socket_impl {
