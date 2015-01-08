@@ -35,7 +35,8 @@ ipv4::ipv4(interface* netif)
         return forward(out_hash_data, p, off);}))
     , _tcp(*this)
     , _icmp(*this)
-    , _l4({ { uint8_t(ip_protocol_num::tcp), &_tcp }, { uint8_t(ip_protocol_num::icmp), &_icmp }}) {
+    , _udp(*this)
+    , _l4({ { uint8_t(ip_protocol_num::tcp), &_tcp }, { uint8_t(ip_protocol_num::icmp), &_icmp }, { uint8_t(ip_protocol_num::udp), &_udp }}) {
     _frag_timer.set_callback([this] { frag_timeout(); });
 }
 
@@ -311,10 +312,6 @@ void ipv4::set_packet_filter(ip_packet_filter * f) {
 
 ip_packet_filter * ipv4::packet_filter() const {
     return _packet_filter;
-}
-
-void ipv4::register_l4(ipv4::proto_type id, ip_protocol *protocol) {
-    _l4.at(id) = protocol;
 }
 
 void ipv4::frag_limit_mem() {

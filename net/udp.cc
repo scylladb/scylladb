@@ -2,12 +2,18 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
-#include "udp.hh"
+#include "ip.hh"
 
 using namespace net;
 
 namespace net {
 namespace udp_v4_impl {
+
+static inline
+ipv4_addr
+to_ipv4_addr(ipv4_address a, uint16_t port) {
+    return {a.ip, port};
+}
 
 class native_datagram : public udp_datagram_impl {
 private:
@@ -94,7 +100,6 @@ const int udp_v4::default_queue_size = 1024;
 udp_v4::udp_v4(ipv4& inet)
     : _inet(inet)
 {
-    _inet.register_l4(uint8_t(ip_protocol_num::udp), this);
 }
 
 bool udp_v4::forward(forward_hash& out_hash_data, packet& p, size_t off)
@@ -131,8 +136,8 @@ void udp_v4::send(uint16_t src_port, ipv4_addr dst, packet &&p, l4send_completio
     offload_info oi;
     checksummer csum;
     ipv4_traits::udp_pseudo_header_checksum(csum, src, dst, p.len());
-    bool needs_frag = ipv4::needs_frag(p, ip_protocol_num::udp, hw_features());
-    if (hw_features().tx_csum_l4_offload && !needs_frag) {
+    bool needs_frag = ipv4::needs_frag(p, ip_protocol_num::udp, _inet.hw_features());
+    if (_inet.hw_features().tx_csum_l4_offload && !needs_frag) {
         hdr->cksum = ~csum.get();
         oi.needs_csum = true;
     } else {

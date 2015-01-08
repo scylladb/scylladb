@@ -110,7 +110,6 @@ public:
 private:
     interface _netif;
     ipv4 _inet;
-    udp_v4 _udp;
     bool _dhcp = false;
     promise<> _config;
     timer<> _timer;
@@ -144,7 +143,7 @@ thread_local promise<std::unique_ptr<network_stack>> native_network_stack::ready
 
 udp_channel
 native_network_stack::make_udp_channel(ipv4_addr addr) {
-    return _udp.make_channel(addr);
+    return _inet.get_udp().make_channel(addr);
 }
 
 void
@@ -165,12 +164,11 @@ add_native_net_options_description(boost::program_options::options_description &
 
 native_network_stack::native_network_stack(boost::program_options::variables_map opts, std::shared_ptr<device> dev)
     : _netif(std::move(dev))
-    , _inet(&_netif)
-    , _udp(_inet) {
+    , _inet(&_netif) {
     _inet.set_host_address(ipv4_address(opts["host-ipv4-addr"].as<std::string>()));
     _inet.set_gw_address(ipv4_address(opts["gw-ipv4-addr"].as<std::string>()));
     _inet.set_netmask_address(ipv4_address(opts["netmask-ipv4-addr"].as<std::string>()));
-    _udp.set_queue_size(opts["udpv4-queue-size"].as<int>());
+    _inet.get_udp().set_queue_size(opts["udpv4-queue-size"].as<int>());
     _dhcp = opts["host-ipv4-addr"].defaulted()
             && opts["gw-ipv4-addr"].defaulted()
             && opts["netmask-ipv4-addr"].defaulted() && opts["dhcp"].as<bool>();
