@@ -5,9 +5,27 @@
 #ifndef FILE_HH_
 #define FILE_HH_
 
+#include "stream.hh"
+#include "sstring.hh"
+#include <experimental/optional>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <linux/fs.h>
+
+enum class directory_entry_type {
+    block_device,
+    char_device,
+    directory,
+    fifo,
+    link,
+    regular,
+    socket,
+};
+
+struct directory_entry {
+    sstring name;
+    std::experimental::optional<directory_entry_type> type;
+};
 
 class file_impl {
 public:
@@ -21,6 +39,7 @@ public:
     virtual future<struct stat> stat(void) = 0;
     virtual future<> discard(uint64_t offset, uint64_t length) = 0;
     virtual future<size_t> size(void) = 0;
+    virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) = 0;
 
     friend class reactor;
 };
@@ -43,6 +62,7 @@ public:
     future<struct stat> stat(void);
     future<> discard(uint64_t offset, uint64_t length);
     future<size_t> size(void);
+    virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override;
 };
 
 class blockdev_file_impl : public posix_file_impl {
@@ -102,6 +122,10 @@ public:
 
     future<size_t> size() {
         return _file_impl->size();
+    }
+
+    subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) {
+        return _file_impl->list_directory(std::move(next));
     }
 
     friend class reactor;

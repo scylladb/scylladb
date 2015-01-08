@@ -134,7 +134,7 @@ template <typename... T>
 inline
 void
 stream<T...>::close() {
-    _sub->_done.set_value();
+    _done.set_value();
 }
 
 template <typename... T>

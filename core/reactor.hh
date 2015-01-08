@@ -680,6 +680,7 @@ public:
     future<> write_all(pollable_fd_state& fd, const void* buffer, size_t size);
 
     future<file> open_file_dma(sstring name);
+    future<file> open_directory(sstring name);
 
     template <typename Func>
     future<io_event> submit_io(Func prepare_io);
