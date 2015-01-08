@@ -428,10 +428,8 @@ void vring<BufferChain, Completion>::do_complete() {
         } else {
             _free_head = id;
         }
-        unsigned count = 0;
         while (true) {
             auto& d = _descs[id];
-            count++;
             if (!d._flags.has_next) {
                 break;
             }
