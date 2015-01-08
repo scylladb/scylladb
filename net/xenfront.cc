@@ -37,12 +37,14 @@ namespace xen {
 using phys = uint64_t;
 
 class xenfront_device : public device {
+public:
+    xenstore* _xenstore = xenstore::instance();
+private:
     net::hw_features _hw_features;
     ethernet_address _hw_address;
     std::string _device_str;
 
 public:
-    xenstore* _xenstore = xenstore::instance();
     bool _userspace;
 
 public:
