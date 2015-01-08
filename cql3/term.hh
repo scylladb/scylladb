@@ -175,7 +175,7 @@ public:
      *   - a function having bind marker
      *   - a non pure function (even if it doesn't have bind marker - see #5616)
      */
-    class non_terminal : public virtual term {
+    class non_terminal : public term {
     public:
         virtual bool uses_function(sstring ks_name, sstring function_name) const override {
             return false;

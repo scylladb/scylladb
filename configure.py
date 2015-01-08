@@ -204,6 +204,7 @@ deps = {
     'seastar': (['main.cc',
                  'database.cc',
                  'log.cc',
+                 'cql3/abstract_marker.cc',
                  'cql3/cql3.cc',
                  'thrift/handler.cc',
                  'thrift/server.cc',
