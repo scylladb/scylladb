@@ -27,6 +27,8 @@
 
 #include "cql3/selection/selectable.hh"
 
+#include "database.hh"
+
 #include <algorithm>
 
 namespace cql3 {
