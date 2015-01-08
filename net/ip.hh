@@ -21,6 +21,7 @@
 #include "const.hh"
 #include "packet-util.hh"
 #include "core/shared_ptr.hh"
+#include "toeplitz.hh"
 
 namespace net {
 
@@ -332,6 +333,15 @@ struct l4connid {
                 && foreign_ip == x.foreign_ip
                 && local_port == x.local_port
                 && foreign_port == x.foreign_port;
+    }
+
+    uint32_t hash() {
+        forward_hash hash_data;
+        hash_data.push_back(hton(foreign_ip.ip));
+        hash_data.push_back(hton(local_ip.ip));
+        hash_data.push_back(hton(foreign_port));
+        hash_data.push_back(hton(local_port));
+        return toeplitz_hash(rsskey, hash_data);
     }
 };
 

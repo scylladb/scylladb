@@ -138,6 +138,18 @@ public:
         throw_system_error_on(r == -1);
         return r;
     }
+    template <class X>
+    int getsockopt(int level, int optname, X&& data) {
+        socklen_t len = sizeof(data);
+        int r = ::getsockopt(_fd, level, optname, &data, &len);
+        throw_system_error_on(r == -1);
+        return r;
+    }
+    int getsockopt(int level, int optname, char* data, socklen_t len) {
+        int r = ::getsockopt(_fd, level, optname, data, &len);
+        throw_system_error_on(r == -1);
+        return r;
+    }
     size_t size() {
         struct stat buf;
         auto r = ::fstat(_fd, &buf);
@@ -194,6 +206,13 @@ public:
     }
     void bind(sockaddr& sa, socklen_t sl) {
         auto r = ::bind(_fd, &sa, sl);
+        throw_system_error_on(r == -1);
+    }
+    void connect(sockaddr& sa, socklen_t sl) {
+        auto r = ::connect(_fd, &sa, sl);
+        if (r == -1 && errno == EINPROGRESS) {
+            return;
+        }
         throw_system_error_on(r == -1);
     }
     socket_address get_address() {
