@@ -106,13 +106,13 @@ public:
         ColumnIdentifier that = (ColumnIdentifier)o;
         return bytes.equals(that.bytes);
     }
+#endif
 
-    @Override
-    public String toString()
-    {
-        return text;
+    sstring to_string() const {
+        return _text;
     }
 
+#if 0
     public long unsharedHeapSize()
     {
         return EMPTY_SIZE
