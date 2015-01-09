@@ -31,6 +31,7 @@
 
 #include "assignment_testable.hh"
 #include "constants.hh"
+#include "lists.hh"
 #include "term.hh"
 #include "cql3_row.hh"
 #include "attributes.hh"

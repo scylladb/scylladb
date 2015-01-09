@@ -302,9 +302,6 @@ public:
         }
 #endif
 
-        virtual ::shared_ptr<terminal> bind(const query_options& options) override {
-            throw std::runtime_error("");
-        }
 #if 0
         @Override
         public ByteBuffer bindAndGet(QueryOptions options) throws InvalidRequestException
@@ -323,6 +320,9 @@ public:
         }
 #endif
 
+        virtual ::shared_ptr<terminal> bind(const query_options& options) override {
+            throw std::runtime_error("");
+        }
 #if 0
         public Value bind(QueryOptions options) throws InvalidRequestException
         {

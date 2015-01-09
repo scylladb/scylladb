@@ -15,6 +15,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_LISTS_HH
+#define CQL3_LISTS_HH
+
+#include "cql3/abstract_marker.hh"
+
+namespace cql3 {
+
+#if 0
 package org.apache.cassandra.cql3;
 
 import java.nio.ByteBuffer;
@@ -38,12 +53,14 @@ import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.UUIDGen;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+#endif
 
 /**
  * Static helper methods and classes for lists.
  */
-public abstract class Lists
-{
+class lists {
+public:
+#if 0
     private static final Logger logger = LoggerFactory.getLogger(Lists.class);
 
     private Lists() {}
@@ -232,21 +249,31 @@ public abstract class Lists
     /**
      * A marker for List values and IN relations
      */
-    public static class Marker extends AbstractMarker
-    {
+#endif
+    class marker : public abstract_marker {
+    public:
+        marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
+            : abstract_marker{bind_index, std::move(receiver)}
+        { }
+#if 0
         protected Marker(int bindIndex, ColumnSpecification receiver)
         {
             super(bindIndex, receiver);
             assert receiver.type instanceof ListType;
         }
-
+#endif
+        virtual ::shared_ptr<terminal> bind(const query_options& options) override {
+            throw std::runtime_error("");
+        }
+#if 0
         public Value bind(QueryOptions options) throws InvalidRequestException
         {
             ByteBuffer value = options.getValues().get(bindIndex);
             return value == null ? null : Value.fromSerialized(value, (ListType)receiver.type, options.getProtocolVersion());
         }
-    }
-
+#endif
+    };
+#if 0
     /*
      * For prepend, we need to be able to generate unique but decreasing time
      * UUID, which is a bit challenging. To do that, given a time in milliseconds,
@@ -505,4 +532,9 @@ public abstract class Lists
             cf.addColumn(params.makeTombstone(elementName));
         }
     }
+#endif
+};
+
 }
+
+#endif
