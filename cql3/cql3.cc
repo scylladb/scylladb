@@ -32,6 +32,7 @@
 #include "assignment_testable.hh"
 #include "constants.hh"
 #include "lists.hh"
+#include "maps.hh"
 #include "term.hh"
 #include "sets.hh"
 #include "cql3_row.hh"

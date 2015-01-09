@@ -15,6 +15,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_MAPS_HH
+#define CQL3_MAPS_HH
+
+#include "cql3/abstract_marker.hh"
+
+namespace cql3 {
+
+#if 0
 package org.apache.cassandra.cql3;
 
 import java.nio.ByteBuffer;
@@ -38,12 +53,14 @@ import org.apache.cassandra.serializers.MarshalException;
 import org.apache.cassandra.transport.Server;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Pair;
+#endif
 
 /**
  * Static helper methods and classes for maps.
  */
-public abstract class Maps
-{
+class maps {
+public:
+#if 0
     private Maps() {}
 
     public static ColumnSpecification keySpecOf(ColumnSpecification column)
@@ -258,22 +275,34 @@ public abstract class Maps
             return new Value(buffers);
         }
     }
+#endif
 
-    public static class Marker extends AbstractMarker
-    {
+    class marker : public abstract_marker {
+    public:
+        marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
+            : abstract_marker{bind_index, std::move(receiver)}
+        { }
+#if 0
         protected Marker(int bindIndex, ColumnSpecification receiver)
         {
             super(bindIndex, receiver);
             assert receiver.type instanceof MapType;
         }
+#endif
 
+        virtual ::shared_ptr<terminal> bind(const query_options& options) override {
+            throw std::runtime_error("");
+        }
+#if 0
         public Value bind(QueryOptions options) throws InvalidRequestException
         {
             ByteBuffer value = options.getValues().get(bindIndex);
             return value == null ? null : Value.fromSerialized(value, (MapType)receiver.type, options.getProtocolVersion());
         }
-    }
+#endif
+    };
 
+#if 0
     public static class Setter extends Operation
     {
         public Setter(ColumnDefinition column, Term t)
@@ -396,4 +425,9 @@ public abstract class Maps
             cf.addColumn(params.makeTombstone(cellName));
         }
     }
+#endif
+};
+
 }
+
+#endif
