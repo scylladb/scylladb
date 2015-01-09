@@ -15,6 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef DB_MARSHAL_LIST_TYPE_HH
+#define DB_MARSHAL_LIST_TYPE_HH
+
+#include "db/marshal/collection_type.hh"
+
+#include "database.hh"
+
+namespace db {
+
+namespace marshal {
+
+#if 0
 package org.apache.cassandra.db.marshal;
 
 import java.nio.ByteBuffer;
@@ -27,9 +46,11 @@ import org.apache.cassandra.serializers.CollectionSerializer;
 import org.apache.cassandra.serializers.ListSerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+#endif
 
-public class ListType<T> extends CollectionType<List<T>>
-{
+class list_type : public collection_type {
+public:
+#if 0
     private static final Logger logger = LoggerFactory.getLogger(ListType.class);
 
     // interning instances
@@ -48,9 +69,11 @@ public class ListType<T> extends CollectionType<List<T>>
 
         return getInstance(l.get(0), true);
     }
+#endif
 
-    public static synchronized <T> ListType<T> getInstance(AbstractType<T> elements, boolean isMultiCell)
-    {
+    static ::shared_ptr<list_type> get_instance(::shared_ptr<abstract_type> elements, bool is_multi_cell) {
+        throw std::runtime_error("not implemented");
+#if 0
         Map<AbstractType<?>, ListType> internMap = isMultiCell ? instances : frozenInstances;
         ListType<T> t = internMap.get(elements);
         if (t == null)
@@ -59,8 +82,10 @@ public class ListType<T> extends CollectionType<List<T>>
             internMap.put(elements, t);
         }
         return t;
+#endif
     }
 
+#if 0
     private ListType(AbstractType<T> elements, boolean isMultiCell)
     {
         super(Kind.LIST);
@@ -171,4 +196,11 @@ public class ListType<T> extends CollectionType<List<T>>
             bbs.add(c.value());
         return bbs;
     }
+#endif
+};
+
 }
+
+}
+
+#endif

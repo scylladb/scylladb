@@ -22,6 +22,7 @@
 #include "row_position.hh"
 #include "marshal/reversed_type.hh"
 #include "marshal/collection_type.hh"
+#include "marshal/list_type.hh"
 
 const db::composites::composite::EOC db::composites::composite::EOC::START{-1};
 const db::composites::composite::EOC db::composites::composite::EOC::NONE{-1};
