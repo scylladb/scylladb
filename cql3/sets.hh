@@ -15,6 +15,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_SETS_HH
+#define CQL3_SETS_HH
+
+#include "cql3/abstract_marker.hh"
+
+namespace cql3 {
+
+#if 0
 package org.apache.cassandra.cql3;
 
 import java.nio.ByteBuffer;
@@ -35,12 +50,14 @@ import org.apache.cassandra.serializers.MarshalException;
 import org.apache.cassandra.transport.Server;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
+#endif
 
 /**
  * Static helper methods and classes for sets.
  */
-public abstract class Sets
-{
+class sets {
+public:
+#if 0
     private Sets() {}
 
     public static ColumnSpecification valueSpecOf(ColumnSpecification column)
@@ -227,22 +244,34 @@ public abstract class Sets
             return new Value(buffers);
         }
     }
+#endif
 
-    public static class Marker extends AbstractMarker
-    {
+    class marker : public abstract_marker {
+    public:
+        marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
+            : abstract_marker{bind_index, std::move(receiver)}
+        { }
+#if 0
         protected Marker(int bindIndex, ColumnSpecification receiver)
         {
             super(bindIndex, receiver);
             assert receiver.type instanceof SetType;
         }
+#endif
 
+        virtual ::shared_ptr<terminal> bind(const query_options& options) override {
+            throw std::runtime_error("");
+        }
+#if 0
         public Value bind(QueryOptions options) throws InvalidRequestException
         {
             ByteBuffer value = options.getValues().get(bindIndex);
             return value == null ? null : Value.fromSerialized(value, (SetType)receiver.type, options.getProtocolVersion());
         }
-    }
+#endif
+    };
 
+#if 0
     public static class Setter extends Operation
     {
         public Setter(ColumnDefinition column, Term t)
@@ -331,4 +360,9 @@ public abstract class Sets
             }
         }
     }
+#endif
+};
+
 }
+
+#endif
