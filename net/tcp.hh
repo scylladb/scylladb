@@ -242,10 +242,12 @@ private:
         };
         static isn_secret _isn_secret;
         tcp_seq get_isn();
+        circular_buffer<typename InetTraits::l4packet> _packetq;
+        bool _poll_active = false;
     public:
         tcb(tcp& t, connid id);
         void input(tcp_hdr* th, packet p);
-        void output();
+        void output_one();
         future<> wait_for_data();
         future<> wait_for_all_data_acked();
         future<> send(packet p);
@@ -256,6 +258,13 @@ private:
             _tcp._tcbs.erase(id);
         }
         bool both_closed() { return _foreign_fin_received && _local_fin_acked; }
+        std::experimental::optional<typename InetTraits::l4packet> get_packet();
+        void output() {
+            if (!_poll_active) {
+                _poll_active = true;
+                _tcp.poll_tcb(_foreign_ip, this->shared_from_this());
+            }
+        }
     private:
         void respond_with_reset(tcp_hdr* th);
         bool merge_out_of_order();
@@ -296,6 +305,9 @@ private:
             std::for_each(_snd.data.begin(), _snd.data.end(), [&] (unacked_segment& seg) { size += seg.data_remaining; });
             return size;
         }
+        void queue_packet(packet p) {
+            _packetq.emplace_back(typename InetTraits::l4packet{_foreign_ip, std::move(p)});
+        }
         friend class connection;
     };
     inet_type& _inet;
@@ -304,6 +316,7 @@ private:
     std::random_device _rd;
     std::default_random_engine _e;
     std::uniform_int_distribution<uint16_t> _port_dist{41952, 65535};
+    circular_buffer<std::pair<lw_shared_ptr<tcb>, ethernet_address>> _poll_tcbs;
 public:
     class connection {
         lw_shared_ptr<tcb> _tcb;
@@ -362,17 +375,45 @@ public:
         friend class tcp;
     };
 public:
-    explicit tcp(inet_type& inet) : _inet(inet), _e(_rd()) {}
+    explicit tcp(inet_type& inet);
     void received(packet p, ipaddr from, ipaddr to);
     bool forward(forward_hash& out_hash_data, packet& p, size_t off);
     listener listen(uint16_t port, size_t queue_length = 100);
     connection connect(socket_address sa);
     net::hw_features hw_features() { return _inet._inet.hw_features(); }
+    void poll_tcb(ipaddr to, lw_shared_ptr<tcb> tcb);
 private:
     void send(ipaddr from, ipaddr to, packet p);
     void respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr foreign_ip);
     friend class listener;
 };
+
+template <typename InetTraits>
+tcp<InetTraits>::tcp(inet_type& inet) : _inet(inet), _e(_rd()) {
+    _inet.register_packet_provider([this] {
+        std::experimental::optional<typename InetTraits::l4packet> l4p;
+        auto c = _poll_tcbs.size();
+        while (c--) {
+            lw_shared_ptr<tcb> tcb;
+            ethernet_address dst;
+            std::tie(tcb, dst) = std::move(_poll_tcbs.front());
+            _poll_tcbs.pop_front();
+            l4p = tcb->get_packet();
+            if (l4p) {
+                l4p.value().e_dst = dst;
+                break;
+            }
+        }
+        return l4p;
+    });
+}
+
+template <typename InetTraits>
+void tcp<InetTraits>::poll_tcb(ipaddr to, lw_shared_ptr<tcb> tcb) {
+    _inet.get_l2_dst_address(to).then([this, tcb = std::move(tcb)] (ethernet_address dst) {
+        _poll_tcbs.emplace_back(std::move(tcb), dst);
+    });
+}
 
 template <typename InetTraits>
 auto tcp<InetTraits>::listen(uint16_t port, size_t queue_length) -> listener {
@@ -829,78 +870,75 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
 }
 
 template <typename InetTraits>
-void tcp<InetTraits>::tcb::output() {
+void tcp<InetTraits>::tcb::output_one() {
     if (_nuked) {
         return;
     }
-    do {
-        uint8_t options_size = 0;
-        packet p = get_transmit_packet();
-        uint16_t len = p.len();
 
-        if (!_local_syn_acked) {
-            options_size = _option.get_size(_foreign_syn_received);
+    uint8_t options_size = 0;
+    packet p = get_transmit_packet();
+    uint16_t len = p.len();
+
+    if (!_local_syn_acked) {
+        options_size = _option.get_size(_foreign_syn_received);
+    }
+    auto th = p.prepend_header<tcp_hdr>(options_size);
+    th->src_port = _local_port;
+    th->dst_port = _foreign_port;
+
+    th->f_syn = !_local_syn_acked;
+    _local_syn_sent |= th->f_syn;
+    th->f_ack = _foreign_syn_received;
+    if (th->f_ack) {
+        clear_delayed_ack();
+    }
+    th->f_urg = false;
+    th->f_psh = false;
+
+    th->seq = _snd.next;
+    th->ack = _rcv.next;
+    th->data_offset = (sizeof(*th) + options_size) / 4;
+    th->window = _rcv.window >> _rcv.window_scale;
+    th->checksum = 0;
+
+    _snd.next += len;
+
+    // FIXME: does the FIN have to fit in the window?
+    th->f_fin = _snd.closed && _snd.unsent_len == 0 && !_local_fin_acked;
+    _local_fin_sent |= th->f_fin;
+
+    // Add tcp options
+    _option.fill(th, options_size);
+    *th = hton(*th);
+
+    offload_info oi;
+    checksummer csum;
+    InetTraits::tcp_pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + options_size + len);
+    if (_tcp.hw_features().tx_csum_l4_offload) {
+        // tx checksum offloading - both virtio-net's VIRTIO_NET_F_CSUM
+        // dpdk's PKT_TX_TCP_CKSUM - requires th->checksum to be
+        // initialized to ones' complement sum of the pseudo header.
+        th->checksum = ~csum.get();
+        oi.needs_csum = true;
+    } else {
+        csum.sum(p);
+        th->checksum = csum.get();
+        oi.needs_csum = false;
+    }
+    oi.protocol = ip_protocol_num::tcp;
+    oi.tcp_hdr_len = sizeof(tcp_hdr) + options_size;
+    p.set_offload_info(oi);
+
+    if (len) {
+        unsigned nr_transmits = 0;
+        auto now = clock_type::now();
+        _snd.data.emplace_back(unacked_segment{p.share(), len, len, nr_transmits, now});
+        if (!_retransmit.armed()) {
+            start_retransmit_timer(now);
         }
-        auto th = p.prepend_header<tcp_hdr>(options_size);
-        th->src_port = _local_port;
-        th->dst_port = _foreign_port;
+    }
 
-        th->f_syn = !_local_syn_acked;
-        _local_syn_sent |= th->f_syn;
-        th->f_ack = _foreign_syn_received;
-        if (th->f_ack) {
-            clear_delayed_ack();
-        }
-        th->f_urg = false;
-        th->f_psh = false;
-
-        th->seq = _snd.next;
-        th->ack = _rcv.next;
-        th->data_offset = (sizeof(*th) + options_size) / 4;
-        th->window = _rcv.window >> _rcv.window_scale;
-        th->checksum = 0;
-
-        _snd.next += len;
-
-        // FIXME: does the FIN have to fit in the window?
-        th->f_fin = _snd.closed && _snd.unsent_len == 0 && !_local_fin_acked;
-        _local_fin_sent |= th->f_fin;
-
-        // Add tcp options
-        _option.fill(th, options_size);
-        *th = hton(*th);
-
-        offload_info oi;
-        checksummer csum;
-        InetTraits::tcp_pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + options_size + len);
-        if (_tcp.hw_features().tx_csum_l4_offload) {
-            // tx checksum offloading - both virtio-net's VIRTIO_NET_F_CSUM
-            // dpdk's PKT_TX_TCP_CKSUM - requires th->checksum to be
-            // initialized to ones' complement sum of the pseudo header.
-            th->checksum = ~csum.get();
-            oi.needs_csum = true;
-        } else {
-            csum.sum(p);
-            th->checksum = csum.get();
-            oi.needs_csum = false;
-        }
-        oi.protocol = ip_protocol_num::tcp;
-        oi.tcp_hdr_len = sizeof(tcp_hdr) + options_size;
-        p.set_offload_info(oi);
-
-        if (len) {
-            unsigned nr_transmits = 0;
-            auto now = clock_type::now();
-            _snd.data.emplace_back(unacked_segment{p.share(), len, len, nr_transmits, now});
-            if (!_retransmit.armed()) {
-                start_retransmit_timer(now);
-            }
-        }
-        _tcp.send(_local_ip, _foreign_ip, std::move(p));
-
-    // Keep sending more if allowed. In addition, dupacks >= 3 is an indication
-    // that an segment is lost, stop sending more in this case.
-    } while (_snd.dupacks < 3 && can_send() > 0);
+    queue_packet(std::move(p));
 }
 
 template <typename InetTraits>
@@ -1067,7 +1105,8 @@ void tcp<InetTraits>::tcb::retransmit() {
         return;
     }
     // TODO: If the Path MTU changes, we need to split the segment if it is larger than current MSS
-    _tcp.send(_local_ip, _foreign_ip, unacked_seg.p.share());
+    queue_packet(unacked_seg.p.share());
+    output();
 
     // According to RFC6298, Update RTO <- RTO * 2 to perform binary exponential back-off
     _rto = std::min(_rto * 2, _rto_max);
@@ -1079,7 +1118,8 @@ void tcp<InetTraits>::tcb::fast_retransmit() {
     if (!_snd.data.empty()) {
         auto& unacked_seg = _snd.data.front();
         unacked_seg.nr_transmits++;
-        _tcp.send(_local_ip, _foreign_ip, unacked_seg.p.share());
+        queue_packet(unacked_seg.p.share());
+        output();
     }
 }
 
@@ -1148,6 +1188,30 @@ tcp_seq tcp<InetTraits>::tcb::get_isn() {
     auto m = duration_cast<microseconds>(clock_type::now().time_since_epoch());
     seq += m.count() / 4;
     return make_seq(seq);
+}
+
+template <typename InetTraits>
+std::experimental::optional<typename InetTraits::l4packet> tcp<InetTraits>::tcb::get_packet() {
+    _poll_active = false;
+    if (_packetq.empty()) {
+        output_one();
+    }
+
+    if (_nuked) {
+        return std::experimental::optional<typename InetTraits::l4packet>();
+    }
+
+    assert(!_packetq.empty());
+
+    auto p = std::move(_packetq.front());
+    _packetq.pop_front();
+    if (!_packetq.empty() || (_snd.dupacks < 3 && can_send() > 0)) {
+        // If there are packets to send in the queue or tcb is allowed to send
+        // more add tcp back to polling set to keep sending. In addition, dupacks >= 3
+        // is an indication that an segment is lost, stop sending more in this case.
+        output();
+    }
+    return std::move(p);
 }
 
 template <typename InetTraits>
