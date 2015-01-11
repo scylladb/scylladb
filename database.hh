@@ -7,6 +7,8 @@
 
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
+#include "net/byteorder.hh"
+#include "utils/UUID.hh"
 #include <functional>
 #include <boost/any.hpp>
 #include <cstdint>
@@ -107,6 +109,7 @@ extern thread_local shared_ptr<abstract_type> ascii_type;
 extern thread_local shared_ptr<abstract_type> bytes_type;
 extern thread_local shared_ptr<abstract_type> utf8_type;
 extern thread_local shared_ptr<abstract_type> boolean_type;
+extern thread_local shared_ptr<abstract_type> timeuuid_type;
 
 template <>
 inline
@@ -191,6 +194,17 @@ inline
 bytes
 to_bytes(const sstring& x) {
     return bytes(reinterpret_cast<const char*>(x.c_str()), x.size());
+}
+
+inline
+bytes
+to_bytes(const utils::UUID& uuid) {
+    struct {
+        uint64_t msb;
+        uint64_t lsb;
+    } tmp = { net::hton(uint64_t(uuid.get_most_significant_bits())),
+              net::hton(uint64_t(uuid.get_least_significant_bits())) };
+    return bytes(reinterpret_cast<char*>(&tmp), 16);
 }
 
 // This follows java.util.Comparator
