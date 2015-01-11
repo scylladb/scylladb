@@ -158,6 +158,76 @@ struct date_type_impl : public abstract_type {
     }
 };
 
+struct timeuuid_type_impl : public abstract_type {
+    timeuuid_type_impl() : abstract_type("timeuuid") {}
+    virtual void serialize(const boost::any& value, std::ostream& out) override {
+        // FIXME: optimize
+        auto& uuid = boost::any_cast<const utils::UUID&>(value);
+        out.write(to_bytes(uuid).begin(), 16);
+    }
+    virtual object_opt deserialize(std::istream& in) override {
+        struct tmp { uint64_t msb, lsb; } t;
+        auto n = in.rdbuf()->sgetn(reinterpret_cast<char*>(&t), 16);
+        if (n == 0) {
+            return {};
+        }
+        if (n != 16) {
+            throw marshal_exception();
+        }
+        return boost::any(utils::UUID(net::ntoh(t.msb), net::ntoh(t.lsb)));
+    }
+    virtual bool less(const bytes& b1, const bytes& b2) override {
+        if (b1.empty()) {
+            return b2.empty() ? false : true;
+        }
+        if (b2.empty()) {
+            return false;
+        }
+        auto r = compare_bytes(b1, b2);
+        if (r != 0) {
+            return r < 0;
+        } else {
+            return std::lexicographical_compare(b1.begin(), b1.end(), b2.begin(), b2.end());
+        }
+    }
+private:
+    static int compare_bytes(const bytes& o1, const bytes& o2) {
+        auto compare_pos = [&] (unsigned pos, int mask, int ifequal) {
+            int d = (o1[pos] & mask) - (o2[pos] & mask);
+            return d ? d : ifequal;
+        };
+        return compare_pos(6, 0xf,
+                compare_pos(7, 0xff,
+                 compare_pos(4, 0xff,
+                  compare_pos(5, 0xff,
+                   compare_pos(0, 0xff,
+                    compare_pos(1, 0xff,
+                     compare_pos(2, 0xff,
+                      compare_pos(3, 0xff, 0))))))));
+    }
+};
+
+struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
+    timestamp_type_impl() : simple_type_impl("timestamp") {}
+    virtual void serialize(const boost::any& value, std::ostream& out) override {
+        uint64_t v = boost::any_cast<db_clock::time_point>(value).time_since_epoch().count();
+        v = net::hton(v);
+        out.write(reinterpret_cast<char*>(&v), 8);
+    }
+    virtual object_opt deserialize(std::istream& is) override {
+        uint64_t v;
+        auto n = is.rdbuf()->sgetn(reinterpret_cast<char*>(&v), 8);
+        if (n == 0) {
+            return {};
+        }
+        if (n != 8) {
+            throw marshal_exception();
+        }
+        return boost::any(db_clock::time_point(db_clock::duration(net::ntoh(v))));
+    }
+    // FIXME: isCompatibleWith(timestampuuid)
+};
+
 thread_local shared_ptr<abstract_type> int_type(make_shared<int32_type_impl>());
 thread_local shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
 thread_local shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii"));
@@ -165,6 +235,8 @@ thread_local shared_ptr<abstract_type> bytes_type(make_shared<bytes_type_impl>()
 thread_local shared_ptr<abstract_type> utf8_type(make_shared<string_type_impl>("utf8"));
 thread_local shared_ptr<abstract_type> boolean_type(make_shared<boolean_type_impl>());
 thread_local shared_ptr<abstract_type> date_type(make_shared<date_type_impl>());
+thread_local shared_ptr<abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
+thread_local shared_ptr<abstract_type> timestamp_type(make_shared<timestamp_type_impl>());
 
 partition::partition(column_family& cf)
         : rows(key_compare(cf.clustering_key_type)) {

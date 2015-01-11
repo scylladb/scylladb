@@ -28,6 +28,7 @@
 
 #include "UUID.hh"
 #include "database.hh"
+#include "db_clock.hh"
 
 namespace utils {
 
@@ -92,13 +93,13 @@ public:
         return UUID(create_time(from_unix_timestamp(when)), clock_seq_and_node);
     }
 
-#if 0
     /** creates a type 1 uuid from raw bytes. */
-    public static UUID getUUID(ByteBuffer raw)
-    {
-        return new UUID(raw.getLong(raw.position()), raw.getLong(raw.position() + 8));
+    static UUID get_UUID(bytes raw) {
+        assert(raw.size() == 16);
+        struct tmp { uint64_t msb, lsb; } t;
+        std::copy(raw.begin(), raw.end(), reinterpret_cast<char*>(&t));
+        return UUID(net::ntoh(t.msb), net::ntoh(t.lsb));
     }
-#endif
 
     /** decomposes a uuid into raw bytes. */
     static std::array<int8_t, 16> decompose(const UUID& uuid)

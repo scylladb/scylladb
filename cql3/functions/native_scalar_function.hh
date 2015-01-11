@@ -46,6 +46,34 @@ public:
     }
 };
 
+template <typename Func, bool Pure>
+class native_scalar_function_for : public native_scalar_function {
+    Func _func;
+public:
+    native_scalar_function_for(sstring name,
+                               data_type return_type,
+                               const std::vector<data_type> arg_types,
+                               Func&& func)
+            : native_scalar_function(std::move(name), std::move(return_type), std::move(arg_types))
+            , _func(std::forward<Func>(func)) {
+    }
+    virtual bytes execute(int protocol_version, const std::vector<bytes>& parameters) override {
+        return _func(protocol_version, parameters);
+    }
+};
+
+template <bool Pure, typename Func>
+std::unique_ptr<function>
+make_native_scalar_function(sstring name,
+                            data_type return_type,
+                            std::vector<data_type> args_type,
+                            Func&& func) {
+    return std::make_unique<native_scalar_function_for<Func, Pure>>(std::move(name),
+                                                  std::move(return_type),
+                                                  std::move(args_type),
+                                                  std::forward<Func>(func));
+}
+
 }
 }
 
