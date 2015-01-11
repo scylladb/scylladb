@@ -207,6 +207,27 @@ private:
     }
 };
 
+struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
+    timestamp_type_impl() : simple_type_impl("timestamp") {}
+    virtual void serialize(const boost::any& value, std::ostream& out) override {
+        uint64_t v = boost::any_cast<db_clock::time_point>(value).time_since_epoch().count();
+        v = net::hton(v);
+        out.write(reinterpret_cast<char*>(&v), 8);
+    }
+    virtual object_opt deserialize(std::istream& is) override {
+        uint64_t v;
+        auto n = is.rdbuf()->sgetn(reinterpret_cast<char*>(&v), 8);
+        if (n == 0) {
+            return {};
+        }
+        if (n != 8) {
+            throw marshal_exception();
+        }
+        return boost::any(db_clock::time_point(db_clock::duration(net::ntoh(v))));
+    }
+    // FIXME: isCompatibleWith(timestampuuid)
+};
+
 thread_local shared_ptr<abstract_type> int_type(make_shared<int32_type_impl>());
 thread_local shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
 thread_local shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii"));
@@ -215,6 +236,7 @@ thread_local shared_ptr<abstract_type> utf8_type(make_shared<string_type_impl>("
 thread_local shared_ptr<abstract_type> boolean_type(make_shared<boolean_type_impl>());
 thread_local shared_ptr<abstract_type> date_type(make_shared<date_type_impl>());
 thread_local shared_ptr<abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
+thread_local shared_ptr<abstract_type> timestamp_type(make_shared<timestamp_type_impl>());
 
 partition::partition(column_family& cf)
         : rows(key_compare(cf.clustering_key_type)) {

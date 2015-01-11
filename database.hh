@@ -9,6 +9,7 @@
 #include "core/shared_ptr.hh"
 #include "net/byteorder.hh"
 #include "utils/UUID.hh"
+#include "db_clock.hh"
 #include <functional>
 #include <boost/any.hpp>
 #include <cstdint>
@@ -110,6 +111,7 @@ extern thread_local shared_ptr<abstract_type> bytes_type;
 extern thread_local shared_ptr<abstract_type> utf8_type;
 extern thread_local shared_ptr<abstract_type> boolean_type;
 extern thread_local shared_ptr<abstract_type> timeuuid_type;
+extern thread_local shared_ptr<abstract_type> timestamp_type;
 
 template <>
 inline
