@@ -202,7 +202,7 @@ public:
     friend class ipv4;
 };
 
-class udp_v4 : public ip_protocol {
+class ipv4_udp : public ip_protocol {
     using connid = l4connid<ipv4_traits>;
     using connid_hash = typename connid::connid_hash;
 
@@ -219,10 +219,10 @@ private:
 public:
     class registration {
     private:
-        udp_v4 &_proto;
+        ipv4_udp &_proto;
         uint16_t _port;
     public:
-        registration(udp_v4 &proto, uint16_t port) : _proto(proto), _port(port) {};
+        registration(ipv4_udp &proto, uint16_t port) : _proto(proto), _port(port) {};
 
         void unregister() {
             _proto._channels.erase(_proto._channels.find(_port));
@@ -233,7 +233,7 @@ public:
         }
     };
 
-    udp_v4(ipv4& inet);
+    ipv4_udp(ipv4& inet);
     udp_channel make_channel(ipv4_addr addr);
     virtual void received(packet p, ipv4_address from, ipv4_address to) override;
     void send(uint16_t src_port, ipv4_addr dst, packet &&p, l4send_completion completion);
@@ -294,7 +294,7 @@ private:
     subscription<packet, ethernet_address> _rx_packets;
     ipv4_tcp _tcp;
     ipv4_icmp _icmp;
-    udp_v4 _udp;
+    ipv4_udp _udp;
     array_map<ip_protocol*, 256> _l4;
     ip_packet_filter * _packet_filter = nullptr;
     struct frag {
@@ -360,7 +360,7 @@ public:
             std::experimental::optional<ethernet_address> e_dst = std::experimental::optional<ethernet_address>());
     void send_raw(ethernet_address, packet, l4send_completion completion = l4send_completion());
     tcp<ipv4_traits>& get_tcp() { return *_tcp._tcp; }
-    udp_v4& get_udp() { return _udp; }
+    ipv4_udp& get_udp() { return _udp; }
     void register_l4(proto_type id, ip_protocol* handler);
     net::hw_features hw_features() { return _netif->hw_features(); }
     static bool needs_frag(packet& p, ip_protocol_num proto_num, net::hw_features hw_features);

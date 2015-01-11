@@ -7,7 +7,7 @@
 using namespace net;
 
 namespace net {
-namespace udp_v4_impl {
+namespace ipv4_udp_impl {
 
 static inline
 ipv4_addr
@@ -49,15 +49,15 @@ public:
 
 class native_channel : public udp_channel_impl {
 private:
-    udp_v4& _proto;
-    udp_v4::registration _reg;
+    ipv4_udp& _proto;
+    ipv4_udp::registration _reg;
     bool _closed;
     lw_shared_ptr<udp_channel_state> _state;
     // Limit number of data queued into send queue
     lw_shared_ptr<semaphore> _user_queue_space;
 
 public:
-    native_channel(udp_v4 &proto, udp_v4::registration reg, lw_shared_ptr<udp_channel_state> state)
+    native_channel(ipv4_udp &proto, ipv4_udp::registration reg, lw_shared_ptr<udp_channel_state> state)
             : _proto(proto)
             , _reg(reg)
             , _closed(false)
@@ -91,18 +91,18 @@ public:
     }
 };
 
-} /* namespace udp_v4_impl */
+} /* namespace ipv4_udp_impl */
 
-using namespace net::udp_v4_impl;
+using namespace net::ipv4_udp_impl;
 
-const int udp_v4::default_queue_size = 1024;
+const int ipv4_udp::default_queue_size = 1024;
 
-udp_v4::udp_v4(ipv4& inet)
+ipv4_udp::ipv4_udp(ipv4& inet)
     : _inet(inet)
 {
 }
 
-bool udp_v4::forward(forward_hash& out_hash_data, packet& p, size_t off)
+bool ipv4_udp::forward(forward_hash& out_hash_data, packet& p, size_t off)
 {
     auto uh = p.get_header<udp_hdr>(off);
 
@@ -113,7 +113,7 @@ bool udp_v4::forward(forward_hash& out_hash_data, packet& p, size_t off)
     return true;
 }
 
-void udp_v4::received(packet p, ipv4_address from, ipv4_address to)
+void ipv4_udp::received(packet p, ipv4_address from, ipv4_address to)
 {
     udp_datagram dgram(std::make_unique<native_datagram>(from, to, std::move(p)));
 
@@ -124,7 +124,7 @@ void udp_v4::received(packet p, ipv4_address from, ipv4_address to)
     }
 }
 
-void udp_v4::send(uint16_t src_port, ipv4_addr dst, packet &&p, l4send_completion completion)
+void ipv4_udp::send(uint16_t src_port, ipv4_addr dst, packet &&p, l4send_completion completion)
 {
     auto src = _inet.host_address();
     auto hdr = p.prepend_header<udp_hdr>();
@@ -151,12 +151,12 @@ void udp_v4::send(uint16_t src_port, ipv4_addr dst, packet &&p, l4send_completio
     _inet.send(dst, ip_protocol_num::udp, std::move(p), std::move(completion));
 }
 
-uint16_t udp_v4::next_port(uint16_t port) {
+uint16_t ipv4_udp::next_port(uint16_t port) {
     return (port + 1) == 0 ? min_anonymous_port : port + 1;
 }
 
 udp_channel
-udp_v4::make_channel(ipv4_addr addr) {
+ipv4_udp::make_channel(ipv4_addr addr) {
     if (!is_ip_unspecified(addr)) {
         throw std::runtime_error("Binding to specific IP not supported yet");
     }

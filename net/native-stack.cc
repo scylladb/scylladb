@@ -292,7 +292,7 @@ boost::program_options::options_description nns_options() {
                 boost::program_options::value<std::string>()->default_value("255.255.255.0"),
                 "static IPv4 netmask to use")
         ("udpv4-queue-size",
-                boost::program_options::value<int>()->default_value(udp_v4::default_queue_size),
+                boost::program_options::value<int>()->default_value(ipv4_udp::default_queue_size),
                 "Default size of the UDPv4 per-channel packet queue")
         ("dhcp",
                 boost::program_options::value<bool>()->default_value(true),
