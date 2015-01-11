@@ -18,6 +18,7 @@ public:
     virtual output_stream<char> output() override { return output_stream<char>(posix_data_sink(_fd), 8192); }
     friend class posix_server_socket_impl;
     friend class posix_ap_server_socket_impl;
+    friend class posix_reuseport_server_socket_impl;
     friend class posix_network_stack;
     friend class posix_ap_network_stack;
 };
@@ -53,6 +54,15 @@ future<connected_socket, socket_address> posix_ap_server_socket_impl::accept() {
         assert(i.second);
         return i.first->second.get_future();
     }
+}
+
+future<connected_socket, socket_address>
+posix_reuseport_server_socket_impl::accept() {
+    return _lfd.accept().then([this] (pollable_fd fd, socket_address sa) {
+        std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(fd)));
+        return make_ready_future<connected_socket, socket_address>(
+            connected_socket(std::move(csi)), sa);
+    });
 }
 
 void  posix_ap_server_socket_impl::move_connected_socket(socket_address sa, pollable_fd fd, socket_address addr) {
@@ -115,7 +125,10 @@ posix_data_sink_impl::put(packet p) {
 
 server_socket
 posix_network_stack::listen(socket_address sa, listen_options opt) {
-    return server_socket(std::make_unique<posix_server_socket_impl>(sa, engine.posix_listen(sa, opt)));
+    if (_reuseport)
+        return server_socket(std::make_unique<posix_reuseport_server_socket_impl>(sa, engine.posix_listen(sa, opt)));
+    else
+        return server_socket(std::make_unique<posix_server_socket_impl>(sa, engine.posix_listen(sa, opt)));
 }
 
 future<connected_socket>
@@ -131,7 +144,10 @@ thread_local std::unordered_multimap<::sockaddr_in, posix_ap_server_socket_impl:
 
 server_socket
 posix_ap_network_stack::listen(socket_address sa, listen_options opt) {
-    return server_socket(std::make_unique<posix_ap_server_socket_impl>(sa));
+    if (_reuseport)
+        return server_socket(std::make_unique<posix_reuseport_server_socket_impl>(sa, engine.posix_listen(sa, opt)));
+    else
+        return server_socket(std::make_unique<posix_ap_server_socket_impl>(sa));
 }
 
 future<connected_socket>
