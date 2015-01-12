@@ -21,6 +21,7 @@
 #include <iostream>
 #include <boost/functional/hash.hpp>
 #include <experimental/optional>
+#include "core/future.hh"
 
 // FIXME: should be int8_t
 using bytes = basic_sstring<char, uint32_t, 31>;
@@ -173,16 +174,16 @@ struct column_family {
     std::map<bytes, partition, key_compare> partitions;
 };
 
-struct keyspace {
+class keyspace {
+public:
     std::unordered_map<sstring, column_family> column_families;
+    static future<keyspace> populate(sstring datadir);
 };
 
 class database {
-private:
-    sstring _datadir;
 public:
-    explicit database(sstring datadir) : _datadir(datadir) {}
     std::unordered_map<sstring, keyspace> keyspaces;
+    static future<database> populate(sstring datadir);
 };
 
 namespace std {

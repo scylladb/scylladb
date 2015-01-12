@@ -2,9 +2,13 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
+#include "log.hh"
 #include "database.hh"
 #include "net/byteorder.hh"
 #include "db_clock.hh"
+#include "core/future-util.hh"
+
+thread_local logging::logger dblog("database");
 
 bool
 less_unsigned(const bytes& v1, const bytes& v2) {
@@ -348,3 +352,85 @@ sstring to_hex(const bytes& b) {
 sstring to_hex(const bytes_opt& b) {
     return b ? "null" : to_hex(*b);
 }
+
+class lister {
+    file _f;
+    std::function<future<> (directory_entry de)> _walker;
+    directory_entry_type _expected_type;
+    subscription<directory_entry> _listing;
+
+public:
+    lister(file f, directory_entry_type type, std::function<future<> (directory_entry)> walker)
+            : _f(std::move(f))
+            , _walker(std::move(walker))
+            , _expected_type(type)
+            , _listing(_f.list_directory([this] (directory_entry de) { return _visit(de); })) {
+    }
+
+    static future<> scan_dir(sstring name, directory_entry_type type, std::function<future<> (directory_entry)> walker);
+protected:
+    future<> _visit(directory_entry de) {
+
+        // FIXME: stat and try to recover
+        if (!de.type) {
+            dblog.error("database found file with unknown type {}", de.name);
+            return make_ready_future<>();
+        }
+
+        // Hide all synthetic directories and hidden files.
+        if ((de.type != _expected_type) || (de.name[0] == '.')) {
+            return make_ready_future<>();
+        }
+        return _walker(de);
+    }
+    future<> done() { return _listing.done(); }
+};
+
+
+future<> lister::scan_dir(sstring name, directory_entry_type type, std::function<future<> (directory_entry)> walker) {
+
+    return engine.open_directory(name).then([type, walker = std::move(walker)] (file f) {
+        auto l = make_lw_shared<lister>(std::move(f), type, walker);
+        return l->done().then([l] { });
+    });
+}
+
+static std::vector<sstring> parse_fname(sstring filename) {
+    std::vector<sstring> comps;
+    boost::split(comps , filename ,boost::is_any_of(".-"));
+    return comps;
+}
+
+future<keyspace> keyspace::populate(sstring ksdir) {
+
+    auto ks = make_lw_shared<keyspace>();
+    return lister::scan_dir(ksdir, directory_entry_type::directory, [ks, ksdir] (directory_entry de) {
+        auto comps = parse_fname(de.name);
+        if (comps.size() != 2) {
+            dblog.error("Keyspace {}: Skipping malformed CF {} ", ksdir, de.name);
+            return make_ready_future<>();
+        }
+        sstring cfname = comps[0];
+
+        auto sstdir = ksdir + "/" + de.name;
+        dblog.warn("Keyspace {}: Reading CF {} ", ksdir, comps[0]);
+        return make_ready_future<>();
+    }).then([ks] {
+        return make_ready_future<keyspace>(std::move(*ks));
+    });
+}
+
+future<database> database::populate(sstring datadir) {
+
+    auto db = make_lw_shared<database>();
+    return lister::scan_dir(datadir, directory_entry_type::directory, [db, datadir] (directory_entry de) {
+        dblog.warn("Populating Keyspace {}", de.name);
+        auto ksdir = datadir + "/" + de.name;
+        return keyspace::populate(ksdir).then([db, de] (keyspace ks){
+            db->keyspaces[de.name] = std::move(ks);
+        });
+    }).then([db] {
+        return make_ready_future<database>(std::move(*db));
+    });
+}
+

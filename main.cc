@@ -18,19 +18,19 @@ int main(int ac, char** av) {
 
     auto server = std::make_unique<distributed<thrift_server>>();;
 
-    std::unique_ptr<database> db;
     return app.run(ac, av, [&] {
         auto&& config = app.configuration();
         uint16_t port = config["thrift-port"].as<uint16_t>();
         sstring datadir = config["datadir"].as<std::string>();
 
-        db.reset(std::make_unique<database>(datadir).release());
-
-        auto server = new distributed<thrift_server>;
-        server->start(std::ref(*db)).then([server = std::move(server), port] () mutable {
-            server->invoke_on_all(&thrift_server::listen, ipv4_addr{port});
-        }).then([port] {
-            std::cout << "Thrift server listening on port " << port << " ...\n";
+        return database::populate(datadir).then([port] (database db) {
+            auto pdb = new database(std::move(db));
+            auto server = new distributed<thrift_server>;
+            server->start(std::ref(*pdb)).then([server = std::move(server), port] () mutable {
+                    server->invoke_on_all(&thrift_server::listen, ipv4_addr{port});
+            }).then([port] {
+                std::cout << "Thrift server listening on port " << port << " ...\n";
+            });
         });
     });
 }
