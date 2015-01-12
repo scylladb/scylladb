@@ -25,6 +25,7 @@
 #ifndef CQL3_ASSIGNMENT_TESTABLE_HH
 #define CQL3_ASSIGNMENT_TESTABLE_HH
 
+#include "column_specification.hh"
 #include <memory>
 #include <vector>
 
