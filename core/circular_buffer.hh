@@ -46,11 +46,11 @@ public:
     void push_front(const T& data);
     void push_front(T&& data);
     template <typename... A>
-    void emplace_front(A... args);
+    void emplace_front(A&&... args);
     void push_back(const T& data);
     void push_back(T&& data);
     template <typename... A>
-    void emplace_back(A... args);
+    void emplace_back(A&&... args);
     T& front();
     T& back();
     void pop_front();
@@ -187,7 +187,7 @@ template <typename T, typename Alloc>
 template <typename... Args>
 inline
 void
-circular_buffer<T, Alloc>::emplace_front(Args... args) {
+circular_buffer<T, Alloc>::emplace_front(Args&&... args) {
     maybe_expand();
     auto p = &_impl.storage[mask(_impl.begin - 1)];
     _impl.construct(p, std::forward<Args>(args)...);
@@ -218,7 +218,7 @@ template <typename T, typename Alloc>
 template <typename... Args>
 inline
 void
-circular_buffer<T, Alloc>::emplace_back(Args... args) {
+circular_buffer<T, Alloc>::emplace_back(Args&&... args) {
     maybe_expand();
     auto p = &_impl.storage[mask(_impl.end)];
     _impl.construct(p, std::forward<Args>(args)...);
