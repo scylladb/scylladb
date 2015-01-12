@@ -34,7 +34,7 @@ namespace cql3 {
 
 namespace statements {
 
-class truncate_statement : public cf_statement, public virtual cql_statement {
+class truncate_statement : public cf_statement, public virtual cql_statement, public ::enable_shared_from_this<truncate_statement> {
 public:
     truncate_statement(std::experimental::optional<cf_name>&& name)
         : cf_statement{std::move(name)}
@@ -44,8 +44,8 @@ public:
         return 0;
     }
 
-    virtual std::unique_ptr<prepared> prepare(std::unique_ptr<cql_statement>&& stmt) override {
-        return std::make_unique<parsed_statement::prepared>(std::move(stmt));
+    virtual std::unique_ptr<prepared> prepare() override {
+        return std::make_unique<parsed_statement::prepared>(this->shared_from_this());
     }
 
     virtual void check_access(const service::client_state& state) override {
