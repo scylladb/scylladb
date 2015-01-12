@@ -138,21 +138,6 @@ struct l4connid {
     }
 };
 
-class l4send_completion {
-    lw_shared_ptr<semaphore> _stream;
-    size_t _len = 0;
-public:
-    l4send_completion() = default;
-    l4send_completion(lw_shared_ptr<semaphore> s, size_t l) : _stream(std::move(s)), _len(l) {}
-    l4send_completion(l4send_completion&) = delete;
-    l4send_completion(l4send_completion&& v) : _stream(std::move(v._stream)), _len(v._len) {}
-    void operator()() {
-        if (_len) {
-            _stream->signal(_len);
-        }
-    }
-};
-
 class ipv4_tcp final : public ip_protocol {
     ipv4_l4<ip_protocol_num::tcp> _inet_l4;
     std::unique_ptr<tcp<ipv4_traits>> _tcp;
@@ -328,13 +313,7 @@ private:
     static constexpr uint32_t _frag_high_thresh{4 * 1024 * 1024};
     uint32_t _frag_mem{0};
     timer<lowres_clock> _frag_timer;
-    struct ipv4packet {
-        l3_protocol::l3packet l3packet;
-        l4send_completion complete;
-        ipv4packet(ipv4packet&& v) noexcept : l3packet(std::move(v.l3packet)), complete(std::move(v.complete)) {}
-        ipv4packet(l3_protocol::l3packet&& p, l4send_completion&& c) : l3packet(std::move(p)), complete(std::move(c)) {}
-    };
-    circular_buffer<ipv4packet> _packetq;
+    circular_buffer<l3_protocol::l3packet> _packetq;
     unsigned _pkt_provider_idx = 0;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
@@ -368,9 +347,7 @@ public:
     // But for now, a simple single raw pointer suffices
     void set_packet_filter(ip_packet_filter *);
     ip_packet_filter * packet_filter() const;
-    void send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_completion complete = l4send_completion(),
-            std::experimental::optional<ethernet_address> e_dst = std::experimental::optional<ethernet_address>());
-    void send_raw(ethernet_address, packet, l4send_completion completion = l4send_completion());
+    void send(ipv4_address to, ip_protocol_num proto_num, packet p, ethernet_address e_dst);
     tcp<ipv4_traits>& get_tcp() { return *_tcp._tcp; }
     ipv4_udp& get_udp() { return _udp; }
     void register_l4(proto_type id, ip_protocol* handler);
