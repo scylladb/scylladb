@@ -25,6 +25,11 @@
 // FIXME: should be int8_t
 using bytes = basic_sstring<char, uint32_t, 31>;
 
+using bytes_opt = std::experimental::optional<bytes>;
+
+sstring to_hex(const bytes& b);
+sstring to_hex(const bytes_opt& b);
+
 using object_opt = std::experimental::optional<boost::any>;
 
 class marshal_exception : public std::exception {
@@ -32,6 +37,13 @@ class marshal_exception : public std::exception {
 public:
     marshal_exception() : _why("marshalling error") {}
     marshal_exception(sstring why) : _why(sstring("marshaling error: ") + why) {}
+    virtual const char* why() const { return _why.c_str(); }
+};
+
+struct runtime_exception : public std::exception {
+    sstring _why;
+public:
+    runtime_exception(sstring why) : _why(sstring("runtime error: ") + why) {}
     virtual const char* why() const { return _why.c_str(); }
 };
 

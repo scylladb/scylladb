@@ -25,6 +25,7 @@
 #ifndef CQL3_TERM_HH
 #define CQL3_TERM_HH
 
+#include "variable_specifications.hh"
 #include "cql3/assignment_testable.hh"
 #include "cql3/query_options.hh"
 

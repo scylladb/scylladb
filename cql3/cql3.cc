@@ -15,6 +15,7 @@
 #include "functions/native_scalar_function.hh"
 #include "functions/aggregate_fcts.hh"
 #include "functions/time_uuid_fcts.hh"
+#include "functions/function_call.hh"
 
 #include "statements/cf_statement.hh"
 #include "statements/use_statement.hh"

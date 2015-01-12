@@ -31,6 +31,7 @@ namespace cql3 {
  * Options for a query.
  */
 class query_options {
+public:
 #if 0
     public static final QueryOptions DEFAULT = new DefaultQueryOptions(ConsistencyLevel.ONE,
                                                                        Collections.<ByteBuffer>emptyList(),
@@ -97,13 +98,14 @@ class query_options {
         long tstamp = getSpecificOptions().timestamp;
         return tstamp != Long.MIN_VALUE ? tstamp : state.getTimestamp();
     }
-
+#endif
     /**
      * The protocol version for the query. Will be 3 if the object don't come from
      * a native protocol request (i.e. it's been allocated locally or by CQL-over-thrift).
      */
-    public abstract int getProtocolVersion();
+    virtual int get_protocol_version() const = 0;
 
+#if 0
     // Mainly for the sake of BatchQueryOptions
     abstract SpecificOptions getSpecificOptions();
 
