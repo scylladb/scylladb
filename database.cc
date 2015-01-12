@@ -205,6 +205,7 @@ private:
                      compare_pos(2, 0xff,
                       compare_pos(3, 0xff, 0))))))));
     }
+    friend class uuid_type_impl;
 };
 
 struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
@@ -228,6 +229,51 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
     // FIXME: isCompatibleWith(timestampuuid)
 };
 
+struct uuid_type_impl : abstract_type {
+    uuid_type_impl() : abstract_type("uuid") {}
+    virtual void serialize(const boost::any& value, std::ostream& out) override {
+        // FIXME: optimize
+        auto& uuid = boost::any_cast<const utils::UUID&>(value);
+        out.write(to_bytes(uuid).begin(), 16);
+    }
+    virtual object_opt deserialize(std::istream& in) override {
+        struct tmp { uint64_t msb, lsb; } t;
+        auto n = in.rdbuf()->sgetn(reinterpret_cast<char*>(&t), 16);
+        if (n == 0) {
+            return {};
+        }
+        if (n != 16) {
+            throw marshal_exception();
+        }
+        return boost::any(utils::UUID(net::ntoh(t.msb), net::ntoh(t.lsb)));
+    }
+    virtual bool less(const bytes& b1, const bytes& b2) override {
+        if (b1.size() < 16) {
+            return b2.size() < 16 ? false : true;
+        }
+        if (b2.size() < 16) {
+            return false;
+        }
+        auto v1 = (b1[6] >> 4) & 0x0f;
+        auto v2 = (b2[6] >> 4) & 0x0f;
+
+        if (v1 != v2) {
+            return v1 < v2;
+        }
+
+        if (v1 == 1) {
+            auto c1 = timeuuid_type_impl::compare_bytes(b1, b2);
+            auto c2 = timeuuid_type_impl::compare_bytes(b2, b1);
+            // Require strict ordering
+            if (c1 != c2) {
+                return c1;
+            }
+        }
+        return less_unsigned(b1, b2);
+    }
+    // FIXME: isCompatibleWith(uuid)
+};
+
 thread_local shared_ptr<abstract_type> int_type(make_shared<int32_type_impl>());
 thread_local shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
 thread_local shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii"));
@@ -237,6 +283,7 @@ thread_local shared_ptr<abstract_type> boolean_type(make_shared<boolean_type_imp
 thread_local shared_ptr<abstract_type> date_type(make_shared<date_type_impl>());
 thread_local shared_ptr<abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
 thread_local shared_ptr<abstract_type> timestamp_type(make_shared<timestamp_type_impl>());
+thread_local shared_ptr<abstract_type> uuid_type(make_shared<uuid_type_impl>());
 
 partition::partition(column_family& cf)
         : rows(key_compare(cf.clustering_key_type)) {

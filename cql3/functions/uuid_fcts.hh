@@ -15,28 +15,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.functions;
 
-import java.nio.ByteBuffer;
-import java.util.List;
-import java.util.UUID;
+/*
+ * Modified by Cloudius Systems
+ *
+ * Copyright 2015 Cloudius Systems
+ */
 
-import org.apache.cassandra.db.marshal.UUIDType;
-import org.apache.cassandra.serializers.UUIDSerializer;
+#include "database.hh"
+#include "native_scalar_function.hh"
+#include "utils/UUID.hh"
 
-public abstract class UuidFcts
-{
-    public static final Function uuidFct = new NativeScalarFunction("uuid", UUIDType.instance)
-    {
-        public ByteBuffer execute(int protocolVersion, List<ByteBuffer> parameters)
-        {
-            return UUIDSerializer.instance.serialize(UUID.randomUUID());
-        }
+namespace cql3 {
 
-        @Override
-        public boolean isPure()
-        {
-            return false;
-        }
-    };
+namespace functions {
+
+inline
+std::unique_ptr<function>
+make_uuid_fct() {
+    return make_native_scalar_function<false>("uuid", uuid_type, {},
+            [] (int protocol_version, const std::vector<bytes>& parameters) {
+        return uuid_type->decompose(boost::any(utils::make_random_uuid()));
+    });
+}
+
+}
 }

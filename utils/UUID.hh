@@ -7,6 +7,7 @@
 // This class is the parts of java.util.UUID that we need
 
 #include <stdint.h>
+#include <cassert>
 
 namespace utils {
 
@@ -40,5 +41,7 @@ public:
 
     }
 };
+
+UUID make_random_uuid();
 
 }

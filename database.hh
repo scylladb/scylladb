@@ -124,6 +124,7 @@ extern thread_local shared_ptr<abstract_type> utf8_type;
 extern thread_local shared_ptr<abstract_type> boolean_type;
 extern thread_local shared_ptr<abstract_type> timeuuid_type;
 extern thread_local shared_ptr<abstract_type> timestamp_type;
+extern thread_local shared_ptr<abstract_type> uuid_type;
 
 template <>
 inline
