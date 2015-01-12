@@ -67,6 +67,23 @@ class Thrift(object):
     def endswith(self, end):
         return self.source.endswith(end)
 
+class Antlr3Grammar(object):
+    def __init__(self, source):
+        self.source = source
+    def generated(self, gen_dir):
+        basename = os.path.splitext(self.source)[0]
+        files = [basename + ext
+                 for ext in ['Lexer.cpp', 'Lexer.hpp', 'Parser.cpp', 'Parser.hpp']]
+        return [os.path.join(gen_dir, file) for file in files]
+    def headers(self, gen_dir):
+        return [x for x in self.generated(gen_dir) if x.endswith('.hpp')]
+    def sources(self, gen_dir):
+        return [x for x in self.generated(gen_dir) if x.endswith('.cpp')]
+    def objects(self, gen_dir):
+        return [x.replace('.cpp', '.o') for x in self.sources(gen_dir)]
+    def endswith(self, end):
+        return self.source.endswith(end)
+
 modes = {
     'debug': {
         'sanitize': '-fsanitize=address -fsanitize=leak -fsanitize=undefined',
@@ -334,12 +351,16 @@ with open(buildfile, 'w') as f:
             rule thrift.{mode}
                 command = thrift -gen cpp:cob_style -out $builddir/{mode}/gen $in
                 description = THRIFT $in
+            rule antlr3.{mode}
+                command = antlr3 $in -o $builddir/{mode}/gen
+                description = ANTLR3 $in
             ''').format(mode = mode, **modeval))
         f.write('build {mode}: phony {artifacts}\n'.format(mode = mode,
             artifacts = str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))))
         compiles = {}
         ragels = {}
         thrifts = []
+        antlr3_grammars = []
         for binary in build_artifacts:
             srcs = deps[binary]
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
@@ -349,6 +370,8 @@ with open(buildfile, 'w') as f:
             for dep in deps[binary]:
                 if isinstance(dep, Thrift):
                     has_thrift = True
+                    objs += dep.objects('$builddir/' + mode + '/gen')
+                if isinstance(dep, Antlr3Grammar):
                     objs += dep.objects('$builddir/' + mode + '/gen')
             f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             if has_thrift:
@@ -362,6 +385,8 @@ with open(buildfile, 'w') as f:
                     ragels[hh] = src
                 elif src.endswith('.thrift'):
                     thrifts += [src]
+                elif src.endswith('.g'):
+                    antlr3_grammars += [src]
                 else:
                     raise Exeception('No rule for ' + src)
         for obj in compiles:
@@ -369,6 +394,8 @@ with open(buildfile, 'w') as f:
             gen_headers = list(ragels.keys())
             for th in thrifts:
                 gen_headers += th.headers('$builddir/{}/gen'.format(mode))
+            for g in antlr3_grammars:
+                gen_headers += g.headers('$builddir/{}/gen'.format(mode))
             f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
         for hh in ragels:
             src = ragels[hh]
@@ -377,6 +404,12 @@ with open(buildfile, 'w') as f:
             outs = ' '.join(thrift.generated('$builddir/{}/gen'.format(mode)))
             f.write('build {}: thrift.{} {}\n'.format(outs, mode, thrift.source))
             for cc in thrift.sources('$builddir/{}/gen'.format(mode)):
+                obj = cc.replace('.cpp', '.o')
+                f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
+        for grammar in antlr3_grammars:
+            outs = ' '.join(grammar.generated('$builddir/{}/gen'.format(mode)))
+            f.write('build {}: antlr3.{} {}\n'.format(outs, mode, grammar.source))
+            for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
                 f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
     f.write(textwrap.dedent('''\
