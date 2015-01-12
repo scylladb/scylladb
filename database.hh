@@ -25,6 +25,8 @@
 // FIXME: should be int8_t
 using bytes = basic_sstring<char, uint32_t, 31>;
 
+sstring to_hex(const bytes& b);
+
 using object_opt = std::experimental::optional<boost::any>;
 
 class marshal_exception : public std::exception {
