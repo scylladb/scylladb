@@ -33,6 +33,7 @@ namespace cql3 {
 namespace functions {
 
 class scalar_function : public virtual function {
+public:
     /**
      * Applies this function to the specified parameter.
      *
