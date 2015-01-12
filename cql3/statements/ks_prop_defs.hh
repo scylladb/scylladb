@@ -15,15 +15,33 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_STATEMENTS_KS_PROP_DEFS_HH
+#define CQL3_STATEMENTS_KS_PROP_DEFS_HH
+
+#include "cql3/statements/property_definitions.hh"
+
+namespace cql3 {
+
+namespace statements {
+
+#if 0
 package org.apache.cassandra.cql3.statements;
 
 import java.util.*;
 
 import org.apache.cassandra.config.KSMetaData;
 import org.apache.cassandra.exceptions.*;
+#endif
 
-public class KSPropDefs extends PropertyDefinitions
-{
+class ks_prop_defs : public property_definitions {
+#if 0
     public static final String KW_DURABLE_WRITES = "durable_writes";
     public static final String KW_REPLICATION = "replication";
 
@@ -86,4 +104,11 @@ public class KSPropDefs extends PropertyDefinitions
         }
         return KSMetaData.newKeyspace(old.name, sClass, sOptions, getBoolean(KW_DURABLE_WRITES, old.durableWrites));
     }
+#endif
+};
+
 }
+
+}
+
+#endif

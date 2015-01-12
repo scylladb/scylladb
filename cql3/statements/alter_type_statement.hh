@@ -15,8 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.statements;
 
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL_STATEMENTS_ALTER_TYPE_STATEMENT_HH
+#define CQL_STATEMENTS_ALTER_TYPE_STATEMENT_HH
+
+#include "cql3/ut_name.hh"
+
+#include "core/shared_ptr.hh"
+
+namespace cql3 {
+
+namespace statements {
+
+#if 0
 import java.nio.ByteBuffer;
 import java.util.*;
 
@@ -29,17 +46,17 @@ import org.apache.cassandra.exceptions.*;
 import org.apache.cassandra.service.ClientState;
 import org.apache.cassandra.service.MigrationManager;
 import org.apache.cassandra.transport.Event;
+#endif
 
-public abstract class AlterTypeStatement extends SchemaAlteringStatement
-{
-    protected final UTName name;
+class alter_type_statement : public schema_altering_statement {
+protected:
+    const ::shared_ptr<ut_name> _name;
 
-    protected AlterTypeStatement(UTName name)
-    {
-        super();
-        this.name = name;
-    }
+    alter_type_statement(::shared_ptr<ut_name> name)
+        : _name{name}
+    { }
 
+#if 0
     @Override
     public void prepareKeyspace(ClientState state) throws InvalidRequestException
     {
@@ -345,4 +362,11 @@ public abstract class AlterTypeStatement extends SchemaAlteringStatement
         }
 
     }
+#endif
+};
+
 }
+
+}
+
+#endif

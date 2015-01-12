@@ -28,6 +28,8 @@
 #include "cql3/statements/cf_statement.hh"
 #include "cql3/cql_statement.hh"
 
+#include "core/shared_ptr.hh"
+
 #include <experimental/optional>
 
 namespace cql3 {
@@ -37,7 +39,7 @@ namespace statements {
 /**
  * Abstract class for statements that alter the schema.
  */
-class schema_altering_statement : public cf_statement, public virtual cql_statement, public ::enable_shared_from_this<use_statement> {
+class schema_altering_statement : public cf_statement, public virtual cql_statement, public ::enable_shared_from_this<schema_altering_statement> {
 private:
     const bool _is_column_family_level;
 

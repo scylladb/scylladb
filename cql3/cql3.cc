@@ -18,9 +18,13 @@
 #include "functions/function_call.hh"
 #include "functions/uuid_fcts.hh"
 
+#include "statements/alter_keyspace_statement.hh"
+#include "statements/alter_type_statement.hh"
 #include "statements/cf_statement.hh"
+#include "statements/ks_prop_defs.hh"
 #include "statements/use_statement.hh"
 #include "statements/parsed_statement.hh"
+#include "statements/property_definitions.hh"
 #include "statements/truncate_statement.hh"
 #include "statements/schema_altering_statement.hh"
 #include "cql_statement.hh"
@@ -31,6 +35,7 @@
 #include "column_identifier.hh"
 #include "column_specification.hh"
 #include "cf_name.hh"
+#include "ut_name.hh"
 
 #include "abstract_marker.hh"
 #include "assignment_testable.hh"
