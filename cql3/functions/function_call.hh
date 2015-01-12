@@ -15,96 +15,101 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.functions;
 
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.List;
+/*
+ * Modified by Cloudius Systems
+ *
+ * Copyright 2015 Cloudius Systems
+ */
 
-import org.apache.cassandra.cql3.*;
-import org.apache.cassandra.db.marshal.CollectionType;
-import org.apache.cassandra.db.marshal.ListType;
-import org.apache.cassandra.db.marshal.MapType;
-import org.apache.cassandra.db.marshal.SetType;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.transport.Server;
-import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.serializers.MarshalException;
+#include "cql3/term.hh"
+#include "cql3/constants.hh"
+#include "db/marshal/collection_type.hh"
+#include "core/print.hh"
 
-public class FunctionCall extends Term.NonTerminal
-{
-    private final ScalarFunction fun;
-    private final List<Term> terms;
+namespace cql3 {
+namespace functions {
 
-    private FunctionCall(ScalarFunction fun, List<Term> terms)
-    {
-        this.fun = fun;
-        this.terms = terms;
+class function_call : public non_terminal {
+    const std::unique_ptr<scalar_function> _fun;
+    const std::vector<shared_ptr<term>> _terms;
+public:
+    function_call(std::unique_ptr<scalar_function> fun, std::vector<shared_ptr<term>> terms)
+            : _fun(std::move(fun)), _terms(std::move(terms)) {
     }
 
-    public boolean usesFunction(String ksName, String functionName)
-    {
-        return fun.usesFunction(ksName, functionName);
+    virtual bool uses_function(sstring ks_name, sstring function_name) const override {
+        return _fun->uses_function(std::move(ks_name), std::move(function_name));
     }
 
-    public void collectMarkerSpecification(VariableSpecifications boundNames)
-    {
-        for (Term t : terms)
-            t.collectMarkerSpecification(boundNames);
+    virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names) override {
+        for (auto&& t : _terms) {
+            t->collect_marker_specification(bound_names);
+        }
     }
 
-    public Term.Terminal bind(QueryOptions options) throws InvalidRequestException
-    {
-        return makeTerminal(fun, bindAndGet(options), options.getProtocolVersion());
+    virtual shared_ptr<terminal> bind(const query_options& options) override {
+        return make_terminal(bind_and_get(options), options.get_protocol_version());
     }
 
-    public ByteBuffer bindAndGet(QueryOptions options) throws InvalidRequestException
-    {
-        List<ByteBuffer> buffers = new ArrayList<>(terms.size());
-        for (Term t : terms)
-        {
+    virtual bytes bind_and_get(const query_options& options) override {
+        std::vector<bytes> buffers;
+        buffers.reserve(_terms.size());
+        for (auto&& t : _terms) {
             // For now, we don't allow nulls as argument as no existing function needs it and it
             // simplify things.
-            ByteBuffer val = t.bindAndGet(options);
+            bytes val = t->bind_and_get(options);
+#if 0
             if (val == null)
                 throw new InvalidRequestException(String.format("Invalid null value for argument to %s", fun));
-            buffers.add(val);
+#endif
+            buffers.push_back(std::move(val));
         }
-        return executeInternal(options.getProtocolVersion(), fun, buffers);
+        return execute_internal(options.get_protocol_version(), std::move(buffers));
     }
 
-    private static ByteBuffer executeInternal(int protocolVersion, ScalarFunction fun, List<ByteBuffer> params) throws InvalidRequestException
-    {
-        ByteBuffer result = fun.execute(protocolVersion, params);
-        try
-        {
+private:
+    bytes execute_internal(int protocol_version, std::vector<bytes> params) {
+        bytes result = _fun->execute(protocol_version, params);
+        try {
             // Check the method didn't lied on it's declared return type
+#if 0
             if (result != null)
-                fun.returnType().validate(result);
+#endif
+            _fun->return_type()->validate(result);
             return result;
-        }
-        catch (MarshalException e)
-        {
-            throw new RuntimeException(String.format("Return of function %s (%s) is not a valid value for its declared return type %s", 
-                                                     fun, ByteBufferUtil.bytesToHex(result), fun.returnType().asCQL3Type()));
+        } catch (marshal_exception e) {
+            throw runtime_exception(sprint("Return of function %s (%s) is not a valid value for its declared return type %s",
+                                           *_fun, to_hex(result),
+#if 0
+                                           _fun->return_type()->as_cql3_type()
+#else
+                                           "FIXME: as_cql3_type"
+#endif
+                                           ));
         }
     }
-
-    public boolean containsBindMarker()
-    {
-        for (Term t : terms)
-        {
-            if (t.containsBindMarker())
+public:
+    virtual bool contains_bind_marker() const override {
+        for (auto&& t : _terms) {
+            if (t->contains_bind_marker()) {
                 return true;
+            }
         }
         return false;
     }
 
-    private static Term.Terminal makeTerminal(Function fun, ByteBuffer result, int version) throws InvalidRequestException
-    {
-        if (!(fun.returnType() instanceof CollectionType))
-            return new Constants.Value(result);
+private:
+    shared_ptr<terminal> make_terminal(bytes result, int version)  {
+        if (!dynamic_pointer_cast<shared_ptr<db::marshal::collection_type>>(_fun->return_type())) {
+#if 0
+            return constants.value(result);
+#else
+            abort();
+#endif
+        }
 
+#if 0
         switch (((CollectionType)fun.returnType()).kind)
         {
             case LIST: return Lists.Value.fromSerialized(result, (ListType)fun.returnType(), version);
@@ -112,8 +117,12 @@ public class FunctionCall extends Term.NonTerminal
             case MAP:  return Maps.Value.fromSerialized(result, (MapType)fun.returnType(), version);
         }
         throw new AssertionError();
+#else
+        abort();
+#endif
     }
 
+#if 0
     public static class Raw implements Term.Raw
     {
         private FunctionName name;
@@ -212,4 +221,8 @@ public class FunctionCall extends Term.NonTerminal
             return sb.append(")").toString();
         }
     }
+#endif
+};
+
+}
 }
