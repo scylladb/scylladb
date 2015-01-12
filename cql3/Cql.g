@@ -20,10 +20,18 @@
 grammar Cql;
 
 options {
-    language = Java;
+    language = Cpp;
+}
+
+@parser::includes {
+#include "cql3/statements/use_statement.hh"
+#include "cql3/cf_name.hh"
+#include "core/sstring.hh"
+#include "CqlLexer.hpp"
 }
 
 @header {
+#if 0
     package org.apache.cassandra.cql3;
 
     import java.util.ArrayList;
@@ -49,9 +57,11 @@ options {
     import org.apache.cassandra.exceptions.InvalidRequestException;
     import org.apache.cassandra.exceptions.SyntaxException;
     import org.apache.cassandra.utils.Pair;
+#endif
 }
 
 @members {
+#if 0
     private final List<ErrorListener> listeners = new ArrayList<ErrorListener>();
     private final List<ColumnIdentifier> bindVariables = new ArrayList<ColumnIdentifier>();
 
@@ -164,15 +174,28 @@ options {
         }
         operations.add(Pair.create(key, update));
     }
+#endif
+}
+
+@lexer::traits {
+    class CqlLexer;
+    class CqlParser;
+    typedef antlr3::Traits<CqlLexer, CqlParser> CqlLexerTraits;
+    typedef CqlLexerTraits CqlParserTraits;
 }
 
 @lexer::header {
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-function"
+#if 0
     package org.apache.cassandra.cql3;
 
     import org.apache.cassandra.exceptions.SyntaxException;
+#endif
 }
 
 @lexer::members {
+#if 0
     List<Token> tokens = new ArrayList<Token>();
 
     public void emit(Token token)
@@ -206,10 +229,12 @@ options {
         for (int i = 0, m = listeners.size(); i < m; i++)
             listeners.get(i).syntaxError(this, tokenNames, e);
     }
+#endif
 }
 
 /** STATEMENTS **/
 
+#if 0
 query returns [ParsedStatement stmnt]
     : st=cqlStatement (';')* EOF { $stmnt = st; }
     ;
@@ -248,14 +273,16 @@ cqlStatement returns [ParsedStatement stmt]
     | st30=createAggregateStatement    { $stmt = st30; }
     | st31=dropAggregateStatement      { $stmt = st31; }
     ;
+#endif
 
 /*
  * USE <KEYSPACE>;
  */
-useStatement returns [UseStatement stmt]
-    : K_USE ks=keyspaceName { $stmt = new UseStatement(ks); }
+useStatement returns [::shared_ptr<cql3::statements::use_statement> stmt]
+    : K_USE ks=keyspaceName { $stmt = ::make_shared<cql3::statements::use_statement>(ks); }
     ;
 
+#if 0
 /**
  * SELECT <expression>
  * FROM <CF>
@@ -930,13 +957,15 @@ ident returns [ColumnIdentifier id]
     | t=QUOTED_NAME        { $id = new ColumnIdentifier($t.text, true); }
     | k=unreserved_keyword { $id = new ColumnIdentifier(k, false); }
     ;
+#endif
 
 // Keyspace & Column family names
-keyspaceName returns [String id]
-    @init { CFName name = new CFName(); }
-    : cfOrKsName[name, true] { $id = name.getKeyspace(); }
+keyspaceName returns [sstring id]
+    @init { cql3::cf_name name; }
+    : cfOrKsName[name, true] { $id = name.get_keyspace(); }
     ;
 
+#if 0
 indexName returns [IndexName name]
     @init { $name = new IndexName(); }
     : (idxOrKsName[name, true] '.')? idxOrKsName[name, false]
@@ -956,14 +985,18 @@ columnFamilyName returns [CFName name]
 userTypeName returns [UTName name]
     : (ks=ident '.')? ut=non_type_ident { return new UTName(ks, ut); }
     ;
+#endif
 
-cfOrKsName[CFName name, boolean isKs]
-    : t=IDENT              { if (isKs) $name.setKeyspace($t.text, false); else $name.setColumnFamily($t.text, false); }
+cfOrKsName[cql3::cf_name& name, bool isKs]
+    : t=IDENT              { if (isKs) $name.set_keyspace($t.text, false); else $name.set_column_family($t.text, false); }
+#if 0
     | t=QUOTED_NAME        { if (isKs) $name.setKeyspace($t.text, true); else $name.setColumnFamily($t.text, true); }
     | k=unreserved_keyword { if (isKs) $name.setKeyspace(k, false); else $name.setColumnFamily(k, false); }
     | QMARK {addRecognitionError("Bind variables cannot be used for keyspace or table names");}
+#endif
     ;
 
+#if 0
 constant returns [Constants.Literal constant]
     : t=STRING_LITERAL { $constant = Constants.Literal.string($t.text); }
     | t=INTEGER        { $constant = Constants.Literal.integer($t.text); }
@@ -1335,6 +1368,7 @@ basic_unreserved_keyword returns [String str]
         | K_DETERMINISTIC
         ) { $str = $k.text; }
     ;
+#endif
 
 // Case-insensitive keywords
 K_SELECT:      S E L E C T;
@@ -1483,6 +1517,7 @@ fragment X: ('x'|'X');
 fragment Y: ('y'|'Y');
 fragment Z: ('z'|'Z');
 
+#if 0
 STRING_LITERAL
     @init{
         StringBuilder txt = new StringBuilder(); // temporary to build pg-style-string
@@ -1511,6 +1546,7 @@ QUOTED_NAME
     @after{ setText(b.toString()); }
     : '\"' (c=~('\"') { b.appendCodePoint(c); } | '\"' '\"' { b.appendCodePoint('\"'); })+ '\"'
     ;
+#endif
 
 fragment DIGIT
     : '0'..'9'

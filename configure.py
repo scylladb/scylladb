@@ -236,6 +236,7 @@ deps = {
 		 'gms/version_generator.cc',
                  'dht/dht.cc',
                  ]
+                + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
                 + core
                 ),
@@ -360,7 +361,7 @@ with open(buildfile, 'w') as f:
                 command = thrift -gen cpp:cob_style -out $builddir/{mode}/gen $in
                 description = THRIFT $in
             rule antlr3.{mode}
-                command = antlr3 $in -o $builddir/{mode}/gen
+                command = sed -e '/^#if 0/,/^#endif/d' $in > $builddir/{mode}/gen/cql3/Cql.g && antlr3 $builddir/{mode}/gen/cql3/Cql.g
                 description = ANTLR3 $in
             ''').format(mode = mode, **modeval))
         f.write('build {mode}: phony {artifacts}\n'.format(mode = mode,
@@ -420,6 +421,7 @@ with open(buildfile, 'w') as f:
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
                 f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
+                f.write('   cxxflags=$cxxflags -Wno-error -fpermissive\n')
     f.write(textwrap.dedent('''\
         rule configure
           command = python3 configure.py $configure_args
