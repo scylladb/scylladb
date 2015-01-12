@@ -181,6 +181,7 @@ public:
     virtual future<> link_ready() { return _link_ready_promise.get_future(); }
     virtual std::unique_ptr<qp> init_local_queue(boost::program_options::variables_map opts, uint16_t qid) override;
     virtual unsigned hash2qid(uint32_t hash) override {
+        assert(_redir_table.size());
         return _redir_table[hash & (_redir_table.size() - 1)];
     }
     uint8_t port_idx() { return _port_idx; }
@@ -301,17 +302,16 @@ int dpdk_device::init_port_start()
         // This comes from the ETH_RSS_RETA_NUM_ENTRIES being 128
         _rss_table_bits = 7;
 #else
-        // Check that the returned RETA size is sane:
-        // greater than 0 and is a power of 2.
-        assert(_dev_info.reta_size &&
-               (_dev_info.reta_size & (_dev_info.reta_size - 1)) == 0);
+        if (_dev_info.reta_size) {
+            // RETA size should be a power of 2
+            assert((_dev_info.reta_size & (_dev_info.reta_size - 1)) == 0);
 
-        // Set the RSS table to the correct size
-        _redir_table.resize(_dev_info.reta_size);
-        _rss_table_bits = std::lround(std::log2(_dev_info.reta_size));
-        printf("Port %d: RSS table size is %d\n",
-               _port_idx, _dev_info.reta_size);
-
+            // Set the RSS table to the correct size
+            _redir_table.resize(_dev_info.reta_size);
+            _rss_table_bits = std::lround(std::log2(_dev_info.reta_size));
+            printf("Port %d: RSS table size is %d\n",
+                   _port_idx, _dev_info.reta_size);
+        }
 #endif
     }
 
@@ -709,7 +709,8 @@ void dpdk_device::get_rss_table()
 #else
 void dpdk_device::get_rss_table()
 {
-    assert(_dev_info.reta_size);
+    if (_dev_info.reta_size == 0)
+        return;
 
     int i, reta_conf_size =
         std::max(1, _dev_info.reta_size / RTE_RETA_GROUP_SIZE);
