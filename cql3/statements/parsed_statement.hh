@@ -59,24 +59,24 @@ public:
 
     class prepared {
     public:
-        const std::unique_ptr<cql_statement> statement;
+        const ::shared_ptr<cql_statement> statement;
         const std::vector<::shared_ptr<column_specification>> bound_names;
 
-        prepared(std::unique_ptr<cql_statement>&& statement_, const std::vector<::shared_ptr<column_specification>>& bound_names_)
+        prepared(::shared_ptr<cql_statement> statement_, const std::vector<::shared_ptr<column_specification>>& bound_names_)
             : statement(std::move(statement_))
             , bound_names(bound_names_)
         { }
 
-        prepared(std::unique_ptr<cql_statement>&& statement_, const variable_specifications& names)
-            : prepared(std::move(statement_), names.get_specifications())
+        prepared(::shared_ptr<cql_statement> statement_, const variable_specifications& names)
+            : prepared(statement_, names.get_specifications())
         { }
 
-        prepared(std::unique_ptr<cql_statement>&& statement_)
-            : prepared(std::move(statement_), std::vector<::shared_ptr<column_specification>>())
+        prepared(::shared_ptr<cql_statement>&& statement_)
+            : prepared(statement_, std::vector<::shared_ptr<column_specification>>())
         { }
     };
 
-    virtual std::unique_ptr<prepared> prepare(std::unique_ptr<cql_statement>&& stmt) = 0;
+    virtual std::unique_ptr<prepared> prepare() = 0;
 
     virtual bool uses_function(sstring ks_name, sstring function_name) {
         return false;
