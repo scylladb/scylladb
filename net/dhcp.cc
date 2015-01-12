@@ -155,14 +155,11 @@ public:
     } __attribute__((packed));
 
     struct dhcp_packet_base {
-        ip_hdr ip;
-        udp_hdr udp;
-
         dhcp_payload dhp;
 
         template <typename Adjuster>
         auto adjust_endianness(Adjuster a) {
-            return a(ip, udp, dhp);
+            return a(dhp);
         }
     } __attribute__((packed));
 
@@ -255,7 +252,9 @@ public:
 
     impl(ipv4 & stack)
        : _stack(stack)
-    {}
+    {
+        _sock = _stack.get_udp().make_channel({0, client_port});
+    }
 
     future<> process_packet(packet p, dhcp_payload* dhp, size_t opt_off) {
         _retry_timer.cancel();
@@ -350,30 +349,7 @@ public:
     }
 
     template<typename T>
-    future<> build_ip_headers_and_send(T && pkt) {
-        auto size = sizeof(pkt);
-        auto & ip = pkt.ip;
-
-        ip.ihl = sizeof(ip) / 4;
-        ip.ver = 4;
-        ip.dscp = 0;
-        ip.ecn = 0;
-        ip.len = uint16_t(size);
-        ip.id = 0;
-        ip.frag = 0;
-        ip.ttl = 64;
-        ip.csum = 0;
-        ip.ip_proto = uint8_t(ip_protocol_num::udp);
-        ip.dst_ip = ipv4_address(0xffffffff);
-
-        auto & udp = pkt.udp;
-
-        udp.src_port = client_port;
-        udp.dst_port = server_port;
-        udp.len = uint16_t(size - sizeof(ip));
-        udp.cksum = 0; // TODO etc.
-
-
+    future<> send(T && pkt) {
         pkt.dhp.bootp.xid = _xid;
         auto ipf = _stack.netif();
         auto mac = ipf->hw_address().mac;
@@ -381,13 +357,8 @@ public:
 
         pkt = hton(pkt);
 
-        checksummer csum;
-        csum.sum(reinterpret_cast<char*>(&ip), sizeof(ip));
-        ip.csum = csum.get();
+        _sock.send({0xffffffff, server_port}, packet(reinterpret_cast<char *>(&pkt), sizeof(pkt)));
 
-        packet p(reinterpret_cast<char *>(&pkt), sizeof(pkt));
-
-        _stack.send_raw(ethernet::broadcast_address(), std::move(p));
         return make_ready_future<>();
     }
 
@@ -411,7 +382,7 @@ public:
 
         _xid = xid_dist(e1);
         _state = state::DISCOVER;
-        return build_ip_headers_and_send(d);
+        return send(d);
     }
 
     future<> send_request(const lease & info) {
@@ -430,7 +401,7 @@ public:
 
         log() << "sending request for " << info.ip << std::endl;
         _state = state::REQUEST;
-        return build_ip_headers_and_send(d);
+        return send(d);
     }
 
 private:
@@ -439,6 +410,7 @@ private:
     timer<> _timer;
     timer<> _retry_timer;
     ipv4 & _stack;
+    udp_channel _sock;
     uint32_t _xid = 0;
 };
 
