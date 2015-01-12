@@ -15,6 +15,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_STATEMENTS_ALTER_KEYSPACE_STATEMENT_HH
+#define CQL3_STATEMENTS_ALTER_KEYSPACE_STATEMENT_HH
+
+#include "cql3/statements/schema_altering_statement.hh"
+#include "cql3/statements/ks_prop_defs.hh"
+
+#include <memory>
+
+namespace cql3 {
+
+namespace statements {
+
+#if 0
 package org.apache.cassandra.cql3.statements;
 
 import org.apache.cassandra.auth.Permission;
@@ -28,25 +48,23 @@ import org.apache.cassandra.service.ClientState;
 import org.apache.cassandra.service.MigrationManager;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.transport.Event;
+#endif
 
-public class AlterKeyspaceStatement extends SchemaAlteringStatement
-{
-    private final String name;
-    private final KSPropDefs attrs;
+class alter_keyspace_statement : public schema_altering_statement {
+    sstring _name;
+    std::unique_ptr<ks_prop_defs> _attrs;
 
-    public AlterKeyspaceStatement(String name, KSPropDefs attrs)
-    {
-        super();
-        this.name = name;
-        this.attrs = attrs;
+public:
+    alter_keyspace_statement(sstring name, std::unique_ptr<ks_prop_defs>&& attrs)
+        : _name{name}
+        , _attrs{std::move(attrs)}
+    { }
+
+    virtual sstring keyspace() const override {
+        return _name;
     }
 
-    @Override
-    public String keyspace()
-    {
-        return name;
-    }
-
+#if 0
     public void checkAccess(ClientState state) throws UnauthorizedException, InvalidRequestException
     {
         state.hasKeyspaceAccess(name, Permission.ALTER);
@@ -94,4 +112,11 @@ public class AlterKeyspaceStatement extends SchemaAlteringStatement
     {
         return new Event.SchemaChange(Event.SchemaChange.Change.UPDATED, keyspace());
     }
+#endif
+};
+
 }
+
+}
+
+#endif
