@@ -297,3 +297,7 @@ sstring to_hex(const bytes& b) {
     }
     return out;
 }
+
+sstring to_hex(const bytes_opt& b) {
+    return b ? "null" : to_hex(*b);
+}
