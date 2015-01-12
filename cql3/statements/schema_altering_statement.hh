@@ -28,6 +28,8 @@
 #include "cql3/statements/cf_statement.hh"
 #include "cql3/cql_statement.hh"
 
+#include "core/shared_ptr.hh"
+
 #include <experimental/optional>
 
 namespace cql3 {
