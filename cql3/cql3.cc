@@ -17,6 +17,7 @@
 #include "functions/time_uuid_fcts.hh"
 #include "functions/function_call.hh"
 #include "functions/uuid_fcts.hh"
+#include "functions/bytes_conversion_fcts.hh"
 
 #include "statements/alter_keyspace_statement.hh"
 #include "statements/alter_type_statement.hh"
