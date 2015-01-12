@@ -60,10 +60,20 @@ public:
      * @return <code>true</code> if the function is an aggregate function, <code>false</code> otherwise.
      */
     virtual bool is_aggregate() = 0;
+
+    virtual void print(std::ostream& os) const = 0;
 protected:
     virtual bool uses_function(sstring ks_name, sstring function_name) = 0;
     virtual bool has_reference_to(function& f) = 0;
+    friend class function_call;
+    friend std::ostream& operator<<(std::ostream& os, const function& f);
 };
+
+std::ostream&
+operator<<(std::ostream& os, const function& f) {
+    f.print(os);
+    return os;
+}
 
 }
 }

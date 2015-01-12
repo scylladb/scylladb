@@ -74,20 +74,20 @@ public:
         return false;
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const abstract_function& f);
+    virtual void print(std::ostream& os) const override;
 };
 
-std::ostream&
-operator<<(std::ostream& os, const abstract_function& f) {
-    os << f._name << " : (";
-    for (size_t i = 0; i < f._arg_types.size(); ++i) {
+inline
+void
+abstract_function::print(std::ostream& os) const {
+    os << _name << " : (";
+    for (size_t i = 0; i < _arg_types.size(); ++i) {
         if (i > 0) {
             os << ", ";
         }
-        os << f._arg_types[i]->name(); // FIXME: asCQL3Type()
+        os << _arg_types[i]->name(); // FIXME: asCQL3Type()
     }
-    os << ") -> " << f._return_type->name(); // FIXME: asCQL3Type()
-    return os;
+    os << ") -> " << _return_type->name(); // FIXME: asCQL3Type()
 }
 
 }
