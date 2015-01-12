@@ -316,7 +316,7 @@ with open(buildfile, 'w') as f:
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.rl', '.hh')
                     ragels[hh] = src
                 else:
-                    raise Exeception('No rule for ' + src)
+                    raise Exception('No rule for ' + src)
         for obj in compiles:
             src = compiles[obj]
             gen_headers = ragels.keys()
