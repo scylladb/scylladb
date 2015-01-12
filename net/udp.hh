@@ -30,7 +30,11 @@ struct udp_hdr {
 
 struct udp_channel_state {
     queue<udp_datagram> _queue;
+    // Limit number of data queued into send queue
+    semaphore _user_queue_space = {212992};
     udp_channel_state(size_t queue_size) : _queue(queue_size) {}
+    future<> wait_for_send_buffer(size_t len) { return _user_queue_space.wait(len); }
+    void complete_send(size_t len) { _user_queue_space.signal(len); }
 };
 
 }

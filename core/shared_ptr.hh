@@ -123,25 +123,25 @@ template <typename T>
 class lw_shared_ptr {
     mutable shared_ptr_impl<T>* _p = nullptr;
 private:
-    lw_shared_ptr(shared_ptr_impl<T>* p) : _p(p) {
+    lw_shared_ptr(shared_ptr_impl<T>* p) noexcept : _p(p) {
         if (_p) {
             ++_p->_count;
         }
     }
     template <typename... A>
-    static lw_shared_ptr make(A&&... a) {
+    static lw_shared_ptr make(A&&... a) noexcept {
         return lw_shared_ptr(new typename shared_ptr_impl<T>::ctor(std::forward<A>(a)...));
     }
 public:
     using element_type = T;
 
-    lw_shared_ptr() = default;
-    lw_shared_ptr(const lw_shared_ptr& x) : _p(x._p) {
+    lw_shared_ptr() noexcept = default;
+    lw_shared_ptr(const lw_shared_ptr& x) noexcept : _p(x._p) {
         if (_p) {
             ++_p->_count;
         }
     }
-    lw_shared_ptr(lw_shared_ptr&& x) : _p(x._p) {
+    lw_shared_ptr(lw_shared_ptr&& x) noexcept  : _p(x._p) {
         x._p = nullptr;
     }
     ~lw_shared_ptr() {
@@ -149,31 +149,31 @@ public:
             delete _p->to_internal_object();
         }
     }
-    lw_shared_ptr& operator=(const lw_shared_ptr& x) {
+    lw_shared_ptr& operator=(const lw_shared_ptr& x) noexcept {
         if (_p != x._p) {
             this->~lw_shared_ptr();
             new (this) lw_shared_ptr(x);
         }
         return *this;
     }
-    lw_shared_ptr& operator=(lw_shared_ptr&& x) {
+    lw_shared_ptr& operator=(lw_shared_ptr&& x) noexcept {
         if (_p != x._p) {
             this->~lw_shared_ptr();
             new (this) lw_shared_ptr(std::move(x));
         }
         return *this;
     }
-    lw_shared_ptr& operator=(T&& x) {
+    lw_shared_ptr& operator=(T&& x) noexcept {
         this->~lw_shared_ptr();
         new (this) lw_shared_ptr(make_lw_shared<T>(std::move(x)));
         return *this;
     }
 
-    T& operator*() const { return *_p->to_value(); }
-    T* operator->() const { return _p->to_value(); }
-    T* get() const { return _p->to_value(); }
+    T& operator*() const noexcept { return *_p->to_value(); }
+    T* operator->() const noexcept { return _p->to_value(); }
+    T* get() const noexcept { return _p->to_value(); }
 
-    long int use_count() {
+    long int use_count() noexcept {
         if (_p) {
             return _p->_count;
         } else {
@@ -181,15 +181,15 @@ public:
         }
     }
 
-    operator lw_shared_ptr<const T>() const {
+    operator lw_shared_ptr<const T>() const noexcept {
         return lw_shared_ptr<const T>(_p);
     }
 
-    explicit operator bool() const {
+    explicit operator bool() const noexcept {
         return _p;
     }
 
-    bool owned() const {
+    bool owned() const noexcept {
         return _p->_count == 1;
     }
 
@@ -260,37 +260,37 @@ class shared_ptr {
     mutable shared_ptr_count_base* _b = nullptr;
     mutable T* _p = nullptr;
 private:
-    explicit shared_ptr(shared_ptr_count_for<T>* b) : _b(b), _p(&b->data) {
+    explicit shared_ptr(shared_ptr_count_for<T>* b) noexcept : _b(b), _p(&b->data) {
         ++_b->count;
     }
-    shared_ptr(shared_ptr_count_base* b, T* p) : _b(b), _p(p) {
+    shared_ptr(shared_ptr_count_base* b, T* p) noexcept : _b(b), _p(p) {
         // test _p, not _b, since dynamic_pointer_cast<>() can zero p but not b
         if (_p) {
             ++_b->count;
         }
     }
-    explicit shared_ptr(enable_shared_from_this<T>* p) : _b(p), _p(static_cast<T*>(p)) {
+    explicit shared_ptr(enable_shared_from_this<T>* p) noexcept : _b(p), _p(static_cast<T*>(p)) {
         if (_b) {
             ++_b->count;
         }
     }
 public:
-    shared_ptr() = default;
-    shared_ptr(const shared_ptr& x)
+    shared_ptr() noexcept = default;
+    shared_ptr(const shared_ptr& x) noexcept
             : _b(x._b)
             , _p(x._p) {
         if (_b) {
             ++_b->count;
         }
     }
-    shared_ptr(shared_ptr&& x)
+    shared_ptr(shared_ptr&& x) noexcept
             : _b(x._b)
             , _p(x._p) {
         x._b = nullptr;
         x._p = nullptr;
     }
     template <typename U, typename = std::enable_if_t<std::is_base_of<T, U>::value>>
-    shared_ptr(const shared_ptr<U>& x)
+    shared_ptr(const shared_ptr<U>& x) noexcept
             : _b(x._b)
             , _p(x._p) {
         if (_b) {
@@ -298,7 +298,7 @@ public:
         }
     }
     template <typename U, typename = std::enable_if_t<std::is_base_of<T, U>::value>>
-    shared_ptr(shared_ptr<U>&& x)
+    shared_ptr(shared_ptr<U>&& x) noexcept
             : _b(x._b)
             , _p(x._p) {
         x._b = nullptr;
@@ -309,14 +309,14 @@ public:
             delete _b;
         }
     }
-    shared_ptr& operator=(const shared_ptr& x) {
+    shared_ptr& operator=(const shared_ptr& x) noexcept {
         if (this != &x) {
             this->~shared_ptr();
             new (this) shared_ptr(x);
         }
         return *this;
     }
-    shared_ptr& operator=(shared_ptr&& x) {
+    shared_ptr& operator=(shared_ptr&& x) noexcept {
         if (this != &x) {
             this->~shared_ptr();
             new (this) shared_ptr(std::move(x));
@@ -324,7 +324,7 @@ public:
         return *this;
     }
     template <typename U, typename = std::enable_if_t<std::is_base_of<T, U>::value>>
-    shared_ptr& operator=(const shared_ptr<U>& x) {
+    shared_ptr& operator=(const shared_ptr<U>& x) noexcept {
         if (this != &x) {
             this->~shared_ptr();
             new (this) shared_ptr(x);
@@ -332,23 +332,23 @@ public:
         return *this;
     }
     template <typename U, typename = std::enable_if_t<std::is_base_of<T, U>::value>>
-    shared_ptr& operator=(shared_ptr<U>&& x) {
+    shared_ptr& operator=(shared_ptr<U>&& x) noexcept {
         if (this != &x) {
             this->~shared_ptr();
             new (this) shared_ptr(std::move(x));
         }
         return *this;
     }
-    explicit operator bool() const {
+    explicit operator bool() const noexcept {
         return _p;
     }
-    T& operator*() const{
+    T& operator*() const noexcept {
         return *_p;
     }
-    T* operator->() const {
+    T* operator->() const noexcept {
         return _p;
     }
-    T* get() const {
+    T* get() const noexcept {
         return _p;
     }
 

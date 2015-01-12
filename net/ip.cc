@@ -28,6 +28,9 @@ ipv4::ipv4(interface* netif)
     : _netif(netif)
     , _global_arp(netif)
     , _arp(_global_arp)
+    , _host_address(0)
+    , _gw_address(0)
+    , _netmask(0)
     , _l3(netif, eth_protocol_num::ipv4, [this] { return get_packet(); })
     , _rx_packets(_l3.receive([this] (packet p, ethernet_address ea) {
         return handle_received_packet(std::move(p), ea); },
@@ -202,10 +205,10 @@ future<ethernet_address> ipv4::get_l2_dst_address(ipv4_address to) {
     return _arp.lookup(dst);
 }
 
-void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_completion complete, std::experimental::optional<ethernet_address> e_dst) {
+void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, ethernet_address e_dst) {
     auto needs_frag = this->needs_frag(p, proto_num, hw_features());
 
-    auto send_pkt = [this, to, proto_num, needs_frag, complete = std::move(complete), e_dst = std::move(e_dst)] (packet& pkt, uint16_t remaining, uint16_t offset) mutable  {
+    auto send_pkt = [this, to, proto_num, needs_frag, e_dst] (packet& pkt, uint16_t remaining, uint16_t offset) mutable  {
         auto iph = pkt.prepend_header<ip_hdr>();
         iph->ihl = sizeof(*iph) / 4;
         iph->ver = 4;
@@ -238,14 +241,7 @@ void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_com
             iph->csum = csum.get();
         }
 
-        auto&& send_complete = remaining ? l4send_completion() : std::move(complete);
-        if (!e_dst) {
-            get_l2_dst_address(to).then([this, pkt = std::move(pkt), send_complete = std::move(send_complete)] (ethernet_address e_dst) mutable {
-                send_raw(e_dst, std::move(pkt), std::move(send_complete));
-            });
-        } else {
-            send_raw(e_dst.value(), std::move(pkt), std::move(send_complete));
-        }
+        _packetq.push_back(l3_protocol::l3packet{eth_protocol_num::ipv4, e_dst, std::move(pkt)});
     };
 
     if (needs_frag) {
@@ -266,29 +262,27 @@ void ipv4::send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_com
     }
 }
 
-void ipv4::send_raw(ethernet_address dst, packet p, l4send_completion complete) {
-    _packetq.push_back(ipv4packet{l3_protocol::l3packet{eth_protocol_num::ipv4, dst, std::move(p)}, std::move(complete)});
-}
-
 std::experimental::optional<l3_protocol::l3packet> ipv4::get_packet() {
-    for (size_t i = 0; i < _pkt_providers.size(); i++) {
-        auto l4p = _pkt_providers[_pkt_provider_idx++]();
-        if (_pkt_provider_idx == _pkt_providers.size()) {
-            _pkt_provider_idx = 0;
-        }
-        if (l4p) {
-            auto l4pv = std::move(l4p.value());
-            send(l4pv.to, l4pv.proto_num, std::move(l4pv.p), l4send_completion(), l4pv.e_dst);
-            break;
+    // _packetq will be mostly empty here unless it hold remnants of previously
+    // fragmented packet
+    if (_packetq.empty()) {
+        for (size_t i = 0; i < _pkt_providers.size(); i++) {
+            auto l4p = _pkt_providers[_pkt_provider_idx++]();
+            if (_pkt_provider_idx == _pkt_providers.size()) {
+                _pkt_provider_idx = 0;
+            }
+            if (l4p) {
+                auto l4pv = std::move(l4p.value());
+                send(l4pv.to, l4pv.proto_num, std::move(l4pv.p), l4pv.e_dst);
+                break;
+            }
         }
     }
 
     std::experimental::optional<l3_protocol::l3packet> p;
     if (!_packetq.empty()) {
-        auto ipv4p = std::move(_packetq.front());
+        p = std::move(_packetq.front());
         _packetq.pop_front();
-        p = std::move(ipv4p.l3packet);
-        ipv4p.complete();
     }
     return p;
 }
@@ -442,7 +436,12 @@ void icmp::received(packet p, ipaddr from, ipaddr to) {
     checksummer csum;
     csum.sum(reinterpret_cast<char*>(hdr), p.len());
     hdr->csum = csum.get();
-    _inet.send(to, from, std::move(p));
+
+    if (_queue_space.try_wait(p.len())) { // drop packets that do not fit the queue
+        _inet.get_l2_dst_address(from).then([this, from, p = std::move(p)] (ethernet_address e_dst) mutable {
+            _packetq.emplace_back(ipv4_traits::l4packet{from, std::move(p), e_dst, ip_protocol_num::icmp});
+        });
+    }
 }
 
 }

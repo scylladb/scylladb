@@ -101,7 +101,9 @@ private:
     void send(l2addr to, packet p);
 public:
     future<> send_query(const l3addr& paddr);
-    explicit arp_for(arp& a) : arp_for_protocol(a, L3::arp_protocol_type()) {}
+    explicit arp_for(arp& a) : arp_for_protocol(a, L3::arp_protocol_type()) {
+        _table[L3::broadcast_address()] = ethernet::broadcast_address();
+    }
     future<ethernet_address> lookup(const l3addr& addr);
     void learn(l2addr l2, l3addr l3);
     void run();
