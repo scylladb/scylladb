@@ -18,6 +18,7 @@
 #include "functions/function_call.hh"
 
 #include "statements/alter_keyspace_statement.hh"
+#include "statements/alter_type_statement.hh"
 #include "statements/cf_statement.hh"
 #include "statements/ks_prop_defs.hh"
 #include "statements/use_statement.hh"
