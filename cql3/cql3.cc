@@ -33,6 +33,7 @@
 #include "column_identifier.hh"
 #include "column_specification.hh"
 #include "cf_name.hh"
+#include "ut_name.hh"
 
 #include "abstract_marker.hh"
 #include "assignment_testable.hh"
