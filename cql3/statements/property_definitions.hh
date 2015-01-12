@@ -15,6 +15,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_STATEMENTS_PROPERTY_DEFINITIONS_HH
+#define CQL3_STATEMENTS_PROPERTY_DEFINITIONS_HH
+
+namespace cql3 {
+
+namespace statements {
+
+#if 0
 package org.apache.cassandra.cql3.statements;
 
 import java.util.*;
@@ -23,9 +38,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.exceptions.SyntaxException;
+#endif
 
-public class PropertyDefinitions
-{
+class property_definitions {
+#if 0
     protected static final Logger logger = LoggerFactory.getLogger(PropertyDefinitions.class);
 
     protected final Map<String, Object> properties = new HashMap<String, Object>();
@@ -140,4 +156,11 @@ public class PropertyDefinitions
             }
         }
     }
+#endif
+};
+
 }
+
+}
+
+#endif
