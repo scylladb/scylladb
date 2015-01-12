@@ -42,4 +42,6 @@ public:
     }
 };
 
+UUID make_random_uuid();
+
 }
