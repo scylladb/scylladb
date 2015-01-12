@@ -99,7 +99,6 @@ public:
     ipv4& _inet;
 public:
     ipv4_l4(ipv4& inet) : _inet(inet) {}
-    void send(ipv4_address from, ipv4_address to, packet p);
     void register_packet_provider(ipv4_traits::packet_provider_type func);
     future<ethernet_address> get_l2_dst_address(ipv4_address to);
 };
@@ -385,12 +384,6 @@ public:
     }
     future<ethernet_address> get_l2_dst_address(ipv4_address to);
 };
-
-template <ip_protocol_num ProtoNum>
-inline
-void ipv4_l4<ProtoNum>::send(ipv4_address from, ipv4_address to, packet p) {
-    _inet.send(/* from, */ to, ProtoNum, std::move(p));
-}
 
 template <ip_protocol_num ProtoNum>
 inline
