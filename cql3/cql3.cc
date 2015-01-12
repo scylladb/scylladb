@@ -18,6 +18,7 @@
 #include "functions/function_call.hh"
 
 #include "statements/cf_statement.hh"
+#include "statements/ks_prop_defs.hh"
 #include "statements/use_statement.hh"
 #include "statements/parsed_statement.hh"
 #include "statements/property_definitions.hh"
