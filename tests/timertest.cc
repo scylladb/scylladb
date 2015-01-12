@@ -14,7 +14,7 @@ using namespace std::chrono_literals;
         throw std::runtime_error("test failed"); \
     } while (0)
 
-#define OK() { \
+#define OK() do { \
         std::cerr << "OK @ " << __FILE__ << ":" << __LINE__ << std::endl; \
     } while (0)
 

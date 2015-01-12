@@ -91,15 +91,17 @@ uint8_t tcp_option::fill(tcp_hdr* th, uint8_t options_size) {
     return size;
 }
 
-uint8_t tcp_option::get_size() {
+uint8_t tcp_option::get_size(bool foreign_syn_received) {
     uint8_t size = 0;
-    if (_mss_received)
+    if (_mss_received || !foreign_syn_received)
         size += option_len::mss;
-    if (_win_scale_received)
+    if (_win_scale_received || !foreign_syn_received)
         size += option_len::win_scale;
-    size += option_len::eol;
-    // Insert NOP option to align on 32-bit
-    size = align_up(size, tcp_option::align);
+    if (size > 0) {
+        size += option_len::eol;
+        // Insert NOP option to align on 32-bit
+        size = align_up(size, tcp_option::align);
+    }
     return size;
 }
 
@@ -123,6 +125,12 @@ server_socket
 tcpv4_listen(tcp<ipv4_traits>& tcpv4, uint16_t port, listen_options opts) {
 	return server_socket(std::make_unique<native_server_socket_impl<tcp<ipv4_traits>>>(
 			tcpv4, port, opts));
+}
+
+connected_socket
+tcpv4_connect(tcp<ipv4_traits>& tcpv4, socket_address sa) {
+    return connected_socket(std::make_unique<native_connected_socket_impl<tcp<ipv4_traits>>>(
+        tcpv4.connect(sa)));
 }
 
 }

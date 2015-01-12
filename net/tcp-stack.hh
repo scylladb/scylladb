@@ -9,6 +9,7 @@
 
 class listen_options;
 class server_socket;
+class connected_socket;
 
 namespace net {
 
@@ -18,6 +19,9 @@ class tcp;
 
 server_socket
 tcpv4_listen(tcp<ipv4_traits>& tcpv4, uint16_t port, listen_options opts);
+
+connected_socket
+tcpv4_connect(tcp<ipv4_traits>& tcpv4, socket_address sa);
 
 }
 

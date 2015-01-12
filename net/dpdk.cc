@@ -477,6 +477,7 @@ dpdk_qp::dpdk_qp(dpdk_device* dev, uint8_t qid)
 
 void dpdk_qp::process_packets(struct rte_mbuf **bufs, uint16_t count)
 {
+    update_rx_count(count);
     for (uint16_t i = 0; i < count; i++) {
         struct rte_mbuf *m = bufs[i];
         offload_info oi;

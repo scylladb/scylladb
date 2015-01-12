@@ -9,6 +9,7 @@
 #include "core/deleter.hh"
 #include "core/queue.hh"
 #include "core/stream.hh"
+#include "core/scollectd.hh"
 #include "ethernet.hh"
 #include "packet.hh"
 #include "const.hh"
@@ -121,8 +122,45 @@ class qp {
     stream<packet> _rx_stream;
     reactor::poller _tx_poller;
     circular_buffer<packet> _tx_packetq;
+    uint64_t _packets_snt = 0;
+    uint64_t _packets_rcv = 0;
+    uint64_t _last_tx_bunch = 0;
+    uint64_t _last_rx_bunch = 0;
+    std::vector<scollectd::registration> _collectd_regs;
+protected:
+    void update_rx_count(uint64_t count) {
+        _last_rx_bunch = count;
+        _packets_rcv += count;
+    }
 public:
-    qp() : _tx_poller([this] { poll_tx(); return true; }) {}
+    qp() : _tx_poller([this] { poll_tx(); return true; }), _collectd_regs({
+                // queue_length     value:GAUGE:0:U
+                // Absolute value of num packets in last tx bunch.
+                scollectd::add_polled_metric(scollectd::type_instance_id("network"
+                        , scollectd::per_cpu_plugin_instance
+                        , "queue_length", "tx-packet-queue")
+                        , scollectd::make_typed(scollectd::data_type::GAUGE, _last_tx_bunch)
+                ),
+                // total_operations value:DERIVE:0:U
+                scollectd::add_polled_metric(scollectd::type_instance_id("network"
+                        , scollectd::per_cpu_plugin_instance
+                        , "total_operations", "tx-packets")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE, _packets_snt)
+                ),
+                // queue_length     value:GAUGE:0:U
+                // Absolute value of num packets in last rx bunch.
+                scollectd::add_polled_metric(scollectd::type_instance_id("network"
+                        , scollectd::per_cpu_plugin_instance
+                        , "queue_length", "rx-packet-queue")
+                        , scollectd::make_typed(scollectd::data_type::GAUGE, _last_rx_bunch)
+                ),
+                // total_operations value:DERIVE:0:U
+                scollectd::add_polled_metric(scollectd::type_instance_id("network"
+                        , scollectd::per_cpu_plugin_instance
+                        , "total_operations", "rx-packets")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE, _packets_rcv)
+                ),
+        }) {}
     virtual ~qp() {}
     virtual future<> send(packet p) = 0;
     virtual uint32_t send(circular_buffer<packet>& p) {
@@ -175,7 +213,8 @@ public:
 
         }
         if (!_tx_packetq.empty()) {
-            send(_tx_packetq);
+            _last_tx_bunch = send(_tx_packetq);
+            _packets_snt += _last_tx_bunch;
         }
     }
     friend class device;

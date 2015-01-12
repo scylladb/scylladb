@@ -110,7 +110,6 @@ public:
 private:
     interface _netif;
     ipv4 _inet;
-    udp_v4 _udp;
     bool _dhcp = false;
     promise<> _config;
     timer<> _timer;
@@ -124,6 +123,7 @@ private:
 public:
     explicit native_network_stack(boost::program_options::variables_map opts, std::shared_ptr<device> dev);
     virtual server_socket listen(socket_address sa, listen_options opt) override;
+    virtual future<connected_socket> connect(socket_address sa) override;
     virtual udp_channel make_udp_channel(ipv4_addr addr) override;
     virtual future<> initialize() override;
     static future<std::unique_ptr<network_stack>> create(boost::program_options::variables_map opts) {
@@ -143,7 +143,7 @@ thread_local promise<std::unique_ptr<network_stack>> native_network_stack::ready
 
 udp_channel
 native_network_stack::make_udp_channel(ipv4_addr addr) {
-    return _udp.make_channel(addr);
+    return _inet.get_udp().make_channel(addr);
 }
 
 void
@@ -164,12 +164,11 @@ add_native_net_options_description(boost::program_options::options_description &
 
 native_network_stack::native_network_stack(boost::program_options::variables_map opts, std::shared_ptr<device> dev)
     : _netif(std::move(dev))
-    , _inet(&_netif)
-    , _udp(_inet) {
+    , _inet(&_netif) {
     _inet.set_host_address(ipv4_address(opts["host-ipv4-addr"].as<std::string>()));
     _inet.set_gw_address(ipv4_address(opts["gw-ipv4-addr"].as<std::string>()));
     _inet.set_netmask_address(ipv4_address(opts["netmask-ipv4-addr"].as<std::string>()));
-    _udp.set_queue_size(opts["udpv4-queue-size"].as<int>());
+    _inet.get_udp().set_queue_size(opts["udpv4-queue-size"].as<int>());
     _dhcp = opts["host-ipv4-addr"].defaulted()
             && opts["gw-ipv4-addr"].defaulted()
             && opts["netmask-ipv4-addr"].defaulted() && opts["dhcp"].as<bool>();
@@ -179,6 +178,12 @@ server_socket
 native_network_stack::listen(socket_address sa, listen_options opts) {
     assert(sa.as_posix_sockaddr().sa_family == AF_INET);
     return tcpv4_listen(_inet.get_tcp(), ntohs(sa.as_posix_sockaddr_in().sin_port), opts);
+}
+
+future<connected_socket>
+native_network_stack::connect(socket_address sa) {
+    assert(sa.as_posix_sockaddr().sa_family == AF_INET);
+    return make_ready_future<connected_socket>(tcpv4_connect(_inet.get_tcp(), sa));
 }
 
 using namespace std::chrono_literals;
@@ -287,7 +292,7 @@ boost::program_options::options_description nns_options() {
                 boost::program_options::value<std::string>()->default_value("255.255.255.0"),
                 "static IPv4 netmask to use")
         ("udpv4-queue-size",
-                boost::program_options::value<int>()->default_value(udp_v4::default_queue_size),
+                boost::program_options::value<int>()->default_value(ipv4_udp::default_queue_size),
                 "Default size of the UDPv4 per-channel packet queue")
         ("dhcp",
                 boost::program_options::value<bool>()->default_value(true),

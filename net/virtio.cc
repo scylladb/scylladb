@@ -419,6 +419,7 @@ void vring<BufferChain, Completion>::post(Iterator begin, Iterator end) {
 template <typename BufferChain, typename Completion>
 void vring<BufferChain, Completion>::do_complete() {
     auto used_head = _used._shared->_idx.load(std::memory_order_acquire);
+    _complete.bunch(_used._tail - used_head);
     while (used_head != _used._tail) {
         auto ue = _used._shared->_used_elements[masked(_used._tail++)];
         _complete(std::move(_buffer_chains[ue._id]), ue._len);
@@ -428,10 +429,8 @@ void vring<BufferChain, Completion>::do_complete() {
         } else {
             _free_head = id;
         }
-        unsigned count = 0;
         while (true) {
             auto& d = _descs[id];
-            count++;
             if (!d._flags.has_next) {
                 break;
             }
@@ -480,6 +479,7 @@ protected:
                 auto p = std::move(bc.p);
                 q._ring.available_descriptors().signal(p.nr_frags());
             }
+            void bunch(uint64_t c) {}
         };
         qp& _dev;
         vring<packet_as_buffer_chain, complete> _ring;
@@ -507,6 +507,9 @@ protected:
             void operator()(single_buffer&& bc, size_t len) {
                 q.complete_buffer(std::move(bc), len);
             }
+            void bunch(uint64_t c) {
+                q.update_rx_count(c);
+            }
         };
         qp& _dev;
         vring<single_buffer, complete> _ring;
@@ -526,6 +529,9 @@ protected:
         }
         void wake_notifier_wait() {
             _ring.wake_notifier_wait();
+        }
+        void update_rx_count(uint64_t c) {
+            _dev.update_rx_count(c);
         }
     private:
         future<> prepare_buffers();
@@ -550,6 +556,7 @@ public:
     }
     virtual uint32_t send(circular_buffer<packet>& p) override;
     virtual void rx_start() override;
+    friend class rxq;
 };
 
 qp::txq::txq(qp& dev, ring_config config)

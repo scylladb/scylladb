@@ -37,12 +37,14 @@ namespace xen {
 using phys = uint64_t;
 
 class xenfront_device : public device {
+public:
+    xenstore* _xenstore = xenstore::instance();
+private:
     net::hw_features _hw_features;
     ethernet_address _hw_address;
     std::string _device_str;
 
 public:
-    xenstore* _xenstore = xenstore::instance();
     bool _userspace;
 
 public:
@@ -227,11 +229,14 @@ future<> front_ring<T>::process_ring(std::function<bool (gntref &entry, T& el)> 
 
 future<> xenfront_qp::queue_rx_packet()
 {
-    return _rx_ring.process_ring([this] (gntref &entry, rx &rx) {
+    uint64_t bunch;
+    return _rx_ring.process_ring([this, &bunch] (gntref &entry, rx &rx) mutable {
         packet p(static_cast<char *>(entry.page) + rx.rsp.offset, rx.rsp.status);
         _dev->l2receive(std::move(p));
+        bunch++;
         return true;
     }, _rx_refs);
+    update_rx_count(bunch);
 }
 
 void xenfront_qp::alloc_one_rx_reference(unsigned index) {

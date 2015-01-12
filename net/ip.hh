@@ -21,6 +21,8 @@
 #include "const.hh"
 #include "packet-util.hh"
 #include "core/shared_ptr.hh"
+#include "toeplitz.hh"
+#include "net/udp.hh"
 
 namespace net {
 
@@ -75,6 +77,13 @@ namespace net {
 struct ipv4_traits {
     using address_type = ipv4_address;
     using inet_type = ipv4_l4<ip_protocol_num::tcp>;
+    struct l4packet {
+        ipv4_address to;
+        packet p;
+        ethernet_address e_dst;
+        ip_protocol_num proto_num;
+    };
+    using packet_provider_type = std::function<std::experimental::optional<l4packet> ()>;
     static void tcp_pseudo_header_checksum(checksummer& csum, ipv4_address src, ipv4_address dst, uint16_t len) {
         csum.sum_many(src.ip.raw, dst.ip.raw, uint8_t(0), uint8_t(ip_protocol_num::tcp), len);
     }
@@ -91,6 +100,8 @@ public:
 public:
     ipv4_l4(ipv4& inet) : _inet(inet) {}
     void send(ipv4_address from, ipv4_address to, packet p);
+    void register_packet_provider(ipv4_traits::packet_provider_type func);
+    future<ethernet_address> get_l2_dst_address(ipv4_address to);
 };
 
 class ip_protocol {
@@ -98,6 +109,49 @@ public:
     virtual ~ip_protocol() {}
     virtual void received(packet p, ipv4_address from, ipv4_address to) = 0;
     virtual bool forward(forward_hash& out_hash_data, packet& p, size_t off) { return true; }
+};
+
+template <typename InetTraits>
+struct l4connid {
+    using ipaddr = typename InetTraits::address_type;
+    using inet_type = typename InetTraits::inet_type;
+    struct connid_hash;
+
+    ipaddr local_ip;
+    ipaddr foreign_ip;
+    uint16_t local_port;
+    uint16_t foreign_port;
+
+    bool operator==(const l4connid& x) const {
+        return local_ip == x.local_ip
+                && foreign_ip == x.foreign_ip
+                && local_port == x.local_port
+                && foreign_port == x.foreign_port;
+    }
+
+    uint32_t hash() {
+        forward_hash hash_data;
+        hash_data.push_back(hton(foreign_ip.ip));
+        hash_data.push_back(hton(local_ip.ip));
+        hash_data.push_back(hton(foreign_port));
+        hash_data.push_back(hton(local_port));
+        return toeplitz_hash(rsskey, hash_data);
+    }
+};
+
+class l4send_completion {
+    lw_shared_ptr<semaphore> _stream;
+    size_t _len = 0;
+public:
+    l4send_completion() = default;
+    l4send_completion(lw_shared_ptr<semaphore> s, size_t l) : _stream(std::move(s)), _len(l) {}
+    l4send_completion(l4send_completion&) = delete;
+    l4send_completion(l4send_completion&& v) : _stream(std::move(v._stream)), _len(v._len) {}
+    void operator()() {
+        if (_len) {
+            _stream->signal(_len);
+        }
+    }
 };
 
 class ipv4_tcp final : public ip_protocol {
@@ -148,6 +202,45 @@ public:
     friend class ipv4;
 };
 
+class ipv4_udp : public ip_protocol {
+    using connid = l4connid<ipv4_traits>;
+    using connid_hash = typename connid::connid_hash;
+
+public:
+    static const int default_queue_size;
+private:
+    static const uint16_t min_anonymous_port = 32768;
+    ipv4 &_inet;
+    std::unordered_map<uint16_t, lw_shared_ptr<udp_channel_state>> _channels;
+    int _queue_size = default_queue_size;
+    uint16_t _next_anonymous_port = min_anonymous_port;
+private:
+    uint16_t next_port(uint16_t port);
+public:
+    class registration {
+    private:
+        ipv4_udp &_proto;
+        uint16_t _port;
+    public:
+        registration(ipv4_udp &proto, uint16_t port) : _proto(proto), _port(port) {};
+
+        void unregister() {
+            _proto._channels.erase(_proto._channels.find(_port));
+        }
+
+        uint16_t port() const {
+            return _port;
+        }
+    };
+
+    ipv4_udp(ipv4& inet);
+    udp_channel make_channel(ipv4_addr addr);
+    virtual void received(packet p, ipv4_address from, ipv4_address to) override;
+    void send(uint16_t src_port, ipv4_addr dst, packet &&p, l4send_completion completion);
+    bool forward(forward_hash& out_hash_data, packet& p, size_t off) override;
+    void set_queue_size(int size) { _queue_size = size; }
+};
+
 struct ip_hdr;
 
 struct ip_packet_filter {
@@ -182,21 +275,6 @@ struct ipv4_frag_id::hash : private std::hash<ipv4_address>,
     }
 };
 
-class l4send_completion {
-    lw_shared_ptr<semaphore> _stream;
-    size_t _len = 0;
-public:
-    l4send_completion() = default;
-    l4send_completion(lw_shared_ptr<semaphore> s, size_t l) : _stream(std::move(s)), _len(l) {}
-    l4send_completion(l4send_completion&) = delete;
-    l4send_completion(l4send_completion&& v) : _stream(std::move(v._stream)), _len(v._len) {}
-    void operator()() {
-        if (_len) {
-            _stream->signal(_len);
-        }
-    }
-};
-
 class ipv4 {
 public:
     using clock_type = lowres_clock;
@@ -206,6 +284,7 @@ public:
     static proto_type arp_protocol_type() { return proto_type(eth_protocol_num::ipv4); }
 private:
     interface* _netif;
+    std::vector<ipv4_traits::packet_provider_type> _pkt_providers;
     arp _global_arp;
     arp_for<ipv4> _arp;
     ipv4_address _host_address;
@@ -215,6 +294,7 @@ private:
     subscription<packet, ethernet_address> _rx_packets;
     ipv4_tcp _tcp;
     ipv4_icmp _icmp;
+    ipv4_udp _udp;
     array_map<ip_protocol*, 256> _l4;
     ip_packet_filter * _packet_filter = nullptr;
     struct frag {
@@ -243,6 +323,7 @@ private:
         ipv4packet(l3_protocol::l3packet&& p, l4send_completion&& c) : l3packet(std::move(p)), complete(std::move(c)) {}
     };
     circular_buffer<ipv4packet> _packetq;
+    unsigned _pkt_provider_idx = 0;
 private:
     future<> handle_received_packet(packet p, ethernet_address from);
     bool forward(forward_hash& out_hash_data, packet& p, size_t off);
@@ -275,21 +356,45 @@ public:
     // But for now, a simple single raw pointer suffices
     void set_packet_filter(ip_packet_filter *);
     ip_packet_filter * packet_filter() const;
-    void send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_completion complete = l4send_completion());
+    void send(ipv4_address to, ip_protocol_num proto_num, packet p, l4send_completion complete = l4send_completion(),
+            std::experimental::optional<ethernet_address> e_dst = std::experimental::optional<ethernet_address>());
     void send_raw(ethernet_address, packet, l4send_completion completion = l4send_completion());
     tcp<ipv4_traits>& get_tcp() { return *_tcp._tcp; }
+    ipv4_udp& get_udp() { return _udp; }
     void register_l4(proto_type id, ip_protocol* handler);
     net::hw_features hw_features() { return _netif->hw_features(); }
     static bool needs_frag(packet& p, ip_protocol_num proto_num, net::hw_features hw_features);
     void learn(ethernet_address l2, ipv4_address l3) {
         _arp.learn(l2, l3);
     }
+    void register_packet_provider(ipv4_traits::packet_provider_type&& func) {
+        _pkt_providers.push_back(std::move(func));
+    }
+    future<ethernet_address> get_l2_dst_address(ipv4_address to);
 };
 
 template <ip_protocol_num ProtoNum>
 inline
 void ipv4_l4<ProtoNum>::send(ipv4_address from, ipv4_address to, packet p) {
     _inet.send(/* from, */ to, ProtoNum, std::move(p));
+}
+
+template <ip_protocol_num ProtoNum>
+inline
+void ipv4_l4<ProtoNum>::register_packet_provider(ipv4_traits::packet_provider_type func) {
+    _inet.register_packet_provider([func = std::move(func)] {
+        auto l4p = func();
+        if (l4p) {
+            l4p.value().proto_num = ProtoNum;
+        }
+        return l4p;
+    });
+}
+
+template <ip_protocol_num ProtoNum>
+inline
+future<ethernet_address> ipv4_l4<ProtoNum>::get_l2_dst_address(ipv4_address to) {
+    return _inet.get_l2_dst_address(to);
 }
 
 struct ip_hdr {
@@ -315,25 +420,6 @@ struct ip_hdr {
     bool df() { return frag & (1 << uint8_t(frag_bits::df)); }
     uint16_t offset() { return frag << uint8_t(frag_bits::offset_shift); }
 } __attribute__((packed));
-
-template <typename InetTraits>
-struct l4connid {
-    using ipaddr = typename InetTraits::address_type;
-    using inet_type = typename InetTraits::inet_type;
-    struct connid_hash;
-
-    ipaddr local_ip;
-    ipaddr foreign_ip;
-    uint16_t local_port;
-    uint16_t foreign_port;
-
-    bool operator==(const l4connid& x) const {
-        return local_ip == x.local_ip
-                && foreign_ip == x.foreign_ip
-                && local_port == x.local_port
-                && foreign_port == x.foreign_port;
-    }
-};
 
 template <typename InetTraits>
 struct l4connid<InetTraits>::connid_hash : private std::hash<ipaddr>, private std::hash<uint16_t> {

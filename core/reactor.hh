@@ -165,7 +165,6 @@ size_t iovec_len(const std::vector<iovec>& iov)
 class pollable_fd {
 public:
     using speculation = pollable_fd_state::speculation;
-    std::unique_ptr<pollable_fd_state> _s;
     pollable_fd(file_desc fd, speculation speculate = speculation())
         : _s(std::make_unique<pollable_fd_state>(std::move(fd), speculate)) {}
 public:
@@ -178,6 +177,8 @@ public:
     future<> write_all(const uint8_t* buffer, size_t size);
     future<size_t> write_some(net::packet& p);
     future<> write_all(net::packet& p);
+    future<> readable();
+    future<> writeable();
     future<pollable_fd, socket_address> accept();
     future<size_t> sendmsg(struct msghdr *msg);
     future<size_t> recvmsg(struct msghdr *msg);
@@ -189,6 +190,8 @@ protected:
     friend class reactor;
     friend class readable_eventfd;
     friend class writeable_eventfd;
+private:
+    std::unique_ptr<pollable_fd_state> _s;
 };
 
 class connected_socket_impl {
@@ -241,6 +244,7 @@ class network_stack {
 public:
     virtual ~network_stack() {}
     virtual server_socket listen(socket_address sa, listen_options opts) = 0;
+    virtual future<connected_socket> connect(socket_address sa) = 0;
     virtual net::udp_channel make_udp_channel(ipv4_addr addr = {}) = 0;
     virtual future<> initialize() {
         return make_ready_future();
@@ -661,7 +665,11 @@ public:
 
     server_socket listen(socket_address sa, listen_options opts = {});
 
+    future<connected_socket> connect(socket_address sa);
+
     pollable_fd posix_listen(socket_address sa, listen_options opts = {});
+
+    future<pollable_fd> posix_connect(socket_address sa);
 
     future<pollable_fd, socket_address> accept(pollable_fd_state& listen_fd);
 
@@ -673,6 +681,7 @@ public:
     future<> write_all(pollable_fd_state& fd, const void* buffer, size_t size);
 
     future<file> open_file_dma(sstring name);
+    future<file> open_directory(sstring name);
 
     template <typename Func>
     future<io_event> submit_io(Func prepare_io);
@@ -1343,6 +1352,16 @@ future<> pollable_fd::write_all(net::packet& p) {
         p.trim_front(size);
         return write_all(p);
     });
+}
+
+inline
+future<> pollable_fd::readable() {
+    return engine.readable(*_s);
+}
+
+inline
+future<> pollable_fd::writeable() {
+    return engine.writeable(*_s);
 }
 
 inline

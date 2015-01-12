@@ -102,6 +102,7 @@ modes = {
 tests = [
     'tests/test-reactor',
     'tests/fileiotest',
+    'tests/directory_test',
     'tests/echotest',
     'tests/l3_test',
     'tests/ip_test',
@@ -114,6 +115,7 @@ tests = [
     'tests/sstring_test',
     'tests/memcached/test_ascii_parser',
     'tests/tcp_server',
+    'tests/tcp_client',
     'tests/allocator_test',
     'tests/output_stream_test',
     'tests/udp_zero_copy',
@@ -242,6 +244,7 @@ deps = {
     'apps/memcached/flashcached': ['apps/memcached/flashcached.cc'] + memcache,
     'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
+    'tests/directory_test': ['tests/directory_test.cc'] + core,
     'tests/echotest': ['tests/echotest.cc'] + core + libnet,
     'tests/l3_test': ['tests/l3_test.cc'] + core + libnet,
     'tests/ip_test': ['tests/ip_test.cc'] + core + libnet,
@@ -251,6 +254,7 @@ deps = {
     'tests/udp_server': ['tests/udp_server.cc'] + core + libnet,
     'tests/udp_client': ['tests/udp_client.cc'] + core + libnet,
     'tests/tcp_server': ['tests/tcp_server.cc'] + core + libnet,
+    'tests/tcp_client': ['tests/tcp_client.cc'] + core + libnet,
     'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
     'tests/sstring_test': ['tests/sstring_test.cc'] + core,
     'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc', 'core/posix.cc'],
@@ -328,6 +332,8 @@ with open(buildfile, 'w') as f:
         cxxflags = -std=gnu++1y {dbgflag} {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags} {warnings} {defines}
         ldflags = {dbgflag} -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags}
         libs = {libs}
+        pool link_pool
+            depth = 1
         rule ragel
             command = ragel -G2 -o $out $in
             description = RAGEL $out
@@ -348,6 +354,7 @@ with open(buildfile, 'w') as f:
             rule link.{mode}
               command = $cxx  $cxxflags_{mode} $ldflags -o $out $in $libs $libs_{mode}
               description = LINK $out
+              pool = link_pool
             rule thrift.{mode}
                 command = thrift -gen cpp:cob_style -out $builddir/{mode}/gen $in
                 description = THRIFT $in
@@ -388,7 +395,7 @@ with open(buildfile, 'w') as f:
                 elif src.endswith('.g'):
                     antlr3_grammars += [src]
                 else:
-                    raise Exeception('No rule for ' + src)
+                    raise Exception('No rule for ' + src)
         for obj in compiles:
             src = compiles[obj]
             gen_headers = list(ragels.keys())
