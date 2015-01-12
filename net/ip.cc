@@ -442,7 +442,12 @@ void icmp::received(packet p, ipaddr from, ipaddr to) {
     checksummer csum;
     csum.sum(reinterpret_cast<char*>(hdr), p.len());
     hdr->csum = csum.get();
-    _inet.send(to, from, std::move(p));
+
+    if (_queue_space.try_wait(p.len())) { // drop packets that do not fit the queue
+        _inet.get_l2_dst_address(from).then([this, from, p = std::move(p)] (ethernet_address e_dst) mutable {
+            _packetq.emplace_back(ipv4_traits::l4packet{from, std::move(p), e_dst, ip_protocol_num::icmp});
+        });
+    }
 }
 
 }

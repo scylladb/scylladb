@@ -185,10 +185,22 @@ class icmp {
 public:
     using ipaddr = ipv4_address;
     using inet_type = ipv4_l4<ip_protocol_num::icmp>;
-    explicit icmp(inet_type& inet) : _inet(inet) {}
+    explicit icmp(inet_type& inet) : _inet(inet) {
+        _inet.register_packet_provider([this] {
+            std::experimental::optional<ipv4_traits::l4packet> l4p;
+            if (!_packetq.empty()) {
+                l4p = std::move(_packetq.front());
+                _packetq.pop_front();
+                _queue_space.signal(l4p.value().p.len());
+            }
+            return l4p;
+        });
+    }
     void received(packet p, ipaddr from, ipaddr to);
 private:
     inet_type& _inet;
+    circular_buffer<ipv4_traits::l4packet> _packetq;
+    semaphore _queue_space = {212992};
 };
 
 class ipv4_icmp final : public ip_protocol {
