@@ -40,6 +40,13 @@ public:
     virtual const char* why() const { return _why.c_str(); }
 };
 
+struct runtime_exception : public std::exception {
+    sstring _why;
+public:
+    runtime_exception(sstring why) : _why(sstring("runtime error: ") + why) {}
+    virtual const char* why() const { return _why.c_str(); }
+};
+
 class abstract_type {
     sstring _name;
 public:
