@@ -6,6 +6,8 @@
 #define BYTEORDER_HH_
 
 #include <arpa/inet.h>  // for ntohs() and friends
+#include <iosfwd>
+#include <utility>
 
 inline uint64_t ntohq(uint64_t v) {
     return __builtin_bswap64(v);
