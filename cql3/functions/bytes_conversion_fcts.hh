@@ -33,7 +33,7 @@ namespace functions {
 // bytes internally. They only "trick" the type system.
 
 inline
-std::unique_ptr<function>
+shared_ptr<function>
 make_to_blob_function(data_type from_type) {
     // FIXME: use cql3 type name
     auto name = from_type->name() + "asblob";
@@ -44,7 +44,7 @@ make_to_blob_function(data_type from_type) {
 }
 
 inline
-std::unique_ptr<function>
+shared_ptr<function>
 make_from_blob_function(data_type to_type) {
     // FIXME: use cql3 type name
     sstring name = sstring("blobas") + to_type->name();
@@ -67,7 +67,7 @@ make_from_blob_function(data_type to_type) {
 }
 
 inline
-std::unique_ptr<function>
+shared_ptr<function>
 make_varchar_as_blob_fct() {
     return make_native_scalar_function<true>("varcharasblob", bytes_type, { utf8_type },
             [] (int protocol_version, const std::vector<bytes>& parameters) {
@@ -76,7 +76,7 @@ make_varchar_as_blob_fct() {
 }
 
 inline
-std::unique_ptr<function>
+shared_ptr<function>
 make_blob_as_varchar_fct() {
     return make_native_scalar_function<true>("blobasvarchar", utf8_type, { bytes_type },
             [] (int protocol_version, const std::vector<bytes>& parameters) {

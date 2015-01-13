@@ -50,7 +50,7 @@ public:
      * The function used to count the number of rows of a result set. This function is called when COUNT(*) or COUNT(1)
      * is specified.
      */
-std::unique_ptr<aggregate_function>
+shared_ptr<aggregate_function>
 make_count_rows_function() {
     return make_native_aggregate_function_using<impl_count_function>("countRows", long_type);
 }
@@ -84,9 +84,9 @@ public:
 
 
 template <typename Type>
-std::unique_ptr<aggregate_function>
+shared_ptr<aggregate_function>
 make_sum_function() {
-    return std::make_unique<sum_function_for<Type>>();
+    return make_shared<sum_function_for<Type>>();
 }
 
 template <typename Type>
@@ -124,9 +124,9 @@ public:
 };
 
 template <typename Type>
-std::unique_ptr<aggregate_function>
+shared_ptr<aggregate_function>
 make_avg_function() {
-    return std::make_unique<avg_function_for<Type>>();
+    return make_shared<avg_function_for<Type>>();
 }
 
 template <typename Type>
@@ -171,9 +171,9 @@ public:
      * @return a MAX function for the specified type.
      */
 template <typename Type>
-std::unique_ptr<aggregate_function>
+shared_ptr<aggregate_function>
 make_max_function() {
-    return std::make_unique<max_function_for<Type>>();
+    return shared_ptr<max_function_for<Type>>();
 }
 
 template <typename Type>
@@ -219,9 +219,9 @@ public:
      * @return a MIN function for the specified type.
      */
 template <typename Type>
-std::unique_ptr<aggregate_function>
+shared_ptr<aggregate_function>
 make_min_function() {
-    return std::make_unique<min_function_for<Type>>();
+    return make_shared<min_function_for<Type>>();
 }
 
 
@@ -259,9 +259,9 @@ public:
      * @return a COUNT function for the specified type.
      */
 template <typename Type>
-std::unique_ptr<aggregate_function>
+shared_ptr<aggregate_function>
 make_count_function() {
-    return std::make_unique<count_function_for<Type>>();
+    return make_shared<count_function_for<Type>>();
 }
 
 }
