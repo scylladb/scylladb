@@ -35,7 +35,8 @@ namespace cql3 {
 
 class cql_statement {
 public:
-    virtual ~cql_statement();
+    virtual ~cql_statement()
+    { }
 
     virtual int get_bound_terms() = 0;
 
