@@ -15,3 +15,7 @@ BOOST_AUTO_TEST_CASE(test_equality) {
 BOOST_AUTO_TEST_CASE(test_to_sstring) {
     BOOST_REQUIRE_EQUAL(to_sstring(1234567), sstring("1234567"));
 }
+
+BOOST_AUTO_TEST_CASE(test_add_literal_to_sstring) {
+    BOOST_REQUIRE_EQUAL("x" + sstring("y"), sstring("xy"));
+}
