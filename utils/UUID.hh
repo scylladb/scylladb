@@ -9,6 +9,9 @@
 #include <stdint.h>
 #include <cassert>
 
+#include "core/sstring.hh"
+#include "core/print.hh"
+
 namespace utils {
 
 class UUID {
@@ -39,6 +42,17 @@ public:
                (((most_sig_bits >> 16) & 0xFFFF) << 32) |
                (((uint64_t)most_sig_bits) >> 32);
 
+    }
+
+    // This matches Java's UUID.toString() actual implementation. Note that
+    // that method's documentation suggest something completely different!
+    sstring to_sstring() const {
+        return sprint("%08x-%04x-%04x-%04x-%012x",
+                ((uint64_t)most_sig_bits >> 32),
+                ((uint64_t)most_sig_bits >> 16 & 0xffff),
+                ((uint64_t)most_sig_bits & 0xffff),
+                ((uint64_t)least_sig_bits >> 48 & 0xffff),
+                ((uint64_t)least_sig_bits & 0xffffffffffffLL));
     }
 };
 
