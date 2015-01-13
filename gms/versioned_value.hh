@@ -14,29 +14,19 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.gms;
 
-import java.io.*;
+#include <vector>
 
-import java.net.InetAddress;
-import java.util.Collection;
-import java.util.UUID;
+#include "core/sstring.hh"
+#include "util/serialization.hh"
+#include "utils/UUID.hh"
+#include "version_generator.hh"
 
-import static java.nio.charset.StandardCharsets.ISO_8859_1;
-
-import com.google.common.collect.Iterables;
-
-import org.apache.cassandra.db.TypeSizes;
-import org.apache.cassandra.dht.IPartitioner;
-import org.apache.cassandra.dht.Token;
-import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.util.DataOutputPlus;
-import org.apache.cassandra.net.MessagingService;
-import org.apache.cassandra.utils.FBUtilities;
-
-import org.apache.commons.lang3.StringUtils;
-
+namespace gms {
 
 /**
  * This abstraction represents the state associated with a particular node which an
@@ -50,82 +40,92 @@ import org.apache.commons.lang3.StringUtils;
  * Gossiper.instance.addApplicationState("LOAD STATE", loadState);
  */
 
-public class VersionedValue implements Comparable<VersionedValue>
+class versioned_value //implements Comparable<VersionedValue>
 {
 
-    public static final IVersionedSerializer<VersionedValue> serializer = new VersionedValueSerializer();
-
+public:
     // this must be a char that cannot be present in any token
-    public final static char DELIMITER = ',';
-    public final static String DELIMITER_STR = new String(new char[]{ DELIMITER });
+    static constexpr char DELIMITER = ',';
+    static constexpr const char DELIMITER_STR[] = { DELIMITER, 0 };
 
     // values for ApplicationState.STATUS
-    public final static String STATUS_BOOTSTRAPPING = "BOOT";
-    public final static String STATUS_NORMAL = "NORMAL";
-    public final static String STATUS_LEAVING = "LEAVING";
-    public final static String STATUS_LEFT = "LEFT";
-    public final static String STATUS_MOVING = "MOVING";
+    static constexpr const char *STATUS_BOOTSTRAPPING = "BOOT";
+    static constexpr const char *STATUS_NORMAL = "NORMAL";
+    static constexpr const char *STATUS_LEAVING = "LEAVING";
+    static constexpr const char *STATUS_LEFT = "LEFT";
+    static constexpr const char *STATUS_MOVING = "MOVING";
 
-    public final static String REMOVING_TOKEN = "removing";
-    public final static String REMOVED_TOKEN = "removed";
+    static constexpr const char *REMOVING_TOKEN = "removing";
+    static constexpr const char *REMOVED_TOKEN = "removed";
 
-    public final static String HIBERNATE = "hibernate";
+    static constexpr const char *HIBERNATE = "hibernate";
 
     // values for ApplicationState.REMOVAL_COORDINATOR
-    public final static String REMOVAL_COORDINATOR = "REMOVER";
+    static constexpr const char *REMOVAL_COORDINATOR = "REMOVER";
 
-    public final int version;
-    public final String value;
+    const int version;
+    const sstring value;
 
-    private VersionedValue(String value, int version)
+private:
+    versioned_value(const sstring& value, int version = version_generator::get_next_version())
+        : version(version), value(value)
     {
-        assert value != null;
+#if 0
         // blindly interning everything is somewhat suboptimal -- lots of VersionedValues are unique --
         // but harmless, and interning the non-unique ones saves significant memory.  (Unfortunately,
         // we don't really have enough information here in VersionedValue to tell the probably-unique
         // values apart.)  See CASSANDRA-6410.
         this.value = value.intern();
-        this.version = version;
+#endif
     }
 
-    private VersionedValue(String value)
+    versioned_value(sstring&& value, int version = version_generator::get_next_version())
+        : version(version), value(std::move(value)) {
+    }
+
+
+public:
+    int compareTo(const versioned_value &value)
     {
-        this(value, VersionGenerator.getNextVersion());
+        return version - value.version;
     }
 
-    public int compareTo(VersionedValue value)
-    {
-        return this.version - value.version;
-    }
-
+#if 0
     @Override
     public String toString()
     {
         return "Value(" + value + "," + version + ")";
     }
+#endif
 
+#if 0
     private static String versionString(String... args)
     {
         return StringUtils.join(args, VersionedValue.DELIMITER);
     }
+#endif
 
-    public static class VersionedValueFactory
+    class versioned_value_factory
     {
+    public:
+#if 0
         final IPartitioner partitioner;
 
         public VersionedValueFactory(IPartitioner partitioner)
         {
             this.partitioner = partitioner;
         }
-        
-        public VersionedValue cloneWithHigherVersion(VersionedValue value)
+#endif
+
+        versioned_value clone_with_higher_version(const versioned_value& value)
         {
-            return new VersionedValue(value.value);
+            return versioned_value(value.value);
         }
 
-        public VersionedValue bootstrapping(Collection<Token> tokens)
+#if 0
+        public versioned_value bootstrapping(const std::vector<token> tokens)
         {
-            return new VersionedValue(versionString(VersionedValue.STATUS_BOOTSTRAPPING,
+            return new versioned_value(versionString(VersionedValue.STATUS_BOOTSTRAPPING,
                                                     makeTokenString(tokens)));
         }
 
@@ -139,18 +139,20 @@ public class VersionedValue implements Comparable<VersionedValue>
         {
             return partitioner.getTokenFactory().toString(Iterables.get(tokens, 0));
         }
+#endif
 
-        public VersionedValue load(double load)
+        versioned_value load(double load)
         {
-            return new VersionedValue(String.valueOf(load));
+            return versioned_value(to_sstring_sprintf(load, "%g"));
         }
 
-        public VersionedValue schema(UUID newVersion)
+        versioned_value schema(const utils::UUID &new_version)
         {
-            return new VersionedValue(newVersion.toString());
+            return versioned_value(new_version.to_sstring());
         }
 
-        public VersionedValue leaving(Collection<Token> tokens)
+#if 0
+        versioned_value leaving(Collection<Token> tokens)
         {
             return new VersionedValue(versionString(VersionedValue.STATUS_LEAVING,
                                                     makeTokenString(tokens)));
@@ -167,12 +169,14 @@ public class VersionedValue implements Comparable<VersionedValue>
         {
             return new VersionedValue(VersionedValue.STATUS_MOVING + VersionedValue.DELIMITER + partitioner.getTokenFactory().toString(token));
         }
+#endif
 
-        public VersionedValue hostId(UUID hostId)
+        versioned_value host_id(const utils::UUID& hostId)
         {
-            return new VersionedValue(hostId.toString());
+            return versioned_value(hostId.to_sstring());
         }
 
+#if 0
         public VersionedValue tokens(Collection<Token> tokens)
         {
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
@@ -187,37 +191,39 @@ public class VersionedValue implements Comparable<VersionedValue>
             }
             return new VersionedValue(new String(bos.toByteArray(), ISO_8859_1));
         }
+#endif
 
-        public VersionedValue removingNonlocal(UUID hostId)
+        versioned_value removing_nonlocal(const utils::UUID& hostId)
         {
-            return new VersionedValue(versionString(VersionedValue.REMOVING_TOKEN, hostId.toString()));
+            return versioned_value(sstring(REMOVING_TOKEN) + sstring(DELIMITER_STR) + hostId.to_sstring());
         }
 
-        public VersionedValue removedNonlocal(UUID hostId, long expireTime)
+        versioned_value removed_nonlocal(const utils::UUID& hostId, int64_t expireTime)
         {
-            return new VersionedValue(versionString(VersionedValue.REMOVED_TOKEN, hostId.toString(), Long.toString(expireTime)));
+            return versioned_value(sstring(REMOVED_TOKEN) + sstring(DELIMITER_STR) + hostId.to_sstring() + sstring(DELIMITER_STR) + to_sstring(expireTime));
         }
 
-        public VersionedValue removalCoordinator(UUID hostId)
+        versioned_value removal_coordinator(const utils::UUID& hostId)
         {
-            return new VersionedValue(versionString(VersionedValue.REMOVAL_COORDINATOR, hostId.toString()));
+            return versioned_value(sstring(REMOVAL_COORDINATOR) + sstring(DELIMITER_STR) + hostId.to_sstring());
         }
 
-        public VersionedValue hibernate(boolean value)
+        versioned_value hibernate(bool value)
         {
-            return new VersionedValue(VersionedValue.HIBERNATE + VersionedValue.DELIMITER + value);
+            return versioned_value(sstring(HIBERNATE) + sstring(DELIMITER_STR) + (value ? "true" : "false"));
         }
 
-        public VersionedValue datacenter(String dcId)
+        versioned_value datacenter(const sstring& dcId)
         {
-            return new VersionedValue(dcId);
+            return versioned_value(dcId);
         }
 
-        public VersionedValue rack(String rackId)
+        versioned_value rack(const sstring &rackId)
         {
-            return new VersionedValue(rackId);
+            return versioned_value(rackId);
         }
 
+#if 0
         public VersionedValue rpcaddress(InetAddress endpoint)
         {
             return new VersionedValue(endpoint.getHostAddress());
@@ -232,42 +238,35 @@ public class VersionedValue implements Comparable<VersionedValue>
         {
             return new VersionedValue(String.valueOf(MessagingService.current_version));
         }
+#endif
 
-        public VersionedValue internalIP(String private_ip)
+        versioned_value internalIP(const sstring &private_ip)
         {
-            return new VersionedValue(private_ip);
+            return versioned_value(private_ip);
         }
 
-        public VersionedValue severity(double value)
+        versioned_value severity(double value)
         {
-            return new VersionedValue(String.valueOf(value));
+            return versioned_value(to_sstring_sprintf(value, "%g"));
         }
+    };
+
+    // The following replaces VersionedValueSerializer from the Java code
+public:
+    void serialize(std::ostream& out) const {
+        serialize_string(out, value);
+        serialize_int32(out, version);
     }
 
-    private static class VersionedValueSerializer implements IVersionedSerializer<VersionedValue>
-    {
-        public void serialize(VersionedValue value, DataOutputPlus out, int version) throws IOException
-        {
-            out.writeUTF(outValue(value, version));
-            out.writeInt(value.version);
-        }
-
-        private String outValue(VersionedValue value, int version)
-        {
-            return value.value;
-        }
-
-        public VersionedValue deserialize(DataInput in, int version) throws IOException
-        {
-            String value = in.readUTF();
-            int valVersion = in.readInt();
-            return new VersionedValue(value, valVersion);
-        }
-
-        public long serializedSize(VersionedValue value, int version)
-        {
-            return TypeSizes.NATIVE.sizeof(outValue(value, version)) + TypeSizes.NATIVE.sizeof(value.version);
-        }
+    static versioned_value deserialize(std::istream& in) {
+        auto value = deserialize_string(in);
+        auto version = deserialize_int32(in);
+        return versioned_value(std::move(value), version);
     }
-}
 
+    size_t serialized_size() const {
+        return serialize_string_size(value) + serialize_int32_size;
+    }
+}; // class versioned_value
+
+} // namespace gms
