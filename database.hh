@@ -231,4 +231,20 @@ struct comparator {
     virtual bool operator()(const T& v1, const T& v2) const = 0;
 };
 
+inline bool
+less_unsigned(const bytes& v1, const bytes& v2) {
+    return std::lexicographical_compare(v1.begin(), v1.end(), v2.begin(), v2.end(),
+            [](int8_t v1, int8_t v2) { return uint8_t(v1) < uint8_t(v2); });
+}
+
+inline int32_t compare_unsigned(const bytes& v1, const bytes& v2) {
+    if (less_unsigned(v1, v2)) {
+        return -1;
+    } else if (less_unsigned(v2, v1)) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
 #endif /* DATABASE_HH_ */
