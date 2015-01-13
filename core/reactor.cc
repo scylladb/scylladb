@@ -913,7 +913,6 @@ size_t smp_message_queue::process_incoming() {
 
 void smp_message_queue::start() {
     _tx.init();
-    _complete_peer = &engine;
 }
 
 /* not yet implemented for OSv. TODO: do the notification like we do class smp. */
@@ -1060,19 +1059,11 @@ smp_message_queue** smp::_qs;
 std::thread::id smp::_tmain;
 unsigned smp::count = 1;
 
-void smp::listen_all(smp_message_queue* qs)
-{
-    for (unsigned i = 0; i < smp::count; i++) {
-        qs[i]._pending_peer = &engine;
-    }
-}
-
 void smp::start_all_queues()
 {
     for (unsigned c = 0; c < count; c++) {
         _qs[c][engine.cpu_id()].start();
     }
-    listen_all(_qs[engine.cpu_id()]);
 }
 
 #ifdef HAVE_DPDK

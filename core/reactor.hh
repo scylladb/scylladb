@@ -389,8 +389,6 @@ class smp_message_queue {
     lf_queue _pending;
     lf_queue _completed;
     size_t _current_queue_length = 0;
-    reactor* _pending_peer;
-    reactor* _complete_peer;
     struct work_item {
         virtual ~work_item() {}
         virtual future<> process() = 0;
@@ -854,7 +852,6 @@ public:
         return got != 0;
     }
 private:
-    static void listen_all(smp_message_queue* qs);
     static void start_all_queues();
     static void pin(unsigned cpu_id);
 public:
