@@ -212,6 +212,18 @@ public:
     }
 };
 
+template <typename char_type, typename size_type, size_type Max, size_type N>
+inline
+basic_sstring<char_type, size_type, Max>
+operator+(const char(&s)[N], const basic_sstring<char_type, size_type, Max>& t) {
+    using sstring = basic_sstring<char_type, size_type, Max>;
+    // don't copy the terminating NUL character
+    sstring ret(typename sstring::initialized_later(), N-1 + t.size());
+    auto p = std::copy(std::begin(s), std::end(s)-1, ret.begin());
+    std::copy(t.begin(), t.end(), p);
+    return ret;
+}
+
 template <size_t N>
 static inline
 size_t str_len(const char(&s)[N]) { return N - 1; }
