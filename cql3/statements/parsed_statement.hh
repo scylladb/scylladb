@@ -39,7 +39,7 @@ namespace cql3 {
 
 namespace statements {
 
-class parsed_statement {
+class parsed_statement : public virtual cql_statement {
 private:
     ::shared_ptr<variable_specifications> _variables;
 
@@ -78,7 +78,7 @@ public:
 
     virtual std::unique_ptr<prepared> prepare() = 0;
 
-    virtual bool uses_function(sstring ks_name, sstring function_name) {
+    virtual bool uses_function(sstring ks_name, sstring function_name) override {
         return false;
     }
 };
