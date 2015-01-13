@@ -317,6 +317,9 @@ private:
     std::default_random_engine _e;
     std::uniform_int_distribution<uint16_t> _port_dist{41952, 65535};
     circular_buffer<std::pair<lw_shared_ptr<tcb>, ethernet_address>> _poll_tcbs;
+    // queue for packets that do not belong to any tcb
+    circular_buffer<ipv4_traits::l4packet> _packetq;
+    semaphore _queue_space = {212992};
 public:
     class connection {
         lw_shared_ptr<tcb> _tcb;
@@ -390,18 +393,25 @@ private:
 
 template <typename InetTraits>
 tcp<InetTraits>::tcp(inet_type& inet) : _inet(inet), _e(_rd()) {
-    _inet.register_packet_provider([this] {
+    _inet.register_packet_provider([this, tcb_polled = 0u] () mutable {
         std::experimental::optional<typename InetTraits::l4packet> l4p;
         auto c = _poll_tcbs.size();
-        while (c--) {
-            lw_shared_ptr<tcb> tcb;
-            ethernet_address dst;
-            std::tie(tcb, dst) = std::move(_poll_tcbs.front());
-            _poll_tcbs.pop_front();
-            l4p = tcb->get_packet();
-            if (l4p) {
-                l4p.value().e_dst = dst;
-                break;
+        if (!_packetq.empty() && (!(tcb_polled % 128) || c == 0)) {
+            l4p = std::move(_packetq.front());
+            _packetq.pop_front();
+            _queue_space.signal(l4p.value().p.len());
+        } else {
+            while (c--) {
+                tcb_polled++;
+                lw_shared_ptr<tcb> tcb;
+                ethernet_address dst;
+                std::tie(tcb, dst) = std::move(_poll_tcbs.front());
+                _poll_tcbs.pop_front();
+                l4p = tcb->get_packet();
+                if (l4p) {
+                    l4p.value().e_dst = dst;
+                    break;
+                }
             }
         }
         return l4p;
@@ -496,7 +506,11 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
 
 template <typename InetTraits>
 void tcp<InetTraits>::send(ipaddr from, ipaddr to, packet p) {
-    _inet.send(from, to, std::move(p));
+    if (_queue_space.try_wait(p.len())) { // drop packets that do not fit the queue
+        _inet.get_l2_dst_address(to).then([this, to, p = std::move(p)] (ethernet_address e_dst) mutable {
+                _packetq.emplace_back(ipv4_traits::l4packet{to, std::move(p), e_dst, ip_protocol_num::tcp});
+        });
+    }
 }
 
 template <typename InetTraits>

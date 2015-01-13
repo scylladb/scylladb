@@ -53,8 +53,6 @@ private:
     ipv4_udp::registration _reg;
     bool _closed;
     lw_shared_ptr<udp_channel_state> _state;
-    // Limit number of data queued into send queue
-    lw_shared_ptr<semaphore> _user_queue_space;
 
 public:
     native_channel(ipv4_udp &proto, ipv4_udp::registration reg, lw_shared_ptr<udp_channel_state> state)
@@ -63,7 +61,6 @@ public:
             , _closed(false)
             , _state(state)
     {
-        _user_queue_space = make_lw_shared<semaphore>(212992);
     }
 
     virtual future<udp_datagram> receive() override {
@@ -76,8 +73,8 @@ public:
 
     virtual future<> send(ipv4_addr dst, packet p) override {
         auto len = p.len();
-        return _user_queue_space->wait(len).then([this, dst, p = std::move(p), len] () mutable {
-            _proto.send(_reg.port(), dst, std::move(p), l4send_completion(_user_queue_space, len));
+        return _state->wait_for_send_buffer(len).then([this, dst, p = std::move(p), len] () mutable {
+            _proto.send(_reg.port(), dst, std::move(p), _state);
         });
     }
 
@@ -100,6 +97,19 @@ const int ipv4_udp::default_queue_size = 1024;
 ipv4_udp::ipv4_udp(ipv4& inet)
     : _inet(inet)
 {
+    _inet.register_packet_provider([this] {
+        std::experimental::optional<ipv4_traits::l4packet> l4p;
+        if (!_packetq.empty()) {
+            ipv4_traits::l4packet p;
+            lw_shared_ptr<udp_channel_state> channel;
+            size_t len;
+            std::tie(p, channel, len) = std::move(_packetq.front());
+            _packetq.pop_front();
+            l4p = std::move(p);
+            channel->complete_send(len);
+        }
+        return l4p;
+    });
 }
 
 bool ipv4_udp::forward(forward_hash& out_hash_data, packet& p, size_t off)
@@ -124,8 +134,9 @@ void ipv4_udp::received(packet p, ipv4_address from, ipv4_address to)
     }
 }
 
-void ipv4_udp::send(uint16_t src_port, ipv4_addr dst, packet &&p, l4send_completion completion)
+void ipv4_udp::send(uint16_t src_port, ipv4_addr dst, packet &&p, lw_shared_ptr<udp_channel_state> channel)
 {
+    size_t len = p.len();
     auto src = _inet.host_address();
     auto hdr = p.prepend_header<udp_hdr>();
     hdr->src_port = src_port;
@@ -148,7 +159,9 @@ void ipv4_udp::send(uint16_t src_port, ipv4_addr dst, packet &&p, l4send_complet
     oi.protocol = ip_protocol_num::udp;
     p.set_offload_info(oi);
 
-    _inet.send(dst, ip_protocol_num::udp, std::move(p), std::move(completion));
+    _inet.get_l2_dst_address(dst).then([this, dst, p = std::move(p), channel = std::move(channel), len] (ethernet_address e_dst) mutable {
+        _packetq.emplace_back(std::make_tuple(ipv4_traits::l4packet{dst, std::move(p), e_dst, ip_protocol_num::udp}, std::move(channel), len));
+    });
 }
 
 uint16_t ipv4_udp::next_port(uint16_t port) {

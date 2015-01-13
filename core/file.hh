@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <linux/fs.h>
+#include <sys/uio.h>
 
 enum class directory_entry_type {
     block_device,

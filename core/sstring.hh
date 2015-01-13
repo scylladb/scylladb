@@ -17,12 +17,12 @@
 #include <experimental/string_view>
 #include "core/temporary_buffer.hh"
 
-template <typename char_type, typename size_type, size_type max_size>
+template <typename char_type, typename Size, Size max_size>
 class basic_sstring {
     union contents {
         struct external_type {
             char_type* str;
-            size_type size;
+            Size size;
             int8_t pad;
         } external;
         struct internal_type {
@@ -44,6 +44,19 @@ class basic_sstring {
     char_type* str() {
         return is_internal() ? u.internal.str : u.external.str;
     }
+public:
+    using value_type = char_type;
+    using traits_type = std::char_traits<char_type>;
+    using allocator_type = std::allocator<char_type>;
+    using reference = char_type&;
+    using const_reference = const char_type&;
+    using pointer = char_type*;
+    using const_pointer = const char_type*;
+    using iterator = char_type*;
+    using const_iterator = const char_type*;
+    // FIXME: add reverse_iterator and friend
+    using difference_type = ssize_t;  // std::make_signed_t<Size> can be too small
+    using size_type = Size;
 public:
     struct initialized_later {};
 
