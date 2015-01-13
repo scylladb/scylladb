@@ -80,7 +80,8 @@ reactor::reactor()
     , _exit_future(_exit_promise.get_future())
     , _cpu_started(0)
     , _io_context(0)
-    , _io_context_available(max_aio) {
+    , _io_context_available(max_aio)
+    , _reuseport(posix_reuseport_detect()) {
     auto r = ::io_setup(max_aio, &_io_context);
     assert(r >= 0);
     struct sigevent sev;
@@ -165,10 +166,23 @@ reactor::posix_listen(socket_address sa, listen_options opts) {
     if (opts.reuse_address) {
         fd.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1);
     }
+    if (_reuseport)
+        fd.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
 
     fd.bind(sa.u.sa, sizeof(sa.u.sas));
     fd.listen(100);
     return pollable_fd(std::move(fd));
+}
+
+bool
+reactor::posix_reuseport_detect() {
+    try {
+        file_desc fd = file_desc::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        fd.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
+        return true;
+    } catch(std::system_error& e) {
+        return false;
+    }
 }
 
 future<pollable_fd>

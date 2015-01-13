@@ -59,21 +59,33 @@ public:
     virtual future<connected_socket, socket_address> accept();
 };
 
-class posix_network_stack : public network_stack {
+class posix_reuseport_server_socket_impl : public server_socket_impl {
+    socket_address _sa;
+    pollable_fd _lfd;
 public:
-    posix_network_stack(boost::program_options::variables_map opts) {}
+    explicit posix_reuseport_server_socket_impl(socket_address sa, pollable_fd lfd) : _sa(sa), _lfd(std::move(lfd)) {}
+    virtual future<connected_socket, socket_address> accept();
+};
+
+class posix_network_stack : public network_stack {
+private:
+    const bool _reuseport;
+public:
+    explicit posix_network_stack(boost::program_options::variables_map opts) : _reuseport(engine.posix_reuseport_available()) {}
     virtual server_socket listen(socket_address sa, listen_options opts) override;
     virtual future<connected_socket> connect(socket_address sa) override;
     virtual net::udp_channel make_udp_channel(ipv4_addr addr) override;
     static future<std::unique_ptr<network_stack>> create(boost::program_options::variables_map opts) {
         return make_ready_future<std::unique_ptr<network_stack>>(std::unique_ptr<network_stack>(new posix_network_stack(opts)));
     }
-    virtual bool has_per_core_namespace() override { return false; };
+    virtual bool has_per_core_namespace() override { return _reuseport; };
 };
 
 class posix_ap_network_stack : public posix_network_stack {
+private:
+    const bool _reuseport;
 public:
-    posix_ap_network_stack(boost::program_options::variables_map opts) : posix_network_stack(std::move(opts)) {}
+    posix_ap_network_stack(boost::program_options::variables_map opts) : posix_network_stack(std::move(opts)), _reuseport(engine.posix_reuseport_available()) {}
     virtual server_socket listen(socket_address sa, listen_options opts) override;
     virtual future<connected_socket> connect(socket_address sa) override;
     static future<std::unique_ptr<network_stack>> create(boost::program_options::variables_map opts) {

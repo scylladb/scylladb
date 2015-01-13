@@ -616,6 +616,7 @@ private:
     promise<> _lowres_timer_promise;
     promise<> _timer_promise;
     std::experimental::optional<poller> _epoll_poller;
+    const bool _reuseport;
 private:
     void abort_on_error(int ret);
     template <typename T, typename E>
@@ -643,6 +644,7 @@ private:
     thread_pool _thread_pool;
 
     void run_tasks(circular_buffer<std::unique_ptr<task>>& tasks, size_t task_quota);
+    bool posix_reuseport_detect();
 public:
     static boost::program_options::options_description get_options_description();
     reactor();
@@ -666,6 +668,8 @@ public:
     future<connected_socket> connect(socket_address sa);
 
     pollable_fd posix_listen(socket_address sa, listen_options opts = {});
+
+    bool posix_reuseport_available() const { return _reuseport; }
 
     future<pollable_fd> posix_connect(socket_address sa);
 
