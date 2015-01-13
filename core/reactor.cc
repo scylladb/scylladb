@@ -1062,7 +1062,9 @@ unsigned smp::count = 1;
 void smp::start_all_queues()
 {
     for (unsigned c = 0; c < count; c++) {
-        _qs[c][engine.cpu_id()].start();
+        if (c != engine.cpu_id()) {
+            _qs[c][engine.cpu_id()].start();
+        }
     }
 }
 
