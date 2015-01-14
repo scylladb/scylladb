@@ -48,6 +48,8 @@
 #include <osv/newpoll.hh>
 #endif
 
+namespace scollectd { class registration; }
+
 class reactor;
 class pollable_fd;
 class pollable_fd_state;
@@ -388,7 +390,14 @@ class smp_message_queue {
                             boost::lockfree::capacity<queue_length>>;
     lf_queue _pending;
     lf_queue _completed;
+    size_t _received = 0;
+    size_t _sent = 0;
+    size_t _compl = 0;
     size_t _current_queue_length = 0;
+    size_t _last_snt_batch = 0;
+    size_t _last_rcv_batch = 0;
+    size_t _last_cmpl_batch = 0;
+    std::vector<scollectd::registration> _collectd_regs;
     struct work_item {
         virtual ~work_item() {}
         virtual future<> process() = 0;
@@ -446,7 +455,7 @@ public:
         submit_item(wi);
         return fut;
     }
-    void start();
+    void start(unsigned cpuid);
     size_t process_incoming();
     size_t process_completions();
 private:

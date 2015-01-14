@@ -894,6 +894,8 @@ void smp_message_queue::move_pending() {
     _pending.push(begin, end);
     _tx.a.pending_fifo.erase(begin, end);
     _current_queue_length += nr;
+    _last_snt_batch = nr;
+    _sent += nr;
 }
 
 void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
@@ -926,6 +928,8 @@ size_t smp_message_queue::process_completions() {
     }
 
     _current_queue_length -= nr;
+    _compl += nr;
+    _last_cmpl_batch = nr;
 
     return nr;
 }
@@ -943,11 +947,57 @@ size_t smp_message_queue::process_incoming() {
             respond(wi);
         });
     }
+    _received += nr;
+    _last_rcv_batch = nr;
     return nr;
 }
 
-void smp_message_queue::start() {
+void smp_message_queue::start(unsigned cpuid) {
     _tx.init();
+    char instance[10];
+    std::snprintf(instance, sizeof(instance), "%u-%u", engine.cpu_id(), cpuid);
+    _collectd_regs = {
+            // queue_length     value:GAUGE:0:U
+            // Absolute value of num packets in last tx batch.
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "queue_length", "send-batch")
+            , scollectd::make_typed(scollectd::data_type::GAUGE, _last_snt_batch)
+            ),
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "queue_length", "receive-batch")
+            , scollectd::make_typed(scollectd::data_type::GAUGE, _last_rcv_batch)
+            ),
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "queue_length", "complete-batch")
+            , scollectd::make_typed(scollectd::data_type::GAUGE, _last_cmpl_batch)
+            ),
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "queue_length", "send-queue-length")
+            , scollectd::make_typed(scollectd::data_type::GAUGE, _current_queue_length)
+            ),
+            // total_operations value:DERIVE:0:U
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "total_operations", "received-messages")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _received)
+            ),
+            // total_operations value:DERIVE:0:U
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "total_operations", "sent-messages")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _sent)
+            ),
+            // total_operations value:DERIVE:0:U
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "total_operations", "completed-messages")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _compl)
+            ),
+    };
 }
 
 /* not yet implemented for OSv. TODO: do the notification like we do class smp. */
@@ -1098,7 +1148,7 @@ void smp::start_all_queues()
 {
     for (unsigned c = 0; c < count; c++) {
         if (c != engine.cpu_id()) {
-            _qs[c][engine.cpu_id()].start();
+            _qs[c][engine.cpu_id()].start(c);
         }
     }
 }
