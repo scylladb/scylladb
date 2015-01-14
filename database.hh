@@ -76,6 +76,11 @@ public:
     virtual void validate_collection_member(const bytes& v, const bytes& collection_name) {
         validate(v);
     }
+    virtual bool is_compatible_with(abstract_type& previous) {
+        // FIXME
+        abort();
+        return false;
+    }
     virtual object_opt compose(const bytes& v) {
         return deserialize(v);
     }
