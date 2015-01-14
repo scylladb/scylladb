@@ -63,6 +63,7 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const cf_name& n);
 };
 
+inline
 std::ostream&
 operator<<(std::ostream& os, const cf_name& n) {
     if (n.has_keyspace()) {

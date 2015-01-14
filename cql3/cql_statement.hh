@@ -35,7 +35,8 @@ namespace cql3 {
 
 class cql_statement {
 public:
-    virtual ~cql_statement();
+    virtual ~cql_statement()
+    { }
 
     virtual int get_bound_terms() = 0;
 
@@ -67,7 +68,7 @@ public:
      *
      * @param state the current query state
      */
-    virtual transport::messages::result_message execute_internal(service::query_state& state, const query_options& options);
+    virtual transport::messages::result_message execute_internal(service::query_state& state, const query_options& options) = 0;
 
     virtual bool uses_function(sstring ks_name, sstring function_name) = 0;
 };
