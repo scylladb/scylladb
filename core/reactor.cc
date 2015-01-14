@@ -62,6 +62,20 @@ struct syscall_result {
     }
 };
 
+// Wrapper for a system call result containing the return value,
+// an output parameter that was returned from the syscall, and errno.
+template <typename Extra>
+struct syscall_result_extra {
+    int result;
+    Extra extra;
+    int error;
+    void throw_if_error() {
+        if (result == -1) {
+            throw std::system_error(error, std::system_category());
+        }
+    }
+};
+
 template <typename T>
 syscall_result<T>
 wrap_syscall(T result) {
@@ -69,6 +83,12 @@ wrap_syscall(T result) {
     sr.result = result;
     sr.error = errno;
     return sr;
+}
+
+template <typename Extra>
+syscall_result_extra<Extra>
+wrap_syscall(int result, const Extra& extra) {
+    return {result, extra, errno};
 }
 
 reactor_backend_epoll::reactor_backend_epoll()
@@ -320,11 +340,13 @@ posix_file_impl::flush(void) {
 
 future<struct stat>
 posix_file_impl::stat(void) {
-    return engine._thread_pool.submit<struct stat>([this] {
+    return engine._thread_pool.submit<syscall_result_extra<struct stat>>([this] {
         struct stat st;
         auto ret = ::fstat(_fd, &st);
-        throw_system_error_on(ret == -1);
-        return (st);
+        return wrap_syscall(ret, st);
+    }).then([] (syscall_result_extra<struct stat> ret) {
+        ret.throw_if_error();
+        return make_ready_future<struct stat>(ret.extra);
     });
 }
 
@@ -352,21 +374,20 @@ blockdev_file_impl::discard(uint64_t offset, uint64_t length) {
 
 future<size_t>
 posix_file_impl::size(void) {
-    return engine._thread_pool.submit<size_t>([this] {
-        struct stat st;
-        auto ret = ::fstat(_fd, &st);
-        throw_system_error_on(ret == -1);
-        return st.st_size;
+    return posix_file_impl::stat().then([] (struct stat&& st) {
+        return make_ready_future<size_t>(st.st_size);
     });
 }
 
 future<size_t>
 blockdev_file_impl::size(void) {
-    return engine._thread_pool.submit<size_t>([this] {
+    return engine._thread_pool.submit<syscall_result_extra<size_t>>([this] {
         size_t size;
-        auto ret = ::ioctl(_fd, BLKGETSIZE64, &size);
-        throw_system_error_on(ret == -1);
-        return size;
+        int ret = ::ioctl(_fd, BLKGETSIZE64, &size);
+        return wrap_syscall(ret, size);
+    }).then([] (syscall_result_extra<size_t> ret) {
+        ret.throw_if_error();
+        return make_ready_future<size_t>(ret.extra);
     });
 }
 
@@ -407,16 +428,16 @@ posix_file_impl::list_directory(std::function<future<> (directory_entry de)> nex
         auto eofcond = [w] { return w->eof; };
         return do_until(eofcond, [w, this] {
             if (w->current == w->total) {
-                return engine._thread_pool.submit<int>([w , this] () {
+                return engine._thread_pool.submit<syscall_result<long>>([w , this] () {
                     auto ret = ::syscall(__NR_getdents, _fd, reinterpret_cast<linux_dirent*>(w->buffer), sizeof(w->buffer));
-                    throw_system_error_on(ret == -1);
-                    return ret;
-                }).then([w] (int ret) {
-                    if (ret == 0) {
+                    return wrap_syscall(ret);
+                }).then([w] (syscall_result<long> ret) {
+                    ret.throw_if_error();
+                    if (ret.result == 0) {
                         w->eof = true;
                     } else {
                         w->current = 0;
-                        w->total = ret;
+                        w->total = ret.result;
                     }
                 });
             }
