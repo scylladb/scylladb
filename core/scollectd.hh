@@ -22,9 +22,6 @@
 
 #include "future.hh"
 #include "net/byteorder.hh"
-#include "net/api.hh"
-
-using clock_type = std::chrono::high_resolution_clock;
 
 /**
  * Implementation of rudimentary collectd data gathering.
@@ -64,389 +61,360 @@ using clock_type = std::chrono::high_resolution_clock;
  *
  */
 
-/* all-static. using a class instead of namespace to hide implementation templates */
-class scollectd {
-    class impl;
-public:
-    scollectd() = delete;
+namespace scollectd {
 
-    // The value binding data types
-    enum class data_type : uint8_t {
-        COUNTER, // unsigned int 64
-        GAUGE, // double
-        DERIVE, // signed int 64
-        ABSOLUTE, // unsigned int 64
-    };
-
-    // don't use directly. use make_typed.
-    template<typename T>
-    struct typed {
-        typed(data_type t, T && v)
-                : type(t), value(std::forward<T>(v)) {
-        }
-        data_type type;
-        T value;
-    };
-
-    template<typename T>
-    static inline typed<T> make_typed(data_type type, T&& t) {
-        return typed<T>(type, std::forward<T>(t));
-    }
-
-    typedef std::string plugin_id;
-    typedef std::string plugin_instance_id;
-    typedef std::string type_id;
-
-    class type_instance_id {
-    public:
-        type_instance_id() = default;
-        type_instance_id(const plugin_id & p, const plugin_instance_id & pi,
-                const type_id & t, const std::string & ti = std::string())
-                : _plugin(p), _plugin_instance(pi), _type(t), _type_instance(ti) {
-        }
-        type_instance_id(type_instance_id &&) = default;
-        type_instance_id(const type_instance_id &) = default;
-
-        type_instance_id & operator=(type_instance_id &&) = default;
-        type_instance_id & operator=(const type_instance_id &) = default;
-
-        const plugin_id & plugin() const {
-            return _plugin;
-        }
-        const plugin_instance_id & plugin_instance() const {
-            return _plugin_instance;
-        }
-        const type_id & type() const {
-            return _type;
-        }
-        const std::string & type_instance() const {
-            return _type_instance;
-        }
-    private:
-        plugin_id _plugin;
-        plugin_instance_id _plugin_instance;
-        type_id _type;
-        std::string _type_instance;
-    };
-
-    static const plugin_instance_id per_cpu_plugin_instance;
-
-    static void configure(const boost::program_options::variables_map&);
-    static boost::program_options::options_description get_options_description();
-
-    /**
-     * Anchor for polled registration.
-     * Iff the registered type is in some way none-persistent,
-     * use this as receiver of the reg and ensure it dies before the
-     * added value(s).
-     *
-     * Use:
-     * uint64_t v = 0;
-     * registration r = add_polled_metric(v);
-     * ++r;
-     * <scope end, above dies>
-     */
-    struct registration {
-        registration() = default;
-        registration(const type_instance_id& id)
-                : _id(id) {
-        }
-        registration(type_instance_id&& id)
-                : _id(std::forward<type_instance_id>(id)) {
-        }
-        registration(const registration&) = default;
-        registration(registration&&) = default;
-        ~registration() {
-            unregister();
-        }
-        registration & operator=(const registration&) = default;
-        registration & operator=(registration&&) = default;
-
-        void unregister() {
-            remove_polled_metric(_id);
-            _id = type_instance_id();
-        }
-    private:
-        type_instance_id _id;
-    };
-
-    typedef std::function<void()> notify_function;
-
-    template<typename ... _Args>
-    static type_instance_id add_polled_metric(const plugin_id & plugin,
-            const plugin_instance_id & plugin_instance, const type_id & type,
-            const std::string & type_instance, _Args&& ... args) {
-        return add_polled_metric(
-                type_instance_id(plugin, plugin_instance, type, type_instance),
-                std::forward<_Args>(args)...);
-    }
-    template<typename ... _Args>
-    static future<> send_explicit_metric(const plugin_id & plugin,
-            const plugin_instance_id & plugin_instance, const type_id & type,
-            const std::string & type_instance, _Args&& ... args) {
-        return send_explicit_metric(
-                type_instance_id(plugin, plugin_instance, type, type_instance),
-                std::forward<_Args>(args)...);
-    }
-    template<typename ... _Args>
-    static notify_function create_explicit_metric(const plugin_id & plugin,
-            const plugin_instance_id & plugin_instance, const type_id & type,
-            const std::string & type_instance, _Args&& ... args) {
-        return create_explicit_metric(
-                type_instance_id(plugin, plugin_instance, type, type_instance),
-                std::forward<_Args>(args)...);
-    }
-    template<typename ... _Args>
-    static type_instance_id add_polled_metric(const type_instance_id & id,
-            _Args&& ... args) {
-        typedef decltype(make_type_instance(std::forward<_Args>(args)...)) impl_type;
-        add_polled(id,
-                std::make_shared<impl_type>(
-                        make_type_instance(std::forward<_Args>(args)...)));
-        return id;
-    }
-    // "Explicit" metric sends. Sends a single value list as a message.
-    // Obviously not super efficient either. But maybe someone needs it sometime.
-    template<typename ... _Args>
-    static future<> send_explicit_metric(const type_instance_id & id,
-            _Args&& ... args) {
-        return send_metric(id, make_type_instance(std::forward<_Args>(args)...));
-    }
-    template<typename ... _Args>
-    static notify_function create_explicit_metric(const type_instance_id & id,
-            _Args&& ... args) {
-        auto list = make_type_instance(std::forward<_Args>(args)...);
-        return [id, list=std::move(list)]() {
-            send_metric(id, list);
-        };
-    }
-
-    static void remove_polled_metric(const type_instance_id &);
-
-    // Send a message packet (string)
-    static future<> send_notification(const type_instance_id & id,
-            const std::string & msg);
-
-private:
-    // lots of template junk to build typed value list tuples
-    // for registered values.
-    template<typename T, typename En = void>
-    struct data_type_for;
-
-    template<typename T, typename En = void>
-    struct is_callable;
-
-    template<typename T>
-    struct is_callable<T,
-            typename std::enable_if<
-                    !std::is_void<typename std::result_of<T()>::type>::value,
-                    void>::type> : public std::true_type {
-    };
-
-    template<typename T>
-    struct is_callable<T,
-            typename std::enable_if<std::is_fundamental<T>::value, void>::type> : public std::false_type {
-    };
-
-    template<typename T>
-    struct data_type_for<T,
-            typename std::enable_if<
-                    std::is_integral<T>::value && std::is_unsigned<T>::value,
-                    void>::type> : public std::integral_constant<data_type,
-            data_type::COUNTER> {
-    };
-    template<typename T>
-    struct data_type_for<T,
-            typename std::enable_if<
-                    std::is_integral<T>::value && std::is_signed<T>::value, void>::type> : public std::integral_constant<
-            data_type, data_type::DERIVE> {
-    };
-    template<typename T>
-    struct data_type_for<T,
-            typename std::enable_if<std::is_floating_point<T>::value, void>::type> : public std::integral_constant<
-            data_type, data_type::GAUGE> {
-    };
-    template<typename T>
-    struct data_type_for<T,
-            typename std::enable_if<is_callable<T>::value, void>::type> : public data_type_for<
-            typename std::result_of<T()>::type> {
-    };
-    template<typename T>
-    struct data_type_for<typed<T>> : public data_type_for<T> {
-    };
-
-    template<typename T>
-    class value {
-    public:
-        template<typename W>
-        struct wrap {
-            wrap(const W & v)
-                    : _v(v) {
-            }
-            const W & operator()() const {
-                return _v;
-            }
-            const W & _v;
-        };
-
-        typedef typename std::remove_reference<T>::type value_type;
-        typedef typename std::conditional<
-                is_callable<typename std::remove_reference<T>::type>::value,
-                value_type, wrap<value_type> >::type stored_type;
-
-        value(const value_type & t)
-                : value<T>(data_type_for<value_type>::value, t) {
-        }
-        value(data_type type, const value_type & t)
-                : _type(type), _t(t) {
-        }
-        uint64_t operator()() const {
-            auto v = _t();
-            if (_type == data_type::GAUGE) {
-                return convert(double(v));
-            } else {
-                uint64_t u = v;
-                return convert(u);
-            }
-        }
-        operator uint64_t() const {
-            return (*this)();
-        }
-        operator data_type() const {
-            return _type;
-        }
-        data_type type() const {
-            return _type;
-        }
-    private:
-        // not super quick value -> protocol endian 64-bit values.
-        template<typename _Iter>
-        void bpack(_Iter s, _Iter e, uint64_t v) const {
-            while (s != e) {
-                *s++ = (v & 0xff);
-                v >>= 8;
-            }
-        }
-        template<typename V>
-        typename std::enable_if<std::is_integral<V>::value, uint64_t>::type convert(
-                V v) const {
-            uint64_t i = v;
-            // network byte order
-            return ntohq(i);
-        }
-        template<typename V>
-        typename std::enable_if<std::is_floating_point<V>::value, uint64_t>::type convert(
-                V t) const {
-            union {
-                uint64_t i;
-                double v;
-            } v;
-            union {
-                uint64_t i;
-                uint8_t b[8];
-            } u;
-            v.v = t;
-            // intel byte order. could also obviously be faster.
-            // could be ignored if we just assume we're le (for now),
-            // but this is ok me thinks.
-            bpack(std::begin(u.b), std::end(u.b), v.i);
-            return u.i;
-        }
-        ;
-
-        const data_type _type;
-        const stored_type _t;
-    };
-
-    template<typename T>
-    class value<typed<T>> : public value<T> {
-    public:
-        value(const typed<T> & args)
-                : value<T>(args.type, args.value) {
-        }
-    };
-
-    class value_list {
-    public:
-        virtual size_t size() const = 0;
-
-        virtual void types(data_type *) const = 0;
-        virtual void values(net::packed<uint64_t> *) const = 0;
-
-        bool empty() const {
-            return size() == 0;
-        }
-    };
-
-    template<typename ... Args>
-    class values_impl: public value_list {
-    public:
-        static const size_t num_values = sizeof...(Args);
-
-        values_impl(Args&& ...args)
-        : _values(std::forward<Args>(args)...)
-        {}
-
-        values_impl(values_impl<Args...>&& a) = default;
-        values_impl(const values_impl<Args...>& a) = default;
-
-        size_t size() const override {
-            return num_values;
-        }
-        void types(data_type * p) const override {
-            unpack(_values, [p](Args... args) {
-                        const std::array<data_type, sizeof...(args)> tmp = { {args}...};
-                        std::copy(tmp.begin(), tmp.end(), p);
-                    });
-        }
-        void values(net::packed<uint64_t> * p) const override {
-            unpack(_values, [p](Args... args) {
-                        std::array<uint64_t, num_values> tmp = { {args}...};
-                        std::copy(tmp.begin(), tmp.end(), p);
-                    });
-        }
-    private:
-        template<typename _Op>
-        void unpack(const std::tuple<Args...>& t, _Op&& op) const {
-            do_unpack(t, std::index_sequence_for<Args...> {}, std::forward<_Op>(op));
-        }
-
-        template<size_t ...S, typename _Op>
-        void do_unpack(const std::tuple<Args...>& t, const std::index_sequence<S...> &, _Op&& op) const {
-            op(std::get<S>(t)...);
-        }
-
-        std::tuple < Args... > _values;
-    };
-
-    template<typename... _Args>
-    static auto make_type_instance(_Args && ... args) -> values_impl < decltype(value<_Args>(std::forward<_Args>(args)))... >
-    {
-        return values_impl<decltype(value<_Args>(std::forward<_Args>(args)))... >
-        (value<_Args>(std::forward<_Args>(args))...);
-    }
-
-    static const ipv4_addr default_addr;
-    static const clock_type::duration default_period;
-
-    static void add_polled(const type_instance_id &, const std::shared_ptr<value_list> &);
-    static future<> send_metric(const type_instance_id &, const value_list &);
-    static impl & get_impl();
+// The value binding data types
+enum class data_type : uint8_t {
+    COUNTER, // unsigned int 64
+    GAUGE, // double
+    DERIVE, // signed int 64
+    ABSOLUTE, // unsigned int 64
 };
 
-inline bool operator<(const scollectd::type_instance_id & id1,
-        const scollectd::type_instance_id & id2) {
-    return std::tie(id1.plugin(), id1.plugin_instance(), id1.type(),
-            id1.type_instance())
-            < std::tie(id2.plugin(), id2.plugin_instance(), id2.type(),
-                    id2.type_instance());
+// don't use directly. use make_typed.
+template<typename T>
+struct typed {
+    typed(data_type t, T && v)
+    : type(t), value(std::forward<T>(v)) {
+    }
+    data_type type;
+    T value;
+};
+
+template<typename T>
+static inline typed<T> make_typed(data_type type, T&& t) {
+    return typed<T>(type, std::forward<T>(t));
 }
-inline bool operator==(const scollectd::type_instance_id & id1,
-        const scollectd::type_instance_id & id2) {
-    return std::tie(id1.plugin(), id1.plugin_instance(), id1.type(),
-            id1.type_instance())
-            == std::tie(id2.plugin(), id2.plugin_instance(), id2.type(),
-                    id2.type_instance());
+
+typedef std::string plugin_id;
+typedef std::string plugin_instance_id;
+typedef std::string type_id;
+
+class type_instance_id {
+public:
+    type_instance_id() = default;
+    type_instance_id(const plugin_id & p, const plugin_instance_id & pi,
+            const type_id & t, const std::string & ti = std::string())
+    : _plugin(p), _plugin_instance(pi), _type(t), _type_instance(ti) {
+    }
+    type_instance_id(type_instance_id &&) = default;
+    type_instance_id(const type_instance_id &) = default;
+
+    type_instance_id & operator=(type_instance_id &&) = default;
+    type_instance_id & operator=(const type_instance_id &) = default;
+
+    const plugin_id & plugin() const {
+        return _plugin;
+    }
+    const plugin_instance_id & plugin_instance() const {
+        return _plugin_instance;
+    }
+    const type_id & type() const {
+        return _type;
+    }
+    const std::string & type_instance() const {
+        return _type_instance;
+    }
+private:
+    plugin_id _plugin;
+    plugin_instance_id _plugin_instance;
+    type_id _type;
+    std::string _type_instance;
+};
+
+extern const plugin_instance_id per_cpu_plugin_instance;
+
+void configure(const boost::program_options::variables_map&);
+boost::program_options::options_description get_options_description();
+void remove_polled_metric(const type_instance_id &);
+
+/**
+ * Anchor for polled registration.
+ * Iff the registered type is in some way none-persistent,
+ * use this as receiver of the reg and ensure it dies before the
+ * added value(s).
+ *
+ * Use:
+ * uint64_t v = 0;
+ * registration r = add_polled_metric(v);
+ * ++r;
+ * <scope end, above dies>
+ */
+struct registration {
+    registration() = default;
+    registration(const type_instance_id& id)
+    : _id(id) {
+    }
+    registration(type_instance_id&& id)
+    : _id(std::forward<type_instance_id>(id)) {
+    }
+    registration(const registration&) = default;
+    registration(registration&&) = default;
+    ~registration() {
+        unregister();
+    }
+    registration & operator=(const registration&) = default;
+    registration & operator=(registration&&) = default;
+
+    void unregister() {
+        remove_polled_metric(_id);
+        _id = type_instance_id();
+    }
+private:
+    type_instance_id _id;
+};
+
+// lots of template junk to build typed value list tuples
+// for registered values.
+template<typename T, typename En = void>
+struct data_type_for;
+
+template<typename T, typename En = void>
+struct is_callable;
+
+template<typename T>
+struct is_callable<T,
+typename std::enable_if<
+!std::is_void<typename std::result_of<T()>::type>::value,
+void>::type> : public std::true_type {
+};
+
+template<typename T>
+struct is_callable<T,
+typename std::enable_if<std::is_fundamental<T>::value, void>::type> : public std::false_type {
+};
+
+template<typename T>
+struct data_type_for<T,
+typename std::enable_if<
+std::is_integral<T>::value && std::is_unsigned<T>::value,
+void>::type> : public std::integral_constant<data_type,
+data_type::COUNTER> {
+};
+template<typename T>
+struct data_type_for<T,
+typename std::enable_if<
+std::is_integral<T>::value && std::is_signed<T>::value, void>::type> : public std::integral_constant<
+data_type, data_type::DERIVE> {
+};
+template<typename T>
+struct data_type_for<T,
+typename std::enable_if<std::is_floating_point<T>::value, void>::type> : public std::integral_constant<
+data_type, data_type::GAUGE> {
+};
+template<typename T>
+struct data_type_for<T,
+typename std::enable_if<is_callable<T>::value, void>::type> : public data_type_for<
+typename std::result_of<T()>::type> {
+};
+template<typename T>
+struct data_type_for<typed<T>> : public data_type_for<T> {
+};
+
+template<typename T>
+class value {
+public:
+    template<typename W>
+    struct wrap {
+        wrap(const W & v)
+        : _v(v) {
+        }
+        const W & operator()() const {
+            return _v;
+        }
+        const W & _v;
+    };
+
+    typedef typename std::remove_reference<T>::type value_type;
+    typedef typename std::conditional<
+            is_callable<typename std::remove_reference<T>::type>::value,
+            value_type, wrap<value_type> >::type stored_type;
+
+    value(const value_type & t)
+    : value<T>(data_type_for<value_type>::value, t) {
+    }
+    value(data_type type, const value_type & t)
+    : _type(type), _t(t) {
+    }
+    uint64_t operator()() const {
+        auto v = _t();
+        if (_type == data_type::GAUGE) {
+            return convert(double(v));
+        } else {
+            uint64_t u = v;
+            return convert(u);
+        }
+    }
+    operator uint64_t() const {
+        return (*this)();
+    }
+    operator data_type() const {
+        return _type;
+    }
+    data_type type() const {
+        return _type;
+    }
+private:
+    // not super quick value -> protocol endian 64-bit values.
+    template<typename _Iter>
+    void bpack(_Iter s, _Iter e, uint64_t v) const {
+        while (s != e) {
+            *s++ = (v & 0xff);
+            v >>= 8;
+        }
+    }
+    template<typename V>
+    typename std::enable_if<std::is_integral<V>::value, uint64_t>::type convert(
+            V v) const {
+        uint64_t i = v;
+        // network byte order
+        return ntohq(i);
+    }
+    template<typename V>
+    typename std::enable_if<std::is_floating_point<V>::value, uint64_t>::type convert(
+            V t) const {
+        union {
+            uint64_t i;
+            double v;
+        } v;
+        union {
+            uint64_t i;
+            uint8_t b[8];
+        } u;
+        v.v = t;
+        // intel byte order. could also obviously be faster.
+        // could be ignored if we just assume we're le (for now),
+        // but this is ok me thinks.
+        bpack(std::begin(u.b), std::end(u.b), v.i);
+        return u.i;
+    }
+    ;
+
+    const data_type _type;
+    const stored_type _t;
+};
+
+template<typename T>
+class value<typed<T>> : public value<T> {
+public:
+    value(const typed<T> & args)
+: value<T>(args.type, args.value) {
+    }
+};
+
+class value_list {
+public:
+    virtual size_t size() const = 0;
+
+    virtual void types(data_type *) const = 0;
+    virtual void values(net::packed<uint64_t> *) const = 0;
+
+    bool empty() const {
+        return size() == 0;
+    }
+};
+
+template<typename ... Args>
+class values_impl: public value_list {
+public:
+    static const size_t num_values = sizeof...(Args);
+
+    values_impl(Args&& ...args)
+    : _values(std::forward<Args>(args)...)
+    {}
+
+    values_impl(values_impl<Args...>&& a) = default;
+    values_impl(const values_impl<Args...>& a) = default;
+
+    size_t size() const override {
+        return num_values;
+    }
+    void types(data_type * p) const override {
+        unpack(_values, [p](Args... args) {
+            const std::array<data_type, sizeof...(args)> tmp = { {args}...};
+            std::copy(tmp.begin(), tmp.end(), p);
+        });
+    }
+    void values(net::packed<uint64_t> * p) const override {
+        unpack(_values, [p](Args... args) {
+            std::array<uint64_t, num_values> tmp = { {args}...};
+            std::copy(tmp.begin(), tmp.end(), p);
+        });
+    }
+private:
+    template<typename _Op>
+    void unpack(const std::tuple<Args...>& t, _Op&& op) const {
+        do_unpack(t, std::index_sequence_for<Args...> {}, std::forward<_Op>(op));
+    }
+
+    template<size_t ...S, typename _Op>
+    void do_unpack(const std::tuple<Args...>& t, const std::index_sequence<S...> &, _Op&& op) const {
+        op(std::get<S>(t)...);
+    }
+
+    std::tuple < Args... > _values;
+};
+
+void add_polled(const type_instance_id &, const std::shared_ptr<value_list> &);
+
+typedef std::function<void()> notify_function;
+template<typename... _Args>
+static auto make_type_instance(_Args && ... args) -> values_impl < decltype(value<_Args>(std::forward<_Args>(args)))... >
+{
+    return values_impl<decltype(value<_Args>(std::forward<_Args>(args)))... >
+    (value<_Args>(std::forward<_Args>(args))...);
 }
+template<typename ... _Args>
+static type_instance_id add_polled_metric(const plugin_id & plugin,
+        const plugin_instance_id & plugin_instance, const type_id & type,
+        const std::string & type_instance, _Args&& ... args) {
+    return add_polled_metric(
+            type_instance_id(plugin, plugin_instance, type, type_instance),
+            std::forward<_Args>(args)...);
+}
+template<typename ... _Args>
+static future<> send_explicit_metric(const plugin_id & plugin,
+        const plugin_instance_id & plugin_instance, const type_id & type,
+        const std::string & type_instance, _Args&& ... args) {
+    return send_explicit_metric(
+            type_instance_id(plugin, plugin_instance, type, type_instance),
+            std::forward<_Args>(args)...);
+}
+template<typename ... _Args>
+static notify_function create_explicit_metric(const plugin_id & plugin,
+        const plugin_instance_id & plugin_instance, const type_id & type,
+        const std::string & type_instance, _Args&& ... args) {
+    return create_explicit_metric(
+            type_instance_id(plugin, plugin_instance, type, type_instance),
+            std::forward<_Args>(args)...);
+}
+template<typename ... _Args>
+static type_instance_id add_polled_metric(const type_instance_id & id,
+        _Args&& ... args) {
+    typedef decltype(make_type_instance(std::forward<_Args>(args)...)) impl_type;
+    add_polled(id,
+            std::make_shared<impl_type>(
+                    make_type_instance(std::forward<_Args>(args)...)));
+    return id;
+}
+// "Explicit" metric sends. Sends a single value list as a message.
+// Obviously not super efficient either. But maybe someone needs it sometime.
+template<typename ... _Args>
+static future<> send_explicit_metric(const type_instance_id & id,
+        _Args&& ... args) {
+    return send_metric(id, make_type_instance(std::forward<_Args>(args)...));
+}
+template<typename ... _Args>
+static notify_function create_explicit_metric(const type_instance_id & id,
+        _Args&& ... args) {
+    auto list = make_type_instance(std::forward<_Args>(args)...);
+    return [id, list=std::move(list)]() {
+        send_metric(id, list);
+    };
+}
+
+// Send a message packet (string)
+future<> send_notification(const type_instance_id & id, const std::string & msg);
+};
 
 #endif /* SCOLLECTD_HH_ */
