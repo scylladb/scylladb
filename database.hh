@@ -73,6 +73,9 @@ public:
     virtual void validate(const bytes& v) {
         // FIXME
     }
+    virtual void validate_collection_member(const bytes& v, const bytes& collection_name) {
+        validate(v);
+    }
     virtual object_opt compose(const bytes& v) {
         return deserialize(v);
     }
