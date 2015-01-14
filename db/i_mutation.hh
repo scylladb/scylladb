@@ -33,6 +33,7 @@ class ColumnFamily;
 
 class i_mutation {
 public:
+    virtual ~i_mutation() {};
     virtual sstring get_keyspace_name() =0;
     virtual std::vector<utils::UUID> get_column_family_ids() = 0;
     virtual bytes key() = 0;
