@@ -52,6 +52,7 @@ class IndexInfo;
  * methods.
  */
 class c_type : public comparator<composite> {
+public:
     class serializer;
     /**
      * Returns whether this is a "truly-composite" underneath.
