@@ -22,6 +22,7 @@
 
 #include "future.hh"
 #include "net/byteorder.hh"
+#include "core/shared_ptr.hh"
 
 /**
  * Implementation of rudimentary collectd data gathering.
@@ -355,7 +356,7 @@ private:
     std::tuple < Args... > _values;
 };
 
-void add_polled(const type_instance_id &, const std::shared_ptr<value_list> &);
+void add_polled(const type_instance_id &, const shared_ptr<value_list> &);
 
 typedef std::function<void()> notify_function;
 template<typename... _Args>
@@ -393,7 +394,7 @@ static type_instance_id add_polled_metric(const type_instance_id & id,
         _Args&& ... args) {
     typedef decltype(make_type_instance(std::forward<_Args>(args)...)) impl_type;
     add_polled(id,
-            std::make_shared<impl_type>(
+            ::make_shared<impl_type>(
                     make_type_instance(std::forward<_Args>(args)...)));
     return id;
 }

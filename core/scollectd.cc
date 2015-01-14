@@ -60,17 +60,15 @@ class impl {
     double _avg = 0;
 
 public:
-    // Note: we use std::shared_ptr, not the C* one. This is because currently
-    // seastar sp does not handle polymorphism. And we use it.
-    typedef std::map<type_instance_id, std::shared_ptr<value_list> > value_list_map;
+    typedef std::map<type_instance_id, shared_ptr<value_list> > value_list_map;
     typedef value_list_map::value_type value_list_pair;
 
     void add_polled(const type_instance_id & id,
-            const std::shared_ptr<value_list> & values) {
+            const shared_ptr<value_list> & values) {
         _values.insert(std::make_pair(id, values));
     }
     void remove_polled(const type_instance_id & id) {
-        _values.insert(std::make_pair(id, std::shared_ptr<value_list>()));
+        _values.insert(std::make_pair(id, shared_ptr<value_list>()));
     }
     // explicitly send a type_instance value list (outside polling)
     future<> send_metric(const type_instance_id & id,
@@ -381,7 +379,7 @@ impl & get_impl() {
 }
 
 void add_polled(const type_instance_id & id,
-        const std::shared_ptr<value_list> & values) {
+        const shared_ptr<value_list> & values) {
     get_impl().add_polled(id, values);
 }
 
