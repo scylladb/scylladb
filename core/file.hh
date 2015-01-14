@@ -91,6 +91,7 @@ private:
     explicit file(int fd) : _file_impl(make_file_impl(fd)) {}
 public:
     file(file&& x) : _file_impl(std::move(x._file_impl)) {}
+    file& operator=(file&& x) noexcept = default;
     template <typename CharType>
     future<size_t> dma_read(uint64_t pos, CharType* buffer, size_t len) {
         return _file_impl->read_dma(pos, buffer, len);

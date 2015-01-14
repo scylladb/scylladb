@@ -62,6 +62,20 @@ struct syscall_result {
     }
 };
 
+// Wrapper for a system call result containing the return value,
+// an output parameter that was returned from the syscall, and errno.
+template <typename Extra>
+struct syscall_result_extra {
+    int result;
+    Extra extra;
+    int error;
+    void throw_if_error() {
+        if (result == -1) {
+            throw std::system_error(error, std::system_category());
+        }
+    }
+};
+
 template <typename T>
 syscall_result<T>
 wrap_syscall(T result) {
@@ -69,6 +83,12 @@ wrap_syscall(T result) {
     sr.result = result;
     sr.error = errno;
     return sr;
+}
+
+template <typename Extra>
+syscall_result_extra<Extra>
+wrap_syscall(int result, const Extra& extra) {
+    return {result, extra, errno};
 }
 
 reactor_backend_epoll::reactor_backend_epoll()
@@ -80,7 +100,8 @@ reactor::reactor()
     , _exit_future(_exit_promise.get_future())
     , _cpu_started(0)
     , _io_context(0)
-    , _io_context_available(max_aio) {
+    , _io_context_available(max_aio)
+    , _reuseport(posix_reuseport_detect()) {
     auto r = ::io_setup(max_aio, &_io_context);
     assert(r >= 0);
     struct sigevent sev;
@@ -165,10 +186,23 @@ reactor::posix_listen(socket_address sa, listen_options opts) {
     if (opts.reuse_address) {
         fd.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1);
     }
+    if (_reuseport)
+        fd.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
 
     fd.bind(sa.u.sa, sizeof(sa.u.sas));
     fd.listen(100);
     return pollable_fd(std::move(fd));
+}
+
+bool
+reactor::posix_reuseport_detect() {
+    try {
+        file_desc fd = file_desc::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        fd.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
+        return true;
+    } catch(std::system_error& e) {
+        return false;
+    }
 }
 
 future<pollable_fd>
@@ -306,11 +340,13 @@ posix_file_impl::flush(void) {
 
 future<struct stat>
 posix_file_impl::stat(void) {
-    return engine._thread_pool.submit<struct stat>([this] {
+    return engine._thread_pool.submit<syscall_result_extra<struct stat>>([this] {
         struct stat st;
         auto ret = ::fstat(_fd, &st);
-        throw_system_error_on(ret == -1);
-        return (st);
+        return wrap_syscall(ret, st);
+    }).then([] (syscall_result_extra<struct stat> ret) {
+        ret.throw_if_error();
+        return make_ready_future<struct stat>(ret.extra);
     });
 }
 
@@ -338,21 +374,20 @@ blockdev_file_impl::discard(uint64_t offset, uint64_t length) {
 
 future<size_t>
 posix_file_impl::size(void) {
-    return engine._thread_pool.submit<size_t>([this] {
-        struct stat st;
-        auto ret = ::fstat(_fd, &st);
-        throw_system_error_on(ret == -1);
-        return st.st_size;
+    return posix_file_impl::stat().then([] (struct stat&& st) {
+        return make_ready_future<size_t>(st.st_size);
     });
 }
 
 future<size_t>
 blockdev_file_impl::size(void) {
-    return engine._thread_pool.submit<size_t>([this] {
+    return engine._thread_pool.submit<syscall_result_extra<size_t>>([this] {
         size_t size;
-        auto ret = ::ioctl(_fd, BLKGETSIZE64, &size);
-        throw_system_error_on(ret == -1);
-        return size;
+        int ret = ::ioctl(_fd, BLKGETSIZE64, &size);
+        return wrap_syscall(ret, size);
+    }).then([] (syscall_result_extra<size_t> ret) {
+        ret.throw_if_error();
+        return make_ready_future<size_t>(ret.extra);
     });
 }
 
@@ -393,16 +428,16 @@ posix_file_impl::list_directory(std::function<future<> (directory_entry de)> nex
         auto eofcond = [w] { return w->eof; };
         return do_until(eofcond, [w, this] {
             if (w->current == w->total) {
-                return engine._thread_pool.submit<int>([w , this] () {
+                return engine._thread_pool.submit<syscall_result<long>>([w , this] () {
                     auto ret = ::syscall(__NR_getdents, _fd, reinterpret_cast<linux_dirent*>(w->buffer), sizeof(w->buffer));
-                    throw_system_error_on(ret == -1);
-                    return ret;
-                }).then([w] (int ret) {
-                    if (ret == 0) {
+                    return wrap_syscall(ret);
+                }).then([w] (syscall_result<long> ret) {
+                    ret.throw_if_error();
+                    if (ret.result == 0) {
                         w->eof = true;
                     } else {
                         w->current = 0;
-                        w->total = ret;
+                        w->total = ret.result;
                     }
                 });
             }
@@ -859,6 +894,8 @@ void smp_message_queue::move_pending() {
     _pending.push(begin, end);
     _tx.a.pending_fifo.erase(begin, end);
     _current_queue_length += nr;
+    _last_snt_batch = nr;
+    _sent += nr;
 }
 
 void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
@@ -891,6 +928,8 @@ size_t smp_message_queue::process_completions() {
     }
 
     _current_queue_length -= nr;
+    _compl += nr;
+    _last_cmpl_batch = nr;
 
     return nr;
 }
@@ -908,12 +947,57 @@ size_t smp_message_queue::process_incoming() {
             respond(wi);
         });
     }
+    _received += nr;
+    _last_rcv_batch = nr;
     return nr;
 }
 
-void smp_message_queue::start() {
+void smp_message_queue::start(unsigned cpuid) {
     _tx.init();
-    _complete_peer = &engine;
+    char instance[10];
+    std::snprintf(instance, sizeof(instance), "%u-%u", engine.cpu_id(), cpuid);
+    _collectd_regs = {
+            // queue_length     value:GAUGE:0:U
+            // Absolute value of num packets in last tx batch.
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "queue_length", "send-batch")
+            , scollectd::make_typed(scollectd::data_type::GAUGE, _last_snt_batch)
+            ),
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "queue_length", "receive-batch")
+            , scollectd::make_typed(scollectd::data_type::GAUGE, _last_rcv_batch)
+            ),
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "queue_length", "complete-batch")
+            , scollectd::make_typed(scollectd::data_type::GAUGE, _last_cmpl_batch)
+            ),
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "queue_length", "send-queue-length")
+            , scollectd::make_typed(scollectd::data_type::GAUGE, _current_queue_length)
+            ),
+            // total_operations value:DERIVE:0:U
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "total_operations", "received-messages")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _received)
+            ),
+            // total_operations value:DERIVE:0:U
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "total_operations", "sent-messages")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _sent)
+            ),
+            // total_operations value:DERIVE:0:U
+            scollectd::add_polled_metric(scollectd::type_instance_id("smp"
+                    , instance
+                    , "total_operations", "completed-messages")
+            , scollectd::make_typed(scollectd::data_type::DERIVE, _compl)
+            ),
+    };
 }
 
 /* not yet implemented for OSv. TODO: do the notification like we do class smp. */
@@ -1060,19 +1144,13 @@ smp_message_queue** smp::_qs;
 std::thread::id smp::_tmain;
 unsigned smp::count = 1;
 
-void smp::listen_all(smp_message_queue* qs)
-{
-    for (unsigned i = 0; i < smp::count; i++) {
-        qs[i]._pending_peer = &engine;
-    }
-}
-
 void smp::start_all_queues()
 {
     for (unsigned c = 0; c < count; c++) {
-        _qs[c][engine.cpu_id()].start();
+        if (c != engine.cpu_id()) {
+            _qs[c][engine.cpu_id()].start(c);
+        }
     }
-    listen_all(_qs[engine.cpu_id()]);
 }
 
 #ifdef HAVE_DPDK

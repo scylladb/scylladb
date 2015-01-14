@@ -48,6 +48,8 @@
 #include <osv/newpoll.hh>
 #endif
 
+namespace scollectd { class registration; }
+
 class reactor;
 class pollable_fd;
 class pollable_fd_state;
@@ -388,9 +390,14 @@ class smp_message_queue {
                             boost::lockfree::capacity<queue_length>>;
     lf_queue _pending;
     lf_queue _completed;
+    size_t _received = 0;
+    size_t _sent = 0;
+    size_t _compl = 0;
     size_t _current_queue_length = 0;
-    reactor* _pending_peer;
-    reactor* _complete_peer;
+    size_t _last_snt_batch = 0;
+    size_t _last_rcv_batch = 0;
+    size_t _last_cmpl_batch = 0;
+    std::vector<scollectd::registration> _collectd_regs;
     struct work_item {
         virtual ~work_item() {}
         virtual future<> process() = 0;
@@ -448,7 +455,7 @@ public:
         submit_item(wi);
         return fut;
     }
-    void start();
+    void start(unsigned cpuid);
     size_t process_incoming();
     size_t process_completions();
 private:
@@ -618,6 +625,7 @@ private:
     promise<> _lowres_timer_promise;
     promise<> _timer_promise;
     std::experimental::optional<poller> _epoll_poller;
+    const bool _reuseport;
 private:
     void abort_on_error(int ret);
     template <typename T, typename E>
@@ -645,6 +653,7 @@ private:
     thread_pool _thread_pool;
 
     void run_tasks(circular_buffer<std::unique_ptr<task>>& tasks, size_t task_quota);
+    bool posix_reuseport_detect();
 public:
     static boost::program_options::options_description get_options_description();
     reactor();
@@ -668,6 +677,8 @@ public:
     future<connected_socket> connect(socket_address sa);
 
     pollable_fd posix_listen(socket_address sa, listen_options opts = {});
+
+    bool posix_reuseport_available() const { return _reuseport; }
 
     future<pollable_fd> posix_connect(socket_address sa);
 
@@ -854,7 +865,6 @@ public:
         return got != 0;
     }
 private:
-    static void listen_all(smp_message_queue* qs);
     static void start_all_queues();
     static void pin(unsigned cpu_id);
 public:

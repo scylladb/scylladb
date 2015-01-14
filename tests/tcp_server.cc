@@ -5,7 +5,7 @@
 #include "core/reactor.hh"
 #include "core/app-template.hh"
 #include "core/temporary_buffer.hh"
-#include "core/smp.hh"
+#include "core/distributed.hh"
 #include <vector>
 #include <iostream>
 

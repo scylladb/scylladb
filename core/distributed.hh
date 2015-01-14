@@ -2,8 +2,8 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
-#ifndef SMP_HH_
-#define SMP_HH_
+#ifndef DISTRIBUTED_HH_
+#define DISTRIBUTED_HH_
 
 #include "reactor.hh"
 #include "future-util.hh"
@@ -226,4 +226,4 @@ foreign_ptr<T> make_foreign(T ptr) {
     return foreign_ptr<T>(std::move(ptr));
 }
 
-#endif /* SMP_HH_ */
+#endif /* DISTRIBUTED_HH_ */

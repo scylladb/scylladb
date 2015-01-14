@@ -15,14 +15,39 @@
 #include <unordered_map>
 
 #include "scollectd.hh"
-#include "core/shared_ptr.hh"
-#include "core/app-template.hh"
 #include "core/future-util.hh"
-#include "core/shared_ptr.hh"
+#include "net/api.hh"
+
+namespace std {
+inline bool operator<(const scollectd::type_instance_id & id1,
+        const scollectd::type_instance_id & id2) {
+    return std::tie(id1.plugin(), id1.plugin_instance(), id1.type(),
+            id1.type_instance())
+            < std::tie(id2.plugin(), id2.plugin_instance(), id2.type(),
+                    id2.type_instance());
+}
+inline bool operator==(const scollectd::type_instance_id & id1,
+        const scollectd::type_instance_id & id2) {
+    return std::tie(id1.plugin(), id1.plugin_instance(), id1.type(),
+            id1.type_instance())
+            == std::tie(id2.plugin(), id2.plugin_instance(), id2.type(),
+                    id2.type_instance());
+}
+}
+
+namespace scollectd {
 
 using namespace std::chrono_literals;
+using clock_type = std::chrono::high_resolution_clock;
 
-class scollectd::impl {
+
+static const ipv4_addr default_addr("239.192.74.66:25826");
+static const clock_type::duration default_period(1s);
+const plugin_instance_id per_cpu_plugin_instance("#cpu");
+
+future<> send_metric(const type_instance_id &, const value_list &);
+
+class impl {
     net::udp_channel _chan;
     timer<> _timer;
 
@@ -35,17 +60,15 @@ class scollectd::impl {
     double _avg = 0;
 
 public:
-    // Note: we use std::shared_ptr, not the C* one. This is because currently
-    // seastar sp does not handle polymorphism. And we use it.
-    typedef std::map<type_instance_id, std::shared_ptr<value_list> > value_list_map;
+    typedef std::map<type_instance_id, shared_ptr<value_list> > value_list_map;
     typedef value_list_map::value_type value_list_pair;
 
     void add_polled(const type_instance_id & id,
-            const std::shared_ptr<value_list> & values) {
+            const shared_ptr<value_list> & values) {
         _values.insert(std::make_pair(id, values));
     }
     void remove_polled(const type_instance_id & id) {
-        _values.insert(std::make_pair(id, std::shared_ptr<value_list>()));
+        _values.insert(std::make_pair(id, shared_ptr<value_list>()));
     }
     // explicitly send a type_instance value list (outside polling)
     future<> send_metric(const type_instance_id & id,
@@ -350,35 +373,31 @@ private:
     std::vector<registration> _regs;
 };
 
-const ipv4_addr scollectd::default_addr("239.192.74.66:25826");
-const clock_type::duration scollectd::default_period(1s);
-const scollectd::plugin_instance_id scollectd::per_cpu_plugin_instance("#cpu");
-
-scollectd::impl & scollectd::get_impl() {
+impl & get_impl() {
     static thread_local impl per_cpu_instance;
     return per_cpu_instance;
 }
 
-void scollectd::add_polled(const type_instance_id & id,
-        const std::shared_ptr<value_list> & values) {
+void add_polled(const type_instance_id & id,
+        const shared_ptr<value_list> & values) {
     get_impl().add_polled(id, values);
 }
 
-void scollectd::remove_polled_metric(const type_instance_id & id) {
+void remove_polled_metric(const type_instance_id & id) {
     get_impl().remove_polled(id);
 }
 
-future<> scollectd::send_notification(const type_instance_id & id,
+future<> send_notification(const type_instance_id & id,
         const std::string & msg) {
     return get_impl().send_notification(id, msg);
 }
 
-future<> scollectd::send_metric(const type_instance_id & id,
+future<> send_metric(const type_instance_id & id,
         const value_list & values) {
     return get_impl().send_metric(id, values);
 }
 
-void scollectd::configure(const boost::program_options::variables_map & opts) {
+void configure(const boost::program_options::variables_map & opts) {
     bool enable = opts["collectd"].as<bool>();
     if (!enable) {
         return;
@@ -398,7 +417,7 @@ void scollectd::configure(const boost::program_options::variables_map & opts) {
     }
 }
 
-boost::program_options::options_description scollectd::get_options_description() {
+boost::program_options::options_description get_options_description() {
     namespace bpo = boost::program_options;
     bpo::options_description opts("COLLECTD options");
     opts.add_options()("collectd", bpo::value<bool>()->default_value(true),
@@ -411,4 +430,5 @@ boost::program_options::options_description scollectd::get_options_description()
             bpo::value<std::string>()->default_value("localhost"),
             "collectd host name");
     return opts;
+}
 }
