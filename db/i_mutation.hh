@@ -24,17 +24,17 @@
 #pragma once
 
 #include "core/sstring.hh"
+#include "utils/UUID.hh"
 
 namespace db {
 
-// FIXME: real UUID and ColumnFamily
-class UUID;
+// FIXME: real ColumnFamily
 class ColumnFamily;
 
 class i_mutation {
 public:
     virtual sstring get_keyspace_name() =0;
-    virtual std::vector<UUID> get_column_family_ids() = 0;
+    virtual std::vector<utils::UUID> get_column_family_ids() = 0;
     virtual bytes key() = 0;
     virtual int64_t get_timeout() = 0;
     virtual sstring to_string(bool shallow) = 0;
