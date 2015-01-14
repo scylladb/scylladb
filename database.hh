@@ -94,6 +94,9 @@ public:
     sstring name() const {
         return _name;
     }
+    virtual bool is_byte_order_comparable() {
+        return false;
+    }
 protected:
     template <typename T, typename Compare = std::less<T>>
     bool default_less(const bytes& b1, const bytes& b2, Compare compare = Compare());
