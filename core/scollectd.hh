@@ -147,7 +147,7 @@ struct registration {
     : _id(id) {
     }
     registration(type_instance_id&& id)
-    : _id(std::forward<type_instance_id>(id)) {
+    : _id(std::move(id)) {
     }
     registration(const registration&) = default;
     registration(registration&&) = default;
