@@ -225,6 +225,8 @@ deps = {
                  'log.cc',
                  'cql3/abstract_marker.cc',
                  'cql3/cql3.cc',
+                 'cql3/cql3_type.cc',
+                 'cql3/functions/functions.cc',
                  'thrift/handler.cc',
                  'thrift/server.cc',
                  'utils/murmur_hash.cc',

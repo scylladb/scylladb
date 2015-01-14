@@ -27,6 +27,7 @@
 
 #include "native_function.hh"
 #include "scalar_function.hh"
+#include "core/shared_ptr.hh"
 
 namespace cql3 {
 namespace functions {
@@ -63,12 +64,12 @@ public:
 };
 
 template <bool Pure, typename Func>
-std::unique_ptr<function>
+shared_ptr<function>
 make_native_scalar_function(sstring name,
                             data_type return_type,
                             std::vector<data_type> args_type,
                             Func&& func) {
-    return std::make_unique<native_scalar_function_for<Func, Pure>>(std::move(name),
+    return ::make_shared<native_scalar_function_for<Func, Pure>>(std::move(name),
                                                   std::move(return_type),
                                                   std::move(args_type),
                                                   std::forward<Func>(func));

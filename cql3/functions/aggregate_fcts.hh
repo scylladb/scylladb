@@ -24,6 +24,9 @@
 
 #pragma once
 
+#include "aggregate_function.hh"
+#include "native_aggregate_function.hh"
+
 namespace cql3 {
 namespace functions {
 
@@ -50,7 +53,8 @@ public:
      * The function used to count the number of rows of a result set. This function is called when COUNT(*) or COUNT(1)
      * is specified.
      */
-std::unique_ptr<aggregate_function>
+inline
+shared_ptr<aggregate_function>
 make_count_rows_function() {
     return make_native_aggregate_function_using<impl_count_function>("countRows", long_type);
 }
@@ -62,7 +66,7 @@ public:
     virtual void reset() override {
         _sum = {};
     }
-    virtual opt_bytes compute() override {
+    virtual opt_bytes compute(int protocol_version) override {
         return data_type_for<Type>()->decompose(_sum);
     }
     virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
@@ -84,9 +88,10 @@ public:
 
 
 template <typename Type>
-std::unique_ptr<aggregate_function>
+inline
+shared_ptr<aggregate_function>
 make_sum_function() {
-    return std::make_unique<sum_function_for<Type>>();
+    return make_shared<sum_function_for<Type>>();
 }
 
 template <typename Type>
@@ -98,19 +103,19 @@ public:
         _sum = {};
         _count = 0;
     }
-    virtual opt_bytes compute() override {
+    virtual opt_bytes compute(int protocol_version) override {
         Type ret = 0;
         if (_count) {
             ret = _sum / _count;
         }
-        return data_type_for<Type>().decompose(ret);
+        return data_type_for<Type>()->decompose(ret);
     }
     virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
         ++_count;
-        _sum += boost::any_cast<Type>(data_type_for<Type>().compose(*values[0]));
+        _sum += boost::any_cast<Type>(data_type_for<Type>()->compose(*values[0]));
     }
 };
 
@@ -124,9 +129,10 @@ public:
 };
 
 template <typename Type>
-std::unique_ptr<aggregate_function>
+inline
+shared_ptr<aggregate_function>
 make_avg_function() {
-    return std::make_unique<avg_function_for<Type>>();
+    return make_shared<avg_function_for<Type>>();
 }
 
 template <typename Type>
@@ -171,9 +177,9 @@ public:
      * @return a MAX function for the specified type.
      */
 template <typename Type>
-std::unique_ptr<aggregate_function>
+shared_ptr<aggregate_function>
 make_max_function() {
-    return std::make_unique<max_function_for<Type>>();
+    return shared_ptr<max_function_for<Type>>();
 }
 
 template <typename Type>
@@ -183,20 +189,20 @@ public:
     virtual void reset() override {
         _min = {};
     }
-    virtual opt_bytes compute() override {
+    virtual opt_bytes compute(int protocol_version) override {
         if (!_min) {
             return {};
         }
-        return data_type_for<Type>().decompose(*_min);
+        return data_type_for<Type>()->decompose(*_min);
     }
     virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
+        auto val = boost::any_cast<Type>(data_type_for<Type>()->compose(*values[0]));
         if (!_min) {
-            _min = values[0];
+            _min = val;
         } else {
-            auto val = boost::any_cast<Type>(data_type_for<Type>().compose(*values[0]));
             _min = std::min(*_min, val);
         }
     }
@@ -219,9 +225,9 @@ public:
      * @return a MIN function for the specified type.
      */
 template <typename Type>
-std::unique_ptr<aggregate_function>
+shared_ptr<aggregate_function>
 make_min_function() {
-    return std::make_unique<min_function_for<Type>>();
+    return make_shared<min_function_for<Type>>();
 }
 
 
@@ -232,7 +238,7 @@ public:
     virtual void reset() override {
         _count = 0;
     }
-    virtual opt_bytes compute() override {
+    virtual opt_bytes compute(int protocol_version) override {
         return long_type->decompose(_count);
     }
     virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
@@ -259,9 +265,9 @@ public:
      * @return a COUNT function for the specified type.
      */
 template <typename Type>
-std::unique_ptr<aggregate_function>
+shared_ptr<aggregate_function>
 make_count_function() {
-    return std::make_unique<count_function_for<Type>>();
+    return make_shared<count_function_for<Type>>();
 }
 
 }

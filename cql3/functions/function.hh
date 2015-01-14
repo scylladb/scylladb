@@ -25,6 +25,7 @@
 #ifndef CQL3_FUNCTIONS_FUNCTION_HH
 #define CQL3_FUNCTIONS_FUNCTION_HH
 
+#include "function_name.hh"
 #include "database.hh"
 #include <vector>
 #include <experimental/optional>
@@ -69,6 +70,7 @@ protected:
     friend std::ostream& operator<<(std::ostream& os, const function& f);
 };
 
+inline
 std::ostream&
 operator<<(std::ostream& os, const function& f) {
     f.print(os);

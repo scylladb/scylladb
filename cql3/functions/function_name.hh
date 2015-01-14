@@ -65,6 +65,7 @@ public:
     }
 };
 
+inline
 std::ostream& operator<<(std::ostream& os, const function_name& fn) {
     if (!fn.keyspace.empty()) {
         os << fn.keyspace << ".";

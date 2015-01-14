@@ -15,70 +15,65 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
-import java.util.ArrayList;
-import java.util.List;
+/*
+ * Modified by Cloudius Systems
+ *
+ * Copyright 2015 Cloudius Systems
+ */
 
-import org.apache.cassandra.config.KSMetaData;
-import org.apache.cassandra.config.Schema;
-import org.apache.cassandra.db.marshal.*;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.exceptions.ConfigurationException;
-import org.apache.cassandra.exceptions.SyntaxException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+#pragma once
 
-public interface CQL3Type
-{
-    static final Logger logger = LoggerFactory.getLogger(CQL3Type.class);
+#include "database.hh"
+#include "exceptions/exceptions.hh"
+#include <iosfwd>
 
-    public boolean isCollection();
-    public AbstractType<?> getType();
+namespace cql3 {
 
-    public enum Native implements CQL3Type
-    {
-        ASCII    (AsciiType.instance),
-        BIGINT   (LongType.instance),
-        BLOB     (BytesType.instance),
-        BOOLEAN  (BooleanType.instance),
+class cql3_type {
+    sstring _name;
+    data_type _type;
+public:
+    cql3_type(sstring name, data_type type) : _name(std::move(name)), _type(std::move(type)) {}
+    virtual ~cql3_type() {}
+    virtual bool is_collection() const = 0;
+    data_type get_type() const { return _type; }
+    sstring to_string() const { return _name; }
+};
+
+class native_cql3_type : public cql3_type {
+    static shared_ptr<cql3_type> make(sstring name, data_type type) {
+        return make_shared<native_cql3_type>(std::move(name), std::move(type));
+    }
+public:
+    static thread_local shared_ptr<cql3_type> ascii;
+    static thread_local shared_ptr<cql3_type> bigint;
+    static thread_local shared_ptr<cql3_type> blob;
+    static thread_local shared_ptr<cql3_type> boolean;
+    //static thread_local shared_ptr<cql3_type> double;
+    //static thread_local shared_ptr<cql3_type> float;
+    static thread_local shared_ptr<cql3_type> int_;
+    static thread_local shared_ptr<cql3_type> text;
+    static thread_local shared_ptr<cql3_type> timestamp;
+    static thread_local shared_ptr<cql3_type> uuid;
+    static thread_local shared_ptr<cql3_type> varchar;
+    static thread_local shared_ptr<cql3_type> timeuuid;
+
+#if 0
         COUNTER  (CounterColumnType.instance),
         DECIMAL  (DecimalType.instance),
-        DOUBLE   (DoubleType.instance),
-        FLOAT    (FloatType.instance),
         INET     (InetAddressType.instance),
-        INT      (Int32Type.instance),
-        TEXT     (UTF8Type.instance),
-        TIMESTAMP(TimestampType.instance),
-        UUID     (UUIDType.instance),
-        VARCHAR  (UTF8Type.instance),
         VARINT   (IntegerType.instance),
-        TIMEUUID (TimeUUIDType.instance);
-
-        private final AbstractType<?> type;
-
-        private Native(AbstractType<?> type)
-        {
-            this.type = type;
-        }
-
-        public boolean isCollection()
-        {
-            return false;
-        }
-
-        public AbstractType<?> getType()
-        {
-            return type;
-        }
-
-        @Override
-        public String toString()
-        {
-            return super.toString().toLowerCase();
-        }
+#endif
+    static const std::vector<shared_ptr<cql3_type>>& values();
+public:
+    using cql3_type::cql3_type;
+    virtual bool is_collection() const override {
+        return false;
     }
+};
 
+#if 0
     public static class Custom implements CQL3Type
     {
         private final AbstractType<?> type;
@@ -591,4 +586,6 @@ public interface CQL3Type
             }
         }
     }
+#endif
+
 }

@@ -27,6 +27,7 @@
 
 #include "database.hh"
 #include "native_function.hh"
+#include "core/shared_ptr.hh"
 
 namespace cql3 {
 namespace functions {
@@ -59,9 +60,9 @@ public:
 };
 
 template <class Aggregate>
-std::unique_ptr<native_aggregate_function>
+shared_ptr<native_aggregate_function>
 make_native_aggregate_function_using(sstring name, shared_ptr<abstract_type> type) {
-    return std::make_unique<native_aggregate_function_using<Aggregate>>(name, type);
+    return ::make_shared<native_aggregate_function_using<Aggregate>>(name, type);
 }
 
 

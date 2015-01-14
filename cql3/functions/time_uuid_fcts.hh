@@ -36,7 +36,7 @@ namespace functions {
 namespace time_uuid_fcts {
 
 inline
-std::unique_ptr<function>
+shared_ptr<function>
 make_now_fct() {
     return make_native_scalar_function<false>("now", timeuuid_type, {},
             [] (int protocol_version, const std::vector<bytes>& values) {
@@ -45,7 +45,7 @@ make_now_fct() {
 }
 
 inline
-std::unique_ptr<function>
+shared_ptr<function>
 make_min_timeuuid_fct() {
     return make_native_scalar_function<true>("mintimeuuid", timeuuid_type, { timestamp_type },
             [] (int protocol_version, const std::vector<bytes>& values) {
@@ -66,7 +66,7 @@ make_min_timeuuid_fct() {
 }
 
 inline
-std::unique_ptr<function>
+shared_ptr<function>
 make_max_timeuuid_fct() {
     return make_native_scalar_function<true>("maxtimeuuid", timeuuid_type, { timestamp_type },
             [] (int protocol_version, const std::vector<bytes>& values) {
@@ -87,7 +87,7 @@ make_max_timeuuid_fct() {
 }
 
 inline
-std::unique_ptr<function>
+shared_ptr<function>
 make_date_of_fct() {
     return make_native_scalar_function<true>("dateof", timestamp_type, { timeuuid_type },
             [] (int protocol, const std::vector<bytes>& values) {
@@ -102,7 +102,7 @@ make_date_of_fct() {
 }
 
 inline
-std::unique_ptr<function>
+shared_ptr<function>
 make_unix_timestamp_of_fcf() {
     return make_native_scalar_function<true>("unixtimestampof", long_type, { timeuuid_type },
             [] (int protocol, const std::vector<bytes>& values) {

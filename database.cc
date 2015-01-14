@@ -278,7 +278,7 @@ struct uuid_type_impl : abstract_type {
     // FIXME: isCompatibleWith(uuid)
 };
 
-thread_local shared_ptr<abstract_type> int_type(make_shared<int32_type_impl>());
+thread_local shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
 thread_local shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii"));
 thread_local shared_ptr<abstract_type> bytes_type(make_shared<bytes_type_impl>());

@@ -22,6 +22,8 @@
  * Copyright 2015 Cloudius Systems
  */
 
+#pragma once
+
 #include "database.hh"
 #include "native_scalar_function.hh"
 #include "utils/UUID.hh"
@@ -31,7 +33,7 @@ namespace cql3 {
 namespace functions {
 
 inline
-std::unique_ptr<function>
+shared_ptr<function>
 make_uuid_fct() {
     return make_native_scalar_function<false>("uuid", uuid_type, {},
             [] (int protocol_version, const std::vector<bytes>& parameters) {

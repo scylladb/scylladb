@@ -15,79 +15,101 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.functions;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
+/*
+ * Modified by Cloudius Systems
+ *
+ * Copyright 2015 Cloudius Systems
+ */
 
-import com.google.common.collect.ArrayListMultimap;
+#pragma once
 
-import org.apache.cassandra.config.Schema;
-import org.apache.cassandra.cql3.*;
-import org.apache.cassandra.db.marshal.AbstractType;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.service.IMigrationListener;
-import org.apache.cassandra.service.MigrationManager;
+#include "function.hh"
+#include "aggregate_fcts.hh"
+#include "time_uuid_fcts.hh"
+#include "uuid_fcts.hh"
+#include "bytes_conversion_fcts.hh"
+#include "aggregate_fcts.hh"
+#include "bytes_conversion_fcts.hh"
+#include "cql3/assignment_testable.hh"
+#include "cql3/cql3_type.hh"
+#include <unordered_map>
 
-public abstract class Functions
-{
+namespace cql3 {
+
+namespace functions {
+
+#if 0
     // We special case the token function because that's the only function whose argument types actually
     // depend on the table on which the function is called. Because it's the sole exception, it's easier
     // to handle it as a special case.
     private static final FunctionName TOKEN_FUNCTION_NAME = FunctionName.nativeFunction("token");
+#endif
 
-    private Functions() {}
+class functions {
+    static thread_local std::unordered_multimap<function_name, shared_ptr<function>> _declared;
+private:
+    static std::unordered_multimap<function_name, shared_ptr<function>> init() {
+        std::unordered_multimap<function_name, shared_ptr<function>> ret;
+        auto declare = [&ret] (shared_ptr<function> f) { ret.emplace(f->name(), std::move(f)); };
+        declare(aggregate_fcts::make_count_rows_function());
+        declare(time_uuid_fcts::make_now_fct());
+        declare(time_uuid_fcts::make_min_timeuuid_fct());
+        declare(time_uuid_fcts::make_max_timeuuid_fct());
+        declare(time_uuid_fcts::make_date_of_fct());
+        declare(time_uuid_fcts::make_unix_timestamp_of_fcf());
+        declare(make_uuid_fct());
 
-    private static final ArrayListMultimap<FunctionName, Function> declared = ArrayListMultimap.create();
-
-    static
-    {
-        declare(AggregateFcts.countRowsFunction);
-        declare(TimeuuidFcts.nowFct);
-        declare(TimeuuidFcts.minTimeuuidFct);
-        declare(TimeuuidFcts.maxTimeuuidFct);
-        declare(TimeuuidFcts.dateOfFct);
-        declare(TimeuuidFcts.unixTimestampOfFct);
-        declare(UuidFcts.uuidFct);
-
-        for (CQL3Type type : CQL3Type.Native.values())
-        {
+        for (auto&& type : native_cql3_type::values()) {
             // Note: because text and varchar ends up being synonimous, our automatic makeToBlobFunction doesn't work
             // for varchar, so we special case it below. We also skip blob for obvious reasons.
-            if (type == CQL3Type.Native.VARCHAR || type == CQL3Type.Native.BLOB)
+            if (type == native_cql3_type::varchar || type == native_cql3_type::blob) {
                 continue;
+            }
 
-            declare(BytesConversionFcts.makeToBlobFunction(type.getType()));
-            declare(BytesConversionFcts.makeFromBlobFunction(type.getType()));
-
-            declare(AggregateFcts.makeCountFunction(type.getType()));
-            declare(AggregateFcts.makeMaxFunction(type.getType()));
-            declare(AggregateFcts.makeMinFunction(type.getType()));
+            declare(make_to_blob_function(type->get_type()));
+            declare(make_from_blob_function(type->get_type()));
         }
-        declare(BytesConversionFcts.VarcharAsBlobFct);
-        declare(BytesConversionFcts.BlobAsVarcharFact);
-        declare(AggregateFcts.sumFunctionForInt32);
-        declare(AggregateFcts.sumFunctionForLong);
+        declare(aggregate_fcts::make_count_function<int32_t>());
+        declare(aggregate_fcts::make_max_function<int32_t>());
+        declare(aggregate_fcts::make_min_function<int32_t>());
+
+        declare(aggregate_fcts::make_count_function<int64_t>());
+        declare(aggregate_fcts::make_max_function<int64_t>());
+        declare(aggregate_fcts::make_min_function<int64_t>());
+
+        //FIXME:
+        //declare(aggregate_fcts::make_count_function<bytes>());
+        //declare(aggregate_fcts::make_max_function<bytes>());
+        //declare(aggregate_fcts::make_min_function<bytes>());
+
+        // FIXME: more count/min/max
+
+        declare(make_varchar_as_blob_fct());
+        declare(make_blob_as_varchar_fct());
+        declare(aggregate_fcts::make_sum_function<int32_t>());
+        declare(aggregate_fcts::make_sum_function<int64_t>());
+        declare(aggregate_fcts::make_avg_function<int32_t>());
+        declare(aggregate_fcts::make_avg_function<int64_t>());
+#if 0
         declare(AggregateFcts.sumFunctionForFloat);
         declare(AggregateFcts.sumFunctionForDouble);
         declare(AggregateFcts.sumFunctionForDecimal);
         declare(AggregateFcts.sumFunctionForVarint);
-        declare(AggregateFcts.avgFunctionForInt32);
-        declare(AggregateFcts.avgFunctionForLong);
         declare(AggregateFcts.avgFunctionForFloat);
         declare(AggregateFcts.avgFunctionForDouble);
         declare(AggregateFcts.avgFunctionForVarint);
         declare(AggregateFcts.avgFunctionForDecimal);
+#endif
 
+        // also needed for smp:
+#if 0
         MigrationManager.instance.register(new FunctionsMigrationListener());
+#endif
+        return ret;
     }
 
-    private static void declare(Function fun)
-    {
-        declared.put(fun.name(), fun);
-    }
-
+#if 0
     public static ColumnSpecification makeArgSpec(String receiverKs, String receiverCf, Function fun, int i)
     {
         return new ColumnSpecification(receiverKs,
@@ -95,20 +117,19 @@ public abstract class Functions
                                        new ColumnIdentifier("arg" + i +  "(" + fun.name().toString().toLowerCase() + ")", true),
                                        fun.argTypes().get(i));
     }
-
-    public static int getOverloadCount(FunctionName name)
-    {
-        return declared.get(name).size();
+#endif
+    static int get_overload_count(const function_name& name) {
+        return _declared.count(name);
     }
 
-    public static Function get(String keyspace,
-                               FunctionName name,
-                               List<? extends AssignmentTestable> providedArgs,
-                               String receiverKs,
-                               String receiverCf)
-    throws InvalidRequestException
-    {
-        if (name.hasKeyspace()
+    static shared_ptr<function> get(const sstring& keyspace,
+                                    const function_name& name,
+                                    const std::vector<shared_ptr<assignment_testable>>& provided_args,
+                                    const sstring& receiver_ks,
+                                    const sstring& receiver_cf) {
+#if 0
+        // later
+        if (name.has_keyspace()
             ? name.equals(TOKEN_FUNCTION_NAME)
             : name.name.equals(TOKEN_FUNCTION_NAME.name))
             return new TokenFct(Schema.instance.getCFMetaData(receiverKs, receiverCf));
@@ -164,24 +185,30 @@ public abstract class Functions
                         name, toString(compatibles)));
 
         return compatibles.get(0);
+#endif
+        abort();
     }
 
-    public static List<Function> find(FunctionName name)
-    {
-        return declared.get(name);
-    }
-
-    public static Function find(FunctionName name, List<AbstractType<?>> argTypes)
-    {
-        assert name.hasKeyspace() : "function name not fully qualified";
-        for (Function f : declared.get(name))
-        {
-            if (typeEquals(f.argTypes(), argTypes))
-                return f;
+    static std::vector<shared_ptr<function>> find(const function_name& name) {
+        auto range = _declared.equal_range(name);
+        std::vector<shared_ptr<function>> ret;
+        for (auto i = range.first; i != range.second; ++i) {
+            ret.push_back(i->second);
         }
-        return null;
+        return ret;
     }
 
+    static shared_ptr<function> find(const function_name& name, const std::vector<data_type>& arg_types) {
+        assert(name.has_keyspace()); // : "function name not fully qualified";
+        for (auto&& f : find(name)) {
+            if (type_equals(f->arg_types(), arg_types)) {
+                return f;
+            }
+        }
+        return {};
+    }
+
+#if 0
     // This method and matchArguments are somewhat duplicate, but this method allows us to provide more precise errors in the common
     // case where there is no override for a given function. This is thus probably worth the minor code duplication.
     private static void validateTypes(String keyspace,
@@ -292,16 +319,21 @@ public abstract class Functions
         return t1.asCQL3Type().toString().equals(t2.asCQL3Type().toString());
     }
 
-    public static boolean typeEquals(List<AbstractType<?>> t1, List<AbstractType<?>> t2)
-    {
+#endif
+
+    static bool type_equals(const std::vector<data_type>& t1, const std::vector<data_type>& t2) {
+#if 0
         if (t1.size() != t2.size())
             return false;
         for (int i = 0; i < t1.size(); i ++)
             if (!typeEquals(t1.get(i), t2.get(i)))
                 return false;
         return true;
+#endif
+        abort();
     }
 
+#if 0
     private static class FunctionsMigrationListener implements IMigrationListener
     {
         public void onCreateKeyspace(String ksName) { }
@@ -326,4 +358,8 @@ public abstract class Functions
         public void onDropFunction(String ksName, String functionName) { }
         public void onDropAggregate(String ksName, String aggregateName) { }
     }
+#endif
+};
+
+}
 }
