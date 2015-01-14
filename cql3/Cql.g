@@ -23,11 +23,18 @@ options {
     language = Cpp;
 }
 
+@parser::namespace{cql3}
+
 @parser::includes {
 #include "cql3/statements/use_statement.hh"
 #include "cql3/cf_name.hh"
 #include "core/sstring.hh"
 #include "CqlLexer.hpp"
+}
+
+@parser::traits {
+using namespace cql3;
+using namespace cql3::statements;
 }
 
 @header {
@@ -177,6 +184,8 @@ options {
 #endif
 }
 
+@lexer::namespace{cql3}
+
 @lexer::traits {
     class CqlLexer;
     class CqlParser;
@@ -278,8 +287,8 @@ cqlStatement returns [ParsedStatement stmt]
 /*
  * USE <KEYSPACE>;
  */
-useStatement returns [::shared_ptr<cql3::statements::use_statement> stmt]
-    : K_USE ks=keyspaceName { $stmt = ::make_shared<cql3::statements::use_statement>(ks); }
+useStatement returns [::shared_ptr<use_statement> stmt]
+    : K_USE ks=keyspaceName { $stmt = ::make_shared<use_statement>(ks); }
     ;
 
 #if 0
@@ -961,7 +970,7 @@ ident returns [ColumnIdentifier id]
 
 // Keyspace & Column family names
 keyspaceName returns [sstring id]
-    @init { cql3::cf_name name; }
+    @init { cf_name name; }
     : cfOrKsName[name, true] { $id = name.get_keyspace(); }
     ;
 
@@ -987,7 +996,7 @@ userTypeName returns [UTName name]
     ;
 #endif
 
-cfOrKsName[cql3::cf_name& name, bool isKs]
+cfOrKsName[cf_name& name, bool isKs]
     : t=IDENT              { if (isKs) $name.set_keyspace($t.text, false); else $name.set_column_family($t.text, false); }
 #if 0
     | t=QUOTED_NAME        { if (isKs) $name.setKeyspace($t.text, true); else $name.setColumnFamily($t.text, true); }
