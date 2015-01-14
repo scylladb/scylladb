@@ -22,6 +22,8 @@
  * Copyright 2015 Cloudius Systems
  */
 
+#pragma once
+
 #include "database.hh"
 #include "native_scalar_function.hh"
 #include "utils/UUID.hh"
