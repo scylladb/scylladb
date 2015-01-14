@@ -56,6 +56,15 @@ public:
     virtual void serialize(const boost::any& value, std::ostream& out) = 0;
     virtual object_opt deserialize(std::istream& in) = 0;
     virtual bool less(const bytes& v1, const bytes& v2) = 0;
+    virtual int32_t compare(const bytes& v1, const bytes& v2) {
+        if (less(v1, v2)) {
+            return -1;
+        } else if (less(v2, v1)) {
+            return 1;
+        } else {
+            return 0;
+        }
+    }
     object_opt deserialize(const bytes& v) {
         // FIXME: optimize
         std::istringstream iss(v);
