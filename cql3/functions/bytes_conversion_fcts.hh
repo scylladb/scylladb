@@ -22,8 +22,11 @@
  * Copyright 2015 Cloudius Systems
  */
 
+#pragma once
+
 #include "native_scalar_function.hh"
 #include "exceptions/exceptions.hh"
+#include "core/print.hh"
 
 namespace cql3 {
 
