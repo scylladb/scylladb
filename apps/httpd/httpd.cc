@@ -7,7 +7,7 @@
 #include "core/sstring.hh"
 #include "core/app-template.hh"
 #include "core/circular_buffer.hh"
-#include "core/smp.hh"
+#include "core/distributed.hh"
 #include "core/queue.hh"
 #include "core/future-util.hh"
 #include "core/scollectd.hh"

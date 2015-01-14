@@ -2,7 +2,7 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
-#include "core/smp.hh"
+#include "core/distributed.hh"
 #include "core/app-template.hh"
 #include "core/future-util.hh"
 

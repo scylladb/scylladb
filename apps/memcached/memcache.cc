@@ -16,7 +16,7 @@
 #include "core/stream.hh"
 #include "core/memory.hh"
 #include "core/units.hh"
-#include "core/smp.hh"
+#include "core/distributed.hh"
 #include "core/vector-data-sink.hh"
 #include "net/api.hh"
 #include "net/packet-data-source.hh"
