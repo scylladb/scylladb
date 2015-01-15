@@ -353,6 +353,9 @@ private:
     future(exception_future_marker, std::exception_ptr ex) noexcept : _promise(nullptr) {
         _local_state.set_exception(std::move(ex));
     }
+    explicit future(future_state<T...>&& state) noexcept
+            : _promise(nullptr), _local_state(std::move(state)) {
+    }
     future_state<T...>* state() noexcept {
         return _promise ? _promise->_state : &_local_state;
     }
@@ -495,7 +498,7 @@ public:
         auto next_fut = pr.get_future();
         _promise->schedule([func = std::forward<Func>(func), pr = std::move(pr)] (auto& state) mutable {
             try {
-                auto next_fut = func(future(ready_future_from_tuple_marker(), state.get()));
+                auto next_fut = func(future(std::move(state)));
                 next_fut.forward_to(std::move(pr));
             } catch (...) {
                 pr.set_exception(std::current_exception());
