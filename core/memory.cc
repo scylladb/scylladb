@@ -80,7 +80,7 @@ using allocate_system_memory_fn
 namespace bi = boost::intrusive;
 
 inline
-unsigned object_cpu_id(void* ptr) {
+unsigned object_cpu_id(const void* ptr) {
     return (reinterpret_cast<uintptr_t>(ptr) >> cpu_id_shift) & 0xff;
 }
 
@@ -262,6 +262,7 @@ struct cpu_pages {
     } fsu;
     small_pool_array small_pools;
     alignas(cache_line_size) std::atomic<cross_cpu_free_item*> xcpu_freelist;
+    alignas(cache_line_size) std::vector<physical_address> virt_to_phys_map;
     static std::atomic<unsigned> cpu_id_gen;
     static cpu_pages* all_cpus[max_cpus];
     char* mem() { return memory; }
@@ -295,6 +296,8 @@ struct cpu_pages {
     void resize(size_t new_size, allocate_system_memory_fn alloc_sys_mem);
     void do_resize(size_t new_size, allocate_system_memory_fn alloc_sys_mem);
     void replace_memory_backing(allocate_system_memory_fn alloc_sys_mem);
+    void init_virt_to_phys_map();
+    translation translate(const void* addr, size_t size);
 };
 
 static thread_local cpu_pages cpu_mem;
@@ -535,7 +538,7 @@ allocate_hugetlbfs_memory(file_desc& fd, optional<void*> where, size_t how_much)
     auto ret = fd.map(
             how_much,
             PROT_READ | PROT_WRITE,
-            MAP_SHARED | (where ? MAP_FIXED : 0),
+            MAP_SHARED | MAP_POPULATE | (where ? MAP_FIXED : 0),
             pos,
             where.value_or(nullptr));
     return ret;
@@ -553,6 +556,39 @@ void cpu_pages::replace_memory_backing(allocate_system_memory_fn alloc_sys_mem) 
     std::memcpy(relocated_old_mem.get(), old_mem, bytes);
     alloc_sys_mem({old_mem}, bytes).release();
     std::memcpy(old_mem, relocated_old_mem.get(), bytes);
+}
+
+void cpu_pages::init_virt_to_phys_map() {
+    auto nr_entries = nr_pages / (huge_page_size / page_size);
+    virt_to_phys_map.resize(nr_entries);
+    auto fd = file_desc::open("/proc/self/pagemap", O_RDONLY | O_CLOEXEC);
+    for (size_t i = 0; i != nr_entries; ++i) {
+        uint64_t entry = 0;
+        auto phys = std::numeric_limits<physical_address>::max();
+        auto pfn = reinterpret_cast<uintptr_t>(mem() + i * huge_page_size) / page_size;
+        fd.pread(&entry, 8, pfn * 8);
+        if (entry & 0x8000'0000'0000'0000) {
+            phys = (entry & 0x003f'ffff'ffff'ffff) << page_bits;
+        }
+        virt_to_phys_map[i] = phys;
+    }
+}
+
+translation
+cpu_pages::translate(const void* addr, size_t size) {
+    auto a = reinterpret_cast<uintptr_t>(addr) - reinterpret_cast<uintptr_t>(mem());
+    auto pfn = a / huge_page_size;
+    if (pfn >= virt_to_phys_map.size()) {
+        return {};
+    }
+    auto phys = virt_to_phys_map[pfn];
+    if (phys == std::numeric_limits<physical_address>::max()) {
+        return {};
+    }
+    auto translation_size = align_up(a + 1, huge_page_size) - a;
+    size = std::min(size, translation_size);
+    phys += a & (huge_page_size - 1);
+    return translation{phys, size};
 }
 
 void cpu_pages::do_resize(size_t new_size, allocate_system_memory_fn alloc_sys_mem) {
@@ -798,6 +834,9 @@ void configure(std::vector<resource::memory> m,
         cpu_mem.replace_memory_backing(sys_alloc);
     }
     cpu_mem.resize(total, sys_alloc);
+    if (hugetlbfs_path) {
+        cpu_mem.init_virt_to_phys_map();
+    }
     size_t pos = 0;
     for (auto&& x : m) {
 #ifdef HAVE_NUMA
@@ -818,6 +857,19 @@ statistics stats() {
 
 bool drain_cross_cpu_freelist() {
     return cpu_mem.drain_cross_cpu_freelist();
+}
+
+translation
+translate(const void* addr, size_t size) {
+    auto cpu_id = object_cpu_id(addr);
+    if (cpu_id >= max_cpus) {
+        return {};
+    }
+    auto cp = cpu_pages::all_cpus[cpu_id];
+    if (!cp) {
+        return {};
+    }
+    return cp->translate(addr, size);
 }
 
 }
@@ -1064,6 +1116,11 @@ statistics stats() {
 
 bool drain_cross_cpu_freelist() {
     return false;
+}
+
+translation
+translate(const void* addr, size_t size) {
+    return {};
 }
 
 }
