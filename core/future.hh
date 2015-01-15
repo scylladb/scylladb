@@ -646,7 +646,7 @@ future<T...> make_exception_future(std::exception_ptr ex) noexcept {
 template <typename... T, typename Exception>
 inline
 future<T...> make_exception_future(Exception&& ex) noexcept {
-    return make_exception_future<T...>(make_exception_ptr(std::forward<Exception>(ex)));
+    return make_exception_future<T...>(std::make_exception_ptr(std::forward<Exception>(ex)));
 }
 
 #endif /* FUTURE_HH_ */
