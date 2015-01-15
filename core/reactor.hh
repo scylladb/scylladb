@@ -626,6 +626,8 @@ private:
     promise<> _timer_promise;
     std::experimental::optional<poller> _epoll_poller;
     const bool _reuseport;
+    circular_buffer<double> _loads;
+    double _load = 0;
 private:
     void abort_on_error(int ret);
     template <typename T, typename E>

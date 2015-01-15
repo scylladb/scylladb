@@ -613,6 +613,12 @@ reactor::register_collectd_metrics() {
                     , scollectd::make_typed(scollectd::data_type::GAUGE
                             , std::bind(&decltype(_timers)::size, &_timers))
             ),
+            scollectd::add_polled_metric(scollectd::type_instance_id("reactor"
+                    , scollectd::per_cpu_plugin_instance
+                    , "queue_length", "idle")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE,
+                            [this] () -> uint32_t { return _load * 100; })
+            ),
             scollectd::add_polled_metric(
                 scollectd::type_instance_id("memory",
                     scollectd::per_cpu_plugin_instance,
@@ -729,9 +735,31 @@ int reactor::run() {
         return false;
     });
 
+    using namespace std::chrono_literals;
+    timer<lowres_clock> load_timer;
+    std::chrono::high_resolution_clock::rep idle_count = 0;
+    auto idle_start = std::chrono::high_resolution_clock::now(), idle_end = idle_start;
+    load_timer.set_callback([this, &idle_count, &idle_start, &idle_end] () mutable {
+        auto load = double(idle_count + (idle_end - idle_start).count()) / double(std::chrono::duration_cast<std::chrono::high_resolution_clock::duration>(1s).count());
+        load = std::min(load, 1.0);
+        idle_count = 0;
+        idle_start = idle_end;
+        _loads.push_front(load);
+        if (_loads.size() > 5) {
+            auto drop = _loads.back();
+            _loads.pop_back();
+            _load -= (drop/5);
+        }
+        _load += (load/5);
+    });
+    load_timer.arm_periodic(1s);
+
+    bool idle = false;
+
     while (true) {
         run_tasks(_pending_tasks, _task_quota);
         if (_stopped) {
+            load_timer.cancel();
             run_tasks(_at_destroy_tasks, _at_destroy_tasks.size());
             if (_id == 0) {
                 smp::join_all();
@@ -739,7 +767,18 @@ int reactor::run() {
             break;
         }
 
-        poll_once();
+        if (!poll_once() && _pending_tasks.empty()) {
+            idle_end = std::chrono::high_resolution_clock::now();
+            if (!idle) {
+                idle_start = idle_end;
+                idle = true;
+            }
+        } else {
+            if (idle) {
+                idle_count += (idle_end - idle_start).count();
+                idle = false;
+            }
+        }
     }
     return _return;
 }
