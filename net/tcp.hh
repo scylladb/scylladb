@@ -68,7 +68,7 @@ struct tcp_option {
 
     void parse(uint8_t* beg, uint8_t* end);
     uint8_t fill(tcp_hdr* th, uint8_t option_size);
-    uint8_t get_size(bool foreign_syn_received);
+    uint8_t get_size(bool syn_on, bool ack_on);
 
     // For option negotiattion
     bool _mss_received = false;
@@ -889,21 +889,21 @@ void tcp<InetTraits>::tcb::output_one() {
         return;
     }
 
-    uint8_t options_size = 0;
     packet p = get_transmit_packet();
     uint16_t len = p.len();
+    bool syn_on = !_local_syn_acked;
+    bool ack_on = _foreign_syn_received;
 
-    if (!_local_syn_acked) {
-        options_size = _option.get_size(_foreign_syn_received);
-    }
+    auto options_size = _option.get_size(syn_on, ack_on);
     auto th = p.prepend_header<tcp_hdr>(options_size);
+
     th->src_port = _local_port;
     th->dst_port = _foreign_port;
 
-    th->f_syn = !_local_syn_acked;
-    _local_syn_sent |= th->f_syn;
-    th->f_ack = _foreign_syn_received;
-    if (th->f_ack) {
+    th->f_syn = syn_on;
+    _local_syn_sent |= syn_on;
+    th->f_ack = ack_on;
+    if (ack_on) {
         clear_delayed_ack();
     }
     th->f_urg = false;

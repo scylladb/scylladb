@@ -59,16 +59,18 @@ uint8_t tcp_option::fill(tcp_hdr* th, uint8_t options_size) {
     auto hdr = reinterpret_cast<uint8_t*>(th);
     auto off = hdr + sizeof(tcp_hdr);
     uint8_t size = 0;
+    bool syn_on = th->f_syn;
+    bool ack_on = th->f_ack;
 
-    if (th->f_syn) {
-        if (_mss_received || !th->f_ack) {
+    if (syn_on) {
+        if (_mss_received || !ack_on) {
             auto mss = new (off) tcp_option::mss;
             mss->mss = _local_mss;
             off += mss->len;
             size += mss->len;
             *mss = hton(*mss);
         }
-        if (_win_scale_received || !th->f_ack) {
+        if (_win_scale_received || !ack_on) {
             auto win_scale = new (off) tcp_option::win_scale;
             win_scale->shift = _local_win_scale;
             off += win_scale->len;
@@ -91,12 +93,16 @@ uint8_t tcp_option::fill(tcp_hdr* th, uint8_t options_size) {
     return size;
 }
 
-uint8_t tcp_option::get_size(bool foreign_syn_received) {
+uint8_t tcp_option::get_size(bool syn_on, bool ack_on) {
     uint8_t size = 0;
-    if (_mss_received || !foreign_syn_received)
-        size += option_len::mss;
-    if (_win_scale_received || !foreign_syn_received)
-        size += option_len::win_scale;
+    if (syn_on) {
+        if (_mss_received || !ack_on) {
+            size += option_len::mss;
+        }
+        if (_win_scale_received || !ack_on) {
+            size += option_len::win_scale;
+        }
+    }
     if (size > 0) {
         size += option_len::eol;
         // Insert NOP option to align on 32-bit
