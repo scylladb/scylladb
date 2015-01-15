@@ -59,11 +59,11 @@ public:
     }
 
     bool is_timestamp_set() const {
-        return _timestamp ? true : false;
+        return bool(_timestamp);
     }
 
     bool is_time_to_live_set() const {
-        return _time_to_live ? true : false;
+        return bool(_time_to_live);
     }
 
     int64_t get_timestamp(int64_t now, const query_options& options) {

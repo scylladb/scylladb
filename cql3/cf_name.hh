@@ -49,7 +49,7 @@ public:
         }
     }
     bool has_keyspace() const {
-        return _ks_name ? true : false;
+        return bool(_ks_name);
     }
 
     sstring get_keyspace() const {
