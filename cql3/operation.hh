@@ -15,6 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_OPERATION_HH
+#define CQL3_OPERATION_HH
+
+#include "config/column_definition.hh"
+
+#include "core/shared_ptr.hh"
+
+#include <experimental/optional>
+
+namespace cql3 {
+
+#if 0
 package org.apache.cassandra.cql3;
 
 import java.nio.ByteBuffer;
@@ -24,6 +43,7 @@ import org.apache.cassandra.db.ColumnFamily;
 import org.apache.cassandra.db.composites.Composite;
 import org.apache.cassandra.db.marshal.*;
 import org.apache.cassandra.exceptions.InvalidRequestException;
+#endif
 
 /**
  * An UPDATE or DELETE operation.
@@ -39,27 +59,27 @@ import org.apache.cassandra.exceptions.InvalidRequestException;
  * Fine grained operation are obtained from their raw counterpart (Operation.Raw, which
  * correspond to a parsed, non-checked operation) by provided the receiver for the operation.
  */
-public abstract class Operation
-{
+class operation {
+public:
     // the column the operation applies to
-    public final ColumnDefinition column;
+    const ::shared_ptr<config::column_definition> column;
 
+protected:
     // Term involved in the operation. In theory this should not be here since some operation
     // may require none of more than one term, but most need 1 so it simplify things a bit.
-    protected final Term t;
+    const std::experimental::optional<::shared_ptr<term>> _t;
 
-    protected Operation(ColumnDefinition column, Term t)
-    {
-        assert column != null;
-        this.column = column;
-        this.t = t;
+    operation(::shared_ptr<config::column_definition> column_, std::experimental::optional<::shared_ptr<term>> t)
+        : column{column_}
+        , _t{t}
+    { }
+
+public:
+    virtual bool uses_function(sstring ks_name, sstring function_name) const {
+        return _t && _t.value()->uses_function(ks_name, function_name);
     }
 
-    public boolean usesFunction(String ksName, String functionName)
-    {
-        return t != null && t.usesFunction(ksName, functionName);
-    }
-
+#if 0
     /**
      * @return whether the operation requires a read of the previous value to be executed
      * (only lists setterByIdx, discard and discardByIdx requires that).
@@ -426,4 +446,9 @@ public abstract class Operation
             throw new AssertionError();
         }
     }
+#endif
+};
+
 }
+
+#endif

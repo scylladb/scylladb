@@ -46,6 +46,7 @@
 #include "maps.hh"
 #include "term.hh"
 #include "sets.hh"
+#include "operation.hh"
 #include "cql3_row.hh"
 #include "cql3_type.hh"
 #include "attributes.hh"
