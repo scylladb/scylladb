@@ -327,7 +327,7 @@ private:
         }
     }
 
-    void do_complete();
+    bool do_complete();
     size_t mask() { return size() - 1; }
     size_t masked(size_t idx) { return idx & mask(); }
     size_t available();
@@ -370,8 +370,7 @@ vring<BufferChain, Completion>::vring(ring_config conf, Completion complete)
     , _avail_event(reinterpret_cast<std::atomic<uint16_t>*>(&_used._shared->_used_elements[conf.size]))
     , _used_event(reinterpret_cast<std::atomic<uint16_t>*>(&_avail._shared->_ring[conf.size]))
     , _poller([this] {
-        do_complete();
-        return true;
+        return do_complete();
     })
 {
     setup();
@@ -417,9 +416,10 @@ void vring<BufferChain, Completion>::post(Iterator begin, Iterator end) {
 }
 
 template <typename BufferChain, typename Completion>
-void vring<BufferChain, Completion>::do_complete() {
+bool vring<BufferChain, Completion>::do_complete() {
     auto used_head = _used._shared->_idx.load(std::memory_order_acquire);
-    _complete.bunch(_used._tail - used_head);
+    auto count = _used._tail - used_head;
+    _complete.bunch(count);
     while (used_head != _used._tail) {
         auto ue = _used._shared->_used_elements[masked(_used._tail++)];
         _complete(std::move(_buffer_chains[ue._id]), ue._len);
@@ -438,6 +438,7 @@ void vring<BufferChain, Completion>::do_complete() {
         }
         _free_last = id;
     }
+    return count;
 }
 
 class qp : public net::qp {

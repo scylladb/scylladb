@@ -254,7 +254,7 @@ reactor::submit_io(Func prepare_io) {
     });
 }
 
-void reactor::process_io()
+bool reactor::process_io()
 {
     io_event ev[max_aio];
     struct timespec timeout = {0, 0};
@@ -266,6 +266,7 @@ void reactor::process_io()
         delete pr;
     }
     _io_context_available.signal(n);
+    return n;
 }
 
 future<size_t>
@@ -557,7 +558,7 @@ void sigaction(int signo, siginfo_t* siginfo, void* ignore) {
     reactor::signal_handler::pending.fetch_or(1ull << signo, std::memory_order_relaxed);
 }
 
-void reactor::poll_signal() {
+bool reactor::poll_signal() {
     auto signals = reactor::signal_handler::pending.load(std::memory_order_relaxed);
     if (signals) {
         reactor::signal_handler::pending.fetch_and(~signals, std::memory_order_relaxed);
@@ -568,6 +569,7 @@ void reactor::poll_signal() {
             }
         }
     }
+    return signals;
 }
 
 reactor::signal_handler::signal_handler(int signo) {
@@ -659,10 +661,10 @@ int reactor::run() {
     auto collectd_metrics = register_collectd_metrics();
 
 #ifndef HAVE_OSV
-    poller io_poller([&] { process_io(); return true; });
+    poller io_poller([&] { return process_io(); });
 #endif
 
-    poller sig_poller([&] { poll_signal(); return true; } );
+    poller sig_poller([&] { return poll_signal(); } );
 
     if (_id == 0) {
        if (_handle_sigint) {
@@ -716,14 +718,15 @@ int reactor::run() {
 
     poller expire_lowres_timers([this] {
         if (_lowres_next_timeout == lowres_clock::time_point()) {
-            return true;
+            return false;
         }
         auto now = lowres_clock::now();
         if (now > _lowres_next_timeout) {
             _lowres_timer_promise.set_value();
             _lowres_timer_promise = promise<>();
+            return true;
         }
-        return true;
+        return false;
     });
 
     while (true) {
@@ -843,12 +846,12 @@ reactor::poller::~poller() {
     }
 }
 
-void
+bool
 reactor_backend_epoll::wait_and_process() {
     std::array<epoll_event, 128> eevt;
     int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(), 0);
     if (nr == -1 && errno == EINTR) {
-        return; // gdb can cause this
+        return false; // gdb can cause this
     }
     assert(nr != -1);
     for (int i = 0; i < nr; ++i) {
@@ -865,6 +868,7 @@ reactor_backend_epoll::wait_and_process() {
             ::epoll_ctl(_epollfd.get(), op, pfd->fd.get(), &evt);
         }
     }
+    return nr;
 }
 
 syscall_work_queue::syscall_work_queue()

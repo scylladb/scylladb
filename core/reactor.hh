@@ -502,7 +502,7 @@ public:
     // and just processes events that have already happened, if any.
     // After the optional wait, just before processing the events, the
     // pre_process() function is called.
-    virtual void wait_and_process() = 0;
+    virtual bool wait_and_process() = 0;
     // Methods that allow polling on file descriptors. This will only work on
     // reactor_backend_epoll. Other reactor_backend will probably abort if
     // they are called (which is fine if no file descriptors are waited on):
@@ -531,7 +531,7 @@ private:
 public:
     reactor_backend_epoll();
     virtual ~reactor_backend_epoll() override { }
-    virtual void wait_and_process() override;
+    virtual bool wait_and_process() override;
     virtual future<> readable(pollable_fd_state& fd) override;
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
@@ -647,7 +647,7 @@ private:
         static thread_local std::atomic<uint64_t> pending;
     };
     std::unordered_map<int, signal_handler> _signal_handlers;
-    void poll_signal();
+    bool poll_signal();
     friend void sigaction(int signo, siginfo_t* siginfo, void* ignore);
 
     thread_pool _thread_pool;
@@ -721,7 +721,7 @@ public:
     void start_epoll() {
         if (!_epoll_poller) {
             _epoll_poller = poller([this] {
-                wait_and_process(); return true;
+                return wait_and_process();
             });
         }
     }
@@ -741,7 +741,7 @@ private:
     collectd_registrations register_collectd_metrics();
     future<> write_all_part(pollable_fd_state& fd, const void* buffer, size_t size, size_t completed);
 
-    void process_io();
+    bool process_io();
 
     void add_timer(timer<>*);
     void del_timer(timer<>*);
@@ -761,8 +761,8 @@ private:
     friend class smp_message_queue;
     friend class poller;
 public:
-    void wait_and_process() {
-        _backend.wait_and_process();
+    bool wait_and_process() {
+        return _backend.wait_and_process();
     }
 
     future<> readable(pollable_fd_state& fd) {

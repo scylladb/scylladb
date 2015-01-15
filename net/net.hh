@@ -133,7 +133,7 @@ protected:
         _packets_rcv += count;
     }
 public:
-    qp() : _tx_poller([this] { poll_tx(); return true; }), _collectd_regs({
+    qp() : _tx_poller([this] { return poll_tx(); }), _collectd_regs({
                 // queue_length     value:GAUGE:0:U
                 // Absolute value of num packets in last tx bunch.
                 scollectd::add_polled_metric(scollectd::type_instance_id("network"
@@ -193,7 +193,7 @@ public:
     void register_packet_provider(packet_provider_type func) {
         _pkt_providers.push_back(std::move(func));
     }
-    void poll_tx() {
+    bool poll_tx() {
         if (_tx_packetq.size() < 16) {
             // refill send queue from upper layers
             uint32_t work;
@@ -215,7 +215,10 @@ public:
         if (!_tx_packetq.empty()) {
             _last_tx_bunch = send(_tx_packetq);
             _packets_snt += _last_tx_bunch;
+            return true;
         }
+
+        return false;
     }
     friend class device;
 };
