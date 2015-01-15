@@ -24,6 +24,7 @@
 #include "statements/alter_type_statement.hh"
 #include "statements/cf_statement.hh"
 #include "statements/ks_prop_defs.hh"
+#include "statements/modification_statement.hh"
 #include "statements/use_statement.hh"
 #include "statements/parsed_statement.hh"
 #include "statements/property_definitions.hh"
