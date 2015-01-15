@@ -628,6 +628,13 @@ reactor::register_collectd_metrics() {
             scollectd::add_polled_metric(
                 scollectd::type_instance_id("memory",
                     scollectd::per_cpu_plugin_instance,
+                    "total_operations", "cross_cpu_free"),
+                scollectd::make_typed(scollectd::data_type::DERIVE,
+                        [] { return memory::stats().cross_cpu_frees(); })
+            ),
+            scollectd::add_polled_metric(
+                scollectd::type_instance_id("memory",
+                    scollectd::per_cpu_plugin_instance,
                     "objects", "malloc"),
                 scollectd::make_typed(scollectd::data_type::GAUGE,
                         [] { return memory::stats().live_objects(); })
@@ -702,6 +709,10 @@ int reactor::run() {
             }
         }
     );
+
+    poller drain_cross_cpu_freelist([] {
+        return memory::drain_cross_cpu_freelist();
+    });
 
     poller expire_lowres_timers([this] {
         if (_lowres_next_timeout == lowres_clock::time_point()) {
