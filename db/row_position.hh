@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include "core/shared_ptr.hh"
 #include "database.hh"
 #include "core/sstring.hh"
 #include "util/serialization.hh"
@@ -55,11 +56,11 @@ public:
     class for_key {
     public:
 #if 0
-        static std::shared_ptr<row_position> get(bytes key, IPartitioner& p)
+        static shared_ptr<row_position> get(bytes key, IPartitioner& p)
         {
             //return key == null || key.remaining() == 0 ? p.getMinimumToken().minKeyBound() : p.decorateKey(key);
             // FIXME: Implement IPartitioner and return the correct value
-            return std::make_shared<row_position>();
+            return make_shared<row_position>();
         }
 #endif
     };
@@ -98,7 +99,7 @@ public:
 #endif
         }
 #if 0
-        std::shared_ptr<row_position> deserialize(std::istream& in)
+        shared_ptr<row_position> deserialize(std::istream& in)
         {
             const row_position::kind kind_(deserialize_int8(in));
             if (kind_ == row_position::kind::ROW_KEY) {

@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include "core/shared_ptr.hh"
 #include "dht/i_partitioner.hh"
 #include <memory>
 
@@ -38,10 +39,10 @@ class Token;
 template <typename C>
 class ring_position /* <C extends RingPosition<C>> extends Comparable<C> */ {
 public:
-    virtual std::shared_ptr<Token> get_token() = 0;
-    virtual std::shared_ptr<i_partitioner> get_partitioner() = 0;
+    virtual shared_ptr<Token> get_token() = 0;
+    virtual shared_ptr<i_partitioner> get_partitioner() = 0;
     virtual bool is_minimum() = 0;
-    virtual std::shared_ptr<C> min_value() = 0;
+    virtual shared_ptr<C> min_value() = 0;
 };
 
 } // dht

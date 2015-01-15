@@ -56,6 +56,15 @@ public:
     virtual void serialize(const boost::any& value, std::ostream& out) = 0;
     virtual object_opt deserialize(std::istream& in) = 0;
     virtual bool less(const bytes& v1, const bytes& v2) = 0;
+    virtual int32_t compare(const bytes& v1, const bytes& v2) {
+        if (less(v1, v2)) {
+            return -1;
+        } else if (less(v2, v1)) {
+            return 1;
+        } else {
+            return 0;
+        }
+    }
     object_opt deserialize(const bytes& v) {
         // FIXME: optimize
         std::istringstream iss(v);
@@ -63,6 +72,14 @@ public:
     }
     virtual void validate(const bytes& v) {
         // FIXME
+    }
+    virtual void validate_collection_member(const bytes& v, const bytes& collection_name) {
+        validate(v);
+    }
+    virtual bool is_compatible_with(abstract_type& previous) {
+        // FIXME
+        abort();
+        return false;
     }
     virtual object_opt compose(const bytes& v) {
         return deserialize(v);
@@ -76,6 +93,9 @@ public:
     }
     sstring name() const {
         return _name;
+    }
+    virtual bool is_byte_order_comparable() {
+        return false;
     }
 protected:
     template <typename T, typename Compare = std::less<T>>
@@ -227,8 +247,29 @@ to_bytes(const utils::UUID& uuid) {
 // FIXME: Choose a better place than database.hh
 template <typename T>
 struct comparator {
-    virtual ~comparator() {}
-    virtual bool operator()(const T& v1, const T& v2) const = 0;
+    comparator() = default;
+    comparator(std::function<int32_t (T& v1, T& v2)> fn)
+        : _compare_fn(std::move(fn))
+    { }
+    int32_t compare() { return _compare_fn(); }
+private:
+    std::function<int32_t (T& v1, T& v2)> _compare_fn;
 };
+
+inline bool
+less_unsigned(const bytes& v1, const bytes& v2) {
+    return std::lexicographical_compare(v1.begin(), v1.end(), v2.begin(), v2.end(),
+            [](int8_t v1, int8_t v2) { return uint8_t(v1) < uint8_t(v2); });
+}
+
+inline int32_t compare_unsigned(const bytes& v1, const bytes& v2) {
+    if (less_unsigned(v1, v2)) {
+        return -1;
+    } else if (less_unsigned(v2, v1)) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
 
 #endif /* DATABASE_HH_ */

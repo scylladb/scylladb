@@ -67,6 +67,15 @@ public:
             return eoc == 0 ? NONE : (eoc < 0 ? START : END);
         }
         int32_t prefix_comparison_result;
+        int32_t compare_to(const EOC& o) {
+            if (this->prefix_comparison_result < o.prefix_comparison_result) {
+                return -1;
+            } else if (this->prefix_comparison_result == o.prefix_comparison_result) {
+                return 0;
+            } else {
+                return 1;
+            }
+        }
     };
 
     virtual int32_t size() = 0;

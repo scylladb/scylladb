@@ -25,14 +25,13 @@
 #ifndef CQL3_ATTRIBUTES_HH
 #define CQL3_ATTRIBUTES_HH
 
-namespace cql3 {
 
 #include "exceptions/exceptions.hh"
 #include "db/expiring_cell.hh"
 #include "cql3/term.hh"
-
 #include <experimental/optional>
 
+namespace cql3 {
 /**
  * Utility class for the Parser to gather attributes for modification
  * statements.
