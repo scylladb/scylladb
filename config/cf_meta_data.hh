@@ -15,8 +15,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.config;
 
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CONFIG_CF_META_DATA_HH
+#define CONFIG_CF_META_DATA_HH
+
+#include "core/sstring.hh"
+
+namespace config {
+
+#if 0
 import java.io.DataInput;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
@@ -54,13 +67,16 @@ import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.UUIDGen;
 import org.github.jamm.Unmetered;
+#endif
 
 /**
  * This class can be tricky to modify. Please read http://wiki.apache.org/cassandra/ConfigurationNotes for how to do so safely.
  */
+#if 0
 @Unmetered
-public final class CFMetaData
-{
+#endif
+class cf_meta_data final {
+#if 0
     private static final Logger logger = LoggerFactory.getLogger(CFMetaData.class);
 
     public final static double DEFAULT_READ_REPAIR_CHANCE = 0.0;
@@ -86,7 +102,10 @@ public final class CFMetaData
             return ByteBufferUtil.compareUnsigned(def1.name.bytes, def2.name.bytes);
         }
     };
+#endif
 
+public:
+#if 0
     public static class SpeculativeRetry
     {
         public enum RetryType
@@ -165,8 +184,10 @@ public final class CFMetaData
 
     //REQUIRED
     public final UUID cfId;                           // internal id, never exposed to user
-    public final String ksName;                       // name of keyspace
-    public final String cfName;                       // name of this column family
+#endif
+    const sstring ks_name;                            // name of keyspace
+    const sstring cf_name;                            // name of this column family
+#if 0
     public final ColumnFamilyType cfType;             // standard, super
     public volatile CellNameType comparator;          // bytes, long, timeuuid, utf8, etc.
 
@@ -1438,12 +1459,16 @@ public final class CFMetaData
 
         return true;
     }
+#endif
 
-    public boolean isCounter()
-    {
+    bool is_counter() const {
+#if 0
         return defaultValidator.isCounter();
+#endif
+        throw std::runtime_error("not implemented");
     }
 
+#if 0
     public boolean hasStaticColumns()
     {
         return !staticColumns.isEmpty();
@@ -1482,4 +1507,9 @@ public final class CFMetaData
             .append("isDense", isDense)
             .toString();
     }
+#endif
+};
+
 }
+
+#endif
