@@ -5,6 +5,7 @@
 // Used to ensure that all .hh files build, as well as a place to put
 // out-of-line implementations.
 
+#include "core/shared_ptr.hh"
 #include "composites/composite.hh"
 #include "composites/c_builder.hh"
 #include "composites/cell_name.hh"
@@ -46,24 +47,24 @@ thread_local comparator<cell> abstract_c_type::right_native_cell {
 
 thread_local comparator<cell> abstract_c_type::neither_native_cell {
     [] (cell& o1, cell& o2) {
-        auto x = std::dynamic_pointer_cast<composite>(o1.name());
-        auto y = std::dynamic_pointer_cast<composite>(o2.name());
+        auto x = dynamic_pointer_cast<composite>(o1.name());
+        auto y = dynamic_pointer_cast<composite>(o2.name());
         return abstract_c_type::compare_unsigned(*x, *y);
     }
 };
 
-thread_local comparator<std::shared_ptr<cell>> abstract_c_type::asymmetric_right_native_cell {
-    [] (std::shared_ptr<cell>& o1, std::shared_ptr<cell>& o2) {
-        auto x = std::dynamic_pointer_cast<native_cell>(o2);
-        auto y = std::dynamic_pointer_cast<composite>(o1);
+thread_local comparator<shared_ptr<cell>> abstract_c_type::asymmetric_right_native_cell {
+    [] (shared_ptr<cell>& o1, shared_ptr<cell>& o2) {
+        auto x = dynamic_pointer_cast<native_cell>(o2);
+        auto y = dynamic_pointer_cast<composite>(o1);
         return -(x->compare_to(y));
     }
 };
 
-thread_local comparator<std::shared_ptr<cell>> abstract_c_type::asymmetric_neither_native_cell {
-    [] (std::shared_ptr<cell>& o1, std::shared_ptr<cell>& o2) {
-        auto x = std::dynamic_pointer_cast<composite>(o1);
-        auto y = std::dynamic_pointer_cast<composite>(o2->name());
+thread_local comparator<shared_ptr<cell>> abstract_c_type::asymmetric_neither_native_cell {
+    [] (shared_ptr<cell>& o1, shared_ptr<cell>& o2) {
+        auto x = dynamic_pointer_cast<composite>(o1);
+        auto y = dynamic_pointer_cast<composite>(o2->name());
         return abstract_c_type::compare_unsigned(*x, *y);
     }
 };

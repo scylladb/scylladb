@@ -25,6 +25,7 @@
 #ifndef DB_MARSHAL_LIST_TYPE_HH
 #define DB_MARSHAL_LIST_TYPE_HH
 
+#include "core/shared_ptr.hh"
 #include "db/marshal/collection_type.hh"
 
 #include "database.hh"
@@ -71,7 +72,7 @@ public:
     }
 #endif
 
-    static ::shared_ptr<list_type> get_instance(::shared_ptr<abstract_type> elements, bool is_multi_cell) {
+    static shared_ptr<list_type> get_instance(shared_ptr<abstract_type> elements, bool is_multi_cell) {
         throw std::runtime_error("not implemented");
 #if 0
         Map<AbstractType<?>, ListType> internMap = isMultiCell ? instances : frozenInstances;

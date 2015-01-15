@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include "core/shared_ptr.hh"
 #include "database.hh"
 #include "db/composites/c_type.hh"
 #include "db/composites/cell_name.hh"
@@ -35,8 +36,8 @@ namespace composites {
 // FIXME: stub
 class index_info {
 public:
-    std::shared_ptr<composite> last_name;
-    std::shared_ptr<composite> first_name;
+    shared_ptr<composite> last_name;
+    shared_ptr<composite> first_name;
 };
 
 // FIXME: stub
@@ -44,11 +45,11 @@ class column_slice {
 public:
     class serializer {
     public:
-        serializer(std::shared_ptr<c_type> type) {
+        serializer(shared_ptr<c_type> type) {
            _type = type;
         }
     private:
-        std::shared_ptr<c_type> _type;
+        shared_ptr<c_type> _type;
     };
 };
 
@@ -57,72 +58,72 @@ class slice_query_filter {
 public:
     class serializer {
     public:
-        serializer(std::shared_ptr<c_type> type) {
+        serializer(shared_ptr<c_type> type) {
            _type = type;
         }
     private:
-        std::shared_ptr<c_type> _type;
+        shared_ptr<c_type> _type;
     };
 };
 
 // FIXME: stub
 class cell {
 public:
-    virtual std::shared_ptr<cell_name> name() const = 0;
+    virtual shared_ptr<cell_name> name() const = 0;
 };
 
 // FIXME: stub
 class native_cell : public cell {
 public:
-    virtual int32_t compare_to(std::shared_ptr<cell_name>) const {
+    virtual int32_t compare_to(shared_ptr<cell_name>) const {
         abort();
     }
     virtual int32_t compare_to(composite& c) const {
         abort();
     }
-    virtual int32_t compare_to(std::shared_ptr<composite>) const {
+    virtual int32_t compare_to(shared_ptr<composite>) const {
         abort();
     }
 };
 
-class abstract_c_type : public c_type, public std::enable_shared_from_this<abstract_c_type> {
+class abstract_c_type : public c_type, public enable_shared_from_this<abstract_c_type> {
 public:
     static thread_local comparator<cell> right_native_cell;
     static thread_local comparator<cell> neither_native_cell;
     // only one or the other of these will ever be used
-    static thread_local comparator<std::shared_ptr<cell>> asymmetric_right_native_cell;
-    static thread_local comparator<std::shared_ptr<cell>> asymmetric_neither_native_cell;
+    static thread_local comparator<shared_ptr<cell>> asymmetric_right_native_cell;
+    static thread_local comparator<shared_ptr<cell>> asymmetric_neither_native_cell;
 
 private:
-    std::shared_ptr<comparator<composite>> _reverse_comparator;
-    std::shared_ptr<comparator<index_info>> _index_comparator;
-    std::shared_ptr<comparator<index_info>> _index_reverse_comparator;
+    shared_ptr<comparator<composite>> _reverse_comparator;
+    shared_ptr<comparator<index_info>> _index_comparator;
+    shared_ptr<comparator<index_info>> _index_reverse_comparator;
 
     // FIXME
     // const Serializer serializer;
 
-    std::shared_ptr<column_slice::serializer> _slice_serializer;
-    std::shared_ptr<slice_query_filter::serializer> _slice_query_filter_serializer;
-    std::shared_ptr<deletion_info::serializer> _deletion_info_serializer;
-    std::shared_ptr<range_tombstone::serializer> _range_tombstone_serializer;
+    shared_ptr<column_slice::serializer> _slice_serializer;
+    shared_ptr<slice_query_filter::serializer> _slice_query_filter_serializer;
+    shared_ptr<deletion_info::serializer> _deletion_info_serializer;
+    shared_ptr<range_tombstone::serializer> _range_tombstone_serializer;
 
 protected:
     bool _is_byte_order_comparable;
 
 public:
     abstract_c_type(bool is_byte_order_comparable_) {
-        _reverse_comparator = std::make_shared<comparator<composite>>(
+        _reverse_comparator = make_shared<comparator<composite>>(
             [this] (composite& c1, composite& c2) {
                 return this->compare(c2, c1);
             }
         );
-        _index_comparator = std::make_shared<comparator<index_info>>(
+        _index_comparator = make_shared<comparator<index_info>>(
             [this] (index_info& o1, index_info& o2) {
                 return this->compare(*(o1.last_name), *(o2.last_name));
             }
         );
 
-        _index_reverse_comparator = std::make_shared<comparator<index_info>>(
+        _index_reverse_comparator = make_shared<comparator<index_info>>(
             [this] (index_info& o1, index_info& o2) {
                 return this->compare(*(o1.first_name), *(o2.first_name));
             }
@@ -132,11 +133,11 @@ public:
         // FIXME
         // serializer = new Serializer(this);
 
-        std::shared_ptr<c_type> zis = std::dynamic_pointer_cast<c_type>(this->shared_from_this());
-        _slice_serializer = std::make_shared<column_slice::serializer>(zis);
-        _slice_query_filter_serializer = std::make_shared<slice_query_filter::serializer>(zis);
-        _deletion_info_serializer = std::make_shared<deletion_info::serializer>(zis);
-        _range_tombstone_serializer = std::make_shared<range_tombstone::serializer>(zis);
+        shared_ptr<c_type> zis = dynamic_pointer_cast<c_type>(this->shared_from_this());
+        _slice_serializer = make_shared<column_slice::serializer>(zis);
+        _slice_query_filter_serializer = make_shared<slice_query_filter::serializer>(zis);
+        _deletion_info_serializer = make_shared<deletion_info::serializer>(zis);
+        _range_tombstone_serializer = make_shared<range_tombstone::serializer>(zis);
 
         this->_is_byte_order_comparable = is_byte_order_comparable_;
     }
@@ -210,7 +211,7 @@ public:
         return neither_native_cell;
     }
 
-    comparator<std::shared_ptr<cell>>& get_byte_order_asymmetric_column_comparator(bool is_right_native) {
+    comparator<shared_ptr<cell>>& get_byte_order_asymmetric_column_comparator(bool is_right_native) {
         if (is_right_native)
             return asymmetric_right_native_cell;
         return asymmetric_neither_native_cell;
@@ -292,14 +293,14 @@ public:
     //     return serializer;
     // }
 
-    virtual std::shared_ptr<comparator<composite>> reverse_comparator() override {
+    virtual shared_ptr<comparator<composite>> reverse_comparator() override {
         return _reverse_comparator;
     }
-    virtual std::shared_ptr<comparator<index_info>> index_comparator() override {
+    virtual shared_ptr<comparator<index_info>> index_comparator() override {
         return _index_comparator;
     }
 
-    virtual std::shared_ptr<comparator<index_info>> index_reverse_comparator() override {
+    virtual shared_ptr<comparator<index_info>> index_reverse_comparator() override {
         return _index_reverse_comparator;
     }
 
@@ -314,11 +315,11 @@ public:
     }
 #endif
 
-    virtual std::shared_ptr<deletion_info::serializer> deletion_info_serializer() override {
+    virtual shared_ptr<deletion_info::serializer> deletion_info_serializer() override {
         return _deletion_info_serializer;
     }
 
-    virtual std::shared_ptr<range_tombstone::serializer> range_tombstone_serializer() override {
+    virtual shared_ptr<range_tombstone::serializer> range_tombstone_serializer() override {
         return _range_tombstone_serializer;
     }
 

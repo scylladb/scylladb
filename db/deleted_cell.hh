@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include "core/shared_ptr.hh"
 #include "cell.hh"
 
 namespace db {
@@ -30,8 +31,8 @@ namespace db {
 class deleted_cell : public cell {
 public:
     // Note: The origin returns deleted_cell instead cell
-    virtual std::shared_ptr<cell> local_copy(CFMetaData metadata, AbstractAllocator allocator) = 0;
-    virtual std::shared_ptr<cell> local_copy(CFMetaData metaData, MemtableAllocator allocator, OpOrder::Group op_group) = 0;
+    virtual shared_ptr<cell> local_copy(CFMetaData metadata, AbstractAllocator allocator) = 0;
+    virtual shared_ptr<cell> local_copy(CFMetaData metaData, MemtableAllocator allocator, OpOrder::Group op_group) = 0;
 };
 
 }

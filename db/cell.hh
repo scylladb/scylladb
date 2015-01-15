@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include "core/shared_ptr.hh"
 #include "database.hh"
 #include "on_disk_atom.hh"
 #include "core/sstring.hh"
@@ -50,12 +51,12 @@ class cell : public on_disk_atom {
 public:
     static const int32_t MAX_NAME_LENGTH = fb_utilities::MAX_UNSIGNED_SHORT;
 
-    virtual std::shared_ptr<cell> with_updated_name(std::shared_ptr<cell_name> new_name) = 0;
+    virtual shared_ptr<cell> with_updated_name(shared_ptr<cell_name> new_name) = 0;
 
-    virtual std::shared_ptr<cell> with_updated_timestamp(int64_t new_timestamp) = 0;
+    virtual shared_ptr<cell> with_updated_timestamp(int64_t new_timestamp) = 0;
 
     //@Override
-    virtual std::shared_ptr<cell_name> name() = 0;
+    virtual shared_ptr<cell_name> name() = 0;
 
     virtual bytes value() = 0;
 
@@ -70,20 +71,20 @@ public:
     virtual int64_t unshared_heap_size_excluding_data() = 0;
 
     // FIXME: real TypeSizes
-    virtual int32_t serialized_size(std::shared_ptr<cell_name_type> type, TypeSizes& type_sizes) = 0;
+    virtual int32_t serialized_size(shared_ptr<cell_name_type> type, TypeSizes& type_sizes) = 0;
 
     virtual int32_t serialization_flags() = 0;
 
-    virtual std::shared_ptr<cell> diff(std::shared_ptr<cell> cell) = 0;
+    virtual shared_ptr<cell> diff(shared_ptr<cell> cell) = 0;
 
-    virtual std::shared_ptr<cell> reconcile(std::shared_ptr<cell> cell) = 0;
+    virtual shared_ptr<cell> reconcile(shared_ptr<cell> cell) = 0;
 
     // FIXME: real CFMetaData, AbstractAllocator, etc...
-    virtual std::shared_ptr<cell> local_copy(CFMetaData metadata, AbstractAllocator allocator) = 0;
+    virtual shared_ptr<cell> local_copy(CFMetaData metadata, AbstractAllocator allocator) = 0;
 
-    virtual std::shared_ptr<cell> local_copy(CFMetaData metaData, MemtableAllocator allocator, OpOrder::Group op_group) = 0;
+    virtual shared_ptr<cell> local_copy(CFMetaData metaData, MemtableAllocator allocator, OpOrder::Group op_group) = 0;
 
-    virtual sstring get_string(std::shared_ptr<cell_name_type> comparator) = 0;
+    virtual sstring get_string(shared_ptr<cell_name_type> comparator) = 0;
 };
 
 }

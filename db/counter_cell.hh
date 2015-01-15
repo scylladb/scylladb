@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include "core/shared_ptr.hh"
 #include "cell.hh"
 
 namespace db {
@@ -40,11 +41,11 @@ class counter_cell : public cell {
 
     virtual bool has_legacy_shards() = 0;
 
-    virtual std::shared_ptr<cell> mark_local_tobe_cleared() = 0;
+    virtual shared_ptr<cell> mark_local_tobe_cleared() = 0;
 
-    virtual std::shared_ptr<cell> local_copy(CFMetaData metadata, AbstractAllocator allocator) = 0;
+    virtual shared_ptr<cell> local_copy(CFMetaData metadata, AbstractAllocator allocator) = 0;
 
-    virtual std::shared_ptr<cell> local_copy(CFMetaData metaData, MemtableAllocator allocator, OpOrder::Group op_group) = 0;
+    virtual shared_ptr<cell> local_copy(CFMetaData metaData, MemtableAllocator allocator, OpOrder::Group op_group) = 0;
 };
 
 }

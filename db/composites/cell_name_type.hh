@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include "core/shared_ptr.hh"
 #include "database.hh"
 #include "composite.hh"
 #include "c_builder.hh"
@@ -188,10 +189,10 @@ public:
     // Ultimately, those might be split into an IVersionedSerializer and an ISSTableSerializer
     virtual std::unique_ptr<i_serializer<cell_name>> cell_serializer() = 0;
 
-    virtual std::shared_ptr<comparator<Cell>> column_comparator(bool is_right_native) = 0;
-    virtual std::shared_ptr<comparator<boost::any>> asymmetric_columncomparator(bool is_right_native) = 0;
-    virtual std::shared_ptr<comparator<Cell>> column_reverse_comparator() = 0;
-    virtual std::shared_ptr<comparator<on_disk_atom>> on_disk_atom_comparator() = 0;
+    virtual shared_ptr<comparator<Cell>> column_comparator(bool is_right_native) = 0;
+    virtual shared_ptr<comparator<boost::any>> asymmetric_columncomparator(bool is_right_native) = 0;
+    virtual shared_ptr<comparator<Cell>> column_reverse_comparator() = 0;
+    virtual shared_ptr<comparator<on_disk_atom>> on_disk_atom_comparator() = 0;
 
     virtual std::unique_ptr<ColumnSerializer> column_Serializer() = 0;
     virtual std::unique_ptr<on_disk_atom::serializer> onDiskAtomSerializer() = 0;

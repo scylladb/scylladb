@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include "core/shared_ptr.hh"
 #include <memory>
 
 namespace db {
@@ -37,7 +38,7 @@ class deletion_info {
 public:
     class serializer {
     public:
-        serializer(std::shared_ptr<db::composites::c_type> type) {
+        serializer(shared_ptr<db::composites::c_type> type) {
         }
     };
 };
