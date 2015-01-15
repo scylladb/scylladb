@@ -60,6 +60,8 @@ static constexpr const size_t page_bits = 12;
 static constexpr const size_t page_size = 1 << page_bits;
 static constexpr const size_t huge_page_size = 512 * page_size;
 static constexpr const unsigned cpu_id_shift = 36; // FIXME: make dynamic
+static constexpr const unsigned max_cpus = 256;
+static constexpr const size_t cache_line_size = 64;
 
 using pageidx = uint32_t;
 
@@ -68,6 +70,7 @@ class page_list;
 
 static thread_local uint64_t g_allocs;
 static thread_local uint64_t g_frees;
+static thread_local uint64_t g_cross_cpu_frees;
 
 using std::experimental::optional;
 
@@ -75,6 +78,11 @@ using allocate_system_memory_fn
         = std::function<mmap_area (optional<void*> where, size_t how_much)>;
 
 namespace bi = boost::intrusive;
+
+inline
+unsigned object_cpu_id(void* ptr) {
+    return (reinterpret_cast<uintptr_t>(ptr) >> cpu_id_shift) & 0xff;
+}
 
 class page_list_link {
     uint32_t _prev;
@@ -226,6 +234,10 @@ public:
 static constexpr const size_t max_small_allocation
     = small_pool::idx_to_size(small_pool_array::nr_small_pools - 1);
 
+struct cross_cpu_free_item {
+    cross_cpu_free_item* next;
+};
+
 struct cpu_pages {
     static constexpr unsigned min_free_pages = 20000000 / page_size;
     char* memory;
@@ -249,7 +261,9 @@ struct cpu_pages {
         page_list free_spans[nr_span_lists];  // contains spans with span_size >= 2^idx
     } fsu;
     small_pool_array small_pools;
+    alignas(cache_line_size) std::atomic<cross_cpu_free_item*> xcpu_freelist;
     static std::atomic<unsigned> cpu_id_gen;
+    static cpu_pages* all_cpus[max_cpus];
     char* mem() { return memory; }
 
     void link(page_list& list, page* span);
@@ -268,6 +282,8 @@ struct cpu_pages {
     void* allocate_small(unsigned size);
     void free(void* ptr);
     void free(void* ptr, size_t size);
+    void free_cross_cpu(unsigned cpu_id, void* ptr);
+    bool drain_cross_cpu_freelist();
     size_t object_size(void* ptr);
     page* to_page(void* p) {
         return &pages[(reinterpret_cast<char*>(p) - mem()) / page_size];
@@ -283,6 +299,7 @@ struct cpu_pages {
 
 static thread_local cpu_pages cpu_mem;
 std::atomic<unsigned> cpu_pages::cpu_id_gen;
+cpu_pages* cpu_pages::all_cpus[max_cpus];
 
 // Free spans are store in the largest index i such that nr_pages >= 1 << i.
 static inline
@@ -379,6 +396,7 @@ cpu_pages::allocate_large_and_trim(unsigned n_pages, Trimmer trimmer) {
     span->span_size = span_end->span_size = n_pages;
     span->pool = nullptr;
     if (nr_free_pages < current_min_free_pages) {
+        drain_cross_cpu_freelist();
         reclaim();
     }
     return mem() + span_idx * page_size;
@@ -422,8 +440,34 @@ size_t cpu_pages::object_size(void* ptr) {
     }
 }
 
+void cpu_pages::free_cross_cpu(unsigned cpu_id, void* ptr) {
+    auto p = reinterpret_cast<cross_cpu_free_item*>(ptr);
+    auto& list = all_cpus[cpu_id]->xcpu_freelist;
+    auto old = list.load(std::memory_order_relaxed);
+    do {
+        p->next = old;
+    } while (!list.compare_exchange_weak(old, p, std::memory_order_release, std::memory_order_relaxed));
+    ++g_cross_cpu_frees;
+}
+
+bool cpu_pages::drain_cross_cpu_freelist() {
+    if (!xcpu_freelist.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    auto p = xcpu_freelist.exchange(nullptr, std::memory_order_acquire);
+    while (p) {
+        auto n = p->next;
+        free(p);
+        p = n;
+    }
+    return true;
+}
+
 void cpu_pages::free(void* ptr) {
-    assert(((reinterpret_cast<uintptr_t>(ptr) >> cpu_id_shift) & 0xff) == cpu_id);
+    auto obj_cpu = object_cpu_id(ptr);
+    if (obj_cpu != cpu_id) {
+        return free_cross_cpu(obj_cpu, ptr);
+    }
     page* span = to_page(ptr);
     if (span->pool) {
         span->pool->deallocate(ptr);
@@ -433,7 +477,10 @@ void cpu_pages::free(void* ptr) {
 }
 
 void cpu_pages::free(void* ptr, size_t size) {
-    assert(((reinterpret_cast<uintptr_t>(ptr) >> cpu_id_shift) & 0xff) == cpu_id);
+    auto obj_cpu = object_cpu_id(ptr);
+    if (obj_cpu != cpu_id) {
+        return free_cross_cpu(obj_cpu, ptr);
+    }
     if (size <= max_small_allocation) {
         auto pool = &small_pools[small_pool::size_to_idx(size)];
         pool->deallocate(ptr);
@@ -447,6 +494,8 @@ bool cpu_pages::initialize() {
         return false;
     }
     cpu_id = cpu_id_gen.fetch_add(1, std::memory_order_relaxed);
+    assert(cpu_id < max_cpus);
+    all_cpus[cpu_id] = this;
     auto base = mem_base() + (size_t(cpu_id) << cpu_id_shift);
     auto size = 32 << 20;  // Small size for bootstrap
     auto r = ::mmap(base, size,
@@ -680,7 +729,7 @@ void free_large(void* ptr) {
 }
 
 size_t object_size(void* ptr) {
-    return cpu_mem.object_size(ptr);
+    return cpu_pages::all_cpus[object_cpu_id(ptr)]->object_size(ptr);
 }
 
 void* allocate(size_t size) {
@@ -764,7 +813,11 @@ void configure(std::vector<resource::memory> m,
 }
 
 statistics stats() {
-    return statistics{g_allocs, g_frees};
+    return statistics{g_allocs, g_frees, g_cross_cpu_frees};
+}
+
+bool drain_cross_cpu_freelist() {
+    return cpu_mem.drain_cross_cpu_freelist();
 }
 
 }
@@ -1006,7 +1059,11 @@ void configure(std::vector<resource::memory> m, std::experimental::optional<std:
 }
 
 statistics stats() {
-    return statistics{0, 0};
+    return statistics{0, 0, 0};
+}
+
+bool drain_cross_cpu_freelist() {
+    return false;
 }
 
 }
