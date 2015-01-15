@@ -15,7 +15,7 @@ namespace bpo = boost::program_options;
 app_template::app_template()
         : _opts("App options") {
     _opts.add_options()
-            ("help", "show help message")
+            ("help,h", "show help message")
             ;
     _opts.add(reactor::get_options_description());
     _opts.add(smp::get_options_description());
@@ -38,13 +38,18 @@ app_template::run(int ac, char ** av, std::function<void ()>&& func) {
     print("WARNING: debug mode. Not for benchmarking or production\n");
 #endif
     bpo::variables_map configuration;
-    bpo::store(bpo::command_line_parser(ac, av).options(_opts).run(), configuration);
-    auto home = std::getenv("HOME");
-    if (home) {
-        std::ifstream ifs(std::string(home) + "/.config/seastar/seastar.conf");
-        if (ifs) {
-            bpo::store(bpo::parse_config_file(ifs, _opts), configuration);
+    try {
+        bpo::store(bpo::command_line_parser(ac, av).options(_opts).run(), configuration);
+        auto home = std::getenv("HOME");
+        if (home) {
+            std::ifstream ifs(std::string(home) + "/.config/seastar/seastar.conf");
+            if (ifs) {
+                bpo::store(bpo::parse_config_file(ifs, _opts), configuration);
+            }
         }
+    } catch (bpo::error& e) {
+        print("error: %s\n\nTry --help.\n", e.what());
+        return 2;
     }
     bpo::notify(configuration);
     if (configuration.count("help")) {
