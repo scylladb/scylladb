@@ -15,7 +15,7 @@ namespace bpo = boost::program_options;
 app_template::app_template()
         : _opts("App options") {
     _opts.add_options()
-            ("help", "show help message")
+            ("help,h", "show help message")
             ;
     _opts.add(reactor::get_options_description());
     _opts.add(smp::get_options_description());
