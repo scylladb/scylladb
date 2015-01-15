@@ -773,6 +773,7 @@ int reactor::run() {
                 idle_start = idle_end;
                 idle = true;
             }
+            _mm_pause();
         } else {
             if (idle) {
                 idle_count += (idle_end - idle_start).count();
