@@ -31,7 +31,7 @@
 
 namespace cql3 {
 
-class column_specification final {
+class column_specification {
 public:
     const sstring ks_name;
     const sstring cf_name;
