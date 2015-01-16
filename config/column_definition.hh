@@ -15,6 +15,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#ifndef CONFIG_COLUMN_DEFINITION_HH
+#define CONFIG_COLUMN_DEFINITION_HH
+
+#include "cql3/column_specification.hh"
+
+#if 0
 package org.apache.cassandra.config;
 
 import java.nio.ByteBuffer;
@@ -28,9 +35,12 @@ import com.google.common.collect.Lists;
 import org.apache.cassandra.cql3.*;
 import org.apache.cassandra.db.marshal.*;
 import org.apache.cassandra.exceptions.*;
+#endif
 
-public class ColumnDefinition extends ColumnSpecification
-{
+namespace config {
+
+class column_definition : public cql3::column_specification {
+#if 0
     /*
      * The type of CQL3 column this definition represents.
      * There is 3 main type of CQL3 columns: those parts of the partition key,
@@ -333,4 +343,9 @@ public class ColumnDefinition extends ColumnSpecification
             }
         });
     }
+#endif
+};
+
 }
+
+#endif
