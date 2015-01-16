@@ -78,7 +78,7 @@ public:
 
     virtual std::unique_ptr<prepared> prepare() = 0;
 
-    virtual bool uses_function(sstring ks_name, sstring function_name) {
+    virtual bool uses_function(sstring ks_name, sstring function_name) const {
         return false;
     }
 };
