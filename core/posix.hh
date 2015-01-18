@@ -242,6 +242,11 @@ public:
         throw_system_error_on(r == -1);
         return { size_t(r) };
     }
+    size_t pread(void* buf, size_t len, off_t off) {
+        auto r = ::pread(_fd, buf, len, off);
+        throw_system_error_on(r == -1);
+        return size_t(r);
+    }
     void timerfd_settime(int flags, const itimerspec& its) {
         auto r = ::timerfd_settime(_fd, flags, &its, NULL);
         throw_system_error_on(r == -1);

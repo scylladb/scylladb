@@ -40,6 +40,22 @@ bool drain_cross_cpu_freelist();
 void set_reclaim_hook(
         std::function<void (std::function<void ()>)> hook);
 
+using physical_address = uint64_t;
+
+struct translation {
+    translation() = default;
+    translation(physical_address a, size_t s) : addr(a), size(s) {}
+    physical_address addr = 0;
+    size_t size = 0;
+};
+
+// Translate a virtual address range to a physical range.
+//
+// Can return a smaller range (in which case the reminder needs
+// to be translated again), or a zero sized range in case the
+// translation is not known.
+translation translate(const void* addr, size_t size);
+
 class statistics;
 statistics stats();
 
