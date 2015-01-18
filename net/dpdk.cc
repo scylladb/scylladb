@@ -669,7 +669,7 @@ rte_mbuf* dpdk_qp::create_tx_mbuf(packet& p) {
 
 uint32_t dpdk_qp::send(circular_buffer<packet>& pb)
 {
-    if (_tx_burst_idx == 0) {
+    if (_tx_burst.size() == 0) {
         pb.for_each([this, err = false] (packet& p) mutable {
             if (!err) {
                 auto mbuf = create_tx_mbuf(p);
