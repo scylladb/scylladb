@@ -79,7 +79,7 @@ make CC=gcc-4.9 CXX=g++-4.9 -j 24
 To build a Docker image:
 
 ```
-docker build -t seastar-dev .
+docker build -t seastar-dev docker/dev
 ```
 
 To launch a container:
