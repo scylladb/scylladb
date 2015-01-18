@@ -311,6 +311,8 @@ int dpdk_device::init_port_start()
             _rss_table_bits = std::lround(std::log2(_dev_info.reta_size));
             printf("Port %d: RSS table size is %d\n",
                    _port_idx, _dev_info.reta_size);
+        } else {
+            _rss_table_bits = std::lround(std::log2(_dev_info.max_rx_queues));
         }
 #endif
     }
