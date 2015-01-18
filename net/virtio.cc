@@ -566,10 +566,10 @@ qp::txq::txq(qp& dev, ring_config config)
 
 uint32_t
 qp::txq::post(circular_buffer<packet>& pb) {
-    net_hdr_mrg vhdr = {};
     _packets.clear();
 
     while (!pb.empty() && pb.front().nr_frags() + 1 <= _ring.available_descriptors().current()) {
+        net_hdr_mrg vhdr = {};
         auto p = std::move(pb.front());
         pb.pop_front();
         // Handle TCP checksum offload
