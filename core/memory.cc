@@ -1097,6 +1097,24 @@ void operator delete[](void* ptr, size_t size, std::nothrow_t) throw () {
     }
 }
 
+void* operator new(size_t size, with_alignment wa) {
+    return allocate_aligned(wa.alignment(), size);
+}
+
+void* operator new[](size_t size, with_alignment wa) {
+    return allocate_aligned(wa.alignment(), size);
+}
+
+void operator delete(void* ptr, with_alignment wa) {
+    // only called for matching operator new, so we know ptr != nullptr
+    return memory::free(ptr);
+}
+
+void operator delete[](void* ptr, with_alignment wa) {
+    // only called for matching operator new, so we know ptr != nullptr
+    return memory::free(ptr);
+}
+
 #else
 
 namespace memory {
@@ -1126,6 +1144,30 @@ translate(const void* addr, size_t size) {
     return {};
 }
 
+}
+
+void* operator new(size_t size, with_alignment wa) {
+    void* ret;
+    if (posix_memalign(&ret, wa.alignment(), size) != 0) {
+        throw std::bad_alloc();
+    }
+    return ret;
+}
+
+void* operator new[](size_t size, with_alignment wa) {
+    void* ret;
+    if (posix_memalign(&ret, wa.alignment(), size) != 0) {
+        throw std::bad_alloc();
+    }
+    return ret;
+}
+
+void operator delete(void* ptr, with_alignment wa) {
+    return ::free(ptr);
+}
+
+void operator delete[](void* ptr, with_alignment wa) {
+    return ::free(ptr);
 }
 
 #endif

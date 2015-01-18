@@ -77,4 +77,35 @@ public:
 
 }
 
+class with_alignment {
+    size_t _align;
+public:
+    with_alignment(size_t align) : _align(align) {}
+    size_t alignment() const { return _align; }
+};
+
+void* operator new(size_t size, with_alignment wa);
+void* operator new[](size_t size, with_alignment wa);
+void operator delete(void* ptr, with_alignment wa);
+void operator delete[](void* ptr, with_alignment wa);
+
+template <typename T, size_t Align>
+class aligned_allocator {
+public:
+    using value_type = T;
+    T* allocate(size_t n) const {
+        // FIXME: multiply can overflow?
+        return reinterpret_cast<T*>(::operator new(n * sizeof(T), with_alignment(Align)));
+    }
+    void deallocate(T* ptr) const {
+        return ::operator delete(ptr, with_alignment(Align));
+    }
+    bool operator==(const aligned_allocator& x) const {
+        return true;
+    }
+    bool operator!=(const aligned_allocator& x) const {
+        return false;
+    }
+};
+
 #endif /* MEMORY_HH_ */
