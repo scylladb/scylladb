@@ -787,6 +787,9 @@ void* allocate_aligned(size_t align, size_t size) {
         size = sizeof(free_object);
     }
     if (size <= max_small_allocation) {
+        // Our small allocator only guarantees alignment for power-of-two
+        // allocations.
+        size = 1 << log2(size);
         return cpu_mem.allocate_small(size);
     } else {
         return allocate_large_aligned(align, size);
