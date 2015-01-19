@@ -20,6 +20,7 @@
 #include <chrono>
 #include <experimental/optional>
 #include <random>
+#include <stdexcept>
 
 #define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
 #include <cryptopp/md5.h>
@@ -29,6 +30,16 @@ using namespace std::chrono_literals;
 namespace net {
 
 class tcp_hdr;
+
+class tcp_error : public std::runtime_error {
+public:
+    tcp_error(const std::string& msg) : std::runtime_error(msg) {}
+};
+
+class tcp_reset_error : public tcp_error {
+public:
+    tcp_reset_error() : tcp_error("connection is reset") {}
+};
 
 struct tcp_option {
     // The kind and len field are fixed and defined in TCP protocol
@@ -593,6 +604,8 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     if (th->f_rst) {
         // Fake end-of-connection so reads return immediately
         _nuked = true;
+        // Free packets to be sent which are waiting for _snd.user_queue_space
+        _snd.user_queue_space.broken(tcp_reset_error());
         cleanup();
         if (_rcv._data_received_promise) {
             // FIXME: set_exception() instead?
@@ -985,13 +998,21 @@ packet tcp<InetTraits>::tcb::read() {
 
 template <typename InetTraits>
 future<> tcp<InetTraits>::tcb::send(packet p) {
+    // We can not send after the connection is closed
+    assert(!_snd.closed);
+
+    if (_nuked) {
+        return make_exception_future<>(tcp_reset_error());
+    }
+
     // TODO: Handle p.len() > max user_queue_space case
     auto len = p.len();
     return _snd.user_queue_space.wait(len).then([this, zis = this->shared_from_this(), p = std::move(p)] () mutable {
         _snd.unsent_len += p.len();
         _snd.unsent.push_back(std::move(p));
-        if (can_send() > 0)
+        if (can_send() > 0) {
             output();
+        }
         return make_ready_future<>();
     });
 }
