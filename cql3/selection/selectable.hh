@@ -26,6 +26,9 @@
 #ifndef CQL3_SELECTION_SELECTABLE_HH
 #define CQL3_SELECTION_SELECTABLE_HH
 
+#include "config/cf_meta_data.hh"
+#include "core/shared_ptr.hh"
+
 namespace cql3 {
 
 namespace selection {
@@ -47,6 +50,7 @@ import org.apache.commons.lang3.text.StrBuilder;
 #endif
 
 class selectable {
+public:
 #if 0
     public abstract Selector.Factory newSelectorFactory(CFMetaData cfm, List<ColumnDefinition> defs)
             throws InvalidRequestException;
@@ -61,17 +65,19 @@ class selectable {
         }
         return idx;
     }
+#endif
 
-    public static interface Raw
-    {
-        public Selectable prepare(CFMetaData cfm);
+    class raw {
+    public:
+        virtual ::shared_ptr<selectable> prepare(::shared_ptr<config::cf_meta_data> cfm) = 0;
 
         /**
          * Returns true if any processing is performed on the selected column.
          **/
-        public boolean processesSelection();
-    }
+        virtual bool processesSelection() = 0;
+    };
 
+#if 0
     public static class WritetimeOrTTL extends Selectable
     {
         public final ColumnIdentifier id;
