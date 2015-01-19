@@ -420,6 +420,9 @@ void configure(const boost::program_options::variables_map & opts) {
 boost::program_options::options_description get_options_description() {
     namespace bpo = boost::program_options;
     bpo::options_description opts("COLLECTD options");
+    char hostname[PATH_MAX];
+    gethostname(hostname, sizeof(hostname));
+    hostname[PATH_MAX-1] = '\0';
     opts.add_options()("collectd", bpo::value<bool>()->default_value(true),
             "enable collectd daemon")("collectd-address",
             bpo::value<std::string>()->default_value("239.192.74.66:25826"),
@@ -427,7 +430,7 @@ boost::program_options::options_description get_options_description() {
             bpo::value<unsigned>()->default_value(1000),
             "poll period - frequency of sending counter metrics (default: 1000ms, 0 disables)")(
             "collectd-hostname",
-            bpo::value<std::string>()->default_value("localhost"),
+            bpo::value<std::string>()->default_value(hostname),
             "collectd host name");
     return opts;
 }
