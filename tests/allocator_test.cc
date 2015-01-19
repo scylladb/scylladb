@@ -2,6 +2,7 @@
  * Copyright 2014 Cloudius Systems
  */
 
+#include "core/memory.hh"
 #include <random>
 #include <cmath>
 #include <iostream>
@@ -11,6 +12,17 @@
 #include <memory>
 #include <chrono>
 #include <boost/program_options.hpp>
+
+template <size_t N>
+void test_aligned_allocator() {
+    using aptr = std::unique_ptr<char[]>;
+    std::vector<aptr> v;
+    for (unsigned i = 0; i < 1000; ++i) {
+        aptr p(new (with_alignment(64)) char[N]);
+        assert(reinterpret_cast<uintptr_t>(p.get()) % 64 == 0);
+        v.push_back(std::move(p));
+    }
+}
 
 struct allocation {
     size_t n;
@@ -52,6 +64,9 @@ int main(int ac, char** av) {
     bpo::variables_map vm;
     bpo::store(bpo::parse_command_line(ac, av, opts), vm);
     bpo::notify(vm);
+    test_aligned_allocator<1>();
+    test_aligned_allocator<4>();
+    test_aligned_allocator<80>();
     std::default_random_engine random_engine;
     std::exponential_distribution<> distr(0.2);
     std::uniform_int_distribution<> type(0, 1);

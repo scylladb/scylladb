@@ -787,6 +787,9 @@ void* allocate_aligned(size_t align, size_t size) {
         size = sizeof(free_object);
     }
     if (size <= max_small_allocation) {
+        // Our small allocator only guarantees alignment for power-of-two
+        // allocations.
+        size = 1 << log2(size);
         return cpu_mem.allocate_small(size);
     } else {
         return allocate_large_aligned(align, size);
@@ -1094,6 +1097,24 @@ void operator delete[](void* ptr, size_t size, std::nothrow_t) throw () {
     }
 }
 
+void* operator new(size_t size, with_alignment wa) {
+    return allocate_aligned(wa.alignment(), size);
+}
+
+void* operator new[](size_t size, with_alignment wa) {
+    return allocate_aligned(wa.alignment(), size);
+}
+
+void operator delete(void* ptr, with_alignment wa) {
+    // only called for matching operator new, so we know ptr != nullptr
+    return memory::free(ptr);
+}
+
+void operator delete[](void* ptr, with_alignment wa) {
+    // only called for matching operator new, so we know ptr != nullptr
+    return memory::free(ptr);
+}
+
 #else
 
 namespace memory {
@@ -1123,6 +1144,30 @@ translate(const void* addr, size_t size) {
     return {};
 }
 
+}
+
+void* operator new(size_t size, with_alignment wa) {
+    void* ret;
+    if (posix_memalign(&ret, wa.alignment(), size) != 0) {
+        throw std::bad_alloc();
+    }
+    return ret;
+}
+
+void* operator new[](size_t size, with_alignment wa) {
+    void* ret;
+    if (posix_memalign(&ret, wa.alignment(), size) != 0) {
+        throw std::bad_alloc();
+    }
+    return ret;
+}
+
+void operator delete(void* ptr, with_alignment wa) {
+    return ::free(ptr);
+}
+
+void operator delete[](void* ptr, with_alignment wa) {
+    return ::free(ptr);
 }
 
 #endif
