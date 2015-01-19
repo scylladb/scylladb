@@ -140,6 +140,7 @@ public:
 
         return SimpleSelector.newFactory(def.name.toString(), addAndGetIndex(def, defs), def.type);
     }
+#endif
 
     /**
      * Because Thrift-created tables may have a non-text comparator, we cannot determine the proper 'key' until
@@ -147,17 +148,21 @@ public:
      * once the comparator is known with prepare(). This should only be used with identifiers that are actual
      * column names. See CASSANDRA-8178 for more background.
      */
-    public static class Raw implements Selectable.Raw
-    {
-        private final String rawText;
-        private final String text;
-
-        public Raw(String rawText, boolean keepCase)
+    class raw : public selectable::raw {
+    private:
+        const sstring _raw_text;
+        sstring _text;
+    public:
+        raw(sstring raw_text, bool keep_case)
+            : _raw_text{raw_text}
+            , _text{raw_text}
         {
-            this.rawText = rawText;
-            this.text =  keepCase ? rawText : rawText.toLowerCase(Locale.US);
+            if (!keep_case) {
+                std::transform(_text.begin(), _text.end(), _text.begin(), ::tolower);
+            }
         }
 
+#if 0
         public ColumnIdentifier prepare(CFMetaData cfm)
         {
             AbstractType<?> comparator = cfm.comparator.asAbstractType();
@@ -201,8 +206,8 @@ public:
         {
             return text;
         }
-    }
 #endif
+    };
 };
 
 }
