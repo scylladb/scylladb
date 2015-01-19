@@ -216,6 +216,8 @@ private:
             uint32_t ssthresh;
             // Duplicated ACKs
             uint16_t dupacks = 0;
+            unsigned syn_retransmit = 0;
+            unsigned fin_retransmit = 0;
         } _snd;
         struct receive {
             tcp_seq next;
@@ -318,6 +320,12 @@ private:
         }
         void queue_packet(packet p) {
             _packetq.emplace_back(typename InetTraits::l4packet{_foreign_ip, std::move(p)});
+        }
+        bool syn_needs_retransmit() {
+            return _local_syn_sent && !_local_syn_acked;
+        }
+        bool fin_needs_retransmit() {
+            return _local_fin_sent && !_local_fin_acked;
         }
         friend class connection;
     };
@@ -931,8 +939,9 @@ void tcp<InetTraits>::tcb::output_one() {
     _snd.next += len;
 
     // FIXME: does the FIN have to fit in the window?
-    th->f_fin = _snd.closed && _snd.unsent_len == 0 && !_local_fin_acked;
-    _local_fin_sent |= th->f_fin;
+    bool fin_on =  _snd.closed && _snd.unsent_len == 0 && !_local_fin_acked;
+    th->f_fin = fin_on;
+    _local_fin_sent |= fin_on;
 
     // Add tcp options
     _option.fill(th, options_size);
@@ -956,10 +965,12 @@ void tcp<InetTraits>::tcb::output_one() {
     oi.tcp_hdr_len = sizeof(tcp_hdr) + options_size;
     p.set_offload_info(oi);
 
-    if (len) {
-        unsigned nr_transmits = 0;
+    if (len || syn_on || fin_on) {
         auto now = clock_type::now();
-        _snd.data.emplace_back(unacked_segment{p.share(), len, len, nr_transmits, now});
+        if (len) {
+            unsigned nr_transmits = 0;
+            _snd.data.emplace_back(unacked_segment{p.share(), len, len, nr_transmits, now});
+        }
         if (!_retransmit.armed()) {
             start_retransmit_timer(now);
         }
@@ -1115,6 +1126,35 @@ void tcp<InetTraits>::tcb::trim_receive_data_after_window() {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::retransmit() {
+    auto output_update_rto = [this] {
+        output();
+        // According to RFC6298, Update RTO <- RTO * 2 to perform binary exponential back-off
+        this->_rto = std::min(this->_rto * 2, this->_rto_max);
+        start_retransmit_timer();
+    };
+
+    // Retransmit SYN
+    if (syn_needs_retransmit()) {
+        if (_snd.syn_retransmit++ < _max_nr_retransmit) {
+            output_update_rto();
+        } else {
+            // TODO: Propagate error to connect()
+            cleanup();
+            return;
+        }
+    }
+
+    // Retransmit FIN
+    if (fin_needs_retransmit()) {
+        if (_snd.fin_retransmit++ < _max_nr_retransmit) {
+            output_update_rto();
+        } else {
+            cleanup();
+            return;
+        }
+    }
+
+    // Retransmit Data
     if (_snd.data.empty()) {
         return;
     }
@@ -1141,11 +1181,8 @@ void tcp<InetTraits>::tcb::retransmit() {
     }
     // TODO: If the Path MTU changes, we need to split the segment if it is larger than current MSS
     queue_packet(unacked_seg.p.share());
-    output();
 
-    // According to RFC6298, Update RTO <- RTO * 2 to perform binary exponential back-off
-    _rto = std::min(_rto * 2, _rto_max);
-    start_retransmit_timer();
+    output_update_rto();
 }
 
 template <typename InetTraits>
