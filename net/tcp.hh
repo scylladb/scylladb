@@ -1178,8 +1178,10 @@ void tcp<InetTraits>::tcb::update_cwnd(uint32_t acked_bytes) {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::cleanup() {
+    _snd.unsent.clear();
     _snd.data.clear();
     _rcv.out_of_order.map.clear();
+    _rcv.data.clear();
     stop_retransmit_timer();
     clear_delayed_ack();
     remove_from_tcbs();
