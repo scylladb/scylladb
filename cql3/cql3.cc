@@ -29,6 +29,7 @@
 #include "statements/parsed_statement.hh"
 #include "statements/property_definitions.hh"
 #include "statements/truncate_statement.hh"
+#include "statements/update_statement.hh"
 #include "statements/schema_altering_statement.hh"
 #include "cql_statement.hh"
 
