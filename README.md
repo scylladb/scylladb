@@ -79,20 +79,22 @@ make CC=gcc-4.9 CXX=g++-4.9 -j 24
 To build a Docker image:
 
 ```
-docker build -t seastar-dev .
+docker build -t seastar-dev docker/dev
 ```
 
-To launch a container:
+Create an shell function for building insider the container (bash syntax given):
 
-```    
-$ docker run -v $HOME/seastar/:/seastar -i -t seastar-dev /bin/bash
+```
+$ seabuild() { docker run -v $HOME/seastar/:/seastar -u $(id -u):$(id -g) -w /seastar -t seastar-dev "$@"; }
 ```
 
-Finally, to build seastar inside the container:
+(it is recommended to put this inside your .bashrc or similar)
+
+To build inside a container:
 
 ```    
-cd /seastar
-ninja-build
+$ seabuild ./configure.py
+$ seabuild ninja-build
 ```
 
 ### Building with a DPDK network backend
