@@ -7,6 +7,14 @@
 
 #include "future.hh"
 #include "circular_buffer.hh"
+#include <stdexcept>
+
+class broken_semaphore : public std::exception {
+public:
+    virtual const char* what() const noexcept {
+        return "Semaphore broken";
+    }
+};
 
 class semaphore {
 private:
@@ -42,6 +50,31 @@ public:
         }
     }
     size_t current() const { return _count; }
+
+    // Signal to waiters that an error occured.  wait() will see
+    // an exceptional future<> containing a broken_semaphore exception.
+    //
+    // This may only be used once per semaphore; after using it the
+    // semaphore is in an indeterminite state and should not be waited on.
+    void broken() { broken(broken_semaphore()); }
+
+    // Signal to waiters that an error occured.  wait() will see
+    // an exceptional future<> containing the provided exception parameter.
+    //
+    // This may only be used once per semaphore; after using it the
+    // semaphore is in an indeterminite state and should not be waited on.
+    template <typename Exception>
+    void broken(const Exception& ex);
 };
+
+template <typename Exception>
+void semaphore::broken(const Exception& ex) {
+    auto xp = std::make_exception_ptr(ex);
+    while (!_wait_list.empty()) {
+        auto& x = _wait_list.front();
+        x.first.set_exception(xp);
+        _wait_list.pop_front();
+    }
+}
 
 #endif /* CORE_SEMAPHORE_HH_ */
