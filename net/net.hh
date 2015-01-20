@@ -117,7 +117,7 @@ public:
 class qp {
     using packet_provider_type = std::function<std::experimental::optional<packet> ()>;
     std::vector<packet_provider_type> _pkt_providers;
-    std::vector<unsigned> proxies;
+    std::experimental::optional<std::array<uint8_t, 128>> _sw_reta;
     circular_buffer<packet> _proxy_packetq;
     stream<packet> _rx_stream;
     reactor::poller _tx_poller;
@@ -173,19 +173,40 @@ public:
         return sent;
     }
     virtual void rx_start() {};
-    bool may_forward() { return !proxies.empty(); }
-    void add_proxy(unsigned cpu) {
-        if(proxies.empty()) {
-            register_packet_provider([this] {
-                std::experimental::optional<packet> p;
-                if (!_proxy_packetq.empty()) {
-                    p = std::move(_proxy_packetq.front());
-                    _proxy_packetq.pop_front();
-                }
-                return p;
-            });
+    void configure_proxies(const std::map<unsigned, float>& cpu_weights) {
+        assert(!cpu_weights.empty());
+        if ((cpu_weights.size() == 1 && cpu_weights.begin()->first == engine.cpu_id())) {
+            // special case queue sending to self only, to avoid requiring a hash value
+            return;
         }
-        proxies.push_back(cpu);
+        register_packet_provider([this] {
+            std::experimental::optional<packet> p;
+            if (!_proxy_packetq.empty()) {
+                p = std::move(_proxy_packetq.front());
+                _proxy_packetq.pop_front();
+            }
+            return p;
+        });
+        build_sw_reta(cpu_weights);
+    }
+    // build REdirection TAble for cpu_weights map: target cpu -> weight
+    void build_sw_reta(const std::map<unsigned, float>& cpu_weights) {
+        float total_weight = 0;
+        for (auto&& x : cpu_weights) {
+            total_weight += x.second;
+        }
+        float accum = 0;
+        unsigned idx = 0;
+        std::array<uint8_t, 128> reta;
+        for (auto&& entry : cpu_weights) {
+            auto cpu = entry.first;
+            auto weight = entry.second;
+            accum += weight;
+            while (idx < (accum / total_weight * reta.size() - 0.5)) {
+                reta[idx++] = cpu;
+            }
+        }
+        _sw_reta = reta;
     }
     void proxy_send(packet p) {
         _proxy_packetq.push_back(std::move(p));
@@ -256,12 +277,12 @@ public:
     template <typename Func>
     unsigned forward_dst(unsigned src_cpuid, Func&& hashfn) {
         auto& qp = queue_for_cpu(src_cpuid);
-        if (!qp.may_forward()) {
+        if (!qp._sw_reta) {
             return src_cpuid;
         }
         auto hash = hashfn() >> _rss_table_bits;
-        auto idx = hash % (qp.proxies.size() + 1);
-        return idx ? qp.proxies[idx - 1] : src_cpuid;
+        auto& reta = *qp._sw_reta;
+        return reta[hash % reta.size()];
     }
     virtual unsigned hash2cpu(uint32_t hash) {
         // there is an assumption here that qid == cpu_id which will
