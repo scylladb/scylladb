@@ -47,10 +47,13 @@ if __name__ == "__main__":
     all_ok = True
 
     n_total = len(test_to_run)
+    env = os.environ
+    # disable false positive due to new (with_alignment(...)) ...
+    env['ASAN_OPTIONS'] = 'alloc_dealloc_mismatch=0'
     for n, path in enumerate(test_to_run):
         prefix = '[%d/%d]' % (n + 1, n_total)
         print_status('%s RUNNING %s' % (prefix, path))
-        proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         out, err = proc.communicate()
         if proc.returncode:
             print_status('FAILED: %s\n' % (path))
