@@ -6,6 +6,7 @@
 #define CORE_SEMAPHORE_HH_
 
 #include "future.hh"
+#include "circular_buffer.hh"
 
 class semaphore {
 private:
