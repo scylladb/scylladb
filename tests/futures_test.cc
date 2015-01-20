@@ -4,6 +4,7 @@
 
 #include "core/app-template.hh"
 #include "core/shared_ptr.hh"
+#include "core/semaphore.hh"
 #include "test-utils.hh"
 
 SEASTAR_TEST_CASE(test_finally_is_called_on_success_and_failure) {
@@ -173,4 +174,25 @@ SEASTAR_TEST_CASE(test_future_forwarding__ready_to_unarmed_soon_to_be_dead) {
     forward_dead_unarmed_promise_with_dead_future_to(p1);
     make_ready_future<>().forward_to(std::move(p1));
     return make_ready_future<>();
+}
+
+
+SEASTAR_TEST_CASE(test_broken_semaphore) {
+    auto sem = make_lw_shared<semaphore>(0);
+    struct oops {};
+    auto ret = sem->wait().then_wrapped([sem] (future<> f) {
+        try {
+            f.get();
+            BOOST_FAIL("expecting exception");
+        } catch (oops& x) {
+            // ok
+            return make_ready_future<>();
+        } catch (...) {
+            BOOST_FAIL("wrong exception seen");
+        }
+        BOOST_FAIL("unreachable");
+        return make_ready_future<>();
+    });
+    sem->broken(oops());
+    return ret;
 }
