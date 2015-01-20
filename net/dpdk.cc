@@ -204,7 +204,7 @@ private:
      * will immediately return after processing all available packets.
      *
      */
-    void poll_rx_once();
+    bool poll_rx_once();
 
     /**
      * Translates an rte_mbuf's into net::packet and feeds them to _rx_stream.
@@ -311,6 +311,8 @@ int dpdk_device::init_port_start()
             _rss_table_bits = std::lround(std::log2(_dev_info.reta_size));
             printf("Port %d: RSS table size is %d\n",
                    _port_idx, _dev_info.reta_size);
+        } else {
+            _rss_table_bits = std::lround(std::log2(_dev_info.max_rx_queues));
         }
 #endif
     }
@@ -454,7 +456,7 @@ void dpdk_device::check_port_link_status()
 
 
 dpdk_qp::dpdk_qp(dpdk_device* dev, uint8_t qid)
-     : _dev(dev), _qid(qid), _rx_poller([&] { poll_rx_once(); return true; })
+     : _dev(dev), _qid(qid), _rx_poller([&] { return poll_rx_once(); })
 {
     if (!init_mbuf_pools()) {
         rte_exit(EXIT_FAILURE, "Cannot initialize mbuf pools\n");
@@ -517,7 +519,7 @@ void dpdk_qp::process_packets(struct rte_mbuf **bufs, uint16_t count)
     }
 }
 
-void dpdk_qp::poll_rx_once()
+bool dpdk_qp::poll_rx_once()
 {
     struct rte_mbuf *buf[packet_read_size];
 
@@ -529,6 +531,8 @@ void dpdk_qp::poll_rx_once()
     if (likely(rx_count > 0)) {
         process_packets(buf, rx_count);
     }
+
+    return rx_count;
 }
 
 size_t dpdk_qp::copy_one_data_buf(rte_mbuf*& m, char* data, size_t l)
@@ -665,7 +669,7 @@ rte_mbuf* dpdk_qp::create_tx_mbuf(packet& p) {
 
 uint32_t dpdk_qp::send(circular_buffer<packet>& pb)
 {
-    if (_tx_burst_idx == 0) {
+    if (_tx_burst.size() == 0) {
         pb.for_each([this, err = false] (packet& p) mutable {
             if (!err) {
                 auto mbuf = create_tx_mbuf(p);

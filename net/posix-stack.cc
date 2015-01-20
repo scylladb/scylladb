@@ -221,6 +221,9 @@ public:
         auto sa = make_ipv4_address(bind_address);
         file_desc fd = file_desc::socket(sa.u.sa.sa_family, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
         fd.setsockopt(SOL_IP, IP_PKTINFO, true);
+        if (engine.posix_reuseport_available()) {
+            fd.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
+        }
         fd.bind(sa.u.sa, sizeof(sa.u.sas));
         _address = ipv4_addr(fd.get_address());
         _fd = std::make_unique<pollable_fd>(std::move(fd));

@@ -60,7 +60,7 @@ std::vector<cpu> allocate(configuration c) {
     if (mem > available_memory) {
         throw std::runtime_error("insufficient physical memory");
     }
-    auto available_procs = hwloc_get_nbobjs_by_depth(topology, HWLOC_OBJ_PU);
+    unsigned available_procs = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
     unsigned procs = c.cpus.value_or(available_procs);
     if (procs > available_procs) {
         throw std::runtime_error("insufficient processing units");

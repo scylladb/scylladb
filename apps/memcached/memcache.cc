@@ -292,6 +292,7 @@ public:
 
     // needed by timer_set
     bool cancel() {
+        assert(false);
         return false;
     }
 
@@ -876,6 +877,10 @@ public:
     {
         _timer.set_callback([this] { expire(); });
         _flush_timer.set_callback([this] { flush_all(); });
+    }
+
+    ~cache() {
+       flush_all();
     }
 
     future<> setup(foreign_ptr<lw_shared_ptr<flashcache::devfile>> dev, uint64_t offset, uint64_t length) {

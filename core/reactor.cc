@@ -254,7 +254,7 @@ reactor::submit_io(Func prepare_io) {
     });
 }
 
-void reactor::process_io()
+bool reactor::process_io()
 {
     io_event ev[max_aio];
     struct timespec timeout = {0, 0};
@@ -266,6 +266,7 @@ void reactor::process_io()
         delete pr;
     }
     _io_context_available.signal(n);
+    return n;
 }
 
 future<size_t>
@@ -557,7 +558,7 @@ void sigaction(int signo, siginfo_t* siginfo, void* ignore) {
     reactor::signal_handler::pending.fetch_or(1ull << signo, std::memory_order_relaxed);
 }
 
-void reactor::poll_signal() {
+bool reactor::poll_signal() {
     auto signals = reactor::signal_handler::pending.load(std::memory_order_relaxed);
     if (signals) {
         reactor::signal_handler::pending.fetch_and(~signals, std::memory_order_relaxed);
@@ -568,6 +569,7 @@ void reactor::poll_signal() {
             }
         }
     }
+    return signals;
 }
 
 reactor::signal_handler::signal_handler(int signo) {
@@ -611,6 +613,12 @@ reactor::register_collectd_metrics() {
                     , scollectd::make_typed(scollectd::data_type::GAUGE
                             , std::bind(&decltype(_timers)::size, &_timers))
             ),
+            scollectd::add_polled_metric(scollectd::type_instance_id("reactor"
+                    , scollectd::per_cpu_plugin_instance
+                    , "queue_length", "idle")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE,
+                            [this] () -> uint32_t { return _load * 100; })
+            ),
             scollectd::add_polled_metric(
                 scollectd::type_instance_id("memory",
                     scollectd::per_cpu_plugin_instance,
@@ -624,6 +632,13 @@ reactor::register_collectd_metrics() {
                     "total_operations", "free"),
                 scollectd::make_typed(scollectd::data_type::DERIVE,
                         [] { return memory::stats().frees(); })
+            ),
+            scollectd::add_polled_metric(
+                scollectd::type_instance_id("memory",
+                    scollectd::per_cpu_plugin_instance,
+                    "total_operations", "cross_cpu_free"),
+                scollectd::make_typed(scollectd::data_type::DERIVE,
+                        [] { return memory::stats().cross_cpu_frees(); })
             ),
             scollectd::add_polled_metric(
                 scollectd::type_instance_id("memory",
@@ -652,10 +667,10 @@ int reactor::run() {
     auto collectd_metrics = register_collectd_metrics();
 
 #ifndef HAVE_OSV
-    poller io_poller([&] { process_io(); return true; });
+    poller io_poller([&] { return process_io(); });
 #endif
 
-    poller sig_poller([&] { poll_signal(); return true; } );
+    poller sig_poller([&] { return poll_signal(); } );
 
     if (_id == 0) {
        if (_handle_sigint) {
@@ -703,21 +718,48 @@ int reactor::run() {
         }
     );
 
+    poller drain_cross_cpu_freelist([] {
+        return memory::drain_cross_cpu_freelist();
+    });
+
     poller expire_lowres_timers([this] {
         if (_lowres_next_timeout == lowres_clock::time_point()) {
-            return true;
+            return false;
         }
         auto now = lowres_clock::now();
         if (now > _lowres_next_timeout) {
             _lowres_timer_promise.set_value();
             _lowres_timer_promise = promise<>();
+            return true;
         }
-        return true;
+        return false;
     });
+
+    using namespace std::chrono_literals;
+    timer<lowres_clock> load_timer;
+    std::chrono::high_resolution_clock::rep idle_count = 0;
+    auto idle_start = std::chrono::high_resolution_clock::now(), idle_end = idle_start;
+    load_timer.set_callback([this, &idle_count, &idle_start, &idle_end] () mutable {
+        auto load = double(idle_count + (idle_end - idle_start).count()) / double(std::chrono::duration_cast<std::chrono::high_resolution_clock::duration>(1s).count());
+        load = std::min(load, 1.0);
+        idle_count = 0;
+        idle_start = idle_end;
+        _loads.push_front(load);
+        if (_loads.size() > 5) {
+            auto drop = _loads.back();
+            _loads.pop_back();
+            _load -= (drop/5);
+        }
+        _load += (load/5);
+    });
+    load_timer.arm_periodic(1s);
+
+    bool idle = false;
 
     while (true) {
         run_tasks(_pending_tasks, _task_quota);
         if (_stopped) {
+            load_timer.cancel();
             run_tasks(_at_destroy_tasks, _at_destroy_tasks.size());
             if (_id == 0) {
                 smp::join_all();
@@ -725,7 +767,19 @@ int reactor::run() {
             break;
         }
 
-        poll_once();
+        if (!poll_once() && _pending_tasks.empty()) {
+            idle_end = std::chrono::high_resolution_clock::now();
+            if (!idle) {
+                idle_start = idle_end;
+                idle = true;
+            }
+            _mm_pause();
+        } else {
+            if (idle) {
+                idle_count += (idle_end - idle_start).count();
+                idle = false;
+            }
+        }
     }
     return _return;
 }
@@ -832,12 +886,12 @@ reactor::poller::~poller() {
     }
 }
 
-void
+bool
 reactor_backend_epoll::wait_and_process() {
     std::array<epoll_event, 128> eevt;
     int nr = ::epoll_wait(_epollfd.get(), eevt.data(), eevt.size(), 0);
     if (nr == -1 && errno == EINTR) {
-        return; // gdb can cause this
+        return false; // gdb can cause this
     }
     assert(nr != -1);
     for (int i = 0; i < nr; ++i) {
@@ -854,6 +908,7 @@ reactor_backend_epoll::wait_and_process() {
             ::epoll_ctl(_epollfd.get(), op, pfd->fd.get(), &evt);
         }
     }
+    return nr;
 }
 
 syscall_work_queue::syscall_work_queue()
