@@ -15,6 +15,37 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_STATEMENTS_MODIFICATION_STATEMENT_HH
+#define CQL3_STATEMENTS_MODIFICATION_STATEMENT_HH
+
+#include "cql3/statements/cf_statement.hh"
+#include "cql3/column_identifier.hh"
+#include "cql3/update_parameters.hh"
+#include "cql3/column_condition.hh"
+#include "cql3/cql_statement.hh"
+#include "cql3/attributes.hh"
+#include "cql3/operation.hh"
+
+#include "config/cf_meta_data.hh"
+
+#include "db/column_family.hh"
+
+#include "core/shared_ptr.hh"
+
+#include <memory>
+
+namespace cql3 {
+
+namespace statements {
+
+#if 0
 package org.apache.cassandra.cql3.statements;
 
 import java.nio.ByteBuffer;
@@ -43,119 +74,128 @@ import org.apache.cassandra.service.StorageProxy;
 import org.apache.cassandra.thrift.ThriftValidation;
 import org.apache.cassandra.transport.messages.ResultMessage;
 import org.apache.cassandra.utils.Pair;
+#endif
 
 /*
  * Abstract parent class of individual modifications, i.e. INSERT, UPDATE and DELETE.
  */
-public abstract class ModificationStatement implements CQLStatement
-{
-    private static final ColumnIdentifier CAS_RESULT_COLUMN = new ColumnIdentifier("[applied]", false);
+class modification_statement : public cql_statement {
+private:
+    static ::shared_ptr<column_identifier> CAS_RESULT_COLUMN;
 
-    public static enum StatementType { INSERT, UPDATE, DELETE }
-    public final StatementType type;
+public:
+    enum class statement_type { INSERT, UPDATE, DELETE };
 
-    private final int boundTerms;
-    public final CFMetaData cfm;
-    public final Attributes attrs;
+    const statement_type type;
 
+private:
+    const int32_t _bound_terms;
+
+public:
+    const ::shared_ptr<config::cf_meta_data> cfm;
+    const std::unique_ptr<attributes> attrs;
+
+#if 0
     protected final Map<ColumnIdentifier, Restriction> processedKeys = new HashMap<>();
-    private final List<Operation> columnOperations = new ArrayList<Operation>();
+#endif
+
+private:
+    const std::vector<std::experimental::optional<::shared_ptr<operation>>> _column_operations;
 
     // Separating normal and static conditions makes things somewhat easier
-    private List<ColumnCondition> columnConditions;
-    private List<ColumnCondition> staticConditions;
-    private boolean ifNotExists;
-    private boolean ifExists;
+    std::vector<std::experimental::optional<::shared_ptr<column_condition>>> _column_conditions;
+    std::vector<std::experimental::optional<::shared_ptr<column_condition>>> _static_conditions;
 
-    private boolean hasNoClusteringColumns = true;
+    bool _if_not_exists = false;
+    bool _if_exists = false;
 
-    private boolean setsStaticColumns;
-    private boolean setsRegularColumns;
+    bool _has_no_clustering_columns = true;
 
-    private final Function<ColumnCondition, ColumnDefinition> getColumnForCondition = new Function<ColumnCondition, ColumnDefinition>()
-    {
-        public ColumnDefinition apply(ColumnCondition cond)
-        {
-            return cond.column;
-        }
-    };
+    bool _sets_static_columns = false;
+    bool _sets_regular_columns = false;
 
-    public ModificationStatement(StatementType type, int boundTerms, CFMetaData cfm, Attributes attrs)
-    {
-        this.type = type;
-        this.boundTerms = boundTerms;
-        this.cfm = cfm;
-        this.attrs = attrs;
-    }
+    const std::function<::shared_ptr<config::column_definition>(::shared_ptr<column_condition>)> get_column_for_condition =
+        [](::shared_ptr<column_condition> cond) -> ::shared_ptr<config::column_definition> {
+            return cond->column;
+        };
 
-    public boolean usesFunction(String ksName, String functionName)
-    {
-        if (attrs.usesFunction(ksName, functionName))
+public:
+    modification_statement(statement_type type_, int32_t bound_terms, ::shared_ptr<config::cf_meta_data> cfm_, std::unique_ptr<attributes>&& attrs_)
+        : type{type_}
+        , _bound_terms{bound_terms}
+        , cfm{cfm_}
+        , attrs{std::move(attrs_)}
+        , _column_operations{}
+    { }
+
+    virtual bool uses_function(sstring ks_name, sstring function_name) const override {
+        if (attrs->uses_function(ks_name, function_name))
             return true;
+#if 0
         for (Restriction restriction : processedKeys.values())
             if (restriction != null && restriction.usesFunction(ksName, functionName))
                 return true;
-        for (Operation operation : columnOperations)
-            if (operation != null && operation.usesFunction(ksName, functionName))
+#endif
+        for (auto&& operation : _column_operations) {
+            if (operation && operation.value()->uses_function(ks_name, function_name))
                 return true;
-        for (ColumnCondition condition : columnConditions)
-            if (condition != null && condition.usesFunction(ksName, functionName))
+        }
+        for (auto&& condition : _column_conditions) {
+            if (condition && condition.value()->uses_function(ks_name, function_name))
                 return true;
-        for (ColumnCondition condition : staticConditions)
-            if (condition != null && condition.usesFunction(ksName, functionName))
+        }
+        for (auto&& condition : _static_conditions) {
+            if (condition && condition.value()->uses_function(ks_name, function_name))
                 return true;
+        }
         return false;
     }
 
-    public abstract boolean requireFullClusteringKey();
-    public abstract void addUpdateForKey(ColumnFamily updates, ByteBuffer key, Composite prefix, UpdateParameters params) throws InvalidRequestException;
+    virtual bool require_full_clustering_key() const = 0;
 
-    public int getBoundTerms()
-    {
-        return boundTerms;
+    virtual void add_update_for_key(::shared_ptr<db::column_family> updates, bytes key, ::shared_ptr<db::composite> prefix, ::shared_ptr<update_parameters> params) = 0;
+
+    virtual int get_bound_terms() override {
+        return _bound_terms;
     }
 
-    public String keyspace()
-    {
-        return cfm.ksName;
+    virtual sstring keyspace() const {
+        return cfm->ks_name;
     }
 
-    public String columnFamily()
-    {
-        return cfm.cfName;
+    virtual sstring column_family() const {
+        return cfm->cf_name;
     }
 
-    public boolean isCounter()
-    {
-        return cfm.isCounter();
+    virtual bool is_counter() const {
+        return cfm->is_counter();
     }
 
-    public long getTimestamp(long now, QueryOptions options) throws InvalidRequestException
-    {
-        return attrs.getTimestamp(now, options);
+    int64_t get_timestamp(int64_t now, const query_options& options) const {
+        return attrs->get_timestamp(now, options);
     }
 
-    public boolean isTimestampSet()
-    {
-        return attrs.isTimestampSet();
+    bool is_timestamp_set() const {
+        return attrs->is_timestamp_set();
     }
 
-    public int getTimeToLive(QueryOptions options) throws InvalidRequestException
-    {
-        return attrs.getTimeToLive(options);
+    int32_t get_time_to_live(const query_options& options) const {
+        return attrs->get_time_to_live(options);
     }
 
-    public void checkAccess(ClientState state) throws InvalidRequestException, UnauthorizedException
-    {
+    virtual void check_access(const service::client_state& state) override {
+#if 0
         state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.MODIFY);
 
         // CAS updates can be used to simulate a SELECT query, so should require Permission.SELECT as well.
         if (hasConditions())
             state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.SELECT);
+#endif
+        throw std::runtime_error("not implemented");
     }
 
-    public void validate(ClientState state) throws InvalidRequestException
-    {
+    virtual void validate(const service::client_state& state) override {
+#if 0
         if (hasConditions() && attrs.isTimestampSet())
             throw new InvalidRequestException("Cannot provide custom timestamp for conditional updates");
 
@@ -164,8 +204,11 @@ public abstract class ModificationStatement implements CQLStatement
 
         if (isCounter() && attrs.isTimeToLiveSet())
             throw new InvalidRequestException("Cannot provide custom TTL for counter updates");
+#endif
+        throw std::runtime_error("not implemented");
     }
 
+#if 0
     public void addOperation(Operation op)
     {
         if (op.column.isStatic())
@@ -208,27 +251,25 @@ public abstract class ModificationStatement implements CQLStatement
         }
         conds.add(cond);
     }
+#endif
 
-    public void setIfNotExistCondition()
-    {
-        ifNotExists = true;
+    void set_if_not_exist_condition() {
+        _if_not_exists = true;
     }
 
-    public boolean hasIfNotExistCondition()
-    {
-        return ifNotExists;
+    bool has_if_not_exist_condition() const {
+        return _if_not_exists;
     }
 
-    public void setIfExistCondition()
-    {
-        ifExists = true;
+    void set_if_exist_condition() {
+        _if_exists = true;
     }
 
-    public boolean hasIfExistCondition()
-    {
-        return ifExists;
+    bool has_if_exist_condition() const {
+        return _if_exists;
     }
 
+#if 0
     private void addKeyValues(ColumnDefinition def, Restriction values) throws InvalidRequestException
     {
         if (def.kind == ColumnDefinition.Kind.CLUSTERING_COLUMN)
@@ -671,33 +712,46 @@ public abstract class ModificationStatement implements CQLStatement
         Map<ByteBuffer, CQL3Row> rows = readRequiredRows(keys, prefix, local, options.getConsistency());
         return new UpdateParameters(cfm, options, getTimestamp(now, options), getTimeToLive(options), rows);
     }
+#endif
 
+protected:
     /**
      * If there are conditions on the statement, this is called after the where clause and conditions have been
      * processed to check that they are compatible.
      * @throws InvalidRequestException
      */
-    protected void validateWhereClauseForConditions() throws InvalidRequestException
-    {
+    virtual void validate_where_clause_for_conditions() {
         //  no-op by default
     }
 
-    public static abstract class Parsed extends CFStatement
-    {
-        protected final Attributes.Raw attrs;
-        protected final List<Pair<ColumnIdentifier.Raw, ColumnCondition.Raw>> conditions;
-        private final boolean ifNotExists;
-        private final boolean ifExists;
-
-        protected Parsed(CFName name, Attributes.Raw attrs, List<Pair<ColumnIdentifier.Raw, ColumnCondition.Raw>> conditions, boolean ifNotExists, boolean ifExists)
+public:
+    class parsed : public cf_statement {
+    public:
+        using conditions_vector = std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<column_condition::raw>>>;
+    protected:
+        const ::shared_ptr<attributes::raw> _attrs;
+        const std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<column_condition::raw>>> _conditions;
+    private:
+        const bool _if_not_exists;
+        const bool _if_exists;
+    protected:
+        parsed(std::experimental::optional<cf_name>&& name, ::shared_ptr<attributes::raw> attrs, const conditions_vector& conditions, bool if_not_exists, bool if_exists)
+            : cf_statement{std::move(name)}
+            , _attrs{attrs}
+            , _conditions{conditions}
+            , _if_not_exists{if_not_exists}
+            , _if_exists{if_exists}
         {
+#if 0
             super(name);
             this.attrs = attrs;
             this.conditions = conditions == null ? Collections.<Pair<ColumnIdentifier.Raw, ColumnCondition.Raw>>emptyList() : conditions;
             this.ifNotExists = ifNotExists;
             this.ifExists = ifExists;
+#endif
         }
 
+#if 0
         public ParsedStatement.Prepared prepare() throws InvalidRequestException
         {
             VariableSpecifications boundNames = getBoundVariables();
@@ -766,5 +820,12 @@ public abstract class ModificationStatement implements CQLStatement
         }
 
         protected abstract ModificationStatement prepareInternal(CFMetaData cfm, VariableSpecifications boundNames, Attributes attrs) throws InvalidRequestException;
-    }
+#endif
+    };
+};
+
 }
+
+}
+
+#endif

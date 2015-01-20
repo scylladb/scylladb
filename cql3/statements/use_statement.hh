@@ -32,7 +32,7 @@ namespace cql3 {
 
 namespace statements {
 
-class use_statement : public parsed_statement, public virtual cql_statement, public ::enable_shared_from_this<use_statement> {
+class use_statement : public parsed_statement, public cql_statement, public ::enable_shared_from_this<use_statement> {
 private:
     const sstring _keyspace;
 
@@ -47,6 +47,10 @@ public:
 
     virtual std::unique_ptr<prepared> prepare() override {
         return std::make_unique<parsed_statement::prepared>(this->shared_from_this());
+    }
+
+    virtual bool uses_function(sstring ks_name, sstring function_name) const override {
+        return parsed_statement::uses_function(ks_name, function_name);
     }
 
     virtual void check_access(const service::client_state& state) override {

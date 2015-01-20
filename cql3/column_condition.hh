@@ -15,8 +15,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_COLUMN_CONDITION_HH
+#define CQL3_COLUMN_CONDITION_HH
+
+#include "config/column_definition.hh"
+
+#if 0
 import java.nio.ByteBuffer;
 import java.util.*;
 
@@ -34,15 +45,18 @@ import org.apache.cassandra.db.marshal.*;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.transport.Server;
 import org.apache.cassandra.utils.ByteBufferUtil;
+#endif
+
+namespace cql3 {
 
 /**
  * A CQL3 condition on the value of a column or collection element.  For example, "UPDATE .. IF a = 0".
  */
-public class ColumnCondition
-{
+class column_condition final {
+public:
+    ::shared_ptr<config::column_definition> column;
 
-    public final ColumnDefinition column;
-
+#if 0
     // For collection, when testing the equality of a specific element, null otherwise.
     private final Term collectionElement;
 
@@ -92,9 +106,11 @@ public class ColumnCondition
     {
         return new ColumnCondition(column, collectionElement, inMarker, null, Operator.IN);
     }
+#endif
 
-    public boolean usesFunction(String ksName, String functionName)
-    {
+    bool uses_function(sstring ks_name, sstring function_name) const {
+        throw std::runtime_error("not implemented");
+#if 0
         if (collectionElement != null && collectionElement.usesFunction(ksName, functionName))
             return true;
         if (value != null && value.usesFunction(ksName, functionName))
@@ -104,8 +120,10 @@ public class ColumnCondition
                 if (value != null && value.usesFunction(ksName, functionName))
                     return true;
         return false;
+#endif
     }
 
+#if 0
     /**
      * Collects the column specification for the bind variables of this operation.
      *
@@ -704,9 +722,10 @@ public class ColumnCondition
             }
         }
     }
+#endif
 
-    public static class Raw
-    {
+    class raw {
+#if 0
         private final Term.Raw value;
         private final List<Term.Raw> inValues;
         private final AbstractMarker.INRaw inMarker;
@@ -816,5 +835,10 @@ public class ColumnCondition
                 return ColumnCondition.condition(receiver, collectionElement.prepare(keyspace, elementSpec), value.prepare(keyspace, valueSpec), operator);
             }
         }
-    }
+#endif
+    };
+};
+
 }
+
+#endif

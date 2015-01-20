@@ -70,7 +70,7 @@ public:
      */
     virtual transport::messages::result_message execute_internal(service::query_state& state, const query_options& options) = 0;
 
-    virtual bool uses_function(sstring ks_name, sstring function_name) = 0;
+    virtual bool uses_function(sstring ks_name, sstring function_name) const = 0;
 };
 
 }

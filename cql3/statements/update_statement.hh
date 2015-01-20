@@ -15,6 +15,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL_STATEMENTS_UPDATE_STATEMENT_HH
+#define CQL_STATEMENTS_UPDATE_STATEMENT_HH
+
+#include "cql3/statements/modification_statement.hh"
+#include "cql3/column_identifier.hh"
+#include "cql3/term.hh"
+
+#include <vector>
+
+#if 0
 package org.apache.cassandra.cql3.statements;
 
 import java.nio.ByteBuffer;
@@ -29,25 +46,31 @@ import org.apache.cassandra.db.index.SecondaryIndexManager;
 import org.apache.cassandra.exceptions.*;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.Pair;
+#endif
+
+namespace cql3 {
+
+namespace statements {
 
 /**
  * An <code>UPDATE</code> statement parsed from a CQL query statement.
  *
  */
-public class UpdateStatement extends ModificationStatement
-{
+class update_statement : public modification_statement {
+private:
+#if 0
     private static final Constants.Value EMPTY = new Constants.Value(ByteBufferUtil.EMPTY_BYTE_BUFFER);
+#endif
 
-    private UpdateStatement(StatementType type, int boundTerms, CFMetaData cfm, Attributes attrs)
-    {
-        super(type, boundTerms, cfm, attrs);
-    }
+    update_statement(statement_type type, int32_t bound_terms, ::shared_ptr<config::cf_meta_data> cfm, std::unique_ptr<attributes>&& attrs)
+        : modification_statement{type, bound_terms, cfm, std::move(attrs)}
+    { }
 
-    public boolean requireFullClusteringKey()
-    {
+    virtual bool require_full_clustering_key() const {
         return true;
     }
 
+#if 0
     public void addUpdateForKey(ColumnFamily cf, ByteBuffer key, Composite prefix, UpdateParameters params)
     throws InvalidRequestException
     {
@@ -113,12 +136,13 @@ public class UpdateStatement extends ModificationStatement
             }
         }
     }
+#endif
 
-    public static class ParsedInsert extends ModificationStatement.Parsed
-    {
-        private final List<ColumnIdentifier.Raw> columnNames;
-        private final List<Term.Raw> columnValues;
-
+    class parsed_insert : public modification_statement::parsed {
+    private:
+        const std::vector<::shared_ptr<column_identifier::raw>> _column_names;
+        const std::vector<::shared_ptr<term::raw>> _column_values;
+    public:
         /**
          * A parsed <code>INSERT</code> statement.
          *
@@ -127,16 +151,16 @@ public class UpdateStatement extends ModificationStatement
          * @param columnValues list of column values (corresponds to names)
          * @param attrs additional attributes for statement (CL, timestamp, timeToLive)
          */
-        public ParsedInsert(CFName name,
-                            Attributes.Raw attrs,
-                            List<ColumnIdentifier.Raw> columnNames, List<Term.Raw> columnValues,
-                            boolean ifNotExists)
-        {
-            super(name, attrs, null, ifNotExists, false);
-            this.columnNames = columnNames;
-            this.columnValues = columnValues;
-        }
-
+        parsed_insert(std::experimental::optional<cf_name>&& name,
+                      ::shared_ptr<attributes::raw> attrs,
+                      std::vector<::shared_ptr<column_identifier::raw>> column_names,
+                      std::vector<::shared_ptr<term::raw>> column_values,
+                      bool if_not_exists)
+            : modification_statement::parsed{std::move(name), attrs, conditions_vector{}, if_not_exists, false}
+            , _column_names{column_names}
+            , _column_values{column_values}
+        { }
+#if 0
         protected ModificationStatement prepareInternal(CFMetaData cfm, VariableSpecifications boundNames, Attributes attrs) throws InvalidRequestException
         {
             UpdateStatement stmt = new UpdateStatement(ModificationStatement.StatementType.INSERT,boundNames.size(), cfm, attrs);
@@ -182,8 +206,10 @@ public class UpdateStatement extends ModificationStatement
             }
             return stmt;
         }
-    }
+#endif
+    };
 
+#if 0
     public static class ParsedUpdate extends ModificationStatement.Parsed
     {
         // Provided for an UPDATE
@@ -238,4 +264,11 @@ public class UpdateStatement extends ModificationStatement
             return stmt;
         }
     }
+#endif
+};
+
 }
+
+}
+
+#endif

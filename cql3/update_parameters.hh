@@ -15,6 +15,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_UPDATE_PARAMETERS_HH
+#define CQL3_UPDATE_PARAMETERS_HH
+
+#if 0
 package org.apache.cassandra.cql3;
 
 import java.nio.ByteBuffer;
@@ -28,12 +39,15 @@ import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.filter.ColumnSlice;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.utils.FBUtilities;
+#endif
+
+namespace cql3 {
 
 /**
  * A simple container that simplify passing parameters for collections methods.
  */
-public class UpdateParameters
-{
+class update_parameters final {
+#if 0
     public final CFMetaData metadata;
     public final QueryOptions options;
     public final long timestamp;
@@ -99,4 +113,9 @@ public class UpdateParameters
         CQL3Row row = prefetchedLists.get(rowKey);
         return row == null ? Collections.<Cell>emptyList() : row.getMultiCellColumn(cql3ColumnName);
     }
+#endif
+};
+
 }
+
+#endif
