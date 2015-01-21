@@ -949,18 +949,22 @@ userOptions[UserOptions opts]
 userOption[UserOptions opts]
     : k=K_PASSWORD v=STRING_LITERAL { opts.put($k.text, $v.text); }
     ;
+#endif
 
 /** DEFINITIONS **/
 
 // Column Identifiers.  These need to be treated differently from other
 // identifiers because the underlying comparator is not necessarily text. See
 // CASSANDRA-8178 for details.
-cident returns [ColumnIdentifier.Raw id]
-    : t=IDENT              { $id = new ColumnIdentifier.Raw($t.text, false); }
+cident returns [shared_ptr<column_identifier::raw> id]
+    : t=IDENT              { $id = make_shared<column_identifier::raw>(sstring{$t.text}, false); }
+#if 0
     | t=QUOTED_NAME        { $id = new ColumnIdentifier.Raw($t.text, true); }
     | k=unreserved_keyword { $id = new ColumnIdentifier.Raw(k, false); }
+#endif
     ;
 
+#if 0
 // Identifiers that do not refer to columns or where the comparator is known to be text
 ident returns [ColumnIdentifier id]
     : t=IDENT              { $id = new ColumnIdentifier($t.text, false); }
