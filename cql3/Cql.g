@@ -27,6 +27,7 @@ options {
 
 @parser::includes {
 #include "cql3/statements/use_statement.hh"
+#include "cql3/cql3_type.hh"
 #include "cql3/cf_name.hh"
 #include "core/sstring.hh"
 #include "CqlLexer.hpp"
@@ -948,18 +949,22 @@ userOptions[UserOptions opts]
 userOption[UserOptions opts]
     : k=K_PASSWORD v=STRING_LITERAL { opts.put($k.text, $v.text); }
     ;
+#endif
 
 /** DEFINITIONS **/
 
 // Column Identifiers.  These need to be treated differently from other
 // identifiers because the underlying comparator is not necessarily text. See
 // CASSANDRA-8178 for details.
-cident returns [ColumnIdentifier.Raw id]
-    : t=IDENT              { $id = new ColumnIdentifier.Raw($t.text, false); }
+cident returns [shared_ptr<column_identifier::raw> id]
+    : t=IDENT              { $id = make_shared<column_identifier::raw>(sstring{$t.text}, false); }
+#if 0
     | t=QUOTED_NAME        { $id = new ColumnIdentifier.Raw($t.text, true); }
     | k=unreserved_keyword { $id = new ColumnIdentifier.Raw(k, false); }
+#endif
     ;
 
+#if 0
 // Identifiers that do not refer to columns or where the comparator is known to be text
 ident returns [ColumnIdentifier id]
     : t=IDENT              { $id = new ColumnIdentifier($t.text, false); }
@@ -1276,26 +1281,32 @@ comparatorType returns [CQL3Type.Raw t]
         }
       }
     ;
+#endif
 
-native_type returns [CQL3Type t]
-    : K_ASCII     { $t = CQL3Type.Native.ASCII; }
-    | K_BIGINT    { $t = CQL3Type.Native.BIGINT; }
-    | K_BLOB      { $t = CQL3Type.Native.BLOB; }
-    | K_BOOLEAN   { $t = CQL3Type.Native.BOOLEAN; }
+native_type returns [shared_ptr<cql3_type> t]
+    : K_ASCII     { $t = native_cql3_type::ascii; }
+    | K_BIGINT    { $t = native_cql3_type::bigint; }
+    | K_BLOB      { $t = native_cql3_type::blob; }
+    | K_BOOLEAN   { $t = native_cql3_type::boolean; }
+#if 0
     | K_COUNTER   { $t = CQL3Type.Native.COUNTER; }
     | K_DECIMAL   { $t = CQL3Type.Native.DECIMAL; }
     | K_DOUBLE    { $t = CQL3Type.Native.DOUBLE; }
     | K_FLOAT     { $t = CQL3Type.Native.FLOAT; }
     | K_INET      { $t = CQL3Type.Native.INET;}
-    | K_INT       { $t = CQL3Type.Native.INT; }
-    | K_TEXT      { $t = CQL3Type.Native.TEXT; }
-    | K_TIMESTAMP { $t = CQL3Type.Native.TIMESTAMP; }
-    | K_UUID      { $t = CQL3Type.Native.UUID; }
-    | K_VARCHAR   { $t = CQL3Type.Native.VARCHAR; }
+#endif
+    | K_INT       { $t = native_cql3_type::int_; }
+    | K_TEXT      { $t = native_cql3_type::text; }
+    | K_TIMESTAMP { $t = native_cql3_type::timestamp; }
+    | K_UUID      { $t = native_cql3_type::uuid; }
+    | K_VARCHAR   { $t = native_cql3_type::varchar; }
+#if 0
     | K_VARINT    { $t = CQL3Type.Native.VARINT; }
-    | K_TIMEUUID  { $t = CQL3Type.Native.TIMEUUID; }
+#endif
+    | K_TIMEUUID  { $t = native_cql3_type::timeuuid; }
     ;
 
+#if 0
 collection_type returns [CQL3Type.Raw pt]
     : K_MAP  '<' t1=comparatorType ',' t2=comparatorType '>'
         {

@@ -162,9 +162,8 @@ public:
             }
         }
 
+        virtual ::shared_ptr<selectable> prepare(::shared_ptr<config::cf_meta_data> cfm) override {
 #if 0
-        public ColumnIdentifier prepare(CFMetaData cfm)
-        {
             AbstractType<?> comparator = cfm.comparator.asAbstractType();
             if (cfm.getIsDense() || comparator instanceof CompositeType || comparator instanceof UTF8Type)
                 return new ColumnIdentifier(text, true);
@@ -179,13 +178,15 @@ public:
                     return new ColumnIdentifier(text, true);
             }
             return new ColumnIdentifier(comparator.fromString(rawText), text);
+#endif
+            throw std::runtime_error("not implemented");
         }
 
-        public boolean processesSelection()
-        {
+        virtual bool processes_selection() const override {
             return false;
         }
 
+#if 0
         @Override
         public final int hashCode()
         {
