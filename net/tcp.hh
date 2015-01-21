@@ -391,7 +391,7 @@ public:
         listener(listener&& x)
             : _tcp(x._tcp), _port(x._port), _q(std::move(x._q)) {
             _tcp._listening[_port] = this;
-            _port = 0;
+            x._port = 0;
         }
         ~listener() {
             if (_port) {
