@@ -414,7 +414,7 @@ public:
     net::hw_features hw_features() { return _inet._inet.hw_features(); }
     void poll_tcb(ipaddr to, lw_shared_ptr<tcb> tcb);
 private:
-    void send(ipaddr from, ipaddr to, packet p);
+    void send_packet_without_tcb(ipaddr from, ipaddr to, packet p);
     void respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr foreign_ip);
     friend class listener;
 };
@@ -534,8 +534,10 @@ void tcp<InetTraits>::received(packet p, ipaddr from, ipaddr to) {
     }
 }
 
+
+// Send packet does not belong to any tcb
 template <typename InetTraits>
-void tcp<InetTraits>::send(ipaddr from, ipaddr to, packet p) {
+void tcp<InetTraits>::send_packet_without_tcb(ipaddr from, ipaddr to, packet p) {
     if (_queue_space.try_wait(p.len())) { // drop packets that do not fit the queue
         _inet.get_l2_dst_address(to).then([this, to, p = std::move(p)] (ethernet_address e_dst) mutable {
                 _packetq.emplace_back(ipv4_traits::l4packet{to, std::move(p), e_dst, ip_protocol_num::tcp});
@@ -605,7 +607,7 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
     oi.tcp_hdr_len = sizeof(tcp_hdr);
     p.set_offload_info(oi);
 
-    send(local_ip, foreign_ip, std::move(p));
+    send_packet_without_tcb(local_ip, foreign_ip, std::move(p));
 }
 
 template <typename InetTraits>
