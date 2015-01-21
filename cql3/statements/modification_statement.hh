@@ -100,11 +100,11 @@ public:
 #endif
 
 private:
-    const std::vector<std::experimental::optional<::shared_ptr<operation>>> _column_operations;
+    const std::vector<::shared_ptr<operation>> _column_operations;
 
     // Separating normal and static conditions makes things somewhat easier
-    std::vector<std::experimental::optional<::shared_ptr<column_condition>>> _column_conditions;
-    std::vector<std::experimental::optional<::shared_ptr<column_condition>>> _static_conditions;
+    std::vector<::shared_ptr<column_condition>> _column_conditions;
+    std::vector<::shared_ptr<column_condition>> _static_conditions;
 
     bool _if_not_exists = false;
     bool _if_exists = false;
