@@ -41,6 +41,11 @@ public:
     tcp_reset_error() : tcp_error("connection is reset") {}
 };
 
+class tcp_connect_error : public tcp_error {
+public:
+    tcp_connect_error() : tcp_error("fail to connect") {}
+};
+
 struct tcp_option {
     // The kind and len field are fixed and defined in TCP protocol
     enum class option_kind: uint8_t { mss = 2, win_scale = 3, sack = 4, timestamps = 8,  nop = 1, eol = 0 };
@@ -174,6 +179,7 @@ private:
         bool _nuked = false;
         tcp& _tcp;
         connection* _conn = nullptr;
+        promise<> _connect_done;
         ipaddr _local_ip;
         ipaddr _foreign_ip;
         uint16_t _local_port;
@@ -277,6 +283,9 @@ private:
                 _poll_active = true;
                 _tcp.poll_tcb(_foreign_ip, this->shared_from_this());
             }
+        }
+        future<> connect_done() {
+            return _connect_done.get_future();
         }
     private:
         void respond_with_reset(tcp_hdr* th);
@@ -401,7 +410,7 @@ public:
     void received(packet p, ipaddr from, ipaddr to);
     bool forward(forward_hash& out_hash_data, packet& p, size_t off);
     listener listen(uint16_t port, size_t queue_length = 100);
-    connection connect(socket_address sa);
+    future<connection> connect(socket_address sa);
     net::hw_features hw_features() { return _inet._inet.hw_features(); }
     void poll_tcb(ipaddr to, lw_shared_ptr<tcb> tcb);
 private:
@@ -450,7 +459,7 @@ auto tcp<InetTraits>::listen(uint16_t port, size_t queue_length) -> listener {
 }
 
 template <typename InetTraits>
-auto tcp<InetTraits>::connect(socket_address sa) -> connection {
+future<typename tcp<InetTraits>::connection> tcp<InetTraits>::connect(socket_address sa) {
     uint16_t src_port;
     connid id;
     auto src_ip = _inet._inet.host_address();
@@ -467,7 +476,9 @@ auto tcp<InetTraits>::connect(socket_address sa) -> connection {
     _tcbs.insert({id, tcbp});
     tcbp->output();
 
-    return connection(tcbp);
+    return tcbp->connect_done().then([tcbp] {
+        return make_ready_future<connection>(connection(tcbp));
+    });
 }
 
 template <typename InetTraits>
@@ -747,6 +758,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             if (th->ack == _snd.initial + 1) {
                 _snd.unacknowledged = _snd.next = _snd.initial + 1;
                 _local_syn_acked = true;
+                _connect_done.set_value();
                 _snd.wl2 = th->ack;
                 update_rto(_snd.syn_tx_time);
             } else {
@@ -1138,7 +1150,7 @@ void tcp<InetTraits>::tcb::retransmit() {
         if (_snd.syn_retransmit++ < _max_nr_retransmit) {
             output_update_rto();
         } else {
-            // TODO: Propagate error to connect()
+            _connect_done.set_exception(tcp_connect_error());
             cleanup();
             return;
         }
