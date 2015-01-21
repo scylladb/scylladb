@@ -20,6 +20,7 @@
 #include <chrono>
 #include <experimental/optional>
 #include <random>
+#include <stdexcept>
 
 #define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
 #include <cryptopp/md5.h>
@@ -29,6 +30,21 @@ using namespace std::chrono_literals;
 namespace net {
 
 class tcp_hdr;
+
+class tcp_error : public std::runtime_error {
+public:
+    tcp_error(const std::string& msg) : std::runtime_error(msg) {}
+};
+
+class tcp_reset_error : public tcp_error {
+public:
+    tcp_reset_error() : tcp_error("connection is reset") {}
+};
+
+class tcp_connect_error : public tcp_error {
+public:
+    tcp_connect_error() : tcp_error("fail to connect") {}
+};
 
 struct tcp_option {
     // The kind and len field are fixed and defined in TCP protocol
@@ -163,6 +179,7 @@ private:
         bool _nuked = false;
         tcp& _tcp;
         connection* _conn = nullptr;
+        promise<> _connect_done;
         ipaddr _local_ip;
         ipaddr _foreign_ip;
         uint16_t _local_port;
@@ -205,6 +222,8 @@ private:
             uint32_t ssthresh;
             // Duplicated ACKs
             uint16_t dupacks = 0;
+            unsigned syn_retransmit = 0;
+            unsigned fin_retransmit = 0;
         } _snd;
         struct receive {
             tcp_seq next;
@@ -265,6 +284,9 @@ private:
                 _tcp.poll_tcb(_foreign_ip, this->shared_from_this());
             }
         }
+        future<> connect_done() {
+            return _connect_done.get_future();
+        }
     private:
         void respond_with_reset(tcp_hdr* th);
         bool merge_out_of_order();
@@ -307,6 +329,12 @@ private:
         }
         void queue_packet(packet p) {
             _packetq.emplace_back(typename InetTraits::l4packet{_foreign_ip, std::move(p)});
+        }
+        bool syn_needs_retransmit() {
+            return _local_syn_sent && !_local_syn_acked;
+        }
+        bool fin_needs_retransmit() {
+            return _local_fin_sent && !_local_fin_acked;
         }
         friend class connection;
     };
@@ -382,7 +410,7 @@ public:
     void received(packet p, ipaddr from, ipaddr to);
     bool forward(forward_hash& out_hash_data, packet& p, size_t off);
     listener listen(uint16_t port, size_t queue_length = 100);
-    connection connect(socket_address sa);
+    future<connection> connect(socket_address sa);
     net::hw_features hw_features() { return _inet._inet.hw_features(); }
     void poll_tcb(ipaddr to, lw_shared_ptr<tcb> tcb);
 private:
@@ -431,7 +459,7 @@ auto tcp<InetTraits>::listen(uint16_t port, size_t queue_length) -> listener {
 }
 
 template <typename InetTraits>
-auto tcp<InetTraits>::connect(socket_address sa) -> connection {
+future<typename tcp<InetTraits>::connection> tcp<InetTraits>::connect(socket_address sa) {
     uint16_t src_port;
     connid id;
     auto src_ip = _inet._inet.host_address();
@@ -448,7 +476,9 @@ auto tcp<InetTraits>::connect(socket_address sa) -> connection {
     _tcbs.insert({id, tcbp});
     tcbp->output();
 
-    return connection(tcbp);
+    return tcbp->connect_done().then([tcbp] {
+        return make_ready_future<connection>(connection(tcbp));
+    });
 }
 
 template <typename InetTraits>
@@ -593,6 +623,8 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
     if (th->f_rst) {
         // Fake end-of-connection so reads return immediately
         _nuked = true;
+        // Free packets to be sent which are waiting for _snd.user_queue_space
+        _snd.user_queue_space.broken(tcp_reset_error());
         cleanup();
         if (_rcv._data_received_promise) {
             // FIXME: set_exception() instead?
@@ -726,6 +758,7 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
             if (th->ack == _snd.initial + 1) {
                 _snd.unacknowledged = _snd.next = _snd.initial + 1;
                 _local_syn_acked = true;
+                _connect_done.set_value();
                 _snd.wl2 = th->ack;
                 update_rto(_snd.syn_tx_time);
             } else {
@@ -918,8 +951,9 @@ void tcp<InetTraits>::tcb::output_one() {
     _snd.next += len;
 
     // FIXME: does the FIN have to fit in the window?
-    th->f_fin = _snd.closed && _snd.unsent_len == 0 && !_local_fin_acked;
-    _local_fin_sent |= th->f_fin;
+    bool fin_on =  _snd.closed && _snd.unsent_len == 0 && !_local_fin_acked;
+    th->f_fin = fin_on;
+    _local_fin_sent |= fin_on;
 
     // Add tcp options
     _option.fill(th, options_size);
@@ -943,10 +977,12 @@ void tcp<InetTraits>::tcb::output_one() {
     oi.tcp_hdr_len = sizeof(tcp_hdr) + options_size;
     p.set_offload_info(oi);
 
-    if (len) {
-        unsigned nr_transmits = 0;
+    if (len || syn_on || fin_on) {
         auto now = clock_type::now();
-        _snd.data.emplace_back(unacked_segment{p.share(), len, len, nr_transmits, now});
+        if (len) {
+            unsigned nr_transmits = 0;
+            _snd.data.emplace_back(unacked_segment{p.share(), len, len, nr_transmits, now});
+        }
         if (!_retransmit.armed()) {
             start_retransmit_timer(now);
         }
@@ -985,13 +1021,21 @@ packet tcp<InetTraits>::tcb::read() {
 
 template <typename InetTraits>
 future<> tcp<InetTraits>::tcb::send(packet p) {
+    // We can not send after the connection is closed
+    assert(!_snd.closed);
+
+    if (_nuked) {
+        return make_exception_future<>(tcp_reset_error());
+    }
+
     // TODO: Handle p.len() > max user_queue_space case
     auto len = p.len();
     return _snd.user_queue_space.wait(len).then([this, zis = this->shared_from_this(), p = std::move(p)] () mutable {
         _snd.unsent_len += p.len();
         _snd.unsent.push_back(std::move(p));
-        if (can_send() > 0)
+        if (can_send() > 0) {
             output();
+        }
         return make_ready_future<>();
     });
 }
@@ -1094,6 +1138,35 @@ void tcp<InetTraits>::tcb::trim_receive_data_after_window() {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::retransmit() {
+    auto output_update_rto = [this] {
+        output();
+        // According to RFC6298, Update RTO <- RTO * 2 to perform binary exponential back-off
+        this->_rto = std::min(this->_rto * 2, this->_rto_max);
+        start_retransmit_timer();
+    };
+
+    // Retransmit SYN
+    if (syn_needs_retransmit()) {
+        if (_snd.syn_retransmit++ < _max_nr_retransmit) {
+            output_update_rto();
+        } else {
+            _connect_done.set_exception(tcp_connect_error());
+            cleanup();
+            return;
+        }
+    }
+
+    // Retransmit FIN
+    if (fin_needs_retransmit()) {
+        if (_snd.fin_retransmit++ < _max_nr_retransmit) {
+            output_update_rto();
+        } else {
+            cleanup();
+            return;
+        }
+    }
+
+    // Retransmit Data
     if (_snd.data.empty()) {
         return;
     }
@@ -1120,11 +1193,8 @@ void tcp<InetTraits>::tcb::retransmit() {
     }
     // TODO: If the Path MTU changes, we need to split the segment if it is larger than current MSS
     queue_packet(unacked_seg.p.share());
-    output();
 
-    // According to RFC6298, Update RTO <- RTO * 2 to perform binary exponential back-off
-    _rto = std::min(_rto * 2, _rto_max);
-    start_retransmit_timer();
+    output_update_rto();
 }
 
 template <typename InetTraits>

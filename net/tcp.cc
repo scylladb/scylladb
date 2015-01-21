@@ -6,6 +6,7 @@
 #include "tcp-stack.hh"
 #include "ip.hh"
 #include "core/align.hh"
+#include "core/future.hh"
 #include "native-stack-impl.hh"
 
 namespace net {
@@ -133,10 +134,12 @@ tcpv4_listen(tcp<ipv4_traits>& tcpv4, uint16_t port, listen_options opts) {
 			tcpv4, port, opts));
 }
 
-connected_socket
+future<connected_socket>
 tcpv4_connect(tcp<ipv4_traits>& tcpv4, socket_address sa) {
-    return connected_socket(std::make_unique<native_connected_socket_impl<tcp<ipv4_traits>>>(
-        tcpv4.connect(sa)));
+    return tcpv4.connect(sa).then([] (tcp<ipv4_traits>::connection conn) mutable {
+        std::unique_ptr<connected_socket_impl> csi(new native_connected_socket_impl<tcp<ipv4_traits>>(std::move(conn)));
+        return make_ready_future<connected_socket>(connected_socket(std::move(csi)));
+    });
 }
 
 }

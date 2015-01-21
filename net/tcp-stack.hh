@@ -7,6 +7,8 @@
 #ifndef NET_TCP_STACK_HH
 #define NET_TCP_STACK_HH
 
+#include "core/future.hh"
+
 class listen_options;
 class server_socket;
 class connected_socket;
@@ -20,7 +22,7 @@ class tcp;
 server_socket
 tcpv4_listen(tcp<ipv4_traits>& tcpv4, uint16_t port, listen_options opts);
 
-connected_socket
+future<connected_socket>
 tcpv4_connect(tcp<ipv4_traits>& tcpv4, socket_address sa);
 
 }

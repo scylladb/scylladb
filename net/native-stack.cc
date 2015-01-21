@@ -185,7 +185,7 @@ native_network_stack::listen(socket_address sa, listen_options opts) {
 future<connected_socket>
 native_network_stack::connect(socket_address sa) {
     assert(sa.as_posix_sockaddr().sa_family == AF_INET);
-    return make_ready_future<connected_socket>(tcpv4_connect(_inet.get_tcp(), sa));
+    return tcpv4_connect(_inet.get_tcp(), sa);
 }
 
 using namespace std::chrono_literals;
