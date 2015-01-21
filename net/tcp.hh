@@ -627,14 +627,10 @@ void tcp<InetTraits>::tcb::input(tcp_hdr* th, packet p) {
         _snd.user_queue_space.broken(tcp_reset_error());
         cleanup();
         if (_rcv._data_received_promise) {
-            // FIXME: set_exception() instead?
-            _rcv._data_received_promise->set_value();
-            _rcv._data_received_promise = {};
+            _rcv._data_received_promise->set_exception(tcp_reset_error());
         }
         if (_snd._all_data_acked_promise) {
-            // FIXME: set_exception() instead?
-            _snd._all_data_acked_promise->set_value();
-            _snd._all_data_acked_promise = {};
+            _snd._all_data_acked_promise->set_exception(tcp_reset_error());
         }
         return;
     }
