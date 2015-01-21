@@ -74,7 +74,7 @@ public:
         /**
          * Returns true if any processing is performed on the selected column.
          **/
-        virtual bool processesSelection() = 0;
+        virtual bool processes_selection() const = 0;
     };
 
 #if 0
