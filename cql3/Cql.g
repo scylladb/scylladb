@@ -27,6 +27,7 @@ options {
 
 @parser::includes {
 #include "cql3/statements/use_statement.hh"
+#include "cql3/constants.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/cf_name.hh"
 #include "core/sstring.hh"
@@ -958,8 +959,8 @@ userOption[UserOptions opts]
 // CASSANDRA-8178 for details.
 cident returns [shared_ptr<column_identifier::raw> id]
     : t=IDENT              { $id = make_shared<column_identifier::raw>(sstring{$t.text}, false); }
+    | t=QUOTED_NAME        { $id = make_shared<column_identifier::raw>(sstring{$t.text}, true); }
 #if 0
-    | t=QUOTED_NAME        { $id = new ColumnIdentifier.Raw($t.text, true); }
     | k=unreserved_keyword { $id = new ColumnIdentifier.Raw(k, false); }
 #endif
     ;
@@ -1003,24 +1004,25 @@ userTypeName returns [UTName name]
 
 cfOrKsName[cf_name& name, bool isKs]
     : t=IDENT              { if (isKs) $name.set_keyspace($t.text, false); else $name.set_column_family($t.text, false); }
+    | t=QUOTED_NAME        { if (isKs) $name.set_keyspace($t.text, true); else $name.set_column_family($t.text, true); }
 #if 0
-    | t=QUOTED_NAME        { if (isKs) $name.setKeyspace($t.text, true); else $name.setColumnFamily($t.text, true); }
     | k=unreserved_keyword { if (isKs) $name.setKeyspace(k, false); else $name.setColumnFamily(k, false); }
     | QMARK {addRecognitionError("Bind variables cannot be used for keyspace or table names");}
 #endif
     ;
 
-#if 0
-constant returns [Constants.Literal constant]
-    : t=STRING_LITERAL { $constant = Constants.Literal.string($t.text); }
-    | t=INTEGER        { $constant = Constants.Literal.integer($t.text); }
-    | t=FLOAT          { $constant = Constants.Literal.floatingPoint($t.text); }
-    | t=BOOLEAN        { $constant = Constants.Literal.bool($t.text); }
-    | t=UUID           { $constant = Constants.Literal.uuid($t.text); }
-    | t=HEXNUMBER      { $constant = Constants.Literal.hex($t.text); }
-    | { String sign=""; } ('-' {sign = "-"; } )? t=(K_NAN | K_INFINITY) { $constant = Constants.Literal.floatingPoint(sign + $t.text); }
+constant returns [shared_ptr<constants::literal> constant]
+    @init{std::string sign;}
+    : t=STRING_LITERAL { $constant = constants::literal::string(sstring{$t.text}); }
+    | t=INTEGER        { $constant = constants::literal::integer(sstring{$t.text}); }
+    | t=FLOAT          { $constant = constants::literal::floating_point(sstring{$t.text}); }
+    | t=BOOLEAN        { $constant = constants::literal::bool_(sstring{$t.text}); }
+    | t=UUID           { $constant = constants::literal::uuid(sstring{$t.text}); }
+    | t=HEXNUMBER      { $constant = constants::literal::hex(sstring{$t.text}); }
+    | { sign=""; } ('-' {sign = "-"; } )? t=(K_NAN | K_INFINITY) { $constant = constants::literal::floating_point(sstring{sign + $t.text}); }
     ;
 
+#if 0
 mapLiteral returns [Maps.Literal map]
     : '{' { List<Pair<Term.Raw, Term.Raw>> m = new ArrayList<Pair<Term.Raw, Term.Raw>>(); }
           ( k1=term ':' v1=term { m.add(Pair.create(k1, v1)); } ( ',' kn=term ':' vn=term { m.add(Pair.create(kn, vn)); } )* )?
@@ -1537,13 +1539,14 @@ fragment X: ('x'|'X');
 fragment Y: ('y'|'Y');
 fragment Z: ('z'|'Z');
 
-#if 0
 STRING_LITERAL
     @init{
-        StringBuilder txt = new StringBuilder(); // temporary to build pg-style-string
+        std::string txt; // temporary to build pg-style-string
     }
-    @after{ setText(txt.toString()); }
+    @after{ setText(txt); }
     :
+// FIXME:
+#if 0
       /* pg-style string literal */
       (
         '\$' '\$'
@@ -1555,18 +1558,18 @@ STRING_LITERAL
         '\$' '\$'
       )
       |
+#endif
       /* conventional quoted string literal */
       (
-        '\'' (c=~('\'') { txt.appendCodePoint(c);} | '\'' '\'' { txt.appendCodePoint('\''); })* '\''
+        '\'' (c=~('\'') { txt.push_back(c);} | '\'' '\'' { txt.push_back('\''); })* '\''
       )
     ;
 
 QUOTED_NAME
-    @init{ StringBuilder b = new StringBuilder(); }
-    @after{ setText(b.toString()); }
-    : '\"' (c=~('\"') { b.appendCodePoint(c); } | '\"' '\"' { b.appendCodePoint('\"'); })+ '\"'
+    @init{ std::string b; }
+    @after{ setText(b); }
+    : '\"' (c=~('\"') { b.push_back(c); } | '\"' '\"' { b.push_back('\"'); })+ '\"'
     ;
-#endif
 
 fragment DIGIT
     : '0'..'9'
