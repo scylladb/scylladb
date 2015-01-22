@@ -390,13 +390,17 @@ class smp_message_queue {
                             boost::lockfree::capacity<queue_length>>;
     lf_queue _pending;
     lf_queue _completed;
-    size_t _received = 0;
-    size_t _sent = 0;
-    size_t _compl = 0;
-    size_t _current_queue_length = 0;
-    size_t _last_snt_batch = 0;
-    size_t _last_rcv_batch = 0;
-    size_t _last_cmpl_batch = 0;
+    struct alignas(64) {
+        size_t _sent = 0;
+        size_t _compl = 0;
+        size_t _last_snt_batch = 0;
+        size_t _last_cmpl_batch = 0;
+        size_t _current_queue_length = 0;
+    };
+    struct alignas(64) {
+        size_t _received = 0;
+        size_t _last_rcv_batch = 0;
+    };
     std::vector<scollectd::registration> _collectd_regs;
     struct work_item {
         virtual ~work_item() {}
