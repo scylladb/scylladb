@@ -58,12 +58,13 @@ class constants {
 public:
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(Constants.class);
+#endif
+public:
+    enum class type {
+        STRING, INTEGER, UUID, FLOAT, BOOLEAN, HEX
+    };
 
-    public enum Type
-    {
-        STRING, INTEGER, UUID, FLOAT, BOOLEAN, HEX;
-    }
-
+#if 0
     public static final Term.Raw NULL_LITERAL = new Term.Raw()
     {
         private final Term.Terminal NULL_VALUE = new Value(null)
@@ -103,57 +104,52 @@ public:
             return "null";
         }
     };
+#endif
 
-    public static class Literal implements Term.Raw
-    {
-        private final Type type;
-        private final String text;
+    class literal : public term::raw {
+    private:
+        const type _type;
+        const sstring _text;
+    public:
+        literal(type type_, sstring text)
+            : _type{type_}
+            , _text{text}
+        { }
 
-        private Literal(Type type, String text)
-        {
-            assert type != null && text != null;
-            this.type = type;
-            this.text = text;
+        static ::shared_ptr<literal> string(sstring text) {
+            return ::make_shared<literal>(type::STRING, text);
         }
 
-        public static Literal string(String text)
-        {
-            return new Literal(Type.STRING, text);
+        static ::shared_ptr<literal> integer(sstring text) {
+            return ::make_shared<literal>(type::INTEGER, text);
         }
 
-        public static Literal integer(String text)
-        {
-            return new Literal(Type.INTEGER, text);
+        static ::shared_ptr<literal> floating_point(sstring text) {
+            return ::make_shared<literal>(type::FLOAT, text);
         }
 
-        public static Literal floatingPoint(String text)
-        {
-            return new Literal(Type.FLOAT, text);
+        static ::shared_ptr<literal> uuid(sstring text) {
+            return ::make_shared<literal>(type::UUID, text);
         }
 
-        public static Literal uuid(String text)
-        {
-            return new Literal(Type.UUID, text);
+        static ::shared_ptr<literal> bool_(sstring text) {
+            return ::make_shared<literal>(type::BOOLEAN, text);
         }
 
-        public static Literal bool(String text)
-        {
-            return new Literal(Type.BOOLEAN, text);
+        static ::shared_ptr<literal> hex(sstring text) {
+            return ::make_shared<literal>(type::HEX, text);
         }
 
-        public static Literal hex(String text)
-        {
-            return new Literal(Type.HEX, text);
-        }
-
-        public Value prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
+        virtual ::shared_ptr<term> prepare(sstring keyspace, ::shared_ptr<column_specification> receiver) override {
+            throw std::runtime_error("not implemented");
+#if 0
             if (!testAssignment(keyspace, receiver).isAssignable())
                 throw new InvalidRequestException(String.format("Invalid %s constant (%s) for \"%s\" of type %s", type, text, receiver.name, receiver.type.asCQL3Type()));
 
             return new Value(parsedValue(receiver.type));
+#endif
         }
-
+#if 0
         private ByteBuffer parsedValue(AbstractType<?> validator) throws InvalidRequestException
         {
             if (validator instanceof ReversedType<?>)
@@ -177,9 +173,11 @@ public:
         {
             return text;
         }
+#endif
 
-        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver)
-        {
+        virtual assignment_testable::test_result test_assignment(sstring keyspace, ::shared_ptr<column_specification> receiver) override {
+            throw new std::runtime_error("not implemented");
+#if 0
             CQL3Type receiverType = receiver.type.asCQL3Type();
             if (receiverType.isCollection())
                 return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
@@ -249,15 +247,19 @@ public:
                     break;
             }
             return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
+#endif
         }
 
+#if 0
         @Override
         public String toString()
         {
             return type == Type.STRING ? String.format("'%s'", text) : text;
         }
-    }
+#endif
+    };
 
+#if 0
     /**
      * A constant value, i.e. a ByteBuffer.
      */
