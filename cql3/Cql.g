@@ -958,8 +958,8 @@ userOption[UserOptions opts]
 // CASSANDRA-8178 for details.
 cident returns [shared_ptr<column_identifier::raw> id]
     : t=IDENT              { $id = make_shared<column_identifier::raw>(sstring{$t.text}, false); }
+    | t=QUOTED_NAME        { $id = make_shared<column_identifier::raw>(sstring{$t.text}, true); }
 #if 0
-    | t=QUOTED_NAME        { $id = new ColumnIdentifier.Raw($t.text, true); }
     | k=unreserved_keyword { $id = new ColumnIdentifier.Raw(k, false); }
 #endif
     ;
@@ -1003,8 +1003,8 @@ userTypeName returns [UTName name]
 
 cfOrKsName[cf_name& name, bool isKs]
     : t=IDENT              { if (isKs) $name.set_keyspace($t.text, false); else $name.set_column_family($t.text, false); }
+    | t=QUOTED_NAME        { if (isKs) $name.set_keyspace($t.text, true); else $name.set_column_family($t.text, true); }
 #if 0
-    | t=QUOTED_NAME        { if (isKs) $name.setKeyspace($t.text, true); else $name.setColumnFamily($t.text, true); }
     | k=unreserved_keyword { if (isKs) $name.setKeyspace(k, false); else $name.setColumnFamily(k, false); }
     | QMARK {addRecognitionError("Bind variables cannot be used for keyspace or table names");}
 #endif
@@ -1560,13 +1560,13 @@ STRING_LITERAL
         '\'' (c=~('\'') { txt.appendCodePoint(c);} | '\'' '\'' { txt.appendCodePoint('\''); })* '\''
       )
     ;
+#endif
 
 QUOTED_NAME
-    @init{ StringBuilder b = new StringBuilder(); }
-    @after{ setText(b.toString()); }
-    : '\"' (c=~('\"') { b.appendCodePoint(c); } | '\"' '\"' { b.appendCodePoint('\"'); })+ '\"'
+    @init{ std::string b; }
+    @after{ setText(b); }
+    : '\"' (c=~('\"') { b.push_back(c); } | '\"' '\"' { b.push_back('\"'); })+ '\"'
     ;
-#endif
 
 fragment DIGIT
     : '0'..'9'
