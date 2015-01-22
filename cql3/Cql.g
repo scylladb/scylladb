@@ -27,6 +27,7 @@ options {
 
 @parser::includes {
 #include "cql3/statements/use_statement.hh"
+#include "cql3/constants.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/cf_name.hh"
 #include "core/sstring.hh"
@@ -1010,17 +1011,18 @@ cfOrKsName[cf_name& name, bool isKs]
 #endif
     ;
 
-#if 0
-constant returns [Constants.Literal constant]
-    : t=STRING_LITERAL { $constant = Constants.Literal.string($t.text); }
-    | t=INTEGER        { $constant = Constants.Literal.integer($t.text); }
-    | t=FLOAT          { $constant = Constants.Literal.floatingPoint($t.text); }
-    | t=BOOLEAN        { $constant = Constants.Literal.bool($t.text); }
-    | t=UUID           { $constant = Constants.Literal.uuid($t.text); }
-    | t=HEXNUMBER      { $constant = Constants.Literal.hex($t.text); }
-    | { String sign=""; } ('-' {sign = "-"; } )? t=(K_NAN | K_INFINITY) { $constant = Constants.Literal.floatingPoint(sign + $t.text); }
+constant returns [shared_ptr<constants::literal> constant]
+    @init{std::string sign;}
+    : t=STRING_LITERAL { $constant = constants::literal::string(sstring{$t.text}); }
+    | t=INTEGER        { $constant = constants::literal::integer(sstring{$t.text}); }
+    | t=FLOAT          { $constant = constants::literal::floating_point(sstring{$t.text}); }
+    | t=BOOLEAN        { $constant = constants::literal::bool_(sstring{$t.text}); }
+    | t=UUID           { $constant = constants::literal::uuid(sstring{$t.text}); }
+    | t=HEXNUMBER      { $constant = constants::literal::hex(sstring{$t.text}); }
+    | { sign=""; } ('-' {sign = "-"; } )? t=(K_NAN | K_INFINITY) { $constant = constants::literal::floating_point(sstring{sign + $t.text}); }
     ;
 
+#if 0
 mapLiteral returns [Maps.Literal map]
     : '{' { List<Pair<Term.Raw, Term.Raw>> m = new ArrayList<Pair<Term.Raw, Term.Raw>>(); }
           ( k1=term ':' v1=term { m.add(Pair.create(k1, v1)); } ( ',' kn=term ':' vn=term { m.add(Pair.create(kn, vn)); } )* )?
