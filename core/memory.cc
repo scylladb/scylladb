@@ -837,9 +837,6 @@ void configure(std::vector<resource::memory> m,
         cpu_mem.replace_memory_backing(sys_alloc);
     }
     cpu_mem.resize(total, sys_alloc);
-    if (hugetlbfs_path) {
-        cpu_mem.init_virt_to_phys_map();
-    }
     size_t pos = 0;
     for (auto&& x : m) {
 #ifdef HAVE_NUMA
@@ -851,6 +848,9 @@ void configure(std::vector<resource::memory> m,
         assert(r == 0);
 #endif
         pos += x.bytes;
+    }
+    if (hugetlbfs_path) {
+        cpu_mem.init_virt_to_phys_map();
     }
 }
 
