@@ -15,31 +15,39 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.restrictions;
 
-import java.nio.ByteBuffer;
-import java.util.List;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import org.apache.cassandra.cql3.QueryOptions;
-import org.apache.cassandra.cql3.statements.Bound;
-import org.apache.cassandra.db.IndexExpression;
-import org.apache.cassandra.db.index.SecondaryIndexManager;
-import org.apache.cassandra.exceptions.InvalidRequestException;
+#pragma once
+
+#include <vector>
+
+#include "cql3/query_options.hh"
+#include "cql3/statements/bound.hh"
+#include "database.hh"
+
+namespace cql3 {
+
+namespace restrictions {
 
 /**
  * A restriction/clause on a column.
  * The goal of this class being to group all conditions for a column in a SELECT.
  */
-public interface Restriction
-{
-    public boolean isOnToken();
-    public boolean isSlice();
-    public boolean isEQ();
-    public boolean isIN();
-    public boolean isContains();
-    public boolean isMultiColumn();
+class restriction {
+public:
+    virtual bool is_on_token() = 0;
+    virtual bool is_slice() = 0;
+    virtual bool is_EQ() = 0;
+    virtual bool is_IN() = 0;
+    virtual bool is_contains() = 0;
+    virtual bool is_multi_column() = 0;
 
-    public List<ByteBuffer> values(QueryOptions options) throws InvalidRequestException;
+    virtual std::vector<bytes> values(const query_options& options) = 0;
 
     /**
      * Returns <code>true</code> if one of the restrictions use the specified function.
@@ -48,24 +56,25 @@ public interface Restriction
      * @param functionName the function name
      * @return <code>true</code> if one of the restrictions use the specified function, <code>false</code> otherwise.
      */
-    public boolean usesFunction(String ksName, String functionName);
+    virtual bool uses_function(sstring ksName, sstring functionName) = 0;
 
     /**
      * Checks if the specified bound is set or not.
      * @param b the bound type
      * @return <code>true</code> if the specified bound is set, <code>false</code> otherwise
      */
-    public boolean hasBound(Bound b);
+    virtual bool has_bound(statements::bound b) = 0;
 
-    public List<ByteBuffer> bounds(Bound b, QueryOptions options) throws InvalidRequestException;
+    virtual std::vector<bytes> bounds(statements::bound b, const query_options& options) = 0;
 
     /**
      * Checks if the specified bound is inclusive or not.
      * @param b the bound type
      * @return <code>true</code> if the specified bound is inclusive, <code>false</code> otherwise
      */
-    public boolean isInclusive(Bound b);
+    virtual bool is_inclusive(statements::bound b) = 0;
 
+#if 0
     /**
      * Merges this restriction with the specified one.
      *
@@ -94,4 +103,9 @@ public interface Restriction
     public void addIndexExpressionTo(List<IndexExpression> expressions,
                                      QueryOptions options)
                                      throws InvalidRequestException;
+#endif
+};
+
+}
+
 }
