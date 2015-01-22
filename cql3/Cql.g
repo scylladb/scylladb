@@ -1537,13 +1537,14 @@ fragment X: ('x'|'X');
 fragment Y: ('y'|'Y');
 fragment Z: ('z'|'Z');
 
-#if 0
 STRING_LITERAL
     @init{
-        StringBuilder txt = new StringBuilder(); // temporary to build pg-style-string
+        std::string txt; // temporary to build pg-style-string
     }
-    @after{ setText(txt.toString()); }
+    @after{ setText(txt); }
     :
+// FIXME:
+#if 0
       /* pg-style string literal */
       (
         '\$' '\$'
@@ -1555,12 +1556,12 @@ STRING_LITERAL
         '\$' '\$'
       )
       |
+#endif
       /* conventional quoted string literal */
       (
-        '\'' (c=~('\'') { txt.appendCodePoint(c);} | '\'' '\'' { txt.appendCodePoint('\''); })* '\''
+        '\'' (c=~('\'') { txt.push_back(c);} | '\'' '\'' { txt.push_back('\''); })* '\''
       )
     ;
-#endif
 
 QUOTED_NAME
     @init{ std::string b; }
