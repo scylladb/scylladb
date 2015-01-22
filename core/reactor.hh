@@ -409,13 +409,12 @@ class smp_message_queue {
     };
     template <typename Func, typename Future>
     struct async_work_item : work_item {
-        smp_message_queue& _q;
         Func _func;
         using value_type = typename Future::value_type;
         std::experimental::optional<value_type> _result;
         std::exception_ptr _ex; // if !_result
         typename Future::promise_type _promise; // used on local side
-        async_work_item(smp_message_queue& q, Func&& func) : _q(q), _func(std::move(func)) {}
+        async_work_item(Func&& func) : _func(std::move(func)) {}
         virtual future<> process() override {
             try {
                 return this->_func().rescue([this] (auto&& get_result) {
@@ -454,7 +453,7 @@ public:
     template <typename Func>
     std::result_of_t<Func()> submit(Func func) {
         using future = std::result_of_t<Func()>;
-        auto wi = new async_work_item<Func, future>(*this, std::move(func));
+        auto wi = new async_work_item<Func, future>(std::move(func));
         auto fut = wi->get_future();
         submit_item(wi);
         return fut;
