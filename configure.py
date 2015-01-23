@@ -230,6 +230,7 @@ deps = {
                  'cql3/functions/functions.cc',
                  'cql3/statements/modification_statement.cc',
                  'cql3/statements/update_statement.cc',
+                 'cql3/statements/delete_statement.cc',
                  'thrift/handler.cc',
                  'thrift/server.cc',
                  'thrift/thrift_validation.cc',
