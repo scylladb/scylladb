@@ -824,6 +824,8 @@ public:
     };
 };
 
+std::ostream& operator<<(std::ostream& out, modification_statement::statement_type t);
+
 }
 
 }

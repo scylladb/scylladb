@@ -32,6 +32,22 @@ namespace statements {
 
 ::shared_ptr<column_identifier> modification_statement::CAS_RESULT_COLUMN = ::make_shared<column_identifier>("[applied]", false);
 
+std::ostream&
+operator<<(std::ostream& out, modification_statement::statement_type t) {
+    switch (t) {
+        case modification_statement::statement_type::UPDATE:
+            out << "UPDATE";
+            break;
+        case modification_statement::statement_type::INSERT:
+            out << "INSERT";
+            break;
+        case modification_statement::statement_type::DELETE:
+            out << "DELETE";
+            break;
+    }
+    return out;
+}
+
 }
 
 }
