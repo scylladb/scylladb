@@ -15,8 +15,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db;
 
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#pragma once
+
+namespace db {
+
+#if 0
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,21 +47,23 @@ import org.apache.cassandra.exceptions.UnavailableException;
 import org.apache.cassandra.locator.AbstractReplicationStrategy;
 import org.apache.cassandra.locator.NetworkTopologyStrategy;
 import org.apache.cassandra.transport.ProtocolException;
+#endif
 
-public enum ConsistencyLevel
-{
-    ANY         (0),
-    ONE         (1),
-    TWO         (2),
-    THREE       (3),
-    QUORUM      (4),
-    ALL         (5),
-    LOCAL_QUORUM(6, true),
-    EACH_QUORUM (7),
-    SERIAL      (8),
-    LOCAL_SERIAL(9),
-    LOCAL_ONE   (10, true);
+enum class consistency_level {
+    ANY,
+    ONE,
+    TWO,
+    THREE,
+    QUORUM,
+    ALL,
+    LOCAL_QUORUM,
+    EACH_QUORUM,
+    SERIAL,
+    LOCAL_SERIAL,
+    LOCAL_ONE
+};
 
+#if 0
     private static final Logger logger = LoggerFactory.getLogger(ConsistencyLevel.class);
 
     // Used by the binary protocol
@@ -140,12 +152,15 @@ public enum ConsistencyLevel
                 throw new UnsupportedOperationException("Invalid consistency level: " + toString());
         }
     }
+#endif
 
-    public boolean isDatacenterLocal()
-    {
-        return isDCLocal;
-    }
+static inline
+bool is_datacenter_local(consistency_level l)
+{
+    return l == consistency_level::LOCAL_ONE || l == consistency_level::LOCAL_QUORUM;
+}
 
+#if 0
     public boolean isLocal(InetAddress endpoint)
     {
         return DatabaseDescriptor.getLocalDataCenter().equals(DatabaseDescriptor.getEndpointSnitch().getDatacenter(endpoint));
@@ -360,4 +375,6 @@ public enum ConsistencyLevel
         if (!(strategy instanceof NetworkTopologyStrategy))
             throw new InvalidRequestException(String.format("consistency level %s not compatible with replication strategy (%s)", this, strategy.getClass().getName()));
     }
+#endif
+
 }
