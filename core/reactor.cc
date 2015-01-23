@@ -113,9 +113,9 @@ reactor::reactor()
     keep_doing([this] {
         return receive_signal(SIGALRM).then([this] {
             _timer_promise.set_value();
-            _timer_promise =  promise<>();
+            _timer_promise = promise<>();
         });
-    });
+    }).or_terminate();
     memory::set_reclaim_hook([this] (std::function<void ()> reclaim_fn) {
         // push it in the front of the queue so we reclaim memory quickly
         _pending_tasks.push_front(make_task([fn = std::move(reclaim_fn)] {
@@ -547,7 +547,10 @@ void reactor::exit(int ret) {
 
 future<>
 reactor::receive_signal(int signo) {
-    auto i = _signal_handlers.emplace(signo, signo).first;
+    auto i = _signal_handlers.find(signo);
+    if (i == _signal_handlers.end()) {
+        i = _signal_handlers.emplace(signo, signo).first;
+    }
     signal_handler& sh = i->second;
     return sh._promise.get_future();
 }
