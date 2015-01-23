@@ -15,58 +15,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.service;
 
-import java.io.IOException;
-import java.lang.management.ManagementFactory;
-import java.net.InetAddress;
-import java.nio.ByteBuffer;
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
-import javax.management.MBeanServer;
-import javax.management.ObjectName;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import com.google.common.base.Predicate;
-import com.google.common.cache.CacheLoader;
-import com.google.common.collect.*;
-import com.google.common.util.concurrent.Uninterruptibles;
-import org.apache.cassandra.metrics.*;
-import org.apache.commons.lang3.StringUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+#include "db/consistency_level.hh"
+#include "storage_proxy.hh"
+#include "unimplemented.hh"
 
-import org.apache.cassandra.concurrent.Stage;
-import org.apache.cassandra.concurrent.StageManager;
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.config.Schema;
-import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.Keyspace;
-import org.apache.cassandra.db.index.SecondaryIndex;
-import org.apache.cassandra.db.index.SecondaryIndexSearcher;
-import org.apache.cassandra.db.marshal.UUIDType;
-import org.apache.cassandra.dht.AbstractBounds;
-import org.apache.cassandra.dht.Bounds;
-import org.apache.cassandra.dht.RingPosition;
-import org.apache.cassandra.dht.Token;
-import org.apache.cassandra.exceptions.*;
-import org.apache.cassandra.gms.FailureDetector;
-import org.apache.cassandra.gms.Gossiper;
-import org.apache.cassandra.io.util.DataOutputBuffer;
-import org.apache.cassandra.locator.AbstractReplicationStrategy;
-import org.apache.cassandra.locator.IEndpointSnitch;
-import org.apache.cassandra.locator.LocalStrategy;
-import org.apache.cassandra.locator.TokenMetadata;
-import org.apache.cassandra.net.*;
-import org.apache.cassandra.service.paxos.*;
-import org.apache.cassandra.sink.SinkManager;
-import org.apache.cassandra.tracing.Tracing;
-import org.apache.cassandra.triggers.TriggerExecutor;
-import org.apache.cassandra.utils.*;
+namespace service {
 
-public class StorageProxy implements StorageProxyMBean
-{
+#if 0
     public static final String MBEAN_NAME = "org.apache.cassandra.db:type=StorageProxy";
     private static final Logger logger = LoggerFactory.getLogger(StorageProxy.class);
     static final boolean OPTIMIZE_LOCAL_REQUESTS = true; // set to false to test messagingservice path on single node
@@ -500,19 +462,22 @@ public class StorageProxy implements StorageProxyMBean
         if (shouldBlock)
             responseHandler.get();
     }
+#endif
 
-    /**
-     * Use this method to have these Mutations applied
-     * across all replicas. This method will take care
-     * of the possibility of a replica being down and hint
-     * the data across to some other replica.
-     *
-     * @param mutations the mutations to be applied across the replicas
-     * @param consistency_level the consistency level for the operation
-     */
-    public static void mutate(Collection<? extends IMutation> mutations, ConsistencyLevel consistency_level)
-    throws UnavailableException, OverloadedException, WriteTimeoutException
-    {
+
+/**
+ * Use this method to have these Mutations applied
+ * across all replicas. This method will take care
+ * of the possibility of a replica being down and hint
+ * the data across to some other replica.
+ *
+ * @param mutations the mutations to be applied across the replicas
+ * @param consistency_level the consistency level for the operation
+ */
+future<>
+storage_proxy::mutate(std::vector<api::mutation> mutations, db::consistency_level cl) {
+    throw std::runtime_error("NOT IMPLEMENTED");
+#if 0
         Tracing.trace("Determining replicas for mutation");
         final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
 
@@ -590,36 +555,41 @@ public class StorageProxy implements StorageProxyMBean
         {
             writeMetrics.addNano(System.nanoTime() - startTime);
         }
-    }
+#endif
+}
 
-    @SuppressWarnings("unchecked")
-    public static void mutateWithTriggers(Collection<? extends IMutation> mutations,
-                                          ConsistencyLevel consistencyLevel,
-                                          boolean mutateAtomically)
-    throws WriteTimeoutException, UnavailableException, OverloadedException, InvalidRequestException
-    {
+future<>
+storage_proxy::mutate_with_triggers(std::vector<api::mutation> mutations, db::consistency_level cl,
+        bool should_mutate_atomically) {
+    unimplemented::triggers();
+#if 0
         Collection<Mutation> augmented = TriggerExecutor.instance.execute(mutations);
-
-        if (augmented != null)
-            mutateAtomically(augmented, consistencyLevel);
-        else if (mutateAtomically)
-            mutateAtomically((Collection<Mutation>) mutations, consistencyLevel);
-        else
-            mutate(mutations, consistencyLevel);
+        if (augmented != null) {
+            return mutate_atomically(augmented, consistencyLevel);
+        } else {
+#endif
+    if (should_mutate_atomically) {
+        return mutate_atomically(std::move(mutations), cl);
     }
+    return mutate(std::move(mutations), cl);
+#if 0
+    }
+#endif
+}
 
-    /**
-     * See mutate. Adds additional steps before and after writing a batch.
-     * Before writing the batch (but after doing availability check against the FD for the row replicas):
-     *      write the entire batch to a batchlog elsewhere in the cluster.
-     * After: remove the batchlog entry (after writing hints for the batch rows, if necessary).
-     *
-     * @param mutations the Mutations to be applied across the replicas
-     * @param consistency_level the consistency level for the operation
-     */
-    public static void mutateAtomically(Collection<Mutation> mutations, ConsistencyLevel consistency_level)
-    throws UnavailableException, OverloadedException, WriteTimeoutException
-    {
+/**
+ * See mutate. Adds additional steps before and after writing a batch.
+ * Before writing the batch (but after doing availability check against the FD for the row replicas):
+ *      write the entire batch to a batchlog elsewhere in the cluster.
+ * After: remove the batchlog entry (after writing hints for the batch rows, if necessary).
+ *
+ * @param mutations the Mutations to be applied across the replicas
+ * @param consistency_level the consistency level for the operation
+ */
+future<>
+storage_proxy::mutate_atomically(std::vector<api::mutation> mutations, db::consistency_level cl) {
+    unimplemented::lwt();
+#if 0
         Tracing.trace("Determining replicas for atomic batch");
         long startTime = System.nanoTime();
 
@@ -666,8 +636,10 @@ public class StorageProxy implements StorageProxyMBean
         {
             writeMetrics.addNano(System.nanoTime() - startTime);
         }
-    }
+#endif
+}
 
+#if 0
     private static void syncWriteToBatchlog(Collection<Mutation> mutations, Collection<InetAddress> endpoints, UUID uuid)
     throws WriteTimeoutException
     {
@@ -2307,4 +2279,6 @@ public class StorageProxy implements StorageProxyMBean
     public long getReadRepairRepairedBackground() {
         return ReadRepairMetrics.repairedBackground.count();
     }
+#endif
+
 }
