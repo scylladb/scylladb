@@ -29,7 +29,10 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/term.hh"
 
+#include "db/api.hh"
+
 #include <vector>
+#include "unimplemented.hh"
 
 #if 0
 package org.apache.cassandra.cql3.statements;
@@ -66,77 +69,11 @@ private:
         : modification_statement{type, bound_terms, std::move(s), std::move(attrs)}
     { }
 
-    virtual bool require_full_clustering_key() const {
+    virtual bool require_full_clustering_key() const override {
         return true;
     }
 
-#if 0
-    public void addUpdateForKey(ColumnFamily cf, ByteBuffer key, Composite prefix, UpdateParameters params)
-    throws InvalidRequestException
-    {
-        // Inserting the CQL row marker (see #4361)
-        // We always need to insert a marker for INSERT, because of the following situation:
-        //   CREATE TABLE t ( k int PRIMARY KEY, c text );
-        //   INSERT INTO t(k, c) VALUES (1, 1)
-        //   DELETE c FROM t WHERE k = 1;
-        //   SELECT * FROM t;
-        // The last query should return one row (but with c == null). Adding the marker with the insert make sure
-        // the semantic is correct (while making sure a 'DELETE FROM t WHERE k = 1' does remove the row entirely)
-        //
-        // We do not insert the marker for UPDATE however, as this amount to updating the columns in the WHERE
-        // clause which is inintuitive (#6782)
-        //
-        // We never insert markers for Super CF as this would confuse the thrift side.
-        if (type == StatementType.INSERT && cfm.isCQL3Table() && !prefix.isStatic())
-            cf.addColumn(params.makeColumn(cfm.comparator.rowMarker(prefix), ByteBufferUtil.EMPTY_BYTE_BUFFER));
-
-        List<Operation> updates = getOperations();
-
-        if (cfm.comparator.isDense())
-        {
-            if (prefix.isEmpty())
-                throw new InvalidRequestException(String.format("Missing PRIMARY KEY part %s", cfm.clusteringColumns().get(0)));
-
-            // An empty name for the compact value is what we use to recognize the case where there is not column
-            // outside the PK, see CreateStatement.
-            if (!cfm.compactValueColumn().name.bytes.hasRemaining())
-            {
-                // There is no column outside the PK. So no operation could have passed through validation
-                assert updates.isEmpty();
-                new Constants.Setter(cfm.compactValueColumn(), EMPTY).execute(key, cf, prefix, params);
-            }
-            else
-            {
-                // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
-                if (updates.isEmpty())
-                    throw new InvalidRequestException(String.format("Column %s is mandatory for this COMPACT STORAGE table", cfm.compactValueColumn().name));
-
-                for (Operation update : updates)
-                    update.execute(key, cf, prefix, params);
-            }
-        }
-        else
-        {
-            for (Operation update : updates)
-                update.execute(key, cf, prefix, params);
-        }
-
-        SecondaryIndexManager indexManager = Keyspace.open(cfm.ksName).getColumnFamilyStore(cfm.cfId).indexManager;
-        if (indexManager.hasIndexes())
-        {
-            for (Cell cell : cf)
-            {
-                // Indexed values must be validated by any applicable index. See CASSANDRA-3057/4240/8081 for more details
-                if (!indexManager.validate(cell))
-                    throw new InvalidRequestException(String.format("Can't index column value of size %d for index %s on %s.%s",
-                                                                    cell.value().remaining(),
-                                                                    cfm.getColumnDefinition(cell.name()).getIndexName(),
-                                                                    cfm.ksName,
-                                                                    cfm.cfName));
-            }
-        }
-    }
-#endif
+    virtual void add_update_for_key(api::mutation& m, const api::clustering_prefix& prefix, const update_parameters& params) override;
 
     class parsed_insert : public modification_statement::parsed {
     private:
