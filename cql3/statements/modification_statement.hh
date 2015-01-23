@@ -137,16 +137,19 @@ public:
             }
         }
         for (auto&& operation : _column_operations) {
-            if (operation && operation->uses_function(ks_name, function_name))
+            if (operation && operation->uses_function(ks_name, function_name)) {
                 return true;
+            }
         }
         for (auto&& condition : _column_conditions) {
-            if (condition && condition->uses_function(ks_name, function_name))
+            if (condition && condition->uses_function(ks_name, function_name)) {
                 return true;
+            }
         }
         for (auto&& condition : _static_conditions) {
-            if (condition && condition->uses_function(ks_name, function_name))
+            if (condition && condition->uses_function(ks_name, function_name)) {
                 return true;
+            }
         }
         return false;
     }
