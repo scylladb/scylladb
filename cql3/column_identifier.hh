@@ -97,6 +97,10 @@ public:
         return _text;
     }
 
+    friend std::ostream& operator<<(std::ostream& out, const column_identifier& i) {
+        return out << i._text;
+    }
+
 #if 0
     public long unsharedHeapSize()
     {
