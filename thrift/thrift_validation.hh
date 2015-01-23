@@ -15,8 +15,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.thrift;
 
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#pragma once
+
+#include "database.hh"
+
+#if 0
 import java.nio.ByteBuffer;
 import java.util.*;
 
@@ -40,6 +50,7 @@ import org.apache.cassandra.serializers.MarshalException;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
+#endif
 
 /**
  * This has a lot of building blocks for CassandraServer to call to make sure it has valid input
@@ -49,35 +60,14 @@ import org.apache.cassandra.utils.FBUtilities;
  * for different needs -- supercolumns vs regular, range slices vs named, batch vs single-column.
  * (ValidateColumnPath is the main exception in that it includes keyspace and CF validation.)
  */
-public class ThriftValidation
-{
+namespace thrift_validation {
+#if 0
     private static final Logger logger = LoggerFactory.getLogger(ThriftValidation.class);
+#endif
 
-    public static void validateKey(CFMetaData metadata, ByteBuffer key) throws org.apache.cassandra.exceptions.InvalidRequestException
-    {
-        if (key == null || key.remaining() == 0)
-        {
-            throw new org.apache.cassandra.exceptions.InvalidRequestException("Key may not be empty");
-        }
+void validate_key(schema_ptr schema_, const bytes& key);
 
-        // check that key can be handled by FBUtilities.writeShortByteArray
-        if (key.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
-        {
-            throw new org.apache.cassandra.exceptions.InvalidRequestException("Key length of " + key.remaining() +
-                                                                              " is longer than maximum of " +
-                                                                              FBUtilities.MAX_UNSIGNED_SHORT);
-        }
-
-        try
-        {
-            metadata.getKeyValidator().validate(key);
-        }
-        catch (MarshalException e)
-        {
-            throw new org.apache.cassandra.exceptions.InvalidRequestException(e.getMessage());
-        }
-    }
-
+#if 0
     public static void validateKeyspace(String keyspaceName) throws KeyspaceNotDefinedException
     {
         if (!Schema.instance.getKeyspaces().contains(keyspaceName))
@@ -663,4 +653,7 @@ public class ThriftValidation
             filter = SuperColumns.fromSCFilter(metadata.comparator, superColumn, filter);
         return filter;
     }
+}
+#endif
+
 }

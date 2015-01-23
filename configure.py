@@ -231,6 +231,7 @@ deps = {
                  'cql3/statements/modification_statement.cc',
                  'thrift/handler.cc',
                  'thrift/server.cc',
+                 'thrift/thrift_validation.cc',
                  'utils/murmur_hash.cc',
                  'utils/uuid.cc',
                  'types.cc',
