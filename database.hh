@@ -10,6 +10,7 @@
 #include "net/byteorder.hh"
 #include "utils/UUID.hh"
 #include "db_clock.hh"
+#include "gc_clock.hh"
 #include <functional>
 #include <boost/any.hpp>
 #include <cstdint>
@@ -69,6 +70,7 @@ struct thrift_schema {
  */
 class schema final {
 public:
+    gc_clock::duration default_time_to_live = gc_clock::duration::zero();
     const sstring ks_name;
     const sstring cf_name;
     const std::vector<column_definition> partition_key;
