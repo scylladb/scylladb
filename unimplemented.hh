@@ -18,4 +18,9 @@ void indexes() {
     warn("indexes");
 }
 
+static inline
+void auth() {
+    warn("auth");
+}
+
 }
