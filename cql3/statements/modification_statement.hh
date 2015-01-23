@@ -25,6 +25,7 @@
 #ifndef CQL3_STATEMENTS_MODIFICATION_STATEMENT_HH
 #define CQL3_STATEMENTS_MODIFICATION_STATEMENT_HH
 
+#include "cql3/restrictions/restriction.hh"
 #include "cql3/statements/cf_statement.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/update_parameters.hh"
@@ -93,13 +94,12 @@ public:
     const schema_ptr s;
     const std::unique_ptr<attributes> attrs;
 
-#if 0
-    protected final Map<ColumnIdentifier, Restriction> processedKeys = new HashMap<>();
-#endif
-
-private:
+protected:
+    std::unordered_map<::shared_ptr<column_identifier>, ::shared_ptr<restrictions::restriction>,
+        shared_ptr_value_hash<column_identifier>,
+        shared_ptr_equal_by_value<column_identifier>> _processed_keys;
     const std::vector<::shared_ptr<operation>> _column_operations;
-
+private:
     // Separating normal and static conditions makes things somewhat easier
     std::vector<::shared_ptr<column_condition>> _column_conditions;
     std::vector<::shared_ptr<column_condition>> _static_conditions;
@@ -127,13 +127,15 @@ public:
     { }
 
     virtual bool uses_function(sstring ks_name, sstring function_name) const override {
-        if (attrs->uses_function(ks_name, function_name))
+        if (attrs->uses_function(ks_name, function_name)) {
             return true;
-#if 0
-        for (Restriction restriction : processedKeys.values())
-            if (restriction != null && restriction.usesFunction(ksName, functionName))
+        }
+        for (auto&& e : _processed_keys) {
+            auto r = e.second;
+            if (r && r->uses_function(ks_name, function_name)) {
                 return true;
-#endif
+            }
+        }
         for (auto&& operation : _column_operations) {
             if (operation && operation->uses_function(ks_name, function_name))
                 return true;
