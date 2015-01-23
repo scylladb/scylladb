@@ -67,16 +67,16 @@ public:
 protected:
     // Term involved in the operation. In theory this should not be here since some operation
     // may require none of more than one term, but most need 1 so it simplify things a bit.
-    const std::experimental::optional<::shared_ptr<term>> _t;
+    const ::shared_ptr<term> _t;
 
-    operation(::shared_ptr<config::column_definition> column_, std::experimental::optional<::shared_ptr<term>> t)
+    operation(::shared_ptr<config::column_definition> column_, ::shared_ptr<term> t)
         : column{column_}
         , _t{t}
     { }
 
 public:
     virtual bool uses_function(sstring ks_name, sstring function_name) const {
-        return _t && _t.value()->uses_function(ks_name, function_name);
+        return _t && _t->uses_function(ks_name, function_name);
     }
 
 #if 0
