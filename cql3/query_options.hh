@@ -25,6 +25,8 @@
 #ifndef CQL3_CQL_QUERY_OPTIONS_HH
 #define CQL3_CQL_QUERY_OPTIONS_HH
 
+#include "db/consistency_level.hh"
+
 namespace cql3 {
 
 /**
@@ -70,8 +72,12 @@ public:
     {
         return new DefaultQueryOptions(consistency, values, skipMetadata, new SpecificOptions(pageSize, pagingState, serialConsistency, -1L), 0);
     }
+#endif
 
-    public abstract ConsistencyLevel getConsistency();
+public:
+    virtual db::consistency_level get_consistency() const = 0;
+
+#if 0
     public abstract List<ByteBuffer> getValues();
     public abstract boolean skipMetadata();
 

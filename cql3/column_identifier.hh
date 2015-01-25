@@ -30,6 +30,7 @@
 #include "database.hh"
 
 #include <algorithm>
+#include <functional>
 
 namespace cql3 {
 
@@ -57,7 +58,7 @@ import org.apache.cassandra.utils.memory.AbstractAllocator;
  * Represents an identifer for a CQL column definition.
  * TODO : should support light-weight mode without text representation for when not interned
  */
-class column_identifier : public selection::selectable /* implements IMeasurableMemory*/ {
+class column_identifier final : public selection::selectable /* implements IMeasurableMemory*/ {
 public:
     bytes bytes_;
 private:
@@ -86,30 +87,18 @@ public:
         this.bytes = bytes;
         this.text = text;
     }
-
-    @Override
-    public final int hashCode()
-    {
-        return bytes.hashCode();
-    }
-
-    @Override
-    public final boolean equals(Object o)
-    {
-        // Note: it's worth checking for reference equality since we intern those
-        // in SparseCellNameType
-        if (this == o)
-            return true;
-
-        if(!(o instanceof ColumnIdentifier))
-            return false;
-        ColumnIdentifier that = (ColumnIdentifier)o;
-        return bytes.equals(that.bytes);
-    }
 #endif
+
+    bool operator==(const column_identifier& other) const {
+        return bytes_ == other.bytes_;
+    }
 
     sstring to_string() const {
         return _text;
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const column_identifier& i) {
+        return out << i._text;
     }
 
 #if 0
@@ -210,6 +199,18 @@ public:
 #endif
     };
 };
+
+}
+
+namespace std {
+
+template<>
+struct hash<cql3::column_identifier> {
+    size_t operator()(const cql3::column_identifier& i) const {
+        return std::hash<bytes>()(i.bytes_);
+    }
+};
+
 
 }
 

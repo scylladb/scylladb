@@ -15,31 +15,43 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.statements;
 
-public enum Bound
-{
-    START(0), END(1);
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-    public final int idx;
+#include <cstdint>
 
-    Bound(int idx)
-    {
-        this.idx = idx;
-    }
+#pragma once
 
-    public Bound reverse()
-    {
-        return isStart() ? END : START;
-    }
+namespace cql3 {
 
-    public boolean isStart()
-    {
-        return this == START;
-    }
+namespace statements {
 
-    public boolean isEnd()
-    {
-        return this == END;
-    }
+enum class bound : int32_t { START = 0, END };
+
+static inline
+int32_t get_idx(bound b) {
+    return (int32_t)b;
+}
+
+static inline
+bound reverse(bound b) {
+    return bound((int32_t)b ^ 1);
+}
+
+static inline
+bool is_start(bound b) {
+    return b == bound::START;
+}
+
+static inline
+bool is_end(bound b) {
+    return b == bound::END;
+}
+
+}
+
 }

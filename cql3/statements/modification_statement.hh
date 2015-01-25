@@ -100,11 +100,11 @@ public:
 #endif
 
 private:
-    const std::vector<std::experimental::optional<::shared_ptr<operation>>> _column_operations;
+    const std::vector<::shared_ptr<operation>> _column_operations;
 
     // Separating normal and static conditions makes things somewhat easier
-    std::vector<std::experimental::optional<::shared_ptr<column_condition>>> _column_conditions;
-    std::vector<std::experimental::optional<::shared_ptr<column_condition>>> _static_conditions;
+    std::vector<::shared_ptr<column_condition>> _column_conditions;
+    std::vector<::shared_ptr<column_condition>> _static_conditions;
 
     bool _if_not_exists = false;
     bool _if_exists = false;
@@ -137,15 +137,15 @@ public:
                 return true;
 #endif
         for (auto&& operation : _column_operations) {
-            if (operation && operation.value()->uses_function(ks_name, function_name))
+            if (operation && operation->uses_function(ks_name, function_name))
                 return true;
         }
         for (auto&& condition : _column_conditions) {
-            if (condition && condition.value()->uses_function(ks_name, function_name))
+            if (condition && condition->uses_function(ks_name, function_name))
                 return true;
         }
         for (auto&& condition : _static_conditions) {
-            if (condition && condition.value()->uses_function(ks_name, function_name))
+            if (condition && condition->uses_function(ks_name, function_name))
                 return true;
         }
         return false;
@@ -823,6 +823,8 @@ public:
 #endif
     };
 };
+
+std::ostream& operator<<(std::ostream& out, modification_statement::statement_type t);
 
 }
 
