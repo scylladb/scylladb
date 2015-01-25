@@ -390,13 +390,17 @@ class smp_message_queue {
                             boost::lockfree::capacity<queue_length>>;
     lf_queue _pending;
     lf_queue _completed;
-    size_t _received = 0;
-    size_t _sent = 0;
-    size_t _compl = 0;
-    size_t _current_queue_length = 0;
-    size_t _last_snt_batch = 0;
-    size_t _last_rcv_batch = 0;
-    size_t _last_cmpl_batch = 0;
+    struct alignas(64) {
+        size_t _sent = 0;
+        size_t _compl = 0;
+        size_t _last_snt_batch = 0;
+        size_t _last_cmpl_batch = 0;
+        size_t _current_queue_length = 0;
+    };
+    struct alignas(64) {
+        size_t _received = 0;
+        size_t _last_rcv_batch = 0;
+    };
     std::vector<scollectd::registration> _collectd_regs;
     struct work_item {
         virtual ~work_item() {}
@@ -405,13 +409,12 @@ class smp_message_queue {
     };
     template <typename Func, typename Future>
     struct async_work_item : work_item {
-        smp_message_queue& _q;
         Func _func;
         using value_type = typename Future::value_type;
         std::experimental::optional<value_type> _result;
         std::exception_ptr _ex; // if !_result
         typename Future::promise_type _promise; // used on local side
-        async_work_item(smp_message_queue& q, Func&& func) : _q(q), _func(std::move(func)) {}
+        async_work_item(Func&& func) : _func(std::move(func)) {}
         virtual future<> process() override {
             try {
                 return this->_func().rescue([this] (auto&& get_result) {
@@ -450,7 +453,7 @@ public:
     template <typename Func>
     std::result_of_t<Func()> submit(Func func) {
         using future = std::result_of_t<Func()>;
-        auto wi = new async_work_item<Func, future>(*this, std::move(func));
+        auto wi = new async_work_item<Func, future>(std::move(func));
         auto fut = wi->get_future();
         submit_item(wi);
         return fut;

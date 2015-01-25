@@ -11,6 +11,120 @@ using std::move;
 
 namespace net {
 
+inline
+bool qp::poll_tx() {
+    if (_tx_packetq.size() < 16) {
+        // refill send queue from upper layers
+        uint32_t work;
+        do {
+            work = 0;
+            for (auto&& pr : _pkt_providers) {
+                auto p = pr();
+                if (p) {
+                    work++;
+                    _tx_packetq.push_back(std::move(p.value()));
+                    if (_tx_packetq.size() == 128) {
+                        break;
+                    }
+                }
+            }
+        } while (work && _tx_packetq.size() < 128);
+
+    }
+    if (!_tx_packetq.empty()) {
+        _last_tx_bunch = send(_tx_packetq);
+        _packets_snt += _last_tx_bunch;
+        return true;
+    }
+
+    return false;
+}
+
+qp::qp()
+        : _tx_poller([this] { return poll_tx(); })
+        , _collectd_regs({
+            // queue_length     value:GAUGE:0:U
+            // Absolute value of num packets in last tx bunch.
+            scollectd::add_polled_metric(scollectd::type_instance_id("network"
+                    , scollectd::per_cpu_plugin_instance
+                    , "queue_length", "tx-packet-queue")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE, _last_tx_bunch)
+            ),
+            // total_operations value:DERIVE:0:U
+            scollectd::add_polled_metric(scollectd::type_instance_id("network"
+                    , scollectd::per_cpu_plugin_instance
+                    , "total_operations", "tx-packets")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE, _packets_snt)
+            ),
+            // queue_length     value:GAUGE:0:U
+            // Absolute value of num packets in last rx bunch.
+            scollectd::add_polled_metric(scollectd::type_instance_id("network"
+                    , scollectd::per_cpu_plugin_instance
+                    , "queue_length", "rx-packet-queue")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE, _last_rx_bunch)
+            ),
+            // total_operations value:DERIVE:0:U
+            scollectd::add_polled_metric(scollectd::type_instance_id("network"
+                    , scollectd::per_cpu_plugin_instance
+                    , "total_operations", "rx-packets")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE, _packets_rcv)
+            ),
+    }) {
+}
+
+qp::~qp() {
+}
+
+void qp::configure_proxies(const std::map<unsigned, float>& cpu_weights) {
+    assert(!cpu_weights.empty());
+    if ((cpu_weights.size() == 1 && cpu_weights.begin()->first == engine.cpu_id())) {
+        // special case queue sending to self only, to avoid requiring a hash value
+        return;
+    }
+    register_packet_provider([this] {
+        std::experimental::optional<packet> p;
+        if (!_proxy_packetq.empty()) {
+            p = std::move(_proxy_packetq.front());
+            _proxy_packetq.pop_front();
+        }
+        return p;
+    });
+    build_sw_reta(cpu_weights);
+}
+
+void qp::build_sw_reta(const std::map<unsigned, float>& cpu_weights) {
+    float total_weight = 0;
+    for (auto&& x : cpu_weights) {
+        total_weight += x.second;
+    }
+    float accum = 0;
+    unsigned idx = 0;
+    std::array<uint8_t, 128> reta;
+    for (auto&& entry : cpu_weights) {
+        auto cpu = entry.first;
+        auto weight = entry.second;
+        accum += weight;
+        while (idx < (accum / total_weight * reta.size() - 0.5)) {
+            reta[idx++] = cpu;
+        }
+    }
+    _sw_reta = reta;
+}
+
+subscription<packet>
+device::receive(std::function<future<> (packet)> next_packet) {
+    auto sub = _queues[engine.cpu_id()]->_rx_stream.listen(std::move(next_packet));
+    _queues[engine.cpu_id()]->rx_start();
+    return std::move(sub);
+}
+
+void device::set_local_queue(std::unique_ptr<qp> dev) {
+    assert(!_queues[engine.cpu_id()]);
+    _queues[engine.cpu_id()] = dev.get();
+    engine.at_destroy([dev = std::move(dev)] {});
+}
+
+
 l3_protocol::l3_protocol(interface* netif, eth_protocol_num proto_num, packet_provider_type func)
     : _netif(netif), _proto_num(proto_num)  {
         _netif->register_packet_provider(std::move(func));

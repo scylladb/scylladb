@@ -7,6 +7,7 @@
 
 #include <utility>
 #include <type_traits>
+#include <functional>
 
 // This header defines two shared pointer facilities, lw_shared_ptr<> and
 // shared_ptr<>, both modeled after std::shared_ptr<>.
@@ -560,5 +561,25 @@ bool
 operator>=(std::nullptr_t, const shared_ptr<T>& y) {
     return nullptr >= y.get();
 }
+
+template<typename T>
+struct shared_ptr_equal_by_value {
+    bool operator()(const shared_ptr<T>& i1, const shared_ptr<T>& i2) const {
+        if (bool(i1) ^ bool(i2)) {
+            return false;
+        }
+        return !i1 || *i1 == *i2;
+    }
+};
+
+template<typename T>
+struct shared_ptr_value_hash {
+    size_t operator()(const shared_ptr<T>& p) const {
+        if (p) {
+            return std::hash<T>()(*p);
+        }
+        return 0;
+    }
+};
 
 #endif /* SHARED_PTR_HH_ */

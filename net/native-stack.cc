@@ -80,9 +80,12 @@ void create_native_net_device(boost::program_options::variables_map opts) {
             uint16_t qid = engine.cpu_id();
             if (qid < sdev->hw_queues_count()) {
                 auto qp = sdev->init_local_queue(opts, qid);
+                std::map<unsigned, float> cpu_weights;
                 for (unsigned i = sdev->hw_queues_count() + qid % sdev->hw_queues_count(); i < smp::count; i+= sdev->hw_queues_count()) {
-                    qp->add_proxy(i);
+                    cpu_weights[i] = 1;
                 }
+                cpu_weights[qid] = opts["hw-queue-weight"].as<float>();
+                qp->configure_proxies(cpu_weights);
                 sdev->set_local_queue(std::move(qp));
             } else {
                 auto master = qid % sdev->hw_queues_count();
@@ -185,7 +188,7 @@ native_network_stack::listen(socket_address sa, listen_options opts) {
 future<connected_socket>
 native_network_stack::connect(socket_address sa) {
     assert(sa.as_posix_sockaddr().sa_family == AF_INET);
-    return make_ready_future<connected_socket>(tcpv4_connect(_inet.get_tcp(), sa));
+    return tcpv4_connect(_inet.get_tcp(), sa);
 }
 
 using namespace std::chrono_literals;
@@ -299,6 +302,9 @@ boost::program_options::options_description nns_options() {
         ("dhcp",
                 boost::program_options::value<bool>()->default_value(true),
                         "Use DHCP discovery")
+        ("hw-queue-weight",
+                boost::program_options::value<float>()->default_value(1.0f),
+                "Weighing of a hardware network queue relative to a software queue (0=no work, 1=equal share)")
 #ifdef HAVE_DPDK
         ("dpdk-pmd", "Use DPDK PMD drivers")
 #endif

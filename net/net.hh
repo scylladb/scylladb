@@ -117,7 +117,7 @@ public:
 class qp {
     using packet_provider_type = std::function<std::experimental::optional<packet> ()>;
     std::vector<packet_provider_type> _pkt_providers;
-    std::vector<unsigned> proxies;
+    std::experimental::optional<std::array<uint8_t, 128>> _sw_reta;
     circular_buffer<packet> _proxy_packetq;
     stream<packet> _rx_stream;
     reactor::poller _tx_poller;
@@ -133,35 +133,8 @@ protected:
         _packets_rcv += count;
     }
 public:
-    qp() : _tx_poller([this] { return poll_tx(); }), _collectd_regs({
-                // queue_length     value:GAUGE:0:U
-                // Absolute value of num packets in last tx bunch.
-                scollectd::add_polled_metric(scollectd::type_instance_id("network"
-                        , scollectd::per_cpu_plugin_instance
-                        , "queue_length", "tx-packet-queue")
-                        , scollectd::make_typed(scollectd::data_type::GAUGE, _last_tx_bunch)
-                ),
-                // total_operations value:DERIVE:0:U
-                scollectd::add_polled_metric(scollectd::type_instance_id("network"
-                        , scollectd::per_cpu_plugin_instance
-                        , "total_operations", "tx-packets")
-                        , scollectd::make_typed(scollectd::data_type::DERIVE, _packets_snt)
-                ),
-                // queue_length     value:GAUGE:0:U
-                // Absolute value of num packets in last rx bunch.
-                scollectd::add_polled_metric(scollectd::type_instance_id("network"
-                        , scollectd::per_cpu_plugin_instance
-                        , "queue_length", "rx-packet-queue")
-                        , scollectd::make_typed(scollectd::data_type::GAUGE, _last_rx_bunch)
-                ),
-                // total_operations value:DERIVE:0:U
-                scollectd::add_polled_metric(scollectd::type_instance_id("network"
-                        , scollectd::per_cpu_plugin_instance
-                        , "total_operations", "rx-packets")
-                        , scollectd::make_typed(scollectd::data_type::DERIVE, _packets_rcv)
-                ),
-        }) {}
-    virtual ~qp() {}
+    qp();
+    virtual ~qp();
     virtual future<> send(packet p) = 0;
     virtual uint32_t send(circular_buffer<packet>& p) {
         uint32_t sent = 0;
@@ -173,53 +146,16 @@ public:
         return sent;
     }
     virtual void rx_start() {};
-    bool may_forward() { return !proxies.empty(); }
-    void add_proxy(unsigned cpu) {
-        if(proxies.empty()) {
-            register_packet_provider([this] {
-                std::experimental::optional<packet> p;
-                if (!_proxy_packetq.empty()) {
-                    p = std::move(_proxy_packetq.front());
-                    _proxy_packetq.pop_front();
-                }
-                return p;
-            });
-        }
-        proxies.push_back(cpu);
-    }
+    void configure_proxies(const std::map<unsigned, float>& cpu_weights);
+    // build REdirection TAble for cpu_weights map: target cpu -> weight
+    void build_sw_reta(const std::map<unsigned, float>& cpu_weights);
     void proxy_send(packet p) {
         _proxy_packetq.push_back(std::move(p));
     }
     void register_packet_provider(packet_provider_type func) {
         _pkt_providers.push_back(std::move(func));
     }
-    bool poll_tx() {
-        if (_tx_packetq.size() < 16) {
-            // refill send queue from upper layers
-            uint32_t work;
-            do {
-                work = 0;
-                for (auto&& pr : _pkt_providers) {
-                    auto p = pr();
-                    if (p) {
-                        work++;
-                        _tx_packetq.push_back(std::move(p.value()));
-                        if (_tx_packetq.size() == 128) {
-                            break;
-                        }
-                    }
-                }
-            } while (work && _tx_packetq.size() < 128);
-
-        }
-        if (!_tx_packetq.empty()) {
-            _last_tx_bunch = send(_tx_packetq);
-            _packets_snt += _last_tx_bunch;
-            return true;
-        }
-
-        return false;
-    }
+    bool poll_tx();
     friend class device;
 };
 
@@ -235,11 +171,7 @@ public:
     qp& queue_for_cpu(unsigned cpu) { return *_queues[cpu]; }
     qp& local_queue() { return queue_for_cpu(engine.cpu_id()); }
     void l2receive(packet p) { _queues[engine.cpu_id()]->_rx_stream.produce(std::move(p)); }
-    subscription<packet> receive(std::function<future<> (packet)> next_packet) {
-        auto sub = _queues[engine.cpu_id()]->_rx_stream.listen(std::move(next_packet));
-        _queues[engine.cpu_id()]->rx_start();
-        return std::move(sub);
-    }
+    subscription<packet> receive(std::function<future<> (packet)> next_packet);
     virtual ethernet_address hw_address() = 0;
     virtual net::hw_features hw_features() = 0;
     virtual uint16_t hw_queues_count() { return 1; }
@@ -248,20 +180,16 @@ public:
     virtual unsigned hash2qid(uint32_t hash) {
         return hash % hw_queues_count();
     }
-    void set_local_queue(std::unique_ptr<qp> dev) {
-        assert(!_queues[engine.cpu_id()]);
-        _queues[engine.cpu_id()] = dev.get();
-        engine.at_destroy([dev = std::move(dev)] {});
-    }
+    void set_local_queue(std::unique_ptr<qp> dev);
     template <typename Func>
     unsigned forward_dst(unsigned src_cpuid, Func&& hashfn) {
         auto& qp = queue_for_cpu(src_cpuid);
-        if (!qp.may_forward()) {
+        if (!qp._sw_reta) {
             return src_cpuid;
         }
         auto hash = hashfn() >> _rss_table_bits;
-        auto idx = hash % (qp.proxies.size() + 1);
-        return idx ? qp.proxies[idx - 1] : src_cpuid;
+        auto& reta = *qp._sw_reta;
+        return reta[hash % reta.size()];
     }
     virtual unsigned hash2cpu(uint32_t hash) {
         // there is an assumption here that qid == cpu_id which will
