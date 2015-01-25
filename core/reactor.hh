@@ -460,7 +460,7 @@ public:
         return fut;
     }
     void start(unsigned cpuid);
-    template<typename Func>
+    template<size_t PrefetchCnt, typename Func>
     size_t process_queue(lf_queue& q, Func process);
     size_t process_incoming();
     size_t process_completions();
