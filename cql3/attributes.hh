@@ -67,37 +67,40 @@ public:
     }
 
     int64_t get_timestamp(int64_t now, const query_options& options) {
-        if (!_timestamp)
+        if (!_timestamp) {
             return now;
+        }
 
-        bytes tval = _timestamp.value()->bind_and_get(options);
-        if (tval == nullptr)
+        bytes_opt tval = _timestamp.value()->bind_and_get(options);
+        if (!tval) {
             throw exceptions::invalid_request_exception("Invalid null value of timestamp");
+        }
 
         try {
-            data_type_for<int64_t>()->validate(tval);
+            data_type_for<int64_t>()->validate(*tval);
         } catch (exceptions::marshal_exception e) {
             throw exceptions::invalid_request_exception("Invalid timestamp value");
         }
-        return boost::any_cast<int64_t>(data_type_for<int64_t>()->compose(tval));
+        return boost::any_cast<int64_t>(data_type_for<int64_t>()->compose(*tval));
     }
 
     int32_t get_time_to_live(const query_options& options) {
         if (!_time_to_live)
             return 0;
 
-        bytes tval = _time_to_live.value()->bind_and_get(options);
-        if (tval == nullptr)
+        bytes_opt tval = _time_to_live.value()->bind_and_get(options);
+        if (!tval) {
             throw exceptions::invalid_request_exception("Invalid null value of TTL");
+        }
 
         try {
-            data_type_for<int32_t>()->validate(tval);
+            data_type_for<int32_t>()->validate(*tval);
         }
         catch (exceptions::marshal_exception e) {
             throw exceptions::invalid_request_exception("Invalid TTL value");
         }
 
-        auto ttl = boost::any_cast<int32_t>(data_type_for<int32_t>()->compose(tval));
+        auto ttl = boost::any_cast<int32_t>(data_type_for<int32_t>()->compose(*tval));
         if (ttl < 0) {
             throw exceptions::invalid_request_exception("A TTL must be greater or equal to 0");
         }

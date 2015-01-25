@@ -25,6 +25,7 @@
 #ifndef CQL3_TERM_HH
 #define CQL3_TERM_HH
 
+#include <experimental/optional>
 #include "variable_specifications.hh"
 #include "cql3/assignment_testable.hh"
 #include "cql3/query_options.hh"
@@ -34,6 +35,8 @@ namespace cql3 {
 class terminal;
 
 class term;
+
+using bytes_opt = std::experimental::optional<bytes>;
 
 /**
  * A CQL3 term, i.e. a column value with or without bind variables.
@@ -69,7 +72,7 @@ public:
      * object between the bind and the get (note that we still want to be able
      * to separate bind and get for collections).
      */
-    virtual bytes bind_and_get(const query_options& options) = 0;
+    virtual bytes_opt bind_and_get(const query_options& options) = 0;
 
     /**
      * Whether or not that term contains at least one bind marker.
@@ -148,9 +151,9 @@ public:
         /**
          * @return the serialized value of this terminal.
          */
-        virtual bytes get(const query_options& options) = 0;
+        virtual bytes_opt get(const query_options& options) = 0;
 
-        virtual bytes bind_and_get(const query_options& options) override {
+        virtual bytes_opt bind_and_get(const query_options& options) override {
             return get(options);
         }
     };
@@ -182,10 +185,13 @@ public:
             return false;
         }
 
-        virtual bytes bind_and_get(const query_options& options) override {
+        virtual bytes_opt bind_and_get(const query_options& options) override {
             auto t = bind(options);
-            return t == nullptr ? nullptr : t->get(options);
-        }
+            if (t) {
+                return t->get(options);
+            }
+            return {};
+        };
     };
 }
 
