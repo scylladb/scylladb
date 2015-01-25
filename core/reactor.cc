@@ -988,7 +988,7 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
     // access with potential cache miss the second pop may cause
     prefetch<2>(wi);
     auto nr = q.pop(items);
-    std::fill(std::begin(items) + nr, std::begin(items) + nr + prefetch_cnt, nullptr);
+    std::fill(std::begin(items) + nr, std::begin(items) + nr + prefetch_cnt, nr ? items[nr - 1] : wi);
     unsigned i = 0;
     do {
         prefetch_n<2>(std::begin(items) + i, std::begin(items) + i + prefetch_cnt);
