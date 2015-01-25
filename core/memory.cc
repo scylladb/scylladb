@@ -567,9 +567,8 @@ void cpu_pages::init_virt_to_phys_map() {
         auto phys = std::numeric_limits<physical_address>::max();
         auto pfn = reinterpret_cast<uintptr_t>(mem() + i * huge_page_size) / page_size;
         fd.pread(&entry, 8, pfn * 8);
-        if (entry & 0x8000'0000'0000'0000) {
-            phys = (entry & 0x007f'ffff'ffff'ffff) << page_bits;
-        }
+        assert(entry & 0x8000'0000'0000'0000);
+        phys = (entry & 0x007f'ffff'ffff'ffff) << page_bits;
         virt_to_phys_map[i] = phys;
     }
 }
