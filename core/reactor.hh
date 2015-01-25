@@ -385,6 +385,7 @@ private:
 class smp_message_queue {
     static constexpr size_t queue_length = 128;
     static constexpr size_t batch_size = 16;
+    static constexpr size_t prefetch_cnt = 2;
     struct work_item;
     using lf_queue = boost::lockfree::spsc_queue<work_item*,
                             boost::lockfree::capacity<queue_length>>;
@@ -459,6 +460,8 @@ public:
         return fut;
     }
     void start(unsigned cpuid);
+    template<typename Func>
+    size_t process_queue(lf_queue& q, Func process);
     size_t process_incoming();
     size_t process_completions();
 private:
