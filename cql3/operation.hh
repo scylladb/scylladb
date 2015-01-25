@@ -79,16 +79,13 @@ public:
         return _t && _t->uses_function(ks_name, function_name);
     }
 
-#if 0
     /**
-     * @return whether the operation requires a read of the previous value to be executed
-     * (only lists setterByIdx, discard and discardByIdx requires that).
-     */
-    public boolean requiresRead()
-    {
-        return false;
-    }
+    * @return whether the operation requires a read of the previous value to be executed
+    * (only lists setterByIdx, discard and discardByIdx requires that).
+    */
+    virtual bool requires_read() = 0;
 
+#if 0
     /**
      * Collects the column specification for the bind variables of this operation.
      *
