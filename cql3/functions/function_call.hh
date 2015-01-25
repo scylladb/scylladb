@@ -22,6 +22,8 @@
  * Copyright 2015 Cloudius Systems
  */
 
+#pragma once
+
 #include "cql3/term.hh"
 #include "cql3/constants.hh"
 #include "db/marshal/collection_type.hh"
