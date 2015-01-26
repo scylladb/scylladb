@@ -61,6 +61,30 @@ static constexpr uint8_t  max_frags              = 32;
 
 static constexpr uint16_t mbuf_size            = mbuf_data_size + mbuf_overhead;
 
+uint32_t qp_mempool_obj_size()
+{
+    uint32_t mp_size = 0;
+    struct rte_mempool_objsz mp_obj_sz = {};
+
+    //
+    // We will align each size to huge page size because DPDK allocates
+    // physically contiguous memory region for each pool object.
+    //
+
+    // Rx
+    mp_size += align_up(rte_mempool_calc_obj_size(mbuf_size, 0, &mp_obj_sz) +
+                                        sizeof(struct rte_pktmbuf_pool_private),
+                                         memory::huge_page_size);
+    //Tx
+    std::memset(&mp_obj_sz, 0, sizeof(mp_obj_sz));
+    mp_size += align_up(rte_mempool_calc_obj_size(mbuf_size,
+                                         MEMPOOL_F_SP_PUT | MEMPOOL_F_SC_GET,
+                                         &mp_obj_sz) +
+                                        sizeof(struct rte_pktmbuf_pool_private),
+                                         memory::huge_page_size);
+    return mp_size;
+}
+
 #ifdef RTE_VERSION_1_7
 /*
  * RX and TX Prefetch, Host, and Write-back threshold values should be
