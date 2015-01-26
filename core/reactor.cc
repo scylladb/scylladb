@@ -1268,6 +1268,26 @@ void smp::configure(boost::program_options::variables_map configuration)
     resource::configuration rc;
     if (configuration.count("memory")) {
         rc.total_memory = parse_memory_size(configuration["memory"].as<std::string>());
+#ifdef HAVE_DPDK
+        if (configuration.count("hugepages") &&
+            !configuration["network-stack"].as<std::string>().compare("native") &&
+            configuration.count("dpdk-pmd")) {
+            size_t dpdk_memory = dpdk::eal::mem_size(smp::count);
+
+            if (dpdk_memory >= rc.total_memory) {
+                std::cerr<<"Can't run with the given amount of memory: ";
+                std::cerr<<configuration["memory"].as<std::string>();
+                std::cerr<<". Consider giving more."<<std::endl;
+                exit(1);
+            }
+
+            //
+            // Subtract the memory we are about to give to DPDK from the total
+            // amount of memory we are allowed to use.
+            //
+            rc.total_memory.value() -= dpdk_memory;
+        }
+#endif
     }
     if (configuration.count("reserve-memory")) {
         rc.reserve_memory = parse_memory_size(configuration["reserve-memory"].as<std::string>());
