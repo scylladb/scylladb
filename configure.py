@@ -233,6 +233,7 @@ deps = {
                  'thrift/server.cc',
                  'utils/murmur_hash.cc',
                  'utils/uuid.cc',
+                 'types.cc',
 		 'db/db.cc',
 		 'io/io.cc',
                  'utils/utils.cc',
