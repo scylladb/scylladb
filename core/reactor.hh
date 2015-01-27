@@ -93,6 +93,8 @@ private:
     bool _queued = false;
     bool _expired = false;
 public:
+    timer() = default;
+    explicit timer(callback_t&& callback);
     ~timer();
     future<> expired();
     void set_callback(callback_t&& callback);
@@ -1441,6 +1443,11 @@ future<size_t> pollable_fd::sendto(socket_address addr, const void* buf, size_t 
         }
         return make_ready_future<size_t>(*r);
     });
+}
+
+template <typename Clock>
+inline
+timer<Clock>::timer(callback_t&& callback) : _callback(std::move(callback)) {
 }
 
 template <typename Clock>
