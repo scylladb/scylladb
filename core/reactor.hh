@@ -652,8 +652,8 @@ private:
     struct signal_handler {
         signal_handler(int signo);
         promise<> _promise;
-        static thread_local std::atomic<uint64_t> pending;
     };
+    std::atomic<uint64_t> _pending_signals;
     std::unordered_map<int, signal_handler> _signal_handlers;
     bool poll_signal();
     friend void sigaction(int signo, siginfo_t* siginfo, void* ignore);

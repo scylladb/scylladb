@@ -102,7 +102,8 @@ reactor::reactor()
     , _cpu_started(0)
     , _io_context(0)
     , _io_context_available(max_aio)
-    , _reuseport(posix_reuseport_detect()) {
+    , _reuseport(posix_reuseport_detect())
+    , _pending_signals(0) {
     auto r = ::io_setup(max_aio, &_io_context);
     assert(r >= 0);
     struct sigevent sev;
@@ -556,16 +557,14 @@ reactor::receive_signal(int signo) {
     return sh._promise.get_future();
 }
 
-thread_local std::atomic<uint64_t> reactor::signal_handler::pending;
-
 void sigaction(int signo, siginfo_t* siginfo, void* ignore) {
-    reactor::signal_handler::pending.fetch_or(1ull << signo, std::memory_order_relaxed);
+    engine._pending_signals.fetch_or(1ull << signo, std::memory_order_relaxed);
 }
 
 bool reactor::poll_signal() {
-    auto signals = reactor::signal_handler::pending.load(std::memory_order_relaxed);
+    auto signals = _pending_signals.load(std::memory_order_relaxed);
     if (signals) {
-        reactor::signal_handler::pending.fetch_and(~signals, std::memory_order_relaxed);
+        _pending_signals.fetch_and(~signals, std::memory_order_relaxed);
         for (size_t i = 0; i < sizeof(signals)*8; i++) {
             if (signals & (1ull << i)) {
                _signal_handlers.at(i)._promise.set_value();
