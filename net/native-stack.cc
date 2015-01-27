@@ -77,7 +77,7 @@ void create_native_net_device(boost::program_options::variables_map opts) {
     std::shared_ptr<device> sdev(dev.release());
     for (unsigned i = 0; i < smp::count; i++) {
         smp::submit_to(i, [opts, sdev] {
-            uint16_t qid = engine.cpu_id();
+            uint16_t qid = engine().cpu_id();
             if (qid < sdev->hw_queues_count()) {
                 auto qp = sdev->init_local_queue(opts, qid);
                 std::map<unsigned, float> cpu_weights;
@@ -130,7 +130,7 @@ public:
     virtual udp_channel make_udp_channel(ipv4_addr addr) override;
     virtual future<> initialize() override;
     static future<std::unique_ptr<network_stack>> create(boost::program_options::variables_map opts) {
-        if (engine.cpu_id() == 0) {
+        if (engine().cpu_id() == 0) {
             create_native_net_device(opts);
         }
         return ready_promise.get_future();
@@ -199,7 +199,7 @@ future<> native_network_stack::run_dhcp(bool is_renew, const dhcp::lease& res) {
     // Hijack the ip-stack.
     for (unsigned i = 0; i < smp::count; i++) {
         smp::submit_to(i, [d] {
-            auto & ns = static_cast<native_network_stack&>(engine.net());
+            auto & ns = static_cast<native_network_stack&>(engine().net());
             ns.set_ipv4_packet_filter(d->get_ipv4_filter());
         });
     }
@@ -209,7 +209,7 @@ future<> native_network_stack::run_dhcp(bool is_renew, const dhcp::lease& res) {
     return fut.then([this, d, is_renew](bool success, const dhcp::lease & res) {
         for (unsigned i = 0; i < smp::count; i++) {
             smp::submit_to(i, [] {
-                auto & ns = static_cast<native_network_stack&>(engine.net());
+                auto & ns = static_cast<native_network_stack&>(engine().net());
                 ns.set_ipv4_packet_filter(nullptr);
             });
         }
@@ -228,12 +228,12 @@ void native_network_stack::on_dhcp(bool success, const dhcp::lease & res, bool i
         _config.set_value();
     }
 
-    if (engine.cpu_id() == 0) {
+    if (engine().cpu_id() == 0) {
         // And the other cpus, which, in the case of initial discovery,
         // will be waiting for us.
         for (unsigned i = 1; i < smp::count; i++) {
             smp::submit_to(i, [success, res, is_renew]() {
-                auto & ns = static_cast<native_network_stack&>(engine.net());
+                auto & ns = static_cast<native_network_stack&>(engine().net());
                 ns.on_dhcp(success, res, is_renew);
             });
         }
@@ -259,7 +259,7 @@ future<> native_network_stack::initialize() {
 
         // Only run actual discover on main cpu.
         // All other cpus must simply for main thread to complete and signal them.
-        if (engine.cpu_id() == 0) {
+        if (engine().cpu_id() == 0) {
             run_dhcp();
         }
         return _config.get_future();
@@ -270,7 +270,7 @@ void arp_learn(ethernet_address l2, ipv4_address l3)
 {
     for (unsigned i = 0; i < smp::count; i++) {
         smp::submit_to(i, [l2, l3] {
-            auto & ns = static_cast<native_network_stack&>(engine.net());
+            auto & ns = static_cast<native_network_stack&>(engine().net());
             ns.arp_learn(l2, l3);
         });
     }

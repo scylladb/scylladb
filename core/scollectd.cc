@@ -93,7 +93,7 @@ public:
         _period = period;
         _addr = addr;
         _host = host;
-        _chan = engine.net().make_udp_channel();
+        _chan = engine().net().make_udp_channel();
         _timer.set_callback(std::bind(&impl::run, this));
 
         // dogfood ourselves
@@ -285,7 +285,7 @@ private:
             // Optional
             put_cached(part_type::PluginInst,
                     id.plugin_instance() == per_cpu_plugin_instance ?
-                            std::to_string(engine.cpu_id()) : id.plugin_instance());
+                            std::to_string(engine().cpu_id()) : id.plugin_instance());
             put_cached(part_type::Type, id.type());
             // Optional
             put_cached(part_type::TypeInst, id.type_instance());

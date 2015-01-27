@@ -383,7 +383,7 @@ protected:
 
 future<> lister::scan_dir(sstring name, directory_entry_type type, std::function<future<> (directory_entry)> walker) {
 
-    return engine.open_directory(name).then([type, walker = std::move(walker)] (file f) {
+    return engine().open_directory(name).then([type, walker = std::move(walker)] (file f) {
         auto l = make_lw_shared<lister>(std::move(f), type, walker);
         return l->done().then([l] { });
     });

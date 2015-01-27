@@ -469,7 +469,7 @@ future<typename tcp<InetTraits>::connection> tcp<InetTraits>::connect(socket_add
     do {
         src_port = _port_dist(_e);
         id = connid{src_ip, dst_ip, src_port, dst_port};
-    } while (_inet._inet.netif()->hash2cpu(id.hash()) != engine.cpu_id()
+    } while (_inet._inet.netif()->hash2cpu(id.hash()) != engine().cpu_id()
             || _tcbs.find(id) != _tcbs.end());
 
     auto tcbp = make_lw_shared<tcb>(*this, id);

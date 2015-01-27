@@ -136,7 +136,7 @@ class kernel_evtchn: public evtchn {
 public:
     kernel_evtchn(unsigned otherend)
         : evtchn(otherend)
-        , _notified(engine.make_reactor_notifier()) {}
+        , _notified(engine().make_reactor_notifier()) {}
     virtual port bind() override;
     virtual void notify(int port) override;
 };

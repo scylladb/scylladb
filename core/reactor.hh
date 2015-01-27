@@ -385,6 +385,7 @@ private:
 class smp_message_queue {
     static constexpr size_t queue_length = 128;
     static constexpr size_t batch_size = 16;
+    static constexpr size_t prefetch_cnt = 2;
     struct work_item;
     using lf_queue = boost::lockfree::spsc_queue<work_item*,
                             boost::lockfree::capacity<queue_length>>;
@@ -459,6 +460,8 @@ public:
         return fut;
     }
     void start(unsigned cpuid);
+    template<size_t PrefetchCnt, typename Func>
+    size_t process_queue(lf_queue& q, Func process);
     size_t process_incoming();
     size_t process_completions();
 private:
@@ -649,8 +652,8 @@ private:
     struct signal_handler {
         signal_handler(int signo);
         promise<> _promise;
-        static thread_local std::atomic<uint64_t> pending;
     };
+    std::atomic<uint64_t> _pending_signals;
     std::unordered_map<int, signal_handler> _signal_handlers;
     bool poll_signal();
     friend void sigaction(int signo, siginfo_t* siginfo, void* ignore);
@@ -808,8 +811,12 @@ reactor::make_pollfn(Func&& func) {
     return std::make_unique<the_pollfn>(std::forward<Func>(func));
 }
 
-extern thread_local reactor engine;
+extern __thread reactor* local_engine;
 extern __thread size_t task_quota;
+
+inline reactor& engine() {
+    return *local_engine;
+}
 
 class smp {
 #if HAVE_DPDK
@@ -834,10 +841,10 @@ public:
     template <typename Func>
     static std::result_of_t<Func()> submit_to(unsigned t, Func func,
             std::enable_if_t<returns_future<Func>::value, void*> = nullptr) {
-        if (t == engine.cpu_id()) {
+        if (t == engine().cpu_id()) {
             return func();
         } else {
-            return _qs[t][engine.cpu_id()].submit(std::move(func));
+            return _qs[t][engine().cpu_id()].submit(std::move(func));
         }
     }
     template <typename Func>
@@ -858,11 +865,11 @@ public:
     static bool poll_queues() {
         size_t got = 0;
         for (unsigned i = 0; i < count; i++) {
-            if (engine.cpu_id() != i) {
-                auto& rxq = _qs[engine.cpu_id()][i];
+            if (engine().cpu_id() != i) {
+                auto& rxq = _qs[engine().cpu_id()][i];
                 rxq.flush_response_batch();
                 got += rxq.process_incoming();
-                auto& txq = _qs[i][engine._id];
+                auto& txq = _qs[i][engine()._id];
                 txq.flush_request_batch();
                 got += txq.process_completions();
             }
@@ -872,13 +879,14 @@ public:
 private:
     static void start_all_queues();
     static void pin(unsigned cpu_id);
+    static void allocate_reactor();
 public:
     static unsigned count;
 };
 
 inline
 pollable_fd_state::~pollable_fd_state() {
-    engine.forget(*this);
+    engine().forget(*this);
 }
 
 class data_source_impl {
@@ -1312,32 +1320,32 @@ output_stream<CharType>::flush() {
 
 inline
 future<size_t> pollable_fd::read_some(char* buffer, size_t size) {
-    return engine.read_some(*_s, buffer, size);
+    return engine().read_some(*_s, buffer, size);
 }
 
 inline
 future<size_t> pollable_fd::read_some(uint8_t* buffer, size_t size) {
-    return engine.read_some(*_s, buffer, size);
+    return engine().read_some(*_s, buffer, size);
 }
 
 inline
 future<size_t> pollable_fd::read_some(const std::vector<iovec>& iov) {
-    return engine.read_some(*_s, iov);
+    return engine().read_some(*_s, iov);
 }
 
 inline
 future<> pollable_fd::write_all(const char* buffer, size_t size) {
-    return engine.write_all(*_s, buffer, size);
+    return engine().write_all(*_s, buffer, size);
 }
 
 inline
 future<> pollable_fd::write_all(const uint8_t* buffer, size_t size) {
-    return engine.write_all(*_s, buffer, size);
+    return engine().write_all(*_s, buffer, size);
 }
 
 inline
 future<size_t> pollable_fd::write_some(net::packet& p) {
-    return engine.writeable(*_s).then([this, &p] () mutable {
+    return engine().writeable(*_s).then([this, &p] () mutable {
         static_assert(offsetof(iovec, iov_base) == offsetof(net::fragment, base) &&
             sizeof(iovec::iov_base) == sizeof(net::fragment::base) &&
             offsetof(iovec, iov_len) == offsetof(net::fragment, size) &&
@@ -1371,22 +1379,22 @@ future<> pollable_fd::write_all(net::packet& p) {
 
 inline
 future<> pollable_fd::readable() {
-    return engine.readable(*_s);
+    return engine().readable(*_s);
 }
 
 inline
 future<> pollable_fd::writeable() {
-    return engine.writeable(*_s);
+    return engine().writeable(*_s);
 }
 
 inline
 future<pollable_fd, socket_address> pollable_fd::accept() {
-    return engine.accept(*_s);
+    return engine().accept(*_s);
 }
 
 inline
 future<size_t> pollable_fd::recvmsg(struct msghdr *msg) {
-    return engine.readable(*_s).then([this, msg] {
+    return engine().readable(*_s).then([this, msg] {
         auto r = get_file_desc().recvmsg(msg, 0);
         if (!r) {
             return recvmsg(msg);
@@ -1405,7 +1413,7 @@ future<size_t> pollable_fd::recvmsg(struct msghdr *msg) {
 
 inline
 future<size_t> pollable_fd::sendmsg(struct msghdr* msg) {
-    return engine.writeable(*_s).then([this, msg] () mutable {
+    return engine().writeable(*_s).then([this, msg] () mutable {
         auto r = get_file_desc().sendmsg(msg, 0);
         if (!r) {
             return sendmsg(msg);
@@ -1422,7 +1430,7 @@ future<size_t> pollable_fd::sendmsg(struct msghdr* msg) {
 
 inline
 future<size_t> pollable_fd::sendto(socket_address addr, const void* buf, size_t len) {
-    return engine.writeable(*_s).then([this, buf, len, addr] () mutable {
+    return engine().writeable(*_s).then([this, buf, len, addr] () mutable {
         auto r = get_file_desc().sendto(addr, buf, len, 0);
         if (!r) {
             return sendto(std::move(addr), buf, len);
@@ -1439,7 +1447,7 @@ template <typename Clock>
 inline
 timer<Clock>::~timer() {
     if (_queued) {
-        engine.del_timer(this);
+        engine().del_timer(this);
     }
 }
 
@@ -1457,7 +1465,7 @@ void timer<Clock>::arm(time_point until, boost::optional<duration> period) {
     _armed = true;
     _expired = false;
     _expiry = until;
-    engine.add_timer(this);
+    engine().add_timer(this);
     _queued = true;
 }
 
@@ -1490,7 +1498,7 @@ bool timer<Clock>::cancel() {
     }
     _armed = false;
     if (_queued) {
-        engine.del_timer(this);
+        engine().del_timer(this);
         _queued = false;
     }
     return true;

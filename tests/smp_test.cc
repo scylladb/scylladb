@@ -55,7 +55,7 @@ int main(int ac, char** av) {
            return report("smp exception", test_smp_exception());
        }).then([] {
            print("\n%d tests / %d failures\n", tests, fails);
-           engine.exit(fails ? 1 : 0);
+           engine().exit(fails ? 1 : 0);
        });
     });
 }

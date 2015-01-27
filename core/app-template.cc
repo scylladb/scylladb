@@ -58,7 +58,7 @@ app_template::run(int ac, char ** av, std::function<void ()>&& func) {
     }
     smp::configure(configuration);
     _configuration = {std::move(configuration)};
-    engine.when_started().then([this] {
+    engine().when_started().then([this] {
         scollectd::configure( this->configuration());
     }).then(
         std::move(func)
@@ -67,10 +67,10 @@ app_template::run(int ac, char ** av, std::function<void ()>&& func) {
             get_ex();
         } catch (std::exception& ex) {
             std::cout << "program failed with uncaught exception: " << ex.what() << "\n";
-            engine.exit(1);
+            engine().exit(1);
         }
     });
-    return engine.run();
+    return engine().run();
 }
 
 

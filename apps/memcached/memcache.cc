@@ -1101,7 +1101,7 @@ public:
             }
             ss << histo[i] << "\n";
         }
-        return {engine.cpu_id(), make_foreign(make_lw_shared<std::string>(ss.str()))};
+        return {engine().cpu_id(), make_foreign(make_lw_shared<std::string>(ss.str()))};
     }
 
     future<> stop() { return make_ready_future<>(); }
@@ -1130,7 +1130,7 @@ public:
     // The caller must keep @insertion live until the resulting future resolves.
     future<bool> set(item_insertion_data& insertion) {
         auto cpu = get_cpu(insertion.key);
-        if (engine.cpu_id() == cpu) {
+        if (engine().cpu_id() == cpu) {
             return make_ready_future<bool>(_peers.local().set(insertion));
         }
         return _peers.invoke_on(cpu, &cache<WithFlashCache>::remote_set, std::ref(insertion));
@@ -1139,7 +1139,7 @@ public:
     // The caller must keep @insertion live until the resulting future resolves.
     future<bool> add(item_insertion_data& insertion) {
         auto cpu = get_cpu(insertion.key);
-        if (engine.cpu_id() == cpu) {
+        if (engine().cpu_id() == cpu) {
             return make_ready_future<bool>(_peers.local().add(insertion));
         }
         return _peers.invoke_on(cpu, &cache<WithFlashCache>::remote_add, std::ref(insertion));
@@ -1148,7 +1148,7 @@ public:
     // The caller must keep @insertion live until the resulting future resolves.
     future<bool> replace(item_insertion_data& insertion) {
         auto cpu = get_cpu(insertion.key);
-        if (engine.cpu_id() == cpu) {
+        if (engine().cpu_id() == cpu) {
             return make_ready_future<bool>(_peers.local().replace(insertion));
         }
         return _peers.invoke_on(cpu, &cache<WithFlashCache>::remote_replace, std::ref(insertion));
@@ -1169,7 +1169,7 @@ public:
     // The caller must keep @insertion live until the resulting future resolves.
     future<cas_result> cas(item_insertion_data& insertion, typename item<WithFlashCache>::version_type version) {
         auto cpu = get_cpu(insertion.key);
-        if (engine.cpu_id() == cpu) {
+        if (engine().cpu_id() == cpu) {
             return make_ready_future<cas_result>(_peers.local().cas(insertion, version));
         }
         return _peers.invoke_on(cpu, &cache<WithFlashCache>::remote_cas, std::ref(insertion), std::move(version));
@@ -1182,7 +1182,7 @@ public:
     // The caller must keep @key live until the resulting future resolves.
     future<std::pair<item_ptr<WithFlashCache>, bool>> incr(item_key& key, uint64_t delta) {
         auto cpu = get_cpu(key);
-        if (engine.cpu_id() == cpu) {
+        if (engine().cpu_id() == cpu) {
             return make_ready_future<std::pair<item_ptr<WithFlashCache>, bool>>(
                 _peers.local().incr(key, delta));
         }
@@ -1192,7 +1192,7 @@ public:
     // The caller must keep @key live until the resulting future resolves.
     future<std::pair<item_ptr<WithFlashCache>, bool>> decr(item_key& key, uint64_t delta) {
         auto cpu = get_cpu(key);
-        if (engine.cpu_id() == cpu) {
+        if (engine().cpu_id() == cpu) {
             return make_ready_future<std::pair<item_ptr<WithFlashCache>, bool>>(
                 _peers.local().decr(key, delta));
         }
@@ -1658,7 +1658,7 @@ public:
     }
 
     void start() {
-        _chan = engine.net().make_udp_channel({_port});
+        _chan = engine().net().make_udp_channel({_port});
         keep_doing([this] {
             return _chan.receive().then([this](udp_datagram dgram) {
                 packet& p = dgram.get_data();
@@ -1734,7 +1734,7 @@ public:
     void start() {
         listen_options lo;
         lo.reuse_address = true;
-        _listener = engine.listen(make_ipv4_address({_port}), lo);
+        _listener = engine().listen(make_ipv4_address({_port}), lo);
         keep_doing([this] {
             return _listener->accept().then([this] (connected_socket fd, socket_address addr) mutable {
                 auto conn = make_lw_shared<connection>(std::move(fd), addr, _cache, _system_stats);
@@ -1811,10 +1811,10 @@ int start_instance(int ac, char** av) {
         ;
 
     return app.run(ac, av, [&] {
-        engine.at_exit([&] { return tcp_server.stop(); });
-        engine.at_exit([&] { return udp_server.stop(); });
-        engine.at_exit([&] { return cache_peers.stop(); });
-        engine.at_exit([&] { return system_stats.stop(); });
+        engine().at_exit([&] { return tcp_server.stop(); });
+        engine().at_exit([&] { return udp_server.stop(); });
+        engine().at_exit([&] { return cache_peers.stop(); });
+        engine().at_exit([&] { return system_stats.stop(); });
 
         auto&& config = app.configuration();
         return cache_peers.start().then([&system_stats] {
@@ -1822,7 +1822,7 @@ int start_instance(int ac, char** av) {
         }).then([&] {
             if (WithFlashCache) {
                 auto device_path = config["device"].as<std::string>();
-                return engine.open_file_dma(device_path).then([&] (file f) {
+                return engine().open_file_dma(device_path).then([&] (file f) {
                     auto dev = make_lw_shared<flashcache::devfile>({std::move(f)});
                     return dev->f().stat().then([&, dev] (struct stat st) mutable {
                         assert(S_ISBLK(st.st_mode));
@@ -1849,7 +1849,7 @@ int start_instance(int ac, char** av) {
         }).then([&tcp_server] {
             return tcp_server.invoke_on_all(&memcache::tcp_server<WithFlashCache>::start);
         }).then([&] {
-            if (engine.net().has_per_core_namespace()) {
+            if (engine().net().has_per_core_namespace()) {
                 return udp_server.start(std::ref(cache), std::ref(system_stats));
             } else {
                 return udp_server.start_single(std::ref(cache), std::ref(system_stats));

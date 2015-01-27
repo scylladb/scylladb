@@ -912,7 +912,7 @@ qp_osv::qp_osv(osv::assigned_virtio &virtio,
     // Set up interrupts
     // FIXME: in OSv, the first thing we do in the handler is to call
     // _rqx.disable_interrupts(). Here in seastar, we only do it much later
-    // in the main engine. Probably needs to do it like in osv - in the beginning of the handler.
+    // in the main engine(). Probably needs to do it like in osv - in the beginning of the handler.
     _virtio.enable_interrupt(
             0, [&] { _rxq.wake_notifier_wait(); } );
     _virtio.enable_interrupt(
