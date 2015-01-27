@@ -29,7 +29,7 @@ posix_server_socket_impl::accept() {
         static unsigned balance = 0;
         auto cpu = balance++ % smp::count;
 
-        if (cpu == engine.cpu_id()) {
+        if (cpu == engine().cpu_id()) {
             std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(fd)));
             return make_ready_future<connected_socket, socket_address>(
                     connected_socket(std::move(csi)), sa);
@@ -126,14 +126,14 @@ posix_data_sink_impl::put(packet p) {
 server_socket
 posix_network_stack::listen(socket_address sa, listen_options opt) {
     if (_reuseport)
-        return server_socket(std::make_unique<posix_reuseport_server_socket_impl>(sa, engine.posix_listen(sa, opt)));
+        return server_socket(std::make_unique<posix_reuseport_server_socket_impl>(sa, engine().posix_listen(sa, opt)));
     else
-        return server_socket(std::make_unique<posix_server_socket_impl>(sa, engine.posix_listen(sa, opt)));
+        return server_socket(std::make_unique<posix_server_socket_impl>(sa, engine().posix_listen(sa, opt)));
 }
 
 future<connected_socket>
 posix_network_stack::connect(socket_address sa) {
-    return engine.posix_connect(sa).then([] (pollable_fd fd) {
+    return engine().posix_connect(sa).then([] (pollable_fd fd) {
         std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(fd)));
         return make_ready_future<connected_socket>(connected_socket(std::move(csi)));
     });
@@ -145,14 +145,14 @@ thread_local std::unordered_multimap<::sockaddr_in, posix_ap_server_socket_impl:
 server_socket
 posix_ap_network_stack::listen(socket_address sa, listen_options opt) {
     if (_reuseport)
-        return server_socket(std::make_unique<posix_reuseport_server_socket_impl>(sa, engine.posix_listen(sa, opt)));
+        return server_socket(std::make_unique<posix_reuseport_server_socket_impl>(sa, engine().posix_listen(sa, opt)));
     else
         return server_socket(std::make_unique<posix_ap_server_socket_impl>(sa));
 }
 
 future<connected_socket>
 posix_ap_network_stack::connect(socket_address sa) {
-    return engine.posix_connect(sa).then([] (pollable_fd fd) {
+    return engine().posix_connect(sa).then([] (pollable_fd fd) {
         std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(fd)));
         return make_ready_future<connected_socket>(connected_socket(std::move(csi)));
     });
@@ -221,7 +221,7 @@ public:
         auto sa = make_ipv4_address(bind_address);
         file_desc fd = file_desc::socket(sa.u.sa.sa_family, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
         fd.setsockopt(SOL_IP, IP_PKTINFO, true);
-        if (engine.posix_reuseport_available()) {
+        if (engine().posix_reuseport_available()) {
             fd.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1);
         }
         fd.bind(sa.u.sa, sizeof(sa.u.sas));

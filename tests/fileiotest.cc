@@ -14,7 +14,7 @@ struct file_test {
 
 int main(int ac, char** av) {
     static constexpr auto max = 10000;
-    engine.open_file_dma("testfile.tmp").then([] (file f) {
+    engine().open_file_dma("testfile.tmp").then([] (file f) {
         auto ft = new file_test{std::move(f)};
         for (size_t i = 0; i < max; ++i) {
             ft->par.wait().then([ft, i] {
@@ -45,7 +45,7 @@ int main(int ac, char** av) {
             ::exit(0);
         });
     });
-    engine.run();
+    engine().run();
     return 0;
 }
 

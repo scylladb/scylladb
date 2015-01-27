@@ -17,7 +17,7 @@ private:
 public:
     void start(uint16_t port) {
         ipv4_addr listen_addr{port};
-        _chan = engine.net().make_udp_channel(listen_addr);
+        _chan = engine().net().make_udp_channel(listen_addr);
 
         _stats_timer.set_callback([this] {
             std::cout << "Out: " << _n_sent << " pps" << std::endl;

@@ -136,7 +136,7 @@ public:
     dpdk_device(uint8_t port_idx, uint16_t num_queues)
         : _port_idx(port_idx)
         , _num_queues(num_queues)
-        , _home_cpu(engine.cpu_id()) {
+        , _home_cpu(engine().cpu_id()) {
 
         /* now initialise the port we will use */
         int ret = init_port_start();

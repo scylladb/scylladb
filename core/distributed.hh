@@ -177,7 +177,7 @@ distributed<Service>::invoke_on_all(void (Service::*func)(Args...), Args... args
 
 template <typename Service>
 Service& distributed<Service>::local() {
-    return *_instances[engine.cpu_id()];
+    return *_instances[engine().cpu_id()];
 }
 
 // Smart pointer wrapper which makes it safe to move across CPUs.
@@ -190,19 +190,19 @@ private:
     unsigned _cpu;
 private:
     bool on_origin() {
-        return engine.cpu_id() == _cpu;
+        return engine().cpu_id() == _cpu;
     }
 public:
     using element_type = typename PtrType::element_type;
 
     foreign_ptr()
         : _value(PtrType())
-        , _cpu(engine.cpu_id()) {
+        , _cpu(engine().cpu_id()) {
     }
     foreign_ptr(std::nullptr_t) : foreign_ptr() {}
     foreign_ptr(PtrType value)
         : _value(std::move(value))
-        , _cpu(engine.cpu_id()) {
+        , _cpu(engine().cpu_id()) {
     }
     // The type is intentionally non-copyable because copies
     // are expensive because each copy requires across-CPU call.

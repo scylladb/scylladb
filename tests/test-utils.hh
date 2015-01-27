@@ -33,18 +33,18 @@ public:
             boost::program_options::variables_map configuration;
             auto opts = reactor::get_options_description();
             bpo::store(bpo::command_line_parser(0, nullptr).options(opts).run(), configuration);
-            engine.configure(configuration);
-            engine.when_started().then([this] {
+            engine().configure(configuration);
+            engine().when_started().then([this] {
                 return run_test_case();
             }).rescue([] (auto get) {
                 try {
                     get();
-                    engine.exit(0);
+                    engine().exit(0);
                 } catch (...) {
                     std::terminate();
                 }
             });
-            engine.run();
+            engine().run();
         });
         t.join();
     }

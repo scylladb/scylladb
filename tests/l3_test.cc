@@ -23,7 +23,7 @@ int main(int ac, char** av) {
     interface netif(std::move(vnet));
     l3_protocol arp(&netif, eth_protocol_num::arp, []{ return std::experimental::optional<l3_protocol::l3packet>(); });
     dump_arp_packets(arp);
-    engine.run();
+    engine().run();
     return 0;
 }
 

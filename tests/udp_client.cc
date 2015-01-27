@@ -19,7 +19,7 @@ public:
     void start(ipv4_addr server_addr) {
         std::cout << "Sending to " << server_addr << std::endl;
 
-        _chan = engine.net().make_udp_channel();
+        _chan = engine().net().make_udp_channel();
 
         _stats_timer.set_callback([this] {
             std::cout << "Out: " << n_sent << " pps, \t";

@@ -153,7 +153,7 @@ future<> reactor_backend_epoll::get_epoll_future(pollable_fd_state& pfd,
         eevt.data.ptr = &pfd;
         int r = ::epoll_ctl(_epollfd.get(), ctl, pfd.fd.get(), &eevt);
         assert(r == 0);
-        engine.start_epoll();
+        engine().start_epoll();
     }
     pfd.*pr = promise<>();
     return (pfd.*pr).get_future();
@@ -273,7 +273,7 @@ bool reactor::process_io()
 
 future<size_t>
 posix_file_impl::write_dma(uint64_t pos, const void* buffer, size_t len) {
-    return engine.submit_io([this, pos, buffer, len] (iocb& io) {
+    return engine().submit_io([this, pos, buffer, len] (iocb& io) {
         io_prep_pwrite(&io, _fd, const_cast<void*>(buffer), len, pos);
     }).then([] (io_event ev) {
         throw_kernel_error(long(ev.res));
@@ -283,7 +283,7 @@ posix_file_impl::write_dma(uint64_t pos, const void* buffer, size_t len) {
 
 future<size_t>
 posix_file_impl::write_dma(uint64_t pos, std::vector<iovec> iov) {
-    return engine.submit_io([this, pos, iov = std::move(iov)] (iocb& io) {
+    return engine().submit_io([this, pos, iov = std::move(iov)] (iocb& io) {
         io_prep_pwritev(&io, _fd, iov.data(), iov.size(), pos);
     }).then([] (io_event ev) {
         throw_kernel_error(long(ev.res));
@@ -293,7 +293,7 @@ posix_file_impl::write_dma(uint64_t pos, std::vector<iovec> iov) {
 
 future<size_t>
 posix_file_impl::read_dma(uint64_t pos, void* buffer, size_t len) {
-    return engine.submit_io([this, pos, buffer, len] (iocb& io) {
+    return engine().submit_io([this, pos, buffer, len] (iocb& io) {
         io_prep_pread(&io, _fd, buffer, len, pos);
     }).then([] (io_event ev) {
         throw_kernel_error(long(ev.res));
@@ -303,7 +303,7 @@ posix_file_impl::read_dma(uint64_t pos, void* buffer, size_t len) {
 
 future<size_t>
 posix_file_impl::read_dma(uint64_t pos, std::vector<iovec> iov) {
-    return engine.submit_io([this, pos, iov = std::move(iov)] (iocb& io) {
+    return engine().submit_io([this, pos, iov = std::move(iov)] (iocb& io) {
         io_prep_preadv(&io, _fd, iov.data(), iov.size(), pos);
     }).then([] (io_event ev) {
         throw_kernel_error(long(ev.res));
@@ -333,7 +333,7 @@ reactor::open_directory(sstring name) {
 
 future<>
 posix_file_impl::flush(void) {
-    return engine._thread_pool.submit<syscall_result<int>>([this] {
+    return engine()._thread_pool.submit<syscall_result<int>>([this] {
         return wrap_syscall<int>(::fsync(_fd));
     }).then([] (syscall_result<int> sr) {
         sr.throw_if_error();
@@ -343,7 +343,7 @@ posix_file_impl::flush(void) {
 
 future<struct stat>
 posix_file_impl::stat(void) {
-    return engine._thread_pool.submit<syscall_result_extra<struct stat>>([this] {
+    return engine()._thread_pool.submit<syscall_result_extra<struct stat>>([this] {
         struct stat st;
         auto ret = ::fstat(_fd, &st);
         return wrap_syscall(ret, st);
@@ -355,7 +355,7 @@ posix_file_impl::stat(void) {
 
 future<>
 posix_file_impl::discard(uint64_t offset, uint64_t length) {
-    return engine._thread_pool.submit<syscall_result<int>>([this, offset, length] () mutable {
+    return engine()._thread_pool.submit<syscall_result<int>>([this, offset, length] () mutable {
         return wrap_syscall<int>(::fallocate(_fd, FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,
             offset, length));
     }).then([] (syscall_result<int> sr) {
@@ -366,7 +366,7 @@ posix_file_impl::discard(uint64_t offset, uint64_t length) {
 
 future<>
 blockdev_file_impl::discard(uint64_t offset, uint64_t length) {
-    return engine._thread_pool.submit<syscall_result<int>>([this, offset, length] () mutable {
+    return engine()._thread_pool.submit<syscall_result<int>>([this, offset, length] () mutable {
         uint64_t range[2] { offset, length };
         return wrap_syscall<int>(::ioctl(_fd, BLKDISCARD, &range));
     }).then([] (syscall_result<int> sr) {
@@ -384,7 +384,7 @@ posix_file_impl::size(void) {
 
 future<size_t>
 blockdev_file_impl::size(void) {
-    return engine._thread_pool.submit<syscall_result_extra<size_t>>([this] {
+    return engine()._thread_pool.submit<syscall_result_extra<size_t>>([this] {
         size_t size;
         int ret = ::ioctl(_fd, BLKGETSIZE64, &size);
         return wrap_syscall(ret, size);
@@ -431,7 +431,7 @@ posix_file_impl::list_directory(std::function<future<> (directory_entry de)> nex
         auto eofcond = [w] { return w->eof; };
         return do_until(eofcond, [w, this] {
             if (w->current == w->total) {
-                return engine._thread_pool.submit<syscall_result<long>>([w , this] () {
+                return engine()._thread_pool.submit<syscall_result<long>>([w , this] () {
                     auto ret = ::syscall(__NR_getdents, _fd, reinterpret_cast<linux_dirent*>(w->buffer), sizeof(w->buffer));
                     return wrap_syscall(ret);
                 }).then([w] (syscall_result<long> ret) {
@@ -524,13 +524,13 @@ future<> reactor::run_exit_tasks() {
 }
 
 void reactor::stop() {
-    assert(engine._id == 0);
+    assert(engine()._id == 0);
     run_exit_tasks().then([this] {
         auto sem = new semaphore(0);
         for (unsigned i = 1; i < smp::count; i++) {
             smp::submit_to<>(i, []() {
-                return engine.run_exit_tasks().then([] {
-                        engine._stopped = true;
+                return engine().run_exit_tasks().then([] {
+                        engine()._stopped = true;
                 });
             }).then([sem, i]() {
                 sem->signal();
@@ -558,7 +558,7 @@ reactor::receive_signal(int signo) {
 }
 
 void sigaction(int signo, siginfo_t* siginfo, void* ignore) {
-    engine._pending_signals.fetch_or(1ull << signo, std::memory_order_relaxed);
+    engine()._pending_signals.fetch_or(1ull << signo, std::memory_order_relaxed);
 }
 
 bool reactor::poll_signal() {
@@ -691,7 +691,7 @@ int reactor::run() {
         _network_stack = std::move(stack);
         for (unsigned c = 0; c < smp::count; c++) {
             smp::submit_to(c, [] {
-                    engine._cpu_started.signal();
+                    engine()._cpu_started.signal();
             });
         }
     });
@@ -804,7 +804,7 @@ public:
     explicit registration_task(poller* p) : _p(p) {}
     virtual void run() noexcept override {
         if (_p) {
-            engine.register_poller(_p->_pollfn.get());
+            engine().register_poller(_p->_pollfn.get());
             _p->_registration_task = nullptr;
         }
     }
@@ -822,7 +822,7 @@ private:
 public:
     explicit deregistration_task(std::unique_ptr<pollfn>&& p) : _p(std::move(p)) {}
     virtual void run() noexcept override {
-        engine.unregister_poller(_p.get());
+        engine().unregister_poller(_p.get());
     }
 };
 
@@ -862,7 +862,7 @@ reactor::poller::do_register() {
     // the poller instead.
     auto task = std::make_unique<registration_task>(this);
     auto tmp = task.get();
-    engine.add_task(std::move(task));
+    engine().add_task(std::move(task));
     _registration_task = tmp;
 }
 
@@ -883,8 +883,8 @@ reactor::poller::~poller() {
             auto dummy = make_pollfn([] { return false; });
             auto dummy_p = dummy.get();
             auto task = std::make_unique<deregistration_task>(std::move(dummy));
-            engine.add_task(std::move(task));
-            engine.replace_poller(_pollfn.get(), dummy_p);
+            engine().add_task(std::move(task));
+            engine().replace_poller(_pollfn.get(), dummy_p);
         }
     }
 }
@@ -965,7 +965,7 @@ void smp_message_queue::submit_item(smp_message_queue::work_item* item) {
 
 void smp_message_queue::respond(work_item* item) {
     _completed_fifo.push_back(item);
-    if (_completed_fifo.size() >= batch_size || engine._stopped) {
+    if (_completed_fifo.size() >= batch_size || engine()._stopped) {
         flush_response_batch();
     }
 }
@@ -1027,7 +1027,7 @@ size_t smp_message_queue::process_incoming() {
 void smp_message_queue::start(unsigned cpuid) {
     _tx.init();
     char instance[10];
-    std::snprintf(instance, sizeof(instance), "%u-%u", engine.cpu_id(), cpuid);
+    std::snprintf(instance, sizeof(instance), "%u-%u", engine().cpu_id(), cpuid);
     _collectd_regs = {
             // queue_length     value:GAUGE:0:U
             // Absolute value of num packets in last tx batch.
@@ -1076,7 +1076,7 @@ void smp_message_queue::start(unsigned cpuid) {
 #ifndef HAVE_OSV
 thread_pool::thread_pool() : _worker_thread([this] { work(); }), _notify(pthread_self()) {
     keep_doing([this] {
-        return engine.receive_signal(SIGUSR1).then([this] { inter_thread_wq.complete(); });
+        return engine().receive_signal(SIGUSR1).then([this] { inter_thread_wq.complete(); });
     });
 }
 
@@ -1132,7 +1132,7 @@ file_desc readable_eventfd::try_create_eventfd(size_t initial) {
 }
 
 future<size_t> readable_eventfd::wait() {
-    return engine.readable(*_fd._s).then([this] {
+    return engine().readable(*_fd._s).then([this] {
         uint64_t count;
         int r = ::read(_fd.get_fd(), &count, sizeof(count));
         assert(r == sizeof(count));
@@ -1141,7 +1141,7 @@ future<size_t> readable_eventfd::wait() {
 }
 
 void schedule(std::unique_ptr<task> t) {
-    engine.add_task(std::move(t));
+    engine().add_task(std::move(t));
 }
 
 bool operator==(const ::sockaddr_in a, const ::sockaddr_in b) {
@@ -1219,8 +1219,8 @@ unsigned smp::count = 1;
 void smp::start_all_queues()
 {
     for (unsigned c = 0; c < count; c++) {
-        if (c != engine.cpu_id()) {
-            _qs[c][engine.cpu_id()].start(c);
+        if (c != engine().cpu_id()) {
+            _qs[c][engine().cpu_id()].start(c);
         }
     }
 }
@@ -1300,11 +1300,11 @@ void smp::configure(boost::program_options::variables_map configuration)
             sigfillset(&mask);
             auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
             throw_system_error_on(r == -1);
-            engine._id = i;
+            engine()._id = i;
             start_all_queues();
             inited.wait();
-            engine.configure(configuration);
-            engine.run();
+            engine().configure(configuration);
+            engine().run();
         });
     }
 
@@ -1317,14 +1317,14 @@ void smp::configure(boost::program_options::variables_map configuration)
 
     start_all_queues();
     inited.wait();
-    engine.configure(configuration);
-    engine._lowres_clock = std::make_unique<lowres_clock>();
+    engine().configure(configuration);
+    engine()._lowres_clock = std::make_unique<lowres_clock>();
 }
 
 __thread size_t future_avail_count = 0;
 __thread size_t task_quota = 0;
 
-thread_local reactor engine;
+thread_local reactor local_engine;
 
 
 class reactor_notifier_epoll : public reactor_notifier {
@@ -1361,7 +1361,7 @@ class reactor_notifier_osv :
     bool _needed = false;
 public:
     virtual future<> wait() override {
-        return engine.notified(this);
+        return engine().notified(this);
     }
     virtual void signal() override {
         wake();

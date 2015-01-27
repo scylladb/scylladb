@@ -101,7 +101,7 @@ int main(int ac, char** av) {
         dnet->receive([vnet, &rx] (packet p) {
             return echo_packet(*vnet, std::move(p));
         });
-    engine.run();
+    engine().run();
     return 0;
 }
 
