@@ -811,11 +811,11 @@ reactor::make_pollfn(Func&& func) {
     return std::make_unique<the_pollfn>(std::forward<Func>(func));
 }
 
-extern thread_local reactor local_engine;
+extern __thread reactor* local_engine;
 extern __thread size_t task_quota;
 
 inline reactor& engine() {
-    return local_engine;
+    return *local_engine;
 }
 
 class smp {
@@ -879,6 +879,7 @@ public:
 private:
     static void start_all_queues();
     static void pin(unsigned cpu_id);
+    static void allocate_reactor();
 public:
     static unsigned count;
 };

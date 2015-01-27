@@ -1253,6 +1253,19 @@ void smp::pin(unsigned cpu_id) {
 }
 #endif
 
+void smp::allocate_reactor() {
+    static thread_local std::unique_ptr<reactor> reactor_holder;
+
+    assert(!reactor_holder);
+
+    // we cannot just write "local_engin = new reactor" since reactor's constructor
+    // uses local_engine
+    auto buf = new (with_alignment(64)) char[sizeof(reactor)];
+    local_engine = reinterpret_cast<reactor*>(buf);
+    new (buf) reactor;
+    reactor_holder.reset(local_engine);
+}
+
 void smp::configure(boost::program_options::variables_map configuration)
 {
     smp::count = 1;
@@ -1300,6 +1313,7 @@ void smp::configure(boost::program_options::variables_map configuration)
             sigfillset(&mask);
             auto r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
             throw_system_error_on(r == -1);
+            allocate_reactor();
             engine()._id = i;
             start_all_queues();
             inited.wait();
@@ -1307,6 +1321,8 @@ void smp::configure(boost::program_options::variables_map configuration)
             engine().run();
         });
     }
+
+    allocate_reactor();
 
 #ifdef HAVE_DPDK
     auto it = _threads.begin();
@@ -1324,8 +1340,7 @@ void smp::configure(boost::program_options::variables_map configuration)
 __thread size_t future_avail_count = 0;
 __thread size_t task_quota = 0;
 
-thread_local reactor local_engine;
-
+__thread reactor* local_engine;
 
 class reactor_notifier_epoll : public reactor_notifier {
     writeable_eventfd _write;
