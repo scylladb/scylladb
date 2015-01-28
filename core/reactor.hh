@@ -129,7 +129,7 @@ private:
     // cache line to avoid false sharing.
     static std::atomic<rep> _now [[gnu::aligned(64)]];
     // High resolution timer to drive this low resolution clock
-    static timer<> _timer [[gnu::aligned(64)]];
+    timer<> _timer [[gnu::aligned(64)]];
     // High resolution timer expires every 10 milliseconds
     static constexpr std::chrono::milliseconds _granularity{10};
 };

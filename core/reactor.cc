@@ -33,7 +33,6 @@
 using namespace net;
 
 std::atomic<lowres_clock::rep> lowres_clock::_now;
-timer<> lowres_clock::_timer;
 constexpr std::chrono::milliseconds lowres_clock::_granularity;
 
 timespec to_timespec(clock_type::time_point t) {
