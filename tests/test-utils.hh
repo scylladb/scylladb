@@ -10,6 +10,7 @@
 #include "core/future.hh"
 #include "core/reactor.hh"
 #include "core/app-template.hh"
+#include "test_runner.hh"
 
 using namespace boost::unit_test;
 
@@ -21,32 +22,15 @@ public:
     virtual future<> run_test_case() = 0;
 
     void run() {
-        namespace bpo = boost::program_options;
+        test_runner::launch_or_get([] {
+            // HACK: please see https://github.com/cloudius-systems/seastar/issues/10
+            BOOST_REQUIRE(true);
 
-        // HACK: please see https://github.com/cloudius-systems/seastar/issues/10
-        BOOST_REQUIRE(true);
-
-        // HACK: please see https://github.com/cloudius-systems/seastar/issues/10
-        bpo::variables_map()["dummy"];
-
-        posix_thread t([this] () mutable {
-            boost::program_options::variables_map configuration;
-            auto opts = reactor::get_options_description();
-            bpo::store(bpo::command_line_parser(0, nullptr).options(opts).run(), configuration);
-            engine().configure(configuration);
-            engine().when_started().then([this] {
-                return run_test_case();
-            }).rescue([] (auto get) {
-                try {
-                    get();
-                    engine().exit(0);
-                } catch (...) {
-                    std::terminate();
-                }
-            });
-            engine().run();
+            // HACK: please see https://github.com/cloudius-systems/seastar/issues/10
+            boost::program_options::variables_map()["dummy"];
+        }).run_sync([this] {
+            return run_test_case();
         });
-        t.join();
     }
 };
 
