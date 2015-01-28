@@ -670,16 +670,13 @@ rte_mbuf* dpdk_qp::create_tx_mbuf(packet& p) {
 uint32_t dpdk_qp::send(circular_buffer<packet>& pb)
 {
     if (_tx_burst.size() == 0) {
-        pb.for_each([this, err = false] (packet& p) mutable {
-            if (!err) {
-                auto mbuf = create_tx_mbuf(p);
-                if (!mbuf) {
-                    err = true;
-                } else {
-                    _tx_burst.push_back(mbuf);
-                }
+        for (auto&& p : pb) {
+            auto mbuf = create_tx_mbuf(p);
+            if (!mbuf) {
+                break;
             }
-        });
+            _tx_burst.push_back(mbuf);
+        }
     }
 
     auto sent = rte_eth_tx_burst(_dev->port_idx(), _qid, _tx_burst.data() + _tx_burst_idx, _tx_burst.size() - _tx_burst_idx);
