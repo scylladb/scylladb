@@ -95,6 +95,14 @@ public:
             });
     }
 
+    template <typename... FuncArgs, typename... Args>
+    void invoke_on(unsigned id, void (Service::*func)(FuncArgs...), Args&&... args) {
+        auto inst = _instances[id];
+        smp::submit_to(id, [inst, func, args...] () mutable {
+            (inst->*func)(std::forward<Args>(args)...);
+        });
+    }
+
     // Returns reference to the local instance.
     Service& local();
 };
