@@ -652,8 +652,8 @@ private:
     static std::unique_ptr<pollfn> make_pollfn(Func&& func);
 
     struct signal_handler {
-        signal_handler(int signo);
-        promise<> _promise;
+        signal_handler(int signo, std::function<void ()>&& handler);
+        std::function<void ()> _handler;
     };
     std::atomic<uint64_t> _pending_signals;
     std::unordered_map<int, signal_handler> _signal_handlers;
@@ -707,7 +707,7 @@ public:
     template <typename Func>
     future<io_event> submit_io(Func prepare_io);
 
-    future<> receive_signal(int signo);
+    void handle_signal(int signo, std::function<void ()>&& handler);
 
     int run();
     void exit(int ret);

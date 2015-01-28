@@ -112,12 +112,10 @@ reactor::reactor()
     sev.sigev_signo = SIGALRM;
     r = timer_create(CLOCK_REALTIME, &sev, &_timer);
     assert(r >= 0);
-    keep_doing([this] {
-        return receive_signal(SIGALRM).then([this] {
-            _timer_promise.set_value();
-            _timer_promise = promise<>();
-        });
-    }).or_terminate();
+    handle_signal(SIGALRM, [this] {
+        _timer_promise.set_value();
+        _timer_promise = promise<>();
+    });
     memory::set_reclaim_hook([this] (std::function<void ()> reclaim_fn) {
         // push it in the front of the queue so we reclaim memory quickly
         _pending_tasks.push_front(make_task([fn = std::move(reclaim_fn)] {
@@ -547,14 +545,10 @@ void reactor::exit(int ret) {
     smp::submit_to(0, [this, ret] { _return = ret; stop(); });
 }
 
-future<>
-reactor::receive_signal(int signo) {
-    auto i = _signal_handlers.find(signo);
-    if (i == _signal_handlers.end()) {
-        i = _signal_handlers.emplace(signo, signo).first;
-    }
-    signal_handler& sh = i->second;
-    return sh._promise.get_future();
+void
+reactor::handle_signal(int signo, std::function<void ()>&& handler) {
+    _signal_handlers.emplace(std::piecewise_construct,
+            std::make_tuple(signo), std::make_tuple(signo, std::move(handler)));
 }
 
 void sigaction(int signo, siginfo_t* siginfo, void* ignore) {
@@ -567,15 +561,15 @@ bool reactor::poll_signal() {
         _pending_signals.fetch_and(~signals, std::memory_order_relaxed);
         for (size_t i = 0; i < sizeof(signals)*8; i++) {
             if (signals & (1ull << i)) {
-               _signal_handlers.at(i)._promise.set_value();
-               _signal_handlers.at(i)._promise = promise<>();
+               _signal_handlers.at(i)._handler();
             }
         }
     }
     return signals;
 }
 
-reactor::signal_handler::signal_handler(int signo) {
+reactor::signal_handler::signal_handler(int signo, std::function<void ()>&& handler)
+        : _handler(std::move(handler)) {
     auto mask = make_sigset_mask(signo);
     auto r = ::sigprocmask(SIG_UNBLOCK, &mask, NULL);
     throw_system_error_on(r == -1);
@@ -677,9 +671,9 @@ int reactor::run() {
 
     if (_id == 0) {
        if (_handle_sigint) {
-          receive_signal(SIGINT).then([this] { stop(); });
+          handle_signal(SIGINT, [this] { stop(); });
        }
-       receive_signal(SIGTERM).then([this] { stop(); });
+       handle_signal(SIGTERM, [this] { stop(); });
     }
 
     _cpu_started.wait(smp::count).then([this] {
@@ -1075,9 +1069,7 @@ void smp_message_queue::start(unsigned cpuid) {
 /* not yet implemented for OSv. TODO: do the notification like we do class smp. */
 #ifndef HAVE_OSV
 thread_pool::thread_pool() : _worker_thread([this] { work(); }), _notify(pthread_self()) {
-    keep_doing([this] {
-        return engine().receive_signal(SIGUSR1).then([this] { inter_thread_wq.complete(); });
-    });
+    engine().handle_signal(SIGUSR1, [this] { inter_thread_wq.complete(); });
 }
 
 void thread_pool::work() {
