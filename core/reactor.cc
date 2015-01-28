@@ -112,10 +112,6 @@ reactor::reactor()
     sev.sigev_signo = SIGALRM;
     r = timer_create(CLOCK_REALTIME, &sev, &_timer);
     assert(r >= 0);
-    handle_signal(SIGALRM, [this] {
-        _timer_promise.set_value();
-        _timer_promise = promise<>();
-    });
     memory::set_reclaim_hook([this] (std::function<void ()> reclaim_fn) {
         // push it in the front of the queue so we reclaim memory quickly
         _pending_tasks.push_front(make_task([fn = std::move(reclaim_fn)] {
@@ -696,24 +692,13 @@ int reactor::run() {
         smp_poller = poller(smp::poll_queues);
     }
 
-    complete_timers(_timers, _expired_timers,
-        [this] { return timers_completed(); },
-        [this] {
+    handle_signal(SIGALRM, [this] {
+        complete_timers(_timers, _expired_timers, [this] {
             if (!_timers.empty()) {
                 enable_timer(_timers.get_next_timeout());
             }
-        }
-    );
-    complete_timers(_lowres_timers, _expired_lowres_timers,
-        [this] { return lowres_timers_completed(); },
-        [this] {
-            if (!_lowres_timers.empty()) {
-                _lowres_next_timeout = _lowres_timers.get_next_timeout();
-            } else {
-                _lowres_next_timeout = lowres_clock::time_point();
-            }
-        }
-    );
+        });
+    });
 
     poller drain_cross_cpu_freelist([] {
         return memory::drain_cross_cpu_freelist();
@@ -725,8 +710,13 @@ int reactor::run() {
         }
         auto now = lowres_clock::now();
         if (now > _lowres_next_timeout) {
-            _lowres_timer_promise.set_value();
-            _lowres_timer_promise = promise<>();
+            complete_timers(_lowres_timers, _expired_lowres_timers, [this] {
+                if (!_lowres_timers.empty()) {
+                    _lowres_next_timeout = _lowres_timers.get_next_timeout();
+                } else {
+                    _lowres_next_timeout = lowres_clock::time_point();
+                }
+            });
             return true;
         }
         return false;
