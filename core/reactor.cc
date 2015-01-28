@@ -1266,6 +1266,10 @@ void smp::allocate_reactor() {
     reactor_holder.reset(local_engine);
 }
 
+void smp::cleanup() {
+    smp::_threads = std::vector<thread_adaptor>();
+}
+
 void smp::configure(boost::program_options::variables_map configuration)
 {
     smp::count = 1;

@@ -70,7 +70,9 @@ app_template::run(int ac, char ** av, std::function<void ()>&& func) {
             engine().exit(1);
         }
     });
-    return engine().run();
+    auto exit_code = engine().run();
+    smp::cleanup();
+    return exit_code;
 }
 
 

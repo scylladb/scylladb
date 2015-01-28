@@ -837,6 +837,7 @@ class smp {
 public:
     static boost::program_options::options_description get_options_description();
     static void configure(boost::program_options::variables_map vm);
+    static void cleanup();
     static void join_all();
     static bool main_thread() { return std::this_thread::get_id() == _tmain; }
 
