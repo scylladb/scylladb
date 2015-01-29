@@ -1000,6 +1000,7 @@ size_t smp_message_queue::process_incoming() {
     auto nr = process_queue<prefetch_cnt>(_pending, [this] (work_item* wi) {
         wi->process().then([this, wi] {
             respond(wi);
+            delete wi;
         });
     });
     _received += nr;
