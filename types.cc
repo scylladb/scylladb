@@ -86,6 +86,9 @@ struct string_type_impl : public abstract_type {
     virtual bool less(const bytes& v1, const bytes& v2) override {
         return less_unsigned(v1, v2);
     }
+    virtual bool is_byte_order_comparable() const override {
+        return true;
+    }
 };
 
 struct bytes_type_impl : public abstract_type {
