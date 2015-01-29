@@ -984,6 +984,7 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
 size_t smp_message_queue::process_completions() {
     auto nr = process_queue<prefetch_cnt*2>(_completed, [] (work_item* wi) {
         wi->complete();
+        delete wi;
     });
     _current_queue_length -= nr;
     _compl += nr;
@@ -1000,7 +1001,6 @@ size_t smp_message_queue::process_incoming() {
     auto nr = process_queue<prefetch_cnt>(_pending, [this] (work_item* wi) {
         wi->process().then([this, wi] {
             respond(wi);
-            delete wi;
         });
     });
     _received += nr;
