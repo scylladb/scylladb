@@ -83,6 +83,12 @@ public:
         std::vector<column_definition> partition_key,
         std::vector<column_definition> clustering_key,
         std::vector<column_definition> regular_columns);
+    bool is_dense() const {
+        return false;
+    }
+    bool is_counter() const {
+        return false;
+    }
 };
 
 using schema_ptr = lw_shared_ptr<schema>;
