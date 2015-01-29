@@ -120,6 +120,9 @@ struct bytes_type_impl : public abstract_type {
     virtual bool is_byte_order_equal() const override {
         return true;
     }
+    virtual bool is_byte_order_comparable() const override {
+        return true;
+    }
     virtual size_t hash(const bytes& v) override {
         return std::hash<bytes>()(v);
     }
