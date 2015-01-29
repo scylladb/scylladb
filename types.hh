@@ -123,16 +123,16 @@ size_t hash_value(const shared_ptr<abstract_type>& x) {
 template <typename Type>
 shared_ptr<abstract_type> data_type_for();
 
-class simple_compare {
-    shared_ptr<abstract_type> _type;
+class serialized_compare {
+    data_type _type;
 public:
-    simple_compare(shared_ptr<abstract_type> type) : _type(type) {}
+    serialized_compare(data_type type) : _type(type) {}
     bool operator()(const bytes& v1, const bytes& v2) const {
         return _type->less(v1, v2);
     }
 };
 
-using key_compare = simple_compare;
+using key_compare = serialized_compare;
 
 // FIXME: add missing types
 extern thread_local shared_ptr<abstract_type> int32_type;
