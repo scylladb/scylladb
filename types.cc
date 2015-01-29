@@ -142,11 +142,10 @@ struct date_type_impl : public abstract_type {
         return boost::any(db_clock::time_point(db_clock::duration(tmp)));
     }
     virtual bool less(const bytes& b1, const bytes& b2) override {
-        // DateType has a bug where it compares the values as an unsigned type.
-        // Preserve this bug.
-        return default_less<db_clock::time_point>(b1, b2, [] (db_clock::time_point t1, db_clock::time_point t2) {
-            return uint64_t(t1.time_since_epoch().count() < t2.time_since_epoch().count());
-        });
+        return compare_unsigned(b1, b2);
+    }
+    virtual bool is_byte_order_comparable() const override {
+        return true;
     }
 };
 
