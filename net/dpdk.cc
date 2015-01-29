@@ -248,7 +248,7 @@ private:
     rte_mempool* _pktmbuf_pool;
     reactor::poller _rx_poller;
     std::vector<rte_mbuf*> _tx_burst;
-    uint16_t _tx_burst_idx;
+    uint16_t _tx_burst_idx = 0;
 };
 
 int dpdk_device::init_port_start()
