@@ -25,8 +25,10 @@ struct timer_test {
     timer<Clock> t3;
     timer<Clock> t4;
     timer<Clock> t5;
+    promise<> pr1;
+    promise<> pr2;
 
-    void run() {
+    future<> run() {
         t1.set_callback([this] {
             OK();
             print(" 500ms timer expired\n");
@@ -41,7 +43,7 @@ struct timer_test {
         t2.set_callback([this] { OK(); print(" 900ms timer expired\n"); });
         t3.set_callback([this] { OK(); print("1000ms timer expired\n"); });
         t4.set_callback([this] { OK(); print("  BAD cancelled timer expired\n"); });
-        t5.set_callback([this] { OK(); print("1600ms rearmed timer expired\n"); });
+        t5.set_callback([this] { OK(); print("1600ms rearmed timer expired\n"); pr1.set_value(); });
 
         t1.arm(500ms);
         t2.arm(900ms);
@@ -49,10 +51,10 @@ struct timer_test {
         t4.arm(700ms);
         t5.arm(800ms);
 
-        test_timer_cancelling();
+        return pr1.get_future().then([this] { test_timer_cancelling(); });
     }
 
-    void test_timer_cancelling() {
+    future<> test_timer_cancelling() {
         timer<Clock>& t1 = *new timer<Clock>();
         t1.set_callback([] { BUG(); });
         t1.arm(100ms);
@@ -61,8 +63,9 @@ struct timer_test {
         t1.arm(100ms);
         t1.cancel();
 
-        t1.set_callback([] { OK(); });
+        t1.set_callback([this] { OK(); pr2.set_value(); });
         t1.arm(100ms);
+        return pr2.get_future();
     }
 };
 
@@ -72,8 +75,9 @@ int main(int ac, char** av) {
     timer_test<lowres_clock> t2;
     return app.run(ac, av, [&t1, &t2] {
         print("=== Start High res clock test\n");
-        t1.run();
-        print("=== Start Low  res clock test\n");
-        t2.run();
+        t1.run().then([&t2] {
+            print("=== Start Low  res clock test\n");
+            t2.run();
+        });
     });
 }
