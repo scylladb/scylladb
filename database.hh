@@ -44,9 +44,11 @@ struct partition {
 using column_id = uint32_t;
 
 struct column_definition final {
+    enum column_kind { PRIMARY, CLUSTERING, REGULAR, STATIC };
     sstring name;
     shared_ptr<abstract_type> type;
     column_id id; // unique within (kind, schema instance)
+    column_kind kind;
     struct name_compare {
         bool operator()(const column_definition& cd1, const column_definition& cd2) const {
             return std::lexicographical_compare(
@@ -55,6 +57,7 @@ struct column_definition final {
                     [] (char c1, char c2) { return uint8_t(c1) < uint8_t(c1); });
         }
     };
+    bool is_static() const { return kind == column_kind::STATIC; }
 };
 
 struct thrift_schema {
