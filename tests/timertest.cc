@@ -77,7 +77,10 @@ int main(int ac, char** av) {
         print("=== Start High res clock test\n");
         t1.run().then([&t2] {
             print("=== Start Low  res clock test\n");
-            t2.run();
+            return t2.run();
+        }).then([] {
+            print("Done\n");
+            engine().exit(0);
         });
     });
 }
