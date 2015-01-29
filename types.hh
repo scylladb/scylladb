@@ -245,3 +245,20 @@ public:
         return _type->equal(v1, v2);
     }
 };
+
+template<typename Type>
+static inline
+typename Type::value_type deserialize_value(Type& t, const bytes& v) {
+    // FIXME: optimize
+    std::istringstream iss(v);
+    return t.deserialize_value(iss);
+}
+
+template<typename Type>
+static inline
+bytes serialize_value(Type& t, const typename Type::value_type& value) {
+    std::ostringstream oss;
+    t.serialize_value(value, oss);
+    auto s = oss.str();
+    return bytes(s.data(), s.size());
+}
