@@ -28,7 +28,7 @@
 
 #include "cql3/query_options.hh"
 #include "cql3/statements/bound.hh"
-#include "database.hh"
+#include "types.hh"
 
 namespace cql3 {
 
@@ -47,7 +47,7 @@ public:
     virtual bool is_contains() = 0;
     virtual bool is_multi_column() = 0;
 
-    virtual std::vector<bytes> values(const query_options& options) = 0;
+    virtual std::vector<bytes_opt> values(const query_options& options) = 0;
 
     /**
      * Returns <code>true</code> if one of the restrictions use the specified function.
