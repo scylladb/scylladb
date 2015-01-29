@@ -79,17 +79,17 @@ public:
                 auto&& range = predicate.slice_range;
                 row* rw = cf.find_row(keyb, bytes());
                 if (rw) {
-                    auto beg = cf.column_defs.begin();
+                    auto beg = cf._schema->regular_columns.begin();
                     if (!range.start.empty()) {
-                        beg = std::lower_bound(cf.column_defs.begin(),
-                                               cf.column_defs.end(),
+                        beg = std::lower_bound(cf._schema->regular_columns.begin(),
+                                               cf._schema->regular_columns.end(),
                                                column_definition{range.start, bytes_type},
                                                column_definition::name_compare());
                     }
-                    auto end = cf.column_defs.end();
+                    auto end = cf._schema->regular_columns.end();
                     if (!range.finish.empty()) {
-                        end = std::upper_bound(cf.column_defs.begin(),
-                                               cf.column_defs.end(),
+                        end = std::upper_bound(cf._schema->regular_columns.begin(),
+                                               cf._schema->regular_columns.end(),
                                                column_definition{range.finish, bytes_type},
                                                column_definition::name_compare());
                     }
@@ -97,7 +97,7 @@ public:
                     // FIXME: force limit count?
                     while (beg != end && count--) {
                         auto& col_def = range.reversed ? *--end : *beg++;
-                        auto idx = &col_def - cf.column_defs.data();
+                        auto idx = &col_def - cf._schema->regular_columns.data();
                         Column col;
                         col.__set_name(col_def.name);
                         col.__set_value(rw->cells[idx]);
@@ -199,13 +199,13 @@ public:
                                 auto&& col = cosc.column;
                                 sstring cname = col.name;
                                 // FIXME: use a lookup map
-                                size_t idx = std::find_if(cf.column_defs.begin(), cf.column_defs.end(),
-                                        [&] (const column_definition& cd) { return cname == cd.name; }) - cf.column_defs.begin();
-                                if (idx == cf.column_defs.size()) {
+                                size_t idx = std::find_if(cf._schema->regular_columns.begin(), cf._schema->regular_columns.end(),
+                                        [&] (const column_definition& cd) { return cname == cd.name; }) - cf._schema->regular_columns.begin();
+                                if (idx == cf._schema->regular_columns.size()) {
                                     throw make_exception<InvalidRequestException>("column %s not found", col.name);
                                 }
                                 auto& cells = row.cells;
-                                cells.resize(cf.column_defs.size());
+                                cells.resize(cf._schema->regular_columns.size());
                                 cells[idx] = to_bytes(col.value);
                             } else if (cosc.__isset.super_column) {
                                 // FIXME: implement
@@ -346,18 +346,24 @@ public:
         }
         keyspace& ks = _db.keyspaces[ks_def.name];
         for (const CfDef& cf_def : ks_def.cf_defs) {
-            column_family cf(bytes_type, bytes_type);
+            std::vector<column_definition> partition_key;
+            std::vector<column_definition> clustering_key;
+            std::vector<column_definition> regular_columns;
+
             // FIXME: look at key_alias and key_validator first
-            cf.partition_key.push_back(column_definition{"key", bytes_type});
+            partition_key.push_back(column_definition{"key", bytes_type});
             // FIXME: guess clustering keys
             for (const ColumnDef& col_def : cf_def.column_metadata) {
                 // FIXME: look at all fields, not just name
-                cf.column_defs.push_back(column_definition{
+                regular_columns.push_back(column_definition{
                     col_def.name,
                     bytes_type,
                 });
             }
-            std::sort(cf.column_defs.begin(), cf.column_defs.end(), column_definition::name_compare());
+            std::sort(regular_columns.begin(), regular_columns.end(), column_definition::name_compare());
+            auto s = make_lw_shared<schema>(ks_def.name, cf_def.name,
+                std::move(partition_key), std::move(clustering_key), std::move(regular_columns));
+            column_family cf(s);
             ks.column_families.emplace(cf_def.name, std::move(cf));
         }
         cob(schema_id);

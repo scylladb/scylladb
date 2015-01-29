@@ -8,16 +8,43 @@
 
 thread_local logging::logger dblog("database");
 
-
 partition::partition(column_family& cf)
-        : rows(key_compare(cf.clustering_key_type)) {
+        : rows(key_compare(cf._schema->clustering_key_type)) {
 }
 
-column_family::column_family(shared_ptr<abstract_type> partition_key_type,
-                             shared_ptr<abstract_type> clustering_key_type)
-        : partition_key_type(std::move(partition_key_type))
-        , clustering_key_type(std::move(clustering_key_type))
-        , partitions(key_compare(this->partition_key_type)) {
+template<typename Sequence>
+std::vector<::shared_ptr<abstract_type>>
+get_column_types(const Sequence& column_definitions) {
+    std::vector<shared_ptr<abstract_type>> result;
+    for (auto&& col : column_definitions) {
+        result.push_back(col.type);
+    }
+    return result;
+}
+
+schema::schema(sstring ks_name, sstring cf_name, std::vector<column_definition> partition_key,
+    std::vector<column_definition> clustering_key,
+    std::vector<column_definition> regular_columns)
+        : ks_name(std::move(ks_name))
+        , cf_name(std::move(cf_name))
+        , partition_key(std::move(partition_key))
+        , clustering_key(std::move(clustering_key))
+        , regular_columns(std::move(regular_columns))
+        , partition_key_type(::make_shared<tuple_type<>>(get_column_types(partition_key)))
+        , clustering_key_type(::make_shared<tuple_type<>>(get_column_types(clustering_key)))
+        , clustering_key_prefix_type(::make_shared<tuple_prefix>(get_column_types(clustering_key)))
+{
+    if (partition_key.size() == 1) {
+        thrift.partition_key_type = partition_key[0].type;
+    } else {
+        // TODO: the type should be composite_type
+        throw std::runtime_error("not implemented");
+    }
+}
+
+column_family::column_family(schema_ptr schema)
+    : _schema(std::move(schema))
+    , partitions(key_compare(_schema->thrift.partition_key_type)) {
 }
 
 partition*

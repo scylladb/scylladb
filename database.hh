@@ -23,6 +23,7 @@
 #include <experimental/optional>
 #include <string.h>
 #include "types.hh"
+#include "tuple.hh"
 #include "core/future.hh"
 
 struct row;
@@ -40,7 +41,7 @@ struct partition {
     std::map<bytes, row, key_compare> rows;
 };
 
-struct column_definition {
+struct column_definition final {
     sstring name;
     shared_ptr<abstract_type> type;
     struct name_compare {
@@ -53,18 +54,40 @@ struct column_definition {
     };
 };
 
-struct column_family {
-    column_family(shared_ptr<abstract_type> partition_key_type, shared_ptr<abstract_type> clustering_key_type);
-    // primary key = paritition key + clustering_key
+struct thrift_schema {
     shared_ptr<abstract_type> partition_key_type;
-    shared_ptr<abstract_type> clustering_key_type;
-    std::vector<column_definition> partition_key;
-    std::vector<column_definition> clustering_key;
-    std::vector<column_definition> column_defs; // sorted by name
+};
+
+/*
+ * Keep this effectively immutable.
+ */
+class schema final {
+public:
+    const sstring ks_name;
+    const sstring cf_name;
+    const std::vector<column_definition> partition_key;
+    const std::vector<column_definition> clustering_key;
+    const std::vector<column_definition> regular_columns; // sorted by name
+    shared_ptr<tuple_type<>> partition_key_type;
+    shared_ptr<tuple_type<>> clustering_key_type;
+    shared_ptr<tuple_prefix> clustering_key_prefix_type;
+    thrift_schema thrift;
+public:
+    schema(sstring ks_name, sstring cf_name,
+        std::vector<column_definition> partition_key,
+        std::vector<column_definition> clustering_key,
+        std::vector<column_definition> regular_columns);
+};
+
+using schema_ptr = lw_shared_ptr<schema>;
+
+struct column_family {
+    column_family(schema_ptr schema);
     partition& find_or_create_partition(const bytes& key);
     row& find_or_create_row(const bytes& partition_key, const bytes& clustering_key);
     partition* find_partition(const bytes& key);
     row* find_row(const bytes& partition_key, const bytes& clustering_key);
+    schema_ptr _schema;
     // partition key -> partition
     std::map<bytes, partition, key_compare> partitions;
 };
