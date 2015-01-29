@@ -62,8 +62,8 @@ private:
     private static final Constants.Value EMPTY = new Constants.Value(ByteBufferUtil.EMPTY_BYTE_BUFFER);
 #endif
 
-    update_statement(statement_type type, int32_t bound_terms, ::shared_ptr<config::cf_meta_data> cfm, std::unique_ptr<attributes>&& attrs)
-        : modification_statement{type, bound_terms, cfm, std::move(attrs)}
+    update_statement(statement_type type, int32_t bound_terms, schema_ptr s, std::unique_ptr<attributes>&& attrs)
+        : modification_statement{type, bound_terms, std::move(s), std::move(attrs)}
     { }
 
     virtual bool require_full_clustering_key() const {

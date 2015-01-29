@@ -26,7 +26,7 @@
 #ifndef CQL3_SELECTION_SELECTABLE_HH
 #define CQL3_SELECTION_SELECTABLE_HH
 
-#include "config/cf_meta_data.hh"
+#include "database.hh"
 #include "core/shared_ptr.hh"
 
 namespace cql3 {
@@ -69,7 +69,7 @@ public:
 
     class raw {
     public:
-        virtual ::shared_ptr<selectable> prepare(::shared_ptr<config::cf_meta_data> cfm) = 0;
+        virtual ::shared_ptr<selectable> prepare(schema_ptr s) = 0;
 
         /**
          * Returns true if any processing is performed on the selected column.

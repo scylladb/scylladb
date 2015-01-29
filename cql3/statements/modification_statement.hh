@@ -33,8 +33,6 @@
 #include "cql3/attributes.hh"
 #include "cql3/operation.hh"
 
-#include "config/cf_meta_data.hh"
-
 #include "db/column_family.hh"
 
 #include "core/shared_ptr.hh"
@@ -92,7 +90,7 @@ private:
     const int32_t _bound_terms;
 
 public:
-    const ::shared_ptr<config::cf_meta_data> cfm;
+    const schema_ptr s;
     const std::unique_ptr<attributes> attrs;
 
 #if 0
@@ -114,16 +112,16 @@ private:
     bool _sets_static_columns = false;
     bool _sets_regular_columns = false;
 
-    const std::function<::shared_ptr<config::column_definition>(::shared_ptr<column_condition>)> get_column_for_condition =
-        [](::shared_ptr<column_condition> cond) -> ::shared_ptr<config::column_definition> {
+    const std::function<column_definition&(::shared_ptr<column_condition>)> get_column_for_condition =
+        [](::shared_ptr<column_condition> cond) -> column_definition& {
             return cond->column;
         };
 
 public:
-    modification_statement(statement_type type_, int32_t bound_terms, ::shared_ptr<config::cf_meta_data> cfm_, std::unique_ptr<attributes>&& attrs_)
+    modification_statement(statement_type type_, int32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_)
         : type{type_}
         , _bound_terms{bound_terms}
-        , cfm{cfm_}
+        , s{schema_}
         , attrs{std::move(attrs_)}
         , _column_operations{}
     { }
@@ -160,15 +158,15 @@ public:
     }
 
     virtual sstring keyspace() const {
-        return cfm->ks_name;
+        return s->ks_name;
     }
 
     virtual sstring column_family() const {
-        return cfm->cf_name;
+        return s->cf_name;
     }
 
     virtual bool is_counter() const {
-        return cfm->is_counter();
+        return s->is_counter();
     }
 
     int64_t get_timestamp(int64_t now, const query_options& options) const {

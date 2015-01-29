@@ -25,8 +25,6 @@
 #ifndef CQL3_OPERATION_HH
 #define CQL3_OPERATION_HH
 
-#include "config/column_definition.hh"
-
 #include "core/shared_ptr.hh"
 
 #include <experimental/optional>
@@ -62,14 +60,16 @@ import org.apache.cassandra.exceptions.InvalidRequestException;
 class operation {
 public:
     // the column the operation applies to
-    const ::shared_ptr<config::column_definition> column;
+    // We can hold a reference because all operations have life bound to their statements and
+    // statements pin the schema.
+    const column_definition& column;
 
 protected:
     // Term involved in the operation. In theory this should not be here since some operation
     // may require none of more than one term, but most need 1 so it simplify things a bit.
     const ::shared_ptr<term> _t;
 
-    operation(::shared_ptr<config::column_definition> column_, ::shared_ptr<term> t)
+    operation(column_definition& column_, ::shared_ptr<term> t)
         : column{column_}
         , _t{t}
     { }
