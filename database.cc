@@ -22,6 +22,13 @@ get_column_types(const Sequence& column_definitions) {
     return result;
 }
 
+static void
+assign_ids(std::vector<column_definition>& columns) {
+    for (column_id i = 0; i < columns.size(); i++) {
+        columns[i].id = i;
+    }
+}
+
 schema::schema(sstring ks_name, sstring cf_name, std::vector<column_definition> partition_key,
     std::vector<column_definition> clustering_key,
     std::vector<column_definition> regular_columns)
@@ -40,6 +47,9 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column_definition> 
         // TODO: the type should be composite_type
         throw std::runtime_error("not implemented");
     }
+    assign_ids(partition_key);
+    assign_ids(clustering_key);
+    assign_ids(regular_columns);
 }
 
 column_family::column_family(schema_ptr schema)

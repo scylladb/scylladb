@@ -41,9 +41,12 @@ struct partition {
     std::map<bytes, row, key_compare> rows;
 };
 
+using column_id = uint32_t;
+
 struct column_definition final {
     sstring name;
     shared_ptr<abstract_type> type;
+    column_id id; // unique within (kind, schema instance)
     struct name_compare {
         bool operator()(const column_definition& cd1, const column_definition& cd2) const {
             return std::lexicographical_compare(
