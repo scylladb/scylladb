@@ -49,6 +49,13 @@ public:
     virtual void serialize(const boost::any& value, std::ostream& out) = 0;
     virtual object_opt deserialize(std::istream& in) = 0;
     virtual bool less(const bytes& v1, const bytes& v2) = 0;
+    virtual size_t hash(const bytes& v) = 0;
+    virtual bool equal(const bytes& v1, const bytes& v2) {
+        if (is_byte_order_equal()) {
+            return v1 == v2;
+        }
+        return compare(v1, v2) == 0;
+    }
     virtual int32_t compare(const bytes& v1, const bytes& v2) {
         if (less(v1, v2)) {
             return -1;
@@ -89,6 +96,17 @@ public:
     }
     virtual bool is_byte_order_comparable() const {
         return false;
+    }
+
+    /**
+     * When returns true then equal values have the same byte representation and if byte
+     * representation is different, the values are not equal.
+     *
+     * When returns false, nothing can be inferred.
+     */
+    virtual bool is_byte_order_equal() const {
+        // If we're byte order comparable, then we must also be byte order equal.
+        return is_byte_order_comparable();
     }
 protected:
     template <typename T, typename Compare = std::less<T>>
@@ -207,3 +225,23 @@ inline bool
 less_unsigned(const bytes& v1, const bytes& v2) {
     return compare_unsigned(v1, v2) < 0;
 }
+
+class serialized_hash {
+private:
+    data_type _type;
+public:
+    serialized_hash(data_type type) : _type(type) {}
+    size_t operator()(const bytes& v) const {
+        return _type->hash(v);
+    }
+};
+
+class serialized_equal {
+private:
+    data_type _type;
+public:
+    serialized_equal(data_type type) : _type(type) {}
+    bool operator()(const bytes& v1, const bytes& v2) const {
+        return _type->equal(v1, v2);
+    }
+};

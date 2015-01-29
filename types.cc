@@ -27,6 +27,12 @@ struct simple_type_impl : abstract_type {
     virtual bool less(const bytes& v1, const bytes& v2) override {
         return default_less<T>(v1, v2);
     }
+    virtual bool is_byte_order_equal() const override {
+        return true;
+    }
+    virtual size_t hash(const bytes& v) override {
+        return std::hash<bytes>()(v);
+    }
 };
 
 struct int32_type_impl : simple_type_impl<int32_t> {
@@ -86,8 +92,14 @@ struct string_type_impl : public abstract_type {
     virtual bool less(const bytes& v1, const bytes& v2) override {
         return less_unsigned(v1, v2);
     }
+    virtual bool is_byte_order_equal() const override {
+        return true;
+    }
     virtual bool is_byte_order_comparable() const override {
         return true;
+    }
+    virtual size_t hash(const bytes& v) override {
+        return std::hash<bytes>()(v);
     }
 };
 
@@ -104,6 +116,12 @@ struct bytes_type_impl : public abstract_type {
     }
     virtual bool less(const bytes& v1, const bytes& v2) override {
         return less_unsigned(v1, v2);
+    }
+    virtual bool is_byte_order_equal() const override {
+        return true;
+    }
+    virtual size_t hash(const bytes& v) override {
+        return std::hash<bytes>()(v);
     }
 };
 
@@ -150,6 +168,9 @@ struct date_type_impl : public abstract_type {
     virtual bool is_byte_order_comparable() const override {
         return true;
     }
+    virtual size_t hash(const bytes& v) override {
+        return std::hash<bytes>()(v);
+    }
 };
 
 struct timeuuid_type_impl : public abstract_type {
@@ -183,6 +204,12 @@ struct timeuuid_type_impl : public abstract_type {
         } else {
             return std::lexicographical_compare(b1.begin(), b1.end(), b2.begin(), b2.end());
         }
+    }
+    virtual bool is_byte_order_equal() const override {
+        return true;
+    }
+    virtual size_t hash(const bytes& v) override {
+        return std::hash<bytes>()(v);
     }
 private:
     static int compare_bytes(const bytes& o1, const bytes& o2) {
@@ -266,6 +293,12 @@ struct uuid_type_impl : abstract_type {
         return less_unsigned(b1, b2);
     }
     // FIXME: isCompatibleWith(uuid)
+    virtual bool is_byte_order_equal() const override {
+        return true;
+    }
+    virtual size_t hash(const bytes& v) override {
+        return std::hash<bytes>()(v);
+    }
 };
 
 thread_local shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
