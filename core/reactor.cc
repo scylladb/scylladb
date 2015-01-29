@@ -482,9 +482,13 @@ void reactor::enable_timer(clock_type::time_point when)
 }
 
 void reactor::add_timer(timer<>* tmr) {
-    if (_timers.insert(*tmr)) {
+    if (queue_timer(tmr)) {
         enable_timer(_timers.get_next_timeout());
     }
+}
+
+bool reactor::queue_timer(timer<>* tmr) {
+    return _timers.insert(*tmr);
 }
 
 void reactor::del_timer(timer<>* tmr) {
@@ -497,9 +501,13 @@ void reactor::del_timer(timer<>* tmr) {
 }
 
 void reactor::add_timer(timer<lowres_clock>* tmr) {
-    if (_lowres_timers.insert(*tmr)) {
+    if (queue_timer(tmr)) {
         _lowres_next_timeout = _lowres_timers.get_next_timeout();
     }
+}
+
+bool reactor::queue_timer(timer<lowres_clock>* tmr) {
+    return _lowres_timers.insert(*tmr);
 }
 
 void reactor::del_timer(timer<lowres_clock>* tmr) {

@@ -88,18 +88,20 @@ private:
     boost::intrusive::list_member_hook<> _link;
     callback_t _callback;
     time_point _expiry;
-    boost::optional<duration> _period;
+    std::experimental::optional<duration> _period;
     bool _armed = false;
     bool _queued = false;
     bool _expired = false;
+    void readd_periodic();
+    void arm_state(time_point until, std::experimental::optional<duration> period);
 public:
     timer() = default;
     explicit timer(callback_t&& callback);
     ~timer();
     future<> expired();
     void set_callback(callback_t&& callback);
-    void arm(time_point until, boost::optional<duration> period = {});
-    void rearm(time_point until, boost::optional<duration> period = {});
+    void arm(time_point until, std::experimental::optional<duration> period = {});
+    void rearm(time_point until, std::experimental::optional<duration> period = {});
     void arm(duration delta);
     void arm_periodic(duration delta);
     bool armed() const { return _armed; }
@@ -752,8 +754,10 @@ private:
     bool process_io();
 
     void add_timer(timer<>*);
+    bool queue_timer(timer<>*);
     void del_timer(timer<>*);
     void add_timer(timer<lowres_clock>*);
+    bool queue_timer(timer<lowres_clock>*);
     void del_timer(timer<lowres_clock>*);
 
     future<> run_exit_tasks();
@@ -1139,7 +1143,7 @@ void reactor::complete_timers(T& timers, E& expired_timers, EnableFunc&& enable_
         if (t->_armed) {
             t->_armed = false;
             if (t->_period) {
-                t->arm_periodic(*t->_period);
+                t->readd_periodic();
             }
             t->_callback();
         }
@@ -1453,19 +1457,25 @@ void timer<Clock>::set_callback(callback_t&& callback) {
 
 template <typename Clock>
 inline
-void timer<Clock>::arm(time_point until, boost::optional<duration> period) {
+void timer<Clock>::arm_state(time_point until, std::experimental::optional<duration> period) {
     assert(!_armed);
     _period = period;
     _armed = true;
     _expired = false;
     _expiry = until;
-    engine().add_timer(this);
     _queued = true;
 }
 
 template <typename Clock>
 inline
-void timer<Clock>::rearm(time_point until, boost::optional<duration> period) {
+void timer<Clock>::arm(time_point until, std::experimental::optional<duration> period) {
+    arm_state(until, period);
+    engine().add_timer(this);
+}
+
+template <typename Clock>
+inline
+void timer<Clock>::rearm(time_point until, std::experimental::optional<duration> period) {
     if (_armed) {
         cancel();
     }
@@ -1482,6 +1492,13 @@ template <typename Clock>
 inline
 void timer<Clock>::arm_periodic(duration delta) {
     arm(Clock::now() + delta, {delta});
+}
+
+template <typename Clock>
+inline
+void timer<Clock>::readd_periodic() {
+    arm_state(Clock::now() + _period.value(), {_period.value()});
+    engine().queue_timer(this);
 }
 
 template <typename Clock>
