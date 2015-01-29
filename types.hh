@@ -87,7 +87,7 @@ public:
     sstring name() const {
         return _name;
     }
-    virtual bool is_byte_order_comparable() {
+    virtual bool is_byte_order_comparable() const {
         return false;
     }
 protected:
