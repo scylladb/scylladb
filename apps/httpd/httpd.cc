@@ -20,6 +20,8 @@
 #include <cctype>
 #include <vector>
 
+using namespace std::chrono_literals;
+
 class http_server;
 class http_stats;
 
@@ -35,7 +37,12 @@ class http_server {
     uint64_t _total_connections = 0;
     uint64_t _current_connections = 0;
     uint64_t _requests_served = 0;
+    sstring _date = http_date();
+    timer<> _date_format_timer{[this] { _date = http_date(); }};
 public:
+    http_server() {
+        _date_format_timer.arm_periodic(1s);
+    }
     future<> listen(ipv4_addr addr) {
         listen_options lo;
         lo.reuse_address = true;
@@ -129,6 +136,8 @@ public:
             });
         }
         future<> start_response() {
+            _resp->_headers["Server"] = "Seastar httpd";
+            _resp->_headers["Date"] = _server._date;
             _resp->_headers["Content-Length"] = to_sstring(_resp->_body.size());
             return _write_buf.write(_resp->_response_line.begin(), _resp->_response_line.size()).then(
                     [this] {
@@ -204,6 +213,14 @@ public:
     }
     uint64_t requests_served() const {
         return _requests_served;
+    }
+    static sstring http_date() {
+        auto t = ::time(nullptr);
+        struct tm tm;
+        gmtime_r(&t, &tm);
+        char tmp[100];
+        strftime(tmp, sizeof(tmp), "%d %b %Y %H:%M:%S GMT", &tm);
+        return tmp;
     }
 };
 

@@ -33,7 +33,6 @@
 using namespace net;
 
 std::atomic<lowres_clock::rep> lowres_clock::_now;
-timer<> lowres_clock::_timer;
 constexpr std::chrono::milliseconds lowres_clock::_granularity;
 
 timespec to_timespec(clock_type::time_point t) {
@@ -112,12 +111,6 @@ reactor::reactor()
     sev.sigev_signo = SIGALRM;
     r = timer_create(CLOCK_REALTIME, &sev, &_timer);
     assert(r >= 0);
-    keep_doing([this] {
-        return receive_signal(SIGALRM).then([this] {
-            _timer_promise.set_value();
-            _timer_promise = promise<>();
-        });
-    }).or_terminate();
     memory::set_reclaim_hook([this] (std::function<void ()> reclaim_fn) {
         // push it in the front of the queue so we reclaim memory quickly
         _pending_tasks.push_front(make_task([fn = std::move(reclaim_fn)] {
@@ -489,9 +482,13 @@ void reactor::enable_timer(clock_type::time_point when)
 }
 
 void reactor::add_timer(timer<>* tmr) {
-    if (_timers.insert(*tmr)) {
+    if (queue_timer(tmr)) {
         enable_timer(_timers.get_next_timeout());
     }
+}
+
+bool reactor::queue_timer(timer<>* tmr) {
+    return _timers.insert(*tmr);
 }
 
 void reactor::del_timer(timer<>* tmr) {
@@ -504,9 +501,13 @@ void reactor::del_timer(timer<>* tmr) {
 }
 
 void reactor::add_timer(timer<lowres_clock>* tmr) {
-    if (_lowres_timers.insert(*tmr)) {
+    if (queue_timer(tmr)) {
         _lowres_next_timeout = _lowres_timers.get_next_timeout();
     }
+}
+
+bool reactor::queue_timer(timer<lowres_clock>* tmr) {
+    return _lowres_timers.insert(*tmr);
 }
 
 void reactor::del_timer(timer<lowres_clock>* tmr) {
@@ -547,14 +548,10 @@ void reactor::exit(int ret) {
     smp::submit_to(0, [this, ret] { _return = ret; stop(); });
 }
 
-future<>
-reactor::receive_signal(int signo) {
-    auto i = _signal_handlers.find(signo);
-    if (i == _signal_handlers.end()) {
-        i = _signal_handlers.emplace(signo, signo).first;
-    }
-    signal_handler& sh = i->second;
-    return sh._promise.get_future();
+void
+reactor::handle_signal(int signo, std::function<void ()>&& handler) {
+    _signal_handlers.emplace(std::piecewise_construct,
+            std::make_tuple(signo), std::make_tuple(signo, std::move(handler)));
 }
 
 void sigaction(int signo, siginfo_t* siginfo, void* ignore) {
@@ -567,15 +564,15 @@ bool reactor::poll_signal() {
         _pending_signals.fetch_and(~signals, std::memory_order_relaxed);
         for (size_t i = 0; i < sizeof(signals)*8; i++) {
             if (signals & (1ull << i)) {
-               _signal_handlers.at(i)._promise.set_value();
-               _signal_handlers.at(i)._promise = promise<>();
+               _signal_handlers.at(i)._handler();
             }
         }
     }
     return signals;
 }
 
-reactor::signal_handler::signal_handler(int signo) {
+reactor::signal_handler::signal_handler(int signo, std::function<void ()>&& handler)
+        : _handler(std::move(handler)) {
     auto mask = make_sigset_mask(signo);
     auto r = ::sigprocmask(SIG_UNBLOCK, &mask, NULL);
     throw_system_error_on(r == -1);
@@ -677,9 +674,9 @@ int reactor::run() {
 
     if (_id == 0) {
        if (_handle_sigint) {
-          receive_signal(SIGINT).then([this] { stop(); });
+          handle_signal(SIGINT, [this] { stop(); });
        }
-       receive_signal(SIGTERM).then([this] { stop(); });
+       handle_signal(SIGTERM, [this] { stop(); });
     }
 
     _cpu_started.wait(smp::count).then([this] {
@@ -702,24 +699,13 @@ int reactor::run() {
         smp_poller = poller(smp::poll_queues);
     }
 
-    complete_timers(_timers, _expired_timers,
-        [this] { return timers_completed(); },
-        [this] {
+    handle_signal(SIGALRM, [this] {
+        complete_timers(_timers, _expired_timers, [this] {
             if (!_timers.empty()) {
                 enable_timer(_timers.get_next_timeout());
             }
-        }
-    );
-    complete_timers(_lowres_timers, _expired_lowres_timers,
-        [this] { return lowres_timers_completed(); },
-        [this] {
-            if (!_lowres_timers.empty()) {
-                _lowres_next_timeout = _lowres_timers.get_next_timeout();
-            } else {
-                _lowres_next_timeout = lowres_clock::time_point();
-            }
-        }
-    );
+        });
+    });
 
     poller drain_cross_cpu_freelist([] {
         return memory::drain_cross_cpu_freelist();
@@ -731,8 +717,13 @@ int reactor::run() {
         }
         auto now = lowres_clock::now();
         if (now > _lowres_next_timeout) {
-            _lowres_timer_promise.set_value();
-            _lowres_timer_promise = promise<>();
+            complete_timers(_lowres_timers, _expired_lowres_timers, [this] {
+                if (!_lowres_timers.empty()) {
+                    _lowres_next_timeout = _lowres_timers.get_next_timeout();
+                } else {
+                    _lowres_next_timeout = lowres_clock::time_point();
+                }
+            });
             return true;
         }
         return false;
@@ -1001,6 +992,7 @@ size_t smp_message_queue::process_queue(lf_queue& q, Func process) {
 size_t smp_message_queue::process_completions() {
     auto nr = process_queue<prefetch_cnt*2>(_completed, [] (work_item* wi) {
         wi->complete();
+        delete wi;
     });
     _current_queue_length -= nr;
     _compl += nr;
@@ -1075,9 +1067,7 @@ void smp_message_queue::start(unsigned cpuid) {
 /* not yet implemented for OSv. TODO: do the notification like we do class smp. */
 #ifndef HAVE_OSV
 thread_pool::thread_pool() : _worker_thread([this] { work(); }), _notify(pthread_self()) {
-    keep_doing([this] {
-        return engine().receive_signal(SIGUSR1).then([this] { inter_thread_wq.complete(); });
-    });
+    engine().handle_signal(SIGUSR1, [this] { inter_thread_wq.complete(); });
 }
 
 void thread_pool::work() {
@@ -1264,6 +1254,10 @@ void smp::allocate_reactor() {
     local_engine = reinterpret_cast<reactor*>(buf);
     new (buf) reactor;
     reactor_holder.reset(local_engine);
+}
+
+void smp::cleanup() {
+    smp::_threads = std::vector<thread_adaptor>();
 }
 
 void smp::configure(boost::program_options::variables_map configuration)

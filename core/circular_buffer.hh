@@ -68,6 +68,100 @@ private:
     void expand();
     void maybe_expand(size_t nr = 1);
     size_t mask(size_t idx) const;
+
+    template<typename CB, typename ValueType>
+    struct cbiterator : std::iterator<std::random_access_iterator_tag, ValueType> {
+        typedef std::iterator<std::random_access_iterator_tag, ValueType> super_t;
+
+        ValueType& operator*() const { return cb->_impl.storage[cb->mask(idx)]; }
+        ValueType* operator->() const { return &cb->_impl.storage[cb->mask(idx)]; }
+        // prefix
+        cbiterator<CB, ValueType>& operator++() {
+            idx++;
+            return *this;
+        }
+        // postfix
+        cbiterator<CB, ValueType> operator++(int unused) {
+            auto v = *this;
+            idx++;
+            return v;
+        }
+        // prefix
+        cbiterator<CB, ValueType>& operator--() {
+            idx--;
+            return *this;
+        }
+        // postfix
+        cbiterator<CB, ValueType> operator--(int unused) {
+            auto v = *this;
+            idx--;
+            return v;
+        }
+        cbiterator<CB, ValueType> operator+(typename super_t::difference_type n) const {
+            return cbiterator<CB, ValueType>(cb, idx + n);
+        }
+        cbiterator<CB, ValueType> operator-(typename super_t::difference_type n) const {
+            return cbiterator<CB, ValueType>(cb, idx - n);
+        }
+        cbiterator<CB, ValueType>& operator+=(typename super_t::difference_type n) {
+            idx += n;
+            return *this;
+        }
+        cbiterator<CB, ValueType>& operator-=(typename super_t::difference_type n) {
+            idx -= n;
+            return *this;
+        }
+        bool operator==(const cbiterator<CB, ValueType>& rhs) const {
+            return idx == rhs.idx;
+        }
+        bool operator!=(const cbiterator<CB, ValueType>& rhs) const {
+            return idx != rhs.idx;
+        }
+        bool operator<(const cbiterator<CB, ValueType>& rhs) const {
+            return idx < rhs.idx;
+        }
+        bool operator>(const cbiterator<CB, ValueType>& rhs) const {
+            return idx > rhs.idx;
+        }
+        bool operator>=(const cbiterator<CB, ValueType>& rhs) const {
+            return idx >= rhs.idx;
+        }
+        bool operator<=(const cbiterator<CB, ValueType>& rhs) const {
+            return idx <= rhs.idx;
+        }
+       typename super_t::difference_type operator-(const cbiterator<CB, ValueType>& rhs) const {
+            return idx - rhs.idx;
+        }
+    private:
+        CB* cb;
+        size_t idx;
+        cbiterator<CB, ValueType>(CB* b, size_t i) : cb(b), idx(i) {}
+        friend class circular_buffer;
+    };
+    friend class iterator;
+
+public:
+    typedef cbiterator<circular_buffer, T> iterator;
+    typedef cbiterator<const circular_buffer, const T> const_iterator;
+
+    iterator begin() {
+        return iterator(this, _impl.begin);
+    }
+    const_iterator begin() const {
+        return const_iterator(this, _impl.begin);
+    }
+    iterator end() {
+        return iterator(this, _impl.end);
+    }
+    const_iterator end() const {
+        return const_iterator(this, _impl.end);
+    }
+    const_iterator cbegin() const {
+        return const_iterator(this, _impl.begin);
+    }
+    const_iterator cend() const {
+        return const_iterator(this, _impl.end);
+    }
 };
 
 template <typename T, typename Alloc>

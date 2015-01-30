@@ -182,6 +182,7 @@ core = [
     'util/conversions.cc',
     'net/packet.cc',
     'net/posix-stack.cc',
+    'tests/test_runner.cc'
     ]
 
 defines = []

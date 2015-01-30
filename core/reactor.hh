@@ -88,16 +88,20 @@ private:
     boost::intrusive::list_member_hook<> _link;
     callback_t _callback;
     time_point _expiry;
-    boost::optional<duration> _period;
+    std::experimental::optional<duration> _period;
     bool _armed = false;
     bool _queued = false;
     bool _expired = false;
+    void readd_periodic();
+    void arm_state(time_point until, std::experimental::optional<duration> period);
 public:
+    timer() = default;
+    explicit timer(callback_t&& callback);
     ~timer();
     future<> expired();
     void set_callback(callback_t&& callback);
-    void arm(time_point until, boost::optional<duration> period = {});
-    void rearm(time_point until, boost::optional<duration> period = {});
+    void arm(time_point until, std::experimental::optional<duration> period = {});
+    void rearm(time_point until, std::experimental::optional<duration> period = {});
     void arm(duration delta);
     void arm_periodic(duration delta);
     bool armed() const { return _armed; }
@@ -127,7 +131,7 @@ private:
     // cache line to avoid false sharing.
     static std::atomic<rep> _now [[gnu::aligned(64)]];
     // High resolution timer to drive this low resolution clock
-    static timer<> _timer [[gnu::aligned(64)]];
+    timer<> _timer [[gnu::aligned(64)]];
     // High resolution timer expires every 10 milliseconds
     static constexpr std::chrono::milliseconds _granularity{10};
 };
@@ -628,16 +632,14 @@ private:
     // _lowres_clock will only be created on cpu 0
     std::unique_ptr<lowres_clock> _lowres_clock;
     lowres_clock::time_point _lowres_next_timeout;
-    promise<> _lowres_timer_promise;
-    promise<> _timer_promise;
     std::experimental::optional<poller> _epoll_poller;
     const bool _reuseport;
     circular_buffer<double> _loads;
     double _load = 0;
 private:
     void abort_on_error(int ret);
-    template <typename T, typename E>
-    void complete_timers(T&, E&, std::function<future<> ()>, std::function<void ()>);
+    template <typename T, typename E, typename EnableFunc>
+    void complete_timers(T&, E&, EnableFunc&& enable_fn);
 
     /**
      * Returns TRUE if all pollers allow blocking.
@@ -650,8 +652,8 @@ private:
     static std::unique_ptr<pollfn> make_pollfn(Func&& func);
 
     struct signal_handler {
-        signal_handler(int signo);
-        promise<> _promise;
+        signal_handler(int signo, std::function<void ()>&& handler);
+        std::function<void ()> _handler;
     };
     std::atomic<uint64_t> _pending_signals;
     std::unordered_map<int, signal_handler> _signal_handlers;
@@ -705,7 +707,7 @@ public:
     template <typename Func>
     future<io_event> submit_io(Func prepare_io);
 
-    future<> receive_signal(int signo);
+    void handle_signal(int signo, std::function<void ()>&& handler);
 
     int run();
     void exit(int ret);
@@ -752,8 +754,10 @@ private:
     bool process_io();
 
     void add_timer(timer<>*);
+    bool queue_timer(timer<>*);
     void del_timer(timer<>*);
     void add_timer(timer<lowres_clock>*);
+    bool queue_timer(timer<lowres_clock>*);
     void del_timer(timer<lowres_clock>*);
 
     future<> run_exit_tasks();
@@ -786,12 +790,6 @@ public:
         return _backend.notified(n);
     }
     void enable_timer(clock_type::time_point when);
-    future<> timers_completed() {
-        return _timer_promise.get_future();
-    }
-    future<> lowres_timers_completed() {
-        return _lowres_timer_promise.get_future();
-    }
     std::unique_ptr<reactor_notifier> make_reactor_notifier() {
         return _backend.make_reactor_notifier();
     }
@@ -835,6 +833,7 @@ class smp {
 public:
     static boost::program_options::options_description get_options_description();
     static void configure(boost::program_options::variables_map vm);
+    static void cleanup();
     static void join_all();
     static bool main_thread() { return std::this_thread::get_id() == _tmain; }
 
@@ -1131,31 +1130,25 @@ reactor::write_all(pollable_fd_state& fd, const void* buffer, size_t len) {
     return write_all_part(fd, buffer, len, 0);
 }
 
-template <typename T, typename E>
-void reactor::complete_timers(T& timers, E& expired_timers,
-                              std::function<future<> ()> completed_fn,
-                              std::function<void ()> enable_fn) {
-    completed_fn().then([this, &timers, &expired_timers, completed_fn,
-            enable_fn = std::move(enable_fn)] () mutable {
-        expired_timers = timers.expire(timers.now());
-        for (auto& t : expired_timers) {
-            t._expired = true;
-        }
-        while (!expired_timers.empty()) {
-            auto t = &*expired_timers.begin();
-            expired_timers.pop_front();
-            t->_queued = false;
-            if (t->_armed) {
-                t->_armed = false;
-                if (t->_period) {
-                    t->arm_periodic(*t->_period);
-                }
-                t->_callback();
+template <typename T, typename E, typename EnableFunc>
+void reactor::complete_timers(T& timers, E& expired_timers, EnableFunc&& enable_fn) {
+    expired_timers = timers.expire(timers.now());
+    for (auto& t : expired_timers) {
+        t._expired = true;
+    }
+    while (!expired_timers.empty()) {
+        auto t = &*expired_timers.begin();
+        expired_timers.pop_front();
+        t->_queued = false;
+        if (t->_armed) {
+            t->_armed = false;
+            if (t->_period) {
+                t->readd_periodic();
             }
+            t->_callback();
         }
-        enable_fn();
-        complete_timers(timers, expired_timers, std::move(completed_fn), std::move(enable_fn));
-    });
+    }
+    enable_fn();
 }
 
 template <typename CharType>
@@ -1445,6 +1438,11 @@ future<size_t> pollable_fd::sendto(socket_address addr, const void* buf, size_t 
 
 template <typename Clock>
 inline
+timer<Clock>::timer(callback_t&& callback) : _callback(std::move(callback)) {
+}
+
+template <typename Clock>
+inline
 timer<Clock>::~timer() {
     if (_queued) {
         engine().del_timer(this);
@@ -1459,19 +1457,25 @@ void timer<Clock>::set_callback(callback_t&& callback) {
 
 template <typename Clock>
 inline
-void timer<Clock>::arm(time_point until, boost::optional<duration> period) {
+void timer<Clock>::arm_state(time_point until, std::experimental::optional<duration> period) {
     assert(!_armed);
     _period = period;
     _armed = true;
     _expired = false;
     _expiry = until;
-    engine().add_timer(this);
     _queued = true;
 }
 
 template <typename Clock>
 inline
-void timer<Clock>::rearm(time_point until, boost::optional<duration> period) {
+void timer<Clock>::arm(time_point until, std::experimental::optional<duration> period) {
+    arm_state(until, period);
+    engine().add_timer(this);
+}
+
+template <typename Clock>
+inline
+void timer<Clock>::rearm(time_point until, std::experimental::optional<duration> period) {
     if (_armed) {
         cancel();
     }
@@ -1488,6 +1492,13 @@ template <typename Clock>
 inline
 void timer<Clock>::arm_periodic(duration delta) {
     arm(Clock::now() + delta, {delta});
+}
+
+template <typename Clock>
+inline
+void timer<Clock>::readd_periodic() {
+    arm_state(Clock::now() + _period.value(), {_period.value()});
+    engine().queue_timer(this);
 }
 
 template <typename Clock>
