@@ -65,7 +65,7 @@ public:
         execute(service::query_state& state, const query_options& options) = 0;
 
     /**
-     * Variante of execute used for internal query against the system tables, and thus only query the local node = 0.
+     * Variant of execute used for internal query against the system tables, and thus only query the local node = 0.
      *
      * @param state the current query state
      */
