@@ -354,15 +354,20 @@ public:
         return _if_not_exists || _if_exists || !_column_conditions.empty() || !_static_conditions.empty();
     }
 
-    future<std::experimental::optional<transport::messages::result_message>>
-    execute(::shared_ptr<service::query_state> qs, ::shared_ptr<query_options> options);
+    virtual future<std::experimental::optional<transport::messages::result_message>>
+    execute(service::query_state& qs, const query_options& options) override;
+
+    virtual future<std::experimental::optional<transport::messages::result_message>>
+    execute_internal(service::query_state& qs, const query_options& options) override {
+        throw std::runtime_error("not implemented");
+    }
 
 private:
     future<>
-    execute_without_condition(::shared_ptr<service::query_state> qs, ::shared_ptr<query_options> options);
+    execute_without_condition(service::query_state& qs, const query_options& options);
 
     future<std::experimental::optional<transport::messages::result_message>>
-    execute_with_condition(::shared_ptr<service::query_state> qs, ::shared_ptr<query_options> options);
+    execute_with_condition(service::query_state& qs, const query_options& options);
 
 #if 0
     public void addConditions(Composite clusteringPrefix, CQL3CasRequest request, QueryOptions options) throws InvalidRequestException
@@ -489,13 +494,13 @@ private:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<api::mutation>> get_mutations(::shared_ptr<query_options> options, bool local, int64_t now);
+    future<std::vector<api::mutation>> get_mutations(const query_options& options, bool local, int64_t now);
 
 public:
     future<std::unique_ptr<update_parameters>> make_update_parameters(
                 lw_shared_ptr<std::vector<api::partition_key>> keys,
                 lw_shared_ptr<api::clustering_prefix> prefix,
-                ::shared_ptr<query_options> options,
+                const query_options& options,
                 bool local,
                 int64_t now);
 

@@ -339,7 +339,7 @@ public:
     class setter : public operation {
     public:
         virtual void execute(api::mutation& m, const api::clustering_prefix& prefix, const update_parameters& params) override {
-            bytes_opt value = _t->bind_and_get(*params._options);
+            bytes_opt value = _t->bind_and_get(params._options);
             m.set_cell(prefix, column.id, value ? params.make_cell(*value) : params.make_dead_cell());
         }
     };

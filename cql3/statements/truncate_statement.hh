@@ -62,7 +62,8 @@ public:
 #endif
     }
 
-    virtual transport::messages::result_message execute(service::query_state& state, const query_options& options) override {
+    virtual future<std::experimental::optional<transport::messages::result_message>>
+    execute(service::query_state& state, const query_options& options) override {
         throw std::runtime_error("not implemented");
 #if 0
         try
@@ -85,7 +86,8 @@ public:
 #endif
     }
 
-    virtual transport::messages::result_message execute_internal(service::query_state& state, const query_options& options) override {
+    virtual future<std::experimental::optional<transport::messages::result_message>>
+    execute_internal(service::query_state& state, const query_options& options) override {
         throw std::runtime_error("unsupported operation");
     }
 };

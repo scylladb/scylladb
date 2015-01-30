@@ -49,9 +49,9 @@ operator<<(std::ostream& out, modification_statement::statement_type t) {
 }
 
 future<std::vector<api::mutation>>
-modification_statement::get_mutations(::shared_ptr<query_options> options, bool local, int64_t now) {
-    auto keys = make_lw_shared(build_partition_keys(*options));
-    auto prefix = make_lw_shared(create_clustering_prefix(*options));
+modification_statement::get_mutations(const query_options& options, bool local, int64_t now) {
+    auto keys = make_lw_shared(build_partition_keys(options));
+    auto prefix = make_lw_shared(create_clustering_prefix(options));
     return make_update_parameters(keys, prefix, options, local, now).then(
             [this, keys = std::move(keys), prefix = std::move(prefix), now] (auto params_ptr) {
                 std::vector<api::mutation> mutations;
@@ -70,15 +70,15 @@ future<std::unique_ptr<update_parameters>>
 modification_statement::make_update_parameters(
         lw_shared_ptr<std::vector<api::partition_key>> keys,
         lw_shared_ptr<api::clustering_prefix> prefix,
-        ::shared_ptr<query_options> options,
+        const query_options& options,
         bool local,
         int64_t now) {
-    return read_required_rows(std::move(keys), std::move(prefix), local, options->get_consistency()).then(
-            [this, options, now] (auto rows) {
+    return read_required_rows(std::move(keys), std::move(prefix), local, options.get_consistency()).then(
+            [this, &options, now] (auto rows) {
                 return make_ready_future<std::unique_ptr<update_parameters>>(
                         std::make_unique<update_parameters>(s, options,
-                                this->get_timestamp(now, *options),
-                                this->get_time_to_live(*options),
+                                this->get_timestamp(now, options),
+                                this->get_time_to_live(options),
                                 std::move(rows)));
             });
 }
@@ -276,8 +276,8 @@ modification_statement::build_partition_keys(const query_options& options) {
 }
 
 future<std::experimental::optional<transport::messages::result_message>>
-modification_statement::execute(::shared_ptr<service::query_state> qs, ::shared_ptr<query_options> options) {
-    if (has_conditions() && options->get_protocol_version() == 1) {
+modification_statement::execute(service::query_state& qs, const query_options& options) {
+    if (has_conditions() && options.get_protocol_version() == 1) {
         throw new exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
     }
 
@@ -292,15 +292,15 @@ modification_statement::execute(::shared_ptr<service::query_state> qs, ::shared_
 }
 
 future<>
-modification_statement::execute_without_condition(::shared_ptr<service::query_state> qs, ::shared_ptr<query_options> options) {
-    auto cl = options->get_consistency();
+modification_statement::execute_without_condition(service::query_state& qs, const query_options& options) {
+    auto cl = options.get_consistency();
     if (is_counter()) {
         db::validate_counter_for_write(s, cl);
     } else {
         db::validate_for_write(s->ks_name, cl);
     }
 
-    return get_mutations(options, false, options->get_timestamp(*qs)).then([cl] (auto mutations) {
+    return get_mutations(options, false, options.get_timestamp(qs)).then([cl] (auto mutations) {
         if (mutations.empty()) {
             return now();
         }
@@ -309,7 +309,7 @@ modification_statement::execute_without_condition(::shared_ptr<service::query_st
 }
 
 future<std::experimental::optional<transport::messages::result_message>>
-modification_statement::execute_with_condition(::shared_ptr<service::query_state> qs, ::shared_ptr<query_options> options) {
+modification_statement::execute_with_condition(service::query_state& qs, const query_options& options) {
     unimplemented::lwt();
 #if 0
         List<ByteBuffer> keys = buildPartitionKeyNames(options);
