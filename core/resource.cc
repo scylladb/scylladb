@@ -137,6 +137,7 @@ std::vector<cpu> allocate(configuration c) {
     }
     auto procs = c.cpus.value_or(nr_processing_units());
     std::vector<cpu> ret;
+    ret.reserve(procs);
     for (unsigned i = 0; i < procs; ++i) {
         ret.push_back(cpu{i, {{mem / procs, 0}}});
     }
