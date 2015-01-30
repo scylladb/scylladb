@@ -47,4 +47,30 @@ validate_cql_key(schema_ptr schema, const api::partition_key& key) {
     }
 }
 
+/**
+ * Based on org.apache.cassandra.thrift.ThriftValidation#validateColumnFamily(java.lang.String, java.lang.String)
+ */
+schema_ptr
+validate_column_family(database& db, const sstring& keyspace_name, const sstring& cf_name) {
+    if (keyspace_name.empty()) {
+        throw exceptions::invalid_request_exception("Keyspace not set");
+    }
+
+    keyspace* ks = db.find_keyspace(keyspace_name);
+    if (!ks) {
+        throw exceptions::keyspace_not_defined_exception(sprint("Keyspace %s does not exist", keyspace_name));
+    }
+
+    if (cf_name.empty()) {
+        throw exceptions::invalid_request_exception("non-empty table is required");
+    }
+
+    auto schema = ks->find_schema(cf_name);
+    if (!schema) {
+        throw exceptions::invalid_request_exception(sprint("unconfigured table %s", cf_name));
+    }
+
+    return schema;
+}
+
 }

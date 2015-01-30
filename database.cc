@@ -201,3 +201,21 @@ column_definition* schema::get_column_definition(const bytes& name) {
     }
     return i->second;
 }
+
+schema_ptr
+keyspace::find_schema(sstring cf_name) {
+    auto i = column_families.find(cf_name);
+    if (i == column_families.end()) {
+        return {};
+    }
+    return i->second._schema;
+}
+
+keyspace*
+database::find_keyspace(sstring name) {
+    auto i = keyspaces.find(name);
+    if (i != keyspaces.end()) {
+        return &i->second;
+    }
+    return nullptr;
+}

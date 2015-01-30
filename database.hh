@@ -115,12 +115,14 @@ class keyspace {
 public:
     std::unordered_map<sstring, column_family> column_families;
     static future<keyspace> populate(sstring datadir);
+    schema_ptr find_schema(sstring cf_name);
 };
 
 class database {
 public:
     std::unordered_map<sstring, keyspace> keyspaces;
     static future<database> populate(sstring datadir);
+    keyspace* find_keyspace(sstring name);
 };
 
 
