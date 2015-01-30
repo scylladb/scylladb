@@ -41,7 +41,7 @@ void validate_cql_key(schema_ptr schema, const api::partition_key& key) {
 
     // check that key can be handled by FBUtilities.writeShortByteArray
     if (key.size() > max_key_size) {
-        throw exceptions::invalid_request_exception(sprint("Key length of %s is longer than maximum of %d", key.size(), max_key_size));
+        throw exceptions::invalid_request_exception(sprint("Key length of %d is longer than maximum of %d", key.size(), max_key_size));
     }
 
     try {
