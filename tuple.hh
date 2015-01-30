@@ -40,7 +40,6 @@ public:
             assert(values.size() == types.size());
         }
 
-        auto values_left = values.size();
         for (auto&& val : values) {
             if (!val) {
                 write<uint32_t>(out, uint32_t(-1));
@@ -49,7 +48,6 @@ public:
                 write<uint32_t>(out, uint32_t(val->size()));
                 out.write(val->begin(), val->size());
             }
-            values_left--;
         }
     }
     value_type deserialize_value(std::istream& in) {
