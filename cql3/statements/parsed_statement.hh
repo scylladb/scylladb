@@ -52,7 +52,7 @@ public:
     }
 
     // Used by the parser and preparable statement
-    void set_bound_variables(const std::vector<std::experimental::optional<::shared_ptr<column_identifier>>>& bound_names)
+    void set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names)
     {
         _variables = ::make_shared<variable_specifications>(bound_names);
     }

@@ -127,8 +127,8 @@ public:
         ::shared_ptr<term::raw> time_to_live;
 
         std::unique_ptr<attributes> prepare(sstring ks_name, sstring cf_name) {
-            auto ts = timestamp.get() == nullptr ? std::experimental::optional<::shared_ptr<term>>{} : std::experimental::optional<::shared_ptr<term>>{timestamp->prepare(ks_name, timestamp_receiver(ks_name, cf_name))};
-            auto ttl = time_to_live.get() == nullptr ? std::experimental::optional<::shared_ptr<term>>{} : std::experimental::optional<::shared_ptr<term>>{time_to_live->prepare(ks_name, time_to_live_receiver(ks_name, cf_name))};
+            auto ts = !timestamp ? ::shared_ptr<term>{} : timestamp->prepare(ks_name, timestamp_receiver(ks_name, cf_name));
+            auto ttl = !time_to_live ? ::shared_ptr<term>{} : time_to_live->prepare(ks_name, time_to_live_receiver(ks_name, cf_name));
             return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl)}};
         }
 
