@@ -15,35 +15,47 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.exceptions;
 
-import org.apache.cassandra.cql3.ColumnIdentifier;
-import org.apache.cassandra.cql3.Relation;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#pragma once
+
+#include "exceptions.hh"
+#include "core/shared_ptr.hh"
+#include "cql3/column_identifier.hh"
+#include "cql3/relation.hh"
+
+namespace exceptions {
 
 /**
  * Exception thrown when an entity is not recognized within a relation.
  */
-public final class UnrecognizedEntityException extends InvalidRequestException
-{
+class unrecognized_entity_exception : public invalid_request_exception {
+public:
     /**
      * The unrecognized entity.
      */
-    public final ColumnIdentifier entity;
+    ::shared_ptr<cql3::column_identifier> entity;
 
     /**
      * The entity relation.
      */
-    public final Relation relation;
+    cql3::relation_ptr relation;
 
     /**
      * Creates a new <code>UnrecognizedEntityException</code>.
      * @param entity the unrecognized entity
      * @param relation the entity relation
      */
-    public UnrecognizedEntityException(ColumnIdentifier entity, Relation relation)
-    {
-        super(String.format("Undefined name %s in where clause ('%s')", entity, relation));
-        this.entity = entity;
-        this.relation = relation;
-    }
+    unrecognized_entity_exception(::shared_ptr<cql3::column_identifier> entity, cql3::relation_ptr relation)
+        : invalid_request_exception(sprint("Undefined name %s in where clause ('%s')", *entity, relation->to_string()))
+        , entity(entity)
+        , relation(relation)
+    { }
+};
+
 }

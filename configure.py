@@ -241,6 +241,7 @@ deps = {
                  'validation.cc',
                  'service/storage_proxy.cc',
                  'cql3/operator.cc',
+                 'cql3/relation.cc',
 		 'db/db.cc',
 		 'io/io.cc',
                  'utils/utils.cc',
