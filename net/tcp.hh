@@ -258,6 +258,8 @@ private:
             unsigned syn_retransmit = 0;
             unsigned fin_retransmit = 0;
             uint32_t limited_transfer = 0;
+            uint32_t partial_ack = 0;
+            tcp_seq recover;
         } _snd;
         struct receive {
             tcp_seq next;
@@ -432,6 +434,7 @@ private:
             _snd.initial = get_isn();
             _snd.unacknowledged = _snd.initial;
             _snd.next = _snd.initial + 1;
+            _snd.recover = _snd.initial;
         }
         void do_local_fin_acked() {
             _snd.unacknowledged += 1;
@@ -453,7 +456,12 @@ private:
         bool in_state(tcp_state state) {
             return uint16_t(_state) & uint16_t(state);
         }
-        void data_segment_acked(tcp_seq seg_ack);
+        void exit_fast_recovery() {
+            _snd.dupacks = 0;
+            _snd.limited_transfer = 0;
+            _snd.partial_ack = 0;
+        }
+        uint32_t data_segment_acked(tcp_seq seg_ack);
         bool segment_acceptable(tcp_seq seg_seq, unsigned seg_len);
         void init_from_options(tcp_hdr* th, uint8_t* opt_start, uint8_t* opt_end);
         friend class connection;
@@ -762,7 +770,8 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
 }
 
 template <typename InetTraits>
-void tcp<InetTraits>::tcb::data_segment_acked(tcp_seq seg_ack) {
+uint32_t tcp<InetTraits>::tcb::data_segment_acked(tcp_seq seg_ack) {
+    uint32_t total_acked_bytes = 0;
     // Full ACK of segment
     while (!_snd.data.empty()
             && (_snd.unacknowledged + _snd.data.front().data_remaining <= seg_ack)) {
@@ -773,6 +782,7 @@ void tcp<InetTraits>::tcb::data_segment_acked(tcp_seq seg_ack) {
             update_rto(_snd.data.front().tx_time);
         }
         update_cwnd(acked_bytes);
+        total_acked_bytes += acked_bytes;
         _snd.user_queue_space.signal(_snd.data.front().data_len);
         _snd.data.pop_front();
     }
@@ -787,7 +797,9 @@ void tcp<InetTraits>::tcb::data_segment_acked(tcp_seq seg_ack) {
         _snd.data.front().data_remaining -= acked_bytes;
         _snd.unacknowledged = seg_ack;
         update_cwnd(acked_bytes);
+        total_acked_bytes += acked_bytes;
     }
+    return total_acked_bytes;
 }
 
 template <typename InetTraits>
@@ -1052,7 +1064,7 @@ void tcp<InetTraits>::tcb::input_handle_other_state(tcp_hdr* th, packet p) {
             // If SND.UNA < SEG.ACK =< SND.NXT then, set SND.UNA <- SEG.ACK.
             if (_snd.unacknowledged < seg_ack && seg_ack <= _snd.next) {
                 // Remote ACKed data we sent
-                data_segment_acked(seg_ack);
+                auto acked_bytes = data_segment_acked(seg_ack);
 
                 // If SND.UNA < SEG.ACK =< SND.NXT, the send window should be updated.
                 if (_snd.wl1 < seg_seq || (_snd.wl1 == seg_seq && _snd.wl2 <= seg_ack)) {
@@ -1066,23 +1078,59 @@ void tcp<InetTraits>::tcb::input_handle_other_state(tcp_hdr* th, packet p) {
                 // some data is acked, try send more data
                 do_output_data = true;
 
-                if (_snd.data.empty()) {
-                    // All outstanding segments are acked, turn off the timer.
-                    stop_retransmit_timer();
-                    // Signal the waiter of this event
-                    signal_all_data_acked();
-                } else {
-                    // Restart the timer becasue new data is acked.
-                    start_retransmit_timer();
-                }
+                auto set_retransmit_timer = [this] {
+                    if (_snd.data.empty()) {
+                        // All outstanding segments are acked, turn off the timer.
+                        stop_retransmit_timer();
+                        // Signal the waiter of this event
+                        signal_all_data_acked();
+                    } else {
+                        // Restart the timer becasue new data is acked.
+                        start_retransmit_timer();
+                    }
+                };
 
-                // New data is acked, exit fast recovery
                 if (_snd.dupacks >= 3) {
-                    // RFC5681 Step 3.6
-                    _snd.cwnd = _snd.ssthresh;
+                    // We are in fast retransmit / fast recovery phase
+                    uint32_t smss = _snd.mss;
+                    if (seg_ack > _snd.recover) {
+                        tcp_debug("ack: full_ack\n");
+                        // Set cwnd to min (ssthresh, max(FlightSize, SMSS) + SMSS)
+                        _snd.cwnd = std::min(_snd.ssthresh, std::max(flight_size(), smss) + smss);
+                        // Exit the fast recovery procedure
+                        exit_fast_recovery();
+                        set_retransmit_timer();
+                    } else {
+                        tcp_debug("ack: partial_ack\n");
+                        // Retransmit the first unacknowledged segment
+                        fast_retransmit();
+                        // Deflate the congestion window by the amount of new data
+                        // acknowledged by the Cumulative Acknowledgment field
+                        _snd.cwnd -= acked_bytes;
+                        // If the partial ACK acknowledges at least one SMSS of new
+                        // data, then add back SMSS bytes to the congestion window
+                        if (acked_bytes >= smss) {
+                            _snd.cwnd += smss;
+                        }
+                        // Send a new segment if permitted by the new value of
+                        // cwnd.  Do not exit the fast recovery procedure For
+                        // the first partial ACK that arrives during fast
+                        // recovery, also reset the retransmit timer.
+                        if (++_snd.partial_ack == 1) {
+                            start_retransmit_timer();
+                        }
+                    }
+                } else {
+                    // RFC5681: The fast retransmit algorithm uses the arrival
+                    // of 3 duplicate ACKs (as defined in section 2, without
+                    // any intervening ACKs which move SND.UNA) as an
+                    // indication that a segment has been lost.  
+                    //
+                    // So, here we reset dupacks to zero becasue this ACK moves
+                    // SND.UNA.
+                    exit_fast_recovery();
+                    set_retransmit_timer();
                 }
-                _snd.dupacks = 0;
-                _snd.limited_transfer = 0;
             } else if (!_snd.data.empty() && seg_len == 0 &&
                 th->f_fin == 0 && th->f_syn == 0 &&
                 th->ack == _snd.unacknowledged &&
@@ -1102,11 +1150,17 @@ void tcp<InetTraits>::tcb::input_handle_other_state(tcp_hdr* th, packet p) {
                     // Send cwnd + 2 * smss per RFC3042
                     do_output_data = true;
                 } else if (_snd.dupacks == 3) {
-                    // RFC5681 Step 3.2
-                    _snd.ssthresh = std::max((flight_size() - _snd.limited_transfer) / 2, 2 * smss);
+                    // RFC6582 Step 3.2
+                    if (seg_ack - 1 > _snd.recover) {
+                        _snd.recover = _snd.next - 1;
+                        // RFC5681 Step 3.2
+                        _snd.ssthresh = std::max((flight_size() - _snd.limited_transfer) / 2, 2 * smss);
+                        fast_retransmit();
+                    } else {
+                        // Do not enter fast retransmit and do not reset ssthresh
+                    }
                     // RFC5681 Step 3.3
                     _snd.cwnd = _snd.ssthresh + 3 * smss;
-                    fast_retransmit();
                 } else if (_snd.dupacks > 3) {
                     // RFC5681 Step 3.4
                     _snd.cwnd += smss;
@@ -1586,11 +1640,12 @@ void tcp<InetTraits>::tcb::retransmit() {
     if (unacked_seg.nr_transmits == 0) {
         _snd.ssthresh = std::max(flight_size() / 2, 2 * smss);
     }
+    // RFC6582 Step 4
+    _snd.recover = _snd.next - 1;
     // Start the slow start process
     _snd.cwnd = smss;
     // End fast recovery
-    _snd.dupacks = 0;
-    _snd.limited_transfer = 0;
+    exit_fast_recovery();
 
     if (unacked_seg.nr_transmits < _max_nr_retransmit) {
         unacked_seg.nr_transmits++;
