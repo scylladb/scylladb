@@ -22,12 +22,13 @@ get_column_types(const Sequence& column_definitions) {
     return result;
 }
 
-static void
-annotate_columns(std::vector<column_definition>& columns, column_definition::column_kind kind) {
+void
+schema::annotate_columns(std::vector<column_definition>& columns, column_definition::column_kind kind) {
     for (column_id i = 0; i < columns.size(); i++) {
         auto& col = columns[i];
         col.id = i;
         col.kind = kind;
+        _columns_by_name[utf8_type->decompose(col.name)] = &col;
     }
 }
 
@@ -193,3 +194,10 @@ future<database> database::populate(sstring datadir) {
     });
 }
 
+column_definition* schema::get_column_definition(const bytes& name) {
+    auto i = _columns_by_name.find(name);
+    if (i == _columns_by_name.end()) {
+        return nullptr;
+    }
+    return i->second;
+}

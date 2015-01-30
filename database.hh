@@ -69,6 +69,10 @@ struct thrift_schema {
  * Keep this effectively immutable.
  */
 class schema final {
+private:
+    std::unordered_map<bytes, column_definition*> _columns_by_name;
+private:
+    void annotate_columns(std::vector<column_definition>& columns, column_definition::column_kind kind);
 public:
     gc_clock::duration default_time_to_live = gc_clock::duration::zero();
     const sstring ks_name;
@@ -91,6 +95,7 @@ public:
     bool is_counter() const {
         return false;
     }
+    column_definition* get_column_definition(const bytes& name);
 };
 
 using schema_ptr = lw_shared_ptr<schema>;
