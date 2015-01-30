@@ -238,6 +238,7 @@ deps = {
                  'utils/murmur_hash.cc',
                  'utils/uuid.cc',
                  'types.cc',
+                 'validation.cc',
                  'service/storage_proxy.cc',
 		 'db/db.cc',
 		 'io/io.cc',

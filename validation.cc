@@ -22,15 +22,29 @@
  * Modified by Cloudius Systems
  */
 
-#pragma once
-
-#include "database.hh"
-#include "db/api.hh"
+#include "validation.hh"
 
 namespace validation {
 
-constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
+/**
+ * Based on org.apache.cassandra.thrift.ThriftValidation#validate_key()
+ */
+void
+validate_cql_key(schema_ptr schema, const api::partition_key& key) {
+    if (key.empty()) {
+        throw exceptions::invalid_request_exception("Key may not be empty");
+    }
 
-void validate_cql_key(schema_ptr schema, const api::partition_key& key);
+    // check that key can be handled by FBUtilities.writeShortByteArray
+    if (key.size() > max_key_size) {
+        throw exceptions::invalid_request_exception(sprint("Key length of %d is longer than maximum of %d", key.size(), max_key_size));
+    }
+
+    try {
+        schema->partition_key_type->validate(key);
+    } catch (const marshal_exception& e) {
+        throw exceptions::invalid_request_exception(e.why());
+    }
+}
 
 }
