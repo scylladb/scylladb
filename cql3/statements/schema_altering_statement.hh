@@ -65,7 +65,7 @@ protected:
         }
     }
 
-    virtual std::unique_ptr<prepared> prepare() override {
+    virtual std::unique_ptr<prepared> prepare(database& db) override {
         return std::make_unique<parsed_statement::prepared>(this->shared_from_this());
     }
 
