@@ -152,6 +152,10 @@ public:
         }
 
         virtual ::shared_ptr<selectable> prepare(schema_ptr s) override {
+            return prepare_column_identifier(s);
+        }
+
+        ::shared_ptr<column_identifier> prepare_column_identifier(schema_ptr s) {
 #if 0
             AbstractType<?> comparator = cfm.comparator.asAbstractType();
             if (cfm.getIsDense() || comparator instanceof CompositeType || comparator instanceof UTF8Type)
