@@ -45,7 +45,7 @@ struct partition {
 using column_id = uint32_t;
 
 struct column_definition final {
-    enum column_kind { PRIMARY, CLUSTERING, REGULAR, STATIC };
+    enum column_kind { PARTITION, CLUSTERING, REGULAR, STATIC };
     sstring name;
     shared_ptr<abstract_type> type;
     column_id id; // unique within (kind, schema instance)

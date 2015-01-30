@@ -49,7 +49,7 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column_definition> 
         // TODO: the type should be composite_type
         throw std::runtime_error("not implemented");
     }
-    annotate_columns(partition_key, column_definition::PRIMARY);
+    annotate_columns(partition_key, column_definition::PARTITION);
     annotate_columns(clustering_key, column_definition::CLUSTERING);
     annotate_columns(regular_columns, column_definition::REGULAR);
 }
