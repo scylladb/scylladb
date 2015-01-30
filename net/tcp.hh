@@ -257,6 +257,7 @@ private:
             uint16_t dupacks = 0;
             unsigned syn_retransmit = 0;
             unsigned fin_retransmit = 0;
+            uint32_t limited_transfer = 0;
         } _snd;
         struct receive {
             tcp_seq next;
@@ -353,8 +354,14 @@ private:
             // Can not send more than congestion window allows
             x = std::min(_snd.cwnd, x);
             if (_snd.dupacks == 1 || _snd.dupacks == 2) {
-                // TODO: Send cwnd + 2*smss per RFC3042
+                // RFC5681 Step 3.1
+                // Send cwnd + 2 * smss per RFC3042
+                auto flight = flight_size();
+                auto max = _snd.cwnd + 2 * _snd.mss;
+                x = flight <= max ? std::min(x, max - flight) : 0;
+                _snd.limited_transfer += x;
             } else if (_snd.dupacks >= 3) {
+                // RFC5681 Step 3.5
                 // Sent 1 full-sized segment at most
                 x = std::min(uint32_t(_snd.mss), x);
             }
@@ -1071,9 +1078,11 @@ void tcp<InetTraits>::tcb::input_handle_other_state(tcp_hdr* th, packet p) {
 
                 // New data is acked, exit fast recovery
                 if (_snd.dupacks >= 3) {
+                    // RFC5681 Step 3.6
                     _snd.cwnd = _snd.ssthresh;
                 }
                 _snd.dupacks = 0;
+                _snd.limited_transfer = 0;
             } else if (!_snd.data.empty() && seg_len == 0 &&
                 th->f_fin == 0 && th->f_syn == 0 &&
                 th->ack == _snd.unacknowledged &&
@@ -1088,12 +1097,21 @@ void tcp<InetTraits>::tcb::input_handle_other_state(tcp_hdr* th, packet p) {
                 _snd.dupacks++;
                 uint32_t smss = _snd.mss;
                 // 3 duplicated ACKs trigger a fast retransmit
-                if (_snd.dupacks == 3) {
-                    _snd.ssthresh = std::max(flight_size() / 2, 2 * smss);
+                if (_snd.dupacks == 1 || _snd.dupacks == 2) {
+                    // RFC5681 Step 3.1
+                    // Send cwnd + 2 * smss per RFC3042
+                    do_output_data = true;
+                } else if (_snd.dupacks == 3) {
+                    // RFC5681 Step 3.2
+                    _snd.ssthresh = std::max((flight_size() - _snd.limited_transfer) / 2, 2 * smss);
+                    // RFC5681 Step 3.3
                     _snd.cwnd = _snd.ssthresh + 3 * smss;
                     fast_retransmit();
                 } else if (_snd.dupacks > 3) {
+                    // RFC5681 Step 3.4
                     _snd.cwnd += smss;
+                    // RFC5681 Step 3.5
+                    do_output_data = true;
                 }
             } else if (seg_ack > _snd.next) {
                 // If the ACK acks something not yet sent (SEG.ACK > SND.NXT)
@@ -1570,7 +1588,9 @@ void tcp<InetTraits>::tcb::retransmit() {
     }
     // Start the slow start process
     _snd.cwnd = smss;
+    // End fast recovery
     _snd.dupacks = 0;
+    _snd.limited_transfer = 0;
 
     if (unacked_seg.nr_transmits < _max_nr_retransmit) {
         unacked_seg.nr_transmits++;
