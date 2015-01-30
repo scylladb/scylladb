@@ -24,6 +24,10 @@
 
 #pragma once
 
+#include "exceptions/exceptions.hh"
+#include "core/sstring.hh"
+#include "database.hh"
+
 namespace db {
 
 #if 0
@@ -313,28 +317,32 @@ bool is_datacenter_local(consistency_level l)
                 break;
         }
     }
+#endif
 
-    public void validateForRead(String keyspaceName) throws InvalidRequestException
-    {
-        switch (this)
-        {
-            case ANY:
-                throw new InvalidRequestException("ANY ConsistencyLevel is only supported for writes");
-            case EACH_QUORUM:
-                throw new InvalidRequestException("EACH_QUORUM ConsistencyLevel is only supported for writes");
-        }
+static inline
+void validate_for_read(const sstring keyspace_name, consistency_level cl) {
+    switch (cl) {
+        case consistency_level::ANY:
+            throw exceptions::invalid_request_exception("ANY ConsistencyLevel is only supported for writes");
+        case consistency_level::EACH_QUORUM:
+            throw exceptions::invalid_request_exception("EACH_QUORUM ConsistencyLevel is only supported for writes");
+        default:
+            break;
     }
+}
 
-    public void validateForWrite(String keyspaceName) throws InvalidRequestException
-    {
-        switch (this)
-        {
-            case SERIAL:
-            case LOCAL_SERIAL:
-                throw new InvalidRequestException("You must use conditional updates for serializable writes");
-        }
+static inline
+void validate_for_write(const sstring keyspace_name, consistency_level cl) {
+    switch (cl) {
+        case consistency_level::SERIAL:
+        case consistency_level::LOCAL_SERIAL:
+            throw exceptions::invalid_request_exception("You must use conditional updates for serializable writes");
+        default:
+            break;
     }
+}
 
+#if 0
     // This is the same than validateForWrite really, but we include a slightly different error message for SERIAL/LOCAL_SERIAL
     public void validateForCasCommit(String keyspaceName) throws InvalidRequestException
     {
@@ -354,21 +362,25 @@ bool is_datacenter_local(consistency_level l)
         if (!isSerialConsistency())
             throw new InvalidRequestException("Invalid consistency for conditional update. Must be one of SERIAL or LOCAL_SERIAL");
     }
+#endif
 
-    public boolean isSerialConsistency()
-    {
-        return this == SERIAL || this == LOCAL_SERIAL;
+static inline
+bool is_serial_consistency(consistency_level cl) {
+    return cl == consistency_level::SERIAL || cl == consistency_level::LOCAL_SERIAL;
+}
+
+static inline
+void validate_counter_for_write(schema_ptr s, consistency_level cl) {
+    if (cl == consistency_level::ANY) {
+        throw exceptions::invalid_request_exception(sprint("Consistency level ANY is not yet supported for counter table %s", s->cf_name));
     }
 
-    public void validateCounterForWrite(CFMetaData metadata) throws InvalidRequestException
-    {
-        if (this == ConsistencyLevel.ANY)
-            throw new InvalidRequestException("Consistency level ANY is not yet supported for counter table " + metadata.cfName);
-
-        if (isSerialConsistency())
-            throw new InvalidRequestException("Counter operations are inherently non-serializable");
+    if (is_serial_consistency(cl)) {
+        throw exceptions::invalid_request_exception("Counter operations are inherently non-serializable");
     }
+}
 
+#if 0
     private void requireNetworkTopologyStrategy(String keyspaceName) throws InvalidRequestException
     {
         AbstractReplicationStrategy strategy = Keyspace.open(keyspaceName).getReplicationStrategy();

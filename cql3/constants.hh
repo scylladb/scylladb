@@ -26,6 +26,8 @@
 #define CQL3_CONSTANTS_HH
 
 #include "cql3/abstract_marker.hh"
+#include "cql3/update_parameters.hh"
+#include "cql3/operation.hh"
 
 namespace cql3 {
 
@@ -334,22 +336,15 @@ public:
 #endif
     };
 
+    class setter : public operation {
+    public:
+        virtual void execute(api::mutation& m, const api::clustering_prefix& prefix, const update_parameters& params) override {
+            bytes_opt value = _t->bind_and_get(*params._options);
+            m.set_cell(prefix, column.id, value ? params.make_cell(*value) : params.make_dead_cell());
+        }
+    };
+
 #if 0
-    public static class Setter extends Operation
-    {
-        public Setter(ColumnDefinition column, Term t)
-        {
-            super(column, t);
-        }
-
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            CellName cname = cf.getComparator().create(prefix, column);
-            ByteBuffer value = t.bindAndGet(params.options);
-            cf.addColumn(value == null ? params.makeTombstone(cname) : params.makeColumn(cname, value));
-        }
-    }
-
     public static class Adder extends Operation
     {
         public Adder(ColumnDefinition column, Term t)

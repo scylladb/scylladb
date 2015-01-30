@@ -25,21 +25,8 @@
 #ifndef CQL3_UPDATE_PARAMETERS_HH
 #define CQL3_UPDATE_PARAMETERS_HH
 
-#if 0
-package org.apache.cassandra.cql3;
-
-import java.nio.ByteBuffer;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.composites.CellName;
-import org.apache.cassandra.db.filter.ColumnSlice;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.utils.FBUtilities;
-#endif
+#include "db/api.hh"
+#include "exceptions/exceptions.hh"
 
 namespace cql3 {
 
@@ -47,50 +34,65 @@ namespace cql3 {
  * A simple container that simplify passing parameters for collections methods.
  */
 class update_parameters final {
-#if 0
-    public final CFMetaData metadata;
-    public final QueryOptions options;
-    public final long timestamp;
-    private final int ttl;
-    public final int localDeletionTime;
+public:
+    using prefetched_rows_type = std::experimental::optional<
+            std::unordered_map<api::partition_key, api::row,
+                serialized_hash, serialized_equal>>;
+private:
+    const gc_clock::duration _ttl;
+    const prefetched_rows_type _prefetched; // For operation that require a read-before-write
+public:
+    const api::timestamp_type _timestamp;
+    const gc_clock::time_point _local_deletion_time;
+    const schema_ptr _schema;
+    const ::shared_ptr<query_options> _options;
 
-    // For lists operation that require a read-before-write. Will be null otherwise.
-    private final Map<ByteBuffer, CQL3Row> prefetchedLists;
-
-    public UpdateParameters(CFMetaData metadata, QueryOptions options, long timestamp, int ttl, Map<ByteBuffer, CQL3Row> prefetchedLists)
-    throws InvalidRequestException
+    update_parameters(const schema_ptr schema_, const ::shared_ptr<query_options> options,
+            api::timestamp_type timestamp, gc_clock::duration ttl, prefetched_rows_type prefetched)
+        : _ttl(ttl)
+        , _prefetched(std::move(prefetched))
+        , _timestamp(timestamp)
+        , _local_deletion_time(gc_clock::now())
+        , _schema(std::move(schema_))
+        , _options(std::move(options))
     {
-        this.metadata = metadata;
-        this.options = options;
-        this.timestamp = timestamp;
-        this.ttl = ttl;
-        this.localDeletionTime = (int)(System.currentTimeMillis() / 1000);
-        this.prefetchedLists = prefetchedLists;
-
         // We use MIN_VALUE internally to mean the absence of of timestamp (in Selection, in sstable stats, ...), so exclude
         // it to avoid potential confusion.
-        if (timestamp == Long.MIN_VALUE)
-            throw new InvalidRequestException(String.format("Out of bound timestamp, must be in [%d, %d]", Long.MIN_VALUE + 1, Long.MAX_VALUE));
+        if (timestamp < api::min_timestamp || timestamp > api::max_timestamp) {
+            throw exceptions::invalid_request_exception(sprint("Out of bound timestamp, must be in [%d, %d]",
+                    api::min_timestamp, api::max_timestamp));
+        }
     }
 
-    public Cell makeColumn(CellName name, ByteBuffer value) throws InvalidRequestException
-    {
-        QueryProcessor.validateCellName(name, metadata.comparator);
-        return AbstractCell.create(name, value, timestamp, ttl, metadata);
+    api::atomic_cell make_dead_cell() const {
+        return {make_tombstone()};
     }
 
+    api::atomic_cell make_cell(bytes value) const {
+        auto ttl = _ttl;
+
+        if (!ttl.count()) {
+            ttl = _schema->default_time_to_live;
+        }
+
+        return api::atomic_cell(api::live_atomic_cell(_timestamp,
+                ttl.count() ? api::ttl_opt{_local_deletion_time + ttl} : api::ttl_opt{},
+                std::move(value)));
+    }
+
+#if 0
      public Cell makeCounter(CellName name, long delta) throws InvalidRequestException
      {
          QueryProcessor.validateCellName(name, metadata.comparator);
          return new BufferCounterUpdateCell(name, delta, FBUtilities.timestampMicros());
      }
+#endif
 
-    public Cell makeTombstone(CellName name) throws InvalidRequestException
-    {
-        QueryProcessor.validateCellName(name, metadata.comparator);
-        return new BufferDeletedCell(name, localDeletionTime, timestamp);
+    api::tombstone make_tombstone() const {
+        return {_timestamp, _local_deletion_time};
     }
 
+#if 0
     public RangeTombstone makeRangeTombstone(ColumnSlice slice) throws InvalidRequestException
     {
         QueryProcessor.validateComposite(slice.start, metadata.comparator);

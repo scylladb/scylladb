@@ -25,7 +25,9 @@
 #ifndef CQL3_CQL_QUERY_OPTIONS_HH
 #define CQL3_CQL_QUERY_OPTIONS_HH
 
+#include "db/api.hh"
 #include "db/consistency_level.hh"
+#include "service/query_state.hh"
 
 namespace cql3 {
 
@@ -98,13 +100,17 @@ public:
     {
         return getSpecificOptions().serialConsistency;
     }
-
-    public long getTimestamp(QueryState state)
-    {
-        long tstamp = getSpecificOptions().timestamp;
-        return tstamp != Long.MIN_VALUE ? tstamp : state.getTimestamp();
-    }
 #endif
+
+public:
+    api::timestamp_type get_timestamp(const service::query_state& state) {
+        throw std::runtime_error("NOT IMPLEMENTED");
+#if 0
+        auto tstamp = get_specific_options().timestamp;
+        return tstamp != api::missing_timestamp ? tstamp : state.get_timestamp();
+#endif
+    }
+
     /**
      * The protocol version for the query. Will be 3 if the object don't come from
      * a native protocol request (i.e. it's been allocated locally or by CQL-over-thrift).

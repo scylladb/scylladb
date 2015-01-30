@@ -151,7 +151,7 @@ public:
             }
         }
 
-        virtual ::shared_ptr<selectable> prepare(::shared_ptr<config::cf_meta_data> cfm) override {
+        virtual ::shared_ptr<selectable> prepare(schema_ptr s) override {
 #if 0
             AbstractType<?> comparator = cfm.comparator.asAbstractType();
             if (cfm.getIsDense() || comparator instanceof CompositeType || comparator instanceof UTF8Type)

@@ -22,10 +22,13 @@
  * Copyright 2015 Cloudius Systems
  */
 
+#pragma once
+
 #include "cql3/term.hh"
 #include "cql3/constants.hh"
 #include "db/marshal/collection_type.hh"
 #include "core/print.hh"
+#include "exceptions/exceptions.hh"
 
 namespace cql3 {
 namespace functions {
@@ -52,18 +55,17 @@ public:
         return make_terminal(bind_and_get(options), options.get_protocol_version());
     }
 
-    virtual bytes bind_and_get(const query_options& options) override {
+    virtual bytes_opt bind_and_get(const query_options& options) override {
         std::vector<bytes> buffers;
         buffers.reserve(_terms.size());
         for (auto&& t : _terms) {
             // For now, we don't allow nulls as argument as no existing function needs it and it
             // simplify things.
-            bytes val = t->bind_and_get(options);
-#if 0
-            if (val == null)
-                throw new InvalidRequestException(String.format("Invalid null value for argument to %s", fun));
-#endif
-            buffers.push_back(std::move(val));
+            bytes_opt val = t->bind_and_get(options);
+            if (!val) {
+                throw exceptions::invalid_request_exception(sprint("Invalid null value for argument to %s", *_fun));
+            }
+            buffers.push_back(std::move(*val));
         }
         return execute_internal(options.get_protocol_version(), std::move(buffers));
     }
@@ -100,7 +102,7 @@ public:
     }
 
 private:
-    shared_ptr<terminal> make_terminal(bytes result, int version)  {
+    shared_ptr<terminal> make_terminal(bytes_opt result, int version)  {
         if (!dynamic_pointer_cast<shared_ptr<db::marshal::collection_type>>(_fun->return_type())) {
 #if 0
             return constants.value(result);

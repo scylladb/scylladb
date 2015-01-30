@@ -25,8 +25,6 @@
 #ifndef CQL3_COLUMN_CONDITION_HH
 #define CQL3_COLUMN_CONDITION_HH
 
-#include "config/column_definition.hh"
-
 #if 0
 import java.nio.ByteBuffer;
 import java.util.*;
@@ -54,7 +52,7 @@ namespace cql3 {
  */
 class column_condition final {
 public:
-    ::shared_ptr<config::column_definition> column;
+    column_definition& column;
 
 #if 0
     // For collection, when testing the equality of a specific element, null otherwise.

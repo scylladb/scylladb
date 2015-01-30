@@ -1,7 +1,7 @@
 #ifndef EXCEPTIONS_HH
 #define EXCEPTIONS_HH
 
-#include <exception>
+#include <stdexcept>
 
 namespace exceptions {
 

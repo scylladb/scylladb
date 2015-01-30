@@ -15,8 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.statements;
 
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#pragma once
+
+#include "cql3/statements/modification_statement.hh"
+#include "cql3/attributes.hh"
+#include "cql3/operation.hh"
+#include "db/api.hh"
+
+namespace cql3 {
+
+namespace statements {
+
+#if 0
 import java.nio.ByteBuffer;
 import java.util.*;
 
@@ -30,63 +47,24 @@ import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.composites.Composite;
 import org.apache.cassandra.exceptions.*;
 import org.apache.cassandra.utils.Pair;
+#endif
 
 /**
- * A <code>DELETE</code> parsed from a CQL query statement.
- */
-public class DeleteStatement extends ModificationStatement
-{
-    private DeleteStatement(StatementType type, int boundTerms, CFMetaData cfm, Attributes attrs)
-    {
-        super(type, boundTerms, cfm, attrs);
-    }
+* A <code>DELETE</code> parsed from a CQL query statement.
+*/
+class delete_statement : public modification_statement {
+public:
+    delete_statement(statement_type type, int32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs)
+            : modification_statement{type, bound_terms, std::move(s), std::move(attrs)}
+    { }
 
-    public boolean requireFullClusteringKey()
-    {
+    virtual bool require_full_clustering_key() const override {
         return false;
     }
 
-    public void addUpdateForKey(ColumnFamily cf, ByteBuffer key, Composite prefix, UpdateParameters params)
-    throws InvalidRequestException
-    {
-        List<Operation> deletions = getOperations();
+    virtual void add_update_for_key(api::mutation& m, const api::clustering_prefix& prefix, const update_parameters& params) override;
 
-        if (prefix.size() < cfm.clusteringColumns().size() && !deletions.isEmpty())
-        {
-            // In general, we can't delete specific columns if not all clustering columns have been specified.
-            // However, if we delete only static colums, it's fine since we won't really use the prefix anyway.
-            for (Operation deletion : deletions)
-                if (!deletion.column.isStatic())
-                    throw new InvalidRequestException(String.format("Primary key column '%s' must be specified in order to delete column '%s'", getFirstEmptyKey().name, deletion.column.name));
-        }
-
-        if (deletions.isEmpty())
-        {
-            // We delete the slice selected by the prefix.
-            // However, for performance reasons, we distinguish 2 cases:
-            //   - It's a full internal row delete
-            //   - It's a full cell name (i.e it's a dense layout and the prefix is full)
-            if (prefix.isEmpty())
-            {
-                // No columns specified, delete the row
-                cf.delete(new DeletionInfo(params.timestamp, params.localDeletionTime));
-            }
-            else if (cfm.comparator.isDense() && prefix.size() == cfm.clusteringColumns().size())
-            {
-                cf.addAtom(params.makeTombstone(cfm.comparator.create(prefix, null)));
-            }
-            else
-            {
-                cf.addAtom(params.makeRangeTombstone(prefix.slice()));
-            }
-        }
-        else
-        {
-            for (Operation op : deletions)
-                op.execute(key, cf, prefix, params);
-        }
-    }
-
+#if 0
     protected void validateWhereClauseForConditions() throws InvalidRequestException
     {
         Iterator<ColumnDefinition> iterator = Iterators.concat(cfm.partitionKeyColumns().iterator(), cfm.clusteringColumns().iterator());
@@ -146,4 +124,9 @@ public class DeleteStatement extends ModificationStatement
             return stmt;
         }
     }
+#endif
+};
+
+}
+
 }
