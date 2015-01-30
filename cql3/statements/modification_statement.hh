@@ -504,20 +504,6 @@ public:
                 bool local,
                 int64_t now);
 
-#if 0
-    public UpdateParameters makeUpdateParameters(Collection<ByteBuffer> keys,
-                                                 Composite prefix,
-                                                 QueryOptions options,
-                                                 boolean local,
-                                                 long now)
-    throws RequestExecutionException, RequestValidationException
-    {
-        // Some lists operation requires reading
-        Map<ByteBuffer, CQL3Row> rows = readRequiredRows(keys, prefix, local, options.getConsistency());
-        return new UpdateParameters(cfm, options, getTimestamp(now, options), getTimeToLive(options), rows);
-    }
-#endif
-
 protected:
     /**
      * If there are conditions on the statement, this is called after the where clause and conditions have been
@@ -545,15 +531,7 @@ public:
             , _conditions{conditions}
             , _if_not_exists{if_not_exists}
             , _if_exists{if_exists}
-        {
-#if 0
-            super(name);
-            this.attrs = attrs;
-            this.conditions = conditions == null ? Collections.<Pair<ColumnIdentifier.Raw, ColumnCondition.Raw>>emptyList() : conditions;
-            this.ifNotExists = ifNotExists;
-            this.ifExists = ifExists;
-#endif
-        }
+        { }
 
 #if 0
         public ParsedStatement.Prepared prepare() throws InvalidRequestException
