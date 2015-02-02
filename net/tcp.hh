@@ -237,6 +237,7 @@ private:
             std::deque<unacked_segment> data;
             std::deque<packet> unsent;
             uint32_t unsent_len = 0;
+            uint32_t queued_len = 0;
             bool closed = false;
             promise<> _window_opened;
             // Wait for all data are acked
@@ -387,7 +388,7 @@ private:
             }
         }
         void signal_all_data_acked() {
-            if (_snd._all_data_acked_promise && _snd.unsent_len == 0) {
+            if (_snd._all_data_acked_promise && _snd.unsent_len == 0 && _snd.queued_len == 0) {
                 _snd._all_data_acked_promise->set_value();
                 _snd._all_data_acked_promise = {};
             }
@@ -444,8 +445,8 @@ private:
             return in_state(SYN_SENT | SYN_RECEIVED);
         }
         bool fin_needs_on() {
-            return in_state(FIN_WAIT_1 | CLOSING | LAST_ACK) &&
-                            (_snd.closed && _snd.unsent_len == 0);
+            return in_state(FIN_WAIT_1 | CLOSING | LAST_ACK) && _snd.closed &&
+                   _snd.unsent_len == 0 && _snd.queued_len == 0;
         }
         bool ack_needs_on() {
             return !in_state(CLOSED | LISTEN | SYN_SENT);
@@ -1438,7 +1439,7 @@ future<> tcp<InetTraits>::tcb::wait_for_data() {
 
 template <typename InetTraits>
 future<> tcp<InetTraits>::tcb::wait_for_all_data_acked() {
-    if (_snd.data.empty() && _snd.unsent_len == 0) {
+    if (_snd.data.empty() && _snd.unsent_len == 0 && _snd.queued_len == 0) {
         return make_ready_future<>();
     }
     _snd._all_data_acked_promise = promise<>();
@@ -1483,8 +1484,11 @@ future<> tcp<InetTraits>::tcb::send(packet p) {
 
     // TODO: Handle p.len() > max user_queue_space case
     auto len = p.len();
+    _snd.queued_len += len;
     return _snd.user_queue_space.wait(len).then([this, zis = this->shared_from_this(), p = std::move(p)] () mutable {
+        assert(!_snd.closed);
         _snd.unsent_len += p.len();
+        _snd.queued_len -= p.len();
         _snd.unsent.push_back(std::move(p));
         if (can_send() > 0) {
             output();
