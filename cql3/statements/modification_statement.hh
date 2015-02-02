@@ -100,7 +100,7 @@ public:
 
 protected:
     std::unordered_map<const column_definition*, ::shared_ptr<restrictions::restriction>> _processed_keys;
-    const std::vector<::shared_ptr<operation>> _column_operations;
+    std::vector<::shared_ptr<operation>> _column_operations;
 private:
     // Separating normal and static conditions makes things somewhat easier
     std::vector<::shared_ptr<column_condition>> _column_conditions;
