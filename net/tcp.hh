@@ -1514,6 +1514,10 @@ void tcp<InetTraits>::tcb::close() {
             _state = FIN_WAIT_1;
         }
         // Send <FIN> to remote
+        // Note: we call output_one to make sure a packet with FIN actually
+        // sent out. If we only call output() and _packetq is not empty,
+        // tcp::tcb::get_packet(), packet with FIN will not be generated.
+        output_one();
         output();
     });
 }
