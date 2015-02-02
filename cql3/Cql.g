@@ -245,19 +245,21 @@ using namespace cql3::statements;
 
 /** STATEMENTS **/
 
-#if 0
-query returns [ParsedStatement stmnt]
+query returns [shared_ptr<parsed_statement> stmnt]
     : st=cqlStatement (';')* EOF { $stmnt = st; }
     ;
 
-cqlStatement returns [ParsedStatement stmt]
+cqlStatement returns [shared_ptr<parsed_statement> stmt]
+#if 0
     @after{ if (stmt != null) stmt.setBoundVariables(bindVariables); }
     : st1= selectStatement             { $stmt = st1; }
     | st2= insertStatement             { $stmt = st2; }
     | st3= updateStatement             { $stmt = st3; }
     | st4= batchStatement              { $stmt = st4; }
     | st5= deleteStatement             { $stmt = st5; }
-    | st6= useStatement                { $stmt = st6; }
+#endif
+    : st6= useStatement                { $stmt = st6; }
+#if 0
     | st7= truncateStatement           { $stmt = st7; }
     | st8= createKeyspaceStatement     { $stmt = st8; }
     | st9= createTableStatement        { $stmt = st9; }
@@ -283,8 +285,8 @@ cqlStatement returns [ParsedStatement stmt]
     | st29=dropFunctionStatement       { $stmt = st29; }
     | st30=createAggregateStatement    { $stmt = st30; }
     | st31=dropAggregateStatement      { $stmt = st31; }
-    ;
 #endif
+    ;
 
 /*
  * USE <KEYSPACE>;
