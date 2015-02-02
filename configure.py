@@ -240,6 +240,7 @@ deps = {
                  'types.cc',
                  'validation.cc',
                  'service/storage_proxy.cc',
+                 'cql3/operator.cc',
 		 'db/db.cc',
 		 'io/io.cc',
                  'utils/utils.cc',
