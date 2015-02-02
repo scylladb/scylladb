@@ -11,6 +11,8 @@
 #include "utils/UUID.hh"
 #include "database.hh"
 
+#include "cql3/CqlParser.hpp"
+
 #include <cassert>
 #include <string>
 
@@ -264,8 +266,13 @@ future<> cql_server::connection::process_query(int16_t stream, temporary_buffer<
     auto consistency = read_consistency(buf);
     auto flags = read_byte(buf);
 #endif
-    print("warning: ignoring query %s\n", query);
-    assert(0);
+    print("processing query: '%s' ...\n", query);
+    cql3::CqlLexer::InputStreamType input{reinterpret_cast<const ANTLR_UINT8*>(query.begin()), ANTLR_ENC_UTF8, static_cast<ANTLR_UINT32>(query.size()), nullptr};
+    cql3::CqlLexer lexer{&input};
+    cql3::CqlParser::TokenStreamType tstream(ANTLR_SIZE_HINT, lexer.get_tokSource());
+    cql3::CqlParser parser{&tstream};
+    auto stmt = parser.query();
+    assert(stmt != nullptr);
     return make_ready_future<>();
 }
 
