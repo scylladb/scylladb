@@ -40,6 +40,6 @@ int main(int ac, char** av) {
             }).then([thrift_port] {
                 std::cout << "Thrift server listening on port " << thrift_port << " ...\n";
             });
-        });
+        }).or_terminate();
     });
 }
