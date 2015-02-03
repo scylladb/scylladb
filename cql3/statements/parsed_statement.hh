@@ -78,7 +78,7 @@ public:
 
     virtual std::unique_ptr<prepared> prepare(database& db) = 0;
 
-    virtual bool uses_function(sstring ks_name, sstring function_name) const {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const {
         return false;
     }
 };

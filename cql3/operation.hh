@@ -77,7 +77,7 @@ protected:
     { }
 
 public:
-    virtual bool uses_function(sstring ks_name, sstring function_name) const {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const {
         return _t && _t->uses_function(ks_name, function_name);
     }
 

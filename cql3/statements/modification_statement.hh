@@ -128,7 +128,7 @@ public:
         , _column_operations{}
     { }
 
-    virtual bool uses_function(sstring ks_name, sstring function_name) const override {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         if (attrs->uses_function(ks_name, function_name)) {
             return true;
         }

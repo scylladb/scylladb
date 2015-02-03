@@ -68,9 +68,9 @@ public:
             : _bind_index{bind_index}
         { }
 
-        virtual ::shared_ptr<term> prepare(sstring keyspace, ::shared_ptr<column_specification> receiver) override;
+        virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override;
 
-        virtual assignment_testable::test_result test_assignment(sstring keyspace, ::shared_ptr<column_specification> receiver) override {
+        virtual assignment_testable::test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
             return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
         }
 
@@ -97,7 +97,7 @@ public:
             return ::make_shared<column_specification>(receiver->ks_name, receiver->cf_name, in_name, db::marshal::list_type::get_instance(receiver->type, false));
         }
 
-        virtual ::shared_ptr<term> prepare(sstring keyspace, ::shared_ptr<column_specification> receiver) override;
+        virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override;
     };
 };
 

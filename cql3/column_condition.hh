@@ -106,7 +106,7 @@ public:
     }
 #endif
 
-    bool uses_function(sstring ks_name, sstring function_name) const {
+    bool uses_function(const sstring& ks_name, const sstring& function_name) const {
         throw std::runtime_error("not implemented");
 #if 0
         if (collectionElement != null && collectionElement.usesFunction(ksName, functionName))

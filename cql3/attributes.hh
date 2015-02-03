@@ -53,7 +53,7 @@ private:
     { }
 
 public:
-    bool uses_function(sstring ks_name, sstring function_name) const {
+    bool uses_function(const sstring& ks_name, const sstring& function_name) const {
         return (_timestamp && _timestamp.value()->uses_function(ks_name, function_name))
             || (_time_to_live && _time_to_live.value()->uses_function(ks_name, function_name));
     }
@@ -126,18 +126,18 @@ public:
         ::shared_ptr<term::raw> timestamp;
         ::shared_ptr<term::raw> time_to_live;
 
-        std::unique_ptr<attributes> prepare(sstring ks_name, sstring cf_name) {
+        std::unique_ptr<attributes> prepare(const sstring& ks_name, const sstring& cf_name) {
             auto ts = !timestamp ? ::shared_ptr<term>{} : timestamp->prepare(ks_name, timestamp_receiver(ks_name, cf_name));
             auto ttl = !time_to_live ? ::shared_ptr<term>{} : time_to_live->prepare(ks_name, time_to_live_receiver(ks_name, cf_name));
             return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl)}};
         }
 
     private:
-        ::shared_ptr<column_specification> timestamp_receiver(const sstring ks_name, sstring cf_name) {
+        ::shared_ptr<column_specification> timestamp_receiver(const sstring& ks_name, const sstring& cf_name) {
             return ::make_shared<column_specification>(ks_name, cf_name, ::make_shared<column_identifier>("[timestamp]", true), data_type_for<int64_t>());
         }
 
-        ::shared_ptr<column_specification> time_to_live_receiver(sstring ks_name, sstring cf_name) {
+        ::shared_ptr<column_specification> time_to_live_receiver(const sstring& ks_name, const sstring& cf_name) {
             return ::make_shared<column_specification>(ks_name, cf_name, ::make_shared<column_identifier>("[ttl]", true), data_type_for<int32_t>());
         }
     };

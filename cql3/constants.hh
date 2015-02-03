@@ -142,7 +142,7 @@ public:
             return ::make_shared<literal>(type::HEX, text);
         }
 
-        virtual ::shared_ptr<term> prepare(sstring keyspace, ::shared_ptr<column_specification> receiver) override {
+        virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
             throw std::runtime_error("not implemented");
 #if 0
             if (!testAssignment(keyspace, receiver).isAssignable())
@@ -177,7 +177,7 @@ public:
         }
 #endif
 
-        virtual assignment_testable::test_result test_assignment(sstring keyspace, ::shared_ptr<column_specification> receiver) override {
+        virtual assignment_testable::test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
             throw new std::runtime_error("not implemented");
 #if 0
             CQL3Type receiverType = receiver.type.asCQL3Type();

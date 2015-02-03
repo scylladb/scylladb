@@ -83,7 +83,7 @@ public:
      */
     virtual bool contains_bind_marker() const = 0;
 
-    virtual bool uses_function(sstring ks_name, sstring function_name) const = 0;
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
 
     /**
      * A parsed, non prepared (thus untyped) term.
@@ -106,14 +106,14 @@ public:
          * case this RawTerm describe a list index or a map key, etc...
          * @return the prepared term.
          */
-        virtual ::shared_ptr<term> prepare(sstring keyspace, ::shared_ptr<column_specification> receiver) = 0;
+        virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) = 0;
 
         virtual sstring to_string() = 0;
     };
 
     class multi_column_raw : public virtual raw {
     public:
-        virtual ::shared_ptr<term> prepare(sstring keyspace, const std::vector<column_specification>& receiver) = 0;
+        virtual ::shared_ptr<term> prepare(const sstring& keyspace, const std::vector<column_specification>& receiver) = 0;
     };
 };
 
@@ -140,7 +140,7 @@ public:
             return this->shared_from_this();
         }
 
-        virtual bool uses_function(sstring ks_name, sstring function_name) const override {
+        virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
             return false;
         }
 
@@ -183,7 +183,7 @@ public:
      */
     class non_terminal : public term {
     public:
-        virtual bool uses_function(sstring ks_name, sstring function_name) const override {
+        virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
             return false;
         }
 

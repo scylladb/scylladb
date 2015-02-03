@@ -49,7 +49,7 @@ public:
         return std::make_unique<parsed_statement::prepared>(this->shared_from_this());
     }
 
-    virtual bool uses_function(sstring ks_name, sstring function_name) const override {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return parsed_statement::uses_function(ks_name, function_name);
     }
 
