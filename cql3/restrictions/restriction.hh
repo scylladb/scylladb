@@ -65,7 +65,7 @@ public:
      */
     virtual bool has_bound(statements::bound b) = 0;
 
-    virtual std::vector<bytes> bounds(statements::bound b, const query_options& options) = 0;
+    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) = 0;
 
     /**
      * Checks if the specified bound is inclusive or not.
