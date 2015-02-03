@@ -41,7 +41,7 @@ void delete_statement::add_update_for_key(api::mutation& m, const api::clusterin
             if (!deletion->column.is_static()) {
                 throw exceptions::invalid_request_exception(sprint(
                     "Primary key column '%s' must be specified in order to delete column '%s'",
-                    get_first_empty_key()->name, deletion->column.name));
+                    get_first_empty_key()->name_as_text(), deletion->column.name_as_text()));
             }
         }
     }

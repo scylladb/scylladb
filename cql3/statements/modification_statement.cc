@@ -165,16 +165,16 @@ modification_statement::create_clustering_prefix_internal(const query_options& o
             // Those tables don't have clustering columns so we wouldn't reach this code, thus
             // the check seems redundant.
             if (require_full_clustering_key() && !s->is_dense()) {
-                throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name));
+                throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
             }
         } else if (first_empty_key) {
-            throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s since %s is set", first_empty_key->name, def.name));
+            throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s since %s is set", first_empty_key->name_as_text(), def.name_as_text()));
         } else {
             auto values = r->values(options);
             assert(values.size() == 1);
             auto val = values[0];
             if (!val) {
-                throw exceptions::invalid_request_exception(sprint("Invalid null value for clustering key part %s", def.name));
+                throw exceptions::invalid_request_exception(sprint("Invalid null value for clustering key part %s", def.name_as_text()));
             }
             components.push_back(val);
         }
@@ -208,7 +208,7 @@ modification_statement::create_clustering_prefix(const query_options& options) {
                 if (_processed_keys.count(&def)) {
                     throw exceptions::invalid_request_exception(sprint(
                             "Invalid restriction on clustering column %s since the %s statement modifies only static columns",
-                            def.name, type));
+                            def.name_as_text(), type));
                 }
             }
 
@@ -230,7 +230,7 @@ modification_statement::build_partition_keys(const query_options& options) {
     for (auto& def : s->partition_key) {
         auto r = _processed_keys[&def];
         if (!r) {
-            throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name));
+            throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
         }
 
         auto values = r->values(options);
@@ -239,7 +239,7 @@ modification_statement::build_partition_keys(const query_options& options) {
             if (values.size() == 1) {
                 auto val = values[0];
                 if (!val) {
-                    throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name));
+                    throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
                 }
                 components.push_back(val);
                 api::partition_key key = serialize_value(*s->partition_key_type, components);
@@ -248,7 +248,7 @@ modification_statement::build_partition_keys(const query_options& options) {
             } else {
                 for (auto&& val : values) {
                     if (!val) {
-                        throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name));
+                        throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
                     }
                     std::vector<bytes_opt> full_components;
                     full_components.reserve(components.size() + 1);
@@ -265,7 +265,7 @@ modification_statement::build_partition_keys(const query_options& options) {
             }
             auto val = values[0];
             if (!val) {
-                throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name));
+                throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
             }
             components.push_back(val);
         }

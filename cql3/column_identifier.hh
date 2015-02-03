@@ -89,6 +89,10 @@ public:
         return bytes_ == other.bytes_;
     }
 
+    const sstring& text() const {
+        return _text;
+    }
+
     sstring to_string() const {
         return _text;
     }
