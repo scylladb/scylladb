@@ -108,6 +108,15 @@ public:
         // If we're byte order comparable, then we must also be byte order equal.
         return is_byte_order_comparable();
     }
+    virtual sstring get_string(const bytes& b) {
+        validate(b);
+        return to_string(b);
+    }
+    virtual sstring to_string(const bytes& b) {
+        throw std::runtime_error("not implemented");
+    }
+    virtual bool is_counter() { return false; }
+    virtual bool is_collection() { return false; }
 protected:
     template <typename T, typename Compare = std::less<T>>
     bool default_less(const bytes& b1, const bytes& b2, Compare compare = Compare());
