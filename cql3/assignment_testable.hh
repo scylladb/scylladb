@@ -33,6 +33,8 @@ namespace cql3 {
 
 class assignment_testable {
 public:
+    virtual ~assignment_testable() {}
+
     enum class test_result {
         EXACT_MATCH,
         WEAKLY_ASSIGNABLE,

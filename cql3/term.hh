@@ -47,6 +47,8 @@ using bytes_opt = std::experimental::optional<bytes>;
  */
 class term {
 public:
+    virtual ~term() {}
+
     /**
      * Collects the column specification for the bind variables in this Term.
      * This is obviously a no-op if the term is Terminal.
@@ -167,6 +169,7 @@ public:
 
     class collection_terminal {
     public:
+        virtual ~collection_terminal() {}
         /** Gets the value of the collection when serialized with the given protocol version format */
         virtual bytes get_with_protocol_version(int protocol_version) = 0;
     };

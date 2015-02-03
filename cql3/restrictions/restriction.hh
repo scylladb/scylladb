@@ -40,6 +40,7 @@ namespace restrictions {
  */
 class restriction {
 public:
+    virtual ~restriction() {}
     virtual bool is_on_token() = 0;
     virtual bool is_slice() = 0;
     virtual bool is_EQ() = 0;
