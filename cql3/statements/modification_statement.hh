@@ -35,7 +35,6 @@
 #include "cql3/operation.hh"
 #include "cql3/relation.hh"
 
-#include "db/column_family.hh"
 #include "db/consistency_level.hh"
 
 #include "core/shared_ptr.hh"
