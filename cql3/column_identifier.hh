@@ -194,13 +194,11 @@ public:
             ColumnIdentifier.Raw that = (ColumnIdentifier.Raw)o;
             return text.equals(that.text);
         }
-
-        @Override
-        public String toString()
-        {
-            return text;
-        }
 #endif
+
+        virtual sstring to_string() const {
+            return _text;
+        }
     };
 };
 

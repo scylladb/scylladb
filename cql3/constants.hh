@@ -252,13 +252,9 @@ public:
 #endif
         }
 
-#if 0
-        @Override
-        public String toString()
-        {
-            return type == Type.STRING ? String.format("'%s'", text) : text;
+        virtual sstring to_string() override {
+            return _type == type::STRING ? sstring(sprint("'%s'", _text)) : _text;
         }
-#endif
     };
 
 #if 0

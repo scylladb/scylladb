@@ -107,6 +107,8 @@ public:
          * @return the prepared term.
          */
         virtual ::shared_ptr<term> prepare(sstring keyspace, ::shared_ptr<column_specification> receiver) = 0;
+
+        virtual sstring to_string() = 0;
     };
 
     class multi_column_raw : public virtual raw {
