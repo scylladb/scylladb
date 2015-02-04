@@ -136,6 +136,36 @@ update_statement::parsed_insert::prepare_internal(schema_ptr schema,
     return stmt;
 }
 
+::shared_ptr<modification_statement>
+update_statement::parsed_update::prepare_internal(schema_ptr schema,
+    ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs)
+{
+    auto stmt = ::make_shared<update_statement>(statement_type::UPDATE, bound_names->size(), schema, std::move(attrs));
+
+    for (auto&& entry : _updates) {
+        auto id = entry.first->prepare_column_identifier(schema);
+        auto def = get_column_definition(schema, *id);
+        if (!def) {
+            throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *entry.first));
+        }
+
+        auto operation = entry.second->prepare(keyspace(), *def);
+        operation->collect_marker_specification(bound_names);
+
+        switch (def->kind) {
+            case column_definition::column_kind::PARTITION:
+            case column_definition::column_kind::CLUSTERING:
+                throw exceptions::invalid_request_exception(sprint("PRIMARY KEY part %s found in SET part", *entry.first));
+            default:
+                stmt->add_operation(std::move(operation));
+                break;
+        }
+    }
+
+    stmt->process_where_clause(_where_clause, bound_names);
+    return stmt;
+}
+
 }
 
 }

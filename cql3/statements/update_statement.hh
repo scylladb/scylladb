@@ -89,7 +89,7 @@ private:
          * @param columnValues list of column values (corresponds to names)
          * @param attrs additional attributes for statement (CL, timestamp, timeToLive)
          */
-        parsed_insert(std::experimental::optional<cf_name>&& name,
+        parsed_insert(std::experimental::optional<cf_name> name,
                       ::shared_ptr<attributes::raw> attrs,
                       std::vector<::shared_ptr<column_identifier::raw>> column_names,
                       std::vector<::shared_ptr<term::raw>> column_values,
@@ -104,13 +104,12 @@ private:
 
     };
 
-#if 0
-    public static class ParsedUpdate extends ModificationStatement.Parsed
-    {
+    class parsed_update : public modification_statement::parsed {
+    private:
         // Provided for an UPDATE
-        private final List<Pair<ColumnIdentifier.Raw, Operation.RawUpdate>> updates;
-        private final List<Relation> whereClause;
-
+        std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> _updates;
+        std::vector<relation_ptr> _where_clause;
+    public:
         /**
          * Creates a new UpdateStatement from a column family name, columns map, consistency
          * level, and key term.
@@ -120,46 +119,19 @@ private:
          * @param updates a map of column operations to perform
          * @param whereClause the where clause
          */
-        public ParsedUpdate(CFName name,
-                            Attributes.Raw attrs,
-                            List<Pair<ColumnIdentifier.Raw, Operation.RawUpdate>> updates,
-                            List<Relation> whereClause,
-                            List<Pair<ColumnIdentifier.Raw, ColumnCondition.Raw>> conditions)
-        {
-            super(name, attrs, conditions, false, false);
-            this.updates = updates;
-            this.whereClause = whereClause;
-        }
-
-        protected ModificationStatement prepareInternal(CFMetaData cfm, VariableSpecifications boundNames, Attributes attrs) throws InvalidRequestException
-        {
-            UpdateStatement stmt = new UpdateStatement(ModificationStatement.StatementType.UPDATE, boundNames.size(), cfm, attrs);
-
-            for (Pair<ColumnIdentifier.Raw, Operation.RawUpdate> entry : updates)
-            {
-                ColumnDefinition def = cfm.getColumnDefinition(entry.left.prepare(cfm));
-                if (def == null)
-                    throw new InvalidRequestException(String.format("Unknown identifier %s", entry.left));
-
-                Operation operation = entry.right.prepare(keyspace(), def);
-                operation.collectMarkerSpecification(boundNames);
-
-                switch (def.kind)
-                {
-                    case PARTITION_KEY:
-                    case CLUSTERING_COLUMN:
-                        throw new InvalidRequestException(String.format("PRIMARY KEY part %s found in SET part", entry.left));
-                    default:
-                        stmt.addOperation(operation);
-                        break;
-                }
-            }
-
-            stmt.processWhereClause(whereClause, boundNames);
-            return stmt;
-        }
-    }
-#endif
+        parsed_update(std::experimental::optional<cf_name> name,
+            ::shared_ptr<attributes::raw> attrs,
+            std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
+            std::vector<relation_ptr> where_clause,
+            std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<column_condition::raw>>> conditions)
+                : modification_statement::parsed(std::move(name), std::move(attrs), std::move(conditions), false, false)
+                , _updates(std::move(updates))
+                , _where_clause(std::move(where_clause))
+        { }
+    protected:
+        virtual ::shared_ptr<modification_statement> prepare_internal(schema_ptr schema,
+                    ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs);
+    };
 };
 
 }
