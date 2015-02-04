@@ -60,15 +60,16 @@ namespace statements {
  *
  */
 class update_statement : public modification_statement {
-private:
+public:
 #if 0
     private static final Constants.Value EMPTY = new Constants.Value(ByteBufferUtil.EMPTY_BYTE_BUFFER);
 #endif
 
-    update_statement(statement_type type, int32_t bound_terms, schema_ptr s, std::unique_ptr<attributes>&& attrs)
+    update_statement(statement_type type, int32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs)
         : modification_statement{type, bound_terms, std::move(s), std::move(attrs)}
     { }
 
+private:
     virtual bool require_full_clustering_key() const override {
         return true;
     }
@@ -97,53 +98,10 @@ private:
             , _column_names{column_names}
             , _column_values{column_values}
         { }
-#if 0
-        protected ModificationStatement prepareInternal(CFMetaData cfm, VariableSpecifications boundNames, Attributes attrs) throws InvalidRequestException
-        {
-            UpdateStatement stmt = new UpdateStatement(ModificationStatement.StatementType.INSERT,boundNames.size(), cfm, attrs);
 
-            // Created from an INSERT
-            if (stmt.isCounter())
-                throw new InvalidRequestException("INSERT statement are not allowed on counter tables, use UPDATE instead");
-            if (columnNames.size() != columnValues.size())
-                throw new InvalidRequestException("Unmatched column names/values");
-            if (columnNames.isEmpty())
-                throw new InvalidRequestException("No columns provided to INSERT");
+        virtual ::shared_ptr<modification_statement> prepare_internal(schema_ptr schema,
+                    ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs) override;
 
-            for (int i = 0; i < columnNames.size(); i++)
-            {
-                ColumnIdentifier id = columnNames.get(i).prepare(cfm);
-                ColumnDefinition def = cfm.getColumnDefinition(id);
-                if (def == null)
-                    throw new InvalidRequestException(String.format("Unknown identifier %s", id));
-
-                for (int j = 0; j < i; j++)
-                {
-                    ColumnIdentifier otherId = columnNames.get(j).prepare(cfm);
-                    if (id.equals(otherId))
-                        throw new InvalidRequestException(String.format("Multiple definitions found for column %s", id));
-                }
-
-                Term.Raw value = columnValues.get(i);
-
-                switch (def.kind)
-                {
-                    case PARTITION_KEY:
-                    case CLUSTERING_COLUMN:
-                        Term t = value.prepare(keyspace(), def);
-                        t.collectMarkerSpecification(boundNames);
-                        stmt.addKeyValue(def, t);
-                        break;
-                    default:
-                        Operation operation = new Operation.SetValue(value).prepare(keyspace(), def);
-                        operation.collectMarkerSpecification(boundNames);
-                        stmt.addOperation(operation);
-                        break;
-                }
-            }
-            return stmt;
-        }
-#endif
     };
 
 #if 0

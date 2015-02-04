@@ -23,6 +23,8 @@
  */
 
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/restrictions/single_column_restriction.hh"
+#include "cql3/single_column_relation.hh"
 #include "validation.hh"
 #include "core/shared_ptr.hh"
 
@@ -334,6 +336,55 @@ modification_statement::execute_with_condition(service::query_state& qs, const q
                                                queryState.getClientState());
         return new ResultMessage.Rows(buildCasResultSet(key, result, options));
 #endif
+}
+
+void
+modification_statement::add_key_values(column_definition& def, ::shared_ptr<restrictions::restriction> values) {
+    if (def.kind == column_definition::CLUSTERING) {
+        _has_no_clustering_columns = false;
+    }
+
+    auto insert_result = _processed_keys.insert({&def, values});
+    if (!insert_result.second) {
+        throw exceptions::invalid_request_exception(sprint("Multiple definitions found for PRIMARY KEY part %s", def.name_as_text()));
+    }
+}
+
+void
+modification_statement::add_key_value(column_definition& def, ::shared_ptr<term> value) {
+    add_key_values(def, ::make_shared<restrictions::single_column_restriction::EQ>(def, value));
+}
+
+void
+modification_statement::precess_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
+    for (auto&& relation : where_clause) {
+        if (relation->is_multi_column()) {
+            throw exceptions::invalid_request_exception(sprint("Multi-column relations cannot be used in WHERE clauses for UPDATE and DELETE statements: %s", relation->to_string()));
+        }
+
+        auto rel = dynamic_pointer_cast<single_column_relation>(relation);
+        if (rel->on_token()) {
+            throw exceptions::invalid_request_exception(sprint("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: %s", relation->to_string()));
+        }
+
+        auto id = rel->get_entity()->prepare_column_identifier(s);
+        auto def = get_column_definition(s, *id);
+        if (!def) {
+            throw exceptions::invalid_request_exception(sprint("Unknown key identifier %s", *id));
+        }
+
+        switch (def->kind) {
+            case column_definition::column_kind::PARTITION:
+            case column_definition::column_kind::CLUSTERING:
+                if (rel->is_EQ() || (def->is_partition_key() && rel->is_IN())) {
+                    add_key_values(*def, rel->to_restriction(s, std::move(names)));
+                    return;
+                }
+                throw exceptions::invalid_request_exception(sprint("Invalid operator %s for PRIMARY KEY part %s", rel->get_operator(), def->name_as_text()));
+            default:
+                throw exceptions::invalid_request_exception(sprint("Non PRIMARY KEY %s found in where clause", def->name_as_text()));
+        }
+    }
 }
 
 }

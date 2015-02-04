@@ -33,13 +33,16 @@
 #include "cql3/cql_statement.hh"
 #include "cql3/attributes.hh"
 #include "cql3/operation.hh"
+#include "cql3/relation.hh"
 
 #include "db/column_family.hh"
 #include "db/consistency_level.hh"
 
 #include "core/shared_ptr.hh"
 #include "core/future-util.hh"
+
 #include "unimplemented.hh"
+#include "validation.hh"
 #include "service/storage_proxy.hh"
 
 #include <memory>
@@ -213,16 +216,16 @@ public:
         throw std::runtime_error("not implemented");
     }
 
-#if 0
-    public void addOperation(Operation op)
-    {
-        if (op.column.isStatic())
-            setsStaticColumns = true;
-        else
-            setsRegularColumns = true;
-        columnOperations.add(op);
+    void add_operation(::shared_ptr<operation> op) {
+        if (op->column.is_static()) {
+            _sets_static_columns = true;
+        } else {
+            _sets_regular_columns = true;
+        }
+        _column_operations.push_back(std::move(op));
     }
 
+#if 0
     public Iterable<ColumnDefinition> getColumnsWithConditions()
     {
         if (ifNotExists || ifExists)
@@ -231,27 +234,17 @@ public:
         return Iterables.concat(columnConditions == null ? Collections.<ColumnDefinition>emptyList() : Iterables.transform(columnConditions, getColumnForCondition),
                                 staticConditions == null ? Collections.<ColumnDefinition>emptyList() : Iterables.transform(staticConditions, getColumnForCondition));
     }
-
-    public void addCondition(ColumnCondition cond)
-    {
-        List<ColumnCondition> conds = null;
-        if (cond.column.isStatic())
-        {
-            setsStaticColumns = true;
-            if (staticConditions == null)
-                staticConditions = new ArrayList<ColumnCondition>();
-            conds = staticConditions;
-        }
-        else
-        {
-            setsRegularColumns = true;
-            if (columnConditions == null)
-                columnConditions = new ArrayList<ColumnCondition>();
-            conds = columnConditions;
-        }
-        conds.add(cond);
-    }
 #endif
+public:
+    void add_condition(::shared_ptr<column_condition> cond) {
+        if (cond->column.is_static()) {
+            _sets_static_columns = true;
+            _static_conditions.emplace_back(std::move(cond));
+        } else {
+            _sets_regular_columns = true;
+            _column_conditions.emplace_back(std::move(cond));
+        }
+    }
 
     void set_if_not_exist_condition() {
         _if_not_exists = true;
@@ -269,63 +262,12 @@ public:
         return _if_exists;
     }
 
-#if 0
-    private void addKeyValues(ColumnDefinition def, Restriction values) throws InvalidRequestException
-    {
-        if (def.kind == ColumnDefinition.Kind.CLUSTERING_COLUMN)
-            hasNoClusteringColumns = false;
-        if (processedKeys.put(def.name, values) != null)
-            throw new InvalidRequestException(String.format("Multiple definitions found for PRIMARY KEY part %s", def.name));
-    }
+private:
+    void add_key_values(column_definition& def, ::shared_ptr<restrictions::restriction> values);
 
-    public void addKeyValue(ColumnDefinition def, Term value) throws InvalidRequestException
-    {
-        addKeyValues(def, new SingleColumnRestriction.EQ(def, value));
-    }
-
-    public void processWhereClause(List<Relation> whereClause, VariableSpecifications names) throws InvalidRequestException
-    {
-        for (Relation relation : whereClause)
-        {
-            if (relation.isMultiColumn())
-            {
-                throw new InvalidRequestException(
-                        String.format("Multi-column relations cannot be used in WHERE clauses for UPDATE and DELETE statements: %s", relation));
-            }
-            SingleColumnRelation rel = (SingleColumnRelation) relation;
-
-            if (rel.onToken())
-                throw new InvalidRequestException(String.format("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: %s", relation));
-
-            ColumnIdentifier id = rel.getEntity().prepare(cfm);
-            ColumnDefinition def = cfm.getColumnDefinition(id);
-            if (def == null)
-                throw new InvalidRequestException(String.format("Unknown key identifier %s", id));
-
-            switch (def.kind)
-            {
-                case PARTITION_KEY:
-                case CLUSTERING_COLUMN:
-                    Restriction restriction;
-
-                    if (rel.isEQ() || (def.isPartitionKey() && rel.isIN()))
-                    {
-                        restriction = rel.toRestriction(cfm, names);
-                    }
-                    else
-                    {
-                        throw new InvalidRequestException(String.format("Invalid operator %s for PRIMARY KEY part %s", rel.operator(), def.name));
-                    }
-
-                    addKeyValues(def, restriction);
-                    break;
-                default:
-                    throw new InvalidRequestException(String.format("Non PRIMARY KEY %s found in where clause", def.name));
-            }
-        }
-    }
-#endif
-
+public:
+    void add_key_value(column_definition& def, ::shared_ptr<term> value);
+    void precess_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
     std::vector<api::partition_key> build_partition_keys(const query_options& options);
 
 private:
@@ -525,7 +467,7 @@ public:
         const bool _if_not_exists;
         const bool _if_exists;
     protected:
-        parsed(std::experimental::optional<cf_name>&& name, ::shared_ptr<attributes::raw> attrs, const conditions_vector& conditions, bool if_not_exists, bool if_exists)
+        parsed(std::experimental::optional<cf_name> name, ::shared_ptr<attributes::raw> attrs, const conditions_vector& conditions, bool if_not_exists, bool if_exists)
             : cf_statement{std::move(name)}
             , _attrs{attrs}
             , _conditions{conditions}
@@ -533,76 +475,66 @@ public:
             , _if_exists{if_exists}
         { }
 
-#if 0
-        public ParsedStatement.Prepared prepare() throws InvalidRequestException
-        {
-            VariableSpecifications boundNames = getBoundVariables();
-            ModificationStatement statement = prepare(boundNames);
-            return new ParsedStatement.Prepared(statement, boundNames);
+    public:
+        std::unique_ptr<parsed_statement::prepared> prepare(database& db) override {
+            auto bound_names = get_bound_variables();
+            auto statement = prepare(db, bound_names);
+            return std::make_unique<parsed_statement::prepared>(std::move(statement), *bound_names);
         }
 
-        public ModificationStatement prepare(VariableSpecifications boundNames) throws InvalidRequestException
-        {
-            CFMetaData metadata = ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
+        ::shared_ptr<modification_statement> prepare(database& db, ::shared_ptr<variable_specifications> bound_names) {
+            schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
 
-            Attributes preparedAttributes = attrs.prepare(keyspace(), columnFamily());
-            preparedAttributes.collectMarkerSpecification(boundNames);
+            auto prepared_attributes = _attrs->prepare(keyspace(), column_family());
+            prepared_attributes->collect_marker_specification(bound_names);
 
-            ModificationStatement stmt = prepareInternal(metadata, boundNames, preparedAttributes);
+            ::shared_ptr<modification_statement> stmt = prepare_internal(schema, bound_names, std::move(prepared_attributes));
 
-            if (ifNotExists || ifExists || !conditions.isEmpty())
-            {
-                if (stmt.isCounter())
-                    throw new InvalidRequestException("Conditional updates are not supported on counter tables");
+            if (_if_not_exists || _if_exists || !_conditions.empty()) {
+                if (stmt->is_counter()) {
+                    throw exceptions::invalid_request_exception("Conditional updates are not supported on counter tables");
+                }
+                if (_attrs->timestamp) {
+                    throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional updates");
+                }
 
-                if (attrs.timestamp != null)
-                    throw new InvalidRequestException("Cannot provide custom timestamp for conditional updates");
-
-                if (ifNotExists)
-                {
+                if (_if_not_exists) {
                     // To have both 'IF NOT EXISTS' and some other conditions doesn't make sense.
                     // So far this is enforced by the parser, but let's assert it for sanity if ever the parse changes.
-                    assert conditions.isEmpty();
-                    assert !ifExists;
-                    stmt.setIfNotExistCondition();
-                }
-                else if (ifExists)
-                {
-                    assert conditions.isEmpty();
-                    assert !ifNotExists;
-                    stmt.setIfExistCondition();
-                }
-                else
-                {
-                    for (Pair<ColumnIdentifier.Raw, ColumnCondition.Raw> entry : conditions)
-                    {
-                        ColumnIdentifier id = entry.left.prepare(metadata);
-                        ColumnDefinition def = metadata.getColumnDefinition(id);
-                        if (def == null)
-                            throw new InvalidRequestException(String.format("Unknown identifier %s", id));
+                    assert(_conditions.empty());
+                    assert(!_if_exists);
+                    stmt->set_if_not_exist_condition();
+                } else if (_if_exists) {
+                    assert(_conditions.empty());
+                    assert(!_if_not_exists);
+                    stmt->set_if_exist_condition();
+                } else {
+                    for (auto&& entry : _conditions) {
+                        auto id = entry.first->prepare_column_identifier(schema);
+                        column_definition* def = get_column_definition(schema, *id);
+                        if (!def) {
+                            throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *id));
+                        }
 
-                        ColumnCondition condition = entry.right.prepare(keyspace(), def);
-                        condition.collectMarkerSpecification(boundNames);
+                        auto condition = entry.second->prepare(keyspace(), *def);
+                        condition->collect_marker_specificaton(bound_names);
 
-                        switch (def.kind)
-                        {
-                            case PARTITION_KEY:
-                            case CLUSTERING_COLUMN:
-                                throw new InvalidRequestException(String.format("PRIMARY KEY column '%s' cannot have IF conditions", id));
+                        switch (def->kind) {
+                            case column_definition::PARTITION:
+                            case column_definition::CLUSTERING:
+                                throw exceptions::invalid_request_exception(sprint("PRIMARY KEY column '%s' cannot have IF conditions", *id));
                             default:
-                                stmt.addCondition(condition);
-                                break;
+                                stmt->add_condition(condition);
                         }
                     }
                 }
-
-                stmt.validateWhereClauseForConditions();
+                stmt->validate_where_clause_for_conditions();
             }
             return stmt;
-        }
-
-        protected abstract ModificationStatement prepareInternal(CFMetaData cfm, VariableSpecifications boundNames, Attributes attrs) throws InvalidRequestException;
-#endif
+        };
+    protected:
+        virtual ::shared_ptr<modification_statement> prepare_internal(schema_ptr schema,
+            ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs) = 0;
     };
 };
 
