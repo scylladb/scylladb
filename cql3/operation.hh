@@ -71,12 +71,12 @@ protected:
     // may require none of more than one term, but most need 1 so it simplify things a bit.
     const ::shared_ptr<term> _t;
 
+public:
     operation(column_definition& column_, ::shared_ptr<term> t)
         : column{column_}
         , _t{t}
     { }
 
-public:
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const {
         return _t && _t->uses_function(ks_name, function_name);
     }
