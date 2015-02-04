@@ -266,7 +266,7 @@ private:
 
 public:
     void add_key_value(column_definition& def, ::shared_ptr<term> value);
-    void precess_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
+    void process_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
     std::vector<api::partition_key> build_partition_keys(const query_options& options);
 
 private:

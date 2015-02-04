@@ -356,7 +356,7 @@ modification_statement::add_key_value(column_definition& def, ::shared_ptr<term>
 }
 
 void
-modification_statement::precess_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
+modification_statement::process_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
     for (auto&& relation : where_clause) {
         if (relation->is_multi_column()) {
             throw exceptions::invalid_request_exception(sprint("Multi-column relations cannot be used in WHERE clauses for UPDATE and DELETE statements: %s", relation->to_string()));
