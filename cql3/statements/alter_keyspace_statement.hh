@@ -60,7 +60,7 @@ public:
         , _attrs{std::move(attrs)}
     { }
 
-    virtual sstring keyspace() const override {
+    virtual const sstring& keyspace() const override {
         return _name;
     }
 
