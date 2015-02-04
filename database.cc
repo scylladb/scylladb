@@ -6,6 +6,8 @@
 #include "database.hh"
 #include "core/future-util.hh"
 
+#include "cql3/column_identifier.hh"
+
 thread_local logging::logger dblog("database");
 
 partition::partition(column_family& cf)
@@ -20,6 +22,12 @@ get_column_types(const Sequence& column_definitions) {
         result.push_back(col.type);
     }
     return result;
+}
+
+::shared_ptr<cql3::column_specification>
+schema::make_column_specification(column_definition& def) {
+    auto id = ::make_shared<cql3::column_identifier>(def.name(), column_name_type(def));
+    return ::make_shared<cql3::column_specification>(ks_name, cf_name, std::move(id), def.type);
 }
 
 void

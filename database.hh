@@ -26,6 +26,7 @@
 #include "types.hh"
 #include "tuple.hh"
 #include "core/future.hh"
+#include "cql3/column_specification.hh"
 
 struct row;
 struct paritition;
@@ -53,6 +54,7 @@ public:
     data_type type;
     column_id id; // unique within (kind, schema instance)
     column_kind kind;
+    ::shared_ptr<cql3::column_specification> column_specification;
     bool is_static() const { return kind == column_kind::STATIC; }
     const sstring& name_as_text() const;
     const bytes& name() const;

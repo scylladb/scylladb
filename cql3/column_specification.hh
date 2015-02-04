@@ -25,13 +25,15 @@
 #ifndef CQL3_COLUMN_SPECIFICATION_HH
 #define CQL3_COLUMN_SPECIFICATION_HH
 
-#include "cql3/column_identifier.hh"
 #include "db/marshal/reversed_type.hh"
-#include "database.hh"
+#include "types.hh"
 
 namespace cql3 {
 
-class column_specification {
+class column_specification;
+class column_identifier;
+
+class column_specification final {
 public:
     const sstring ks_name;
     const sstring cf_name;
