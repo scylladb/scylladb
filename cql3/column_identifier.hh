@@ -75,19 +75,15 @@ public:
         bytes_ = to_bytes(_text);
     }
 
-#if 0
-    public ColumnIdentifier(ByteBuffer bytes, AbstractType<?> type)
-    {
-        this.bytes = bytes;
-        this.text = type.getString(bytes);
-    }
+    column_identifier(bytes bytes_, shared_ptr<abstract_type> type)
+        : bytes_(std::move(bytes_))
+        , _text(type->get_string(this->bytes_))
+    { }
 
-    public ColumnIdentifier(ByteBuffer bytes, String text)
-    {
-        this.bytes = bytes;
-        this.text = text;
-    }
-#endif
+    column_identifier(bytes bytes_, sstring text)
+        : bytes_(std::move(bytes_))
+        , _text(text)
+    { }
 
     bool operator==(const column_identifier& other) const {
         return bytes_ == other.bytes_;
