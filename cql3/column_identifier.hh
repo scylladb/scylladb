@@ -68,7 +68,7 @@ private:
 #endif
 public:
     column_identifier(sstring raw_text, bool keep_case) {
-        _text = raw_text;
+        _text = std::move(raw_text);
         if (!keep_case) {
             std::transform(_text.begin(), _text.end(), _text.begin(), ::tolower);
         }
