@@ -115,6 +115,9 @@ public:
     virtual sstring to_string(const bytes& b) {
         throw std::runtime_error("not implemented");
     }
+    virtual bytes from_string(const sstring& text) {
+        throw std::runtime_error("not implemented");
+    }
     virtual bool is_counter() { return false; }
     virtual bool is_collection() { return false; }
 protected:
