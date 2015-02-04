@@ -56,6 +56,7 @@ public:
     column_kind kind;
     ::shared_ptr<cql3::column_specification> column_specification;
     bool is_static() const { return kind == column_kind::STATIC; }
+    bool is_partition_key() const { return kind == column_kind::PARTITION; }
     const sstring& name_as_text() const;
     const bytes& name() const;
 };
