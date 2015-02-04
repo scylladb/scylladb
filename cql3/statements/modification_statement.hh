@@ -476,7 +476,7 @@ public:
         { }
 
     public:
-        std::unique_ptr<parsed_statement::prepared> prepare(database& db);
+        virtual std::unique_ptr<parsed_statement::prepared> prepare(database& db) override;
         ::shared_ptr<modification_statement> prepare(database& db, ::shared_ptr<variable_specifications> bound_names);;
     protected:
         virtual ::shared_ptr<modification_statement> prepare_internal(schema_ptr schema,
