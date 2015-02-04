@@ -25,7 +25,7 @@
 #ifndef DB_MARSHAL_REVERSED_TYPE_HH
 #define DB_MARSHAL_REVERSED_TYPE_HH
 
-#include "database.hh"
+#include "types.hh"
 
 namespace db {
 
