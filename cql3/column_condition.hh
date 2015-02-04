@@ -780,9 +780,11 @@ public:
         {
             return new Raw(null, null, inMarker, collectionElement, Operator.IN);
         }
-
-        public ColumnCondition prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException
-        {
+#endif
+    public:
+        ::shared_ptr<column_condition> prepare(const sstring& keyspace, column_definition& receiver) {
+            throw std::runtime_error("not implemented");
+#if 0
             if (receiver.type instanceof CounterColumnType)
                 throw new InvalidRequestException("Conditions on counters are not supported");
 
@@ -835,8 +837,8 @@ public:
             {
                 return ColumnCondition.condition(receiver, collectionElement.prepare(keyspace, elementSpec), value.prepare(keyspace, valueSpec), operator);
             }
-        }
 #endif
+        }
     };
 };
 
