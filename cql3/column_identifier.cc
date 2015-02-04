@@ -6,24 +6,22 @@
 
 namespace cql3 {
 
-::shared_ptr<column_identifier> prepare_column_identifier(schema_ptr s) {
-#if 0
-            AbstractType<?> comparator = cfm.comparator.asAbstractType();
-            if (cfm.getIsDense() || comparator instanceof CompositeType || comparator instanceof UTF8Type)
-                return new ColumnIdentifier(text, true);
+::shared_ptr<column_identifier>
+column_identifier::raw::prepare_column_identifier(schema_ptr schema) {
+    if (schema->regular_column_name_type == utf8_type) {
+        return ::make_shared<column_identifier>(_text, true);
+    }
 
-            // We have a Thrift-created table with a non-text comparator.  We need to parse column names with the comparator
-            // to get the correct ByteBuffer representation.  However, this doesn't apply to key aliases, so we need to
-            // make a special check for those and treat them normally.  See CASSANDRA-8178.
-            ByteBuffer bufferName = ByteBufferUtil.bytes(text);
-            for (ColumnDefinition def : cfm.partitionKeyColumns())
-            {
-                if (def.name.bytes.equals(bufferName))
-                    return new ColumnIdentifier(text, true);
-            }
-            return new ColumnIdentifier(comparator.fromString(rawText), text);
-#endif
-    throw std::runtime_error("not implemented");
+    // We have a Thrift-created table with a non-text comparator.  We need to parse column names with the comparator
+    // to get the correct ByteBuffer representation.  However, this doesn't apply to key aliases, so we need to
+    // make a special check for those and treat them normally.  See CASSANDRA-8178.
+    auto text_bytes = to_bytes(_text);
+    auto def = schema->get_column_definition(text_bytes);
+    if (def) {
+        return ::make_shared<column_identifier>(std::move(text_bytes), _text);
+    }
+
+    return ::make_shared<column_identifier>(schema->regular_column_name_type->from_string(_raw_text), _text);
 }
 
 std::ostream& operator<<(std::ostream& out, const column_identifier::raw& id) {
