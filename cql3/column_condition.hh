@@ -121,15 +121,16 @@ public:
 #endif
     }
 
-#if 0
+public:
     /**
      * Collects the column specification for the bind variables of this operation.
      *
      * @param boundNames the list of column specification where to collect the
      * bind variables of this term in.
      */
-    public void collectMarkerSpecification(VariableSpecifications boundNames)
-    {
+    void collect_marker_specificaton(::shared_ptr<variable_specifications> bound_names) {
+        throw std::runtime_error("not found");
+#if 0
         if (collectionElement != null)
             collectionElement.collectMarkerSpecification(boundNames);
 
@@ -142,8 +143,10 @@ public:
         {
             value.collectMarkerSpecification(boundNames);
         }
+#endif
     }
 
+#if 0
     public ColumnCondition.Bound bind(QueryOptions options) throws InvalidRequestException
     {
         boolean isInCondition = operator == Operator.IN;
