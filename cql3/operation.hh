@@ -170,51 +170,9 @@ public:
         virtual ::shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) = 0;
     };
 
+    class set_value;
+
 #if 0
-    public static class SetValue implements RawUpdate
-    {
-        private final Term.Raw value;
-
-        public SetValue(Term.Raw value)
-        {
-            this.value = value;
-        }
-
-        public Operation prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException
-        {
-            Term v = value.prepare(keyspace, receiver);
-
-            if (receiver.type instanceof CounterColumnType)
-                throw new InvalidRequestException(String.format("Cannot set the value of counter column %s (counters can only be incremented/decremented, not set)", receiver.name));
-
-            if (!(receiver.type.isCollection()))
-                return new Constants.Setter(receiver, v);
-
-            switch (((CollectionType)receiver.type).kind)
-            {
-                case LIST:
-                    return new Lists.Setter(receiver, v);
-                case SET:
-                    return new Sets.Setter(receiver, v);
-                case MAP:
-                    return new Maps.Setter(receiver, v);
-            }
-            throw new AssertionError();
-        }
-
-        protected String toString(ColumnSpecification column)
-        {
-            return String.format("%s = %s", column, value);
-        }
-
-        public boolean isCompatibleWith(RawUpdate other)
-        {
-            // We don't allow setting multiple time the same column, because 1)
-            // it's stupid and 2) the result would seem random to the user.
-            return false;
-        }
-    }
-
     public static class SetElement implements RawUpdate
     {
         private final Term.Raw selector;
