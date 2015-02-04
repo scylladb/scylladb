@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <iostream>
 
 namespace cql3 {
 
@@ -137,7 +138,7 @@ public:
      * once the comparator is known with prepare(). This should only be used with identifiers that are actual
      * column names. See CASSANDRA-8178 for more background.
      */
-    class raw : public selectable::raw {
+    class raw final : public selectable::raw {
     private:
         const sstring _raw_text;
         sstring _text;
@@ -195,6 +196,7 @@ public:
         }
 
         friend std::hash<column_identifier::raw>;
+        friend std::ostream& operator<<(std::ostream& out, const column_identifier::raw& id);
     };
 };
 
