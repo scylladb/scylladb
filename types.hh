@@ -215,10 +215,11 @@ private:
 };
 
 inline int32_t compare_unsigned(const bytes& v1, const bytes& v2) {
-    if (v1.size() != v2.size()) {
-        return v1.size() < v2.size() ? -1 : 1;
+    auto n = memcmp(v1.begin(), v2.begin(), std::min(v1.size(), v2.size()));
+    if (n) {
+        return n;
     }
-    return memcmp(v1.begin(), v2.begin(), v1.size());
+    return (int32_t) (v1.size() - v2.size());
 }
 
 inline bool
