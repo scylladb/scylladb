@@ -51,6 +51,7 @@ public:
                 // Merge two segments, trim front of new segment
                 auto trim = seg_end - beg;
                 p.trim_front(trim);
+                p.linearize();
                 // Append new data to the old segment, keep the old segment
                 seg_pkt.append(std::move(p));
                 insert = false;
