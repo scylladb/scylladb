@@ -89,26 +89,23 @@ public:
         return false;
     }
 
-#if 0
     /**
      * Collects the column specification for the bind variables of this operation.
      *
-     * @param boundNames the list of column specification where to collect the
+     * @param bound_names the list of column specification where to collect the
      * bind variables of this term in.
      */
-    public void collectMarkerSpecification(VariableSpecifications boundNames)
-    {
-        if (t != null)
-            t.collectMarkerSpecification(boundNames);
+    virtual void collect_marker_specification(::shared_ptr<variable_specifications> bound_names) {
+        if (_t) {
+            _t->collect_marker_specification(bound_names);
+        }
     }
-#endif
 
     /**
      * Execute the operation.
      */
     virtual void execute(api::mutation& m, const api::clustering_prefix& row_key, const update_parameters& params) = 0;
 
-#if 0
     /**
      * A parsed raw UPDATE operation.
      *
@@ -118,8 +115,10 @@ public:
      *   - An addition/subtraction to a variable: c = c +/- v (where v can be a collection literal)
      *   - An prepend operation: c = v + c
      */
-    public interface RawUpdate
-    {
+    class raw_update {
+    public:
+        virtual ~raw_update() {}
+
         /**
          * This method validates the operation (i.e. validate it is well typed)
          * based on the specification of the receiver of the operation.
@@ -132,14 +131,14 @@ public:
          * be a true column.
          * @return the prepared update operation.
          */
-        public Operation prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException;
+        virtual ::shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) = 0;
 
         /**
          * @return whether this operation can be applied alongside the {@code
          * other} update (in the same UPDATE statement for the same column).
          */
-        public boolean isCompatibleWith(RawUpdate other);
-    }
+        virtual bool is_compatible_with(::shared_ptr<raw_update> other) = 0;
+    };
 
     /**
      * A parsed raw DELETE operation.
@@ -148,12 +147,14 @@ public:
      *   - Deleting a column
      *   - Deleting an element of a collection
      */
-    public interface RawDeletion
-    {
+    class raw_deletion {
+    public:
+        ~raw_deletion() {}
+
         /**
          * The name of the column affected by this delete operation.
          */
-        public ColumnIdentifier.Raw affectedColumn();
+        virtual ::shared_ptr<column_identifier::raw> affectedColumn() = 0;
 
         /**
          * This method validates the operation (i.e. validate it is well typed)
@@ -166,9 +167,10 @@ public:
          * @param receiver the "column" this operation applies to.
          * @return the prepared delete operation.
          */
-        public Operation prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException;
-    }
+        virtual ::shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) = 0;
+    };
 
+#if 0
     public static class SetValue implements RawUpdate
     {
         private final Term.Raw value;
