@@ -88,42 +88,20 @@ struct deletable_row final {
     row cells;
 };
 
-struct row_tombstone final {
-    tombstone t;
-
-    /*
-     * Prefix can be shorter than the clustering key size, in which case it
-     * means that all rows whose keys have that prefix are removed.
-     *
-     * Empty prefix removes all rows, which is equivalent to removing the whole partition.
-     */
-    bytes prefix;
-};
-
-struct row_tombstone_compare final {
-private:
-    data_type _type;
-public:
-    row_tombstone_compare(data_type type) : _type(type) {}
-
-    bool operator()(const row_tombstone& t1, const row_tombstone& t2) {
-        return _type->less(t1.prefix, t2.prefix);
-    }
-};
+using row_tombstone_set = std::map<bytes, tombstone, serialized_compare>;
 
 class partition final {
 private:
     schema_ptr _schema;
     tombstone _tombstone;
-
     row _static_row;
     std::map<clustering_key, deletable_row, key_compare> _rows;
-    std::set<row_tombstone, row_tombstone_compare> _row_tombstones;
+    row_tombstone_set _row_tombstones;
 public:
     partition(schema_ptr s)
         : _schema(std::move(s))
         , _rows(key_compare(_schema->clustering_key_type))
-        , _row_tombstones(row_tombstone_compare(_schema->clustering_key_prefix_type))
+        , _row_tombstones(serialized_compare(_schema->clustering_key_prefix_type))
     { }
 
     void apply(tombstone t) {
@@ -136,14 +114,14 @@ public:
         } else if (prefix.size() == _schema->clustering_key.size()) {
             _rows[serialize_value(*_schema->clustering_key_type, prefix)].t.apply(t);
         } else {
-            apply(row_tombstone{t, serialize_value(*_schema->clustering_key_prefix_type, prefix)});
+            apply_row_tombstone(serialize_value(*_schema->clustering_key_prefix_type, prefix), t);
         }
     }
 
-    void apply(const row_tombstone& rt) {
-        auto i = _row_tombstones.lower_bound(rt);
-        if (i == _row_tombstones.end() || !_schema->clustering_key_prefix_type->equal(rt.prefix, i->prefix) || rt.t > i->t) {
-            _row_tombstones.insert(i, rt);
+    void apply_row_tombstone(const bytes& prefix, const tombstone& t) {
+        auto i = _row_tombstones.lower_bound(prefix);
+        if (i == _row_tombstones.end() || !_schema->clustering_key_prefix_type->equal(prefix, i->first) || t > i->second) {
+            _row_tombstones.insert(i, {prefix, t});
         }
     }
 
