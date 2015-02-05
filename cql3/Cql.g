@@ -962,18 +962,14 @@ userOption[UserOptions opts]
 cident returns [shared_ptr<column_identifier::raw> id]
     : t=IDENT              { $id = make_shared<column_identifier::raw>(sstring{$t.text}, false); }
     | t=QUOTED_NAME        { $id = make_shared<column_identifier::raw>(sstring{$t.text}, true); }
-#if 0
-    | k=unreserved_keyword { $id = new ColumnIdentifier.Raw(k, false); }
-#endif
+    | k=unreserved_keyword { $id = make_shared<column_identifier::raw>(k, false); }
     ;
 
 // Identifiers that do not refer to columns or where the comparator is known to be text
 ident returns [shared_ptr<column_identifier> id]
     : t=IDENT              { $id = make_shared<column_identifier>(sstring{$t.text}, false); }
     | t=QUOTED_NAME        { $id = make_shared<column_identifier>(sstring{$t.text}, true); }
-#if 0
-    | k=unreserved_keyword { $id = new ColumnIdentifier(k, false); }
-#endif
+    | k=unreserved_keyword { $id = make_shared<column_identifier>(k, false); }
     ;
 
 // Keyspace & Column family names
@@ -1007,8 +1003,8 @@ userTypeName returns [UTName name]
 cfOrKsName[cf_name& name, bool isKs]
     : t=IDENT              { if (isKs) $name.set_keyspace($t.text, false); else $name.set_column_family($t.text, false); }
     | t=QUOTED_NAME        { if (isKs) $name.set_keyspace($t.text, true); else $name.set_column_family($t.text, true); }
+    | k=unreserved_keyword { if (isKs) $name.set_keyspace(k, false); else $name.set_column_family(k, false); }
 #if 0
-    | k=unreserved_keyword { if (isKs) $name.setKeyspace(k, false); else $name.setColumnFamily(k, false); }
     | QMARK {addRecognitionError("Bind variables cannot be used for keyspace or table names");}
 #endif
     ;
@@ -1347,18 +1343,19 @@ non_type_ident returns [ColumnIdentifier id]
     | k=basic_unreserved_keyword { $id = new ColumnIdentifier(k, false); }
     | kk=K_KEY                   { $id = new ColumnIdentifier($kk.text, false); }
     ;
+#endif
 
-unreserved_keyword returns [String str]
+unreserved_keyword returns [sstring str]
     : u=unreserved_function_keyword     { $str = u; }
     | k=(K_TTL | K_COUNT | K_WRITETIME | K_KEY) { $str = $k.text; }
     ;
 
-unreserved_function_keyword returns [String str]
+unreserved_function_keyword returns [sstring str]
     : u=basic_unreserved_keyword { $str = u; }
-    | t=native_type              { $str = t.toString(); }
+    | t=native_type              { $str = t->to_string(); }
     ;
 
-basic_unreserved_keyword returns [String str]
+basic_unreserved_keyword returns [sstring str]
     : k=( K_KEYS
         | K_AS
         | K_CLUSTERING
@@ -1396,7 +1393,6 @@ basic_unreserved_keyword returns [String str]
         | K_DETERMINISTIC
         ) { $str = $k.text; }
     ;
-#endif
 
 // Case-insensitive keywords
 K_SELECT:      S E L E C T;
