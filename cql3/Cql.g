@@ -26,17 +26,22 @@ options {
 @parser::namespace{cql3}
 
 @parser::includes {
+#include "cql3/statements/select_statement.hh"
 #include "cql3/statements/use_statement.hh"
+#include "cql3/selection/raw_selector.hh"
 #include "cql3/constants.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/cf_name.hh"
 #include "core/sstring.hh"
 #include "CqlLexer.hpp"
+
+#include <unordered_map>
 }
 
 @parser::traits {
 using namespace cql3;
 using namespace cql3::statements;
+using namespace cql3::selection;
 }
 
 @header {
@@ -252,13 +257,15 @@ query returns [shared_ptr<parsed_statement> stmnt]
 cqlStatement returns [shared_ptr<parsed_statement> stmt]
 #if 0
     @after{ if (stmt != null) stmt.setBoundVariables(bindVariables); }
+#endif
     : st1= selectStatement             { $stmt = st1; }
+#if 0
     | st2= insertStatement             { $stmt = st2; }
     | st3= updateStatement             { $stmt = st3; }
     | st4= batchStatement              { $stmt = st4; }
     | st5= deleteStatement             { $stmt = st5; }
 #endif
-    : st6= useStatement                { $stmt = st6; }
+    | st6= useStatement                { $stmt = st6; }
 #if 0
     | st7= truncateStatement           { $stmt = st7; }
     | st8= createKeyspaceStatement     { $stmt = st8; }
@@ -295,54 +302,69 @@ useStatement returns [::shared_ptr<use_statement> stmt]
     : K_USE ks=keyspaceName { $stmt = ::make_shared<use_statement>(ks); }
     ;
 
-#if 0
 /**
  * SELECT <expression>
  * FROM <CF>
  * WHERE KEY = "key1" AND COL > 1 AND COL < 100
  * LIMIT <NUMBER>;
  */
-selectStatement returns [SelectStatement.RawStatement expr]
+selectStatement returns [shared_ptr<select_statement::raw_statement> expr]
     @init {
-        boolean isDistinct = false;
+        bool is_distinct = false;
+#if 0
         Term.Raw limit = null;
-        Map<ColumnIdentifier.Raw, Boolean> orderings = new LinkedHashMap<ColumnIdentifier.Raw, Boolean>();
-        boolean allowFiltering = false;
+#endif
+        select_statement::parameters::orderings_type orderings;
+        bool allow_filtering = false;
     }
-    : K_SELECT ( ( K_DISTINCT { isDistinct = true; } )? sclause=selectClause
-               | sclause=selectCountClause )
+    : K_SELECT ( ( K_DISTINCT { is_distinct = true; } )?
+                 sclause=selectClause
+#if 0
+               | sclause=selectCountClause
+#endif
+               )
       K_FROM cf=columnFamilyName
+#if 0
       ( K_WHERE wclause=whereClause )?
       ( K_ORDER K_BY orderByClause[orderings] ( ',' orderByClause[orderings] )* )?
       ( K_LIMIT rows=intValue { limit = rows; } )?
       ( K_ALLOW K_FILTERING  { allowFiltering = true; } )?
+#endif
       {
-          SelectStatement.Parameters params = new SelectStatement.Parameters(orderings,
-                                                                             isDistinct,
-                                                                             allowFiltering);
+          auto params = ::make_shared<select_statement::parameters>(orderings, is_distinct, allow_filtering);
+#if 0
           $expr = new SelectStatement.RawStatement(cf, params, sclause, wclause, limit);
+#endif
       }
     ;
 
-selectClause returns [List<RawSelector> expr]
-    : t1=selector { $expr = new ArrayList<RawSelector>(); $expr.add(t1); } (',' tN=selector { $expr.add(tN); })*
+selectClause returns [std::vector<shared_ptr<raw_selector>> expr]
+    : t1=selector { $expr = std::vector<shared_ptr<raw_selector>>(); $expr.push_back(t1); } (',' tN=selector { $expr.push_back(tN); })*
+#if 0
     | '\*' { $expr = Collections.<RawSelector>emptyList();}
+#endif
     ;
 
-selector returns [RawSelector s]
-    @init{ ColumnIdentifier alias = null; }
-    : us=unaliasedSelector (K_AS c=ident { alias = c; })? { $s = new RawSelector(us, alias); }
+selector returns [shared_ptr<raw_selector> s]
+    @init{ shared_ptr<column_identifier> alias; }
+    : us=unaliasedSelector (K_AS c=ident { alias = c; })? { $s = make_shared<raw_selector>(us, alias); }
     ;
 
-unaliasedSelector returns [Selectable.Raw s]
-    @init { Selectable.Raw tmp = null; }
+unaliasedSelector returns [shared_ptr<selectable::raw> s]
+    @init { shared_ptr<selectable::raw> tmp; }
     :  ( c=cident                                  { tmp = c; }
+#if 0
        | K_WRITETIME '(' c=cident ')'              { tmp = new Selectable.WritetimeOrTTL.Raw(c, true); }
        | K_TTL       '(' c=cident ')'              { tmp = new Selectable.WritetimeOrTTL.Raw(c, false); }
        | f=functionName args=selectionFunctionArgs { tmp = new Selectable.WithFunction.Raw(f, args); }
-       ) ( '.' fi=cident { tmp = new Selectable.WithFieldSelection.Raw(tmp, fi); } )* { $s = tmp; }
+#endif
+       )
+#if 0
+       ( '.' fi=cident { tmp = new Selectable.WithFieldSelection.Raw(tmp, fi); } )* { $s = tmp; }
+#endif
     ;
 
+#if 0
 selectionFunctionArgs returns [List<Selectable.Raw> a]
     : '(' ')' { $a = Collections.emptyList(); }
     | '(' s1=unaliasedSelector { List<Selectable.Raw> args = new ArrayList<Selectable.Raw>(); args.add(s1); }
