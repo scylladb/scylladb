@@ -133,11 +133,8 @@ public:
         return _rows[key].cells;
     }
 
-    row& get_row(const clustering_prefix& prefix) {
-        if (prefix.empty()) {
-            return static_row();
-        }
-        return clustered_row(serialize_value(*_schema->clustering_key_type, prefix));
+    row& clustered_row(clustering_key&& key) {
+        return _rows[std::move(key)].cells;
     }
 };
 
@@ -156,8 +153,18 @@ public:
     mutation(mutation&&) = default;
     mutation(const mutation&) = delete;
 
-    void set_cell(const clustering_prefix& prefix, column_id col, boost::any value) {
-        p.get_row(prefix)[col] = value;
+    void set_static_cell(const column_definition& def, boost::any value) {
+        p.static_row()[def.id] = std::move(value);
+    }
+
+    void set_clustered_cell(const clustering_prefix& prefix, const column_definition& def, boost::any value) {
+        auto& row = p.clustered_row(serialize_value(*schema->clustering_key_type, prefix));
+        row[def.id] = std::move(value);
+    }
+
+    void set_clustered_cell(const clustering_key& key, const column_definition& def, boost::any value) {
+        auto& row = p.clustered_row(key);
+        row[def.id] = std::move(value);
     }
 };
 

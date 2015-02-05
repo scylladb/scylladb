@@ -338,7 +338,12 @@ public:
 
         virtual void execute(api::mutation& m, const api::clustering_prefix& prefix, const update_parameters& params) override {
             bytes_opt value = _t->bind_and_get(params._options);
-            m.set_cell(prefix, column.id, value ? params.make_cell(*value) : params.make_dead_cell());
+            auto cell = value ? params.make_cell(*value) : params.make_dead_cell();
+            if (column.is_static()) {
+                m.set_static_cell(column, std::move(cell));
+            } else {
+                m.set_clustered_cell(prefix, column, std::move(cell));
+            }
         }
     };
 
