@@ -142,7 +142,7 @@ public:
             return ::make_shared<literal>(type::HEX, text);
         }
 
-        virtual ::shared_ptr<term> prepare(sstring keyspace, ::shared_ptr<column_specification> receiver) override {
+        virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
             throw std::runtime_error("not implemented");
 #if 0
             if (!testAssignment(keyspace, receiver).isAssignable())
@@ -177,7 +177,7 @@ public:
         }
 #endif
 
-        virtual assignment_testable::test_result test_assignment(sstring keyspace, ::shared_ptr<column_specification> receiver) override {
+        virtual assignment_testable::test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
             throw new std::runtime_error("not implemented");
 #if 0
             CQL3Type receiverType = receiver.type.asCQL3Type();
@@ -252,13 +252,9 @@ public:
 #endif
         }
 
-#if 0
-        @Override
-        public String toString()
-        {
-            return type == Type.STRING ? String.format("'%s'", text) : text;
+        virtual sstring to_string() override {
+            return _type == type::STRING ? sstring(sprint("'%s'", _text)) : _text;
         }
-#endif
     };
 
 #if 0
@@ -338,8 +334,10 @@ public:
 
     class setter : public operation {
     public:
+        using operation::operation;
+
         virtual void execute(api::mutation& m, const api::clustering_prefix& prefix, const update_parameters& params) override {
-            bytes_opt value = _t->bind_and_get(*params._options);
+            bytes_opt value = _t->bind_and_get(params._options);
             m.set_cell(prefix, column.id, value ? params.make_cell(*value) : params.make_dead_cell());
         }
     };

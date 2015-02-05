@@ -41,8 +41,8 @@ public:
             : _fun(std::move(fun)), _terms(std::move(terms)) {
     }
 
-    virtual bool uses_function(sstring ks_name, sstring function_name) const override {
-        return _fun->uses_function(std::move(ks_name), std::move(function_name));
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
+        return _fun->uses_function(ks_name, function_name);
     }
 
     virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names) override {

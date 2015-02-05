@@ -25,6 +25,8 @@
 #include "update_statement.hh"
 #include "unimplemented.hh"
 
+#include "cql3/operation_impl.hh"
+
 namespace cql3 {
 
 namespace statements {
@@ -78,6 +80,60 @@ void update_statement::add_update_for_key(api::mutation& m, const api::clusterin
         }
     }
 #endif
+}
+
+::shared_ptr<modification_statement>
+update_statement::parsed_insert::prepare_internal(schema_ptr schema,
+    ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs)
+{
+    auto stmt = ::make_shared<update_statement>(statement_type::INSERT, bound_names->size(), schema, std::move(attrs));
+
+    // Created from an INSERT
+    if (stmt->is_counter()) {
+        throw exceptions::invalid_request_exception("INSERT statement are not allowed on counter tables, use UPDATE instead");
+    }
+
+    if (_column_names.size() != _column_values.size()) {
+        throw exceptions::invalid_request_exception("Unmatched column names/values");
+    }
+
+    if (_column_names.empty()) {
+        throw exceptions::invalid_request_exception("No columns provided to INSERT");
+    }
+
+    for (size_t i = 0; i < _column_names.size(); i++) {
+        auto id = _column_names[i]->prepare_column_identifier(schema);
+        auto def = get_column_definition(schema, *id);
+        if (!def) {
+            throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *id));
+        }
+
+        for (size_t j = 0; j < i; j++) {
+            auto other_id = _column_names[j]->prepare_column_identifier(schema);
+            if (*id == *other_id) {
+                throw exceptions::invalid_request_exception(sprint("Multiple definitions found for column %s", *id));
+            }
+        }
+
+        auto&& value = _column_values[i];
+
+        switch(def->kind) {
+            case column_definition::PARTITION:
+            case column_definition::CLUSTERING: {
+                auto t = value->prepare(keyspace(), def->column_specification);
+                t->collect_marker_specification(bound_names);
+                stmt->add_key_value(*def, std::move(t));
+                break;
+            }
+            default: {
+                auto operation = operation::set_value(value).prepare(keyspace(), *def);
+                operation->collect_marker_specification(bound_names);
+                stmt->add_operation(std::move(operation));
+                break;
+            }
+        };
+    }
+    return stmt;
 }
 
 }

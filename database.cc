@@ -6,6 +6,8 @@
 #include "database.hh"
 #include "core/future-util.hh"
 
+#include "cql3/column_identifier.hh"
+
 thread_local logging::logger dblog("database");
 
 partition::partition(column_family& cf)
@@ -22,26 +24,37 @@ get_column_types(const Sequence& column_definitions) {
     return result;
 }
 
-static void
-annotate_columns(std::vector<column_definition>& columns, column_definition::column_kind kind) {
+::shared_ptr<cql3::column_specification>
+schema::make_column_specification(column_definition& def) {
+    auto id = ::make_shared<cql3::column_identifier>(def.name(), column_name_type(def));
+    return ::make_shared<cql3::column_specification>(ks_name, cf_name, std::move(id), def.type);
+}
+
+void
+schema::build_columns(std::vector<column> columns, column_definition::column_kind kind,
+    std::vector<column_definition>& dst)
+{
+    dst.reserve(columns.size());
     for (column_id i = 0; i < columns.size(); i++) {
         auto& col = columns[i];
-        col.id = i;
-        col.kind = kind;
+        dst.emplace_back(std::move(col.name), std::move(col.type), i, kind);
+        column_definition& def = dst.back();
+        _columns_by_name[def.name()] = &def;
+        def.column_specification = make_column_specification(def);
     }
 }
 
-schema::schema(sstring ks_name, sstring cf_name, std::vector<column_definition> partition_key,
-    std::vector<column_definition> clustering_key,
-    std::vector<column_definition> regular_columns)
-        : ks_name(std::move(ks_name))
+schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_key,
+    std::vector<column> clustering_key,
+    std::vector<column> regular_columns,
+    data_type regular_column_name_type)
+        : _regular_columns_by_name(serialized_compare(regular_column_name_type))
+        , ks_name(std::move(ks_name))
         , cf_name(std::move(cf_name))
-        , partition_key(std::move(partition_key))
-        , clustering_key(std::move(clustering_key))
-        , regular_columns(std::move(regular_columns))
         , partition_key_type(::make_shared<tuple_type<>>(get_column_types(partition_key)))
         , clustering_key_type(::make_shared<tuple_type<>>(get_column_types(clustering_key)))
         , clustering_key_prefix_type(::make_shared<tuple_prefix>(get_column_types(clustering_key)))
+        , regular_column_name_type(regular_column_name_type)
 {
     if (partition_key.size() == 1) {
         thrift.partition_key_type = partition_key[0].type;
@@ -49,9 +62,15 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column_definition> 
         // TODO: the type should be composite_type
         throw std::runtime_error("not implemented");
     }
-    annotate_columns(partition_key, column_definition::PRIMARY);
-    annotate_columns(clustering_key, column_definition::CLUSTERING);
-    annotate_columns(regular_columns, column_definition::REGULAR);
+
+    build_columns(std::move(partition_key), column_definition::PARTITION, this->partition_key);
+    build_columns(std::move(clustering_key), column_definition::CLUSTERING, this->clustering_key);
+
+    std::sort(regular_columns.begin(), regular_columns.end(), column::name_compare(regular_column_name_type));
+    build_columns(std::move(regular_columns), column_definition::REGULAR, this->regular_columns);
+    for (column_definition& def : this->regular_columns) {
+        _regular_columns_by_name[def.name()] = &def;
+    }
 }
 
 column_family::column_family(schema_ptr schema)
@@ -193,3 +212,45 @@ future<database> database::populate(sstring datadir) {
     });
 }
 
+column_definition::column_definition(bytes name, data_type type, column_id id, column_kind kind)
+    : _name(std::move(name))
+    , type(std::move(type))
+    , id(id)
+    , kind(kind)
+{ }
+
+column_definition* schema::get_column_definition(const bytes& name) {
+    auto i = _columns_by_name.find(name);
+    if (i == _columns_by_name.end()) {
+        return nullptr;
+    }
+    return i->second;
+}
+
+const sstring&
+column_definition::name_as_text() const {
+    return column_specification->name->text();
+}
+
+const bytes&
+column_definition::name() const {
+    return _name;
+}
+
+schema_ptr
+keyspace::find_schema(sstring cf_name) {
+    auto i = column_families.find(cf_name);
+    if (i == column_families.end()) {
+        return {};
+    }
+    return i->second._schema;
+}
+
+keyspace*
+database::find_keyspace(sstring name) {
+    auto i = keyspaces.find(name);
+    if (i != keyspaces.end()) {
+        return &i->second;
+    }
+    return nullptr;
+}

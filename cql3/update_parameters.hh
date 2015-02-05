@@ -45,16 +45,16 @@ public:
     const api::timestamp_type _timestamp;
     const gc_clock::time_point _local_deletion_time;
     const schema_ptr _schema;
-    const ::shared_ptr<query_options> _options;
+    const query_options& _options;
 
-    update_parameters(const schema_ptr schema_, const ::shared_ptr<query_options> options,
+    update_parameters(const schema_ptr schema_, const query_options& options,
             api::timestamp_type timestamp, gc_clock::duration ttl, prefetched_rows_type prefetched)
         : _ttl(ttl)
         , _prefetched(std::move(prefetched))
         , _timestamp(timestamp)
         , _local_deletion_time(gc_clock::now())
         , _schema(std::move(schema_))
-        , _options(std::move(options))
+        , _options(options)
     {
         // We use MIN_VALUE internally to mean the absence of of timestamp (in Selection, in sstable stats, ...), so exclude
         // it to avoid potential confusion.

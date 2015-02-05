@@ -46,7 +46,7 @@ public:
     }
 
     function_name(sstring keyspace, sstring name)
-            : keyspace(keyspace), name(name) {
+            : keyspace(std::move(keyspace)), name(std::move(name)) {
     }
 
 #if 0

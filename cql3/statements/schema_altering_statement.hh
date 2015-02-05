@@ -65,7 +65,7 @@ protected:
         }
     }
 
-    virtual std::unique_ptr<prepared> prepare() override {
+    virtual std::unique_ptr<prepared> prepare(database& db) override {
         return std::make_unique<parsed_statement::prepared>(this->shared_from_this());
     }
 
@@ -81,7 +81,8 @@ protected:
     public abstract boolean announceMigration(boolean isLocalOnly) throws RequestValidationException;
 #endif
 
-    virtual transport::messages::result_message execute(service::query_state& state, const query_options& options) override {
+    virtual future<std::experimental::optional<transport::messages::result_message>>
+    execute(service::query_state& state, const query_options& options) override {
         throw std::runtime_error("not implemented");
 #if 0
         // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
@@ -95,7 +96,8 @@ protected:
 #endif
     }
 
-    virtual transport::messages::result_message execute_internal(service::query_state& state, const query_options& options) override {
+    virtual future<std::experimental::optional<transport::messages::result_message>>
+    execute_internal(service::query_state& state, const query_options& options) override {
         throw std::runtime_error("unsupported operation");
 #if 0
         try

@@ -33,6 +33,8 @@ namespace cql3 {
 
 class assignment_testable {
 public:
+    virtual ~assignment_testable() {}
+
     enum class test_result {
         EXACT_MATCH,
         WEAKLY_ASSIGNABLE,
@@ -49,7 +51,7 @@ public:
 
     // Test all elements of toTest for assignment. If all are exact match, return exact match. If any is not assignable,
     // return not assignable. Otherwise, return weakly assignable.
-    static test_result test_all(sstring keyspace, ::shared_ptr<column_specification> receiver, const std::vector<::shared_ptr<assignment_testable>>& to_test) {
+    static test_result test_all(const sstring& keyspace, ::shared_ptr<column_specification> receiver, const std::vector<::shared_ptr<assignment_testable>>& to_test) {
         test_result res = test_result::EXACT_MATCH;
         for (auto&& rt : to_test) {
             if (rt == nullptr) {
@@ -77,7 +79,7 @@ public:
      * Most caller should just call the isAssignable() method on the result, though functions have a use for
      * testing "strong" equality to decide the most precise overload to pick when multiple could match.
      */
-    virtual test_result test_assignment(sstring keyspace, ::shared_ptr<column_specification> receiver) = 0;
+    virtual test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver) = 0;
 };
 
 }

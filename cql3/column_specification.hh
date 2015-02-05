@@ -25,13 +25,15 @@
 #ifndef CQL3_COLUMN_SPECIFICATION_HH
 #define CQL3_COLUMN_SPECIFICATION_HH
 
-#include "cql3/column_identifier.hh"
 #include "db/marshal/reversed_type.hh"
-#include "database.hh"
+#include "types.hh"
 
 namespace cql3 {
 
-class column_specification {
+class column_specification;
+class column_identifier;
+
+class column_specification final {
 public:
     const sstring ks_name;
     const sstring cf_name;
@@ -39,8 +41,8 @@ public:
     const ::shared_ptr<abstract_type> type;
 
     column_specification(sstring ks_name_, sstring cf_name_, ::shared_ptr<column_identifier> name_, ::shared_ptr<abstract_type> type_)
-        : ks_name(ks_name_)
-        , cf_name(cf_name_)
+        : ks_name(std::move(ks_name_))
+        , cf_name(std::move(cf_name_))
         , name(name_)
         , type(type_)
     { }

@@ -15,27 +15,35 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
-import java.util.ArrayList;
-import java.util.List;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.config.ColumnDefinition;
-import org.apache.cassandra.cql3.restrictions.Restriction;
-import org.apache.cassandra.cql3.statements.Bound;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.exceptions.UnrecognizedEntityException;
+#pragma once
 
-import static org.apache.cassandra.cql3.statements.RequestValidations.invalidRequest;
+#include "operator.hh"
+#include "database.hh"
+#include "column_identifier.hh"
+#include "variable_specifications.hh"
+#include "restrictions/restriction.hh"
+#include "statements/bound.hh"
 
-public abstract class Relation {
+namespace cql3 {
 
-    protected Operator relationType;
+class relation : public enable_shared_from_this<relation> {
+protected:
+    const operator_type& _relation_type;
+public:
+    relation(const operator_type& relation_type)
+        : _relation_type(_relation_type) {
+    }
+    virtual ~relation() {}
 
-    public Operator operator()
-    {
-        return relationType;
+    virtual const operator_type& get_operator() {
+        return _relation_type;
     }
 
     /**
@@ -43,8 +51,7 @@ public abstract class Relation {
      *
      * @return <code>true</code> if this relation apply to multiple columns, <code>false</code> otherwise.
      */
-    public boolean isMultiColumn()
-    {
+    virtual bool is_multi_column() {
         return false;
     }
 
@@ -53,8 +60,7 @@ public abstract class Relation {
      *
      * @return <code>true</code> if this relation is a token relation, <code>false</code> otherwise.
      */
-    public boolean onToken()
-    {
+    virtual bool on_token() {
         return false;
     }
 
@@ -63,9 +69,8 @@ public abstract class Relation {
      * @return <code>true</code>  if the operator of this relation is a <code>CONTAINS</code>, <code>false</code>
      * otherwise.
      */
-    public final boolean isContains()
-    {
-        return relationType == Operator.CONTAINS;
+    virtual bool is_contains() final {
+        return _relation_type == operator_type::CONTAINS;
     }
 
     /**
@@ -73,9 +78,8 @@ public abstract class Relation {
      * @return <code>true</code>  if the operator of this relation is a <code>CONTAINS_KEY</code>, <code>false</code>
      * otherwise.
      */
-    public final boolean isContainsKey()
-    {
-        return relationType == Operator.CONTAINS_KEY;
+    virtual bool is_contains_key() final {
+        return _relation_type == operator_type::CONTAINS_KEY;
     }
 
     /**
@@ -83,9 +87,8 @@ public abstract class Relation {
      * @return <code>true</code>  if the operator of this relation is a <code>IN</code>, <code>false</code>
      * otherwise.
      */
-    public final boolean isIN()
-    {
-        return relationType == Operator.IN;
+    virtual bool is_IN() final {
+        return _relation_type == operator_type::IN;
     }
 
     /**
@@ -93,9 +96,8 @@ public abstract class Relation {
      * @return <code>true</code>  if the operator of this relation is a <code>EQ</code>, <code>false</code>
      * otherwise.
      */
-    public final boolean isEQ()
-    {
-        return relationType == Operator.EQ;
+    virtual bool is_EQ() final {
+        return _relation_type == operator_type::EQ;
     }
 
     /**
@@ -103,12 +105,13 @@ public abstract class Relation {
      *
      * @return <code>true</code> if the operator of this relation is a <code>Slice</code>, <code>false</code> otherwise.
      */
-    public final boolean isSlice()
-    {
-        return relationType == Operator.GT
-                || relationType == Operator.GTE
-                || relationType == Operator.LTE
-                || relationType == Operator.LT;
+    virtual bool is_slice() final {
+        return _relation_type == operator_type::
+        GT
+                || _relation_type == operator_type::GTE
+                || _relation_type == operator_type::LTE
+                || _relation_type ==
+            operator_type::LT;
     }
 
     /**
@@ -119,22 +122,29 @@ public abstract class Relation {
      * @return the <code>Restriction</code> corresponding to this <code>Relation</code>
      * @throws InvalidRequestException if this <code>Relation</code> is not valid
      */
-    public final Restriction toRestriction(CFMetaData cfm,
-                                           VariableSpecifications boundNames) throws InvalidRequestException
-    {
-        switch (relationType)
-        {
-            case EQ: return newEQRestriction(cfm, boundNames);
-            case LT: return newSliceRestriction(cfm, boundNames, Bound.END, false);
-            case LTE: return newSliceRestriction(cfm, boundNames, Bound.END, true);
-            case GTE: return newSliceRestriction(cfm, boundNames, Bound.START, true);
-            case GT: return newSliceRestriction(cfm, boundNames, Bound.START, false);
-            case IN: return newINRestriction(cfm, boundNames);
-            case CONTAINS: return newContainsRestriction(cfm, boundNames, false);
-            case CONTAINS_KEY: return newContainsRestriction(cfm, boundNames, true);
-            default: throw invalidRequest("Unsupported \"!=\" relation: %s", this);
+    virtual ::shared_ptr<restrictions::restriction> to_restriction(schema_ptr schema, ::shared_ptr<variable_specifications> bound_names) final {
+        if (_relation_type == operator_type::EQ) {
+            return new_EQ_restriction(schema, bound_names);
+        } else if (_relation_type == operator_type::LT) {
+            return new_slice_restriction(schema, bound_names, statements::bound::END, false);
+        } else if (_relation_type == operator_type::LTE) {
+            return new_slice_restriction(schema, bound_names, statements::bound::END, true);
+        } else if (_relation_type == operator_type::GTE) {
+            return new_slice_restriction(schema, bound_names, statements::bound::START, true);
+        } else if (_relation_type == operator_type::GT) {
+            return new_slice_restriction(schema, bound_names, statements::bound::START, false);
+        } else if (_relation_type == operator_type::IN) {
+            return new_IN_restriction(schema, bound_names);
+        } else if (_relation_type == operator_type::CONTAINS) {
+            return new_contains_restriction(schema, bound_names, false);
+        } else if (_relation_type == operator_type::CONTAINS_KEY) {
+            return new_contains_restriction(schema, bound_names, true);
+        } else {
+            throw exceptions::invalid_request_exception(sprint("Unsupported \"!=\" relation: %s", to_string()));
         }
     }
+
+    virtual sstring to_string() = 0;
 
     /**
      * Creates a new EQ restriction instance.
@@ -144,47 +154,55 @@ public abstract class Relation {
      * @return a new EQ restriction instance.
      * @throws InvalidRequestException if the relation cannot be converted into an EQ restriction.
      */
-    protected abstract Restriction newEQRestriction(CFMetaData cfm,
-                                                    VariableSpecifications boundNames) throws InvalidRequestException;
+    virtual ::shared_ptr<restrictions::restriction> new_EQ_restriction(schema_ptr schema,
+                                                    ::shared_ptr<
+                                                        variable_specifications> bound_names) = 0;
 
     /**
      * Creates a new IN restriction instance.
      *
      * @param cfm the Column Family meta data
-     * @param boundNames the variables specification where to collect the bind variables
+     * @param bound_names the variables specification where to collect the bind variables
      * @return a new IN restriction instance
      * @throws InvalidRequestException if the relation cannot be converted into an IN restriction.
      */
-    protected abstract Restriction newINRestriction(CFMetaData cfm,
-                                                    VariableSpecifications boundNames) throws InvalidRequestException;
+    virtual ::shared_ptr<restrictions::restriction> new_IN_restriction(schema_ptr schema,
+                                                    ::
+                                                    shared_ptr<variable_specifications> bound_names) = 0;
 
     /**
      * Creates a new Slice restriction instance.
      *
      * @param cfm the Column Family meta data
-     * @param boundNames the variables specification where to collect the bind variables
+     * @param bound_names the variables specification where to collect the bind variables
      * @param bound the slice bound
      * @param inclusive <code>true</code> if the bound is included.
      * @return a new slice restriction instance
      * @throws InvalidRequestException if the <code>Relation</code> is not valid
      */
-    protected abstract Restriction newSliceRestriction(CFMetaData cfm,
-                                                       VariableSpecifications boundNames,
-                                                       Bound bound,
-                                                       boolean inclusive) throws InvalidRequestException;
+    virtual ::shared_ptr<restrictions::restriction> new_slice_restriction(
+        schema_ptr schema,
+                                                       ::shared_ptr<variable_specifications> bound_names,
+                                                       statements::bound bound,
+                                                       bool
+                                                       inclusive) = 0;
 
     /**
      * Creates a new Contains restriction instance.
      *
      * @param cfm the Column Family meta data
-     * @param boundNames the variables specification where to collect the bind variables
+     * @param bound_names the variables specification where to collect the bind variables
      * @param isKey <code>true</code> if the restriction to create is a CONTAINS KEY
-     * @return a new Contains <code>Restriction</code> instance
+     * @return a new Contains <code>::shared_ptr<restrictions::restriction></code> instance
      * @throws InvalidRequestException if the <code>Relation</code> is not valid
      */
-    protected abstract Restriction newContainsRestriction(CFMetaData cfm,
-                                                          VariableSpecifications boundNames,
-                                                          boolean isKey) throws InvalidRequestException;
+    virtual ::
+    shared_ptr<restrictions::restriction>
+        new_contains_restriction(schema_ptr schema,
+                                                          ::shared_ptr<variable_specifications> bound_names,
+                                                          bool isKey) = 0;
+
+#if 0
 
     /**
      * Converts the specified <code>Raw</code> into a <code>Term</code>.
@@ -227,6 +245,9 @@ public abstract class Relation {
         return terms;
     }
 
+#endif
+
+protected:
     /**
      * Converts the specified entity into a column definition.
      *
@@ -235,15 +256,9 @@ public abstract class Relation {
      * @return the column definition corresponding to the specified entity
      * @throws InvalidRequestException if the entity cannot be recognized
      */
-    protected final ColumnDefinition toColumnDefinition(CFMetaData cfm,
-                                                        ColumnIdentifier.Raw entity) throws InvalidRequestException
-    {
-        ColumnIdentifier identifier = entity.prepare(cfm);
-        ColumnDefinition def = cfm.getColumnDefinition(identifier);
+    virtual column_definition& to_column_definition(schema_ptr schema, ::shared_ptr<column_identifier::raw> entity) final;
+};
 
-        if (def == null)
-            throw new UnrecognizedEntityException(identifier, this);
+using relation_ptr = ::shared_ptr<relation>;
 
-        return def;
-    }
 }

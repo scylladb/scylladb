@@ -52,7 +52,7 @@ public:
     }
 
     // Used by the parser and preparable statement
-    void set_bound_variables(const std::vector<std::experimental::optional<::shared_ptr<column_identifier>>>& bound_names)
+    void set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names)
     {
         _variables = ::make_shared<variable_specifications>(bound_names);
     }
@@ -76,9 +76,9 @@ public:
         { }
     };
 
-    virtual std::unique_ptr<prepared> prepare() = 0;
+    virtual std::unique_ptr<prepared> prepare(database& db) = 0;
 
-    virtual bool uses_function(sstring ks_name, sstring function_name) const {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const {
         return false;
     }
 };

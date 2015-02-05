@@ -61,16 +61,18 @@ public:
      * @param state the current query state
      * @param options options for this query (consistency, variables, pageSize, ...)
      */
-    virtual transport::messages::result_message execute(service::query_state& state, const query_options& options) = 0;
+    virtual future<std::experimental::optional<transport::messages::result_message>>
+        execute(service::query_state& state, const query_options& options) = 0;
 
     /**
-     * Variante of execute used for internal query against the system tables, and thus only query the local node = 0.
+     * Variant of execute used for internal query against the system tables, and thus only query the local node = 0.
      *
      * @param state the current query state
      */
-    virtual transport::messages::result_message execute_internal(service::query_state& state, const query_options& options) = 0;
+    virtual future<std::experimental::optional<transport::messages::result_message>>
+        execute_internal(service::query_state& state, const query_options& options) = 0;
 
-    virtual bool uses_function(sstring ks_name, sstring function_name) const = 0;
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
 };
 
 }

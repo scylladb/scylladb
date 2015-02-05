@@ -12,6 +12,13 @@ public:
     { }
 };
 
+class keyspace_not_defined_exception : public invalid_request_exception {
+public:
+    keyspace_not_defined_exception(std::string cause)
+        : invalid_request_exception(cause)
+    { }
+};
+
 class marshal_exception : public std::logic_error {
 public:
     marshal_exception(std::string cause)

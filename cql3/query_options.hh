@@ -103,7 +103,7 @@ public:
 #endif
 
 public:
-    api::timestamp_type get_timestamp(const service::query_state& state) {
+    api::timestamp_type get_timestamp(const service::query_state& state) const {
         throw std::runtime_error("NOT IMPLEMENTED");
 #if 0
         auto tstamp = get_specific_options().timestamp;

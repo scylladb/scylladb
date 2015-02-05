@@ -23,6 +23,8 @@
  */
 
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/restrictions/single_column_restriction.hh"
+#include "cql3/single_column_relation.hh"
 #include "validation.hh"
 #include "core/shared_ptr.hh"
 
@@ -49,9 +51,9 @@ operator<<(std::ostream& out, modification_statement::statement_type t) {
 }
 
 future<std::vector<api::mutation>>
-modification_statement::get_mutations(::shared_ptr<query_options> options, bool local, int64_t now) {
-    auto keys = make_lw_shared(build_partition_keys(*options));
-    auto prefix = make_lw_shared(create_clustering_prefix(*options));
+modification_statement::get_mutations(const query_options& options, bool local, int64_t now) {
+    auto keys = make_lw_shared(build_partition_keys(options));
+    auto prefix = make_lw_shared(create_clustering_prefix(options));
     return make_update_parameters(keys, prefix, options, local, now).then(
             [this, keys = std::move(keys), prefix = std::move(prefix), now] (auto params_ptr) {
                 std::vector<api::mutation> mutations;
@@ -70,15 +72,15 @@ future<std::unique_ptr<update_parameters>>
 modification_statement::make_update_parameters(
         lw_shared_ptr<std::vector<api::partition_key>> keys,
         lw_shared_ptr<api::clustering_prefix> prefix,
-        ::shared_ptr<query_options> options,
+        const query_options& options,
         bool local,
         int64_t now) {
-    return read_required_rows(std::move(keys), std::move(prefix), local, options->get_consistency()).then(
-            [this, options, now] (auto rows) {
+    return read_required_rows(std::move(keys), std::move(prefix), local, options.get_consistency()).then(
+            [this, &options, now] (auto rows) {
                 return make_ready_future<std::unique_ptr<update_parameters>>(
                         std::make_unique<update_parameters>(s, options,
-                                this->get_timestamp(now, *options),
-                                this->get_time_to_live(*options),
+                                this->get_timestamp(now, options),
+                                this->get_time_to_live(options),
                                 std::move(rows)));
             });
 }
@@ -165,16 +167,16 @@ modification_statement::create_clustering_prefix_internal(const query_options& o
             // Those tables don't have clustering columns so we wouldn't reach this code, thus
             // the check seems redundant.
             if (require_full_clustering_key() && !s->is_dense()) {
-                throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name));
+                throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
             }
         } else if (first_empty_key) {
-            throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s since %s is set", first_empty_key->name, def.name));
+            throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s since %s is set", first_empty_key->name_as_text(), def.name_as_text()));
         } else {
             auto values = r->values(options);
             assert(values.size() == 1);
             auto val = values[0];
             if (!val) {
-                throw exceptions::invalid_request_exception(sprint("Invalid null value for clustering key part %s", def.name));
+                throw exceptions::invalid_request_exception(sprint("Invalid null value for clustering key part %s", def.name_as_text()));
             }
             components.push_back(val);
         }
@@ -208,7 +210,7 @@ modification_statement::create_clustering_prefix(const query_options& options) {
                 if (_processed_keys.count(&def)) {
                     throw exceptions::invalid_request_exception(sprint(
                             "Invalid restriction on clustering column %s since the %s statement modifies only static columns",
-                            def.name, type));
+                            def.name_as_text(), type));
                 }
             }
 
@@ -230,7 +232,7 @@ modification_statement::build_partition_keys(const query_options& options) {
     for (auto& def : s->partition_key) {
         auto r = _processed_keys[&def];
         if (!r) {
-            throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name));
+            throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
         }
 
         auto values = r->values(options);
@@ -239,7 +241,7 @@ modification_statement::build_partition_keys(const query_options& options) {
             if (values.size() == 1) {
                 auto val = values[0];
                 if (!val) {
-                    throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name));
+                    throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
                 }
                 components.push_back(val);
                 api::partition_key key = serialize_value(*s->partition_key_type, components);
@@ -248,7 +250,7 @@ modification_statement::build_partition_keys(const query_options& options) {
             } else {
                 for (auto&& val : values) {
                     if (!val) {
-                        throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name));
+                        throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
                     }
                     std::vector<bytes_opt> full_components;
                     full_components.reserve(components.size() + 1);
@@ -265,7 +267,7 @@ modification_statement::build_partition_keys(const query_options& options) {
             }
             auto val = values[0];
             if (!val) {
-                throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name));
+                throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
             }
             components.push_back(val);
         }
@@ -276,8 +278,8 @@ modification_statement::build_partition_keys(const query_options& options) {
 }
 
 future<std::experimental::optional<transport::messages::result_message>>
-modification_statement::execute(::shared_ptr<service::query_state> qs, ::shared_ptr<query_options> options) {
-    if (has_conditions() && options->get_protocol_version() == 1) {
+modification_statement::execute(service::query_state& qs, const query_options& options) {
+    if (has_conditions() && options.get_protocol_version() == 1) {
         throw new exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
     }
 
@@ -292,15 +294,15 @@ modification_statement::execute(::shared_ptr<service::query_state> qs, ::shared_
 }
 
 future<>
-modification_statement::execute_without_condition(::shared_ptr<service::query_state> qs, ::shared_ptr<query_options> options) {
-    auto cl = options->get_consistency();
+modification_statement::execute_without_condition(service::query_state& qs, const query_options& options) {
+    auto cl = options.get_consistency();
     if (is_counter()) {
         db::validate_counter_for_write(s, cl);
     } else {
         db::validate_for_write(s->ks_name, cl);
     }
 
-    return get_mutations(options, false, options->get_timestamp(*qs)).then([cl] (auto mutations) {
+    return get_mutations(options, false, options.get_timestamp(qs)).then([cl] (auto mutations) {
         if (mutations.empty()) {
             return now();
         }
@@ -309,7 +311,7 @@ modification_statement::execute_without_condition(::shared_ptr<service::query_st
 }
 
 future<std::experimental::optional<transport::messages::result_message>>
-modification_statement::execute_with_condition(::shared_ptr<service::query_state> qs, ::shared_ptr<query_options> options) {
+modification_statement::execute_with_condition(service::query_state& qs, const query_options& options) {
     unimplemented::lwt();
 #if 0
         List<ByteBuffer> keys = buildPartitionKeyNames(options);
@@ -334,6 +336,55 @@ modification_statement::execute_with_condition(::shared_ptr<service::query_state
                                                queryState.getClientState());
         return new ResultMessage.Rows(buildCasResultSet(key, result, options));
 #endif
+}
+
+void
+modification_statement::add_key_values(column_definition& def, ::shared_ptr<restrictions::restriction> values) {
+    if (def.kind == column_definition::CLUSTERING) {
+        _has_no_clustering_columns = false;
+    }
+
+    auto insert_result = _processed_keys.insert({&def, values});
+    if (!insert_result.second) {
+        throw exceptions::invalid_request_exception(sprint("Multiple definitions found for PRIMARY KEY part %s", def.name_as_text()));
+    }
+}
+
+void
+modification_statement::add_key_value(column_definition& def, ::shared_ptr<term> value) {
+    add_key_values(def, ::make_shared<restrictions::single_column_restriction::EQ>(def, value));
+}
+
+void
+modification_statement::precess_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
+    for (auto&& relation : where_clause) {
+        if (relation->is_multi_column()) {
+            throw exceptions::invalid_request_exception(sprint("Multi-column relations cannot be used in WHERE clauses for UPDATE and DELETE statements: %s", relation->to_string()));
+        }
+
+        auto rel = dynamic_pointer_cast<single_column_relation>(relation);
+        if (rel->on_token()) {
+            throw exceptions::invalid_request_exception(sprint("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: %s", relation->to_string()));
+        }
+
+        auto id = rel->get_entity()->prepare_column_identifier(s);
+        auto def = get_column_definition(s, *id);
+        if (!def) {
+            throw exceptions::invalid_request_exception(sprint("Unknown key identifier %s", *id));
+        }
+
+        switch (def->kind) {
+            case column_definition::column_kind::PARTITION:
+            case column_definition::column_kind::CLUSTERING:
+                if (rel->is_EQ() || (def->is_partition_key() && rel->is_IN())) {
+                    add_key_values(*def, rel->to_restriction(s, std::move(names)));
+                    return;
+                }
+                throw exceptions::invalid_request_exception(sprint("Invalid operator %s for PRIMARY KEY part %s", rel->get_operator(), def->name_as_text()));
+            default:
+                throw exceptions::invalid_request_exception(sprint("Non PRIMARY KEY %s found in where clause", def->name_as_text()));
+        }
+    }
 }
 
 }

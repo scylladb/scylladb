@@ -93,20 +93,6 @@ void validate_key(schema_ptr schema_, const bytes& key);
         return metadata;
     }
 
-    // To be used when the operation should be authorized whether this is a counter CF or not
-    public static CFMetaData validateColumnFamily(String keyspaceName, String cfName) throws org.apache.cassandra.exceptions.InvalidRequestException
-    {
-        validateKeyspace(keyspaceName);
-        if (cfName.isEmpty())
-            throw new org.apache.cassandra.exceptions.InvalidRequestException("non-empty table is required");
-
-        CFMetaData metadata = Schema.instance.getCFMetaData(keyspaceName, cfName);
-        if (metadata == null)
-            throw new org.apache.cassandra.exceptions.InvalidRequestException("unconfigured table " + cfName);
-
-        return metadata;
-    }
-
     /**
      * validates all parts of the path to the column, including the column name
      */

@@ -15,79 +15,69 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.restrictions;
 
-import java.nio.ByteBuffer;
-import java.util.List;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import org.apache.cassandra.cql3.ColumnSpecification;
-import org.apache.cassandra.cql3.QueryOptions;
-import org.apache.cassandra.cql3.Term;
-import org.apache.cassandra.cql3.statements.Bound;
-import org.apache.cassandra.exceptions.InvalidRequestException;
+#pragma once
 
-import static org.apache.cassandra.cql3.statements.RequestValidations.checkFalse;
-import static org.apache.cassandra.cql3.statements.RequestValidations.checkNotNull;
+#include <vector>
+
+#include "core/shared_ptr.hh"
+#include "core/sstring.hh"
+#include "cql3/restrictions/restriction.hh"
+#include "types.hh"
+
+namespace cql3 {
+
+namespace restrictions {
 
 /**
  * Base class for <code>Restriction</code>s
  */
-abstract class AbstractRestriction  implements Restriction
-{
-    @Override
-    public  boolean isOnToken()
-    {
+class abstract_restriction : public restriction {
+public:
+    virtual bool is_on_token() override {
         return false;
     }
 
-    @Override
-    public boolean isMultiColumn()
-    {
+    virtual bool is_multi_column() override {
         return false;
     }
 
-    @Override
-    public boolean isSlice()
-    {
+    virtual bool is_slice() override {
         return false;
     }
 
-    @Override
-    public boolean isEQ()
-    {
+    virtual bool is_EQ() override {
         return false;
     }
 
-    @Override
-    public boolean isIN()
-    {
+    virtual bool is_IN() override {
         return false;
     }
 
-    @Override
-    public boolean isContains()
-    {
+    virtual bool is_contains() override {
         return false;
     }
 
-    @Override
-    public boolean hasBound(Bound b)
-    {
+    virtual bool has_bound(statements::bound b) override {
         return true;
     }
 
-    @Override
-    public List<ByteBuffer> bounds(Bound b, QueryOptions options) throws InvalidRequestException
-    {
+    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) override {
         return values(options);
     }
 
-    @Override
-    public boolean isInclusive(Bound b)
-    {
+    virtual bool is_inclusive(statements::bound b) override {
         return true;
     }
 
+protected:
+#if 0
     protected static ByteBuffer validateIndexedValue(ColumnSpecification columnSpec,
                                                      ByteBuffer value)
                                                      throws InvalidRequestException
@@ -96,34 +86,37 @@ abstract class AbstractRestriction  implements Restriction
         checkFalse(value.remaining() > 0xFFFF, "Index expression values may not be larger than 64K");
         return value;
     }
-
+#endif
     /**
      * Checks if the specified term is using the specified function.
      *
      * @param term the term to check
-     * @param ksName the function keyspace name
-     * @param functionName the function name
+     * @param ks_name the function keyspace name
+     * @param function_name the function name
      * @return <code>true</code> if the specified term is using the specified function, <code>false</code> otherwise.
      */
-    protected static final boolean usesFunction(Term term, String ksName, String functionName)
-    {
-        return term != null && term.usesFunction(ksName, functionName);
+    static bool uses_function(::shared_ptr<term> term, const sstring& ks_name, const sstring& function_name) {
+        return bool(term) && term->uses_function(ks_name, function_name);
     }
 
     /**
      * Checks if one of the specified term is using the specified function.
      *
      * @param terms the terms to check
-     * @param ksName the function keyspace name
-     * @param functionName the function name
-     * @return <code>true</code> if onee of the specified term is using the specified function, <code>false</code> otherwise.
+     * @param ks_name the function keyspace name
+     * @param function_name the function name
+     * @return <code>true</code> if one of the specified term is using the specified function, <code>false</code> otherwise.
      */
-    protected static final boolean usesFunction(List<Term> terms, String ksName, String functionName)
-    {
-        if (terms != null)
-            for (Term value : terms)
-                if (usesFunction(value, ksName, functionName))
-                    return true;
+    static bool uses_function(std::vector<::shared_ptr<term>> terms, const sstring& ks_name, const sstring& function_name) {
+        for (auto&& value : terms) {
+            if (uses_function(value, ks_name, function_name)) {
+                return true;
+            }
+        }
         return false;
     }
+};
+
+}
+
 }

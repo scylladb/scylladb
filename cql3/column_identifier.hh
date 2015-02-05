@@ -68,29 +68,29 @@ private:
 #endif
 public:
     column_identifier(sstring raw_text, bool keep_case) {
-        _text = raw_text;
+        _text = std::move(raw_text);
         if (!keep_case) {
             std::transform(_text.begin(), _text.end(), _text.begin(), ::tolower);
         }
         bytes_ = to_bytes(_text);
     }
 
-#if 0
-    public ColumnIdentifier(ByteBuffer bytes, AbstractType<?> type)
-    {
-        this.bytes = bytes;
-        this.text = type.getString(bytes);
-    }
+    column_identifier(bytes bytes_, shared_ptr<abstract_type> type)
+        : bytes_(std::move(bytes_))
+        , _text(type->get_string(this->bytes_))
+    { }
 
-    public ColumnIdentifier(ByteBuffer bytes, String text)
-    {
-        this.bytes = bytes;
-        this.text = text;
-    }
-#endif
+    column_identifier(bytes bytes_, sstring text)
+        : bytes_(std::move(bytes_))
+        , _text(text)
+    { }
 
     bool operator==(const column_identifier& other) const {
         return bytes_ == other.bytes_;
+    }
+
+    const sstring& text() const {
+        return _text;
     }
 
     sstring to_string() const {
@@ -152,6 +152,10 @@ public:
         }
 
         virtual ::shared_ptr<selectable> prepare(schema_ptr s) override {
+            return prepare_column_identifier(s);
+        }
+
+        ::shared_ptr<column_identifier> prepare_column_identifier(schema_ptr s) {
 #if 0
             AbstractType<?> comparator = cfm.comparator.asAbstractType();
             if (cfm.getIsDense() || comparator instanceof CompositeType || comparator instanceof UTF8Type)
@@ -190,15 +194,18 @@ public:
             ColumnIdentifier.Raw that = (ColumnIdentifier.Raw)o;
             return text.equals(that.text);
         }
-
-        @Override
-        public String toString()
-        {
-            return text;
-        }
 #endif
+
+        virtual sstring to_string() const {
+            return _text;
+        }
     };
 };
+
+static inline
+column_definition* get_column_definition(schema_ptr schema, column_identifier& id) {
+    return schema->get_column_definition(id.bytes_);
+}
 
 }
 

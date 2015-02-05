@@ -35,11 +35,11 @@ namespace cql3 {
 
 class variable_specifications final {
 private:
-    std::vector<std::experimental::optional<::shared_ptr<column_identifier>>> _variable_names;
+    std::vector<shared_ptr<column_identifier>> _variable_names;
     std::vector<::shared_ptr<column_specification>> _specs;
 
 public:
-    variable_specifications(const std::vector<std::experimental::optional<::shared_ptr<column_identifier>>>& variable_names)
+    variable_specifications(const std::vector<::shared_ptr<column_identifier>>& variable_names)
         : _variable_names{variable_names}
         , _specs{variable_names.size()}
     { }
@@ -49,7 +49,7 @@ public:
      * @return an empty instance of <code>VariableSpecifications</code>
      */
     static ::shared_ptr<variable_specifications> empty() {
-        return ::make_shared<variable_specifications>(std::vector<std::experimental::optional<::shared_ptr<column_identifier>>>{});
+        return ::make_shared<variable_specifications>(std::vector<::shared_ptr<column_identifier>>{});
     }
 
     size_t size() const {
@@ -64,7 +64,7 @@ public:
         auto name = _variable_names[bind_index];
         // Use the user name, if there is one
         if (name) {
-            spec = ::make_shared<column_specification>(spec->ks_name, spec->cf_name, name.value(), spec->type);
+            spec = ::make_shared<column_specification>(spec->ks_name, spec->cf_name, name, spec->type);
         }
         _specs[bind_index] = spec;
     }

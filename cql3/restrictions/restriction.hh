@@ -40,6 +40,7 @@ namespace restrictions {
  */
 class restriction {
 public:
+    virtual ~restriction() {}
     virtual bool is_on_token() = 0;
     virtual bool is_slice() = 0;
     virtual bool is_EQ() = 0;
@@ -56,7 +57,7 @@ public:
      * @param functionName the function name
      * @return <code>true</code> if one of the restrictions use the specified function, <code>false</code> otherwise.
      */
-    virtual bool uses_function(sstring ksName, sstring functionName) = 0;
+    virtual bool uses_function(const sstring& ksName, const sstring& functionName) = 0;
 
     /**
      * Checks if the specified bound is set or not.
@@ -65,7 +66,7 @@ public:
      */
     virtual bool has_bound(statements::bound b) = 0;
 
-    virtual std::vector<bytes> bounds(statements::bound b, const query_options& options) = 0;
+    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) = 0;
 
     /**
      * Checks if the specified bound is inclusive or not.

@@ -22,16 +22,18 @@
  * Modified by Cloudius Systems
  */
 
-#pragma once
+#include "operator.hh"
 
-#include "database.hh"
-#include "db/api.hh"
+namespace cql3 {
 
-namespace validation {
-
-constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
-
-void validate_cql_key(schema_ptr schema, const api::partition_key& key);
-schema_ptr validate_column_family(database& db, const sstring& keyspace_name, const sstring& cf_name);
+const operator_type operator_type::EQ(0, operator_type::EQ, "=");
+const operator_type operator_type::LT(4, operator_type::GT, "<");
+const operator_type operator_type::LTE(3, operator_type::GTE, "<=");
+const operator_type operator_type::GTE(1, operator_type::LTE, ">=");
+const operator_type operator_type::GT(2, operator_type::LT, ">");
+const operator_type operator_type::IN(7, operator_type::IN, "IN");
+const operator_type operator_type::CONTAINS(5, operator_type::CONTAINS, "CONTAINS");
+const operator_type operator_type::CONTAINS_KEY(6, operator_type::CONTAINS_KEY, "CONTAINS_KEY");
+const operator_type operator_type::NEQ(8, operator_type::NEQ, "!=");
 
 }

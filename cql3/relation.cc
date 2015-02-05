@@ -22,16 +22,19 @@
  * Modified by Cloudius Systems
  */
 
-#pragma once
+#include "relation.hh"
+#include "exceptions/unrecognized_entity_exception.hh"
 
-#include "database.hh"
-#include "db/api.hh"
+namespace cql3 {
 
-namespace validation {
-
-constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
-
-void validate_cql_key(schema_ptr schema, const api::partition_key& key);
-schema_ptr validate_column_family(database& db, const sstring& keyspace_name, const sstring& cf_name);
+column_definition&
+relation::to_column_definition(schema_ptr schema, ::shared_ptr<column_identifier::raw> entity) {
+    auto id = entity->prepare_column_identifier(schema);
+    auto def = get_column_definition(schema, *id);
+    if (!def) {
+        throw exceptions::unrecognized_entity_exception(id, shared_from_this());
+    }
+    return *def;
+}
 
 }

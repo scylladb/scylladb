@@ -26,6 +26,7 @@
 #include "types.hh"
 #include "tuple.hh"
 #include "core/future.hh"
+#include "cql3/column_specification.hh"
 
 struct row;
 struct paritition;
@@ -44,21 +45,20 @@ struct partition {
 
 using column_id = uint32_t;
 
-struct column_definition final {
-    enum column_kind { PRIMARY, CLUSTERING, REGULAR, STATIC };
-    sstring name;
-    shared_ptr<abstract_type> type;
+class column_definition final {
+private:
+    bytes _name;
+public:
+    enum column_kind { PARTITION, CLUSTERING, REGULAR, STATIC };
+    column_definition(bytes name, data_type type, column_id id, column_kind kind);
+    data_type type;
     column_id id; // unique within (kind, schema instance)
     column_kind kind;
-    struct name_compare {
-        bool operator()(const column_definition& cd1, const column_definition& cd2) const {
-            return std::lexicographical_compare(
-                    cd1.name.begin(), cd1.name.end(),
-                    cd2.name.begin(), cd2.name.end(),
-                    [] (char c1, char c2) { return uint8_t(c1) < uint8_t(c1); });
-        }
-    };
+    ::shared_ptr<cql3::column_specification> column_specification;
     bool is_static() const { return kind == column_kind::STATIC; }
+    bool is_partition_key() const { return kind == column_kind::PARTITION; }
+    const sstring& name_as_text() const;
+    const bytes& name() const;
 };
 
 struct thrift_schema {
@@ -69,27 +69,78 @@ struct thrift_schema {
  * Keep this effectively immutable.
  */
 class schema final {
+private:
+    std::unordered_map<bytes, column_definition*> _columns_by_name;
+    std::map<bytes, column_definition*, serialized_compare> _regular_columns_by_name;
+public:
+    struct column {
+        bytes name;
+        data_type type;
+        struct name_compare {
+            shared_ptr<abstract_type> type;
+            name_compare(shared_ptr<abstract_type> type) : type(type) {}
+            bool operator()(const column& cd1, const column& cd2) const {
+                return type->less(cd1.name, cd2.name);
+            }
+        };
+    };
+private:
+    void build_columns(std::vector<column> columns, column_definition::column_kind kind, std::vector<column_definition>& dst);
+    ::shared_ptr<cql3::column_specification> make_column_specification(column_definition& def);
 public:
     gc_clock::duration default_time_to_live = gc_clock::duration::zero();
     const sstring ks_name;
     const sstring cf_name;
-    const std::vector<column_definition> partition_key;
-    const std::vector<column_definition> clustering_key;
-    const std::vector<column_definition> regular_columns; // sorted by name
+    std::vector<column_definition> partition_key;
+    std::vector<column_definition> clustering_key;
+    std::vector<column_definition> regular_columns; // sorted by name
     shared_ptr<tuple_type<>> partition_key_type;
     shared_ptr<tuple_type<>> clustering_key_type;
     shared_ptr<tuple_prefix> clustering_key_prefix_type;
+    data_type regular_column_name_type;
     thrift_schema thrift;
 public:
     schema(sstring ks_name, sstring cf_name,
-        std::vector<column_definition> partition_key,
-        std::vector<column_definition> clustering_key,
-        std::vector<column_definition> regular_columns);
+        std::vector<column> partition_key,
+        std::vector<column> clustering_key,
+        std::vector<column> regular_columns,
+        shared_ptr<abstract_type> regular_column_name_type);
     bool is_dense() const {
         return false;
     }
     bool is_counter() const {
         return false;
+    }
+    column_definition* get_column_definition(const bytes& name);
+    auto regular_begin() {
+        return regular_columns.begin();
+    }
+    auto regular_end() {
+        return regular_columns.end();
+    }
+    auto regular_lower_bound(const bytes& name) {
+        // TODO: use regular_columns and a version of std::lower_bound() with heterogeneous comparator
+        auto i = _regular_columns_by_name.lower_bound(name);
+        if (i == _regular_columns_by_name.end()) {
+            return regular_end();
+        } else {
+            return regular_columns.begin() + i->second->id;
+        }
+    }
+    auto regular_upper_bound(const bytes& name) {
+        // TODO: use regular_columns and a version of std::upper_bound() with heterogeneous comparator
+        auto i = _regular_columns_by_name.upper_bound(name);
+        if (i == _regular_columns_by_name.end()) {
+            return regular_end();
+        } else {
+            return regular_columns.begin() + i->second->id;
+        }
+    }
+    column_id get_regular_columns_count() {
+        return regular_columns.size();
+    }
+    data_type column_name_type(column_definition& def) {
+        return def.kind == column_definition::REGULAR ? regular_column_name_type : utf8_type;
     }
 };
 
@@ -110,12 +161,14 @@ class keyspace {
 public:
     std::unordered_map<sstring, column_family> column_families;
     static future<keyspace> populate(sstring datadir);
+    schema_ptr find_schema(sstring cf_name);
 };
 
 class database {
 public:
     std::unordered_map<sstring, keyspace> keyspaces;
     static future<database> populate(sstring datadir);
+    keyspace* find_keyspace(sstring name);
 };
 
 

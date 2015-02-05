@@ -66,7 +66,7 @@ public:
             && _return_type == x._return_type;
     }
 
-    virtual bool uses_function(sstring ks_name, sstring function_name) override {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
         return _name.keyspace == ks_name && _name.name == function_name;
     }
 

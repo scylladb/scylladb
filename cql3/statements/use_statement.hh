@@ -45,11 +45,11 @@ public:
         return 0;
     }
 
-    virtual std::unique_ptr<prepared> prepare() override {
+    virtual std::unique_ptr<prepared> prepare(database& db) override {
         return std::make_unique<parsed_statement::prepared>(this->shared_from_this());
     }
 
-    virtual bool uses_function(sstring ks_name, sstring function_name) const override {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return parsed_statement::uses_function(ks_name, function_name);
     }
 
@@ -60,7 +60,8 @@ public:
     virtual void validate(const service::client_state& state) override {
     }
 
-    virtual transport::messages::result_message execute(service::query_state& state, const query_options& options) override {
+    virtual future<std::experimental::optional<transport::messages::result_message>>
+    execute(service::query_state& state, const query_options& options) override {
         throw std::runtime_error("not implemented");
 #if 0
         state.getClientState().setKeyspace(keyspace);
@@ -68,7 +69,8 @@ public:
 #endif
     }
 
-    virtual transport::messages::result_message execute_internal(service::query_state& state, const query_options& options) override {
+    virtual future<std::experimental::optional<transport::messages::result_message>>
+    execute_internal(service::query_state& state, const query_options& options) override {
         // Internal queries are exclusively on the system keyspace and 'use' is thus useless
         throw std::runtime_error("unsupported operation");
     }

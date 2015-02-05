@@ -15,53 +15,39 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.restrictions;
 
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Deque;
-import java.util.LinkedList;
-import java.util.List;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import org.apache.cassandra.config.ColumnDefinition;
-import org.apache.cassandra.cql3.AbstractMarker;
-import org.apache.cassandra.cql3.Operator;
-import org.apache.cassandra.cql3.QueryOptions;
-import org.apache.cassandra.cql3.Term;
-import org.apache.cassandra.cql3.statements.Bound;
-import org.apache.cassandra.db.IndexExpression;
-import org.apache.cassandra.db.index.SecondaryIndex;
-import org.apache.cassandra.db.index.SecondaryIndexManager;
-import org.apache.cassandra.db.marshal.CompositeType;
-import org.apache.cassandra.exceptions.InvalidRequestException;
+#pragma once
 
-import static org.apache.cassandra.cql3.statements.RequestValidations.checkFalse;
-import static org.apache.cassandra.cql3.statements.RequestValidations.checkTrue;
-import static org.apache.cassandra.cql3.statements.RequestValidations.invalidRequest;
+#include "cql3/restrictions/abstract_restriction.hh"
+#include "cql3/term.hh"
+#include "core/shared_ptr.hh"
+#include "database.hh"
 
-public abstract class SingleColumnRestriction extends AbstractRestriction
-{
+namespace cql3 {
+
+namespace restrictions {
+
+class single_column_restriction : public abstract_restriction {
+protected:
     /**
      * The definition of the column to which apply the restriction.
      */
-    protected final ColumnDefinition columnDef;
+    column_definition& _column_def;
+public:
+    single_column_restriction(column_definition& column_def)
+        : _column_def(column_def)
+    { }
 
-    public SingleColumnRestriction(ColumnDefinition columnDef)
-    {
-        this.columnDef = columnDef;
+    column_definition& get_column_def() {
+        return _column_def;
     }
-
-    /**
-     * Returns the definition of the column to which is associated this restriction.
-     * @return the definition of the column to which is associated this restriction
-     */
-    public ColumnDefinition getColumnDef()
-    {
-        return columnDef;
-    }
-
+#if 0
     @Override
     public void addIndexExpressionTo(List<IndexExpression> expressions,
                                      QueryOptions options) throws InvalidRequestException
@@ -88,53 +74,11 @@ public abstract class SingleColumnRestriction extends AbstractRestriction
      * <code>false</code> otherwise.
      */
     protected abstract boolean isSupportedBy(SecondaryIndex index);
+#endif
 
-    public static final class EQ extends SingleColumnRestriction
-    {
-        private final Term value;
+    class EQ;
 
-        public EQ(ColumnDefinition columnDef, Term value)
-        {
-            super(columnDef);
-            this.value = value;
-        }
-
-        @Override
-        public boolean usesFunction(String ksName, String functionName)
-        {
-            return usesFunction(value, ksName, functionName);
-        }
-
-        public boolean isEQ()
-        {
-            return true;
-        }
-
-        @Override
-        public List<ByteBuffer> values(QueryOptions options) throws InvalidRequestException
-        {
-            return Collections.singletonList(value.bindAndGet(options));
-        }
-
-        @Override
-        public String toString()
-        {
-            return String.format("EQ(%s)", value);
-        }
-
-        @Override
-        public Restriction mergeWith(Restriction otherRestriction) throws InvalidRequestException
-        {
-            throw invalidRequest("%s cannot be restricted by more than one relation if it includes an Equal", columnDef.name);
-        }
-
-        @Override
-        protected boolean isSupportedBy(SecondaryIndex index)
-        {
-            return index.supportsOperator(Operator.EQ);
-        }
-    }
-
+#if 0
     public static abstract class IN extends SingleColumnRestriction
     {
         public IN(ColumnDefinition columnDef)
@@ -515,4 +459,54 @@ public abstract class SingleColumnRestriction extends AbstractRestriction
             super(columnDef);
         }
     }
+#endif
+};
+
+class single_column_restriction::EQ final : public single_column_restriction {
+private:
+    ::shared_ptr<term> _value;
+public:
+    EQ(column_definition& column_def, ::shared_ptr<term> value)
+        : single_column_restriction(column_def)
+        , _value(std::move(value))
+    { }
+
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+        return abstract_restriction::uses_function(_value, ks_name, function_name);
+    }
+
+    virtual bool is_EQ() override {
+        return true;
+    }
+
+    virtual std::vector<bytes_opt> values(const query_options& options) override {
+        std::vector<bytes_opt> v;
+        v.push_back(_value->bind_and_get(options));
+        return v;
+    }
+
+#if 0
+        @Override
+        public String toString()
+        {
+            return String.format("EQ(%s)", value);
+        }
+
+        @Override
+        public Restriction mergeWith(Restriction otherRestriction) throws InvalidRequestException
+        {
+            throw invalidRequest("%s cannot be restricted by more than one relation if it includes an Equal", columnDef.name);
+        }
+
+        @Override
+        protected boolean isSupportedBy(SecondaryIndex index)
+        {
+            return index.supportsOperator(Operator.EQ);
+        }
+#endif
+};
+
+
+}
+
 }

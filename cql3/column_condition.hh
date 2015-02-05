@@ -106,7 +106,7 @@ public:
     }
 #endif
 
-    bool uses_function(sstring ks_name, sstring function_name) const {
+    bool uses_function(const sstring& ks_name, const sstring& function_name) const {
         throw std::runtime_error("not implemented");
 #if 0
         if (collectionElement != null && collectionElement.usesFunction(ksName, functionName))
@@ -121,15 +121,16 @@ public:
 #endif
     }
 
-#if 0
+public:
     /**
      * Collects the column specification for the bind variables of this operation.
      *
      * @param boundNames the list of column specification where to collect the
      * bind variables of this term in.
      */
-    public void collectMarkerSpecification(VariableSpecifications boundNames)
-    {
+    void collect_marker_specificaton(::shared_ptr<variable_specifications> bound_names) {
+        throw std::runtime_error("not found");
+#if 0
         if (collectionElement != null)
             collectionElement.collectMarkerSpecification(boundNames);
 
@@ -142,8 +143,10 @@ public:
         {
             value.collectMarkerSpecification(boundNames);
         }
+#endif
     }
 
+#if 0
     public ColumnCondition.Bound bind(QueryOptions options) throws InvalidRequestException
     {
         boolean isInCondition = operator == Operator.IN;
@@ -777,9 +780,11 @@ public:
         {
             return new Raw(null, null, inMarker, collectionElement, Operator.IN);
         }
-
-        public ColumnCondition prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException
-        {
+#endif
+    public:
+        ::shared_ptr<column_condition> prepare(const sstring& keyspace, column_definition& receiver) {
+            throw std::runtime_error("not implemented");
+#if 0
             if (receiver.type instanceof CounterColumnType)
                 throw new InvalidRequestException("Conditions on counters are not supported");
 
@@ -832,8 +837,8 @@ public:
             {
                 return ColumnCondition.condition(receiver, collectionElement.prepare(keyspace, elementSpec), value.prepare(keyspace, valueSpec), operator);
             }
-        }
 #endif
+        }
     };
 };
 
