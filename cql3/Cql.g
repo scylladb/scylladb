@@ -1072,14 +1072,18 @@ value returns [Term.Raw value]
     | ':' id=ident         { $value = newBindVariables(id); }
     | QMARK                { $value = newBindVariables(null); }
     ;
+#endif
 
-intValue returns [Term.Raw value]
+intValue returns [::shared_ptr<term::raw> value]
     :
-    | t=INTEGER     { $value = Constants.Literal.integer($t.text); }
+    | t=INTEGER     { $value = constants::literal::integer(sstring{$t.text}); }
+#if 0
     | ':' id=ident  { $value = newBindVariables(id); }
     | QMARK         { $value = newBindVariables(null); }
+#endif
     ;
 
+#if 0
 functionName returns [FunctionName s]
     : (ks=keyspaceName '.')? f=allowedFunctionName   { $s = new FunctionName(ks, f); }
     ;
