@@ -65,20 +65,19 @@ public:
     }
 
     api::atomic_cell make_dead_cell() const {
-        return {make_tombstone()};
+        return api::atomic_cell{_timestamp, api::atomic_cell::dead{_local_deletion_time}};
     }
 
     api::atomic_cell make_cell(bytes value) const {
         auto ttl = _ttl;
 
-        if (!ttl.count()) {
+        if (ttl.count() <= 0) {
             ttl = _schema->default_time_to_live;
         }
 
-        return api::atomic_cell(api::live_atomic_cell(_timestamp,
-                ttl.count() ? api::ttl_opt{_local_deletion_time + ttl} : api::ttl_opt{},
-                std::move(value)));
-    }
+        return api::atomic_cell{_timestamp,
+            api::atomic_cell::live{ttl.count() > 0 ? ttl_opt{_local_deletion_time + ttl} : ttl_opt{}, std::move(value)}};
+    };
 
 #if 0
      public Cell makeCounter(CellName name, long delta) throws InvalidRequestException

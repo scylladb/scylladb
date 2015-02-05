@@ -66,20 +66,22 @@ struct tombstone final {
 
 using ttl_opt = std::experimental::optional<gc_clock::time_point>;
 
-class live_atomic_cell final {
-private:
-    timestamp_type _timestamp;
-    ttl_opt _ttl;
-    bytes _value;
-public:
-    live_atomic_cell(timestamp_type timestamp, ttl_opt ttl, bytes value)
-        : _timestamp(timestamp)
-        , _ttl(ttl)
-        , _value(value) {
-    }
+struct atomic_cell final {
+    struct dead {
+        gc_clock::time_point ttl;
+    };
+    struct live {
+        ttl_opt ttl;
+        bytes value;
+    };
+    api::timestamp_type timestamp;
+    boost::variant<dead, live> value;
+    bool is_live() const { return value.which() == 1; }
+    // Call only when is_live() == true
+    const live& as_live() const { return boost::get<live>(value); }
+    // Call only when is_live() == false
+    const dead& as_dead() const { return boost::get<dead>(value); }
 };
-
-using atomic_cell = boost::variant<tombstone, live_atomic_cell>;
 
 using row = std::map<column_id, boost::any>;
 
@@ -90,7 +92,7 @@ struct deletable_row final {
 
 using row_tombstone_set = std::map<bytes, tombstone, serialized_compare>;
 
-class partition final {
+class mutation_partition final {
 private:
     schema_ptr _schema;
     tombstone _tombstone;
@@ -98,7 +100,7 @@ private:
     std::map<clustering_key, deletable_row, key_compare> _rows;
     row_tombstone_set _row_tombstones;
 public:
-    partition(schema_ptr s)
+    mutation_partition(schema_ptr s)
         : _schema(std::move(s))
         , _rows(key_compare(_schema->clustering_key_type))
         , _row_tombstones(serialized_compare(_schema->clustering_key_prefix_type))
@@ -136,13 +138,21 @@ public:
     row& clustered_row(clustering_key&& key) {
         return _rows[std::move(key)].cells;
     }
+
+    row* find_row(const clustering_key& key) {
+        auto i = _rows.find(key);
+        if (i == _rows.end()) {
+            return nullptr;
+        }
+        return &i->second.cells;
+    }
 };
 
 class mutation final {
 public:
     schema_ptr schema;
     partition_key key;
-    partition p;
+    mutation_partition p;
 public:
     mutation(partition_key key_, schema_ptr schema_)
         : schema(std::move(schema_))
