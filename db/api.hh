@@ -127,6 +127,8 @@ public:
         }
     }
 
+    void apply(const mutation_partition& p);
+
     row& static_row() {
         return _static_row;
     }

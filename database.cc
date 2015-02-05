@@ -254,3 +254,76 @@ database::find_keyspace(sstring name) {
     }
     return nullptr;
 }
+
+// Based on org.apache.cassandra.db.AbstractCell#reconcile()
+static inline
+int
+compare_for_merge(const column_definition& def, const atomic_cell& left, const atomic_cell& right) {
+    if (left.timestamp != right.timestamp) {
+        return left.timestamp > right.timestamp ? 1 : -1;
+    }
+    if (left.value.which() != right.value.which()) {
+        return left.is_live() ? -1 : 1;
+    }
+    if (left.is_live()) {
+        return def.type->compare(left.as_live().value, right.as_live().value);
+    } else {
+        auto& c1 = left.as_dead();
+        auto& c2 = right.as_dead();
+        if (c1.ttl != c2.ttl) {
+            // Origin compares big-endian serialized TTL
+            return (uint32_t)c1.ttl.time_since_epoch().count() < (uint32_t)c2.ttl.time_since_epoch().count() ? -1 : 1;
+        }
+        return 0;
+    }
+}
+
+static inline
+int
+compare_for_merge(const column_definition& def,
+                  const std::pair<column_id, boost::any>& left,
+                  const std::pair<column_id, boost::any>& right) {
+    if (def.is_atomic()) {
+        return compare_for_merge(def, boost::any_cast<const atomic_cell&>(left.second),
+            boost::any_cast<const atomic_cell&>(right.second));
+    } else {
+        throw std::runtime_error("not implemented");
+    }
+}
+
+void mutation_partition::apply(const mutation_partition& p) {
+    _tombstone.apply(p._tombstone);
+
+    for (auto&& entry : p._row_tombstones) {
+        apply_row_tombstone(entry.first, entry.second);
+    }
+
+    auto merge_cells = [this] (row& old_row, const row& new_row) {
+        for (auto&& new_column : new_row) {
+            auto col = new_column.first;
+            auto i = old_row.find(col);
+            if (i == old_row.end()) {
+                _static_row.emplace_hint(i, new_column);
+            } else {
+                auto& old_column = *i;
+                auto& def = _schema->regular_column_at(col);
+                if (compare_for_merge(def, old_column, new_column) < 0) {
+                    old_column.second = new_column.second;
+                }
+            }
+        }
+    };
+
+    merge_cells(_static_row, p._static_row);
+
+    for (auto&& entry : p._rows) {
+        auto& key = entry.first;
+        auto i = _rows.find(key);
+        if (i == _rows.end()) {
+            _rows.emplace_hint(i, entry);
+        } else {
+            i->second.t.apply(entry.second.t);
+            merge_cells(i->second.cells, entry.second.cells);
+        }
+    }
+}

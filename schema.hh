@@ -26,6 +26,7 @@ public:
     ::shared_ptr<cql3::column_specification> column_specification;
     bool is_static() const { return kind == column_kind::STATIC; }
     bool is_partition_key() const { return kind == column_kind::PARTITION; }
+    bool is_atomic() const { return !type->is_multi_cell(); }
     const sstring& name_as_text() const;
     const bytes& name() const;
 };
@@ -110,6 +111,9 @@ public:
     }
     data_type column_name_type(column_definition& def) {
         return def.kind == column_definition::REGULAR ? regular_column_name_type : utf8_type;
+    }
+    column_definition& regular_column_at(column_id id) {
+        return regular_columns[id];
     }
 };
 

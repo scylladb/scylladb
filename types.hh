@@ -120,6 +120,7 @@ public:
     }
     virtual bool is_counter() { return false; }
     virtual bool is_collection() { return false; }
+    virtual bool is_multi_cell() { return false; }
 protected:
     template <typename T, typename Compare = std::less<T>>
     bool default_less(const bytes& b1, const bytes& b2, Compare compare = Compare());
