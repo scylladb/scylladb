@@ -160,7 +160,7 @@ public:
 
     virtual bool require_full_clustering_key() const = 0;
 
-    virtual void add_update_for_key(api::mutation& m, const api::clustering_prefix& prefix, const update_parameters& params) = 0;
+    virtual void add_update_for_key(mutation& m, const clustering_prefix& prefix, const update_parameters& params) = 0;
 
     virtual int get_bound_terms() override {
         return _bound_terms;
@@ -267,11 +267,11 @@ private:
 public:
     void add_key_value(column_definition& def, ::shared_ptr<term> value);
     void process_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
-    std::vector<api::partition_key> build_partition_keys(const query_options& options);
+    std::vector<partition_key> build_partition_keys(const query_options& options);
 
 private:
-    api::clustering_prefix create_clustering_prefix(const query_options& options);
-    api::clustering_prefix create_clustering_prefix_internal(const query_options& options);
+    clustering_prefix create_clustering_prefix(const query_options& options);
+    clustering_prefix create_clustering_prefix_internal(const query_options& options);
 
 protected:
     const column_definition* get_first_empty_key();
@@ -285,8 +285,8 @@ public:
 
 protected:
     future<update_parameters::prefetched_rows_type> read_required_rows(
-                lw_shared_ptr<std::vector<api::partition_key>> keys,
-                lw_shared_ptr<api::clustering_prefix> prefix,
+                lw_shared_ptr<std::vector<partition_key>> keys,
+                lw_shared_ptr<clustering_prefix> prefix,
                 bool local,
                 db::consistency_level cl);
 
@@ -435,12 +435,12 @@ private:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<api::mutation>> get_mutations(const query_options& options, bool local, int64_t now);
+    future<std::vector<mutation>> get_mutations(const query_options& options, bool local, int64_t now);
 
 public:
     future<std::unique_ptr<update_parameters>> make_update_parameters(
-                lw_shared_ptr<std::vector<api::partition_key>> keys,
-                lw_shared_ptr<api::clustering_prefix> prefix,
+                lw_shared_ptr<std::vector<partition_key>> keys,
+                lw_shared_ptr<clustering_prefix> prefix,
                 const query_options& options,
                 bool local,
                 int64_t now);

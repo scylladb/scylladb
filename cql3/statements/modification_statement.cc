@@ -50,13 +50,13 @@ operator<<(std::ostream& out, modification_statement::statement_type t) {
     return out;
 }
 
-future<std::vector<api::mutation>>
+future<std::vector<mutation>>
 modification_statement::get_mutations(const query_options& options, bool local, int64_t now) {
     auto keys = make_lw_shared(build_partition_keys(options));
     auto prefix = make_lw_shared(create_clustering_prefix(options));
     return make_update_parameters(keys, prefix, options, local, now).then(
             [this, keys = std::move(keys), prefix = std::move(prefix), now] (auto params_ptr) {
-                std::vector<api::mutation> mutations;
+                std::vector<mutation> mutations;
                 mutations.reserve(keys->size());
                 for (auto key : *keys) {
                     validation::validate_cql_key(s, key);
@@ -70,8 +70,8 @@ modification_statement::get_mutations(const query_options& options, bool local, 
 
 future<std::unique_ptr<update_parameters>>
 modification_statement::make_update_parameters(
-        lw_shared_ptr<std::vector<api::partition_key>> keys,
-        lw_shared_ptr<api::clustering_prefix> prefix,
+        lw_shared_ptr<std::vector<partition_key>> keys,
+        lw_shared_ptr<clustering_prefix> prefix,
         const query_options& options,
         bool local,
         int64_t now) {
@@ -87,8 +87,8 @@ modification_statement::make_update_parameters(
 
 future<update_parameters::prefetched_rows_type>
 modification_statement::read_required_rows(
-        lw_shared_ptr<std::vector<api::partition_key>> keys,
-        lw_shared_ptr<api::clustering_prefix> prefix,
+        lw_shared_ptr<std::vector<partition_key>> keys,
+        lw_shared_ptr<clustering_prefix> prefix,
         bool local,
         db::consistency_level cl) {
     if (!requires_read()) {
@@ -148,7 +148,7 @@ modification_statement::get_first_empty_key() {
     return {};
 }
 
-api::clustering_prefix
+clustering_prefix
 modification_statement::create_clustering_prefix_internal(const query_options& options) {
     std::vector<bytes_opt> components;
     const column_definition* first_empty_key = nullptr;
@@ -184,7 +184,7 @@ modification_statement::create_clustering_prefix_internal(const query_options& o
     return components;
 }
 
-api::clustering_prefix
+clustering_prefix
 modification_statement::create_clustering_prefix(const query_options& options) {
     // If the only updated/deleted columns are static, then we don't need clustering columns.
     // And in fact, unless it is an INSERT, we reject if clustering columns are provided as that
@@ -222,9 +222,9 @@ modification_statement::create_clustering_prefix(const query_options& options) {
     return create_clustering_prefix_internal(options);
 }
 
-std::vector<api::partition_key>
+std::vector<partition_key>
 modification_statement::build_partition_keys(const query_options& options) {
-    std::vector<api::partition_key> result;
+    std::vector<partition_key> result;
     std::vector<bytes_opt> components;
 
     auto remaining = s->partition_key.size();
@@ -244,7 +244,7 @@ modification_statement::build_partition_keys(const query_options& options) {
                     throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
                 }
                 components.push_back(val);
-                api::partition_key key = serialize_value(*s->partition_key_type, components);
+                partition_key key = serialize_value(*s->partition_key_type, components);
                 validation::validate_cql_key(s, key);
                 result.push_back(key);
             } else {
@@ -256,7 +256,7 @@ modification_statement::build_partition_keys(const query_options& options) {
                     full_components.reserve(components.size() + 1);
                     auto i = std::copy(components.begin(), components.end(), std::back_inserter(full_components));
                     *i = val;
-                    api::partition_key key = serialize_value(*s->partition_key_type, full_components);
+                    partition_key key = serialize_value(*s->partition_key_type, full_components);
                     validation::validate_cql_key(s, key);
                     result.push_back(key);
                 }

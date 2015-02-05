@@ -475,7 +475,7 @@ namespace service {
  * @param consistency_level the consistency level for the operation
  */
 future<>
-storage_proxy::mutate(std::vector<api::mutation> mutations, db::consistency_level cl) {
+storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl) {
     throw std::runtime_error("NOT IMPLEMENTED");
 #if 0
         Tracing.trace("Determining replicas for mutation");
@@ -559,7 +559,7 @@ storage_proxy::mutate(std::vector<api::mutation> mutations, db::consistency_leve
 }
 
 future<>
-storage_proxy::mutate_with_triggers(std::vector<api::mutation> mutations, db::consistency_level cl,
+storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl,
         bool should_mutate_atomically) {
     unimplemented::triggers();
 #if 0
@@ -587,7 +587,7 @@ storage_proxy::mutate_with_triggers(std::vector<api::mutation> mutations, db::co
  * @param consistency_level the consistency level for the operation
  */
 future<>
-storage_proxy::mutate_atomically(std::vector<api::mutation> mutations, db::consistency_level cl) {
+storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl) {
     unimplemented::lwt();
 #if 0
         Tracing.trace("Determining replicas for atomic batch");

@@ -31,7 +31,7 @@ namespace cql3 {
 
 namespace statements {
 
-void update_statement::add_update_for_key(api::mutation& m, const api::clustering_prefix& prefix, const update_parameters& params) {
+void update_statement::add_update_for_key(mutation& m, const clustering_prefix& prefix, const update_parameters& params) {
     if (s->is_dense()) {
         throw std::runtime_error("Dense tables not supported yet");
 #if 0

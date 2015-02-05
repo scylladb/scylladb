@@ -39,9 +39,9 @@ public:
     * @param mutations the mutations to be applied across the replicas
     * @param consistency_level the consistency level for the operation
     */
-    static future<> mutate(std::vector<api::mutation> mutations, db::consistency_level cl);
+    static future<> mutate(std::vector<mutation> mutations, db::consistency_level cl);
 
-    static future<> mutate_with_triggers(std::vector<api::mutation> mutations,
+    static future<> mutate_with_triggers(std::vector<mutation> mutations,
             db::consistency_level cl, bool should_mutate_atomically);
 
     /**
@@ -53,7 +53,7 @@ public:
     * @param mutations the Mutations to be applied across the replicas
     * @param consistency_level the consistency level for the operation
     */
-    static future<> mutate_atomically(std::vector<api::mutation> mutations, db::consistency_level cl);
+    static future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl);
 };
 
 }

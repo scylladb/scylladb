@@ -36,8 +36,7 @@ namespace cql3 {
 class update_parameters final {
 public:
     using prefetched_rows_type = std::experimental::optional<
-            std::unordered_map<api::partition_key, api::row,
-                serialized_hash, serialized_equal>>;
+            std::unordered_map<partition_key, row, serialized_hash, serialized_equal>>;
 private:
     const gc_clock::duration _ttl;
     const prefetched_rows_type _prefetched; // For operation that require a read-before-write
@@ -64,19 +63,19 @@ public:
         }
     }
 
-    api::atomic_cell make_dead_cell() const {
-        return api::atomic_cell{_timestamp, api::atomic_cell::dead{_local_deletion_time}};
+    atomic_cell make_dead_cell() const {
+        return atomic_cell{_timestamp, atomic_cell::dead{_local_deletion_time}};
     }
 
-    api::atomic_cell make_cell(bytes value) const {
+    atomic_cell make_cell(bytes value) const {
         auto ttl = _ttl;
 
         if (ttl.count() <= 0) {
             ttl = _schema->default_time_to_live;
         }
 
-        return api::atomic_cell{_timestamp,
-            api::atomic_cell::live{ttl.count() > 0 ? ttl_opt{_local_deletion_time + ttl} : ttl_opt{}, std::move(value)}};
+        return atomic_cell{_timestamp,
+            atomic_cell::live{ttl.count() > 0 ? ttl_opt{_local_deletion_time + ttl} : ttl_opt{}, std::move(value)}};
     };
 
 #if 0
@@ -87,7 +86,7 @@ public:
      }
 #endif
 
-    api::tombstone make_tombstone() const {
+    tombstone make_tombstone() const {
         return {_timestamp, _local_deletion_time};
     }
 

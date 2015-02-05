@@ -13,8 +13,6 @@
 #include "database.hh"
 #include "db/consistency_level.hh"
 
-namespace api {
-
 using partition_key_type = tuple_type<>;
 using clustering_key_type = tuple_type<>;
 using clustering_prefix_type = tuple_prefix;
@@ -22,10 +20,14 @@ using partition_key = bytes;
 using clustering_key = bytes;
 using clustering_prefix = clustering_prefix_type::value_type;
 
+namespace api {
+
 using timestamp_type = int64_t;
 timestamp_type constexpr missing_timestamp = std::numeric_limits<timestamp_type>::min();
 timestamp_type constexpr min_timestamp = std::numeric_limits<timestamp_type>::min() + 1;
 timestamp_type constexpr max_timestamp = std::numeric_limits<timestamp_type>::max();
+
+}
 
 /**
  * Represents deletion operation. Can be commuted with other tombstones via apply() method.
@@ -33,16 +35,16 @@ timestamp_type constexpr max_timestamp = std::numeric_limits<timestamp_type>::ma
  *
  */
 struct tombstone final {
-    timestamp_type timestamp;
+    api::timestamp_type timestamp;
     gc_clock::time_point ttl;
 
-    tombstone(timestamp_type timestamp, gc_clock::time_point ttl)
+    tombstone(api::timestamp_type timestamp, gc_clock::time_point ttl)
         : timestamp(timestamp)
         , ttl(ttl)
     { }
 
     tombstone()
-        : tombstone(missing_timestamp, {})
+        : tombstone(api::missing_timestamp, {})
     { }
 
     bool operator<(const tombstone& t) const {
@@ -54,7 +56,7 @@ struct tombstone final {
     }
 
     operator bool() const {
-        return timestamp != missing_timestamp;
+        return timestamp != api::missing_timestamp;
     }
 
     void apply(const tombstone& t) {
@@ -179,5 +181,3 @@ public:
         row[def.id] = std::move(value);
     }
 };
-
-}

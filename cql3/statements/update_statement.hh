@@ -74,7 +74,7 @@ private:
         return true;
     }
 
-    virtual void add_update_for_key(api::mutation& m, const api::clustering_prefix& prefix, const update_parameters& params) override;
+    virtual void add_update_for_key(mutation& m, const clustering_prefix& prefix, const update_parameters& params) override;
 
     class parsed_insert : public modification_statement::parsed {
     private:
