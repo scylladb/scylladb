@@ -261,6 +261,7 @@ private:
             uint32_t limited_transfer = 0;
             uint32_t partial_ack = 0;
             tcp_seq recover;
+            bool window_probe = false;
         } _snd;
         struct receive {
             tcp_seq next;
@@ -277,12 +278,14 @@ private:
         timer<lowres_clock> _delayed_ack;
         // Retransmission timeout
         std::chrono::milliseconds _rto{1000};
+        std::chrono::milliseconds _persist_time_out{1000};
         static constexpr std::chrono::milliseconds _rto_min{1000};
         static constexpr std::chrono::milliseconds _rto_max{60000};
         // Clock granularity
         static constexpr std::chrono::milliseconds _rto_clk_granularity{1};
         static constexpr uint16_t _max_nr_retransmit{5};
         timer<lowres_clock> _retransmit;
+        timer<lowres_clock> _persist;
         uint16_t _nr_full_seg_received = 0;
         struct isn_secret {
             // 512 bits secretkey for ISN generating
@@ -345,13 +348,30 @@ private:
             auto tp = now + _rto;
             _retransmit.rearm(tp);
         };
-        void stop_retransmit_timer() { _retransmit.cancel(); };
+        void stop_retransmit_timer() {
+            _retransmit.cancel();
+        };
+        void start_persist_timer() {
+            auto now = clock_type::now();
+            start_persist_timer(now);
+        };
+        void start_persist_timer(clock_type::time_point now) {
+            auto tp = now + _persist_time_out;
+            _persist.rearm(tp);
+        };
+        void stop_persist_timer() {
+            _persist.cancel();
+        };
+        void persist();
         void retransmit();
         void fast_retransmit();
         void update_rto(clock_type::time_point tx_time);
         void update_cwnd(uint32_t acked_bytes);
         void cleanup();
         uint32_t can_send() {
+            if (_snd.window_probe) {
+                return 1;
+            }
             // Can not send more than advertised window allows
             auto x = std::min(uint32_t(_snd.unacknowledged + _snd.window - _snd.next), _snd.unsent_len);
             // Can not send more than congestion window allows
@@ -721,7 +741,8 @@ tcp<InetTraits>::tcb::tcb(tcp& t, connid id)
     , _local_ip(id.local_ip)
     , _foreign_ip(id.foreign_ip)
     , _local_port(id.local_port)
-    , _foreign_port(id.foreign_port) {
+    , _foreign_port(id.foreign_port)
+    , _persist([this] { persist(); }) {
         _delayed_ack.set_callback([this] { _nr_full_seg_received = 0; output(); });
         _retransmit.set_callback([this] { retransmit(); });
 }
@@ -1059,6 +1080,19 @@ void tcp<InetTraits>::tcb::input_handle_other_state(tcp_hdr* th, packet p) {
                 return respond_with_reset(th);
             }
         }
+        auto update_window = [this, th, seg_seq, seg_ack] {
+            tcp_debug("window update seg_seq=%d, seg_ack=%d, old window=%d new window=%d\n",
+                      seg_seq, seg_ack, _snd.window, th->window << _snd.window_scale);
+            _snd.window = th->window << _snd.window_scale;
+            _snd.wl1 = seg_seq;
+            _snd.wl2 = seg_ack;
+            if (_snd.window == 0) {
+                _persist_time_out = _rto;
+                start_persist_timer();
+            } else {
+                stop_persist_timer();
+            }
+        };
         // ESTABLISHED STATE or
         // CLOSE_WAIT STATE: Do the same processing as for the ESTABLISHED state.
         if (in_state(ESTABLISHED | CLOSE_WAIT)){
@@ -1069,11 +1103,7 @@ void tcp<InetTraits>::tcb::input_handle_other_state(tcp_hdr* th, packet p) {
 
                 // If SND.UNA < SEG.ACK =< SND.NXT, the send window should be updated.
                 if (_snd.wl1 < seg_seq || (_snd.wl1 == seg_seq && _snd.wl2 <= seg_ack)) {
-                    // tcp_debug("window update seg_seq=%d, seg_ack=%d, old window=%d new window=%d\n",
-                    //         seg_seq, seg_ack, _snd.window, th->window << _snd.window_scale);
-                    _snd.window = th->window << _snd.window_scale;
-                    _snd.wl1 = seg_seq;
-                    _snd.wl2 = seg_ack;
+                    update_window();
                 }
 
                 // some data is acked, try send more data
@@ -1173,11 +1203,7 @@ void tcp<InetTraits>::tcb::input_handle_other_state(tcp_hdr* th, packet p) {
                 // then send an ACK, drop the segment, and return
                 return output();
             } else if (_snd.window == 0 && th->window > 0) {
-                // FIXME !!!!
-                // tcp_debug("ack: TCP Window Update\n");
-                _snd.window = th->window << _snd.window_scale;
-                _snd.wl1 = seg_seq;
-                _snd.wl2 = seg_ack;
+                update_window();
                 do_output_data = true;
             }
         }
@@ -1602,6 +1628,20 @@ void tcp<InetTraits>::tcb::insert_out_of_order(tcp_seq seg, packet p) {
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::trim_receive_data_after_window() {
     abort();
+}
+
+template <typename InetTraits>
+void tcp<InetTraits>::tcb::persist() {
+    print("persist timer fired\n");
+    // Send 1 byte packet to probe peer's window size
+    _snd.window_probe = true;
+    output_one();
+    _snd.window_probe = false;
+
+    output();
+    // Perform binary exponential back-off per RFC1122
+    _persist_time_out = std::min(_persist_time_out * 2, _rto_max);
+    start_persist_timer();
 }
 
 template <typename InetTraits>
