@@ -10,10 +10,6 @@
 
 thread_local logging::logger dblog("database");
 
-partition::partition(column_family& cf)
-        : rows(key_compare(cf._schema->clustering_key_type)) {
-}
-
 template<typename Sequence>
 std::vector<::shared_ptr<abstract_type>>
 get_column_types(const Sequence& column_definitions) {
@@ -78,7 +74,7 @@ column_family::column_family(schema_ptr schema)
     , partitions(key_compare(_schema->thrift.partition_key_type)) {
 }
 
-partition*
+mutation_partition*
 column_family::find_partition(const bytes& key) {
     auto i = partitions.find(key);
     return i == partitions.end() ? nullptr : &i->second;
@@ -86,33 +82,28 @@ column_family::find_partition(const bytes& key) {
 
 row*
 column_family::find_row(const bytes& partition_key, const bytes& clustering_key) {
-    partition* p = find_partition(partition_key);
+    mutation_partition* p = find_partition(partition_key);
     if (!p) {
         return nullptr;
     }
-    auto i = p->rows.find(clustering_key);
-    return i == p->rows.end() ? nullptr : &i->second;
+    return p->find_row(clustering_key);
 }
 
-partition&
+mutation_partition&
 column_family::find_or_create_partition(const bytes& key) {
     // call lower_bound so we have a hint for the insert, just in case.
     auto i = partitions.lower_bound(key);
     if (i == partitions.end() || key != i->first) {
-        i = partitions.emplace_hint(i, std::make_pair(std::move(key), partition(*this)));
+        i = partitions.emplace_hint(i, std::make_pair(std::move(key), mutation_partition(_schema)));
     }
     return i->second;
 }
 
 row&
 column_family::find_or_create_row(const bytes& partition_key, const bytes& clustering_key) {
-    partition& p = find_or_create_partition(partition_key);
+    mutation_partition& p = find_or_create_partition(partition_key);
     // call lower_bound so we have a hint for the insert, just in case.
-    auto i = p.rows.lower_bound(clustering_key);
-    if (i == p.rows.end() || clustering_key != i->first) {
-        i = p.rows.emplace_hint(i, std::make_pair(std::move(clustering_key), row()));
-    }
-    return i->second;
+    return p.clustered_row(clustering_key);
 }
 
 sstring to_hex(const bytes& b) {
@@ -253,6 +244,11 @@ database::find_keyspace(sstring name) {
         return &i->second;
     }
     return nullptr;
+}
+
+void column_family::apply(const mutation& m) {
+    mutation_partition& p = find_or_create_partition(m.key);
+    p.apply(m.p);
 }
 
 // Based on org.apache.cassandra.db.AbstractCell#reconcile()

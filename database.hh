@@ -27,32 +27,23 @@
 #include "tuple.hh"
 #include "core/future.hh"
 #include "cql3/column_specification.hh"
+#include <limits>
+#include <cstddef>
+#include "db/api.hh"
 #include "schema.hh"
 
-struct row;
-struct paritition;
 struct column_family;
-
-struct row {
-    std::vector<bytes> cells;
-};
-
-struct partition {
-    explicit partition(column_family& cf);
-    row static_columns;
-    // row key within partition -> row
-    std::map<bytes, row, key_compare> rows;
-};
 
 struct column_family {
     column_family(schema_ptr schema);
-    partition& find_or_create_partition(const bytes& key);
+    mutation_partition& find_or_create_partition(const bytes& key);
     row& find_or_create_row(const bytes& partition_key, const bytes& clustering_key);
-    partition* find_partition(const bytes& key);
+    mutation_partition* find_partition(const bytes& key);
     row* find_row(const bytes& partition_key, const bytes& clustering_key);
     schema_ptr _schema;
     // partition key -> partition
-    std::map<bytes, partition, key_compare> partitions;
+    std::map<bytes, mutation_partition, key_compare> partitions;
+    void apply(const mutation& m);
 };
 
 class keyspace {

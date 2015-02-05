@@ -4,14 +4,12 @@
 
 #pragma once
 
-#include <experimental/optional>
-#include <limits>
-#include <boost/variant/variant.hpp>
+#include <boost/variant.hpp>
+#include <cstdint>
 
+#include "schema.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
-#include "database.hh"
-#include "db/consistency_level.hh"
 
 using partition_key_type = tuple_type<>;
 using clustering_key_type = tuple_type<>;
