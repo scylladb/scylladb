@@ -16,27 +16,33 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.cassandra.cql3.selection;
 
-import java.util.List;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.cql3.ColumnIdentifier;
+#pragma once
 
-import com.google.common.base.Function;
-import com.google.common.collect.Lists;
+#include "cql3/selection/selectable.hh"
+#include "cql3/column_identifier.hh"
 
-public class RawSelector
-{
-    public final Selectable.Raw selectable;
-    public final ColumnIdentifier alias;
+namespace cql3 {
 
-    public RawSelector(Selectable.Raw selectable, ColumnIdentifier alias)
-    {
-        this.selectable = selectable;
-        this.alias = alias;
-    }
+namespace selection {
 
+class raw_selector {
+public:
+    const shared_ptr<selectable::raw> selectable_;
+    const shared_ptr<column_identifier> alias;
+
+    raw_selector(shared_ptr<selectable::raw> selectable__, shared_ptr<column_identifier> alias_)
+        : selectable_{selectable__}
+        , alias{alias_}
+    { }
+
+#if 0
     /**
      * Converts the specified list of <code>RawSelector</code>s into a list of <code>Selectable</code>s.
      *
@@ -58,4 +64,9 @@ public class RawSelector
     {
         return selectable.processesSelection();
     }
+#endif
+};
+
+}
+
 }
