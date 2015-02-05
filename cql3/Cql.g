@@ -967,14 +967,14 @@ cident returns [shared_ptr<column_identifier::raw> id]
 #endif
     ;
 
-#if 0
 // Identifiers that do not refer to columns or where the comparator is known to be text
-ident returns [ColumnIdentifier id]
-    : t=IDENT              { $id = new ColumnIdentifier($t.text, false); }
-    | t=QUOTED_NAME        { $id = new ColumnIdentifier($t.text, true); }
+ident returns [shared_ptr<column_identifier> id]
+    : t=IDENT              { $id = make_shared<column_identifier>(sstring{$t.text}, false); }
+    | t=QUOTED_NAME        { $id = make_shared<column_identifier>(sstring{$t.text}, true); }
+#if 0
     | k=unreserved_keyword { $id = new ColumnIdentifier(k, false); }
-    ;
 #endif
+    ;
 
 // Keyspace & Column family names
 keyspaceName returns [sstring id]
