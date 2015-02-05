@@ -1499,7 +1499,7 @@ future<> tcp<InetTraits>::tcb::send(packet p) {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::close() {
-    if (_snd.closed) {
+    if (in_state(CLOSED) || _snd.closed) {
         return;
     }
     // TODO: We should return a future to upper layer
