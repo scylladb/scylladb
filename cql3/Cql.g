@@ -974,8 +974,8 @@ ident returns [shared_ptr<column_identifier> id]
 
 // Keyspace & Column family names
 keyspaceName returns [sstring id]
-    @init { cf_name name; }
-    : cfOrKsName[name, true] { $id = name.get_keyspace(); }
+    @init { auto name = make_shared<cf_name>(); }
+    : cfOrKsName[name, true] { $id = name->get_keyspace(); }
     ;
 
 #if 0
@@ -989,21 +989,23 @@ idxOrKsName[IndexName name, boolean isKs]
     | t=QUOTED_NAME        { if (isKs) $name.setKeyspace($t.text, true); else $name.setIndex($t.text, true); }
     | k=unreserved_keyword { if (isKs) $name.setKeyspace(k, false); else $name.setIndex(k, false); }
     ;
+#endif
 
-columnFamilyName returns [CFName name]
-    @init { $name = new CFName(); }
+columnFamilyName returns [shared_ptr<cf_name> name]
+    @init { $name = make_shared<cf_name>(); }
     : (cfOrKsName[name, true] '.')? cfOrKsName[name, false]
     ;
 
+#if 0
 userTypeName returns [UTName name]
     : (ks=ident '.')? ut=non_type_ident { return new UTName(ks, ut); }
     ;
 #endif
 
-cfOrKsName[cf_name& name, bool isKs]
-    : t=IDENT              { if (isKs) $name.set_keyspace($t.text, false); else $name.set_column_family($t.text, false); }
-    | t=QUOTED_NAME        { if (isKs) $name.set_keyspace($t.text, true); else $name.set_column_family($t.text, true); }
-    | k=unreserved_keyword { if (isKs) $name.set_keyspace(k, false); else $name.set_column_family(k, false); }
+cfOrKsName[shared_ptr<cf_name> name, bool isKs]
+    : t=IDENT              { if (isKs) $name->set_keyspace($t.text, false); else $name->set_column_family($t.text, false); }
+    | t=QUOTED_NAME        { if (isKs) $name->set_keyspace($t.text, true); else $name->set_column_family($t.text, true); }
+    | k=unreserved_keyword { if (isKs) $name->set_keyspace(k, false); else $name->set_column_family(k, false); }
 #if 0
     | QMARK {addRecognitionError("Bind variables cannot be used for keyspace or table names");}
 #endif
