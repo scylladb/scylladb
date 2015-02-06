@@ -172,6 +172,13 @@ public:
             return buf;
         }
     }
+    int compare(const basic_sstring& x) const noexcept {
+        auto n = traits_type::compare(begin(), x.begin(), std::min(size(), x.size()));
+        if (n != 0) {
+            return n;
+        }
+        return size() - x.size();
+    }
     void swap(basic_sstring& x) noexcept {
         contents tmp;
         tmp = x.u;
@@ -190,6 +197,9 @@ public:
     }
     bool operator!=(const basic_sstring& x) const {
         return !operator==(x);
+    }
+    bool operator<(const basic_sstring& x) const {
+        return compare(x) < 0;
     }
     basic_sstring operator+(const basic_sstring& x) const {
         basic_sstring ret(initialized_later(), size() + x.size());
