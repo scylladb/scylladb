@@ -11,6 +11,7 @@ all_tests = [
     'sstring_test',
     'output_stream_test',
     'urchin/types_test',
+    'urchin/mutation_test',
 ]
 
 last_len = 0
