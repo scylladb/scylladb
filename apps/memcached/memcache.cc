@@ -1393,7 +1393,7 @@ private:
                         }).then([this, &out, v = all_cache_stats._resize_failure] {
                             return this->print_stat(out, "seastar.resize_failure", v);
                         }).then([this, &out, v = all_cache_stats._evicted] {
-                            return this->print_stat(out, "evicted", v);
+                            return this->print_stat(out, "evictions", v);
                         }).then([this, &out, v = all_cache_stats._bytes] {
                             return this->print_stat(out, "bytes", v);
                         }).then([&out] {
