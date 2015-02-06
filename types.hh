@@ -112,12 +112,8 @@ public:
         validate(b);
         return to_string(b);
     }
-    virtual sstring to_string(const bytes& b) {
-        throw std::runtime_error("not implemented");
-    }
-    virtual bytes from_string(const sstring& text) {
-        throw std::runtime_error("not implemented");
-    }
+    virtual sstring to_string(const bytes& b) = 0;
+    virtual bytes from_string(const sstring& text) = 0;
     virtual bool is_counter() { return false; }
     virtual bool is_collection() { return false; }
     virtual bool is_multi_cell() { return false; }
