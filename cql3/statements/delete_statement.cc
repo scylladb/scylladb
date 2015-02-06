@@ -30,7 +30,7 @@ namespace statements {
 
 void delete_statement::add_update_for_key(mutation& m, const clustering_prefix& prefix, const update_parameters& params) {
     if (_column_operations.empty()) {
-        m.p.apply_delete(prefix, params.make_tombstone());
+        m.p.apply_delete(s, prefix, params.make_tombstone());
         return;
     }
 

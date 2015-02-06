@@ -94,40 +94,38 @@ using row_tombstone_set = std::map<bytes, tombstone, serialized_compare>;
 
 class mutation_partition final {
 private:
-    schema_ptr _schema;
     tombstone _tombstone;
     row _static_row;
     std::map<clustering_key, deletable_row, key_compare> _rows;
     row_tombstone_set _row_tombstones;
 public:
     mutation_partition(schema_ptr s)
-        : _schema(std::move(s))
-        , _rows(key_compare(_schema->clustering_key_type))
-        , _row_tombstones(serialized_compare(_schema->clustering_key_prefix_type))
+        : _rows(key_compare(s->clustering_key_type))
+        , _row_tombstones(serialized_compare(s->clustering_key_prefix_type))
     { }
 
     void apply(tombstone t) {
         _tombstone.apply(t);
     }
 
-    void apply_delete(const clustering_prefix& prefix, tombstone t) {
+    void apply_delete(schema_ptr schema, const clustering_prefix& prefix, tombstone t) {
         if (prefix.empty()) {
             apply(t);
-        } else if (prefix.size() == _schema->clustering_key.size()) {
-            _rows[serialize_value(*_schema->clustering_key_type, prefix)].t.apply(t);
+        } else if (prefix.size() == schema->clustering_key.size()) {
+            _rows[serialize_value(*schema->clustering_key_type, prefix)].t.apply(t);
         } else {
-            apply_row_tombstone(serialize_value(*_schema->clustering_key_prefix_type, prefix), t);
+            apply_row_tombstone(schema, serialize_value(*schema->clustering_key_prefix_type, prefix), t);
         }
     }
 
-    void apply_row_tombstone(const bytes& prefix, const tombstone& t) {
+    void apply_row_tombstone(schema_ptr schema, const bytes& prefix, const tombstone& t) {
         auto i = _row_tombstones.lower_bound(prefix);
-        if (i == _row_tombstones.end() || !_schema->clustering_key_prefix_type->equal(prefix, i->first) || t > i->second) {
+        if (i == _row_tombstones.end() || !schema->clustering_key_prefix_type->equal(prefix, i->first) || t > i->second) {
             _row_tombstones.insert(i, {prefix, t});
         }
     }
 
-    void apply(const mutation_partition& p);
+    void apply(schema_ptr schema, const mutation_partition& p);
 
     row& static_row() {
         return _static_row;
