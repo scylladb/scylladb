@@ -25,7 +25,7 @@
 #ifndef CQL3_UPDATE_PARAMETERS_HH
 #define CQL3_UPDATE_PARAMETERS_HH
 
-#include "db/api.hh"
+#include "database.hh"
 #include "exceptions/exceptions.hh"
 
 namespace cql3 {

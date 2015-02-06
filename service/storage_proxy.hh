@@ -24,7 +24,7 @@
 
 #pragma once
 
-#include "db/api.hh"
+#include "database.hh"
 
 namespace service {
 

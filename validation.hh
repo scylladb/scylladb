@@ -25,7 +25,7 @@
 #pragma once
 
 #include "database.hh"
-#include "db/api.hh"
+#include "database.hh"
 
 namespace validation {
 

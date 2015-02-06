@@ -27,7 +27,7 @@
 
 #include "core/shared_ptr.hh"
 
-#include "db/api.hh"
+#include "database.hh"
 
 #include <experimental/optional>
 
