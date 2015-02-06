@@ -134,18 +134,24 @@ public:
         } else if (prefix.size() == schema->clustering_key.size()) {
             _rows[serialize_value(*schema->clustering_key_type, prefix)].t.apply(t);
         } else {
-            apply_row_tombstone(schema, serialize_value(*schema->clustering_key_prefix_type, prefix), t);
+            apply_row_tombstone(schema, {serialize_value(*schema->clustering_key_prefix_type, prefix), t});
         }
     }
 
-    void apply_row_tombstone(schema_ptr schema, const bytes& prefix, const tombstone& t) {
+    void apply_row_tombstone(schema_ptr schema, bytes prefix, tombstone t) {
+        apply_row_tombstone(schema, {std::move(prefix), std::move(t)});
+    }
+
+    void apply_row_tombstone(schema_ptr schema, std::pair<bytes, tombstone> row_tombstone) {
+        auto& prefix = row_tombstone.first;
         auto i = _row_tombstones.lower_bound(prefix);
-        if (i == _row_tombstones.end() || !schema->clustering_key_prefix_type->equal(prefix, i->first) || t > i->second) {
-            _row_tombstones.insert(i, {prefix, t});
+        if (i == _row_tombstones.end() || !schema->clustering_key_prefix_type->equal(prefix, i->first)
+                || row_tombstone.second > i->second) {
+            _row_tombstones.insert(i, std::move(row_tombstone));
         }
     }
 
-    void apply(schema_ptr schema, const mutation_partition& p);
+    void apply(schema_ptr schema, mutation_partition&& p);
 
     row& static_row() {
         return _static_row;
@@ -207,7 +213,7 @@ struct column_family {
     schema_ptr _schema;
     // partition key -> partition
     std::map<bytes, mutation_partition, key_compare> partitions;
-    void apply(const mutation& m);
+    void apply(mutation&& m);
 };
 
 class keyspace {

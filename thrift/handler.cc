@@ -231,7 +231,7 @@ public:
                             throw make_exception<InvalidRequestException>("Mutation must have either column or deletion");
                         }
                     }
-                    cf.apply(m_to_apply);
+                    cf.apply(std::move(m_to_apply));
                 }
             }
         } catch (std::exception& ex) {

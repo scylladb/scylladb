@@ -246,9 +246,10 @@ database::find_keyspace(sstring name) {
     return nullptr;
 }
 
-void column_family::apply(const mutation& m) {
-    mutation_partition& p = find_or_create_partition(m.key);
-    p.apply(_schema, m.p);
+void
+column_family::apply(mutation&& m) {
+    mutation_partition& p = find_or_create_partition(std::move(m.key));
+    p.apply(_schema, std::move(m.p));
 }
 
 // Based on org.apache.cassandra.db.AbstractCell#reconcile()
@@ -287,39 +288,39 @@ compare_for_merge(const column_definition& def,
     }
 }
 
-void mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
+void mutation_partition::apply(schema_ptr schema, mutation_partition&& p) {
     _tombstone.apply(p._tombstone);
 
     for (auto&& entry : p._row_tombstones) {
-        apply_row_tombstone(schema, entry.first, entry.second);
+        apply_row_tombstone(schema, std::move(entry));
     }
 
-    auto merge_cells = [this, schema] (row& old_row, const row& new_row) {
+    auto merge_cells = [this, schema] (row& old_row, row&& new_row) {
         for (auto&& new_column : new_row) {
             auto col = new_column.first;
             auto i = old_row.find(col);
             if (i == old_row.end()) {
-                _static_row.emplace_hint(i, new_column);
+                _static_row.emplace_hint(i, std::move(new_column));
             } else {
                 auto& old_column = *i;
                 auto& def = schema->regular_column_at(col);
                 if (compare_for_merge(def, old_column, new_column) < 0) {
-                    old_column.second = new_column.second;
+                    old_column.second = std::move(new_column.second);
                 }
             }
         }
     };
 
-    merge_cells(_static_row, p._static_row);
+    merge_cells(_static_row, std::move(p._static_row));
 
     for (auto&& entry : p._rows) {
         auto& key = entry.first;
         auto i = _rows.find(key);
         if (i == _rows.end()) {
-            _rows.emplace_hint(i, entry);
+            _rows.emplace_hint(i, std::move(entry));
         } else {
             i->second.t.apply(entry.second.t);
-            merge_cells(i->second.cells, entry.second.cells);
+            merge_cells(i->second.cells, std::move(entry.second.cells));
         }
     }
 }

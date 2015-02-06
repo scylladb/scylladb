@@ -32,7 +32,7 @@ BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
 
     mutation m(key, s);
     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(3)));
-    cf.apply(m);
+    cf.apply(std::move(m));
 
     row& row = cf.find_or_create_row(key, c_key);
     auto& cell = boost::any_cast<const atomic_cell&>(row[r1_col.id]);
