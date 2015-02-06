@@ -296,19 +296,19 @@ public:
     }
 
     virtual future<std::experimental::optional<transport::messages::result_message>>
-    execute(service::query_state& qs, const query_options& options) override;
+    execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) override;
 
     virtual future<std::experimental::optional<transport::messages::result_message>>
-    execute_internal(service::query_state& qs, const query_options& options) override {
+    execute_internal(database& db, service::query_state& qs, const query_options& options) override {
         throw std::runtime_error("not implemented");
     }
 
 private:
     future<>
-    execute_without_condition(service::query_state& qs, const query_options& options);
+    execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
 
     future<std::experimental::optional<transport::messages::result_message>>
-    execute_with_condition(service::query_state& qs, const query_options& options);
+    execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
 
 #if 0
     public void addConditions(Composite clusteringPrefix, CQL3CasRequest request, QueryOptions options) throws InvalidRequestException

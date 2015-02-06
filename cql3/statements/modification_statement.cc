@@ -278,23 +278,23 @@ modification_statement::build_partition_keys(const query_options& options) {
 }
 
 future<std::experimental::optional<transport::messages::result_message>>
-modification_statement::execute(service::query_state& qs, const query_options& options) {
+modification_statement::execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     if (has_conditions() && options.get_protocol_version() == 1) {
         throw new exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
     }
 
     if (has_conditions()) {
-        return execute_with_condition(qs, options);
+        return execute_with_condition(proxy, qs, options);
     }
 
-    return execute_without_condition(qs, options).then([] {
+    return execute_without_condition(proxy, qs, options).then([] {
         return make_ready_future<std::experimental::optional<transport::messages::result_message>>(
                 std::experimental::optional<transport::messages::result_message>{});
     });
 }
 
 future<>
-modification_statement::execute_without_condition(service::query_state& qs, const query_options& options) {
+modification_statement::execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     auto cl = options.get_consistency();
     if (is_counter()) {
         db::validate_counter_for_write(s, cl);
@@ -302,16 +302,16 @@ modification_statement::execute_without_condition(service::query_state& qs, cons
         db::validate_for_write(s->ks_name, cl);
     }
 
-    return get_mutations(options, false, options.get_timestamp(qs)).then([cl] (auto mutations) {
+    return get_mutations(options, false, options.get_timestamp(qs)).then([cl, &proxy] (auto mutations) {
         if (mutations.empty()) {
             return now();
         }
-        return service::storage_proxy::mutate_with_triggers(std::move(mutations), cl, false);
+        return proxy.mutate_with_triggers(std::move(mutations), cl, false);
     });
 }
 
 future<std::experimental::optional<transport::messages::result_message>>
-modification_statement::execute_with_condition(service::query_state& qs, const query_options& options) {
+modification_statement::execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     unimplemented::lwt();
 #if 0
         List<ByteBuffer> keys = buildPartitionKeyNames(options);
