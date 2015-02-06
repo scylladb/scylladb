@@ -50,6 +50,9 @@ public:
             }
         }
     }
+    bytes decompose_value(const value_type& values) {
+        return ::serialize_value(*this, values);
+    }
     value_type deserialize_value(std::istream& in) {
         std::vector<bytes_opt> result;
         result.reserve(types.size());
