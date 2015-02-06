@@ -30,7 +30,11 @@
 namespace service {
 
 class storage_proxy /*implements StorageProxyMBean*/ {
+private:
+    database& _db;
 public:
+    storage_proxy(database& db) : _db(db) {}
+
     /**
     * Use this method to have these Mutations applied
     * across all replicas. This method will take care

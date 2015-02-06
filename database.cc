@@ -228,13 +228,22 @@ column_definition::name() const {
     return _name;
 }
 
-schema_ptr
-keyspace::find_schema(sstring cf_name) {
+column_family*
+keyspace::find_column_family(sstring cf_name) {
     auto i = column_families.find(cf_name);
     if (i == column_families.end()) {
+        return nullptr;
+    }
+    return &i->second;
+}
+
+schema_ptr
+keyspace::find_schema(sstring cf_name) {
+    auto cf = find_column_family(cf_name);
+    if (!cf) {
         return {};
     }
-    return i->second._schema;
+    return cf->_schema;
 }
 
 keyspace*

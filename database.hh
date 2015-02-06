@@ -221,6 +221,7 @@ public:
     std::unordered_map<sstring, column_family> column_families;
     static future<keyspace> populate(sstring datadir);
     schema_ptr find_schema(sstring cf_name);
+    column_family* find_column_family(sstring cf_name);
 };
 
 class database {
