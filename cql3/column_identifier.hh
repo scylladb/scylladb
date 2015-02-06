@@ -181,12 +181,6 @@ public:
 
 #if 0
         @Override
-        public final int hashCode()
-        {
-            return text.hashCode();
-        }
-
-        @Override
         public final boolean equals(Object o)
         {
             if(!(o instanceof ColumnIdentifier.Raw))
@@ -199,6 +193,8 @@ public:
         virtual sstring to_string() const {
             return _text;
         }
+
+        friend std::hash<column_identifier::raw>;
     };
 };
 
@@ -218,6 +214,12 @@ struct hash<cql3::column_identifier> {
     }
 };
 
+template<>
+struct hash<cql3::column_identifier::raw> {
+    size_t operator()(const cql3::column_identifier::raw& r) const {
+        return std::hash<sstring>()(r._text);
+    }
+};
 
 }
 
