@@ -18,6 +18,7 @@ private:
     const std::vector<shared_ptr<abstract_type>> types;
     const bool _byte_order_equal;
 public:
+    using prefix_type = tuple_type<true>;
     using value_type = std::vector<bytes_opt>;
 
     tuple_type(std::vector<shared_ptr<abstract_type>> types)
@@ -27,6 +28,11 @@ public:
                 return t->is_byte_order_equal();
             }))
     { }
+
+    prefix_type as_prefix() {
+        return prefix_type(types);
+    }
+
     /*
      * Format:
      *   <len(value1)><value1><len(value2)><value2>...
@@ -49,6 +55,9 @@ public:
                 out.write(val->begin(), val->size());
             }
         }
+    }
+    bytes serialize_value(const value_type& values) {
+        return ::serialize_value(*this, values);
     }
     bytes decompose_value(const value_type& values) {
         return ::serialize_value(*this, values);
