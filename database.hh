@@ -206,6 +206,27 @@ public:
         }
         return &i->second.cells;
     }
+
+    /**
+     * Returns the base tombstone for all cells of given clustering row. Such tombstone
+     * holds all information necessary to decide whether cells in a row are deleted or not,
+     * in addition to any information inside individual cells.
+     */
+    tombstone tombstone_for_row(schema_ptr schema, const clustering_key& key) {
+        tombstone t = _tombstone;
+
+        auto i = _row_tombstones.lower_bound(key);
+        if (i != _row_tombstones.end() && schema->clustering_key_prefix_type->is_prefix_of(i->first, key)) {
+            t.apply(i->second);
+        }
+
+        auto j = _rows.find(key);
+        if (j != _rows.end()) {
+            t.apply(j->second.t);
+        }
+
+        return t;
+    }
 };
 
 class mutation final {
