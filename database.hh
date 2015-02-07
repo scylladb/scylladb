@@ -112,6 +112,10 @@ struct tombstone final {
             *this = t;
         }
     }
+
+    friend std::ostream& operator<<(std::ostream& out, const tombstone& t) {
+        return out << "{timestamp=" << t.timestamp << ", ttl=" << t.ttl.time_since_epoch().count() << "}";
+    }
 };
 
 using ttl_opt = std::experimental::optional<gc_clock::time_point>;
