@@ -83,8 +83,24 @@ struct tombstone final {
         return compare(t) < 0;
     }
 
+    bool operator<=(const tombstone& t) const {
+        return compare(t) <= 0;
+    }
+
+    bool operator>(const tombstone& t) const {
+        return compare(t) > 0;
+    }
+
+    bool operator>=(const tombstone& t) const {
+        return compare(t) >= 0;
+    }
+
     bool operator==(const tombstone& t) const {
         return compare(t) == 0;
+    }
+
+    bool operator!=(const tombstone& t) const {
+        return compare(t) != 0;
     }
 
     operator bool() const {
