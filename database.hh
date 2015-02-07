@@ -103,7 +103,7 @@ struct tombstone final {
         return compare(t) != 0;
     }
 
-    operator bool() const {
+    explicit operator bool() const {
         return timestamp != api::missing_timestamp;
     }
 
