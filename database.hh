@@ -188,6 +188,10 @@ public:
 
     void apply(schema_ptr schema, mutation_partition&& p);
 
+    const row_tombstone_set& row_tombstones() {
+        return _row_tombstones;
+    }
+
     row& static_row() {
         return _static_row;
     }
