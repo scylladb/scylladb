@@ -179,9 +179,10 @@ public:
     void apply_row_tombstone(schema_ptr schema, std::pair<bytes, tombstone> row_tombstone) {
         auto& prefix = row_tombstone.first;
         auto i = _row_tombstones.lower_bound(prefix);
-        if (i == _row_tombstones.end() || !schema->clustering_key_prefix_type->equal(prefix, i->first)
-                || row_tombstone.second > i->second) {
-            _row_tombstones.insert(i, std::move(row_tombstone));
+        if (i == _row_tombstones.end() || !schema->clustering_key_prefix_type->equal(prefix, i->first)) {
+            _row_tombstones.emplace_hint(i, std::move(row_tombstone));
+        } else if (row_tombstone.second > i->second) {
+            i->second = row_tombstone.second;
         }
     }
 
