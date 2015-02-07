@@ -65,12 +65,26 @@ struct tombstone final {
         : tombstone(api::missing_timestamp, {})
     { }
 
+    int compare(const tombstone& t) const {
+        if (timestamp < t.timestamp) {
+            return -1;
+        } else if (timestamp > t.timestamp) {
+            return 1;
+        } else if (ttl < t.ttl) {
+            return -1;
+        } else if (ttl > t.ttl) {
+            return 1;
+        } else {
+            return 0;
+        }
+    }
+
     bool operator<(const tombstone& t) const {
-        return timestamp < t.timestamp || ttl < t.ttl;
+        return compare(t) < 0;
     }
 
     bool operator==(const tombstone& t) const {
-        return timestamp == t.timestamp && ttl == t.ttl;
+        return compare(t) == 0;
     }
 
     operator bool() const {
