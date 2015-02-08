@@ -177,7 +177,13 @@ public:
         if (n != 0) {
             return n;
         }
-        return size() - x.size();
+        if (size() < x.size()) {
+            return -1;
+        } else if (size() > x.size()) {
+            return 1;
+        } else {
+            return 0;
+        }
     }
     void swap(basic_sstring& x) noexcept {
         contents tmp;
