@@ -393,8 +393,8 @@ with open(buildfile, 'w') as f:
             artifacts = str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))))
         compiles = {}
         ragels = {}
-        thrifts = []
-        antlr3_grammars = []
+        thrifts = set()
+        antlr3_grammars = set()
         for binary in build_artifacts:
             srcs = deps[binary]
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
@@ -418,9 +418,9 @@ with open(buildfile, 'w') as f:
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.rl', '.hh')
                     ragels[hh] = src
                 elif src.endswith('.thrift'):
-                    thrifts += [src]
+                    thrifts.add(src)
                 elif src.endswith('.g'):
-                    antlr3_grammars += [src]
+                    antlr3_grammars.add(src)
                 else:
                     raise Exception('No rule for ' + src)
         for obj in compiles:
