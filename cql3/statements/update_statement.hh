@@ -94,9 +94,9 @@ private:
                       std::vector<::shared_ptr<column_identifier::raw>> column_names,
                       std::vector<::shared_ptr<term::raw>> column_values,
                       bool if_not_exists)
-            : modification_statement::parsed{std::move(name), attrs, conditions_vector{}, if_not_exists, false}
-            , _column_names{column_names}
-            , _column_values{column_values}
+            : modification_statement::parsed{std::move(name), std::move(attrs), conditions_vector{}, if_not_exists, false}
+            , _column_names{std::move(column_names)}
+            , _column_values{std::move(column_values)}
         { }
 
         virtual ::shared_ptr<modification_statement> prepare_internal(schema_ptr schema,
