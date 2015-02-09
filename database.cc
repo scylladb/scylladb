@@ -297,7 +297,8 @@ compare_for_merge(const column_definition& def,
     }
 }
 
-void mutation_partition::apply(schema_ptr schema, mutation_partition&& p) {
+void
+mutation_partition::apply(schema_ptr schema, mutation_partition&& p) {
     _tombstone.apply(p._tombstone);
 
     for (auto&& entry : p._row_tombstones) {
@@ -332,4 +333,52 @@ void mutation_partition::apply(schema_ptr schema, mutation_partition&& p) {
             merge_cells(i->second.cells, std::move(entry.second.cells));
         }
     }
+}
+
+tombstone
+mutation_partition::tombstone_for_row(schema_ptr schema, const clustering_key& key) {
+    tombstone t = _tombstone;
+
+    auto i = _row_tombstones.lower_bound(key);
+    if (i != _row_tombstones.end() && schema->clustering_key_prefix_type->is_prefix_of(i->first, key)) {
+        t.apply(i->second);
+    }
+
+    auto j = _rows.find(key);
+    if (j != _rows.end()) {
+        t.apply(j->second.t);
+    }
+
+    return t;
+}
+
+void
+mutation_partition::apply_row_tombstone(schema_ptr schema, std::pair<bytes, tombstone> row_tombstone) {
+    auto& prefix = row_tombstone.first;
+    auto i = _row_tombstones.lower_bound(prefix);
+    if (i == _row_tombstones.end() || !schema->clustering_key_prefix_type->equal(prefix, i->first)) {
+        _row_tombstones.emplace_hint(i, std::move(row_tombstone));
+    } else if (row_tombstone.second > i->second) {
+        i->second = row_tombstone.second;
+    }
+}
+
+void
+mutation_partition::apply_delete(schema_ptr schema, const clustering_prefix& prefix, tombstone t) {
+    if (prefix.empty()) {
+        apply(t);
+    } else if (prefix.size() == schema->clustering_key.size()) {
+        _rows[serialize_value(*schema->clustering_key_type, prefix)].t.apply(t);
+    } else {
+        apply_row_tombstone(schema, {serialize_value(*schema->clustering_key_prefix_type, prefix), t});
+    }
+}
+
+row*
+mutation_partition::find_row(const clustering_key& key) {
+    auto i = _rows.find(key);
+    if (i == _rows.end()) {
+        return nullptr;
+    }
+    return &i->second.cells;
 }
