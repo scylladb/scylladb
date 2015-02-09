@@ -26,17 +26,22 @@ options {
 @parser::namespace{cql3}
 
 @parser::includes {
+#include "cql3/statements/select_statement.hh"
 #include "cql3/statements/use_statement.hh"
+#include "cql3/selection/raw_selector.hh"
 #include "cql3/constants.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/cf_name.hh"
 #include "core/sstring.hh"
 #include "CqlLexer.hpp"
+
+#include <unordered_map>
 }
 
 @parser::traits {
 using namespace cql3;
 using namespace cql3::statements;
+using namespace cql3::selection;
 }
 
 @header {
@@ -245,19 +250,23 @@ using namespace cql3::statements;
 
 /** STATEMENTS **/
 
-#if 0
-query returns [ParsedStatement stmnt]
+query returns [shared_ptr<parsed_statement> stmnt]
     : st=cqlStatement (';')* EOF { $stmnt = st; }
     ;
 
-cqlStatement returns [ParsedStatement stmt]
+cqlStatement returns [shared_ptr<parsed_statement> stmt]
+#if 0
     @after{ if (stmt != null) stmt.setBoundVariables(bindVariables); }
+#endif
     : st1= selectStatement             { $stmt = st1; }
+#if 0
     | st2= insertStatement             { $stmt = st2; }
     | st3= updateStatement             { $stmt = st3; }
     | st4= batchStatement              { $stmt = st4; }
     | st5= deleteStatement             { $stmt = st5; }
+#endif
     | st6= useStatement                { $stmt = st6; }
+#if 0
     | st7= truncateStatement           { $stmt = st7; }
     | st8= createKeyspaceStatement     { $stmt = st8; }
     | st9= createTableStatement        { $stmt = st9; }
@@ -283,8 +292,8 @@ cqlStatement returns [ParsedStatement stmt]
     | st29=dropFunctionStatement       { $stmt = st29; }
     | st30=createAggregateStatement    { $stmt = st30; }
     | st31=dropAggregateStatement      { $stmt = st31; }
-    ;
 #endif
+    ;
 
 /*
  * USE <KEYSPACE>;
@@ -293,54 +302,69 @@ useStatement returns [::shared_ptr<use_statement> stmt]
     : K_USE ks=keyspaceName { $stmt = ::make_shared<use_statement>(ks); }
     ;
 
-#if 0
 /**
  * SELECT <expression>
  * FROM <CF>
  * WHERE KEY = "key1" AND COL > 1 AND COL < 100
  * LIMIT <NUMBER>;
  */
-selectStatement returns [SelectStatement.RawStatement expr]
+selectStatement returns [shared_ptr<select_statement::raw_statement> expr]
     @init {
-        boolean isDistinct = false;
+        bool is_distinct = false;
+#if 0
         Term.Raw limit = null;
-        Map<ColumnIdentifier.Raw, Boolean> orderings = new LinkedHashMap<ColumnIdentifier.Raw, Boolean>();
-        boolean allowFiltering = false;
+#endif
+        select_statement::parameters::orderings_type orderings;
+        bool allow_filtering = false;
     }
-    : K_SELECT ( ( K_DISTINCT { isDistinct = true; } )? sclause=selectClause
-               | sclause=selectCountClause )
+    : K_SELECT ( ( K_DISTINCT { is_distinct = true; } )?
+                 sclause=selectClause
+#if 0
+               | sclause=selectCountClause
+#endif
+               )
       K_FROM cf=columnFamilyName
+#if 0
       ( K_WHERE wclause=whereClause )?
       ( K_ORDER K_BY orderByClause[orderings] ( ',' orderByClause[orderings] )* )?
       ( K_LIMIT rows=intValue { limit = rows; } )?
       ( K_ALLOW K_FILTERING  { allowFiltering = true; } )?
+#endif
       {
-          SelectStatement.Parameters params = new SelectStatement.Parameters(orderings,
-                                                                             isDistinct,
-                                                                             allowFiltering);
+          auto params = ::make_shared<select_statement::parameters>(orderings, is_distinct, allow_filtering);
+#if 0
           $expr = new SelectStatement.RawStatement(cf, params, sclause, wclause, limit);
+#endif
       }
     ;
 
-selectClause returns [List<RawSelector> expr]
-    : t1=selector { $expr = new ArrayList<RawSelector>(); $expr.add(t1); } (',' tN=selector { $expr.add(tN); })*
+selectClause returns [std::vector<shared_ptr<raw_selector>> expr]
+    : t1=selector { $expr = std::vector<shared_ptr<raw_selector>>(); $expr.push_back(t1); } (',' tN=selector { $expr.push_back(tN); })*
+#if 0
     | '\*' { $expr = Collections.<RawSelector>emptyList();}
+#endif
     ;
 
-selector returns [RawSelector s]
-    @init{ ColumnIdentifier alias = null; }
-    : us=unaliasedSelector (K_AS c=ident { alias = c; })? { $s = new RawSelector(us, alias); }
+selector returns [shared_ptr<raw_selector> s]
+    @init{ shared_ptr<column_identifier> alias; }
+    : us=unaliasedSelector (K_AS c=ident { alias = c; })? { $s = make_shared<raw_selector>(us, alias); }
     ;
 
-unaliasedSelector returns [Selectable.Raw s]
-    @init { Selectable.Raw tmp = null; }
+unaliasedSelector returns [shared_ptr<selectable::raw> s]
+    @init { shared_ptr<selectable::raw> tmp; }
     :  ( c=cident                                  { tmp = c; }
+#if 0
        | K_WRITETIME '(' c=cident ')'              { tmp = new Selectable.WritetimeOrTTL.Raw(c, true); }
        | K_TTL       '(' c=cident ')'              { tmp = new Selectable.WritetimeOrTTL.Raw(c, false); }
        | f=functionName args=selectionFunctionArgs { tmp = new Selectable.WithFunction.Raw(f, args); }
-       ) ( '.' fi=cident { tmp = new Selectable.WithFieldSelection.Raw(tmp, fi); } )* { $s = tmp; }
+#endif
+       )
+#if 0
+       ( '.' fi=cident { tmp = new Selectable.WithFieldSelection.Raw(tmp, fi); } )* { $s = tmp; }
+#endif
     ;
 
+#if 0
 selectionFunctionArgs returns [List<Selectable.Raw> a]
     : '(' ')' { $a = Collections.emptyList(); }
     | '(' s1=unaliasedSelector { List<Selectable.Raw> args = new ArrayList<Selectable.Raw>(); args.add(s1); }
@@ -960,24 +984,20 @@ userOption[UserOptions opts]
 cident returns [shared_ptr<column_identifier::raw> id]
     : t=IDENT              { $id = make_shared<column_identifier::raw>(sstring{$t.text}, false); }
     | t=QUOTED_NAME        { $id = make_shared<column_identifier::raw>(sstring{$t.text}, true); }
-#if 0
-    | k=unreserved_keyword { $id = new ColumnIdentifier.Raw(k, false); }
-#endif
+    | k=unreserved_keyword { $id = make_shared<column_identifier::raw>(k, false); }
     ;
 
-#if 0
 // Identifiers that do not refer to columns or where the comparator is known to be text
-ident returns [ColumnIdentifier id]
-    : t=IDENT              { $id = new ColumnIdentifier($t.text, false); }
-    | t=QUOTED_NAME        { $id = new ColumnIdentifier($t.text, true); }
-    | k=unreserved_keyword { $id = new ColumnIdentifier(k, false); }
+ident returns [shared_ptr<column_identifier> id]
+    : t=IDENT              { $id = make_shared<column_identifier>(sstring{$t.text}, false); }
+    | t=QUOTED_NAME        { $id = make_shared<column_identifier>(sstring{$t.text}, true); }
+    | k=unreserved_keyword { $id = make_shared<column_identifier>(k, false); }
     ;
-#endif
 
 // Keyspace & Column family names
 keyspaceName returns [sstring id]
-    @init { cf_name name; }
-    : cfOrKsName[name, true] { $id = name.get_keyspace(); }
+    @init { auto name = make_shared<cf_name>(); }
+    : cfOrKsName[name, true] { $id = name->get_keyspace(); }
     ;
 
 #if 0
@@ -991,22 +1011,24 @@ idxOrKsName[IndexName name, boolean isKs]
     | t=QUOTED_NAME        { if (isKs) $name.setKeyspace($t.text, true); else $name.setIndex($t.text, true); }
     | k=unreserved_keyword { if (isKs) $name.setKeyspace(k, false); else $name.setIndex(k, false); }
     ;
+#endif
 
-columnFamilyName returns [CFName name]
-    @init { $name = new CFName(); }
+columnFamilyName returns [shared_ptr<cf_name> name]
+    @init { $name = make_shared<cf_name>(); }
     : (cfOrKsName[name, true] '.')? cfOrKsName[name, false]
     ;
 
+#if 0
 userTypeName returns [UTName name]
     : (ks=ident '.')? ut=non_type_ident { return new UTName(ks, ut); }
     ;
 #endif
 
-cfOrKsName[cf_name& name, bool isKs]
-    : t=IDENT              { if (isKs) $name.set_keyspace($t.text, false); else $name.set_column_family($t.text, false); }
-    | t=QUOTED_NAME        { if (isKs) $name.set_keyspace($t.text, true); else $name.set_column_family($t.text, true); }
+cfOrKsName[shared_ptr<cf_name> name, bool isKs]
+    : t=IDENT              { if (isKs) $name->set_keyspace($t.text, false); else $name->set_column_family($t.text, false); }
+    | t=QUOTED_NAME        { if (isKs) $name->set_keyspace($t.text, true); else $name->set_column_family($t.text, true); }
+    | k=unreserved_keyword { if (isKs) $name->set_keyspace(k, false); else $name->set_column_family(k, false); }
 #if 0
-    | k=unreserved_keyword { if (isKs) $name.setKeyspace(k, false); else $name.setColumnFamily(k, false); }
     | QMARK {addRecognitionError("Bind variables cannot be used for keyspace or table names");}
 #endif
     ;
@@ -1070,14 +1092,18 @@ value returns [Term.Raw value]
     | ':' id=ident         { $value = newBindVariables(id); }
     | QMARK                { $value = newBindVariables(null); }
     ;
+#endif
 
-intValue returns [Term.Raw value]
+intValue returns [::shared_ptr<term::raw> value]
     :
-    | t=INTEGER     { $value = Constants.Literal.integer($t.text); }
+    | t=INTEGER     { $value = constants::literal::integer(sstring{$t.text}); }
+#if 0
     | ':' id=ident  { $value = newBindVariables(id); }
     | QMARK         { $value = newBindVariables(null); }
+#endif
     ;
 
+#if 0
 functionName returns [FunctionName s]
     : (ks=keyspaceName '.')? f=allowedFunctionName   { $s = new FunctionName(ks, f); }
     ;
@@ -1341,18 +1367,19 @@ non_type_ident returns [ColumnIdentifier id]
     | k=basic_unreserved_keyword { $id = new ColumnIdentifier(k, false); }
     | kk=K_KEY                   { $id = new ColumnIdentifier($kk.text, false); }
     ;
+#endif
 
-unreserved_keyword returns [String str]
+unreserved_keyword returns [sstring str]
     : u=unreserved_function_keyword     { $str = u; }
     | k=(K_TTL | K_COUNT | K_WRITETIME | K_KEY) { $str = $k.text; }
     ;
 
-unreserved_function_keyword returns [String str]
+unreserved_function_keyword returns [sstring str]
     : u=basic_unreserved_keyword { $str = u; }
-    | t=native_type              { $str = t.toString(); }
+    | t=native_type              { $str = t->to_string(); }
     ;
 
-basic_unreserved_keyword returns [String str]
+basic_unreserved_keyword returns [sstring str]
     : k=( K_KEYS
         | K_AS
         | K_CLUSTERING
@@ -1390,7 +1417,6 @@ basic_unreserved_keyword returns [String str]
         | K_DETERMINISTIC
         ) { $str = $k.text; }
     ;
-#endif
 
 // Case-insensitive keywords
 K_SELECT:      S E L E C T;

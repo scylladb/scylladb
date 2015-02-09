@@ -11,6 +11,8 @@
 #include "utils/UUID.hh"
 #include "database.hh"
 
+#include "cql3/CqlParser.hpp"
+
 #include <cassert>
 #include <string>
 
@@ -163,15 +165,15 @@ public:
     void write_string(const sstring& s);
     void write_long_string(const sstring& s);
     void write_uuid(utils::UUID uuid);
-    void write_string_list(std::vector<std::string> string_list);
+    void write_string_list(std::vector<sstring> string_list);
     void write_bytes(bytes b);
     void write_short_bytes(bytes b);
     void write_option(std::pair<int16_t, boost::any> opt);
     void write_option_list(std::vector<std::pair<int16_t, boost::any>> opt_list);
     void write_inet(ipv4_addr inet);
     void write_consistency(db::consistency_level c);
-    void write_string_map(std::map<std::string, std::string> string_map);
-    void write_string_multimap(std::multimap<std::string, std::string> string_map);
+    void write_string_map(std::map<sstring, sstring> string_map);
+    void write_string_multimap(std::multimap<sstring, sstring> string_map);
 private:
     sstring make_frame(uint8_t version, size_t length);
 };
@@ -264,8 +266,13 @@ future<> cql_server::connection::process_query(int16_t stream, temporary_buffer<
     auto consistency = read_consistency(buf);
     auto flags = read_byte(buf);
 #endif
-    print("warning: ignoring query %s\n", query);
-    assert(0);
+    print("processing query: '%s' ...\n", query);
+    cql3::CqlLexer::InputStreamType input{reinterpret_cast<const ANTLR_UINT8*>(query.begin()), ANTLR_ENC_UTF8, static_cast<ANTLR_UINT32>(query.size()), nullptr};
+    cql3::CqlLexer lexer{&input};
+    cql3::CqlParser::TokenStreamType tstream(ANTLR_SIZE_HINT, lexer.get_tokSource());
+    cql3::CqlParser parser{&tstream};
+    auto stmt = parser.query();
+    assert(stmt != nullptr);
     return make_ready_future<>();
 }
 
@@ -309,7 +316,7 @@ future<> cql_server::connection::write_ready(int16_t stream)
 
 future<> cql_server::connection::write_supported(int16_t stream)
 {
-    std::multimap<std::string, std::string> opts;
+    std::multimap<sstring, sstring> opts;
     opts.insert({"CQL_VERSION", "3.0.0"});
     opts.insert({"CQL_VERSION", "3.2.0"});
     opts.insert({"COMPRESSION", "snappy"});
@@ -481,7 +488,7 @@ void cql_server::response::write_uuid(utils::UUID uuid)
     assert(0);
 }
 
-void cql_server::response::write_string_list(std::vector<std::string> string_list)
+void cql_server::response::write_string_list(std::vector<sstring> string_list)
 {
     assert(string_list.size() < std::numeric_limits<int16_t>::max());
     write_short(string_list.size());
@@ -527,7 +534,7 @@ void cql_server::response::write_consistency(db::consistency_level c)
     write_short(consistency_to_wire(c));
 }
 
-void cql_server::response::write_string_map(std::map<std::string, std::string> string_map)
+void cql_server::response::write_string_map(std::map<sstring, sstring> string_map)
 {
     assert(string_map.size() < std::numeric_limits<int16_t>::max());
     write_short(string_map.size());
@@ -537,16 +544,16 @@ void cql_server::response::write_string_map(std::map<std::string, std::string> s
     }
 }
 
-void cql_server::response::write_string_multimap(std::multimap<std::string, std::string> string_map)
+void cql_server::response::write_string_multimap(std::multimap<sstring, sstring> string_map)
 {
-    std::vector<std::string> keys;
+    std::vector<sstring> keys;
     for (auto it = string_map.begin(), end = string_map.end(); it != end; it = string_map.upper_bound(it->first)) {
         keys.push_back(it->first);
     }
     assert(keys.size() < std::numeric_limits<int16_t>::max());
     write_short(keys.size());
     for (auto&& key : keys) {
-        std::vector<std::string> values;
+        std::vector<sstring> values;
         auto range = string_map.equal_range(key);
         for (auto it = range.first; it != range.second; ++it) {
             values.push_back(it->second);

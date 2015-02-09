@@ -31,6 +31,7 @@
 #include "statements/truncate_statement.hh"
 #include "statements/update_statement.hh"
 #include "statements/schema_altering_statement.hh"
+#include "statements/select_statement.hh"
 #include "cql_statement.hh"
 
 #include "selection/selectable.hh"

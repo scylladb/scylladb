@@ -15,8 +15,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.statements;
 
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#ifndef CQL3_STATEMENTS_SELECT_STATEMENT_HH
+#define CQL3_STATEMENTS_SELECT_STATEMENT_HH
+
+#if 0
 import java.nio.ByteBuffer;
 import java.util.*;
 
@@ -63,17 +72,31 @@ import static org.apache.cassandra.cql3.statements.RequestValidations.checkFalse
 import static org.apache.cassandra.cql3.statements.RequestValidations.checkNotNull;
 import static org.apache.cassandra.cql3.statements.RequestValidations.checkTrue;
 import static org.apache.cassandra.cql3.statements.RequestValidations.invalidRequest;
+#endif
+
+#include "cql3/statements/cf_statement.hh"
+#include "cql3/cql_statement.hh"
+
+#include "core/shared_ptr.hh"
+
+namespace cql3 {
+
+namespace statements {
 
 /**
  * Encapsulates a completely parsed SELECT query, including the target
  * column family, expression, result count, and ordering clause.
  *
  */
-public class SelectStatement implements CQLStatement
-{
+class select_statement : public cql_statement {
+private:
+#if 0
     private static final int DEFAULT_COUNT_PAGE_SIZE = 10000;
 
     private final int boundTerms;
+#endif
+public:
+#if 0
     public final CFMetaData cfm;
     public final Parameters parameters;
     private final Selection selection;
@@ -706,9 +729,11 @@ public class SelectStatement implements CQLStatement
 
         Collections.sort(cqlRows.rows, orderingComparator);
     }
+#endif
 
-    public static class RawStatement extends CFStatement
+    class raw_statement : public cf_statement
     {
+#if 0
         private final Parameters parameters;
         private final List<RawSelector> selectClause;
         private final List<Relation> whereClause;
@@ -1000,24 +1025,27 @@ public class SelectStatement implements CQLStatement
                           .add("isDistinct", parameters.isDistinct)
                           .toString();
         }
-    }
+#endif
+    };
 
-    public static class Parameters
-    {
-        private final Map<ColumnIdentifier.Raw, Boolean> orderings;
-        private final boolean isDistinct;
-        private final boolean allowFiltering;
+    class parameters final {
+    public:
+        using orderings_type = std::unordered_map<shared_ptr<column_identifier::raw>, bool, shared_ptr_value_hash<column_identifier::raw>, shared_ptr_equal_by_value<column_identifier::raw>>;
+    private:
+        const orderings_type _orderings;
+        const bool _is_distinct;
+        const bool _allow_filtering;
+    public:
+        parameters(const orderings_type& orderings,
+                   bool is_distinct,
+                   bool allow_filtering)
+            : _orderings{orderings}
+            , _is_distinct{is_distinct}
+            , _allow_filtering{allow_filtering}
+        { }
+    };
 
-        public Parameters(Map<ColumnIdentifier.Raw, Boolean> orderings,
-                          boolean isDistinct,
-                          boolean allowFiltering)
-        {
-            this.orderings = orderings;
-            this.isDistinct = isDistinct;
-            this.allowFiltering = allowFiltering;
-        }
-    }
-
+#if 0
     /**
      * Used in orderResults(...) method when single 'ORDER BY' condition where given
      */
@@ -1071,4 +1099,11 @@ public class SelectStatement implements CQLStatement
             return 0;
         }
     }
+#endif
+};
+
 }
+
+}
+
+#endif
