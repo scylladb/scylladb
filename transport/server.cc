@@ -7,7 +7,6 @@
 #include "db/consistency_level.hh"
 #include "core/future-util.hh"
 #include "core/reactor.hh"
-#include "cql/binary.hh"
 #include "utils/UUID.hh"
 #include "database.hh"
 #include "net/byteorder.hh"
