@@ -27,6 +27,7 @@ options {
 
 @parser::includes {
 #include "cql3/statements/select_statement.hh"
+#include "cql3/statements/update_statement.hh"
 #include "cql3/statements/use_statement.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/constants.hh"
@@ -260,8 +261,8 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     @after{ if (stmt != null) stmt.setBoundVariables(bindVariables); }
 #endif
     : st1= selectStatement             { $stmt = st1; }
-#if 0
     | st2= insertStatement             { $stmt = st2; }
+#if 0
     | st3= updateStatement             { $stmt = st3; }
     | st4= batchStatement              { $stmt = st4; }
     | st5= deleteStatement             { $stmt = st5; }
@@ -394,6 +395,7 @@ orderByClause[Map<ColumnIdentifier.Raw, Boolean> orderings]
     }
     : c=cident (K_ASC | K_DESC { reversed = true; })? { orderings.put(c, reversed); }
     ;
+#endif
 
 /**
  * INSERT INTO <CF> (<column>, <column>, <column>, ...)
@@ -401,37 +403,39 @@ orderByClause[Map<ColumnIdentifier.Raw, Boolean> orderings]
  * USING TIMESTAMP <long>;
  *
  */
-insertStatement returns [UpdateStatement.ParsedInsert expr]
+insertStatement returns [::shared_ptr<update_statement::parsed_insert> expr]
     @init {
-        Attributes.Raw attrs = new Attributes.Raw();
-        List<ColumnIdentifier.Raw> columnNames  = new ArrayList<ColumnIdentifier.Raw>();
-        List<Term.Raw> values = new ArrayList<Term.Raw>();
-        boolean ifNotExists = false;
+        auto attrs = ::make_shared<cql3::attributes::raw>();
+        std::vector<::shared_ptr<cql3::column_identifier::raw>> column_names;
+        std::vector<::shared_ptr<cql3::term::raw>> values;
+        bool if_not_exists = false;
     }
     : K_INSERT K_INTO cf=columnFamilyName
-          '(' c1=cident { columnNames.add(c1); }  ( ',' cn=cident { columnNames.add(cn); } )* ')'
+          '(' c1=cident { column_names.push_back(c1); }  ( ',' cn=cident { column_names.push_back(cn); } )* ')'
         K_VALUES
-          '(' v1=term { values.add(v1); } ( ',' vn=term { values.add(vn); } )* ')'
+          '(' v1=term { values.push_back(v1); } ( ',' vn=term { values.push_back(vn); } )* ')'
 
-        ( K_IF K_NOT K_EXISTS { ifNotExists = true; } )?
+        ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
         ( usingClause[attrs] )?
       {
-          $expr = new UpdateStatement.ParsedInsert(cf,
-                                                   attrs,
-                                                   columnNames,
-                                                   values,
-                                                   ifNotExists);
+          $expr = ::make_shared<update_statement::parsed_insert>(std::move(cf),
+                                                   std::move(attrs),
+                                                   std::move(column_names),
+                                                   std::move(values),
+                                                   if_not_exists);
       }
     ;
 
-usingClause[Attributes.Raw attrs]
+usingClause[::shared_ptr<cql3::attributes::raw> attrs]
     : K_USING usingClauseObjective[attrs] ( K_AND usingClauseObjective[attrs] )*
     ;
 
-usingClauseObjective[Attributes.Raw attrs]
-    : K_TIMESTAMP ts=intValue { attrs.timestamp = ts; }
-    | K_TTL t=intValue { attrs.timeToLive = t; }
+usingClauseObjective[::shared_ptr<cql3::attributes::raw> attrs]
+    : K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
+    | K_TTL t=intValue { attrs->time_to_live = t; }
     ;
+
+#if 0
 
 /**
  * UPDATE <CF>
@@ -1083,17 +1087,21 @@ tupleLiteral returns [Tuples.Literal tt]
     @after{ $tt = new Tuples.Literal(l); }
     : '(' t1=term { l.add(t1); } ( ',' tn=term { l.add(tn); } )* ')'
     ;
+#endif
 
-value returns [Term.Raw value]
+value returns [::shared_ptr<cql3::term::raw> value]
     : c=constant           { $value = c; }
+#if 0
     | l=collectionLiteral  { $value = l; }
     | u=usertypeLiteral    { $value = u; }
     | t=tupleLiteral       { $value = t; }
-    | K_NULL               { $value = Constants.NULL_LITERAL; }
+#endif
+    | K_NULL               { $value = cql3::constants::NULL_LITERAL; }
+#if 0
     | ':' id=ident         { $value = newBindVariables(id); }
     | QMARK                { $value = newBindVariables(null); }
-    ;
 #endif
+    ;
 
 intValue returns [::shared_ptr<cql3::term::raw> value]
     :
@@ -1123,13 +1131,17 @@ functionArgs returns [List<Term.Raw> a]
           ( ',' tn=term { args.add(tn); } )*
        ')' { $a = args; }
     ;
+#endif
 
-term returns [Term.Raw term]
+term returns [::shared_ptr<cql3::term::raw> term]
     : v=value                          { $term = v; }
+#if 0
     | f=functionName args=functionArgs { $term = new FunctionCall.Raw(f, args); }
     | '(' c=comparatorType ')' t=term  { $term = new TypeCast(c, t); }
+#endif
     ;
 
+#if 0
 columnOperation[List<Pair<ColumnIdentifier.Raw, Operation.RawUpdate>> operations]
     : key=cident columnOperationDifferentiator[operations, key]
     ;
