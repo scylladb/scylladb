@@ -742,9 +742,9 @@ tcp<InetTraits>::tcb::tcb(tcp& t, connid id)
     , _foreign_ip(id.foreign_ip)
     , _local_port(id.local_port)
     , _foreign_port(id.foreign_port)
+    , _delayed_ack([this] { _nr_full_seg_received = 0; output(); })
+    , _retransmit([this] { retransmit(); })
     , _persist([this] { persist(); }) {
-        _delayed_ack.set_callback([this] { _nr_full_seg_received = 0; output(); });
-        _retransmit.set_callback([this] { retransmit(); });
 }
 
 template <typename InetTraits>
