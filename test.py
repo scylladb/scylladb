@@ -21,14 +21,19 @@ def print_status(msg):
     print('\r' + msg, end='')
 
 if __name__ == "__main__":
+    all_modes = ['debug', 'release']
+
     parser = argparse.ArgumentParser(description="Seastar test runner")
     parser.add_argument('--fast',  action="store_true", help="Run only fast tests")
+    parser.add_argument('--name',  action="store", help="Run only test whose name contains given string")
+    parser.add_argument('--mode', choices=all_modes, help="Run only tests for given build mode")
     args = parser.parse_args()
 
     black_hole = open('/dev/null', 'w')
 
     test_to_run = []
-    for mode in ['debug', 'release']:
+    modes_to_run = all_modes if not args.mode else [args.mode]
+    for mode in modes_to_run:
         prefix = os.path.join('build', mode, 'tests')
         for test in all_tests:
             test_to_run.append(os.path.join(prefix, test))
@@ -43,6 +48,8 @@ if __name__ == "__main__":
         else:
             test_to_run.append(allocator_test_path)
 
+    if args.name:
+        test_to_run = [t for t in test_to_run if args.name in t]
 
     all_ok = True
 

@@ -237,6 +237,7 @@ private:
             std::deque<unacked_segment> data;
             std::deque<packet> unsent;
             uint32_t unsent_len = 0;
+            uint32_t queued_len = 0;
             bool closed = false;
             promise<> _window_opened;
             // Wait for all data are acked
@@ -257,6 +258,10 @@ private:
             uint16_t dupacks = 0;
             unsigned syn_retransmit = 0;
             unsigned fin_retransmit = 0;
+            uint32_t limited_transfer = 0;
+            uint32_t partial_ack = 0;
+            tcp_seq recover;
+            bool window_probe = false;
         } _snd;
         struct receive {
             tcp_seq next;
@@ -273,12 +278,14 @@ private:
         timer<lowres_clock> _delayed_ack;
         // Retransmission timeout
         std::chrono::milliseconds _rto{1000};
+        std::chrono::milliseconds _persist_time_out{1000};
         static constexpr std::chrono::milliseconds _rto_min{1000};
         static constexpr std::chrono::milliseconds _rto_max{60000};
         // Clock granularity
         static constexpr std::chrono::milliseconds _rto_clk_granularity{1};
         static constexpr uint16_t _max_nr_retransmit{5};
         timer<lowres_clock> _retransmit;
+        timer<lowres_clock> _persist;
         uint16_t _nr_full_seg_received = 0;
         struct isn_secret {
             // 512 bits secretkey for ISN generating
@@ -341,20 +348,43 @@ private:
             auto tp = now + _rto;
             _retransmit.rearm(tp);
         };
-        void stop_retransmit_timer() { _retransmit.cancel(); };
+        void stop_retransmit_timer() {
+            _retransmit.cancel();
+        };
+        void start_persist_timer() {
+            auto now = clock_type::now();
+            start_persist_timer(now);
+        };
+        void start_persist_timer(clock_type::time_point now) {
+            auto tp = now + _persist_time_out;
+            _persist.rearm(tp);
+        };
+        void stop_persist_timer() {
+            _persist.cancel();
+        };
+        void persist();
         void retransmit();
         void fast_retransmit();
         void update_rto(clock_type::time_point tx_time);
         void update_cwnd(uint32_t acked_bytes);
         void cleanup();
         uint32_t can_send() {
+            if (_snd.window_probe) {
+                return 1;
+            }
             // Can not send more than advertised window allows
             auto x = std::min(uint32_t(_snd.unacknowledged + _snd.window - _snd.next), _snd.unsent_len);
             // Can not send more than congestion window allows
             x = std::min(_snd.cwnd, x);
             if (_snd.dupacks == 1 || _snd.dupacks == 2) {
-                // TODO: Send cwnd + 2*smss per RFC3042
+                // RFC5681 Step 3.1
+                // Send cwnd + 2 * smss per RFC3042
+                auto flight = flight_size();
+                auto max = _snd.cwnd + 2 * _snd.mss;
+                x = flight <= max ? std::min(x, max - flight) : 0;
+                _snd.limited_transfer += x;
             } else if (_snd.dupacks >= 3) {
+                // RFC5681 Step 3.5
                 // Sent 1 full-sized segment at most
                 x = std::min(uint32_t(_snd.mss), x);
             }
@@ -378,7 +408,7 @@ private:
             }
         }
         void signal_all_data_acked() {
-            if (_snd._all_data_acked_promise && _snd.unsent_len == 0) {
+            if (_snd._all_data_acked_promise && _snd.unsent_len == 0 && _snd.queued_len == 0) {
                 _snd._all_data_acked_promise->set_value();
                 _snd._all_data_acked_promise = {};
             }
@@ -425,6 +455,7 @@ private:
             _snd.initial = get_isn();
             _snd.unacknowledged = _snd.initial;
             _snd.next = _snd.initial + 1;
+            _snd.recover = _snd.initial;
         }
         void do_local_fin_acked() {
             _snd.unacknowledged += 1;
@@ -434,8 +465,8 @@ private:
             return in_state(SYN_SENT | SYN_RECEIVED);
         }
         bool fin_needs_on() {
-            return in_state(FIN_WAIT_1 | CLOSING | LAST_ACK) &&
-                            (_snd.closed && _snd.unsent_len == 0);
+            return in_state(FIN_WAIT_1 | CLOSING | LAST_ACK) && _snd.closed &&
+                   _snd.unsent_len == 0 && _snd.queued_len == 0;
         }
         bool ack_needs_on() {
             return !in_state(CLOSED | LISTEN | SYN_SENT);
@@ -446,7 +477,12 @@ private:
         bool in_state(tcp_state state) {
             return uint16_t(_state) & uint16_t(state);
         }
-        void data_segment_acked(tcp_seq seg_ack);
+        void exit_fast_recovery() {
+            _snd.dupacks = 0;
+            _snd.limited_transfer = 0;
+            _snd.partial_ack = 0;
+        }
+        uint32_t data_segment_acked(tcp_seq seg_ack);
         bool segment_acceptable(tcp_seq seg_seq, unsigned seg_len);
         void init_from_options(tcp_hdr* th, uint8_t* opt_start, uint8_t* opt_end);
         friend class connection;
@@ -705,9 +741,10 @@ tcp<InetTraits>::tcb::tcb(tcp& t, connid id)
     , _local_ip(id.local_ip)
     , _foreign_ip(id.foreign_ip)
     , _local_port(id.local_port)
-    , _foreign_port(id.foreign_port) {
-        _delayed_ack.set_callback([this] { _nr_full_seg_received = 0; output(); });
-        _retransmit.set_callback([this] { retransmit(); });
+    , _foreign_port(id.foreign_port)
+    , _delayed_ack([this] { _nr_full_seg_received = 0; output(); })
+    , _retransmit([this] { retransmit(); })
+    , _persist([this] { persist(); }) {
 }
 
 template <typename InetTraits>
@@ -755,7 +792,8 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
 }
 
 template <typename InetTraits>
-void tcp<InetTraits>::tcb::data_segment_acked(tcp_seq seg_ack) {
+uint32_t tcp<InetTraits>::tcb::data_segment_acked(tcp_seq seg_ack) {
+    uint32_t total_acked_bytes = 0;
     // Full ACK of segment
     while (!_snd.data.empty()
             && (_snd.unacknowledged + _snd.data.front().data_remaining <= seg_ack)) {
@@ -766,6 +804,7 @@ void tcp<InetTraits>::tcb::data_segment_acked(tcp_seq seg_ack) {
             update_rto(_snd.data.front().tx_time);
         }
         update_cwnd(acked_bytes);
+        total_acked_bytes += acked_bytes;
         _snd.user_queue_space.signal(_snd.data.front().data_len);
         _snd.data.pop_front();
     }
@@ -780,7 +819,9 @@ void tcp<InetTraits>::tcb::data_segment_acked(tcp_seq seg_ack) {
         _snd.data.front().data_remaining -= acked_bytes;
         _snd.unacknowledged = seg_ack;
         update_cwnd(acked_bytes);
+        total_acked_bytes += acked_bytes;
     }
+    return total_acked_bytes;
 }
 
 template <typename InetTraits>
@@ -1039,41 +1080,88 @@ void tcp<InetTraits>::tcb::input_handle_other_state(tcp_hdr* th, packet p) {
                 return respond_with_reset(th);
             }
         }
+        auto update_window = [this, th, seg_seq, seg_ack] {
+            tcp_debug("window update seg_seq=%d, seg_ack=%d, old window=%d new window=%d\n",
+                      seg_seq, seg_ack, _snd.window, th->window << _snd.window_scale);
+            _snd.window = th->window << _snd.window_scale;
+            _snd.wl1 = seg_seq;
+            _snd.wl2 = seg_ack;
+            if (_snd.window == 0) {
+                _persist_time_out = _rto;
+                start_persist_timer();
+            } else {
+                stop_persist_timer();
+            }
+        };
         // ESTABLISHED STATE or
         // CLOSE_WAIT STATE: Do the same processing as for the ESTABLISHED state.
         if (in_state(ESTABLISHED | CLOSE_WAIT)){
             // If SND.UNA < SEG.ACK =< SND.NXT then, set SND.UNA <- SEG.ACK.
             if (_snd.unacknowledged < seg_ack && seg_ack <= _snd.next) {
                 // Remote ACKed data we sent
-                data_segment_acked(seg_ack);
+                auto acked_bytes = data_segment_acked(seg_ack);
 
                 // If SND.UNA < SEG.ACK =< SND.NXT, the send window should be updated.
                 if (_snd.wl1 < seg_seq || (_snd.wl1 == seg_seq && _snd.wl2 <= seg_ack)) {
-                    // tcp_debug("window update seg_seq=%d, seg_ack=%d, old window=%d new window=%d\n",
-                    //         seg_seq, seg_ack, _snd.window, th->window << _snd.window_scale);
-                    _snd.window = th->window << _snd.window_scale;
-                    _snd.wl1 = seg_seq;
-                    _snd.wl2 = seg_ack;
+                    update_window();
                 }
 
                 // some data is acked, try send more data
                 do_output_data = true;
 
-                if (_snd.data.empty()) {
-                    // All outstanding segments are acked, turn off the timer.
-                    stop_retransmit_timer();
-                    // Signal the waiter of this event
-                    signal_all_data_acked();
-                } else {
-                    // Restart the timer becasue new data is acked.
-                    start_retransmit_timer();
-                }
+                auto set_retransmit_timer = [this] {
+                    if (_snd.data.empty()) {
+                        // All outstanding segments are acked, turn off the timer.
+                        stop_retransmit_timer();
+                        // Signal the waiter of this event
+                        signal_all_data_acked();
+                    } else {
+                        // Restart the timer becasue new data is acked.
+                        start_retransmit_timer();
+                    }
+                };
 
-                // New data is acked, exit fast recovery
                 if (_snd.dupacks >= 3) {
-                    _snd.cwnd = _snd.ssthresh;
+                    // We are in fast retransmit / fast recovery phase
+                    uint32_t smss = _snd.mss;
+                    if (seg_ack > _snd.recover) {
+                        tcp_debug("ack: full_ack\n");
+                        // Set cwnd to min (ssthresh, max(FlightSize, SMSS) + SMSS)
+                        _snd.cwnd = std::min(_snd.ssthresh, std::max(flight_size(), smss) + smss);
+                        // Exit the fast recovery procedure
+                        exit_fast_recovery();
+                        set_retransmit_timer();
+                    } else {
+                        tcp_debug("ack: partial_ack\n");
+                        // Retransmit the first unacknowledged segment
+                        fast_retransmit();
+                        // Deflate the congestion window by the amount of new data
+                        // acknowledged by the Cumulative Acknowledgment field
+                        _snd.cwnd -= acked_bytes;
+                        // If the partial ACK acknowledges at least one SMSS of new
+                        // data, then add back SMSS bytes to the congestion window
+                        if (acked_bytes >= smss) {
+                            _snd.cwnd += smss;
+                        }
+                        // Send a new segment if permitted by the new value of
+                        // cwnd.  Do not exit the fast recovery procedure For
+                        // the first partial ACK that arrives during fast
+                        // recovery, also reset the retransmit timer.
+                        if (++_snd.partial_ack == 1) {
+                            start_retransmit_timer();
+                        }
+                    }
+                } else {
+                    // RFC5681: The fast retransmit algorithm uses the arrival
+                    // of 3 duplicate ACKs (as defined in section 2, without
+                    // any intervening ACKs which move SND.UNA) as an
+                    // indication that a segment has been lost.  
+                    //
+                    // So, here we reset dupacks to zero becasue this ACK moves
+                    // SND.UNA.
+                    exit_fast_recovery();
+                    set_retransmit_timer();
                 }
-                _snd.dupacks = 0;
             } else if (!_snd.data.empty() && seg_len == 0 &&
                 th->f_fin == 0 && th->f_syn == 0 &&
                 th->ack == _snd.unacknowledged &&
@@ -1088,23 +1176,34 @@ void tcp<InetTraits>::tcb::input_handle_other_state(tcp_hdr* th, packet p) {
                 _snd.dupacks++;
                 uint32_t smss = _snd.mss;
                 // 3 duplicated ACKs trigger a fast retransmit
-                if (_snd.dupacks == 3) {
-                    _snd.ssthresh = std::max(flight_size() / 2, 2 * smss);
+                if (_snd.dupacks == 1 || _snd.dupacks == 2) {
+                    // RFC5681 Step 3.1
+                    // Send cwnd + 2 * smss per RFC3042
+                    do_output_data = true;
+                } else if (_snd.dupacks == 3) {
+                    // RFC6582 Step 3.2
+                    if (seg_ack - 1 > _snd.recover) {
+                        _snd.recover = _snd.next - 1;
+                        // RFC5681 Step 3.2
+                        _snd.ssthresh = std::max((flight_size() - _snd.limited_transfer) / 2, 2 * smss);
+                        fast_retransmit();
+                    } else {
+                        // Do not enter fast retransmit and do not reset ssthresh
+                    }
+                    // RFC5681 Step 3.3
                     _snd.cwnd = _snd.ssthresh + 3 * smss;
-                    fast_retransmit();
                 } else if (_snd.dupacks > 3) {
+                    // RFC5681 Step 3.4
                     _snd.cwnd += smss;
+                    // RFC5681 Step 3.5
+                    do_output_data = true;
                 }
             } else if (seg_ack > _snd.next) {
                 // If the ACK acks something not yet sent (SEG.ACK > SND.NXT)
                 // then send an ACK, drop the segment, and return
                 return output();
             } else if (_snd.window == 0 && th->window > 0) {
-                // FIXME !!!!
-                // tcp_debug("ack: TCP Window Update\n");
-                _snd.window = th->window << _snd.window_scale;
-                _snd.wl1 = seg_seq;
-                _snd.wl2 = seg_ack;
+                update_window();
                 do_output_data = true;
             }
         }
@@ -1366,7 +1465,7 @@ future<> tcp<InetTraits>::tcb::wait_for_data() {
 
 template <typename InetTraits>
 future<> tcp<InetTraits>::tcb::wait_for_all_data_acked() {
-    if (_snd.data.empty() && _snd.unsent_len == 0) {
+    if (_snd.data.empty() && _snd.unsent_len == 0 && _snd.queued_len == 0) {
         return make_ready_future<>();
     }
     _snd._all_data_acked_promise = promise<>();
@@ -1411,8 +1510,11 @@ future<> tcp<InetTraits>::tcb::send(packet p) {
 
     // TODO: Handle p.len() > max user_queue_space case
     auto len = p.len();
+    _snd.queued_len += len;
     return _snd.user_queue_space.wait(len).then([this, zis = this->shared_from_this(), p = std::move(p)] () mutable {
+        assert(!_snd.closed);
         _snd.unsent_len += p.len();
+        _snd.queued_len -= p.len();
         _snd.unsent.push_back(std::move(p));
         if (can_send() > 0) {
             output();
@@ -1423,7 +1525,7 @@ future<> tcp<InetTraits>::tcb::send(packet p) {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::close() {
-    if (_snd.closed) {
+    if (in_state(CLOSED) || _snd.closed) {
         return;
     }
     // TODO: We should return a future to upper layer
@@ -1438,6 +1540,10 @@ void tcp<InetTraits>::tcb::close() {
             _state = FIN_WAIT_1;
         }
         // Send <FIN> to remote
+        // Note: we call output_one to make sure a packet with FIN actually
+        // sent out. If we only call output() and _packetq is not empty,
+        // tcp::tcb::get_packet(), packet with FIN will not be generated.
+        output_one();
         output();
     });
 }
@@ -1525,6 +1631,20 @@ void tcp<InetTraits>::tcb::trim_receive_data_after_window() {
 }
 
 template <typename InetTraits>
+void tcp<InetTraits>::tcb::persist() {
+    tcp_debug("persist timer fired\n");
+    // Send 1 byte packet to probe peer's window size
+    _snd.window_probe = true;
+    output_one();
+    _snd.window_probe = false;
+
+    output();
+    // Perform binary exponential back-off per RFC1122
+    _persist_time_out = std::min(_persist_time_out * 2, _rto_max);
+    start_persist_timer();
+}
+
+template <typename InetTraits>
 void tcp<InetTraits>::tcb::retransmit() {
     auto output_update_rto = [this] {
         output();
@@ -1568,9 +1688,12 @@ void tcp<InetTraits>::tcb::retransmit() {
     if (unacked_seg.nr_transmits == 0) {
         _snd.ssthresh = std::max(flight_size() / 2, 2 * smss);
     }
+    // RFC6582 Step 4
+    _snd.recover = _snd.next - 1;
     // Start the slow start process
     _snd.cwnd = smss;
-    _snd.dupacks = 0;
+    // End fast recovery
+    exit_fast_recovery();
 
     if (unacked_seg.nr_transmits < _max_nr_retransmit) {
         unacked_seg.nr_transmits++;

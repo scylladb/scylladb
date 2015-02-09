@@ -326,7 +326,7 @@ public:
     }
     template <typename U, typename = std::enable_if_t<std::is_base_of<T, U>::value>>
     shared_ptr& operator=(const shared_ptr<U>& x) noexcept {
-        if (this != &x) {
+        if (*this != x) {
             this->~shared_ptr();
             new (this) shared_ptr(x);
         }
@@ -334,7 +334,7 @@ public:
     }
     template <typename U, typename = std::enable_if_t<std::is_base_of<T, U>::value>>
     shared_ptr& operator=(shared_ptr<U>&& x) noexcept {
-        if (this != &x) {
+        if (*this != x) {
             this->~shared_ptr();
             new (this) shared_ptr(std::move(x));
         }

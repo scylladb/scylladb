@@ -53,6 +53,7 @@ public:
                 p.trim_front(trim);
                 // Append new data to the old segment, keep the old segment
                 seg_pkt.append(std::move(p));
+                seg_pkt.linearize();
                 insert = false;
                 break;
             } else {

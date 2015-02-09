@@ -121,6 +121,13 @@ public:
                         return read();
                     }
                 });
+            }).rescue([this] (auto&& get_ex) {
+                try {
+                    get_ex();
+                    return make_ready_future<>();
+                } catch (std::exception& ex) {
+                    return _responses.push_eventually({});
+                }
             });
         }
         future<> respond() {
