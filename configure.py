@@ -229,7 +229,6 @@ cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'C
 
 urchin_core = (['database.cc',
                  'log.cc',
-                 'transport/binary.rl',
                  'transport/server.cc',
                  'cql3/abstract_marker.cc',
                  'cql3/cql3.cc',

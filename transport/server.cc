@@ -10,26 +10,49 @@
 #include "cql/binary.hh"
 #include "utils/UUID.hh"
 #include "database.hh"
+#include "net/byteorder.hh"
 
 #include "cql3/CqlParser.hpp"
 
 #include <cassert>
 #include <string>
 
+struct cql_frame_error : std::exception {
+    const char* what() const throw () override {
+        return "bad cql binary frame";
+    }
+};
+
+struct bad_cql_protocol_version : std::exception {
+    const char* what() const throw () override {
+        return "bad cql binary protocol version";
+    }
+};
+
 struct [[gnu::packed]] cql_binary_frame_v1 {
     uint8_t  version;
     uint8_t  flags;
     uint8_t  stream;
     uint8_t  opcode;
-    uint32_t length;
+    net::packed<uint32_t> length;
+
+    template <typename Adjuster>
+    void adjust_endianness(Adjuster a) {
+        return a(length);
+    }
 };
 
 struct [[gnu::packed]] cql_binary_frame_v3 {
     uint8_t  version;
     uint8_t  flags;
-    int16_t stream;
+    net::packed<uint16_t> stream;
     uint8_t  opcode;
-    uint32_t length;
+    net::packed<uint32_t> length;
+
+    template <typename Adjuster>
+    void adjust_endianness(Adjuster a) {
+        return a(stream, length);
+    }
 };
 
 enum class cql_binary_opcode : uint8_t {
@@ -111,7 +134,6 @@ class cql_server::connection {
     connected_socket _fd;
     input_stream<char> _read_buf;
     output_stream<char> _write_buf;
-    cql_binary_parser _parser;
     uint8_t _version = 0;
 public:
     connection(cql_server& server, connected_socket&& fd, socket_address addr)
@@ -125,14 +147,17 @@ public:
     }
     future<> process_request();
 private:
-    future<> process_startup(uint8_t version, int16_t stream, temporary_buffer<char>& buf);
-    future<> process_auth_response(int16_t stream, temporary_buffer<char>& buf);
-    future<> process_options(uint8_t version, int16_t stream, temporary_buffer<char>& buf);
-    future<> process_query(int16_t stream, temporary_buffer<char>& buf);
-    future<> process_prepare(int16_t stream, temporary_buffer<char>& buf);
-    future<> process_execute(int16_t stream, temporary_buffer<char>& buf);
-    future<> process_batch(int16_t stream, temporary_buffer<char>& buf);
-    future<> process_register(int16_t stream, temporary_buffer<char>& buf);
+    unsigned frame_size() const;
+    cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
+    future<std::experimental::optional<cql_binary_frame_v3>> read_frame();
+    future<> process_startup(uint16_t stream, temporary_buffer<char> buf);
+    future<> process_auth_response(uint16_t stream, temporary_buffer<char> buf);
+    future<> process_options(uint16_t stream, temporary_buffer<char> buf);
+    future<> process_query(uint16_t stream, temporary_buffer<char> buf);
+    future<> process_prepare(uint16_t stream, temporary_buffer<char> buf);
+    future<> process_execute(uint16_t stream, temporary_buffer<char> buf);
+    future<> process_batch(uint16_t stream, temporary_buffer<char> buf);
+    future<> process_register(uint16_t stream, temporary_buffer<char> buf);
 
     future<> write_error(int16_t stream, cql_binary_error err, sstring msg);
     future<> write_ready(int16_t stream);
@@ -212,34 +237,106 @@ cql_server::do_accepts(int which) {
     });
 }
 
+unsigned
+cql_server::connection::frame_size() const {
+    if (_version < 3) {
+        return 8;
+    } else {
+        return 9;
+    }
+}
+
+cql_binary_frame_v3
+cql_server::connection::parse_frame(temporary_buffer<char> buf) {
+    if (buf.size() != frame_size()) {
+        throw cql_frame_error();
+    }
+    cql_binary_frame_v3 v3;
+    switch (_version) {
+    case 1:
+    case 2: {
+        auto raw = reinterpret_cast<const cql_binary_frame_v1*>(buf.get());
+        auto cooked = net::ntoh(*raw);
+        v3.version = cooked.version;
+        v3.flags = cooked.flags;
+        v3.opcode = cooked.opcode;
+        v3.stream = cooked.stream;
+        v3.length = cooked.length;
+        break;
+    }
+    case 3:
+    case 4: {
+        v3 = net::ntoh(*reinterpret_cast<const cql_binary_frame_v3*>(buf.get()));
+        break;
+    }
+    default:
+        abort();
+    }
+    if (v3.version != _version) {
+        throw bad_cql_protocol_version();
+    }
+    return v3;
+}
+
+future<std::experimental::optional<cql_binary_frame_v3>>
+cql_server::connection::read_frame() {
+    using ret_type = std::experimental::optional<cql_binary_frame_v3>;
+    if (!_version) {
+        // We don't know the frame size before reading the first frame,
+        // so read just one byte, and then read the rest of the frame.
+        return _read_buf.read_exactly(1).then([this] (temporary_buffer<char> buf) {
+            if (buf.empty()) {
+                return make_ready_future<ret_type>();
+            }
+            _version = buf[0];
+            if (_version < 1 || _version > 4) {
+                throw bad_cql_protocol_version();
+            }
+            return _read_buf.read_exactly(frame_size() - 1).then([this] (temporary_buffer<char> tail) {
+                temporary_buffer<char> full(frame_size());
+                full.get_write()[0] = _version;
+                std::copy(tail.get(), tail.get() + tail.size(), full.get_write() + 1);
+                return make_ready_future<ret_type>(parse_frame(std::move(full)));
+            });
+        });
+    } else {
+        // Not the first frame, so we know the size.
+        return _read_buf.read_exactly(frame_size()).then([this] (temporary_buffer<char> buf) {
+            if (buf.empty()) {
+                return make_ready_future<ret_type>();
+            }
+            return make_ready_future<ret_type>(parse_frame(std::move(buf)));
+        });
+    }
+}
+
 future<> cql_server::connection::process_request() {
-    _parser.init();
-    return _read_buf.consume(_parser).then([this] () -> future<> {
-        switch (_parser._state) {
-            case cql_binary_parser::state::eof:               return make_ready_future<>();
-            case cql_binary_parser::state::error:             return write_error(_parser._stream, cql_binary_error::PROTOCOL_ERROR, sstring{"parse error"});
-            default: break;
+    return read_frame().then_wrapped([this] (future<std::experimental::optional<cql_binary_frame_v3>>&& v) {
+        auto maybe_frame = std::get<0>(v.get());
+        if (!maybe_frame) {
+            // eof
+            return make_ready_future<>();
         }
-        return _read_buf.read_exactly(_parser._length).then([this] (temporary_buffer<char> buf) {
-            assert(!(_parser._flags & 0x01)); // FIXME: compression
-            switch (_parser._state) {
-            case cql_binary_parser::state::req_startup:       return process_startup(_parser._version, _parser._stream, buf);
-            case cql_binary_parser::state::req_auth_response: return process_auth_response(_parser._stream, buf);
-            case cql_binary_parser::state::req_options:       return process_options(_parser._version, _parser._stream, buf);
-            case cql_binary_parser::state::req_query:         return process_query(_parser._stream, buf);
-            case cql_binary_parser::state::req_prepare:       return process_prepare(_parser._stream, buf);
-            case cql_binary_parser::state::req_execute:       return process_execute(_parser._stream, buf);
-            case cql_binary_parser::state::req_batch:         return process_batch(_parser._stream, buf);
-            case cql_binary_parser::state::req_register:      return process_register(_parser._stream, buf);
+        auto& f = *maybe_frame;
+        return _read_buf.read_exactly(f.length).then([this, f] (temporary_buffer<char> buf) {
+            assert(!(f.flags & 0x01)); // FIXME: compression
+            switch (static_cast<cql_binary_opcode>(f.opcode)) {
+            case cql_binary_opcode::STARTUP:       return process_startup(f.stream, std::move(buf));
+            case cql_binary_opcode::AUTH_RESPONSE: return process_auth_response(f.stream, std::move(buf));
+            case cql_binary_opcode::OPTIONS:       return process_options(f.stream, std::move(buf));
+            case cql_binary_opcode::QUERY:         return process_query(f.stream, std::move(buf));
+            case cql_binary_opcode::PREPARE:       return process_prepare(f.stream, std::move(buf));
+            case cql_binary_opcode::EXECUTE:       return process_execute(f.stream, std::move(buf));
+            case cql_binary_opcode::BATCH:         return process_batch(f.stream, std::move(buf));
+            case cql_binary_opcode::REGISTER:      return process_register(f.stream, std::move(buf));
             default: assert(0);
             };
         });
     });
 }
 
-future<> cql_server::connection::process_startup(uint8_t version, int16_t stream, temporary_buffer<char>& buf)
+future<> cql_server::connection::process_startup(uint16_t stream, temporary_buffer<char> buf)
 {
-    _version = version;
     auto string_map = read_string_map(buf);
     for (auto&& s : string_map) {
         print("%s => %s\n", s.first, s.second);
@@ -247,19 +344,18 @@ future<> cql_server::connection::process_startup(uint8_t version, int16_t stream
     return write_ready(stream);
 }
 
-future<> cql_server::connection::process_auth_response(int16_t stream, temporary_buffer<char>& buf)
+future<> cql_server::connection::process_auth_response(uint16_t stream, temporary_buffer<char> buf)
 {
     assert(0);
     return make_ready_future<>();
 }
 
-future<> cql_server::connection::process_options(uint8_t version, int16_t stream, temporary_buffer<char>& buf)
+future<> cql_server::connection::process_options(uint16_t stream, temporary_buffer<char> buf)
 {
-    _version = version;
     return write_supported(stream);
 }
 
-future<> cql_server::connection::process_query(int16_t stream, temporary_buffer<char>& buf)
+future<> cql_server::connection::process_query(uint16_t stream, temporary_buffer<char> buf)
 {
     auto query = read_long_string(buf);
 #if 0
@@ -276,25 +372,25 @@ future<> cql_server::connection::process_query(int16_t stream, temporary_buffer<
     return make_ready_future<>();
 }
 
-future<> cql_server::connection::process_prepare(int16_t stream, temporary_buffer<char>& buf)
+future<> cql_server::connection::process_prepare(uint16_t stream, temporary_buffer<char> buf)
 {
     assert(0);
     return make_ready_future<>();
 }
 
-future<> cql_server::connection::process_execute(int16_t stream, temporary_buffer<char>& buf)
+future<> cql_server::connection::process_execute(uint16_t stream, temporary_buffer<char> buf)
 {
     assert(0);
     return make_ready_future<>();
 }
 
-future<> cql_server::connection::process_batch(int16_t stream, temporary_buffer<char>& buf)
+future<> cql_server::connection::process_batch(uint16_t stream, temporary_buffer<char> buf)
 {
     assert(0);
     return make_ready_future<>();
 }
 
-future<> cql_server::connection::process_register(int16_t stream, temporary_buffer<char>& buf)
+future<> cql_server::connection::process_register(uint16_t stream, temporary_buffer<char> buf)
 {
     print("warning: ignoring event registration\n");
     return write_ready(stream);
