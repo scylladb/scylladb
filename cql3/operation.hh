@@ -27,7 +27,7 @@
 
 #include "core/shared_ptr.hh"
 
-#include "db/api.hh"
+#include "database.hh"
 
 #include <experimental/optional>
 
@@ -104,7 +104,7 @@ public:
     /**
      * Execute the operation.
      */
-    virtual void execute(api::mutation& m, const api::clustering_prefix& row_key, const update_parameters& params) = 0;
+    virtual void execute(mutation& m, const clustering_prefix& row_key, const update_parameters& params) = 0;
 
     /**
      * A parsed raw UPDATE operation.

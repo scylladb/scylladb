@@ -99,6 +99,12 @@ modes = {
     },
 }
 
+urchin_tests = [
+    'tests/urchin/mutation_test',
+    'tests/urchin/types_test',
+    'tests/perf/perf_mutation',
+]
+
 tests = [
     'tests/test-reactor',
     'tests/fileiotest',
@@ -121,7 +127,7 @@ tests = [
     'tests/output_stream_test',
     'tests/udp_zero_copy',
     'tests/test-serialization'
-    ]
+    ] + urchin_tests
 
 apps = [
     'apps/httpd/httpd',
@@ -221,9 +227,7 @@ memcache = [
 
 cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'Cassandra')
 
-deps = {
-    'seastar': (['main.cc',
-                 'database.cc',
+urchin_core = (['database.cc',
                  'log.cc',
                  'cql/binary.rl',
                  'cql/server.cc',
@@ -244,17 +248,20 @@ deps = {
                  'service/storage_proxy.cc',
                  'cql3/operator.cc',
                  'cql3/relation.cc',
-		 'db/db.cc',
-		 'io/io.cc',
+                 'cql3/column_identifier.cc',
+                 'db/db.cc',
+                 'io/io.cc',
                  'utils/utils.cc',
                  'utils/UUID_gen.cc',
-		 'gms/version_generator.cc',
+                 'gms/version_generator.cc',
                  'dht/dht.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
-                + core
-                ),
+                + core)
+
+deps = {
+    'seastar': ['main.cc'] + urchin_core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['apps/httpd/httpd.cc', 'apps/httpd/request_parser.rl'] + libnet + core,
     'apps/memcached/memcached': ['apps/memcached/memcached.cc'] + memcache,
@@ -280,6 +287,9 @@ deps = {
     'tests/udp_zero_copy': ['tests/udp_zero_copy.cc'] + core + libnet,
     'tests/test-serialization': ['tests/test-serialization.cc'],
 }
+
+for t in urchin_tests:
+    deps[t] = urchin_core + [t + '.cc']
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only

@@ -23,6 +23,7 @@
  */
 
 #include "validation.hh"
+#include "exceptions/exceptions.hh"
 
 namespace validation {
 
@@ -30,7 +31,7 @@ namespace validation {
  * Based on org.apache.cassandra.thrift.ThriftValidation#validate_key()
  */
 void
-validate_cql_key(schema_ptr schema, const api::partition_key& key) {
+validate_cql_key(schema_ptr schema, const partition_key& key) {
     if (key.empty()) {
         throw exceptions::invalid_request_exception("Key may not be empty");
     }

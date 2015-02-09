@@ -27,134 +27,253 @@
 #include "tuple.hh"
 #include "core/future.hh"
 #include "cql3/column_specification.hh"
+#include <limits>
+#include <cstddef>
+#include "schema.hh"
 
-struct row;
-struct paritition;
-struct column_family;
+using partition_key_type = tuple_type<>;
+using clustering_key_type = tuple_type<>;
+using clustering_prefix_type = tuple_prefix;
+using partition_key = bytes;
+using clustering_key = bytes;
+using clustering_prefix = clustering_prefix_type::value_type;
 
-struct row {
-    std::vector<bytes> cells;
+namespace api {
+
+using timestamp_type = int64_t;
+timestamp_type constexpr missing_timestamp = std::numeric_limits<timestamp_type>::min();
+timestamp_type constexpr min_timestamp = std::numeric_limits<timestamp_type>::min() + 1;
+timestamp_type constexpr max_timestamp = std::numeric_limits<timestamp_type>::max();
+
+}
+
+/**
+* Represents deletion operation. Can be commuted with other tombstones via apply() method.
+* Can be empty.
+*
+*/
+struct tombstone final {
+    api::timestamp_type timestamp;
+    gc_clock::time_point ttl;
+
+    tombstone(api::timestamp_type timestamp, gc_clock::time_point ttl)
+        : timestamp(timestamp)
+        , ttl(ttl)
+    { }
+
+    tombstone()
+        : tombstone(api::missing_timestamp, {})
+    { }
+
+    int compare(const tombstone& t) const {
+        if (timestamp < t.timestamp) {
+            return -1;
+        } else if (timestamp > t.timestamp) {
+            return 1;
+        } else if (ttl < t.ttl) {
+            return -1;
+        } else if (ttl > t.ttl) {
+            return 1;
+        } else {
+            return 0;
+        }
+    }
+
+    bool operator<(const tombstone& t) const {
+        return compare(t) < 0;
+    }
+
+    bool operator<=(const tombstone& t) const {
+        return compare(t) <= 0;
+    }
+
+    bool operator>(const tombstone& t) const {
+        return compare(t) > 0;
+    }
+
+    bool operator>=(const tombstone& t) const {
+        return compare(t) >= 0;
+    }
+
+    bool operator==(const tombstone& t) const {
+        return compare(t) == 0;
+    }
+
+    bool operator!=(const tombstone& t) const {
+        return compare(t) != 0;
+    }
+
+    explicit operator bool() const {
+        return timestamp != api::missing_timestamp;
+    }
+
+    void apply(const tombstone& t) {
+        if (*this < t) {
+            *this = t;
+        }
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const tombstone& t) {
+        return out << "{timestamp=" << t.timestamp << ", ttl=" << t.ttl.time_since_epoch().count() << "}";
+    }
 };
 
-struct partition {
-    explicit partition(column_family& cf);
-    row static_columns;
-    // row key within partition -> row
-    std::map<bytes, row, key_compare> rows;
-};
+using ttl_opt = std::experimental::optional<gc_clock::time_point>;
 
-using column_id = uint32_t;
-
-class column_definition final {
-private:
-    bytes _name;
-public:
-    enum column_kind { PARTITION, CLUSTERING, REGULAR, STATIC };
-    column_definition(bytes name, data_type type, column_id id, column_kind kind);
-    data_type type;
-    column_id id; // unique within (kind, schema instance)
-    column_kind kind;
-    ::shared_ptr<cql3::column_specification> column_specification;
-    bool is_static() const { return kind == column_kind::STATIC; }
-    bool is_partition_key() const { return kind == column_kind::PARTITION; }
-    const sstring& name_as_text() const;
-    const bytes& name() const;
-};
-
-struct thrift_schema {
-    shared_ptr<abstract_type> partition_key_type;
-};
-
-/*
- * Keep this effectively immutable.
- */
-class schema final {
-private:
-    std::unordered_map<bytes, column_definition*> _columns_by_name;
-    std::map<bytes, column_definition*, serialized_compare> _regular_columns_by_name;
-public:
-    struct column {
-        bytes name;
-        data_type type;
-        struct name_compare {
-            shared_ptr<abstract_type> type;
-            name_compare(shared_ptr<abstract_type> type) : type(type) {}
-            bool operator()(const column& cd1, const column& cd2) const {
-                return type->less(cd1.name, cd2.name);
-            }
-        };
+struct atomic_cell final {
+    struct dead {
+        gc_clock::time_point ttl;
     };
+    struct live {
+        ttl_opt ttl;
+        bytes value;
+    };
+    api::timestamp_type timestamp;
+    boost::variant<dead, live> value;
+    bool is_live() const { return value.which() == 1; }
+    // Call only when is_live() == true
+    const live& as_live() const { return boost::get<live>(value); }
+    // Call only when is_live() == false
+    const dead& as_dead() const { return boost::get<dead>(value); }
+};
+
+using row = std::map<column_id, boost::any>;
+
+struct deletable_row final {
+    tombstone t;
+    row cells;
+};
+
+using row_tombstone_set = std::map<bytes, tombstone, serialized_compare>;
+
+class mutation_partition final {
 private:
-    void build_columns(std::vector<column> columns, column_definition::column_kind kind, std::vector<column_definition>& dst);
-    ::shared_ptr<cql3::column_specification> make_column_specification(column_definition& def);
+    tombstone _tombstone;
+    row _static_row;
+    std::map<clustering_key, deletable_row, key_compare> _rows;
+    row_tombstone_set _row_tombstones;
 public:
-    gc_clock::duration default_time_to_live = gc_clock::duration::zero();
-    const sstring ks_name;
-    const sstring cf_name;
-    std::vector<column_definition> partition_key;
-    std::vector<column_definition> clustering_key;
-    std::vector<column_definition> regular_columns; // sorted by name
-    shared_ptr<tuple_type<>> partition_key_type;
-    shared_ptr<tuple_type<>> clustering_key_type;
-    shared_ptr<tuple_prefix> clustering_key_prefix_type;
-    data_type regular_column_name_type;
-    thrift_schema thrift;
-public:
-    schema(sstring ks_name, sstring cf_name,
-        std::vector<column> partition_key,
-        std::vector<column> clustering_key,
-        std::vector<column> regular_columns,
-        shared_ptr<abstract_type> regular_column_name_type);
-    bool is_dense() const {
-        return false;
+    mutation_partition(schema_ptr s)
+        : _rows(key_compare(s->clustering_key_type))
+        , _row_tombstones(serialized_compare(s->clustering_key_prefix_type))
+    { }
+
+    void apply(tombstone t) {
+        _tombstone.apply(t);
     }
-    bool is_counter() const {
-        return false;
-    }
-    column_definition* get_column_definition(const bytes& name);
-    auto regular_begin() {
-        return regular_columns.begin();
-    }
-    auto regular_end() {
-        return regular_columns.end();
-    }
-    auto regular_lower_bound(const bytes& name) {
-        // TODO: use regular_columns and a version of std::lower_bound() with heterogeneous comparator
-        auto i = _regular_columns_by_name.lower_bound(name);
-        if (i == _regular_columns_by_name.end()) {
-            return regular_end();
+
+    void apply_delete(schema_ptr schema, const clustering_prefix& prefix, tombstone t) {
+        if (prefix.empty()) {
+            apply(t);
+        } else if (prefix.size() == schema->clustering_key.size()) {
+            _rows[serialize_value(*schema->clustering_key_type, prefix)].t.apply(t);
         } else {
-            return regular_columns.begin() + i->second->id;
+            apply_row_tombstone(schema, {serialize_value(*schema->clustering_key_prefix_type, prefix), t});
         }
     }
-    auto regular_upper_bound(const bytes& name) {
-        // TODO: use regular_columns and a version of std::upper_bound() with heterogeneous comparator
-        auto i = _regular_columns_by_name.upper_bound(name);
-        if (i == _regular_columns_by_name.end()) {
-            return regular_end();
-        } else {
-            return regular_columns.begin() + i->second->id;
+
+    void apply_row_tombstone(schema_ptr schema, bytes prefix, tombstone t) {
+        apply_row_tombstone(schema, {std::move(prefix), std::move(t)});
+    }
+
+    void apply_row_tombstone(schema_ptr schema, std::pair<bytes, tombstone> row_tombstone) {
+        auto& prefix = row_tombstone.first;
+        auto i = _row_tombstones.lower_bound(prefix);
+        if (i == _row_tombstones.end() || !schema->clustering_key_prefix_type->equal(prefix, i->first)) {
+            _row_tombstones.emplace_hint(i, std::move(row_tombstone));
+        } else if (row_tombstone.second > i->second) {
+            i->second = row_tombstone.second;
         }
     }
-    column_id get_regular_columns_count() {
-        return regular_columns.size();
+
+    void apply(schema_ptr schema, mutation_partition&& p);
+
+    const row_tombstone_set& row_tombstones() {
+        return _row_tombstones;
     }
-    data_type column_name_type(column_definition& def) {
-        return def.kind == column_definition::REGULAR ? regular_column_name_type : utf8_type;
+
+    row& static_row() {
+        return _static_row;
+    }
+
+    row& clustered_row(const clustering_key& key) {
+        return _rows[key].cells;
+    }
+
+    row& clustered_row(clustering_key&& key) {
+        return _rows[std::move(key)].cells;
+    }
+
+    row* find_row(const clustering_key& key) {
+        auto i = _rows.find(key);
+        if (i == _rows.end()) {
+            return nullptr;
+        }
+        return &i->second.cells;
+    }
+
+    /**
+     * Returns the base tombstone for all cells of given clustering row. Such tombstone
+     * holds all information necessary to decide whether cells in a row are deleted or not,
+     * in addition to any information inside individual cells.
+     */
+    tombstone tombstone_for_row(schema_ptr schema, const clustering_key& key) {
+        tombstone t = _tombstone;
+
+        auto i = _row_tombstones.lower_bound(key);
+        if (i != _row_tombstones.end() && schema->clustering_key_prefix_type->is_prefix_of(i->first, key)) {
+            t.apply(i->second);
+        }
+
+        auto j = _rows.find(key);
+        if (j != _rows.end()) {
+            t.apply(j->second.t);
+        }
+
+        return t;
     }
 };
 
-using schema_ptr = lw_shared_ptr<schema>;
+class mutation final {
+public:
+    schema_ptr schema;
+    partition_key key;
+    mutation_partition p;
+public:
+    mutation(partition_key key_, schema_ptr schema_)
+        : schema(std::move(schema_))
+        , key(std::move(key_))
+        , p(schema)
+    { }
+
+    mutation(mutation&&) = default;
+    mutation(const mutation&) = delete;
+
+    void set_static_cell(const column_definition& def, boost::any value) {
+        p.static_row()[def.id] = std::move(value);
+    }
+
+    void set_clustered_cell(const clustering_prefix& prefix, const column_definition& def, boost::any value) {
+        auto& row = p.clustered_row(serialize_value(*schema->clustering_key_type, prefix));
+        row[def.id] = std::move(value);
+    }
+
+    void set_clustered_cell(const clustering_key& key, const column_definition& def, boost::any value) {
+        auto& row = p.clustered_row(key);
+        row[def.id] = std::move(value);
+    }
+};
 
 struct column_family {
     column_family(schema_ptr schema);
-    partition& find_or_create_partition(const bytes& key);
+    mutation_partition& find_or_create_partition(const bytes& key);
     row& find_or_create_row(const bytes& partition_key, const bytes& clustering_key);
-    partition* find_partition(const bytes& key);
+    mutation_partition* find_partition(const bytes& key);
     row* find_row(const bytes& partition_key, const bytes& clustering_key);
     schema_ptr _schema;
     // partition key -> partition
-    std::map<bytes, partition, key_compare> partitions;
+    std::map<bytes, mutation_partition, key_compare> partitions;
+    void apply(mutation&& m);
 };
 
 class keyspace {
@@ -162,6 +281,7 @@ public:
     std::unordered_map<sstring, column_family> column_families;
     static future<keyspace> populate(sstring datadir);
     schema_ptr find_schema(sstring cf_name);
+    column_family* find_column_family(sstring cf_name);
 };
 
 class database {

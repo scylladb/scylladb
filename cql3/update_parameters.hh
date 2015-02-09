@@ -25,7 +25,7 @@
 #ifndef CQL3_UPDATE_PARAMETERS_HH
 #define CQL3_UPDATE_PARAMETERS_HH
 
-#include "db/api.hh"
+#include "database.hh"
 #include "exceptions/exceptions.hh"
 
 namespace cql3 {
@@ -36,8 +36,7 @@ namespace cql3 {
 class update_parameters final {
 public:
     using prefetched_rows_type = std::experimental::optional<
-            std::unordered_map<api::partition_key, api::row,
-                serialized_hash, serialized_equal>>;
+            std::unordered_map<partition_key, row, serialized_hash, serialized_equal>>;
 private:
     const gc_clock::duration _ttl;
     const prefetched_rows_type _prefetched; // For operation that require a read-before-write
@@ -64,21 +63,20 @@ public:
         }
     }
 
-    api::atomic_cell make_dead_cell() const {
-        return {make_tombstone()};
+    atomic_cell make_dead_cell() const {
+        return atomic_cell{_timestamp, atomic_cell::dead{_local_deletion_time}};
     }
 
-    api::atomic_cell make_cell(bytes value) const {
+    atomic_cell make_cell(bytes value) const {
         auto ttl = _ttl;
 
-        if (!ttl.count()) {
+        if (ttl.count() <= 0) {
             ttl = _schema->default_time_to_live;
         }
 
-        return api::atomic_cell(api::live_atomic_cell(_timestamp,
-                ttl.count() ? api::ttl_opt{_local_deletion_time + ttl} : api::ttl_opt{},
-                std::move(value)));
-    }
+        return atomic_cell{_timestamp,
+            atomic_cell::live{ttl.count() > 0 ? ttl_opt{_local_deletion_time + ttl} : ttl_opt{}, std::move(value)}};
+    };
 
 #if 0
      public Cell makeCounter(CellName name, long delta) throws InvalidRequestException
@@ -88,7 +86,7 @@ public:
      }
 #endif
 
-    api::tombstone make_tombstone() const {
+    tombstone make_tombstone() const {
         return {_timestamp, _local_deletion_time};
     }
 

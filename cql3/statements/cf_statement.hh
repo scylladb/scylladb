@@ -62,12 +62,12 @@ public:
         }
     }
 
-    virtual sstring keyspace() const {
+    virtual const sstring& keyspace() const {
         assert(_cf_name->has_keyspace()); // "The statement hasn't be prepared correctly";
         return _cf_name->get_keyspace();
     }
 
-    virtual sstring column_family() const {
+    virtual const sstring& column_family() const {
         return _cf_name->get_column_family();
     }
 };

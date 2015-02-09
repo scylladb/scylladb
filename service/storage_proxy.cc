@@ -475,8 +475,20 @@ namespace service {
  * @param consistency_level the consistency level for the operation
  */
 future<>
-storage_proxy::mutate(std::vector<api::mutation> mutations, db::consistency_level cl) {
-    throw std::runtime_error("NOT IMPLEMENTED");
+storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl) {
+    // FIXME: send it to replicas instead of applying locally
+    for (auto&& m : mutations) {
+        // FIXME: lookup column_family by UUID
+        keyspace* ks = _db.find_keyspace(m.schema->ks_name);
+        assert(ks); // FIXME: load keyspace meta-data from storage
+        column_family* cf = ks->find_column_family(m.schema->cf_name);
+        if (cf) {
+            cf->apply(std::move(m));
+        } else {
+            // TODO: log a warning
+        }
+    }
+    return make_ready_future<>();
 #if 0
         Tracing.trace("Determining replicas for mutation");
         final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
@@ -559,7 +571,7 @@ storage_proxy::mutate(std::vector<api::mutation> mutations, db::consistency_leve
 }
 
 future<>
-storage_proxy::mutate_with_triggers(std::vector<api::mutation> mutations, db::consistency_level cl,
+storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl,
         bool should_mutate_atomically) {
     unimplemented::triggers();
 #if 0
@@ -587,7 +599,7 @@ storage_proxy::mutate_with_triggers(std::vector<api::mutation> mutations, db::co
  * @param consistency_level the consistency level for the operation
  */
 future<>
-storage_proxy::mutate_atomically(std::vector<api::mutation> mutations, db::consistency_level cl) {
+storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl) {
     unimplemented::lwt();
 #if 0
         Tracing.trace("Determining replicas for atomic batch");

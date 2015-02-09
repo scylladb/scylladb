@@ -91,12 +91,19 @@ public:
                     // FIXME: force limit count?
                     while (beg != end && count--) {
                         column_definition& def = range.reversed ? *--end : *beg++;
-                        Column col;
-                        col.__set_name(def.name());
-                        col.__set_value(rw->cells[def.id]);
-                        ColumnOrSuperColumn v;
-                        v.__set_column(std::move(col));
-                        ret.push_back(std::move(v));
+                        if (def.is_atomic()) {
+                            const auto& cell = boost::any_cast<atomic_cell&>((*rw)[def.id]);
+                            if (cell.is_live()) { // FIXME: we should actually use tombstone information from all levels
+                                Column col;
+                                col.__set_name(def.name());
+                                col.__set_value(cell.as_live().value);
+                                col.__set_timestamp(cell.timestamp);
+                                // FIXME: set ttl
+                                ColumnOrSuperColumn v;
+                                v.__set_column(std::move(col));
+                                ret.push_back(std::move(v));
+                            };
+                        }
                     }
                 }
             } else {
@@ -184,21 +191,30 @@ public:
                     sstring cf_name = cf_mutations.first;
                     const std::vector<Mutation>& mutations = cf_mutations.second;
                     auto& cf = lookup_column_family(cf_name);
-                    auto& row = cf.find_or_create_row(key, null_clustering_key);
+                    mutation m_to_apply(key, cf._schema);
                     for (const Mutation& m : mutations) {
                         if (m.__isset.column_or_supercolumn) {
                             auto&& cosc = m.column_or_supercolumn;
                             if (cosc.__isset.column) {
                                 auto&& col = cosc.column;
                                 bytes cname = to_bytes(col.name);
-                                // FIXME: use a lookup map
                                 auto def = cf._schema->get_column_definition(cname);
                                 if (!def) {
                                     throw make_exception<InvalidRequestException>("column %s not found", col.name);
                                 }
-                                auto& cells = row.cells;
-                                cells.resize(cf._schema->get_regular_columns_count());
-                                cells[def->id] = to_bytes(col.value);
+                                if (def->kind != column_definition::column_kind::REGULAR) {
+                                    throw make_exception<InvalidRequestException>("Column %s is not settable", col.name);
+                                }
+                                gc_clock::duration ttl;
+                                if (col.__isset.ttl) {
+                                    ttl = std::chrono::duration_cast<gc_clock::duration>(std::chrono::seconds(col.ttl));
+                                }
+                                if (ttl.count() <= 0) {
+                                    ttl = cf._schema->default_time_to_live;
+                                }
+                                auto ttl_option = ttl.count() > 0 ? ttl_opt(gc_clock::now() + ttl) : ttl_opt();
+                                m_to_apply.set_clustered_cell(null_clustering_key, *def,
+                                    atomic_cell{col.timestamp, atomic_cell::live{ttl_option, to_bytes(col.value)}});
                             } else if (cosc.__isset.super_column) {
                                 // FIXME: implement
                             } else if (cosc.__isset.counter_column) {
@@ -215,6 +231,7 @@ public:
                             throw make_exception<InvalidRequestException>("Mutation must have either column or deletion");
                         }
                     }
+                    cf.apply(std::move(m_to_apply));
                 }
             }
         } catch (std::exception& ex) {

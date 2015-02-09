@@ -10,6 +10,8 @@ all_tests = [
     'memcached/test_ascii_parser',
     'sstring_test',
     'output_stream_test',
+    'urchin/types_test',
+    'urchin/mutation_test',
 ]
 
 last_len = 0

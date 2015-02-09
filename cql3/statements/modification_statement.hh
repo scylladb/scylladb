@@ -35,7 +35,6 @@
 #include "cql3/operation.hh"
 #include "cql3/relation.hh"
 
-#include "db/column_family.hh"
 #include "db/consistency_level.hh"
 
 #include "core/shared_ptr.hh"
@@ -161,7 +160,7 @@ public:
 
     virtual bool require_full_clustering_key() const = 0;
 
-    virtual void add_update_for_key(api::mutation& m, const api::clustering_prefix& prefix, const update_parameters& params) = 0;
+    virtual void add_update_for_key(mutation& m, const clustering_prefix& prefix, const update_parameters& params) = 0;
 
     virtual int get_bound_terms() override {
         return _bound_terms;
@@ -267,12 +266,12 @@ private:
 
 public:
     void add_key_value(column_definition& def, ::shared_ptr<term> value);
-    void precess_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
-    std::vector<api::partition_key> build_partition_keys(const query_options& options);
+    void process_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
+    std::vector<partition_key> build_partition_keys(const query_options& options);
 
 private:
-    api::clustering_prefix create_clustering_prefix(const query_options& options);
-    api::clustering_prefix create_clustering_prefix_internal(const query_options& options);
+    clustering_prefix create_clustering_prefix(const query_options& options);
+    clustering_prefix create_clustering_prefix_internal(const query_options& options);
 
 protected:
     const column_definition* get_first_empty_key();
@@ -286,8 +285,8 @@ public:
 
 protected:
     future<update_parameters::prefetched_rows_type> read_required_rows(
-                lw_shared_ptr<std::vector<api::partition_key>> keys,
-                lw_shared_ptr<api::clustering_prefix> prefix,
+                lw_shared_ptr<std::vector<partition_key>> keys,
+                lw_shared_ptr<clustering_prefix> prefix,
                 bool local,
                 db::consistency_level cl);
 
@@ -297,19 +296,19 @@ public:
     }
 
     virtual future<std::experimental::optional<transport::messages::result_message>>
-    execute(service::query_state& qs, const query_options& options) override;
+    execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) override;
 
     virtual future<std::experimental::optional<transport::messages::result_message>>
-    execute_internal(service::query_state& qs, const query_options& options) override {
+    execute_internal(database& db, service::query_state& qs, const query_options& options) override {
         throw std::runtime_error("not implemented");
     }
 
 private:
     future<>
-    execute_without_condition(service::query_state& qs, const query_options& options);
+    execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
 
     future<std::experimental::optional<transport::messages::result_message>>
-    execute_with_condition(service::query_state& qs, const query_options& options);
+    execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
 
 #if 0
     public void addConditions(Composite clusteringPrefix, CQL3CasRequest request, QueryOptions options) throws InvalidRequestException
@@ -436,12 +435,12 @@ private:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<api::mutation>> get_mutations(const query_options& options, bool local, int64_t now);
+    future<std::vector<mutation>> get_mutations(const query_options& options, bool local, int64_t now);
 
 public:
     future<std::unique_ptr<update_parameters>> make_update_parameters(
-                lw_shared_ptr<std::vector<api::partition_key>> keys,
-                lw_shared_ptr<api::clustering_prefix> prefix,
+                lw_shared_ptr<std::vector<partition_key>> keys,
+                lw_shared_ptr<clustering_prefix> prefix,
                 const query_options& options,
                 bool local,
                 int64_t now);
@@ -476,62 +475,8 @@ public:
         { }
 
     public:
-        std::unique_ptr<parsed_statement::prepared> prepare(database& db) override {
-            auto bound_names = get_bound_variables();
-            auto statement = prepare(db, bound_names);
-            return std::make_unique<parsed_statement::prepared>(std::move(statement), *bound_names);
-        }
-
-        ::shared_ptr<modification_statement> prepare(database& db, ::shared_ptr<variable_specifications> bound_names) {
-            schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
-
-            auto prepared_attributes = _attrs->prepare(keyspace(), column_family());
-            prepared_attributes->collect_marker_specification(bound_names);
-
-            ::shared_ptr<modification_statement> stmt = prepare_internal(schema, bound_names, std::move(prepared_attributes));
-
-            if (_if_not_exists || _if_exists || !_conditions.empty()) {
-                if (stmt->is_counter()) {
-                    throw exceptions::invalid_request_exception("Conditional updates are not supported on counter tables");
-                }
-                if (_attrs->timestamp) {
-                    throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional updates");
-                }
-
-                if (_if_not_exists) {
-                    // To have both 'IF NOT EXISTS' and some other conditions doesn't make sense.
-                    // So far this is enforced by the parser, but let's assert it for sanity if ever the parse changes.
-                    assert(_conditions.empty());
-                    assert(!_if_exists);
-                    stmt->set_if_not_exist_condition();
-                } else if (_if_exists) {
-                    assert(_conditions.empty());
-                    assert(!_if_not_exists);
-                    stmt->set_if_exist_condition();
-                } else {
-                    for (auto&& entry : _conditions) {
-                        auto id = entry.first->prepare_column_identifier(schema);
-                        column_definition* def = get_column_definition(schema, *id);
-                        if (!def) {
-                            throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *id));
-                        }
-
-                        auto condition = entry.second->prepare(keyspace(), *def);
-                        condition->collect_marker_specificaton(bound_names);
-
-                        switch (def->kind) {
-                            case column_definition::PARTITION:
-                            case column_definition::CLUSTERING:
-                                throw exceptions::invalid_request_exception(sprint("PRIMARY KEY column '%s' cannot have IF conditions", *id));
-                            default:
-                                stmt->add_condition(condition);
-                        }
-                    }
-                }
-                stmt->validate_where_clause_for_conditions();
-            }
-            return stmt;
-        };
+        virtual std::unique_ptr<parsed_statement::prepared> prepare(database& db) override;
+        ::shared_ptr<modification_statement> prepare(database& db, ::shared_ptr<variable_specifications> bound_names);;
     protected:
         virtual ::shared_ptr<modification_statement> prepare_internal(schema_ptr schema,
             ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs) = 0;

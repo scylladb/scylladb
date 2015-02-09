@@ -25,13 +25,13 @@
 #pragma once
 
 #include "database.hh"
-#include "db/api.hh"
+#include "database.hh"
 
 namespace validation {
 
 constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
 
-void validate_cql_key(schema_ptr schema, const api::partition_key& key);
+void validate_cql_key(schema_ptr schema, const partition_key& key);
 schema_ptr validate_column_family(database& db, const sstring& keyspace_name, const sstring& cf_name);
 
 }

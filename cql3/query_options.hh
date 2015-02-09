@@ -25,7 +25,7 @@
 #ifndef CQL3_CQL_QUERY_OPTIONS_HH
 #define CQL3_CQL_QUERY_OPTIONS_HH
 
-#include "db/api.hh"
+#include "database.hh"
 #include "db/consistency_level.hh"
 #include "service/query_state.hh"
 

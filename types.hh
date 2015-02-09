@@ -18,7 +18,7 @@
 
 // FIXME: should be int8_t
 using bytes = basic_sstring<char, uint32_t, 31>;
-
+using bytes_view = std::experimental::string_view;
 using bytes_opt = std::experimental::optional<bytes>;
 
 sstring to_hex(const bytes& b);
@@ -112,11 +112,11 @@ public:
         validate(b);
         return to_string(b);
     }
-    virtual sstring to_string(const bytes& b) {
-        throw std::runtime_error("not implemented");
-    }
+    virtual sstring to_string(const bytes& b) = 0;
+    virtual bytes from_string(const sstring& text) = 0;
     virtual bool is_counter() { return false; }
     virtual bool is_collection() { return false; }
+    virtual bool is_multi_cell() { return false; }
 protected:
     template <typename T, typename Compare = std::less<T>>
     bool default_less(const bytes& b1, const bytes& b2, Compare compare = Compare());

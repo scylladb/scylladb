@@ -52,11 +52,11 @@ public:
         return bool(_ks_name);
     }
 
-    sstring get_keyspace() const {
+    const sstring& get_keyspace() const {
         return *_ks_name;
     }
 
-    sstring get_column_family() const {
+    const sstring& get_column_family() const {
         return _cf_name;
     }
 

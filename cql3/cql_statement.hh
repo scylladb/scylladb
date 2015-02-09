@@ -28,6 +28,7 @@
 #include "transport/messages/result_message.hh"
 #include "service/client_state.hh"
 #include "service/query_state.hh"
+#include "service/storage_proxy.hh"
 #include "cql3/query_options.hh"
 #include "database.hh"
 
@@ -62,7 +63,7 @@ public:
      * @param options options for this query (consistency, variables, pageSize, ...)
      */
     virtual future<std::experimental::optional<transport::messages::result_message>>
-        execute(service::query_state& state, const query_options& options) = 0;
+        execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) = 0;
 
     /**
      * Variant of execute used for internal query against the system tables, and thus only query the local node = 0.
@@ -70,7 +71,7 @@ public:
      * @param state the current query state
      */
     virtual future<std::experimental::optional<transport::messages::result_message>>
-        execute_internal(service::query_state& state, const query_options& options) = 0;
+        execute_internal(database& db, service::query_state& state, const query_options& options) = 0;
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
 };

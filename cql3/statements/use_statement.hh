@@ -61,7 +61,7 @@ public:
     }
 
     virtual future<std::experimental::optional<transport::messages::result_message>>
-    execute(service::query_state& state, const query_options& options) override {
+    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override {
         throw std::runtime_error("not implemented");
 #if 0
         state.getClientState().setKeyspace(keyspace);
@@ -70,7 +70,7 @@ public:
     }
 
     virtual future<std::experimental::optional<transport::messages::result_message>>
-    execute_internal(service::query_state& state, const query_options& options) override {
+    execute_internal(database& db, service::query_state& state, const query_options& options) override {
         // Internal queries are exclusively on the system keyspace and 'use' is thus useless
         throw std::runtime_error("unsupported operation");
     }

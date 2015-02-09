@@ -1,0 +1,73 @@
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
+#define BOOST_TEST_DYN_LINK
+#define BOOST_TEST_MODULE core
+
+#include <boost/test/included/unit_test.hpp>
+#include "types.hh"
+#include "tuple.hh"
+
+BOOST_AUTO_TEST_CASE(test_int32_type_string_conversions) {
+    BOOST_REQUIRE(int32_type->equal(int32_type->from_string("1234567890"), int32_type->decompose(1234567890)));
+    BOOST_REQUIRE_EQUAL(int32_type->to_string(int32_type->decompose(1234567890)), "1234567890");
+
+    BOOST_REQUIRE(int32_type->equal(int32_type->from_string("12"), int32_type->decompose(12)));
+    BOOST_REQUIRE(int32_type->equal(int32_type->from_string("0012"), int32_type->decompose(12)));
+    BOOST_REQUIRE(int32_type->equal(int32_type->from_string("+12"), int32_type->decompose(12)));
+    BOOST_REQUIRE_EQUAL(int32_type->to_string(int32_type->decompose(12)), "12");
+    BOOST_REQUIRE(int32_type->equal(int32_type->from_string("-12"), int32_type->decompose(-12)));
+    BOOST_REQUIRE_EQUAL(int32_type->to_string(int32_type->decompose(-12)), "-12");
+
+    BOOST_REQUIRE(int32_type->equal(int32_type->from_string("0"), int32_type->decompose(0)));
+    BOOST_REQUIRE(int32_type->equal(int32_type->from_string("-0"), int32_type->decompose(0)));
+    BOOST_REQUIRE(int32_type->equal(int32_type->from_string("+0"), int32_type->decompose(0)));
+    BOOST_REQUIRE_EQUAL(int32_type->to_string(int32_type->decompose(0)), "0");
+
+    BOOST_REQUIRE(int32_type->equal(int32_type->from_string("-2147483648"), int32_type->decompose((int32_t)-2147483648)));
+    BOOST_REQUIRE_EQUAL(int32_type->to_string(int32_type->decompose((int32_t)-2147483648)), "-2147483648");
+
+    BOOST_REQUIRE(int32_type->equal(int32_type->from_string("2147483647"), int32_type->decompose((int32_t)2147483647)));
+    BOOST_REQUIRE_EQUAL(int32_type->to_string(int32_type->decompose((int32_t)-2147483647)), "-2147483647");
+
+    auto test_parsing_fails = [] (sstring text) {
+        try {
+            int32_type->from_string(text);
+            BOOST_FAIL(sprint("Parsing of '%s' should have failed", text));
+        } catch (const marshal_exception& e) {
+            // expected
+        }
+    };
+
+    test_parsing_fails("asd");
+    test_parsing_fails("-2147483649");
+    test_parsing_fails("2147483648");
+    test_parsing_fails("2147483648123");
+
+    BOOST_REQUIRE_EQUAL(int32_type->to_string(bytes()), "");
+}
+
+BOOST_AUTO_TEST_CASE(test_tuple_is_prefix_of) {
+    tuple_type<> type({utf8_type, utf8_type, utf8_type});
+    auto prefix_type = type.as_prefix();
+
+    auto val = type.serialize_value({{bytes("a")}, {bytes("b")}, {bytes("c")}});
+
+    BOOST_REQUIRE(prefix_type.is_prefix_of(prefix_type.serialize_value({}), val));
+    BOOST_REQUIRE(prefix_type.is_prefix_of(prefix_type.serialize_value({{bytes("a")}}), val));
+    BOOST_REQUIRE(prefix_type.is_prefix_of(prefix_type.serialize_value({{bytes("a")}, {bytes("b")}}), val));
+    BOOST_REQUIRE(prefix_type.is_prefix_of(prefix_type.serialize_value({{bytes("a")}, {bytes("b")}, {bytes("c")}}), val));
+
+    BOOST_REQUIRE(!prefix_type.is_prefix_of(prefix_type.serialize_value({{}}), val));
+    BOOST_REQUIRE(!prefix_type.is_prefix_of(prefix_type.serialize_value({{bytes()}}), val));
+    BOOST_REQUIRE(!prefix_type.is_prefix_of(prefix_type.serialize_value({{bytes("b")}, {bytes("c")}}), val));
+    BOOST_REQUIRE(!prefix_type.is_prefix_of(prefix_type.serialize_value({{bytes("a")}, {bytes("c")}, {bytes("b")}}), val));
+    BOOST_REQUIRE(!prefix_type.is_prefix_of(prefix_type.serialize_value({{bytes("abc")}}), val));
+    BOOST_REQUIRE(!prefix_type.is_prefix_of(prefix_type.serialize_value({{bytes("ab")}}), val));
+
+    auto val2 = type.serialize_value({{bytes("a")}, {bytes("b")}, {}});
+    BOOST_REQUIRE(prefix_type.is_prefix_of(prefix_type.serialize_value({{bytes("a")}, {bytes("b")}}), val2));
+    BOOST_REQUIRE(prefix_type.is_prefix_of(prefix_type.serialize_value({{bytes("a")}, {bytes("b")}, {}}), val2));
+    BOOST_REQUIRE(!prefix_type.is_prefix_of(prefix_type.serialize_value({{bytes("a")}, {bytes("b")}, {bytes()}}), val2));
+}

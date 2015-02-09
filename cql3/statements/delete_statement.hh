@@ -27,7 +27,7 @@
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/attributes.hh"
 #include "cql3/operation.hh"
-#include "db/api.hh"
+#include "database.hh"
 
 namespace cql3 {
 
@@ -62,7 +62,7 @@ public:
         return false;
     }
 
-    virtual void add_update_for_key(api::mutation& m, const api::clustering_prefix& prefix, const update_parameters& params) override;
+    virtual void add_update_for_key(mutation& m, const clustering_prefix& prefix, const update_parameters& params) override;
 
 #if 0
     protected void validateWhereClauseForConditions() throws InvalidRequestException
