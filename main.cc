@@ -7,7 +7,7 @@
 #include "core/app-template.hh"
 #include "core/distributed.hh"
 #include "thrift/server.hh"
-#include "cql/server.hh"
+#include "transport/server.hh"
 
 namespace bpo = boost::program_options;
 

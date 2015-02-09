@@ -2,7 +2,7 @@
  * Copyright 2015 Cloudius Systems
  */
 
-#include "cql/server.hh"
+#include "server.hh"
 
 #include "db/consistency_level.hh"
 #include "core/future-util.hh"
