@@ -159,6 +159,8 @@ public:
         virtual bytes_opt bind_and_get(const query_options& options) override {
             return get(options);
         }
+
+        virtual sstring to_string() const = 0;
     };
 
     class multi_item_terminal : public terminal {
