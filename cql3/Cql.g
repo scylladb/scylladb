@@ -23,7 +23,7 @@ options {
     language = Cpp;
 }
 
-@parser::namespace{cql3}
+@parser::namespace{cql3_parser}
 
 @parser::includes {
 #include "cql3/statements/select_statement.hh"
@@ -39,9 +39,10 @@ options {
 }
 
 @parser::traits {
-using namespace cql3;
 using namespace cql3::statements;
 using namespace cql3::selection;
+using cql3::cql3_type;
+using cql3::native_cql3_type;
 }
 
 @header {
@@ -191,7 +192,7 @@ using namespace cql3::selection;
 #endif
 }
 
-@lexer::namespace{cql3}
+@lexer::namespace{cql3_parser}
 
 @lexer::traits {
     class CqlLexer;
@@ -346,7 +347,7 @@ selectClause returns [std::vector<shared_ptr<raw_selector>> expr]
     ;
 
 selector returns [shared_ptr<raw_selector> s]
-    @init{ shared_ptr<column_identifier> alias; }
+    @init{ shared_ptr<cql3::column_identifier> alias; }
     : us=unaliasedSelector (K_AS c=ident { alias = c; })? { $s = make_shared<raw_selector>(us, alias); }
     ;
 
@@ -981,22 +982,22 @@ userOption[UserOptions opts]
 // Column Identifiers.  These need to be treated differently from other
 // identifiers because the underlying comparator is not necessarily text. See
 // CASSANDRA-8178 for details.
-cident returns [shared_ptr<column_identifier::raw> id]
-    : t=IDENT              { $id = make_shared<column_identifier::raw>(sstring{$t.text}, false); }
-    | t=QUOTED_NAME        { $id = make_shared<column_identifier::raw>(sstring{$t.text}, true); }
-    | k=unreserved_keyword { $id = make_shared<column_identifier::raw>(k, false); }
+cident returns [shared_ptr<cql3::column_identifier::raw> id]
+    : t=IDENT              { $id = make_shared<cql3::column_identifier::raw>(sstring{$t.text}, false); }
+    | t=QUOTED_NAME        { $id = make_shared<cql3::column_identifier::raw>(sstring{$t.text}, true); }
+    | k=unreserved_keyword { $id = make_shared<cql3::column_identifier::raw>(k, false); }
     ;
 
 // Identifiers that do not refer to columns or where the comparator is known to be text
-ident returns [shared_ptr<column_identifier> id]
-    : t=IDENT              { $id = make_shared<column_identifier>(sstring{$t.text}, false); }
-    | t=QUOTED_NAME        { $id = make_shared<column_identifier>(sstring{$t.text}, true); }
-    | k=unreserved_keyword { $id = make_shared<column_identifier>(k, false); }
+ident returns [shared_ptr<cql3::column_identifier> id]
+    : t=IDENT              { $id = make_shared<cql3::column_identifier>(sstring{$t.text}, false); }
+    | t=QUOTED_NAME        { $id = make_shared<cql3::column_identifier>(sstring{$t.text}, true); }
+    | k=unreserved_keyword { $id = make_shared<cql3::column_identifier>(k, false); }
     ;
 
 // Keyspace & Column family names
 keyspaceName returns [sstring id]
-    @init { auto name = make_shared<cf_name>(); }
+    @init { auto name = make_shared<cql3::cf_name>(); }
     : cfOrKsName[name, true] { $id = name->get_keyspace(); }
     ;
 
@@ -1013,8 +1014,8 @@ idxOrKsName[IndexName name, boolean isKs]
     ;
 #endif
 
-columnFamilyName returns [shared_ptr<cf_name> name]
-    @init { $name = make_shared<cf_name>(); }
+columnFamilyName returns [shared_ptr<cql3::cf_name> name]
+    @init { $name = make_shared<cql3::cf_name>(); }
     : (cfOrKsName[name, true] '.')? cfOrKsName[name, false]
     ;
 
@@ -1024,7 +1025,7 @@ userTypeName returns [UTName name]
     ;
 #endif
 
-cfOrKsName[shared_ptr<cf_name> name, bool isKs]
+cfOrKsName[shared_ptr<cql3::cf_name> name, bool isKs]
     : t=IDENT              { if (isKs) $name->set_keyspace($t.text, false); else $name->set_column_family($t.text, false); }
     | t=QUOTED_NAME        { if (isKs) $name->set_keyspace($t.text, true); else $name->set_column_family($t.text, true); }
     | k=unreserved_keyword { if (isKs) $name->set_keyspace(k, false); else $name->set_column_family(k, false); }
@@ -1033,15 +1034,15 @@ cfOrKsName[shared_ptr<cf_name> name, bool isKs]
 #endif
     ;
 
-constant returns [shared_ptr<constants::literal> constant]
+constant returns [shared_ptr<cql3::constants::literal> constant]
     @init{std::string sign;}
-    : t=STRING_LITERAL { $constant = constants::literal::string(sstring{$t.text}); }
-    | t=INTEGER        { $constant = constants::literal::integer(sstring{$t.text}); }
-    | t=FLOAT          { $constant = constants::literal::floating_point(sstring{$t.text}); }
-    | t=BOOLEAN        { $constant = constants::literal::bool_(sstring{$t.text}); }
-    | t=UUID           { $constant = constants::literal::uuid(sstring{$t.text}); }
-    | t=HEXNUMBER      { $constant = constants::literal::hex(sstring{$t.text}); }
-    | { sign=""; } ('-' {sign = "-"; } )? t=(K_NAN | K_INFINITY) { $constant = constants::literal::floating_point(sstring{sign + $t.text}); }
+    : t=STRING_LITERAL { $constant = cql3::constants::literal::string(sstring{$t.text}); }
+    | t=INTEGER        { $constant = cql3::constants::literal::integer(sstring{$t.text}); }
+    | t=FLOAT          { $constant = cql3::constants::literal::floating_point(sstring{$t.text}); }
+    | t=BOOLEAN        { $constant = cql3::constants::literal::bool_(sstring{$t.text}); }
+    | t=UUID           { $constant = cql3::constants::literal::uuid(sstring{$t.text}); }
+    | t=HEXNUMBER      { $constant = cql3::constants::literal::hex(sstring{$t.text}); }
+    | { sign=""; } ('-' {sign = "-"; } )? t=(K_NAN | K_INFINITY) { $constant = cql3::constants::literal::floating_point(sstring{sign + $t.text}); }
     ;
 
 #if 0
@@ -1094,9 +1095,9 @@ value returns [Term.Raw value]
     ;
 #endif
 
-intValue returns [::shared_ptr<term::raw> value]
+intValue returns [::shared_ptr<cql3::term::raw> value]
     :
-    | t=INTEGER     { $value = constants::literal::integer(sstring{$t.text}); }
+    | t=INTEGER     { $value = cql3::constants::literal::integer(sstring{$t.text}); }
 #if 0
     | ':' id=ident  { $value = newBindVariables(id); }
     | QMARK         { $value = newBindVariables(null); }
