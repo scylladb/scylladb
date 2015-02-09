@@ -29,14 +29,13 @@
 #include "variable_specifications.hh"
 #include "cql3/assignment_testable.hh"
 #include "cql3/query_options.hh"
+#include "types.hh"
 
 namespace cql3 {
 
 class terminal;
 
 class term;
-
-using bytes_opt = std::experimental::optional<bytes>;
 
 /**
  * A CQL3 term, i.e. a column value with or without bind variables.
