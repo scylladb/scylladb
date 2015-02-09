@@ -15,56 +15,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import com.google.common.primitives.Ints;
-import com.googlecode.concurrentlinkedhashmap.ConcurrentLinkedHashMap;
-import com.googlecode.concurrentlinkedhashmap.EntryWeigher;
-import com.googlecode.concurrentlinkedhashmap.EvictionListener;
+#include <experimental/string_view>
 
-import org.antlr.runtime.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+#include "core/shared_ptr.hh"
+#include "exceptions/exceptions.hh"
+#include "cql3/query_options.hh"
+#include "cql3/statements/cf_statement.hh"
+#include "service/query_state.hh"
+#include "log.hh"
 
-import org.apache.cassandra.concurrent.ScheduledExecutors;
-import org.apache.cassandra.cql3.functions.*;
+namespace cql3 {
 
-import org.apache.cassandra.cql3.statements.*;
-import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.composites.CType;
-import org.apache.cassandra.db.composites.CellName;
-import org.apache.cassandra.db.composites.CellNameType;
-import org.apache.cassandra.db.composites.Composite;
-import org.apache.cassandra.db.marshal.AbstractType;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.exceptions.RequestExecutionException;
-import org.apache.cassandra.exceptions.RequestValidationException;
-import org.apache.cassandra.exceptions.SyntaxException;
-import org.apache.cassandra.metrics.CQLMetrics;
-import org.apache.cassandra.service.ClientState;
-import org.apache.cassandra.service.IMigrationListener;
-import org.apache.cassandra.service.MigrationManager;
-import org.apache.cassandra.service.QueryState;
-import org.apache.cassandra.service.pager.QueryPager;
-import org.apache.cassandra.service.pager.QueryPagers;
-import org.apache.cassandra.thrift.ThriftClientState;
-import org.apache.cassandra.tracing.Tracing;
-import org.apache.cassandra.transport.messages.ResultMessage;
-import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.MD5Digest;
-import org.apache.cassandra.utils.SemanticVersion;
-import org.github.jamm.MemoryMeter;
+class query_processor {
+private:
+    service::storage_proxy& _proxy;
+    database& _db;
+public:
+    query_processor(service::storage_proxy& proxy, database& db) : _proxy(proxy), _db(db) {}
 
-public class QueryProcessor implements QueryHandler
-{
+#if 0
     public static final SemanticVersion CQL_VERSION = new SemanticVersion("3.2.0");
 
     public static final QueryProcessor instance = new QueryProcessor();
@@ -227,40 +203,23 @@ public class QueryProcessor implements QueryHandler
                                                             serializedSize,
                                                             Cell.MAX_NAME_LENGTH));
     }
+#endif
+public:
+    future<::shared_ptr<transport::messages::result_message>> process_statement(::shared_ptr<cql_statement> statement,
+            service::query_state& query_state, const query_options& options);
 
-    public ResultMessage processStatement(CQLStatement statement, QueryState queryState, QueryOptions options)
-    throws RequestExecutionException, RequestValidationException
-    {
-        logger.trace("Process {} @CL.{}", statement, options.getConsistency());
-        ClientState clientState = queryState.getClientState();
-        statement.checkAccess(clientState);
-        statement.validate(clientState);
-
-        ResultMessage result = statement.execute(queryState, options);
-        return result == null ? new ResultMessage.Void() : result;
-    }
-
+#if 0
     public static ResultMessage process(String queryString, ConsistencyLevel cl, QueryState queryState)
     throws RequestExecutionException, RequestValidationException
     {
         return instance.process(queryString, queryState, QueryOptions.forInternalCalls(cl, Collections.<ByteBuffer>emptyList()));
     }
+#endif
 
-    public ResultMessage process(String queryString, QueryState queryState, QueryOptions options)
-    throws RequestExecutionException, RequestValidationException
-    {
-        ParsedStatement.Prepared p = getStatement(queryString, queryState.getClientState());
-        options.prepare(p.boundNames);
-        CQLStatement prepared = p.statement;
-        if (prepared.getBoundTerms() != options.getValues().size())
-            throw new InvalidRequestException("Invalid amount of bind variables");
+    future<::shared_ptr<transport::messages::result_message>> process(const std::experimental::string_view& query_string,
+            service::query_state& query_state, query_options& options);
 
-        if (!queryState.getClientState().isInternal)
-            metrics.regularStatementsExecuted.inc();
-
-        return processStatement(prepared, queryState, options);
-    }
-
+#if 0
     public static ParsedStatement.Prepared parseStatement(String queryStr, QueryState queryState) throws RequestValidationException
     {
         return getStatement(queryStr, queryState.getClientState());
@@ -503,58 +462,14 @@ public class QueryProcessor implements QueryHandler
         batch.validate(clientState);
         return batch.execute(queryState, options);
     }
+#endif
 
-    public static ParsedStatement.Prepared getStatement(String queryStr, ClientState clientState)
-    throws RequestValidationException
-    {
-        Tracing.trace("Parsing {}", queryStr);
-        ParsedStatement statement = parseStatement(queryStr);
+public:
+    std::unique_ptr<statements::parsed_statement::prepared> get_statement(const std::experimental::string_view& query,
+            service::client_state& client_state);
+    static ::shared_ptr<statements::parsed_statement> parse_statement(const std::experimental::string_view& query);
 
-        // Set keyspace for statement that require login
-        if (statement instanceof CFStatement)
-            ((CFStatement)statement).prepareKeyspace(clientState);
-
-        Tracing.trace("Preparing statement");
-        return statement.prepare();
-    }
-
-    public static ParsedStatement parseStatement(String queryStr) throws SyntaxException
-    {
-        try
-        {
-            // Lexer and parser
-            ErrorCollector errorCollector = new ErrorCollector(queryStr);
-            CharStream stream = new ANTLRStringStream(queryStr);
-            CqlLexer lexer = new CqlLexer(stream);
-            lexer.addErrorListener(errorCollector);
-
-            TokenStream tokenStream = new CommonTokenStream(lexer);
-            CqlParser parser = new CqlParser(tokenStream);
-            parser.addErrorListener(errorCollector);
-
-            // Parse the query string to a statement instance
-            ParsedStatement statement = parser.query();
-
-            // The errorCollector has queue up any errors that the lexer and parser may have encountered
-            // along the way, if necessary, we turn the last error into exceptions here.
-            errorCollector.throwFirstSyntaxError();
-
-            return statement;
-        }
-        catch (RuntimeException re)
-        {
-            logger.error(String.format("The statement: [%s] could not be parsed.", queryStr), re);
-            throw new SyntaxException(String.format("Failed parsing statement: [%s] reason: %s %s",
-                                                    queryStr,
-                                                    re.getClass().getSimpleName(),
-                                                    re.getMessage()));
-        }
-        catch (RecognitionException e)
-        {
-            throw new SyntaxException("Invalid or malformed CQL query string: " + e.getMessage());
-        }
-    }
-
+#if 0
     private static long measure(Object key)
     {
         return meter.measureDeep(key);
@@ -659,4 +574,7 @@ public class QueryProcessor implements QueryHandler
                     iterator.remove();
         }
     }
+#endif
+};
+
 }

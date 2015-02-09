@@ -5,8 +5,14 @@ namespace transport {
 
 namespace messages {
 
+// FIXME: stub
 class result_message {
-  // FIXME: stub
+    virtual ~result_message() {}
+
+    class void_message;
+};
+
+class result_message::void_message : public result_message {
 };
 
 }

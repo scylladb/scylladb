@@ -82,6 +82,11 @@ public:
     { }
 };
 
+class recognition_exception : public std::runtime_error {
+public:
+    recognition_exception(const std::string& msg) : std::runtime_error(msg) {};
+};
+
 }
 
 #endif

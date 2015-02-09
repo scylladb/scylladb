@@ -50,4 +50,7 @@ void triggers() {
     warn("triggers");
 }
 
+static inline
+void metrics() {}
+
 }

@@ -25,12 +25,17 @@ options {
 
 @parser::namespace{cql3_parser}
 
+@lexer::includes {
+#include "cql3/error_listener.hh"
+}
+
 @parser::includes {
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/update_statement.hh"
 #include "cql3/statements/use_statement.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/constants.hh"
+#include "cql3/error_listener.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/cf_name.hh"
 #include "core/sstring.hh"
@@ -77,11 +82,10 @@ using cql3::native_cql3_type;
 }
 
 @context {
-#if 0
-    private final List<ErrorListener> listeners = new ArrayList<ErrorListener>();
-#endif
+    using listener_type = cql3::error_listener<RecognizerType>;
+    listener_type* listener;
 
-std::vector<::shared_ptr<cql3::column_identifier>> _bind_variables;
+    std::vector<::shared_ptr<cql3::column_identifier>> _bind_variables;
 
 #if 0
     public static final Set<String> reservedTypeNames = new HashSet<String>()
@@ -123,29 +127,25 @@ std::vector<::shared_ptr<cql3::column_identifier>> _bind_variables;
         bindVariables.add(name);
         return marker;
     }
+#endif
 
-    public void addErrorListener(ErrorListener listener)
-    {
-        this.listeners.add(listener);
+    void set_error_listener(listener_type& listener) {
+        this->listener = &listener;
     }
 
-    public void removeErrorListener(ErrorListener listener)
-    {
-        this.listeners.remove(listener);
-    }
-
+#if 0
     public void displayRecognitionError(String[] tokenNames, RecognitionException e)
     {
         for (int i = 0, m = listeners.size(); i < m; i++)
             listeners.get(i).syntaxError(this, tokenNames, e);
     }
+#endif
 
-    private void addRecognitionError(String msg)
-    {
-        for (int i = 0, m = listeners.size(); i < m; i++)
-            listeners.get(i).syntaxError(this, msg);
+    void add_recognition_error(const sstring& msg) {
+        listener->syntax_error(*this, msg);
     }
 
+#if 0
     public Map<String, String> convertPropertyMap(Maps.Literal map)
     {
         if (map == null || map.entries == null || map.entries.isEmpty())
@@ -232,19 +232,17 @@ std::vector<::shared_ptr<cql3::column_identifier>> _bind_variables;
             return new CommonToken(Token.EOF);
         return tokens.remove(0);
     }
+#endif
 
-    private final List<ErrorListener> listeners = new ArrayList<ErrorListener>();
+    using listener_type = cql3::error_listener<RecognizerType>;
 
-    public void addErrorListener(ErrorListener listener)
-    {
-        this.listeners.add(listener);
+    listener_type* listener;
+
+    void set_error_listener(listener_type& listener) {
+        this->listener = &listener;
     }
 
-    public void removeErrorListener(ErrorListener listener)
-    {
-        this.listeners.remove(listener);
-    }
-
+#if 0
     public void displayRecognitionError(String[] tokenNames, RecognitionException e)
     {
         for (int i = 0, m = listeners.size(); i < m; i++)
