@@ -283,10 +283,10 @@ public:
         return _if_not_exists || _if_exists || !_column_conditions.empty() || !_static_conditions.empty();
     }
 
-    virtual future<std::experimental::optional<transport::messages::result_message>>
+    virtual future<::shared_ptr<transport::messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) override;
 
-    virtual future<std::experimental::optional<transport::messages::result_message>>
+    virtual future<::shared_ptr<transport::messages::result_message>>
     execute_internal(database& db, service::query_state& qs, const query_options& options) override {
         throw std::runtime_error("not implemented");
     }
@@ -295,7 +295,7 @@ private:
     future<>
     execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
 
-    future<std::experimental::optional<transport::messages::result_message>>
+    future<::shared_ptr<transport::messages::result_message>>
     execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
 
 #if 0

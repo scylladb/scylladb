@@ -277,7 +277,7 @@ modification_statement::build_partition_keys(const query_options& options) {
     return result;
 }
 
-future<std::experimental::optional<transport::messages::result_message>>
+future<::shared_ptr<transport::messages::result_message>>
 modification_statement::execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     if (has_conditions() && options.get_protocol_version() == 1) {
         throw new exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
@@ -288,8 +288,8 @@ modification_statement::execute(service::storage_proxy& proxy, service::query_st
     }
 
     return execute_without_condition(proxy, qs, options).then([] {
-        return make_ready_future<std::experimental::optional<transport::messages::result_message>>(
-                std::experimental::optional<transport::messages::result_message>{});
+        return make_ready_future<::shared_ptr<transport::messages::result_message>>(
+                ::shared_ptr<transport::messages::result_message>{});
     });
 }
 
@@ -310,7 +310,7 @@ modification_statement::execute_without_condition(service::storage_proxy& proxy,
     });
 }
 
-future<std::experimental::optional<transport::messages::result_message>>
+future<::shared_ptr<transport::messages::result_message>>
 modification_statement::execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     unimplemented::lwt();
 #if 0
