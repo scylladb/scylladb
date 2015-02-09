@@ -1632,7 +1632,7 @@ void tcp<InetTraits>::tcb::trim_receive_data_after_window() {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::persist() {
-    print("persist timer fired\n");
+    tcp_debug("persist timer fired\n");
     // Send 1 byte packet to probe peer's window size
     _snd.window_probe = true;
     output_one();
