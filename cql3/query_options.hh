@@ -28,21 +28,34 @@
 #include "database.hh"
 #include "db/consistency_level.hh"
 #include "service/query_state.hh"
+#include "service/pager/paging_state.hh"
+#include "cql3/column_specification.hh"
 
 namespace cql3 {
+
+class default_query_options;
 
 /**
  * Options for a query.
  */
 class query_options {
 public:
-#if 0
-    public static final QueryOptions DEFAULT = new DefaultQueryOptions(ConsistencyLevel.ONE,
-                                                                       Collections.<ByteBuffer>emptyList(),
-                                                                       false,
-                                                                       SpecificOptions.DEFAULT,
-                                                                       3);
+    // Options that are likely to not be present in most queries
+    struct specific_options final {
+        static const specific_options DEFAULT;
 
+        const int page_size;
+        const ::shared_ptr<service::pager::paging_state> state;
+        const std::experimental::optional<db::consistency_level> serial_consistency;
+        const api::timestamp_type timestamp;
+    };
+
+    // It can't be const because of prepare()
+    static default_query_options DEFAULT;
+
+    virtual ~query_options() {}
+
+#if 0
     public static final CBCodec<QueryOptions> codec = new Codec();
 
     public static QueryOptions fromProtocolV1(ConsistencyLevel consistency, List<ByteBuffer> values)
@@ -76,39 +89,26 @@ public:
     }
 #endif
 
-public:
     virtual db::consistency_level get_consistency() const = 0;
-
-#if 0
-    public abstract List<ByteBuffer> getValues();
-    public abstract boolean skipMetadata();
+    virtual const std::vector<bytes_opt>& get_values() const = 0;
+    virtual bool skip_metadata() const = 0;
 
     /**  The pageSize for this query. Will be <= 0 if not relevant for the query.  */
-    public int getPageSize()
-    {
-        return getSpecificOptions().pageSize;
-    }
+    int32_t get_page_size() const { return get_specific_options().page_size; }
 
     /** The paging state for this query, or null if not relevant. */
-    public PagingState getPagingState()
-    {
-        return getSpecificOptions().state;
+    ::shared_ptr<service::pager::paging_state> get_paging_state() const {
+        return get_specific_options().state;
     }
 
     /**  Serial consistency for conditional updates. */
-    public ConsistencyLevel getSerialConsistency()
-    {
-        return getSpecificOptions().serialConsistency;
+    std::experimental::optional<db::consistency_level> get_serial_consistency() const {
+        return get_specific_options().serial_consistency;
     }
-#endif
 
-public:
-    api::timestamp_type get_timestamp(const service::query_state& state) const {
-        throw std::runtime_error("NOT IMPLEMENTED");
-#if 0
+    api::timestamp_type get_timestamp(service::query_state& state) const {
         auto tstamp = get_specific_options().timestamp;
         return tstamp != api::missing_timestamp ? tstamp : state.get_timestamp();
-#endif
     }
 
     /**
@@ -117,60 +117,14 @@ public:
      */
     virtual int get_protocol_version() const = 0;
 
-#if 0
     // Mainly for the sake of BatchQueryOptions
-    abstract SpecificOptions getSpecificOptions();
+    virtual const specific_options& get_specific_options() const = 0;
 
-    public QueryOptions prepare(List<ColumnSpecification> specs)
-    {
-        return this;
+    query_options& prepare(const std::vector<::shared_ptr<column_specification>>& specs) {
+        return *this;
     }
 
-    static class DefaultQueryOptions extends QueryOptions
-    {
-        private final ConsistencyLevel consistency;
-        private final List<ByteBuffer> values;
-        private final boolean skipMetadata;
-
-        private final SpecificOptions options;
-
-        private final transient int protocolVersion;
-
-        DefaultQueryOptions(ConsistencyLevel consistency, List<ByteBuffer> values, boolean skipMetadata, SpecificOptions options, int protocolVersion)
-        {
-            this.consistency = consistency;
-            this.values = values;
-            this.skipMetadata = skipMetadata;
-            this.options = options;
-            this.protocolVersion = protocolVersion;
-        }
-
-        public ConsistencyLevel getConsistency()
-        {
-            return consistency;
-        }
-
-        public List<ByteBuffer> getValues()
-        {
-            return values;
-        }
-
-        public boolean skipMetadata()
-        {
-            return skipMetadata;
-        }
-
-        public int getProtocolVersion()
-        {
-            return protocolVersion;
-        }
-
-        SpecificOptions getSpecificOptions()
-        {
-            return options;
-        }
-    }
-
+#if 0
     static abstract class QueryOptionsWrapper extends QueryOptions
     {
         protected final QueryOptions wrapped;
@@ -244,25 +198,6 @@ public:
         {
             assert orderedValues != null; // We should have called prepare first!
             return orderedValues;
-        }
-    }
-
-    // Options that are likely to not be present in most queries
-    static class SpecificOptions
-    {
-        private static final SpecificOptions DEFAULT = new SpecificOptions(-1, null, null, Long.MIN_VALUE);
-
-        private final int pageSize;
-        private final PagingState state;
-        private final ConsistencyLevel serialConsistency;
-        private final long timestamp;
-
-        private SpecificOptions(int pageSize, PagingState state, ConsistencyLevel serialConsistency, long timestamp)
-        {
-            this.pageSize = pageSize;
-            this.state = state;
-            this.serialConsistency = serialConsistency == null ? ConsistencyLevel.SERIAL : serialConsistency;
-            this.timestamp = timestamp;
         }
     }
 
@@ -416,6 +351,39 @@ public:
         }
     }
 #endif
+};
+
+class default_query_options : public query_options {
+private:
+    const db::consistency_level _consistency;
+    const std::vector<bytes_opt> _values;
+    const bool _skip_metadata;
+    const specific_options _options;
+    const int32_t _protocol_version; // transient
+public:
+    default_query_options(db::consistency_level consistency, std::vector<bytes_opt> values, bool skip_metadata, specific_options options,
+        int protocol_version)
+        : _consistency(consistency)
+        , _values(std::move(values))
+        , _skip_metadata(skip_metadata)
+        , _options(std::move(options))
+        , _protocol_version(protocol_version)
+    { }
+    virtual db::consistency_level get_consistency() const override {
+        return _consistency;
+    }
+    virtual const std::vector<bytes_opt>& get_values() const override {
+        return _values;
+    }
+    virtual bool skip_metadata() const override {
+        return _skip_metadata;
+    }
+    virtual int32_t get_protocol_version() const override {
+        return _protocol_version;
+    }
+    virtual const specific_options& get_specific_options() const override {
+        return _options;
+    }
 };
 
 }
