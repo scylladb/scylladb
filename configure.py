@@ -135,6 +135,7 @@ libnet = [
 
 core = [
     'core/reactor.cc',
+    'core/fstream.cc',
     'core/posix.cc',
     'core/memory.cc',
     'core/resource.cc',
