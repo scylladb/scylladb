@@ -38,24 +38,24 @@ namespace cql3 {
  */
 class attributes final {
 private:
-    const std::experimental::optional<::shared_ptr<term>> _timestamp;
-    const std::experimental::optional<::shared_ptr<term>> _time_to_live;
+    const ::shared_ptr<term> _timestamp;
+    const ::shared_ptr<term> _time_to_live;
 
 public:
     static std::unique_ptr<attributes> none() {
-        return std::unique_ptr<attributes>{new attributes{std::move(std::experimental::optional<::shared_ptr<term>>{}), std::move(std::experimental::optional<::shared_ptr<term>>{})}};
+        return std::unique_ptr<attributes>{new attributes{{}, {}}};
     }
 
 private:
-    attributes(std::experimental::optional<::shared_ptr<term>>&& timestamp, std::experimental::optional<::shared_ptr<term>>&& time_to_live)
+    attributes(::shared_ptr<term>&& timestamp, ::shared_ptr<term>&& time_to_live)
         : _timestamp{std::move(timestamp)}
         , _time_to_live{std::move(time_to_live)}
     { }
 
 public:
     bool uses_function(const sstring& ks_name, const sstring& function_name) const {
-        return (_timestamp && _timestamp.value()->uses_function(ks_name, function_name))
-            || (_time_to_live && _time_to_live.value()->uses_function(ks_name, function_name));
+        return (_timestamp && _timestamp->uses_function(ks_name, function_name))
+            || (_time_to_live && _time_to_live->uses_function(ks_name, function_name));
     }
 
     bool is_timestamp_set() const {
@@ -71,7 +71,7 @@ public:
             return now;
         }
 
-        bytes_opt tval = _timestamp.value()->bind_and_get(options);
+        bytes_opt tval = _timestamp->bind_and_get(options);
         if (!tval) {
             throw exceptions::invalid_request_exception("Invalid null value of timestamp");
         }
@@ -88,7 +88,7 @@ public:
         if (!_time_to_live)
             return 0;
 
-        bytes_opt tval = _time_to_live.value()->bind_and_get(options);
+        bytes_opt tval = _time_to_live->bind_and_get(options);
         if (!tval) {
             throw exceptions::invalid_request_exception("Invalid null value of TTL");
         }
@@ -114,10 +114,10 @@ public:
 
     void collect_marker_specification(::shared_ptr<variable_specifications> bound_names) {
         if (_timestamp) {
-            _timestamp.value()->collect_marker_specification(bound_names);
+            _timestamp->collect_marker_specification(bound_names);
         }
         if (_time_to_live) {
-            _time_to_live.value()->collect_marker_specification(bound_names);
+            _time_to_live->collect_marker_specification(bound_names);
         }
     }
 
