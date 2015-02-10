@@ -76,7 +76,7 @@ using cql3::native_cql3_type;
 #endif
 }
 
-@members {
+@context {
 #if 0
     private final List<ErrorListener> listeners = new ArrayList<ErrorListener>();
     private final List<ColumnIdentifier> bindVariables = new ArrayList<ColumnIdentifier>();
@@ -212,7 +212,7 @@ using cql3::native_cql3_type;
 #endif
 }
 
-@lexer::members {
+@lexer::context {
 #if 0
     List<Token> tokens = new ArrayList<Token>();
 
