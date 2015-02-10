@@ -65,7 +65,7 @@ public:
     private static final Constants.Value EMPTY = new Constants.Value(ByteBufferUtil.EMPTY_BYTE_BUFFER);
 #endif
 
-    update_statement(statement_type type, int32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs)
+    update_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs)
         : modification_statement{type, bound_terms, std::move(s), std::move(attrs)}
     { }
 

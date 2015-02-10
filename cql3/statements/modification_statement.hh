@@ -94,7 +94,7 @@ public:
     const statement_type type;
 
 private:
-    const int32_t _bound_terms;
+    const uint32_t _bound_terms;
 
 public:
     const schema_ptr s;
@@ -122,7 +122,7 @@ private:
         };
 
 public:
-    modification_statement(statement_type type_, int32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_)
+    modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_)
         : type{type_}
         , _bound_terms{bound_terms}
         , s{schema_}
@@ -162,7 +162,7 @@ public:
 
     virtual void add_update_for_key(mutation& m, const clustering_prefix& prefix, const update_parameters& params) = 0;
 
-    virtual int get_bound_terms() override {
+    virtual uint32_t get_bound_terms() override {
         return _bound_terms;
     }
 

@@ -41,7 +41,7 @@ public:
         : _keyspace(keyspace)
     { }
 
-    virtual int get_bound_terms() override {
+    virtual uint32_t get_bound_terms() override {
         return 0;
     }
 

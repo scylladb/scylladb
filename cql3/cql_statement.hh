@@ -39,7 +39,7 @@ public:
     virtual ~cql_statement()
     { }
 
-    virtual int get_bound_terms() = 0;
+    virtual uint32_t get_bound_terms() = 0;
 
     /**
      * Perform any access verification necessary for the statement.

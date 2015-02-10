@@ -54,7 +54,7 @@ import org.apache.cassandra.utils.Pair;
 */
 class delete_statement : public modification_statement {
 public:
-    delete_statement(statement_type type, int32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs)
+    delete_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs)
             : modification_statement{type, bound_terms, std::move(s), std::move(attrs)}
     { }
 
