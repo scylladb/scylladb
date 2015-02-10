@@ -45,11 +45,11 @@ private:
 
 protected:
     schema_altering_statement()
-        : cf_statement{std::experimental::optional<cf_name>{}}
+        : cf_statement{::shared_ptr<cf_name>{}}
         , _is_column_family_level{false}
     { }
 
-    schema_altering_statement(std::experimental::optional<cf_name>&& name)
+    schema_altering_statement(::shared_ptr<cf_name>&& name)
         : cf_statement{std::move(name)}
         , _is_column_family_level{true}
     { }

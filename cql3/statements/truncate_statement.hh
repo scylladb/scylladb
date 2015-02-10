@@ -36,7 +36,7 @@ namespace statements {
 
 class truncate_statement : public cf_statement, public virtual cql_statement, public ::enable_shared_from_this<truncate_statement> {
 public:
-    truncate_statement(std::experimental::optional<cf_name>&& name)
+    truncate_statement(::shared_ptr<cf_name>&& name)
         : cf_statement{std::move(name)}
     { }
 

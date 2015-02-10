@@ -89,7 +89,7 @@ private:
          * @param columnValues list of column values (corresponds to names)
          * @param attrs additional attributes for statement (CL, timestamp, timeToLive)
          */
-        parsed_insert(std::experimental::optional<cf_name> name,
+        parsed_insert(::shared_ptr<cf_name> name,
                       ::shared_ptr<attributes::raw> attrs,
                       std::vector<::shared_ptr<column_identifier::raw>> column_names,
                       std::vector<::shared_ptr<term::raw>> column_values,
@@ -119,7 +119,7 @@ private:
          * @param updates a map of column operations to perform
          * @param whereClause the where clause
          */
-        parsed_update(std::experimental::optional<cf_name> name,
+        parsed_update(::shared_ptr<cf_name> name,
             ::shared_ptr<attributes::raw> attrs,
             std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
             std::vector<relation_ptr> where_clause,
