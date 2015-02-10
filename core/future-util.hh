@@ -38,17 +38,22 @@ template<typename AsyncAction, typename StopCondition>
 static inline
 void do_until_continued(StopCondition&& stop_cond, AsyncAction&& action, promise<> p) {
     while (!stop_cond()) {
-        auto&& f = action();
-        if (!f.available()) {
-            f.then([action = std::forward<AsyncAction>(action),
+        try {
+            auto&& f = action();
+            if (!f.available()) {
+                f.then([action = std::forward<AsyncAction>(action),
                     stop_cond = std::forward<StopCondition>(stop_cond), p = std::move(p)]() mutable {
-                do_until_continued(stop_cond, std::forward<AsyncAction>(action), std::move(p));
-            });
-            return;
-        }
+                    do_until_continued(stop_cond, std::forward<AsyncAction>(action), std::move(p));
+                });
+                return;
+            }
 
-        if (f.failed()) {
-            f.forward_to(std::move(p));
+            if (f.failed()) {
+                f.forward_to(std::move(p));
+                return;
+            }
+        } catch (...) {
+            p.set_exception(std::current_exception());
             return;
         }
     }
