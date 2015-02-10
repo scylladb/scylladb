@@ -26,6 +26,7 @@
 
 #include "exceptions/exceptions.hh"
 #include "unimplemented.hh"
+#include "database.hh"
 
 namespace service {
 
@@ -84,10 +85,12 @@ private:
 
     // The remote address of the client - null for internal clients.
     private final SocketAddress remoteAddress;
+#endif
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
-    private final AtomicLong lastTimestampMicros = new AtomicLong(0);
+    api::timestamp_type _last_timestamp_micros = 0;
 
+#if 0
     /**
      * Construct a new, empty ClientState for internal calls.
      */
@@ -120,23 +123,22 @@ private:
     {
         return new ClientState(remoteAddress);
     }
+#endif
 
     /**
      * This clock guarantees that updates for the same ClientState will be ordered
      * in the sequence seen, even if multiple updates happen in the same millisecond.
      */
-    public long getTimestamp()
-    {
-        while (true)
-        {
-            long current = System.currentTimeMillis() * 1000;
-            long last = lastTimestampMicros.get();
-            long tstamp = last >= current ? last + 1 : current;
-            if (lastTimestampMicros.compareAndSet(last, tstamp))
-                return tstamp;
-        }
+public:
+    api::timestamp_type get_timestamp() {
+        auto current = db_clock::now().time_since_epoch().count() * 1000;
+        auto last = _last_timestamp_micros;
+        auto result = last >= current ? last + 1 : current;
+        _last_timestamp_micros = result;
+        return result;
     }
 
+#if 0
     /**
      * Can be use when a timestamp has been assigned by a query, but that timestamp is
      * not directly one returned by getTimestamp() (see SP.beginAndRepairPaxos()).
