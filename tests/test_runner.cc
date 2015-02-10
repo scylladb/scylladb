@@ -58,14 +58,19 @@ void
 test_runner::run_sync(std::function<future<>()> task) {
     exchanger<std::experimental::optional<std::exception_ptr>> e;
     _task.give([task = std::move(task), &e] {
-        return task().rescue([&e] (auto get) {
-            try {
-                get();
-                e.give({});
-            } catch (...) {
-                e.give({std::current_exception()});
-            }
-        });
+        try {
+            return task().rescue([&e](auto get) {
+                try {
+                    get();
+                    e.give({});
+                } catch (...) {
+                    e.give({std::current_exception()});
+                }
+            });
+        } catch (...) {
+            e.give({std::current_exception()});
+            return make_ready_future<>();
+        }
     });
     auto maybe_exception = e.take();
     if (maybe_exception) {
