@@ -15,18 +15,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.service.pager;
 
-import java.io.DataInputStream;
-import java.io.IOException;
-import java.nio.ByteBuffer;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import org.apache.cassandra.io.util.DataOutputBuffer;
-import org.apache.cassandra.transport.ProtocolException;
-import org.apache.cassandra.utils.ByteBufferUtil;
+#pragma once
 
-public class PagingState
-{
+namespace service {
+
+namespace pager {
+
+class paging_state final {
+#if 0
     public final ByteBuffer partitionKey;
     public final ByteBuffer cellName;
     public final int remaining;
@@ -85,4 +88,9 @@ public class PagingState
     {
         return String.format("PagingState(key=%s, cellname=%s, remaining=%d", ByteBufferUtil.bytesToHex(partitionKey), ByteBufferUtil.bytesToHex(cellName), remaining);
     }
+#endif
+};
+
+}
+
 }
