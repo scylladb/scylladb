@@ -2,6 +2,7 @@
 #define EXCEPTIONS_HH
 
 #include <stdexcept>
+#include "core/sstring.hh"
 
 namespace exceptions {
 
@@ -47,6 +48,38 @@ enum exception_code {
     CONFIG_ERROR    = 0x2300,
     ALREADY_EXISTS  = 0x2400,
     UNPREPARED      = 0x2500
+};
+
+class transport_exception {
+public:
+    virtual exception_code code() const = 0;
+    virtual sstring get_message() const = 0;
+};
+
+class cassandra_exception : public std::exception, public transport_exception {
+private:
+    exception_code _code;
+    sstring _msg;
+public:
+    cassandra_exception(exception_code code, sstring msg)
+        : _code(code)
+        , _msg(std::move(msg))
+    { }
+    virtual const char* what() const noexcept override { return _msg.begin(); }
+    virtual exception_code code() const override { return _code; }
+    virtual sstring get_message() const override { return what(); }
+};
+
+class request_validation_exception : public cassandra_exception {
+public:
+    using cassandra_exception::cassandra_exception;
+};
+
+class syntax_exception : public request_validation_exception {
+public:
+    syntax_exception(sstring msg)
+        : request_validation_exception(exception_code::SYNTAX_ERROR, std::move(msg))
+    { }
 };
 
 }
