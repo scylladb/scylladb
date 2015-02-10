@@ -196,7 +196,7 @@ future<database> database::populate(sstring datadir) {
         dblog.warn("Populating Keyspace {}", de.name);
         auto ksdir = datadir + "/" + de.name;
         return keyspace::populate(ksdir).then([db, de] (keyspace ks){
-            db->keyspaces[de.name] = std::move(ks);
+            db->keyspaces.emplace(de.name, std::move(ks));
         });
     }).then([db] {
         return make_ready_future<database>(std::move(*db));
