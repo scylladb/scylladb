@@ -896,6 +896,8 @@ public:
 
 class data_source {
     std::unique_ptr<data_source_impl> _dsi;
+protected:
+    data_source_impl* impl() const { return _dsi.get(); }
 public:
     explicit data_source(std::unique_ptr<data_source_impl> dsi) : _dsi(std::move(dsi)) {}
     data_source(data_source&& x) = default;
@@ -946,6 +948,8 @@ class input_stream {
 private:
     using tmp_buf = temporary_buffer<CharType>;
     size_t available() const { return _buf.size(); }
+protected:
+    data_source* fd() { return &_fd; }
 public:
     // Consumer concept, for consume() method:
     struct ConsumerConcept {
