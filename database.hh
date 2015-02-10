@@ -48,10 +48,9 @@ timestamp_type constexpr max_timestamp = std::numeric_limits<timestamp_type>::ma
 }
 
 /**
-* Represents deletion operation. Can be commuted with other tombstones via apply() method.
-* Can be empty.
-*
-*/
+ * Represents deletion operation. Can be commuted with other tombstones via apply() method.
+ * Can be empty.
+ */
 struct tombstone final {
     api::timestamp_type timestamp;
     gc_clock::time_point ttl;
