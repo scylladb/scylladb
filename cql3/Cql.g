@@ -79,8 +79,11 @@ using cql3::native_cql3_type;
 @context {
 #if 0
     private final List<ErrorListener> listeners = new ArrayList<ErrorListener>();
-    private final List<ColumnIdentifier> bindVariables = new ArrayList<ColumnIdentifier>();
+#endif
 
+std::vector<::shared_ptr<cql3::column_identifier>> _bind_variables;
+
+#if 0
     public static final Set<String> reservedTypeNames = new HashSet<String>()
     {{
         add("byte");
@@ -257,9 +260,7 @@ query returns [shared_ptr<parsed_statement> stmnt]
     ;
 
 cqlStatement returns [shared_ptr<parsed_statement> stmt]
-#if 0
-    @after{ if (stmt != null) stmt.setBoundVariables(bindVariables); }
-#endif
+    @after{ if (stmt) { stmt->set_bound_variables(_bind_variables); } }
     : st1= selectStatement             { $stmt = st1; }
     | st2= insertStatement             { $stmt = st2; }
 #if 0
