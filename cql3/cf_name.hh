@@ -39,7 +39,7 @@ public:
         if (!keep_case) {
             std::transform(ks.begin(), ks.end(), ks.begin(), ::tolower);
         }
-        _ks_name = std::experimental::make_optional(ks);
+        _ks_name = std::experimental::make_optional(std::move(ks));
     }
 
     void set_column_family(sstring cf, bool keep_case) {
