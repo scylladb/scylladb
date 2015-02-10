@@ -183,7 +183,7 @@ public:
         _keyspace = keyspace;
     }
 
-    sstring get_keyspace() const {
+    const sstring& get_keyspace() const {
         if (_keyspace.empty()) {
             throw exceptions::invalid_request_exception("No keyspace has been specified. USE a keyspace, or explicitly specify keyspace.tablename");
         }
