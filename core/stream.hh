@@ -5,6 +5,7 @@
 #ifndef STREAM_HH_
 #define STREAM_HH_
 
+#include "future.hh"
 #include <exception>
 #include <cassert>
 
