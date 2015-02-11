@@ -1847,15 +1847,15 @@ int start_instance(int ac, char** av) {
                 std::cout << PLATFORM << " memcached " << VERSION << "\n";
                 return make_ready_future<>();
             }
-        }).then([&] {
-            return tcp_server.start(std::ref(cache), std::ref(system_stats), std::move(port));
+        }).then([&, port] {
+            return tcp_server.start(std::ref(cache), std::ref(system_stats), port);
         }).then([&tcp_server] {
             return tcp_server.invoke_on_all(&memcache::tcp_server<WithFlashCache>::start);
-        }).then([&] {
+        }).then([&, port] {
             if (engine().net().has_per_core_namespace()) {
-                return udp_server.start(std::ref(cache), std::ref(system_stats), std::move(port));
+                return udp_server.start(std::ref(cache), std::ref(system_stats), port);
             } else {
-                return udp_server.start_single(std::ref(cache), std::ref(system_stats), std::move(port));
+                return udp_server.start_single(std::ref(cache), std::ref(system_stats), port);
             }
         }).then([&] {
             return udp_server.invoke_on_all(&memcache::udp_server<WithFlashCache>::set_max_datagram_size,
