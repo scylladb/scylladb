@@ -949,6 +949,7 @@ private:
     using tmp_buf = temporary_buffer<CharType>;
     size_t available() const { return _buf.size(); }
 protected:
+    void reset() { _buf = {}; }
     data_source* fd() { return &_fd; }
 public:
     // Consumer concept, for consume() method:
