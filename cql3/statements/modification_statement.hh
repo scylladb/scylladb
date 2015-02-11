@@ -191,6 +191,7 @@ public:
     }
 
     virtual void check_access(const service::client_state& state) override {
+        unimplemented::permissions();
 #if 0
         state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.MODIFY);
 
@@ -198,7 +199,6 @@ public:
         if (hasConditions())
             state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.SELECT);
 #endif
-        throw std::runtime_error("not implemented");
     }
 
     virtual void validate(const service::client_state& state);

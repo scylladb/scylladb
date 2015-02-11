@@ -41,6 +41,11 @@ void auth() {
 }
 
 static inline
+void permissions() {
+    warn("permissions");
+}
+
+static inline
 void triggers() {
     warn("triggers");
 }
