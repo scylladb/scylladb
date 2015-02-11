@@ -201,19 +201,7 @@ public:
         throw std::runtime_error("not implemented");
     }
 
-    virtual void validate(const service::client_state& state) override {
-#if 0
-        if (hasConditions() && attrs.isTimestampSet())
-            throw new InvalidRequestException("Cannot provide custom timestamp for conditional updates");
-
-        if (isCounter() && attrs.isTimestampSet())
-            throw new InvalidRequestException("Cannot provide custom timestamp for counter updates");
-
-        if (isCounter() && attrs.isTimeToLiveSet())
-            throw new InvalidRequestException("Cannot provide custom TTL for counter updates");
-#endif
-        throw std::runtime_error("not implemented");
-    }
+    virtual void validate(const service::client_state& state);
 
     void add_operation(::shared_ptr<operation> op) {
         if (op->column.is_static()) {

@@ -446,6 +446,21 @@ modification_statement::parsed::prepare(database& db, ::shared_ptr<variable_spec
     return stmt;
 }
 
+void
+modification_statement::validate(const service::client_state& state) {
+    if (has_conditions() && attrs->is_timestamp_set()) {
+        throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional updates");
+    }
+
+    if (is_counter() && attrs->is_timestamp_set()) {
+        throw exceptions::invalid_request_exception("Cannot provide custom timestamp for counter updates");
+    }
+
+    if (is_counter() && attrs->is_time_to_live_set()) {
+        throw exceptions::invalid_request_exception("Cannot provide custom TTL for counter updates");
+    }
+}
+
 }
 
 }
