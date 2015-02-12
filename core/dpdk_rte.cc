@@ -74,6 +74,8 @@ void eal::init(cpuset cpus, boost::program_options::variables_map opts)
     initialized = true;
 }
 
+uint32_t __attribute__((weak)) qp_mempool_obj_size() { return 0; }
+
 size_t eal::mem_size(int num_cpus)
 {
     size_t memsize = 0;
