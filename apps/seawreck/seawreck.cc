@@ -2,7 +2,7 @@
  * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
-#include "tests/http_response_parser.hh"
+#include "apps/seawreck/http_response_parser.hh"
 #include "core/print.hh"
 #include "core/reactor.hh"
 #include "core/app-template.hh"
