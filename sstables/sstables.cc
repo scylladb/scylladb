@@ -207,6 +207,14 @@ future<> parse(file_input_stream& in, disk_hash<Size, Key, Value>& h) {
     });
 }
 
+future<> parse(file_input_stream& in, option& op) {
+    return parse(in, op.key, op.value);
+}
+
+future<> parse(file_input_stream& in, compression& c) {
+    return parse(in, c.name, c.options, c.chunk_len, c.data_len, c.offsets);
+}
+
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc() {
@@ -269,8 +277,40 @@ future<> sstable::read_toc() {
 
 }
 
+template <typename T, sstable::component_type Type, T sstable::* Comptr>
+future<> sstable::read_simple() {
+
+    auto file_path = filename(Type);
+    sstlog.debug(("Reading " + _component_map[Type] + " file {} ").c_str(), file_path);
+    return engine().open_file_dma(file_path, open_flags::ro).then([this] (file f) {
+
+        auto r = std::make_unique<file_input_stream>(std::move(f), 4096);
+        auto fut = parse(*r, *this.*Comptr);
+        return fut.then([r = std::move(r)] {});
+    }).rescue([this, file_path] (auto get_ex) {
+        try {
+            get_ex();
+        } catch (std::system_error& e) {
+            if (e.code() == std::error_code(ENOENT, std::system_category())) {
+                throw malformed_sstable_exception(file_path + ": file not found");
+            }
+        }
+    });
+}
+
+future<> sstable::read_compression() {
+     // FIXME: If there is no compression, we should expect a CRC file to be present.
+    if (!has_component(sstable::component_type::CompressionInfo)) {
+        return make_ready_future<>();
+    }
+
+    return read_simple<compression, component_type::CompressionInfo, &sstable::_compression>();
+}
+
 future<> sstable::load() {
-    return read_toc();
+    return read_toc().then([this] {
+        return read_compression();
+    });
 }
 
 const bool sstable::has_component(component_type f) {

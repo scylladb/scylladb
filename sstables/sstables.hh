@@ -11,6 +11,7 @@
 #include "core/enum.hh"
 #include <unordered_set> 
 #include <unordered_map>
+#include "types.hh"
 
 namespace sstables {
 
@@ -49,6 +50,8 @@ private:
 
     std::unordered_set<component_type> _components;
 
+    compression _compression;
+
     sstring _dir;
     unsigned long _epoch = 0;
     version_types _version;
@@ -58,6 +61,11 @@ private:
 
     const sstring filename(component_type f);
     future<> read_toc();
+
+    template <typename T, sstable::component_type Type, T sstable::* Comptr>
+    future<> read_simple();
+
+    future<> read_compression();
 
 public:
     sstable(sstring dir, unsigned long epoch, version_types v, format_types f) : _dir(dir), _epoch(epoch), _version(v), _format(f) {}

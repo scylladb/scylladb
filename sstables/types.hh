@@ -28,4 +28,17 @@ template <typename Size, typename Key, typename Value>
 struct disk_hash {
     std::unordered_map<Key, Value, std::hash<Key>> map;
 };
+
+struct option {
+    disk_string<uint16_t> key;
+    disk_string<uint16_t> value;
+};
+
+struct compression {
+    disk_string<uint16_t> name;
+    disk_array<uint32_t, option> options;
+    uint32_t chunk_len;
+    uint64_t data_len;
+    disk_array<uint32_t, uint64_t> offsets;
+};
 }
