@@ -25,6 +25,10 @@
 #ifndef CQL3_COLUMN_CONDITION_HH
 #define CQL3_COLUMN_CONDITION_HH
 
+#include "cql3/term.hh"
+#include "cql3/abstract_marker.hh"
+#include "cql3/operator.hh"
+
 #if 0
 import java.nio.ByteBuffer;
 import java.util.*;
@@ -53,74 +57,59 @@ namespace cql3 {
 class column_condition final {
 public:
     column_definition& column;
-
-#if 0
-    // For collection, when testing the equality of a specific element, null otherwise.
-    private final Term collectionElement;
-
-    private final Term value;  // a single value or a marker for a list of IN values
-    private final List<Term> inValues;
-
-    public final Operator operator;
-
-    private ColumnCondition(ColumnDefinition column, Term collectionElement, Term value, List<Term> inValues, Operator op)
+private:
+    // For collection, when testing the equality of a specific element, nullptr otherwise.
+    ::shared_ptr<term> _collection_element;
+    ::shared_ptr<term> _value;
+    std::vector<::shared_ptr<term>> _in_values;
+    const operator_type& _op;
+public:
+    column_condition(column_definition& column, ::shared_ptr<term> collection_element,
+        ::shared_ptr<term> value, std::vector<::shared_ptr<term>> in_values, const operator_type& op)
+            : column(column)
+            , _collection_element(std::move(collection_element))
+            , _value(std::move(value))
+            , _in_values(std::move(in_values))
+            , _op(op)
     {
-        this.column = column;
-        this.collectionElement = collectionElement;
-        this.value = value;
-        this.inValues = inValues;
-        this.operator = op;
-
-        if (operator != Operator.IN)
-            assert this.inValues == null;
+        if (op != operator_type::IN) {
+            assert(_in_values.empty());
+        }
     }
 
-    public static ColumnCondition condition(ColumnDefinition column, Term value, Operator op)
-    {
-        return new ColumnCondition(column, null, value, null, op);
+    static ::shared_ptr<column_condition> condition(column_definition& def, ::shared_ptr<term> value, const operator_type& op) {
+        return ::make_shared<column_condition>(def, ::shared_ptr<term>{}, std::move(value), std::vector<::shared_ptr<term>>{}, op);
     }
 
-    public static ColumnCondition condition(ColumnDefinition column, Term collectionElement, Term value, Operator op)
-    {
-        return new ColumnCondition(column, collectionElement, value, null, op);
+    static ::shared_ptr<column_condition> condition(column_definition& def, ::shared_ptr<term> collection_element,
+            ::shared_ptr<term> value, const operator_type& op) {
+        return ::make_shared<column_condition>(def, std::move(collection_element), std::move(value),
+            std::vector<::shared_ptr<term>>{}, op);
     }
 
-    public static ColumnCondition inCondition(ColumnDefinition column, List<Term> inValues)
-    {
-        return new ColumnCondition(column, null, null, inValues, Operator.IN);
+    static ::shared_ptr<column_condition> in_condition(column_definition& def, std::vector<::shared_ptr<term>> in_values) {
+        return ::make_shared<column_condition>(def, ::shared_ptr<term>{}, ::shared_ptr<term>{},
+            std::move(in_values), operator_type::IN);
     }
 
-    public static ColumnCondition inCondition(ColumnDefinition column, Term collectionElement, List<Term> inValues)
-    {
-        return new ColumnCondition(column, collectionElement, null, inValues, Operator.IN);
+    static ::shared_ptr<column_condition> in_condition(column_definition& def, ::shared_ptr<term> collection_element,
+            std::vector<::shared_ptr<term>> in_values) {
+        return ::make_shared<column_condition>(def, std::move(collection_element), ::shared_ptr<term>{},
+            std::move(in_values), operator_type::IN);
     }
 
-    public static ColumnCondition inCondition(ColumnDefinition column, Term inMarker)
-    {
-        return new ColumnCondition(column, null, inMarker, null, Operator.IN);
+    static ::shared_ptr<column_condition> in_condition(column_definition& def, ::shared_ptr<term> in_marker) {
+        return ::make_shared<column_condition>(def, ::shared_ptr<term>{}, std::move(in_marker),
+            std::vector<::shared_ptr<term>>{}, operator_type::IN);
     }
 
-    public static ColumnCondition inCondition(ColumnDefinition column, Term collectionElement, Term inMarker)
-    {
-        return new ColumnCondition(column, collectionElement, inMarker, null, Operator.IN);
-    }
-#endif
-
-    bool uses_function(const sstring& ks_name, const sstring& function_name) const {
-        throw std::runtime_error("not implemented");
-#if 0
-        if (collectionElement != null && collectionElement.usesFunction(ksName, functionName))
-            return true;
-        if (value != null && value.usesFunction(ksName, functionName))
-            return true;
-        if (inValues != null)
-            for (Term value : inValues)
-                if (value != null && value.usesFunction(ksName, functionName))
-                    return true;
-        return false;
-#endif
+    static ::shared_ptr<column_condition> in_condition(column_definition& def, ::shared_ptr<term> collection_element,
+        ::shared_ptr<term> in_marker) {
+        return ::make_shared<column_condition>(def, std::move(collection_element), std::move(in_marker),
+            std::vector<::shared_ptr<term>>{}, operator_type::IN);
     }
 
+    bool uses_function(const sstring& ks_name, const sstring& function_name);
 public:
     /**
      * Collects the column specification for the bind variables of this operation.
@@ -128,23 +117,7 @@ public:
      * @param boundNames the list of column specification where to collect the
      * bind variables of this term in.
      */
-    void collect_marker_specificaton(::shared_ptr<variable_specifications> bound_names) {
-        throw std::runtime_error("not found");
-#if 0
-        if (collectionElement != null)
-            collectionElement.collectMarkerSpecification(boundNames);
-
-        if ((operator == Operator.IN) && inValues != null)
-        {
-            for (Term value : inValues)
-                value.collectMarkerSpecification(boundNames);
-        }
-        else
-        {
-            value.collectMarkerSpecification(boundNames);
-        }
-#endif
-    }
+    void collect_marker_specificaton(::shared_ptr<variable_specifications> bound_names);
 
 #if 0
     public ColumnCondition.Bound bind(QueryOptions options) throws InvalidRequestException
@@ -725,120 +698,67 @@ public:
     }
 #endif
 
-    class raw {
-#if 0
-        private final Term.Raw value;
-        private final List<Term.Raw> inValues;
-        private final AbstractMarker.INRaw inMarker;
+    class raw final {
+    private:
+        ::shared_ptr<term::raw> _value;
+        std::vector<::shared_ptr<term::raw>> _in_values;
+        ::shared_ptr<abstract_marker::in_raw> _in_marker;
 
-        // Can be null, only used with the syntax "IF m[e] = ..." (in which case it's 'e')
-        private final Term.Raw collectionElement;
-
-        private final Operator operator;
-
-        private Raw(Term.Raw value, List<Term.Raw> inValues, AbstractMarker.INRaw inMarker, Term.Raw collectionElement, Operator op)
-        {
-            this.value = value;
-            this.inValues = inValues;
-            this.inMarker = inMarker;
-            this.collectionElement = collectionElement;
-            this.operator = op;
-        }
+        // Can be nullptr, only used with the syntax "IF m[e] = ..." (in which case it's 'e')
+        ::shared_ptr<term::raw> _collection_element;
+        const operator_type& _op;
+    public:
+        raw(::shared_ptr<term::raw> value,
+            std::vector<::shared_ptr<term::raw>> in_values,
+            ::shared_ptr<abstract_marker::in_raw> in_marker,
+            ::shared_ptr<term::raw> collection_element,
+            const operator_type& op)
+                : _value(std::move(value))
+                , _in_values(std::move(in_values))
+                , _in_marker(std::move(in_marker))
+                , _collection_element(std::move(collection_element))
+                , _op(op)
+        { }
 
         /** A condition on a column. For example: "IF col = 'foo'" */
-        public static Raw simpleCondition(Term.Raw value, Operator op)
-        {
-            return new Raw(value, null, null, null, op);
+        static ::shared_ptr<raw> simple_condition(::shared_ptr<term::raw> value, const operator_type& op) {
+            return ::make_shared<raw>(std::move(value), std::vector<::shared_ptr<term::raw>>{},
+                ::shared_ptr<abstract_marker::in_raw>{}, ::shared_ptr<term::raw>{}, op);
         }
 
         /** An IN condition on a column. For example: "IF col IN ('foo', 'bar', ...)" */
-        public static Raw simpleInCondition(List<Term.Raw> inValues)
-        {
-            return new Raw(null, inValues, null, null, Operator.IN);
+        static ::shared_ptr<raw> simple_in_condition(std::vector<::shared_ptr<term::raw>> in_values) {
+            return ::make_shared<raw>(::shared_ptr<term::raw>{}, std::move(in_values),
+                ::shared_ptr<abstract_marker::in_raw>{}, ::shared_ptr<term::raw>{}, operator_type::IN);
         }
 
         /** An IN condition on a column with a single marker. For example: "IF col IN ?" */
-        public static Raw simpleInCondition(AbstractMarker.INRaw inMarker)
-        {
-            return new Raw(null, null, inMarker, null, Operator.IN);
+        static ::shared_ptr<raw> simple_in_condition(::shared_ptr<abstract_marker::in_raw> in_marker) {
+            return ::make_shared<raw>(::shared_ptr<term::raw>{}, std::vector<::shared_ptr<term::raw>>{},
+                std::move(in_marker), ::shared_ptr<term::raw>{}, operator_type::IN);
         }
 
         /** A condition on a collection element. For example: "IF col['key'] = 'foo'" */
-        public static Raw collectionCondition(Term.Raw value, Term.Raw collectionElement, Operator op)
-        {
-            return new Raw(value, null, null, collectionElement, op);
+        static ::shared_ptr<raw> collection_condition(::shared_ptr<term::raw> value, ::shared_ptr<term::raw> collection_element,
+                const operator_type& op) {
+            return ::make_shared<raw>(std::move(value), std::vector<::shared_ptr<term::raw>>{}, ::shared_ptr<abstract_marker::in_raw>{}, std::move(collection_element), operator_type::IN);
         }
 
         /** An IN condition on a collection element. For example: "IF col['key'] IN ('foo', 'bar', ...)" */
-        public static Raw collectionInCondition(Term.Raw collectionElement, List<Term.Raw> inValues)
-        {
-            return new Raw(null, inValues, null, collectionElement, Operator.IN);
+        static ::shared_ptr<raw> collection_in_condition(::shared_ptr<term::raw> collection_element,
+                std::vector<::shared_ptr<term::raw>> in_values) {
+            return ::make_shared<raw>(::shared_ptr<term::raw>{}, std::move(in_values), ::shared_ptr<abstract_marker::in_raw>{},
+                std::move(collection_element), operator_type::IN);
         }
 
         /** An IN condition on a collection element with a single marker. For example: "IF col['key'] IN ?" */
-        public static Raw collectionInCondition(Term.Raw collectionElement, AbstractMarker.INRaw inMarker)
-        {
-            return new Raw(null, null, inMarker, collectionElement, Operator.IN);
+        static ::shared_ptr<raw> collectionInCondition(::shared_ptr<term::raw> collection_element,
+                ::shared_ptr<abstract_marker::in_raw> in_marker) {
+            return ::make_shared<raw>(::shared_ptr<term::raw>{}, std::vector<::shared_ptr<term::raw>>{}, std::move(in_marker),
+                std::move(collection_element), operator_type::IN);
         }
-#endif
-    public:
-        ::shared_ptr<column_condition> prepare(const sstring& keyspace, column_definition& receiver) {
-            throw std::runtime_error("not implemented");
-#if 0
-            if (receiver.type instanceof CounterColumnType)
-                throw new InvalidRequestException("Conditions on counters are not supported");
 
-            if (collectionElement == null)
-            {
-                if (operator == Operator.IN)
-                {
-                    if (inValues == null)
-                        return ColumnCondition.inCondition(receiver, inMarker.prepare(keyspace, receiver));
-                    List<Term> terms = new ArrayList<>(inValues.size());
-                    for (Term.Raw value : inValues)
-                        terms.add(value.prepare(keyspace, receiver));
-                    return ColumnCondition.inCondition(receiver, terms);
-                }
-                else
-                {
-                    return ColumnCondition.condition(receiver, value.prepare(keyspace, receiver), operator);
-                }
-            }
-
-            if (!(receiver.type.isCollection()))
-                throw new InvalidRequestException(String.format("Invalid element access syntax for non-collection column %s", receiver.name));
-
-            ColumnSpecification elementSpec, valueSpec;
-            switch ((((CollectionType)receiver.type).kind))
-            {
-                case LIST:
-                    elementSpec = Lists.indexSpecOf(receiver);
-                    valueSpec = Lists.valueSpecOf(receiver);
-                    break;
-                case MAP:
-                    elementSpec = Maps.keySpecOf(receiver);
-                    valueSpec = Maps.valueSpecOf(receiver);
-                    break;
-                case SET:
-                    throw new InvalidRequestException(String.format("Invalid element access syntax for set column %s", receiver.name));
-                default:
-                    throw new AssertionError();
-            }
-            if (operator == Operator.IN)
-            {
-                if (inValues == null)
-                    return ColumnCondition.inCondition(receiver, collectionElement.prepare(keyspace, elementSpec), inMarker.prepare(keyspace, valueSpec));
-                List<Term> terms = new ArrayList<>(inValues.size());
-                for (Term.Raw value : inValues)
-                    terms.add(value.prepare(keyspace, valueSpec));
-                return ColumnCondition.inCondition(receiver, collectionElement.prepare(keyspace, elementSpec), terms);
-            }
-            else
-            {
-                return ColumnCondition.condition(receiver, collectionElement.prepare(keyspace, elementSpec), value.prepare(keyspace, valueSpec), operator);
-            }
-#endif
-        }
+        ::shared_ptr<column_condition> prepare(const sstring& keyspace, column_definition& receiver);
     };
 };
 
