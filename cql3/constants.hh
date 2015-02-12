@@ -145,115 +145,15 @@ public:
             return ::make_shared<literal>(type::HEX, text);
         }
 
-        virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
-            throw std::runtime_error("not implemented");
-#if 0
-            if (!testAssignment(keyspace, receiver).isAssignable())
-                throw new InvalidRequestException(String.format("Invalid %s constant (%s) for \"%s\" of type %s", type, text, receiver.name, receiver.type.asCQL3Type()));
-
-            return new Value(parsedValue(receiver.type));
-#endif
-        }
-#if 0
-        private ByteBuffer parsedValue(AbstractType<?> validator) throws InvalidRequestException
-        {
-            if (validator instanceof ReversedType<?>)
-                validator = ((ReversedType<?>) validator).baseType;
-            try
-            {
-                // BytesType doesn't want it's input prefixed by '0x'.
-                if (type == Type.HEX && validator instanceof BytesType)
-                    return validator.fromString(text.substring(2));
-                if (validator instanceof CounterColumnType)
-                    return LongType.instance.fromString(text);
-                return validator.fromString(text);
-            }
-            catch (MarshalException e)
-            {
-                throw new InvalidRequestException(e.getMessage());
-            }
+        virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver);
+    private:
+        bytes parsed_value(::shared_ptr<abstract_type> validator);
+    public:
+        const sstring& get_raw_text() {
+            return _text;
         }
 
-        public String getRawText()
-        {
-            return text;
-        }
-#endif
-
-        virtual assignment_testable::test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
-            throw new std::runtime_error("not implemented");
-#if 0
-            CQL3Type receiverType = receiver.type.asCQL3Type();
-            if (receiverType.isCollection())
-                return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
-
-            if (!(receiverType instanceof CQL3Type.Native))
-                // Skip type validation for custom types. May or may not be a good idea
-                return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-
-            CQL3Type.Native nt = (CQL3Type.Native)receiverType;
-            switch (type)
-            {
-                case STRING:
-                    switch (nt)
-                    {
-                        case ASCII:
-                        case TEXT:
-                        case INET:
-                        case VARCHAR:
-                        case TIMESTAMP:
-                            return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-                    }
-                    break;
-                case INTEGER:
-                    switch (nt)
-                    {
-                        case BIGINT:
-                        case COUNTER:
-                        case DECIMAL:
-                        case DOUBLE:
-                        case FLOAT:
-                        case INT:
-                        case TIMESTAMP:
-                        case VARINT:
-                            return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-                    }
-                    break;
-                case UUID:
-                    switch (nt)
-                    {
-                        case UUID:
-                        case TIMEUUID:
-                            return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-                    }
-                    break;
-                case FLOAT:
-                    switch (nt)
-                    {
-                        case DECIMAL:
-                        case DOUBLE:
-                        case FLOAT:
-                            return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-                    }
-                    break;
-                case BOOLEAN:
-                    switch (nt)
-                    {
-                        case BOOLEAN:
-                            return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-                    }
-                    break;
-                case HEX:
-                    switch (nt)
-                    {
-                        case BLOB:
-                            return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-                    }
-                    break;
-            }
-            return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
-#endif
-        }
+        virtual assignment_testable::test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver);
 
         virtual sstring to_string() override {
             return _type == type::STRING ? sstring(sprint("'%s'", _text)) : _text;
@@ -379,6 +279,8 @@ public:
     };
 #endif
 };
+
+std::ostream& operator<<(std::ostream&out, constants::type t);
 
 }
 
