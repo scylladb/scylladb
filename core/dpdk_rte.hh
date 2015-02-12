@@ -28,6 +28,9 @@
 #define rte_mbuf_nb_segs(m)  ((m)->pkt.nb_segs)
 #define rte_mbuf_l2_len(m)   ((m)->pkt.vlan_macip.f.l2_len)
 #define rte_mbuf_l3_len(m)   ((m)->pkt.vlan_macip.f.l3_len)
+#define rte_mbuf_buf_addr(m) ((m)->pkt.buf_addr)
+#define rte_mbuf_buf_physaddr(m) ((m)->pkt.buf_physaddr)
+#define rte_mbuf_data_off(m) ((m)->pkt.data_off)
 
 #else
 
@@ -39,6 +42,9 @@
 #define rte_mbuf_nb_segs(m)  ((m)->nb_segs)
 #define rte_mbuf_l2_len(m)   ((m)->l2_len)
 #define rte_mbuf_l3_len(m)   ((m)->l3_len)
+#define rte_mbuf_buf_addr(m) ((m)->buf_addr)
+#define rte_mbuf_buf_physaddr(m) ((m)->buf_physaddr)
+#define rte_mbuf_data_off(m) ((m)->data_off)
 
 #endif
 
@@ -52,6 +58,13 @@ public:
     using cpuset = std::bitset<RTE_MAX_LCORE>;
 
     static void init(cpuset cpus, boost::program_options::variables_map opts);
+    /**
+     * Returns the amount of memory needed for DPDK
+     * @param num_cpus Number of CPUs the application is going to use
+     *
+     * @return
+     */
+    static size_t mem_size(int num_cpus);
     static bool initialized;
 };
 

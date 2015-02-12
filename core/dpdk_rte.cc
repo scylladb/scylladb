@@ -1,5 +1,6 @@
 #ifdef HAVE_DPDK
 
+#include "net/dpdk.hh"
 #include "core/dpdk_rte.hh"
 #include "util/conversions.hh"
 #include <experimental/optional>
@@ -35,6 +36,18 @@ void eal::init(cpuset cpus, boost::program_options::variables_map opts)
     if (hugepages_path) {
         args.push_back(string2vector("--huge-dir"));
         args.push_back(string2vector(hugepages_path.value()));
+
+        //
+        // We don't know what is going to be our networking configuration so we
+        // assume there is going to be a queue per-CPU. Plus we'll give a DPDK
+        // 64MB for "other stuff".
+        //
+        size_t size_MB = mem_size(cpus.count()) >> 20;
+        std::stringstream size_MB_str;
+        size_MB_str << size_MB;
+
+        args.push_back(string2vector("-m"));
+        args.push_back(string2vector(size_MB_str.str()));
     } else if (!opts.count("dpdk-pmd")) {
         args.push_back(string2vector("--no-huge"));
     }
@@ -59,6 +72,23 @@ void eal::init(cpuset cpus, boost::program_options::variables_map opts)
 #endif
 
     initialized = true;
+}
+
+size_t eal::mem_size(int num_cpus)
+{
+    size_t memsize = 0;
+    //
+    // PMD mempool memory:
+    //
+    // We don't know what is going to be our networking configuration so we
+    // assume there is going to be a queue per-CPU.
+    //
+    memsize += num_cpus * qp_mempool_obj_size();
+
+    // Plus we'll give a DPDK 64MB for "other stuff".
+    memsize += (64UL << 20);
+
+    return memsize;
 }
 
 } // namespace dpdk
