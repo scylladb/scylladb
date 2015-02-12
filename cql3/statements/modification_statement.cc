@@ -141,7 +141,7 @@ modification_statement::read_required_rows(
 const column_definition*
 modification_statement::get_first_empty_key() {
     for (auto& def : s->clustering_key) {
-        if (!_processed_keys[&def]) {
+        if (_processed_keys.find(&def) == _processed_keys.end()) {
             return &def;
         }
     }
@@ -154,8 +154,8 @@ modification_statement::create_clustering_prefix_internal(const query_options& o
     const column_definition* first_empty_key = nullptr;
 
     for (auto& def : s->clustering_key) {
-        auto r = _processed_keys[&def];
-        if (!r) {
+        auto i = _processed_keys.find(&def);
+        if (i == _processed_keys.end()) {
             first_empty_key = &def;
             // Tomek: Origin had "&& s->comparator->is_composite()" in the condition below.
             // Comparator is a thrift concept, not CQL concept, and we want to avoid
@@ -172,7 +172,7 @@ modification_statement::create_clustering_prefix_internal(const query_options& o
         } else if (first_empty_key) {
             throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s since %s is set", first_empty_key->name_as_text(), def.name_as_text()));
         } else {
-            auto values = r->values(options);
+            auto values = i->second->values(options);
             assert(values.size() == 1);
             auto val = values[0];
             if (!val) {
@@ -230,12 +230,12 @@ modification_statement::build_partition_keys(const query_options& options) {
     auto remaining = s->partition_key.size();
 
     for (auto& def : s->partition_key) {
-        auto r = _processed_keys[&def];
-        if (!r) {
+        auto i = _processed_keys.find(&def);
+        if (i == _processed_keys.end()) {
             throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
         }
 
-        auto values = r->values(options);
+        auto values = i->second->values(options);
 
         if (remaining == 1) {
             if (values.size() == 1) {
