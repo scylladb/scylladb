@@ -695,9 +695,9 @@ class dpdk_qp : public net::qp {
             if (HugetlbfsMemBackend) {
                 std::vector<phys_addr_t> mappings;
 
-                _xmem = dpdk_qp::alloc_mempool_xmem(mbufs_per_queue_tx,
-                                                    mbuf_size, mappings);
-                if (!_xmem) {
+                _xmem.reset(dpdk_qp::alloc_mempool_xmem(mbufs_per_queue_tx,
+                                                        mbuf_size, mappings));
+                if (!_xmem.get()) {
                     printf("Can't allocate a memory for Tx buffers\n");
                     exit(1);
                 }
@@ -715,7 +715,7 @@ class dpdk_qp : public net::qp {
                                        rte_pktmbuf_pool_init, nullptr,
                                        rte_pktmbuf_init, nullptr,
                                        rte_socket_id(), 0,
-                                       _xmem, mappings.data(),
+                                       _xmem.get(), mappings.data(),
                                        mappings.size(), page_bits);
 
             } else {
@@ -739,12 +739,6 @@ class dpdk_qp : public net::qp {
             // above.
             //
             init_factory();
-        }
-
-        ~tx_buf_factory() {
-            // WTF: Hmmm... There is no way to destroy the mempool!
-
-            free(_xmem);
         }
 
         /**
@@ -828,7 +822,7 @@ class dpdk_qp : public net::qp {
     private:
         std::deque<tx_buf*> _ring;
         rte_mempool* _pool = nullptr;
-        void* _xmem = nullptr;
+        std::unique_ptr<void, free_deleter> _xmem;
     };
 
 public:
@@ -838,13 +832,7 @@ public:
     virtual future<> send(packet p) override {
         abort();
     }
-
-    virtual ~dpdk_qp() {
-        // TODO: Free all mempools
-        if (_rx_xmem) {
-            free(_rx_xmem);
-        }
-    }
+    virtual ~dpdk_qp() {}
 
     virtual uint32_t send(circular_buffer<packet>& pb) override {
         if (HugetlbfsMemBackend) {
@@ -940,7 +928,7 @@ private:
     dpdk_device* _dev;
     uint8_t _qid;
     rte_mempool *_pktmbuf_pool_rx;
-    void *_rx_xmem = nullptr;
+    std::unique_ptr<void, free_deleter> _rx_xmem;
     tx_buf_factory _tx_buf_factory;
     std::experimental::optional<reactor::poller> _rx_poller;
     reactor::poller _tx_gc_poller;
@@ -1140,8 +1128,9 @@ bool dpdk_qp<HugetlbfsMemBackend>::init_rx_mbuf_pool()
     if (HugetlbfsMemBackend) {
         std::vector<phys_addr_t> mappings;
 
-        _rx_xmem = alloc_mempool_xmem(mbufs_per_queue_rx, mbuf_size, mappings);
-        if (!_rx_xmem) {
+        _rx_xmem.reset(alloc_mempool_xmem(mbufs_per_queue_rx, mbuf_size,
+                                          mappings));
+        if (!_rx_xmem.get()) {
             printf("Can't allocate a memory for Rx buffers\n");
             return false;
         }
@@ -1158,7 +1147,8 @@ bool dpdk_qp<HugetlbfsMemBackend>::init_rx_mbuf_pool()
                                    rte_pktmbuf_pool_init, nullptr,
                                    rte_pktmbuf_init, nullptr,
                                    rte_socket_id(), 0,
-                                   _rx_xmem, mappings.data(), mappings.size(),
+                                   _rx_xmem.get(), mappings.data(),
+                                   mappings.size(),
                                    page_bits);
     } else {
         _pktmbuf_pool_rx =
