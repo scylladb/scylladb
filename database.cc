@@ -4,6 +4,7 @@
 
 #include "log.hh"
 #include "database.hh"
+#include "unimplemented.hh"
 #include "core/future-util.hh"
 
 #include "cql3/column_identifier.hh"
@@ -381,4 +382,9 @@ mutation_partition::find_row(const clustering_key& key) {
         return nullptr;
     }
     return &i->second.cells;
+}
+
+bool column_definition::is_compact_value() const {
+    unimplemented::compact_tables();
+    return false;
 }

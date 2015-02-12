@@ -53,4 +53,7 @@ void triggers() {
 static inline
 void metrics() {}
 
+static inline
+void compact_tables() {}
+
 }
