@@ -59,6 +59,16 @@ public:
     bytes serialize_value(const value_type& values) {
         return ::serialize_value(*this, values);
     }
+    bytes serialize_value_deep(const std::vector<boost::any>& values) {
+        // TODO: Optimize
+        std::vector<bytes_opt> partial;
+        auto i = types.begin();
+        for (auto&& component : values) {
+            assert(i != types.end());
+            partial.push_back({(*i++)->decompose(component)});
+        }
+        return serialize_value(partial);
+    }
     bytes decompose_value(const value_type& values) {
         return ::serialize_value(*this, values);
     }
