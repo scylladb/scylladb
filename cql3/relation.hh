@@ -38,7 +38,7 @@ protected:
     const operator_type& _relation_type;
 public:
     relation(const operator_type& relation_type)
-        : _relation_type(_relation_type) {
+        : _relation_type(relation_type) {
     }
     virtual ~relation() {}
 
