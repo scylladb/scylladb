@@ -20,6 +20,7 @@
 using bytes = basic_sstring<char, uint32_t, 31>;
 using bytes_view = std::experimental::string_view;
 using bytes_opt = std::experimental::optional<bytes>;
+using sstring_view = std::experimental::string_view;
 
 sstring to_hex(const bytes& b);
 sstring to_hex(const bytes_opt& b);
