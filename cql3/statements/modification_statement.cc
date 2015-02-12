@@ -378,7 +378,7 @@ modification_statement::process_where_clause(std::vector<relation_ptr> where_cla
             case column_definition::column_kind::CLUSTERING:
                 if (rel->is_EQ() || (def->is_partition_key() && rel->is_IN())) {
                     add_key_values(*def, rel->to_restriction(s, std::move(names)));
-                    return;
+                    break;
                 }
                 throw exceptions::invalid_request_exception(sprint("Invalid operator %s for PRIMARY KEY part %s", rel->get_operator(), def->name_as_text()));
             default:
