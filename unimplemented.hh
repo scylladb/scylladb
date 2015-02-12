@@ -51,6 +51,14 @@ void triggers() {
 }
 
 static inline
+void collections() __attribute__((noreturn));
+
+static inline
+void collections() {
+    fail("collections");
+}
+
+static inline
 void metrics() {}
 
 static inline
