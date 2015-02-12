@@ -19,6 +19,12 @@
 #endif
 
 #ifdef RTE_VERSION_1_7
+#if defined(RTE_LIBRTE_PMD_BOND) || defined(RTE_MBUF_SCATTER_GATHER) || \
+    defined(RTE_LIBRTE_IP_FRAG)
+#error "RTE_LIBRTE_PMD_BOND, RTE_MBUF_SCATTER_GATHER," \
+       "and RTE_LIBRTE_IP_FRAG should be disabled in DPDK's " \
+       "config/common_linuxapp"
+#endif
 
 #define rte_mbuf_vlan_tci(m) ((m)->pkt.vlan_macip.f.vlan_tci)
 #define rte_mbuf_rss_hash(m) ((m)->pkt.hash.rss)
@@ -28,12 +34,13 @@
 #define rte_mbuf_nb_segs(m)  ((m)->pkt.nb_segs)
 #define rte_mbuf_l2_len(m)   ((m)->pkt.vlan_macip.f.l2_len)
 #define rte_mbuf_l3_len(m)   ((m)->pkt.vlan_macip.f.l3_len)
-#define rte_mbuf_buf_addr(m) ((m)->pkt.buf_addr)
-#define rte_mbuf_buf_physaddr(m) ((m)->pkt.buf_physaddr)
-#define rte_mbuf_data_off(m) ((m)->pkt.data_off)
-
+#define rte_mbuf_buf_addr(m) ((m)->buf_addr)
+#define rte_mbuf_buf_physaddr(m) ((m)->buf_physaddr)
+#define rte_mbuf_buf_len(m)  ((m)->buf_len)
 #else
-
+#if defined(RTE_MBUF_REFCNT)
+#error "RTE_MBUF_REFCNT should be disabled in DPDK's config/common_linuxapp"
+#endif
 #define rte_mbuf_vlan_tci(m) ((m)->vlan_tci)
 #define rte_mbuf_rss_hash(m) ((m)->hash.rss)
 #define rte_mbuf_data_len(m) ((m)->data_len)
@@ -44,7 +51,7 @@
 #define rte_mbuf_l3_len(m)   ((m)->l3_len)
 #define rte_mbuf_buf_addr(m) ((m)->buf_addr)
 #define rte_mbuf_buf_physaddr(m) ((m)->buf_physaddr)
-#define rte_mbuf_data_off(m) ((m)->data_off)
+#define rte_mbuf_buf_len(m)  ((m)->buf_len)
 
 #endif
 

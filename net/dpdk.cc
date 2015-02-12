@@ -36,6 +36,10 @@
 #include <rte_cycles.h>
 #include <rte_memzone.h>
 
+#ifndef MARKER
+typedef void    *MARKER[0];   /**< generic marker for a point in a structure */
+#endif
+
 using namespace net;
 
 namespace dpdk {
@@ -569,9 +573,13 @@ class dpdk_qp : public net::qp {
     public:
         tx_buf(tx_buf_factory& fc) : _fc(fc) {
 
-            _buf_physaddr = _mbuf.buf_physaddr;
-            _buf_len      = _mbuf.buf_len;
+            _buf_physaddr = rte_mbuf_buf_physaddr(&_mbuf);
+            _buf_len      = rte_mbuf_buf_len(&_mbuf);
+#ifdef RTE_VERSION_1_7
+            _data         = _mbuf.pkt.data;
+#else
             _data_off     = _mbuf.data_off;
+#endif
         }
 
         rte_mbuf* rte_mbuf_p() { return &_mbuf; }
@@ -584,7 +592,11 @@ class dpdk_qp : public net::qp {
             // Set the mbuf to point to our data
             rte_mbuf_buf_addr(&_mbuf)           = va;
             rte_mbuf_buf_physaddr(&_mbuf)       = pa;
-            rte_mbuf_data_off(&_mbuf)           = 0;
+#ifdef RTE_VERSION_1_7
+            _mbuf.pkt.data                      = va;
+#else
+            _mbuf.data_off                      = 0;
+#endif
             _is_zc                              = true;
         }
 
@@ -608,10 +620,14 @@ class dpdk_qp : public net::qp {
             }
 
             // Restore the rte_mbuf fields we trashed in set_zc_info()
-            _mbuf.buf_physaddr = _buf_physaddr;
-            _mbuf.buf_addr     = RTE_MBUF_TO_BADDR(&_mbuf);
-            _mbuf.buf_len      = _buf_len;
-            _mbuf.data_off     = _data_off;
+            rte_mbuf_buf_physaddr(&_mbuf) = _buf_physaddr;
+            rte_mbuf_buf_addr(&_mbuf)     = RTE_MBUF_TO_BADDR(&_mbuf);
+            rte_mbuf_buf_len(&_mbuf)      = _buf_len;
+#ifdef RTE_VERSION_1_7
+            _mbuf.pkt.data                = _data;
+#else
+            _mbuf.data_off                = _data_off;
+#endif
 
             _is_zc             = false;
         }
@@ -620,7 +636,7 @@ class dpdk_qp : public net::qp {
             struct rte_mbuf *m = &_mbuf, *m_next;
 
             while (m != nullptr) {
-                m_next = m->next;
+                m_next = rte_mbuf_next(m);
                 //
                 // Zero only "next" field since we want to save the dirtying of
                 // the extra cache line.
@@ -629,7 +645,7 @@ class dpdk_qp : public net::qp {
                 // cluster are going to be cleared when the buffer is pooled
                 // from the mempool and not in this flow.
                 //
-                m->next = nullptr;
+                rte_mbuf_next(m) = nullptr;
                 _fc.put(me(m));
                 m = m_next;
             }
@@ -645,7 +661,11 @@ class dpdk_qp : public net::qp {
         std::experimental::optional<packet> _p;
         phys_addr_t _buf_physaddr;
         uint32_t _buf_len;
+#ifdef RTE_VERSION_1_7
+        void*    _data;
+#else
         uint16_t _data_off;
+#endif
         // TRUE if underlying mbuf has been used in the zero-copy flow
         bool _is_zc = false;
         // buffers' factory the buffer came from
