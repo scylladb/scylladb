@@ -57,11 +57,14 @@ private:
     const bool has_component(component_type f);
 
     const sstring filename(component_type f);
+    future<> read_toc();
 
 public:
     sstable(sstring dir, unsigned long epoch, version_types v, format_types f) : _dir(dir), _epoch(epoch), _version(v), _format(f) {}
     sstable& operator=(const sstable&) = delete;
     sstable(const sstable&) = delete;
     sstable(sstable&&) = default;
+
+    future<> load();
 };
 }

@@ -10,6 +10,7 @@
 #include "core/sstring.hh"
 #include "core/fstream.hh"
 #include "core/shared_ptr.hh"
+#include <boost/algorithm/string.hpp>
 
 #include "types.hh"
 #include "sstables.hh"
@@ -204,6 +205,72 @@ future<> parse(file_input_stream& in, disk_hash<Size, Key, Value>& h) {
     return f.then([&in, &h, w = std::move(w)] {
         return parse(in, *w, h.map);
     });
+}
+
+// This is small enough, and well-defined. Easier to just read it all
+// at once
+future<> sstable::read_toc() {
+    auto file_path = filename(sstable::component_type::TOC);
+
+    sstlog.debug("Reading TOC file {} ", file_path);
+
+    return engine().open_file_dma(file_path, open_flags::ro).then([this] (file f) {
+        auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
+        auto buf = bufptr.get();
+
+        return f.dma_read(0, buf, 4096).then([this, bufptr = std::move(bufptr)] (size_t size) {
+            // This file is supposed to be very small. Theoretically we should check its size,
+            // but if we so much as read a whole page from it, there is definitely something fishy
+            // going on - and this simplifies the code.
+            if (size > 4096) {
+                throw malformed_sstable_exception("SSTable too big: " + to_sstring(size) + " bytes.");
+            }
+
+            auto buf = bufptr.get();
+            std::vector<sstring> comps;
+
+            boost::split(comps , buf, boost::is_any_of("\n"));
+
+            for (auto& c: comps) {
+                // accept trailing newlines
+                if (c == "") {
+                    continue;
+                }
+                auto found = false;
+                for (auto& cmap: _component_map) {
+                    // Remember that this map is a { index => string } one.
+                    // Note that we match the string...
+                    if (c == cmap.second) {
+                        // but add the index to the components list.
+                        sstlog.debug("\tFound at TOC file: {} ", c);
+                        _components.insert(cmap.first);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    throw malformed_sstable_exception("Unrecognized TOC component: " + c);
+                }
+            }
+            if (!_components.size()) {
+                throw malformed_sstable_exception("Empty TOC");
+            }
+            return make_ready_future<>();
+        });
+    }).rescue([file_path] (auto get_ex) {
+        try {
+            get_ex();
+        } catch (std::system_error& e) {
+            if (e.code() == std::error_code(ENOENT, std::system_category())) {
+                throw malformed_sstable_exception(file_path + ": file not found");
+            }
+        }
+    });
+
+}
+
+future<> sstable::load() {
+    return read_toc();
 }
 
 const bool sstable::has_component(component_type f) {
