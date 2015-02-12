@@ -814,6 +814,7 @@ class dpdk_qp : public net::qp {
 public:
     explicit dpdk_qp(dpdk_device* dev, uint8_t qid);
 
+    virtual void rx_start() override;
     virtual future<> send(packet p) override {
         abort();
     }
@@ -921,7 +922,7 @@ private:
     rte_mempool *_pktmbuf_pool_rx;
     void *_rx_xmem = nullptr;
     tx_buf_factory _tx_buf_factory;
-    reactor::poller _rx_poller;
+    std::experimental::optional<reactor::poller> _rx_poller;
     reactor::poller _tx_gc_poller;
     std::vector<rte_mbuf*> _tx_burst;
     uint16_t _tx_burst_idx = 0;
@@ -1191,7 +1192,6 @@ template <bool HugetlbfsMemBackend>
 dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid)
      : _dev(dev), _qid(qid),
        _tx_buf_factory(qid),
-       _rx_poller([&] { return poll_rx_once(); }),
        _tx_gc_poller([&] { return _tx_buf_factory.gc(); })
 {
     if (!init_rx_mbuf_pool()) {
@@ -1216,6 +1216,11 @@ dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid)
             rte_eth_dev_socket_id(_dev->port_idx()), _dev->def_tx_conf()) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot initialize tx queue\n");
     }
+}
+
+template <bool HugetlbfsMemBackend>
+void dpdk_qp<HugetlbfsMemBackend>::rx_start() {
+    _rx_poller = reactor::poller([&] { return poll_rx_once(); });
 }
 
 template <bool HugetlbfsMemBackend>
