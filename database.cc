@@ -230,7 +230,7 @@ column_definition::name() const {
 }
 
 column_family*
-keyspace::find_column_family(sstring cf_name) {
+keyspace::find_column_family(const sstring& cf_name) {
     auto i = column_families.find(cf_name);
     if (i == column_families.end()) {
         return nullptr;
@@ -239,7 +239,7 @@ keyspace::find_column_family(sstring cf_name) {
 }
 
 schema_ptr
-keyspace::find_schema(sstring cf_name) {
+keyspace::find_schema(const sstring& cf_name) {
     auto cf = find_column_family(cf_name);
     if (!cf) {
         return {};
@@ -248,7 +248,7 @@ keyspace::find_schema(sstring cf_name) {
 }
 
 keyspace*
-database::find_keyspace(sstring name) {
+database::find_keyspace(const sstring& name) {
     auto i = keyspaces.find(name);
     if (i != keyspaces.end()) {
         return &i->second;
