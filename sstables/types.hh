@@ -41,4 +41,9 @@ struct compression {
     uint64_t data_len;
     disk_array<uint32_t, uint64_t> offsets;
 };
+
+struct filter {
+    uint32_t hashes;
+    disk_array<uint32_t, uint64_t> buckets;
+};
 }

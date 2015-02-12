@@ -51,6 +51,7 @@ private:
     std::unordered_set<component_type> _components;
 
     compression _compression;
+    filter _filter;
 
     sstring _dir;
     unsigned long _epoch = 0;
@@ -66,6 +67,9 @@ private:
     future<> read_simple();
 
     future<> read_compression();
+    future<> read_filter() {
+        return read_simple<filter, component_type::Filter, &sstable::_filter>();
+    }
 
 public:
     sstable(sstring dir, unsigned long epoch, version_types v, format_types f) : _dir(dir), _epoch(epoch), _version(v), _format(f) {}

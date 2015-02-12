@@ -215,6 +215,10 @@ future<> parse(file_input_stream& in, compression& c) {
     return parse(in, c.name, c.options, c.chunk_len, c.data_len, c.offsets);
 }
 
+future<> parse(file_input_stream& in, filter& f) {
+    return parse(in, f.hashes, f.buckets);
+}
+
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc() {
@@ -310,6 +314,8 @@ future<> sstable::read_compression() {
 future<> sstable::load() {
     return read_toc().then([this] {
         return read_compression();
+    }).then([this] {
+        return read_filter();
     });
 }
 
