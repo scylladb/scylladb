@@ -66,14 +66,14 @@ struct int32_type_impl : simple_type_impl<int32_t> {
         *reinterpret_cast<int32_t*>(b.begin()) = (int32_t)net::hton((uint32_t)v);
         return b;
     }
-    int32_t parse_int(const sstring& s) {
+    int32_t parse_int(sstring_view s) {
         try {
-            return boost::lexical_cast<int32_t>(s);
+            return boost::lexical_cast<int32_t>(s.begin(), s.size());
         } catch (const boost::bad_lexical_cast& e) {
             throw marshal_exception(sprint("Invalid number format '%s'", s));
         }
     }
-    virtual bytes from_string(const sstring& s) override {
+    virtual bytes from_string(sstring_view s) override {
         return decompose_value(parse_int(s));
     }
     virtual sstring to_string(const bytes& b) override {
@@ -103,7 +103,7 @@ struct long_type_impl : simple_type_impl<int64_t> {
         auto v = int64_t(net::ntoh(u));
         return boost::any(v);
     }
-    virtual bytes from_string(const sstring& s) override {
+    virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
     }
     virtual sstring to_string(const bytes& b) override {
@@ -135,7 +135,7 @@ struct string_type_impl : public abstract_type {
     virtual size_t hash(const bytes& v) override {
         return std::hash<bytes>()(v);
     }
-    virtual bytes from_string(const sstring& s) override {
+    virtual bytes from_string(sstring_view s) override {
         return to_bytes(s);
     }
     virtual sstring to_string(const bytes& b) override {
@@ -166,7 +166,7 @@ struct bytes_type_impl : public abstract_type {
     virtual size_t hash(const bytes& v) override {
         return std::hash<bytes>()(v);
     }
-    virtual bytes from_string(const sstring& s) override {
+    virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
     }
     virtual sstring to_string(const bytes& b) override {
@@ -189,7 +189,7 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         }
         return boost::any(tmp != 0);
     }
-    virtual bytes from_string(const sstring& s) override {
+    virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
     }
     virtual sstring to_string(const bytes& b) override {
@@ -226,7 +226,7 @@ struct date_type_impl : public abstract_type {
     virtual size_t hash(const bytes& v) override {
         return std::hash<bytes>()(v);
     }
-    virtual bytes from_string(const sstring& s) override {
+    virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
     }
     virtual sstring to_string(const bytes& b) override {
@@ -272,7 +272,7 @@ struct timeuuid_type_impl : public abstract_type {
     virtual size_t hash(const bytes& v) override {
         return std::hash<bytes>()(v);
     }
-    virtual bytes from_string(const sstring& s) override {
+    virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
     }
     virtual sstring to_string(const bytes& b) override {
@@ -315,7 +315,7 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
         return boost::any(db_clock::time_point(db_clock::duration(net::ntoh(v))));
     }
     // FIXME: isCompatibleWith(timestampuuid)
-    virtual bytes from_string(const sstring& s) override {
+    virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
     }
     virtual sstring to_string(const bytes& b) override {

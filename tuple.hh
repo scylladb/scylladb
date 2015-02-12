@@ -162,7 +162,7 @@ public:
         // TODO: make the length byte-order comparable by adding numeric_limits<int32_t>::min() when serializing
         return false;
     }
-    virtual bytes from_string(const sstring& s) override {
+    virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
     }
     virtual sstring to_string(const bytes& b) override {

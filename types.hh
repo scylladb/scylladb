@@ -114,7 +114,7 @@ public:
         return to_string(b);
     }
     virtual sstring to_string(const bytes& b) = 0;
-    virtual bytes from_string(const sstring& text) = 0;
+    virtual bytes from_string(sstring_view text) = 0;
     virtual bool is_counter() { return false; }
     virtual bool is_collection() { return false; }
     virtual bool is_multi_cell() { return false; }
@@ -192,6 +192,12 @@ inline
 bytes
 to_bytes(const std::string& x) {
     return bytes(reinterpret_cast<const char*>(x.data()), x.size());
+}
+
+inline
+bytes
+to_bytes(sstring_view x) {
+    return bytes(x.begin(), x.size());
 }
 
 inline
