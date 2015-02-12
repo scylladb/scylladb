@@ -214,6 +214,9 @@ public:
         }
         return true;
     }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        assert(0);
+    }
 };
 
 using tuple_prefix = tuple_type<true>;

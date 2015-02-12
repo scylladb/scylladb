@@ -16,6 +16,12 @@
 #include "net/byteorder.hh"
 #include "db_clock.hh"
 
+namespace cql3 {
+
+class cql3_type;
+
+}
+
 // FIXME: should be int8_t
 using bytes = basic_sstring<char, uint32_t, 31>;
 using bytes_view = std::experimental::string_view;
@@ -118,6 +124,7 @@ public:
     virtual bool is_counter() { return false; }
     virtual bool is_collection() { return false; }
     virtual bool is_multi_cell() { return false; }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() = 0;
 protected:
     template <typename T, typename Compare = std::less<T>>
     bool default_less(const bytes& b1, const bytes& b2, Compare compare = Compare());

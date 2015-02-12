@@ -3,6 +3,7 @@
  */
 
 #include <boost/lexical_cast.hpp>
+#include "cql3/cql3_type.hh"
 #include "types.hh"
 
 template <typename T, typename Compare>
@@ -82,6 +83,9 @@ struct int32_type_impl : simple_type_impl<int32_t> {
         }
         return to_sstring(compose_value(b));
     }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        return cql3::native_cql3_type::int_;
+    }
 };
 
 struct long_type_impl : simple_type_impl<int64_t> {
@@ -109,10 +113,14 @@ struct long_type_impl : simple_type_impl<int64_t> {
     virtual sstring to_string(const bytes& b) override {
         throw std::runtime_error("not implemented");
     }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        return cql3::native_cql3_type::bigint;
+    }
 };
 
 struct string_type_impl : public abstract_type {
-    string_type_impl(sstring name) : abstract_type(name) {}
+    string_type_impl(sstring name, shared_ptr<cql3::cql3_type> cql3_type)
+        : abstract_type(name), _cql3_type(cql3_type) {}
     virtual void serialize(const boost::any& value, std::ostream& out) override {
         auto& v = boost::any_cast<const sstring&>(value);
         out.write(v.c_str(), v.size());
@@ -141,9 +149,13 @@ struct string_type_impl : public abstract_type {
     virtual sstring to_string(const bytes& b) override {
         return sstring(b);
     }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        return _cql3_type;
+    }
+    shared_ptr<cql3::cql3_type> _cql3_type;
 };
 
-struct bytes_type_impl : public abstract_type {
+struct bytes_type_impl final : public abstract_type {
     bytes_type_impl() : abstract_type("bytes") {}
     virtual void serialize(const boost::any& value, std::ostream& out) override {
         auto& v = boost::any_cast<const bytes&>(value);
@@ -172,6 +184,9 @@ struct bytes_type_impl : public abstract_type {
     virtual sstring to_string(const bytes& b) override {
         throw std::runtime_error("not implemented");
     }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        return cql3::native_cql3_type::blob;
+    }
 };
 
 struct boolean_type_impl : public simple_type_impl<bool> {
@@ -194,6 +209,9 @@ struct boolean_type_impl : public simple_type_impl<bool> {
     }
     virtual sstring to_string(const bytes& b) override {
         throw std::runtime_error("not implemented");
+    }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        return cql3::native_cql3_type::boolean;
     }
 };
 
@@ -231,6 +249,9 @@ struct date_type_impl : public abstract_type {
     }
     virtual sstring to_string(const bytes& b) override {
         throw std::runtime_error("not implemented");
+    }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        return cql3::native_cql3_type::timestamp;
     }
 };
 
@@ -278,6 +299,9 @@ struct timeuuid_type_impl : public abstract_type {
     virtual sstring to_string(const bytes& b) override {
         throw std::runtime_error("not implemented");
     }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        return cql3::native_cql3_type::timeuuid;
+    }
 private:
     static int compare_bytes(const bytes& o1, const bytes& o2) {
         auto compare_pos = [&] (unsigned pos, int mask, int ifequal) {
@@ -320,6 +344,9 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
     }
     virtual sstring to_string(const bytes& b) override {
         throw std::runtime_error("not implemented");
+    }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        return cql3::native_cql3_type::timestamp;
     }
 };
 
@@ -372,19 +399,22 @@ struct uuid_type_impl : abstract_type {
     virtual size_t hash(const bytes& v) override {
         return std::hash<bytes>()(v);
     }
-    virtual bytes from_string(const sstring& s) override {
+    virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
     }
     virtual sstring to_string(const bytes& b) override {
         throw std::runtime_error("not implemented");
     }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        return cql3::native_cql3_type::uuid;
+    }
 };
 
 thread_local shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
-thread_local shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii"));
+thread_local shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii", cql3::native_cql3_type::ascii));
 thread_local shared_ptr<abstract_type> bytes_type(make_shared<bytes_type_impl>());
-thread_local shared_ptr<abstract_type> utf8_type(make_shared<string_type_impl>("utf8"));
+thread_local shared_ptr<abstract_type> utf8_type(make_shared<string_type_impl>("utf8", cql3::native_cql3_type::text));
 thread_local shared_ptr<abstract_type> boolean_type(make_shared<boolean_type_impl>());
 thread_local shared_ptr<abstract_type> date_type(make_shared<date_type_impl>());
 thread_local shared_ptr<abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
