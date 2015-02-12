@@ -106,8 +106,7 @@ public:
      * @return <code>true</code> if the operator of this relation is a <code>Slice</code>, <code>false</code> otherwise.
      */
     virtual bool is_slice() final {
-        return _relation_type == operator_type::
-        GT
+        return _relation_type == operator_type::GT
                 || _relation_type == operator_type::GTE
                 || _relation_type == operator_type::LTE
                 || _relation_type ==
