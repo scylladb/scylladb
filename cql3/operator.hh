@@ -55,7 +55,7 @@ public:
     const operator_type& reverse() const { return _reverse; }
     sstring to_string() const { return _text; }
     bool operator==(const operator_type& other) const { return this == &other; }
-
+    bool operator!=(const operator_type& other) const { return this != &other; }
 #if 0
 
     /**
