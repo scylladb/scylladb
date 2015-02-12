@@ -103,6 +103,7 @@ urchin_tests = [
     'tests/urchin/mutation_test',
     'tests/urchin/types_test',
     'tests/perf/perf_mutation',
+    'tests/urchin/cql_query_test',
 ]
 
 tests = [
