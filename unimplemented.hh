@@ -6,6 +6,7 @@
 
 #include <iostream>
 #include "core/print.hh"
+#include "core/sstring.hh"
 
 namespace unimplemented {
 
@@ -17,15 +18,7 @@ void fail(sstring what) {
     throw std::runtime_error(sprint("not implemented: %s", what));
 }
 
-static inline
-void warn(sstring what) {
-    std::cerr << "WARNING: Not implemented: " << what << std::endl;
-}
-
-static inline
-void indexes() {
-    warn("indexes");
-}
+void indexes();
 
 static inline
 void lwt() __attribute__((noreturn));
@@ -35,20 +28,9 @@ void lwt() {
     fail("light-weight transactions");
 }
 
-static inline
-void auth() {
-    warn("auth");
-}
-
-static inline
-void permissions() {
-    warn("permissions");
-}
-
-static inline
-void triggers() {
-    warn("triggers");
-}
+void auth();
+void permissions();
+void triggers();
 
 static inline
 void collections() __attribute__((noreturn));
