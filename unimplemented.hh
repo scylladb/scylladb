@@ -28,6 +28,14 @@ void lwt() {
     fail("light-weight transactions");
 }
 
+static inline
+void paging() __attribute__((noreturn));
+
+static inline
+void paging() {
+    fail("paging");
+}
+
 void auth();
 void permissions();
 void triggers();

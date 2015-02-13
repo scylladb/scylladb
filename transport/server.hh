@@ -6,11 +6,15 @@
 #define CQL_SERVER_HH
 
 #include "core/reactor.hh"
+#include "service/storage_proxy.hh"
+#include "cql3/query_processor.hh"
 
 class database;
 
 class cql_server {
     std::vector<server_socket> _listeners;
+    service::storage_proxy _proxy;
+    cql3::query_processor _query_processor;
 public:
     cql_server(database& db);
     future<> listen(ipv4_addr addr);
