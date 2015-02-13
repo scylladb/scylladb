@@ -45,7 +45,7 @@ public:
     struct specific_options final {
         static const specific_options DEFAULT;
 
-        const int page_size;
+        const int32_t page_size;
         const ::shared_ptr<service::pager::paging_state> state;
         const std::experimental::optional<db::consistency_level> serial_consistency;
         const api::timestamp_type timestamp;
@@ -286,7 +286,7 @@ private:
     const int32_t _protocol_version; // transient
 public:
     default_query_options(db::consistency_level consistency, std::vector<bytes_opt> values, bool skip_metadata, specific_options options,
-        int protocol_version)
+        int32_t protocol_version)
         : _consistency(consistency)
         , _values(std::move(values))
         , _skip_metadata(skip_metadata)
