@@ -15,23 +15,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.transport;
 
-import org.apache.cassandra.exceptions.ExceptionCode;
-import org.apache.cassandra.exceptions.TransportException;
-
-/**
- * Exceptions thrown when a client didn't respect the protocol.
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
  */
-public class ProtocolException extends RuntimeException implements TransportException
-{
-    public ProtocolException(String msg)
-    {
-        super(msg);
-    }
 
-    public ExceptionCode code()
-    {
-        return ExceptionCode.PROTOCOL_ERROR;
-    }
+#pragma once
+
+#include "exceptions/exceptions.hh"
+
+namespace transport {
+
+class protocol_exception : public std::exception, public exceptions::transport_exception {
+private:
+    exceptions::exception_code _code;
+    sstring _msg;
+public:
+    protocol_exception(sstring msg)
+        : _code(exceptions::exception_code::PROTOCOL_ERROR)
+        , _msg(std::move(msg))
+    { }
+    virtual const char* what() const noexcept override { return _msg.begin(); }
+    virtual exceptions::exception_code code() const override { return _code; }
+    virtual sstring get_message() const override { return _msg; }
+};
+
 }
