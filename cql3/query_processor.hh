@@ -22,6 +22,8 @@
  * Modified by Cloudius Systems
  */
 
+#pragma once
+
 #include <experimental/string_view>
 
 #include "core/shared_ptr.hh"
