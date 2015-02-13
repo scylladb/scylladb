@@ -30,6 +30,7 @@
 #include "service/query_state.hh"
 #include "service/pager/paging_state.hh"
 #include "cql3/column_specification.hh"
+#include "cql3/column_identifier.hh"
 
 namespace cql3 {
 
@@ -120,87 +121,10 @@ public:
     // Mainly for the sake of BatchQueryOptions
     virtual const specific_options& get_specific_options() const = 0;
 
-    query_options& prepare(const std::vector<::shared_ptr<column_specification>>& specs) {
-        return *this;
+    virtual void prepare(const std::vector<::shared_ptr<column_specification>>& specs) {
     }
 
 #if 0
-    static abstract class QueryOptionsWrapper extends QueryOptions
-    {
-        protected final QueryOptions wrapped;
-
-        QueryOptionsWrapper(QueryOptions wrapped)
-        {
-            this.wrapped = wrapped;
-        }
-
-        public ConsistencyLevel getConsistency()
-        {
-            return wrapped.getConsistency();
-        }
-
-        public boolean skipMetadata()
-        {
-            return wrapped.skipMetadata();
-        }
-
-        public int getProtocolVersion()
-        {
-            return wrapped.getProtocolVersion();
-        }
-
-        SpecificOptions getSpecificOptions()
-        {
-            return wrapped.getSpecificOptions();
-        }
-
-        @Override
-        public QueryOptions prepare(List<ColumnSpecification> specs)
-        {
-            wrapped.prepare(specs);
-            return this;
-        }
-    }
-
-    static class OptionsWithNames extends QueryOptionsWrapper
-    {
-        private final List<String> names;
-        private List<ByteBuffer> orderedValues;
-
-        OptionsWithNames(DefaultQueryOptions wrapped, List<String> names)
-        {
-            super(wrapped);
-            this.names = names;
-        }
-
-        @Override
-        public QueryOptions prepare(List<ColumnSpecification> specs)
-        {
-            super.prepare(specs);
-
-            orderedValues = new ArrayList<ByteBuffer>(specs.size());
-            for (int i = 0; i < specs.size(); i++)
-            {
-                String name = specs.get(i).name.toString();
-                for (int j = 0; j < names.size(); j++)
-                {
-                    if (name.equals(names.get(j)))
-                    {
-                        orderedValues.add(wrapped.getValues().get(j));
-                        break;
-                    }
-                }
-            }
-            return this;
-        }
-
-        public List<ByteBuffer> getValues()
-        {
-            assert orderedValues != null; // We should have called prepare first!
-            return orderedValues;
-        }
-    }
-
     private static class Codec implements CBCodec<QueryOptions>
     {
         private static enum Flag
@@ -383,6 +307,69 @@ public:
     }
     virtual const specific_options& get_specific_options() const override {
         return _options;
+    }
+};
+
+class query_options_wrapper : public query_options {
+protected:
+    std::unique_ptr<query_options> _wrapped;
+public:
+    query_options_wrapper(std::unique_ptr<query_options> wrapped) : _wrapped(std::move(wrapped)) {}
+
+    virtual db::consistency_level get_consistency() const override {
+        return _wrapped->get_consistency();
+    }
+
+    virtual const std::vector<bytes_opt>& get_values() const override {
+        return _wrapped->get_values();
+    }
+
+    virtual bool skip_metadata() const override {
+        return _wrapped->skip_metadata();
+    }
+
+    virtual int get_protocol_version() const override {
+        return _wrapped->get_protocol_version();
+    }
+
+    virtual const specific_options& get_specific_options() const override {
+        return _wrapped->get_specific_options();
+    }
+
+    virtual void prepare(const std::vector<::shared_ptr<column_specification>>& specs) override {
+        _wrapped->prepare(specs);
+    }
+};
+
+class options_with_names : public query_options_wrapper {
+private:
+    std::vector<sstring> _names;
+    std::vector<bytes_opt> _ordered_values;
+public:
+    options_with_names(std::unique_ptr<query_options> wrapped, std::vector<sstring> names)
+        : query_options_wrapper(std::move(wrapped))
+        , _names(std::move(names))
+    { }
+
+    void prepare(const std::vector<::shared_ptr<column_specification>>& specs) override {
+        query_options::prepare(specs);
+
+        _ordered_values.resize(specs.size());
+        auto& wrapped_values = _wrapped->get_values();
+
+        for (auto&& spec : specs) {
+            auto& spec_name = spec->name->text();
+            for (size_t j = 0; j < _names.size(); j++) {
+                if (_names[j] == spec_name) {
+                    _ordered_values.emplace_back(wrapped_values[j]);
+                    break;
+                }
+            }
+        }
+    }
+
+    virtual const std::vector<bytes_opt>& get_values() const override {
+        return _ordered_values;
     }
 };
 
