@@ -265,7 +265,7 @@ column_family::apply(mutation&& m) {
 // Based on org.apache.cassandra.db.AbstractCell#reconcile()
 static inline
 int
-compare_for_merge(const column_definition& def, const atomic_cell& left, const atomic_cell& right) {
+compare_for_merge(const atomic_cell& left, const atomic_cell& right) {
     if (left.timestamp != right.timestamp) {
         return left.timestamp > right.timestamp ? 1 : -1;
     }
@@ -273,7 +273,7 @@ compare_for_merge(const column_definition& def, const atomic_cell& left, const a
         return left.is_live() ? -1 : 1;
     }
     if (left.is_live()) {
-        return def.type->compare(left.as_live().value, right.as_live().value);
+        return compare_unsigned(left.as_live().value, right.as_live().value);
     } else {
         auto& c1 = left.as_dead();
         auto& c2 = right.as_dead();
@@ -291,7 +291,7 @@ compare_for_merge(const column_definition& def,
                   const std::pair<column_id, boost::any>& left,
                   const std::pair<column_id, boost::any>& right) {
     if (def.is_atomic()) {
-        return compare_for_merge(def, boost::any_cast<const atomic_cell&>(left.second),
+        return compare_for_merge(boost::any_cast<const atomic_cell&>(left.second),
             boost::any_cast<const atomic_cell&>(right.second));
     } else {
         throw std::runtime_error("not implemented");
