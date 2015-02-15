@@ -1808,6 +1808,8 @@ int start_instance(int ac, char** av) {
              "Maximum size of UDP datagram")
         ("stats",
              "Print basic statistics periodically (every second)")
+        ("port", bpo::value<uint16_t>()->default_value(11211),
+             "Specify UDP and TCP ports for memcached server to listen on")
         ;
 
     return app.run(ac, av, [&] {
@@ -1817,6 +1819,7 @@ int start_instance(int ac, char** av) {
         engine().at_exit([&] { return system_stats.stop(); });
 
         auto&& config = app.configuration();
+        uint16_t port = config["port"].as<uint16_t>();
         return cache_peers.start().then([&system_stats] {
             return system_stats.start(clock_type::now());
         }).then([&] {
@@ -1844,15 +1847,15 @@ int start_instance(int ac, char** av) {
                 std::cout << PLATFORM << " memcached " << VERSION << "\n";
                 return make_ready_future<>();
             }
-        }).then([&] {
-            return tcp_server.start(std::ref(cache), std::ref(system_stats));
+        }).then([&, port] {
+            return tcp_server.start(std::ref(cache), std::ref(system_stats), port);
         }).then([&tcp_server] {
             return tcp_server.invoke_on_all(&memcache::tcp_server<WithFlashCache>::start);
-        }).then([&] {
+        }).then([&, port] {
             if (engine().net().has_per_core_namespace()) {
-                return udp_server.start(std::ref(cache), std::ref(system_stats));
+                return udp_server.start(std::ref(cache), std::ref(system_stats), port);
             } else {
-                return udp_server.start_single(std::ref(cache), std::ref(system_stats));
+                return udp_server.start_single(std::ref(cache), std::ref(system_stats), port);
             }
         }).then([&] {
             return udp_server.invoke_on_all(&memcache::udp_server<WithFlashCache>::set_max_datagram_size,

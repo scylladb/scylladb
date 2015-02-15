@@ -88,6 +88,7 @@ public:
         std::unique_ptr<response> _resp;
         // null element marks eof
         queue<std::unique_ptr<response>> _responses { 10 };
+        bool _done = false;
     public:
         connection(http_server& server, connected_socket&& fd, socket_address addr)
             : _server(server), _fd(std::move(fd)), _read_buf(_fd.input())
@@ -106,28 +107,27 @@ public:
             });
         }
         future<> read() {
+            return do_until([this] { return _done; },
+                    [this] {
+                return read_one();
+            }).then_wrapped([this] (future<> f) {
+                // swallow error
+                // FIXME: count it?
+                return _responses.push_eventually({});
+            });
+        }
+        future<> read_one() {
             _parser.init();
             return _read_buf.consume(_parser).then([this] {
                 if (_parser.eof()) {
-                    return _responses.push_eventually({});
+                    _done = true;
+                    return make_ready_future<>();
                 }
                 ++_server._requests_served;
                 _req = _parser.get_parsed_request();
                 return _responses.not_full().then([this] {
-                    bool close = generate_response(std::move(_req));
-                    if (close) {
-                        return _responses.push_eventually({});
-                    } else {
-                        return read();
-                    }
+                    _done = generate_response(std::move(_req));
                 });
-            }).rescue([this] (auto&& get_ex) {
-                try {
-                    get_ex();
-                    return make_ready_future<>();
-                } catch (std::exception& ex) {
-                    return _responses.push_eventually({});
-                }
             });
         }
         future<> respond() {

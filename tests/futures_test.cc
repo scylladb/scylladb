@@ -6,6 +6,12 @@
 #include "core/shared_ptr.hh"
 #include "core/semaphore.hh"
 #include "test-utils.hh"
+#include "core/future-util.hh"
+
+class expected_exception : std::runtime_error {
+public:
+    expected_exception() : runtime_error("expected") {}
+};
 
 SEASTAR_TEST_CASE(test_finally_is_called_on_success_and_failure) {
     auto finally1 = make_shared<bool>();
@@ -176,6 +182,19 @@ SEASTAR_TEST_CASE(test_future_forwarding__ready_to_unarmed_soon_to_be_dead) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(test_exception_can_be_thrown_from_do_until_body) {
+    return do_until([] { return false; }, [] {
+        throw expected_exception();
+        return now();
+    }).rescue([] (auto get) {
+       try {
+           get();
+           BOOST_FAIL("should have failed");
+       } catch (const expected_exception& e) {
+           // expected
+       }
+    });
+}
 
 SEASTAR_TEST_CASE(test_broken_semaphore) {
     auto sem = make_lw_shared<semaphore>(0);

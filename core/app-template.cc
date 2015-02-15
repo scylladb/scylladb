@@ -7,6 +7,7 @@
 #include "core/scollectd.hh"
 #include "core/print.hh"
 #include <boost/program_options.hpp>
+#include <boost/make_shared.hpp>
 #include <fstream>
 #include <cstdlib>
 
@@ -27,6 +28,15 @@ app_template::add_options() {
     return _opts.add_options();
 }
 
+void
+app_template::add_positional_options(std::initializer_list<positional_option> options) {
+    for (auto&& o : options) {
+        _opts.add(boost::make_shared<bpo::option_description>(o.name, o.value_semantic, o.help));
+        _pos_opts.add(o.name, o.max_count);
+    }
+}
+
+
 bpo::variables_map&
 app_template::configuration() {
     return *_configuration;
@@ -39,7 +49,11 @@ app_template::run(int ac, char ** av, std::function<void ()>&& func) {
 #endif
     bpo::variables_map configuration;
     try {
-        bpo::store(bpo::command_line_parser(ac, av).options(_opts).run(), configuration);
+        bpo::store(bpo::command_line_parser(ac, av)
+                    .options(_opts)
+                    .positional(_pos_opts)
+                    .run()
+            , configuration);
         auto home = std::getenv("HOME");
         if (home) {
             std::ifstream ifs(std::string(home) + "/.config/seastar/seastar.conf");

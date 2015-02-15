@@ -110,6 +110,7 @@ tests = [
     'tests/test-reactor',
     'tests/fileiotest',
     'tests/directory_test',
+    'tests/linecount',
     'tests/echotest',
     'tests/l3_test',
     'tests/ip_test',
@@ -133,6 +134,7 @@ tests = [
 apps = [
     'apps/httpd/httpd',
     'seastar',
+    'apps/seawreck/seawreck',
     'apps/memcached/memcached',
     'apps/memcached/flashcached',
     ]
@@ -180,6 +182,7 @@ libnet = [
 
 core = [
     'core/reactor.cc',
+    'core/fstream.cc',
     'core/posix.cc',
     'core/memory.cc',
     'core/resource.cc',
@@ -274,6 +277,7 @@ deps = {
     'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
     'tests/directory_test': ['tests/directory_test.cc'] + core,
+    'tests/linecount': ['tests/linecount.cc'] + core,
     'tests/echotest': ['tests/echotest.cc'] + core + libnet,
     'tests/l3_test': ['tests/l3_test.cc'] + core + libnet,
     'tests/ip_test': ['tests/ip_test.cc'] + core + libnet,
@@ -285,6 +289,7 @@ deps = {
     'tests/udp_client': ['tests/udp_client.cc'] + core + libnet,
     'tests/tcp_server': ['tests/tcp_server.cc'] + core + libnet,
     'tests/tcp_client': ['tests/tcp_client.cc'] + core + libnet,
+    'apps/seawreck/seawreck': ['apps/seawreck/seawreck.cc', 'apps/seawreck/http_response_parser.rl'] + core + libnet,
     'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
     'tests/sstring_test': ['tests/sstring_test.cc'] + core,
     'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc', 'core/posix.cc'],
@@ -312,7 +317,7 @@ if args.with_osv:
 if args.dpdk_target:
     args.user_cflags = (args.user_cflags +
         ' -DHAVE_DPDK -I' +
-        args.dpdk_target + '/include -Wno-error=literal-suffix -Wno-literal-suffix')
+        args.dpdk_target + '/include -Wno-error=literal-suffix -Wno-literal-suffix -Wno-invalid-offsetof')
     libs += (' -L' + args.dpdk_target + '/lib ' +
         '-Wl,--whole-archive -lrte_pmd_bond -lrte_pmd_vmxnet3_uio -lrte_pmd_virtio_uio -lrte_pmd_i40e -lrte_pmd_ixgbe -lrte_pmd_e1000 -lrte_pmd_ring -Wl,--no-whole-archive -lrte_distributor -lrte_kni -lrte_pipeline -lrte_table -lrte_port -lrte_timer -lrte_hash -lrte_lpm -lrte_power -lrte_acl -lrte_meter -lrte_sched -lrte_kvargs -lrte_mbuf -lrte_ip_frag -lethdev -lrte_eal -lrte_malloc -lrte_mempool -lrte_ring -lrte_cmdline -lrte_cfgfile -lrt -lm -ldl')
 

@@ -56,9 +56,6 @@
 
 namespace memory {
 
-static constexpr const size_t page_bits = 12;
-static constexpr const size_t page_size = 1 << page_bits;
-static constexpr const size_t huge_page_size = 512 * page_size;
 static constexpr const unsigned cpu_id_shift = 36; // FIXME: make dynamic
 static constexpr const unsigned max_cpus = 256;
 static constexpr const size_t cache_line_size = 64;
