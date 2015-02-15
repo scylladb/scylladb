@@ -39,7 +39,7 @@ public:
     virtual ~cql_statement()
     { }
 
-    virtual int get_bound_terms() = 0;
+    virtual uint32_t get_bound_terms() = 0;
 
     /**
      * Perform any access verification necessary for the statement.
@@ -62,7 +62,7 @@ public:
      * @param state the current query state
      * @param options options for this query (consistency, variables, pageSize, ...)
      */
-    virtual future<std::experimental::optional<transport::messages::result_message>>
+    virtual future<::shared_ptr<transport::messages::result_message>>
         execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) = 0;
 
     /**
@@ -70,7 +70,7 @@ public:
      *
      * @param state the current query state
      */
-    virtual future<std::experimental::optional<transport::messages::result_message>>
+    virtual future<::shared_ptr<transport::messages::result_message>>
         execute_internal(database& db, service::query_state& state, const query_options& options) = 0;
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;

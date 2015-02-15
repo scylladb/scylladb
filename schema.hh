@@ -26,7 +26,9 @@ public:
     ::shared_ptr<cql3::column_specification> column_specification;
     bool is_static() const { return kind == column_kind::STATIC; }
     bool is_partition_key() const { return kind == column_kind::PARTITION; }
+    bool is_primary_key() const { return kind == column_kind::PARTITION || kind == column_kind::CLUSTERING; }
     bool is_atomic() const { return !type->is_multi_cell(); }
+    bool is_compact_value() const;
     const sstring& name_as_text() const;
     const bytes& name() const;
 };
@@ -114,6 +116,9 @@ public:
     }
     column_definition& regular_column_at(column_id id) {
         return regular_columns[id];
+    }
+    bool is_last_partition_key(column_definition& def) {
+        return &partition_key[partition_key.size() - 1] == &def;
     }
 };
 

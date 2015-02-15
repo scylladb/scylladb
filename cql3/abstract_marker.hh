@@ -97,6 +97,7 @@ public:
             return ::make_shared<column_specification>(receiver->ks_name, receiver->cf_name, in_name, db::marshal::list_type::get_instance(receiver->type, false));
         }
 
+    public:
         virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override;
     };
 };

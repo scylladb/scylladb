@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include "core/sstring.hh"
+#include <vector>
+#include <sstream>
+
 /**
  * Converts a vector of pointers to Printable elements.
  * Printable is an object which has to_string() method.

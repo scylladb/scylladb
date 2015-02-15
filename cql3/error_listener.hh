@@ -15,16 +15,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
-import org.antlr.runtime.BaseRecognizer;
-import org.antlr.runtime.RecognitionException;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#pragma once
+
+#include <vector>
+#include "core/sstring.hh"
+
+namespace cql3 {
 
 /**
  * Listener used to collect the syntax errors emitted by the Lexer and Parser.
  */
-public interface ErrorListener
-{
+template<typename RecognizerType>
+class error_listener {
+public:
     /**
      * Invoked when a syntax error occurs.
      *
@@ -32,7 +42,7 @@ public interface ErrorListener
      * @param tokenNames the token names
      * @param e the exception
      */
-    void syntaxError(BaseRecognizer recognizer, String[] tokenNames, RecognitionException e);
+    virtual void syntax_error(RecognizerType& recognizer, const std::vector<sstring>& token_names) = 0;
 
     /**
      * Invoked when a syntax error with a specified message occurs.
@@ -40,5 +50,7 @@ public interface ErrorListener
      * @param recognizer the parser or lexer that emitted the error
      * @param errorMsg the error message
      */
-    void syntaxError(BaseRecognizer recognizer, String errorMsg);
+    virtual void syntax_error(RecognizerType& recognizer, const sstring& error_msg) = 0;
+};
+
 }

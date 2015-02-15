@@ -39,9 +39,9 @@ namespace statements {
  */
 class cf_statement : public parsed_statement {
 protected:
-    std::experimental::optional<cf_name> _cf_name;
+    ::shared_ptr<cf_name> _cf_name;
 
-    cf_statement(std::experimental::optional<cf_name>&& cf_name)
+    cf_statement(::shared_ptr<cf_name>&& cf_name)
         : _cf_name(std::move(cf_name))
     { }
 

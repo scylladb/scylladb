@@ -103,6 +103,7 @@ urchin_tests = [
     'tests/urchin/mutation_test',
     'tests/urchin/types_test',
     'tests/perf/perf_mutation',
+    'tests/urchin/cql_query_test',
 ]
 
 tests = [
@@ -248,6 +249,11 @@ urchin_core = (['database.cc',
                  'cql3/operator.cc',
                  'cql3/relation.cc',
                  'cql3/column_identifier.cc',
+                 'cql3/constants.cc',
+                 'cql3/query_processor.cc',
+                 'cql3/query_options.cc',
+                 'cql3/single_column_relation.cc',
+                 'cql3/column_condition.cc',
                  'db/db.cc',
                  'io/io.cc',
                  'utils/utils.cc',

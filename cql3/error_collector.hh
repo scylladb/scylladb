@@ -15,41 +15,46 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
 
-import java.util.LinkedList;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import org.antlr.runtime.BaseRecognizer;
-import org.antlr.runtime.Parser;
-import org.antlr.runtime.RecognitionException;
-import org.antlr.runtime.Token;
-import org.antlr.runtime.TokenStream;
-import org.apache.cassandra.exceptions.SyntaxException;
+#pragma once
+
+#include "cql3/error_listener.hh"
+#include "exceptions/exceptions.hh"
+#include "types.hh"
+
+namespace cql3 {
 
 /**
  * <code>ErrorListener</code> that collect and enhance the errors send by the CQL lexer and parser.
  */
-public final class ErrorCollector implements ErrorListener
-{
+template<typename Recognizer>
+class error_collector : public error_listener<Recognizer> {
     /**
      * The offset of the first token of the snippet.
      */
-    private static final int FIRST_TOKEN_OFFSET = 10;
+    static const int32_t FIRST_TOKEN_OFFSET = 10;
 
     /**
      * The offset of the last token of the snippet.
      */
-    private static final int LAST_TOKEN_OFFSET = 2;
+    static const int32_t LAST_TOKEN_OFFSET = 2;
 
     /**
      * The CQL query.
      */
-    private final String query;
+    const sstring_view _query;
 
     /**
      * The error messages.
      */
-    private final LinkedList<String> errorMsgs = new LinkedList<>();
+    std::vector<sstring> _error_msgs;
+public:
 
     /**
      * Creates a new <code>ErrorCollector</code> instance to collect the syntax errors associated to the specified CQL
@@ -57,17 +62,12 @@ public final class ErrorCollector implements ErrorListener
      *
      * @param query the CQL query that will be parsed
      */
-    public ErrorCollector(String query)
-    {
-        this.query = query;
-    }
+    error_collector(const sstring_view& query) : _query(query) {}
 
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public void syntaxError(BaseRecognizer recognizer, String[] tokenNames, RecognitionException e)
-    {
+    virtual void syntax_error(Recognizer& recognizer, const std::vector<sstring>& token_names) override {
+        // FIXME: stub
+        syntax_error(recognizer, "Parsing failed, detailed description construction not implemented yet");
+#if 0
         String hdr = recognizer.getErrorHeader(e);
         String msg = recognizer.getErrorMessage(e, tokenNames);
 
@@ -79,15 +79,11 @@ public final class ErrorCollector implements ErrorListener
             appendQuerySnippet((Parser) recognizer, builder);
 
         errorMsgs.add(builder.toString());
+#endif
     }
 
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public void syntaxError(BaseRecognizer recognizer, String errorMsg)
-    {
-        errorMsgs.add(errorMsg);
+    virtual void syntax_error(Recognizer& recognizer, const sstring& msg) override {
+        _error_msgs.emplace_back(msg);
     }
 
     /**
@@ -95,11 +91,13 @@ public final class ErrorCollector implements ErrorListener
      *
      * @throws SyntaxException the syntax error.
      */
-    public void throwFirstSyntaxError() throws SyntaxException
-    {
-        if (!errorMsgs.isEmpty())
-            throw new SyntaxException(errorMsgs.getFirst());
+    void throw_first_syntax_error() {
+        if (!_error_msgs.empty()) {
+            throw exceptions::syntax_exception(_error_msgs[0]);
+        }
     }
+
+#if 0
 
     /**
      * Appends a query snippet to the message to help the user to understand the problem.
@@ -287,4 +285,7 @@ public final class ErrorCollector implements ErrorListener
     {
         return Math.max(0, index - FIRST_TOKEN_OFFSET);
     }
+#endif
+};
+
 }

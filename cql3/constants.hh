@@ -28,6 +28,8 @@
 #include "cql3/abstract_marker.hh"
 #include "cql3/update_parameters.hh"
 #include "cql3/operation.hh"
+#include "cql3/term.hh"
+#include "core/shared_ptr.hh"
 
 namespace cql3 {
 
@@ -66,47 +68,48 @@ public:
         STRING, INTEGER, UUID, FLOAT, BOOLEAN, HEX
     };
 
-#if 0
-    public static final Term.Raw NULL_LITERAL = new Term.Raw()
-    {
-        private final Term.Terminal NULL_VALUE = new Value(null)
-        {
-            @Override
-            public Terminal bind(QueryOptions options)
-            {
-                // We return null because that makes life easier for collections
-                return null;
-            }
+    /**
+    * A constant value, i.e. a ByteBuffer.
+    */
+    class value : public terminal {
+    public:
+        bytes_opt _bytes;
+        value(bytes_opt bytes_) : _bytes(std::move(bytes_)) {}
+        virtual bytes_opt get(const query_options& options) override { return _bytes; }
+        virtual bytes_opt bind_and_get(const query_options& options) override { return _bytes; }
+        virtual sstring to_string() const override { return to_hex(*_bytes); }
+    };
 
-            @Override
-            public String toString()
-            {
-                return "null";
-            }
+    class null_literal final : public term::raw {
+    private:
+        class null_value final : public value {
+        public:
+            null_value() : value({}) {}
+            virtual ::shared_ptr<terminal> bind(const query_options& options) override { return {}; }
+            virtual sstring to_string() const override { return "null"; }
         };
-
-        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
-            if (!testAssignment(keyspace, receiver).isAssignable())
-                throw new InvalidRequestException("Invalid null value for counter increment/decrement");
-
+        static const ::shared_ptr<terminal> NULL_VALUE;
+    public:
+        virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
+            if (!is_assignable(test_assignment(keyspace, receiver))) {
+                throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
+            }
             return NULL_VALUE;
         }
 
-        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver)
-        {
-            return receiver.type instanceof CounterColumnType
-                 ? AssignmentTestable.TestResult.NOT_ASSIGNABLE
-                 : AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
+        virtual assignment_testable::test_result test_assignment(const sstring& keyspace,
+            ::shared_ptr<column_specification> receiver) override {
+                return receiver->type->is_counter()
+                    ? assignment_testable::test_result::NOT_ASSIGNABLE
+                    : assignment_testable::test_result::WEAKLY_ASSIGNABLE;
         }
 
-        @Override
-        public String toString()
-        {
+        virtual sstring to_string() override {
             return "null";
         }
     };
-#endif
+
+    static const ::shared_ptr<term::raw> NULL_LITERAL;
 
     class literal : public term::raw {
     private:
@@ -142,152 +145,20 @@ public:
             return ::make_shared<literal>(type::HEX, text);
         }
 
-        virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
-            throw std::runtime_error("not implemented");
-#if 0
-            if (!testAssignment(keyspace, receiver).isAssignable())
-                throw new InvalidRequestException(String.format("Invalid %s constant (%s) for \"%s\" of type %s", type, text, receiver.name, receiver.type.asCQL3Type()));
-
-            return new Value(parsedValue(receiver.type));
-#endif
-        }
-#if 0
-        private ByteBuffer parsedValue(AbstractType<?> validator) throws InvalidRequestException
-        {
-            if (validator instanceof ReversedType<?>)
-                validator = ((ReversedType<?>) validator).baseType;
-            try
-            {
-                // BytesType doesn't want it's input prefixed by '0x'.
-                if (type == Type.HEX && validator instanceof BytesType)
-                    return validator.fromString(text.substring(2));
-                if (validator instanceof CounterColumnType)
-                    return LongType.instance.fromString(text);
-                return validator.fromString(text);
-            }
-            catch (MarshalException e)
-            {
-                throw new InvalidRequestException(e.getMessage());
-            }
+        virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver);
+    private:
+        bytes parsed_value(::shared_ptr<abstract_type> validator);
+    public:
+        const sstring& get_raw_text() {
+            return _text;
         }
 
-        public String getRawText()
-        {
-            return text;
-        }
-#endif
-
-        virtual assignment_testable::test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
-            throw new std::runtime_error("not implemented");
-#if 0
-            CQL3Type receiverType = receiver.type.asCQL3Type();
-            if (receiverType.isCollection())
-                return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
-
-            if (!(receiverType instanceof CQL3Type.Native))
-                // Skip type validation for custom types. May or may not be a good idea
-                return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-
-            CQL3Type.Native nt = (CQL3Type.Native)receiverType;
-            switch (type)
-            {
-                case STRING:
-                    switch (nt)
-                    {
-                        case ASCII:
-                        case TEXT:
-                        case INET:
-                        case VARCHAR:
-                        case TIMESTAMP:
-                            return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-                    }
-                    break;
-                case INTEGER:
-                    switch (nt)
-                    {
-                        case BIGINT:
-                        case COUNTER:
-                        case DECIMAL:
-                        case DOUBLE:
-                        case FLOAT:
-                        case INT:
-                        case TIMESTAMP:
-                        case VARINT:
-                            return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-                    }
-                    break;
-                case UUID:
-                    switch (nt)
-                    {
-                        case UUID:
-                        case TIMEUUID:
-                            return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-                    }
-                    break;
-                case FLOAT:
-                    switch (nt)
-                    {
-                        case DECIMAL:
-                        case DOUBLE:
-                        case FLOAT:
-                            return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-                    }
-                    break;
-                case BOOLEAN:
-                    switch (nt)
-                    {
-                        case BOOLEAN:
-                            return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-                    }
-                    break;
-                case HEX:
-                    switch (nt)
-                    {
-                        case BLOB:
-                            return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-                    }
-                    break;
-            }
-            return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
-#endif
-        }
+        virtual assignment_testable::test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver);
 
         virtual sstring to_string() override {
             return _type == type::STRING ? sstring(sprint("'%s'", _text)) : _text;
         }
     };
-
-#if 0
-    /**
-     * A constant value, i.e. a ByteBuffer.
-     */
-    public static class Value extends Term.Terminal
-    {
-        public final ByteBuffer bytes;
-
-        public Value(ByteBuffer bytes)
-        {
-            this.bytes = bytes;
-        }
-
-        public ByteBuffer get(QueryOptions options)
-        {
-            return bytes;
-        }
-
-        @Override
-        public ByteBuffer bindAndGet(QueryOptions options)
-        {
-            return bytes;
-        }
-
-        @Override
-        public String toString()
-        {
-            return ByteBufferUtil.bytesToHex(bytes);
-        }
-    }
-#endif
 
     class marker : public abstract_marker {
     public:
@@ -408,6 +279,8 @@ public:
     };
 #endif
 };
+
+std::ostream& operator<<(std::ostream&out, constants::type t);
 
 }
 

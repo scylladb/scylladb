@@ -141,7 +141,7 @@ modification_statement::read_required_rows(
 const column_definition*
 modification_statement::get_first_empty_key() {
     for (auto& def : s->clustering_key) {
-        if (!_processed_keys[&def]) {
+        if (_processed_keys.find(&def) == _processed_keys.end()) {
             return &def;
         }
     }
@@ -154,8 +154,8 @@ modification_statement::create_clustering_prefix_internal(const query_options& o
     const column_definition* first_empty_key = nullptr;
 
     for (auto& def : s->clustering_key) {
-        auto r = _processed_keys[&def];
-        if (!r) {
+        auto i = _processed_keys.find(&def);
+        if (i == _processed_keys.end()) {
             first_empty_key = &def;
             // Tomek: Origin had "&& s->comparator->is_composite()" in the condition below.
             // Comparator is a thrift concept, not CQL concept, and we want to avoid
@@ -172,7 +172,7 @@ modification_statement::create_clustering_prefix_internal(const query_options& o
         } else if (first_empty_key) {
             throw exceptions::invalid_request_exception(sprint("Missing PRIMARY KEY part %s since %s is set", first_empty_key->name_as_text(), def.name_as_text()));
         } else {
-            auto values = r->values(options);
+            auto values = i->second->values(options);
             assert(values.size() == 1);
             auto val = values[0];
             if (!val) {
@@ -230,12 +230,12 @@ modification_statement::build_partition_keys(const query_options& options) {
     auto remaining = s->partition_key.size();
 
     for (auto& def : s->partition_key) {
-        auto r = _processed_keys[&def];
-        if (!r) {
+        auto i = _processed_keys.find(&def);
+        if (i == _processed_keys.end()) {
             throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
         }
 
-        auto values = r->values(options);
+        auto values = i->second->values(options);
 
         if (remaining == 1) {
             if (values.size() == 1) {
@@ -277,7 +277,7 @@ modification_statement::build_partition_keys(const query_options& options) {
     return result;
 }
 
-future<std::experimental::optional<transport::messages::result_message>>
+future<::shared_ptr<transport::messages::result_message>>
 modification_statement::execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     if (has_conditions() && options.get_protocol_version() == 1) {
         throw new exceptions::invalid_request_exception("Conditional updates are not supported by the protocol version in use. You need to upgrade to a driver using the native protocol v2.");
@@ -288,8 +288,8 @@ modification_statement::execute(service::storage_proxy& proxy, service::query_st
     }
 
     return execute_without_condition(proxy, qs, options).then([] {
-        return make_ready_future<std::experimental::optional<transport::messages::result_message>>(
-                std::experimental::optional<transport::messages::result_message>{});
+        return make_ready_future<::shared_ptr<transport::messages::result_message>>(
+                ::shared_ptr<transport::messages::result_message>{});
     });
 }
 
@@ -310,7 +310,7 @@ modification_statement::execute_without_condition(service::storage_proxy& proxy,
     });
 }
 
-future<std::experimental::optional<transport::messages::result_message>>
+future<::shared_ptr<transport::messages::result_message>>
 modification_statement::execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
     unimplemented::lwt();
 #if 0
@@ -378,7 +378,7 @@ modification_statement::process_where_clause(std::vector<relation_ptr> where_cla
             case column_definition::column_kind::CLUSTERING:
                 if (rel->is_EQ() || (def->is_partition_key() && rel->is_IN())) {
                     add_key_values(*def, rel->to_restriction(s, std::move(names)));
-                    return;
+                    break;
                 }
                 throw exceptions::invalid_request_exception(sprint("Invalid operator %s for PRIMARY KEY part %s", rel->get_operator(), def->name_as_text()));
             default:
@@ -444,6 +444,21 @@ modification_statement::parsed::prepare(database& db, ::shared_ptr<variable_spec
         stmt->validate_where_clause_for_conditions();
     }
     return stmt;
+}
+
+void
+modification_statement::validate(const service::client_state& state) {
+    if (has_conditions() && attrs->is_timestamp_set()) {
+        throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional updates");
+    }
+
+    if (is_counter() && attrs->is_timestamp_set()) {
+        throw exceptions::invalid_request_exception("Cannot provide custom timestamp for counter updates");
+    }
+
+    if (is_counter() && attrs->is_time_to_live_set()) {
+        throw exceptions::invalid_request_exception("Cannot provide custom TTL for counter updates");
+    }
 }
 
 }

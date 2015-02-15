@@ -162,16 +162,9 @@ public:
             return false;
         }
 
-#if 0
-        @Override
-        public final boolean equals(Object o)
-        {
-            if(!(o instanceof ColumnIdentifier.Raw))
-                return false;
-            ColumnIdentifier.Raw that = (ColumnIdentifier.Raw)o;
-            return text.equals(that.text);
+        bool operator==(const raw& other) const {
+            return _text == other._text;
         }
-#endif
 
         virtual sstring to_string() const {
             return _text;

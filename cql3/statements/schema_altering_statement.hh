@@ -45,17 +45,17 @@ private:
 
 protected:
     schema_altering_statement()
-        : cf_statement{std::experimental::optional<cf_name>{}}
+        : cf_statement{::shared_ptr<cf_name>{}}
         , _is_column_family_level{false}
     { }
 
-    schema_altering_statement(std::experimental::optional<cf_name>&& name)
+    schema_altering_statement(::shared_ptr<cf_name>&& name)
         : cf_statement{std::move(name)}
         , _is_column_family_level{true}
     { }
 
 
-    virtual int get_bound_terms() override {
+    virtual uint32_t get_bound_terms() override {
         return 0;
     }
 
@@ -81,7 +81,7 @@ protected:
     public abstract boolean announceMigration(boolean isLocalOnly) throws RequestValidationException;
 #endif
 
-    virtual future<std::experimental::optional<transport::messages::result_message>>
+    virtual future<::shared_ptr<transport::messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override {
         throw std::runtime_error("not implemented");
 #if 0
@@ -96,7 +96,7 @@ protected:
 #endif
     }
 
-    virtual future<std::experimental::optional<transport::messages::result_message>>
+    virtual future<::shared_ptr<transport::messages::result_message>>
     execute_internal(database& db, service::query_state& state, const query_options& options) override {
         throw std::runtime_error("unsupported operation");
 #if 0

@@ -59,6 +59,16 @@ public:
     bytes serialize_value(const value_type& values) {
         return ::serialize_value(*this, values);
     }
+    bytes serialize_value_deep(const std::vector<boost::any>& values) {
+        // TODO: Optimize
+        std::vector<bytes_opt> partial;
+        auto i = types.begin();
+        for (auto&& component : values) {
+            assert(i != types.end());
+            partial.push_back({(*i++)->decompose(component)});
+        }
+        return serialize_value(partial);
+    }
     bytes decompose_value(const value_type& values) {
         return ::serialize_value(*this, values);
     }
@@ -162,7 +172,7 @@ public:
         // TODO: make the length byte-order comparable by adding numeric_limits<int32_t>::min() when serializing
         return false;
     }
-    virtual bytes from_string(const sstring& s) override {
+    virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
     }
     virtual sstring to_string(const bytes& b) override {
@@ -213,6 +223,9 @@ public:
             }
         }
         return true;
+    }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        assert(0);
     }
 };
 

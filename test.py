@@ -12,6 +12,7 @@ all_tests = [
     'output_stream_test',
     'urchin/types_test',
     'urchin/mutation_test',
+    'urchin/cql_query_test',
 ]
 
 last_len = 0

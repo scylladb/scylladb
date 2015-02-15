@@ -23,13 +23,21 @@ options {
     language = Cpp;
 }
 
-@parser::namespace{cql3}
+@parser::namespace{cql3_parser}
+
+@lexer::includes {
+#include "cql3/error_listener.hh"
+}
 
 @parser::includes {
 #include "cql3/statements/select_statement.hh"
+#include "cql3/statements/update_statement.hh"
 #include "cql3/statements/use_statement.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/constants.hh"
+#include "cql3/operation_impl.hh"
+#include "cql3/error_listener.hh"
+#include "cql3/single_column_relation.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/cf_name.hh"
 #include "core/sstring.hh"
@@ -39,9 +47,12 @@ options {
 }
 
 @parser::traits {
-using namespace cql3;
 using namespace cql3::statements;
 using namespace cql3::selection;
+using cql3::cql3_type;
+using cql3::native_cql3_type;
+using conditions_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::column_condition::raw>>>;
+using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>;
 }
 
 @header {
@@ -74,11 +85,13 @@ using namespace cql3::selection;
 #endif
 }
 
-@members {
-#if 0
-    private final List<ErrorListener> listeners = new ArrayList<ErrorListener>();
-    private final List<ColumnIdentifier> bindVariables = new ArrayList<ColumnIdentifier>();
+@context {
+    using listener_type = cql3::error_listener<RecognizerType>;
+    listener_type* listener;
 
+    std::vector<::shared_ptr<cql3::column_identifier>> _bind_variables;
+
+#if 0
     public static final Set<String> reservedTypeNames = new HashSet<String>()
     {{
         add("byte");
@@ -118,29 +131,25 @@ using namespace cql3::selection;
         bindVariables.add(name);
         return marker;
     }
+#endif
 
-    public void addErrorListener(ErrorListener listener)
-    {
-        this.listeners.add(listener);
+    void set_error_listener(listener_type& listener) {
+        this->listener = &listener;
     }
 
-    public void removeErrorListener(ErrorListener listener)
-    {
-        this.listeners.remove(listener);
-    }
-
+#if 0
     public void displayRecognitionError(String[] tokenNames, RecognitionException e)
     {
         for (int i = 0, m = listeners.size(); i < m; i++)
             listeners.get(i).syntaxError(this, tokenNames, e);
     }
+#endif
 
-    private void addRecognitionError(String msg)
-    {
-        for (int i = 0, m = listeners.size(); i < m; i++)
-            listeners.get(i).syntaxError(this, msg);
+    void add_recognition_error(const sstring& msg) {
+        listener->syntax_error(*this, msg);
     }
 
+#if 0
     public Map<String, String> convertPropertyMap(Maps.Literal map)
     {
         if (map == null || map.entries == null || map.entries.isEmpty())
@@ -179,19 +188,21 @@ using namespace cql3::selection;
         return res;
     }
 
-    public void addRawUpdate(List<Pair<ColumnIdentifier.Raw, Operation.RawUpdate>> operations, ColumnIdentifier.Raw key, Operation.RawUpdate update)
-    {
-        for (Pair<ColumnIdentifier.Raw, Operation.RawUpdate> p : operations)
-        {
-            if (p.left.equals(key) && !p.right.isCompatibleWith(update))
-                addRecognitionError("Multiple incompatible setting of column " + key);
-        }
-        operations.add(Pair.create(key, update));
-    }
 #endif
+    void add_raw_update(std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>& operations,
+        ::shared_ptr<cql3::column_identifier::raw> key, ::shared_ptr<cql3::operation::raw_update> update)
+    {
+        for (auto&& p : operations) {
+            if (*p.first == *key && !p.second->is_compatible_with(update)) {
+                // \%s is escaped for antlr
+                add_recognition_error(sprint("Multiple incompatible setting of column \%s", *key));
+            }
+        }
+        operations.emplace_back(std::move(key), std::move(update));
+    }
 }
 
-@lexer::namespace{cql3}
+@lexer::namespace{cql3_parser}
 
 @lexer::traits {
     class CqlLexer;
@@ -210,7 +221,7 @@ using namespace cql3::selection;
 #endif
 }
 
-@lexer::members {
+@lexer::context {
 #if 0
     List<Token> tokens = new ArrayList<Token>();
 
@@ -227,19 +238,17 @@ using namespace cql3::selection;
             return new CommonToken(Token.EOF);
         return tokens.remove(0);
     }
+#endif
 
-    private final List<ErrorListener> listeners = new ArrayList<ErrorListener>();
+    using listener_type = cql3::error_listener<RecognizerType>;
 
-    public void addErrorListener(ErrorListener listener)
-    {
-        this.listeners.add(listener);
+    listener_type* listener;
+
+    void set_error_listener(listener_type& listener) {
+        this->listener = &listener;
     }
 
-    public void removeErrorListener(ErrorListener listener)
-    {
-        this.listeners.remove(listener);
-    }
-
+#if 0
     public void displayRecognitionError(String[] tokenNames, RecognitionException e)
     {
         for (int i = 0, m = listeners.size(); i < m; i++)
@@ -255,13 +264,11 @@ query returns [shared_ptr<parsed_statement> stmnt]
     ;
 
 cqlStatement returns [shared_ptr<parsed_statement> stmt]
-#if 0
-    @after{ if (stmt != null) stmt.setBoundVariables(bindVariables); }
-#endif
+    @after{ if (stmt) { stmt->set_bound_variables(_bind_variables); } }
     : st1= selectStatement             { $stmt = st1; }
-#if 0
     | st2= insertStatement             { $stmt = st2; }
     | st3= updateStatement             { $stmt = st3; }
+#if 0
     | st4= batchStatement              { $stmt = st4; }
     | st5= deleteStatement             { $stmt = st5; }
 #endif
@@ -346,7 +353,7 @@ selectClause returns [std::vector<shared_ptr<raw_selector>> expr]
     ;
 
 selector returns [shared_ptr<raw_selector> s]
-    @init{ shared_ptr<column_identifier> alias; }
+    @init{ shared_ptr<cql3::column_identifier> alias; }
     : us=unaliasedSelector (K_AS c=ident { alias = c; })? { $s = make_shared<raw_selector>(us, alias); }
     ;
 
@@ -381,18 +388,20 @@ countArgument
     : '\*'
     | i=INTEGER { if (!i.getText().equals("1")) addRecognitionError("Only COUNT(1) is supported, got COUNT(" + i.getText() + ")");}
     ;
+#endif
 
-whereClause returns [List<Relation> clause]
-    @init{ $clause = new ArrayList<Relation>(); }
+whereClause returns [std::vector<cql3::relation_ptr> clause]
     : relation[$clause] (K_AND relation[$clause])*
     ;
 
+#if 0
 orderByClause[Map<ColumnIdentifier.Raw, Boolean> orderings]
     @init{
         boolean reversed = false;
     }
     : c=cident (K_ASC | K_DESC { reversed = true; })? { orderings.put(c, reversed); }
     ;
+#endif
 
 /**
  * INSERT INTO <CF> (<column>, <column>, <column>, ...)
@@ -400,36 +409,36 @@ orderByClause[Map<ColumnIdentifier.Raw, Boolean> orderings]
  * USING TIMESTAMP <long>;
  *
  */
-insertStatement returns [UpdateStatement.ParsedInsert expr]
+insertStatement returns [::shared_ptr<update_statement::parsed_insert> expr]
     @init {
-        Attributes.Raw attrs = new Attributes.Raw();
-        List<ColumnIdentifier.Raw> columnNames  = new ArrayList<ColumnIdentifier.Raw>();
-        List<Term.Raw> values = new ArrayList<Term.Raw>();
-        boolean ifNotExists = false;
+        auto attrs = ::make_shared<cql3::attributes::raw>();
+        std::vector<::shared_ptr<cql3::column_identifier::raw>> column_names;
+        std::vector<::shared_ptr<cql3::term::raw>> values;
+        bool if_not_exists = false;
     }
     : K_INSERT K_INTO cf=columnFamilyName
-          '(' c1=cident { columnNames.add(c1); }  ( ',' cn=cident { columnNames.add(cn); } )* ')'
+          '(' c1=cident { column_names.push_back(c1); }  ( ',' cn=cident { column_names.push_back(cn); } )* ')'
         K_VALUES
-          '(' v1=term { values.add(v1); } ( ',' vn=term { values.add(vn); } )* ')'
+          '(' v1=term { values.push_back(v1); } ( ',' vn=term { values.push_back(vn); } )* ')'
 
-        ( K_IF K_NOT K_EXISTS { ifNotExists = true; } )?
+        ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
         ( usingClause[attrs] )?
       {
-          $expr = new UpdateStatement.ParsedInsert(cf,
-                                                   attrs,
-                                                   columnNames,
-                                                   values,
-                                                   ifNotExists);
+          $expr = ::make_shared<update_statement::parsed_insert>(std::move(cf),
+                                                   std::move(attrs),
+                                                   std::move(column_names),
+                                                   std::move(values),
+                                                   if_not_exists);
       }
     ;
 
-usingClause[Attributes.Raw attrs]
+usingClause[::shared_ptr<cql3::attributes::raw> attrs]
     : K_USING usingClauseObjective[attrs] ( K_AND usingClauseObjective[attrs] )*
     ;
 
-usingClauseObjective[Attributes.Raw attrs]
-    : K_TIMESTAMP ts=intValue { attrs.timestamp = ts; }
-    | K_TTL t=intValue { attrs.timeToLive = t; }
+usingClauseObjective[::shared_ptr<cql3::attributes::raw> attrs]
+    : K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
+    | K_TTL t=intValue { attrs->time_to_live = t; }
     ;
 
 /**
@@ -438,10 +447,10 @@ usingClauseObjective[Attributes.Raw attrs]
  * SET name1 = value1, name2 = value2
  * WHERE key = value;
  */
-updateStatement returns [UpdateStatement.ParsedUpdate expr]
+updateStatement returns [::shared_ptr<update_statement::parsed_update> expr]
     @init {
-        Attributes.Raw attrs = new Attributes.Raw();
-        List<Pair<ColumnIdentifier.Raw, Operation.RawUpdate>> operations = new ArrayList<Pair<ColumnIdentifier.Raw, Operation.RawUpdate>>();
+        auto attrs = ::make_shared<cql3::attributes::raw>();
+        std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>, ::shared_ptr<cql3::operation::raw_update>>> operations;
     }
     : K_UPDATE cf=columnFamilyName
       ( usingClause[attrs] )?
@@ -449,19 +458,19 @@ updateStatement returns [UpdateStatement.ParsedUpdate expr]
       K_WHERE wclause=whereClause
       ( K_IF conditions=updateConditions )?
       {
-          return new UpdateStatement.ParsedUpdate(cf,
-                                                  attrs,
-                                                  operations,
-                                                  wclause,
-                                                  conditions == null ? Collections.<Pair<ColumnIdentifier.Raw, ColumnCondition.Raw>>emptyList() : conditions);
+          return ::make_shared<update_statement::parsed_update>(std::move(cf),
+                                                  std::move(attrs),
+                                                  std::move(operations),
+                                                  std::move(wclause),
+                                                  std::move(conditions));
      }
     ;
 
-updateConditions returns [List<Pair<ColumnIdentifier.Raw, ColumnCondition.Raw>> conditions]
-    @init { conditions = new ArrayList<Pair<ColumnIdentifier.Raw, ColumnCondition.Raw>>(); }
+updateConditions returns [conditions_type conditions]
     : columnCondition[conditions] ( K_AND columnCondition[conditions] )*
     ;
 
+#if 0
 
 /**
  * DELETE name1, name2
@@ -981,22 +990,22 @@ userOption[UserOptions opts]
 // Column Identifiers.  These need to be treated differently from other
 // identifiers because the underlying comparator is not necessarily text. See
 // CASSANDRA-8178 for details.
-cident returns [shared_ptr<column_identifier::raw> id]
-    : t=IDENT              { $id = make_shared<column_identifier::raw>(sstring{$t.text}, false); }
-    | t=QUOTED_NAME        { $id = make_shared<column_identifier::raw>(sstring{$t.text}, true); }
-    | k=unreserved_keyword { $id = make_shared<column_identifier::raw>(k, false); }
+cident returns [shared_ptr<cql3::column_identifier::raw> id]
+    : t=IDENT              { $id = make_shared<cql3::column_identifier::raw>(sstring{$t.text}, false); }
+    | t=QUOTED_NAME        { $id = make_shared<cql3::column_identifier::raw>(sstring{$t.text}, true); }
+    | k=unreserved_keyword { $id = make_shared<cql3::column_identifier::raw>(k, false); }
     ;
 
 // Identifiers that do not refer to columns or where the comparator is known to be text
-ident returns [shared_ptr<column_identifier> id]
-    : t=IDENT              { $id = make_shared<column_identifier>(sstring{$t.text}, false); }
-    | t=QUOTED_NAME        { $id = make_shared<column_identifier>(sstring{$t.text}, true); }
-    | k=unreserved_keyword { $id = make_shared<column_identifier>(k, false); }
+ident returns [shared_ptr<cql3::column_identifier> id]
+    : t=IDENT              { $id = make_shared<cql3::column_identifier>(sstring{$t.text}, false); }
+    | t=QUOTED_NAME        { $id = make_shared<cql3::column_identifier>(sstring{$t.text}, true); }
+    | k=unreserved_keyword { $id = make_shared<cql3::column_identifier>(k, false); }
     ;
 
 // Keyspace & Column family names
 keyspaceName returns [sstring id]
-    @init { auto name = make_shared<cf_name>(); }
+    @init { auto name = make_shared<cql3::cf_name>(); }
     : cfOrKsName[name, true] { $id = name->get_keyspace(); }
     ;
 
@@ -1013,8 +1022,8 @@ idxOrKsName[IndexName name, boolean isKs]
     ;
 #endif
 
-columnFamilyName returns [shared_ptr<cf_name> name]
-    @init { $name = make_shared<cf_name>(); }
+columnFamilyName returns [shared_ptr<cql3::cf_name> name]
+    @init { $name = make_shared<cql3::cf_name>(); }
     : (cfOrKsName[name, true] '.')? cfOrKsName[name, false]
     ;
 
@@ -1024,7 +1033,7 @@ userTypeName returns [UTName name]
     ;
 #endif
 
-cfOrKsName[shared_ptr<cf_name> name, bool isKs]
+cfOrKsName[shared_ptr<cql3::cf_name> name, bool isKs]
     : t=IDENT              { if (isKs) $name->set_keyspace($t.text, false); else $name->set_column_family($t.text, false); }
     | t=QUOTED_NAME        { if (isKs) $name->set_keyspace($t.text, true); else $name->set_column_family($t.text, true); }
     | k=unreserved_keyword { if (isKs) $name->set_keyspace(k, false); else $name->set_column_family(k, false); }
@@ -1033,15 +1042,15 @@ cfOrKsName[shared_ptr<cf_name> name, bool isKs]
 #endif
     ;
 
-constant returns [shared_ptr<constants::literal> constant]
+constant returns [shared_ptr<cql3::constants::literal> constant]
     @init{std::string sign;}
-    : t=STRING_LITERAL { $constant = constants::literal::string(sstring{$t.text}); }
-    | t=INTEGER        { $constant = constants::literal::integer(sstring{$t.text}); }
-    | t=FLOAT          { $constant = constants::literal::floating_point(sstring{$t.text}); }
-    | t=BOOLEAN        { $constant = constants::literal::bool_(sstring{$t.text}); }
-    | t=UUID           { $constant = constants::literal::uuid(sstring{$t.text}); }
-    | t=HEXNUMBER      { $constant = constants::literal::hex(sstring{$t.text}); }
-    | { sign=""; } ('-' {sign = "-"; } )? t=(K_NAN | K_INFINITY) { $constant = constants::literal::floating_point(sstring{sign + $t.text}); }
+    : t=STRING_LITERAL { $constant = cql3::constants::literal::string(sstring{$t.text}); }
+    | t=INTEGER        { $constant = cql3::constants::literal::integer(sstring{$t.text}); }
+    | t=FLOAT          { $constant = cql3::constants::literal::floating_point(sstring{$t.text}); }
+    | t=BOOLEAN        { $constant = cql3::constants::literal::bool_(sstring{$t.text}); }
+    | t=UUID           { $constant = cql3::constants::literal::uuid(sstring{$t.text}); }
+    | t=HEXNUMBER      { $constant = cql3::constants::literal::hex(sstring{$t.text}); }
+    | { sign=""; } ('-' {sign = "-"; } )? t=(K_NAN | K_INFINITY) { $constant = cql3::constants::literal::floating_point(sstring{sign + $t.text}); }
     ;
 
 #if 0
@@ -1082,21 +1091,25 @@ tupleLiteral returns [Tuples.Literal tt]
     @after{ $tt = new Tuples.Literal(l); }
     : '(' t1=term { l.add(t1); } ( ',' tn=term { l.add(tn); } )* ')'
     ;
+#endif
 
-value returns [Term.Raw value]
+value returns [::shared_ptr<cql3::term::raw> value]
     : c=constant           { $value = c; }
+#if 0
     | l=collectionLiteral  { $value = l; }
     | u=usertypeLiteral    { $value = u; }
     | t=tupleLiteral       { $value = t; }
-    | K_NULL               { $value = Constants.NULL_LITERAL; }
+#endif
+    | K_NULL               { $value = cql3::constants::NULL_LITERAL; }
+#if 0
     | ':' id=ident         { $value = newBindVariables(id); }
     | QMARK                { $value = newBindVariables(null); }
-    ;
 #endif
+    ;
 
-intValue returns [::shared_ptr<term::raw> value]
+intValue returns [::shared_ptr<cql3::term::raw> value]
     :
-    | t=INTEGER     { $value = constants::literal::integer(sstring{$t.text}); }
+    | t=INTEGER     { $value = cql3::constants::literal::integer(sstring{$t.text}); }
 #if 0
     | ':' id=ident  { $value = newBindVariables(id); }
     | QMARK         { $value = newBindVariables(null); }
@@ -1122,36 +1135,43 @@ functionArgs returns [List<Term.Raw> a]
           ( ',' tn=term { args.add(tn); } )*
        ')' { $a = args; }
     ;
+#endif
 
-term returns [Term.Raw term]
+term returns [::shared_ptr<cql3::term::raw> term]
     : v=value                          { $term = v; }
+#if 0
     | f=functionName args=functionArgs { $term = new FunctionCall.Raw(f, args); }
     | '(' c=comparatorType ')' t=term  { $term = new TypeCast(c, t); }
+#endif
     ;
 
-columnOperation[List<Pair<ColumnIdentifier.Raw, Operation.RawUpdate>> operations]
+columnOperation[operations_type& operations]
     : key=cident columnOperationDifferentiator[operations, key]
     ;
 
-columnOperationDifferentiator[List<Pair<ColumnIdentifier.Raw, Operation.RawUpdate>> operations, ColumnIdentifier.Raw key]
+columnOperationDifferentiator[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
     : '=' normalColumnOperation[operations, key]
+#if 0
     | '[' k=term ']' specializedColumnOperation[operations, key, k]
+#endif
     ;
 
-normalColumnOperation[List<Pair<ColumnIdentifier.Raw, Operation.RawUpdate>> operations, ColumnIdentifier.Raw key]
+normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
     : t=term ('+' c=cident )?
       {
-          if (c == null)
-          {
-              addRawUpdate(operations, key, new Operation.SetValue(t));
-          }
-          else
-          {
-              if (!key.equals(c))
-                  addRecognitionError("Only expressions of the form X = <value> + X are supported.");
-              addRawUpdate(operations, key, new Operation.Prepend(t));
+          if (!c) {
+              add_raw_update(operations, key, ::make_shared<cql3::operation::set_value>(t));
+          } else {
+              throw std::runtime_error("not implemented");
+#if 0
+              if (!key.equals(c)) {
+                add_recognition_error("Only expressions of the form X = <value> + X are supported.");
+              }
+              add_raw_update(operations, key, ::make_shared<cql3::operation::prepend>(t));
+#endif
           }
       }
+#if 0
     | c=cident sig=('+' | '-') t=term
       {
           if (!key.equals(c))
@@ -1166,32 +1186,41 @@ normalColumnOperation[List<Pair<ColumnIdentifier.Raw, Operation.RawUpdate>> oper
               addRecognitionError("Only expressions of the form X = X " + ($i.text.charAt(0) == '-' ? '-' : '+') + " <value> are supported.");
           addRawUpdate(operations, key, new Operation.Addition(Constants.Literal.integer($i.text)));
       }
+#endif
     ;
 
+#if 0
 specializedColumnOperation[List<Pair<ColumnIdentifier.Raw, Operation.RawUpdate>> operations, ColumnIdentifier.Raw key, Term.Raw k]
     : '=' t=term
       {
           addRawUpdate(operations, key, new Operation.SetElement(k, t));
       }
     ;
+#endif
 
-columnCondition[List<Pair<ColumnIdentifier.Raw, ColumnCondition.Raw>> conditions]
+columnCondition[conditions_type& conditions]
     // Note: we'll reject duplicates later
     : key=cident
-        ( op=relationType t=term { conditions.add(Pair.create(key, ColumnCondition.Raw.simpleCondition(t, op))); }
+        ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::simple_condition(t, *op)); }
         | K_IN
-            ( values=singleColumnInValues { conditions.add(Pair.create(key, ColumnCondition.Raw.simpleInCondition(values))); }
+            ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::simple_in_condition(values)); }
+#if 0
             | marker=inMarker { conditions.add(Pair.create(key, ColumnCondition.Raw.simpleInCondition(marker))); }
+#endif
             )
+#if 0
         | '[' element=term ']'
-            ( op=relationType t=term { conditions.add(Pair.create(key, ColumnCondition.Raw.collectionCondition(t, element, op))); }
+            ( op=relationType t=term { conditions.add(Pair.create(key, ColumnCondition.Raw.collectionCondition(t, element, *op))); }
             | K_IN
                 ( values=singleColumnInValues { conditions.add(Pair.create(key, ColumnCondition.Raw.collectionInCondition(element, values))); }
                 | marker=inMarker { conditions.add(Pair.create(key, ColumnCondition.Raw.collectionInCondition(element, marker))); }
                 )
             )
+#endif
         )
     ;
+
+#if 0
 
 properties[PropertyDefinitions props]
     : property[props] (K_AND property[props])*
@@ -1206,18 +1235,20 @@ propertyValue returns [String str]
     : c=constant           { $str = c.getRawText(); }
     | u=unreserved_keyword { $str = u; }
     ;
+#endif
 
-relationType returns [Operator op]
-    : '='  { $op = Operator.EQ; }
-    | '<'  { $op = Operator.LT; }
-    | '<=' { $op = Operator.LTE; }
-    | '>'  { $op = Operator.GT; }
-    | '>=' { $op = Operator.GTE; }
-    | '!=' { $op = Operator.NEQ; }
+relationType returns [const cql3::operator_type* op = nullptr]
+    : '='  { $op = &cql3::operator_type::EQ; }
+    | '<'  { $op = &cql3::operator_type::LT; }
+    | '<=' { $op = &cql3::operator_type::LTE; }
+    | '>'  { $op = &cql3::operator_type::GT; }
+    | '>=' { $op = &cql3::operator_type::GTE; }
+    | '!=' { $op = &cql3::operator_type::NEQ; }
     ;
 
-relation[List<Relation> clauses]
-    : name=cident type=relationType t=term { $clauses.add(new SingleColumnRelation(name, type, t)); }
+relation[std::vector<cql3::relation_ptr>& clauses]
+    : name=cident type=relationType t=term { $clauses.emplace_back(::make_shared<cql3::single_column_relation>(std::move(name), *type, std::move(t))); }
+#if 0
     | K_TOKEN l=tupleOfIdentifiers type=relationType t=term
         { $clauses.add(new TokenRelation(l, type, t)); }
     | name=cident K_IN marker=inMarker
@@ -1247,9 +1278,11 @@ relation[List<Relation> clauses]
       | type=relationType tupleMarker=markerForTuple /* (a, b, c) >= ? */
           { $clauses.add(MultiColumnRelation.createNonInRelation(ids, type, tupleMarker)); }
       )
+#endif
     | '(' relation[$clauses] ')'
     ;
 
+#if 0
 inMarker returns [AbstractMarker.INRaw marker]
     : QMARK { $marker = newINBindVariables(null); }
     | ':' name=ident { $marker = newINBindVariables(name); }
@@ -1259,12 +1292,13 @@ tupleOfIdentifiers returns [List<ColumnIdentifier.Raw> ids]
     @init { $ids = new ArrayList<ColumnIdentifier.Raw>(); }
     : '(' n1=cident { $ids.add(n1); } (',' ni=cident { $ids.add(ni); })* ')'
     ;
+#endif
 
-singleColumnInValues returns [List<Term.Raw> terms]
-    @init { $terms = new ArrayList<Term.Raw>(); }
-    : '(' ( t1 = term { $terms.add(t1); } (',' ti=term { $terms.add(ti); })* )? ')'
+singleColumnInValues returns [std::vector<::shared_ptr<cql3::term::raw>> terms]
+    : '(' ( t1 = term { $terms.push_back(t1); } (',' ti=term { $terms.push_back(ti); })* )? ')'
     ;
 
+#if 0
 tupleOfTupleLiterals returns [List<Tuples.Literal> literals]
     @init { $literals = new ArrayList<>(); }
     : '(' t1=tupleLiteral { $literals.add(t1); } (',' ti=tupleLiteral { $literals.add(ti); })* ')'

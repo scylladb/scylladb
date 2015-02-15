@@ -36,11 +36,11 @@ namespace statements {
 
 class truncate_statement : public cf_statement, public virtual cql_statement, public ::enable_shared_from_this<truncate_statement> {
 public:
-    truncate_statement(std::experimental::optional<cf_name>&& name)
+    truncate_statement(::shared_ptr<cf_name>&& name)
         : cf_statement{std::move(name)}
     { }
 
-    virtual int get_bound_terms() override {
+    virtual uint32_t get_bound_terms() override {
         return 0;
     }
 
@@ -62,7 +62,7 @@ public:
 #endif
     }
 
-    virtual future<std::experimental::optional<transport::messages::result_message>>
+    virtual future<::shared_ptr<transport::messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override {
         throw std::runtime_error("not implemented");
 #if 0
@@ -86,7 +86,7 @@ public:
 #endif
     }
 
-    virtual future<std::experimental::optional<transport::messages::result_message>>
+    virtual future<::shared_ptr<transport::messages::result_message>>
     execute_internal(database& db, service::query_state& state, const query_options& options) override {
         throw std::runtime_error("unsupported operation");
     }

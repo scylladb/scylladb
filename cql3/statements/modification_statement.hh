@@ -94,7 +94,7 @@ public:
     const statement_type type;
 
 private:
-    const int32_t _bound_terms;
+    const uint32_t _bound_terms;
 
 public:
     const schema_ptr s;
@@ -122,7 +122,7 @@ private:
         };
 
 public:
-    modification_statement(statement_type type_, int32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_)
+    modification_statement(statement_type type_, uint32_t bound_terms, schema_ptr schema_, std::unique_ptr<attributes> attrs_)
         : type{type_}
         , _bound_terms{bound_terms}
         , s{schema_}
@@ -162,7 +162,7 @@ public:
 
     virtual void add_update_for_key(mutation& m, const clustering_prefix& prefix, const update_parameters& params) = 0;
 
-    virtual int get_bound_terms() override {
+    virtual uint32_t get_bound_terms() override {
         return _bound_terms;
     }
 
@@ -191,6 +191,7 @@ public:
     }
 
     virtual void check_access(const service::client_state& state) override {
+        unimplemented::permissions();
 #if 0
         state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.MODIFY);
 
@@ -198,22 +199,9 @@ public:
         if (hasConditions())
             state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.SELECT);
 #endif
-        throw std::runtime_error("not implemented");
     }
 
-    virtual void validate(const service::client_state& state) override {
-#if 0
-        if (hasConditions() && attrs.isTimestampSet())
-            throw new InvalidRequestException("Cannot provide custom timestamp for conditional updates");
-
-        if (isCounter() && attrs.isTimestampSet())
-            throw new InvalidRequestException("Cannot provide custom timestamp for counter updates");
-
-        if (isCounter() && attrs.isTimeToLiveSet())
-            throw new InvalidRequestException("Cannot provide custom TTL for counter updates");
-#endif
-        throw std::runtime_error("not implemented");
-    }
+    virtual void validate(const service::client_state& state);
 
     void add_operation(::shared_ptr<operation> op) {
         if (op->column.is_static()) {
@@ -295,10 +283,10 @@ public:
         return _if_not_exists || _if_exists || !_column_conditions.empty() || !_static_conditions.empty();
     }
 
-    virtual future<std::experimental::optional<transport::messages::result_message>>
+    virtual future<::shared_ptr<transport::messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) override;
 
-    virtual future<std::experimental::optional<transport::messages::result_message>>
+    virtual future<::shared_ptr<transport::messages::result_message>>
     execute_internal(database& db, service::query_state& qs, const query_options& options) override {
         throw std::runtime_error("not implemented");
     }
@@ -307,7 +295,7 @@ private:
     future<>
     execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
 
-    future<std::experimental::optional<transport::messages::result_message>>
+    future<::shared_ptr<transport::messages::result_message>>
     execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
 
 #if 0
@@ -466,7 +454,7 @@ public:
         const bool _if_not_exists;
         const bool _if_exists;
     protected:
-        parsed(std::experimental::optional<cf_name> name, ::shared_ptr<attributes::raw> attrs, const conditions_vector& conditions, bool if_not_exists, bool if_exists)
+        parsed(::shared_ptr<cf_name> name, ::shared_ptr<attributes::raw> attrs, const conditions_vector& conditions, bool if_not_exists, bool if_exists)
             : cf_statement{std::move(name)}
             , _attrs{attrs}
             , _conditions{conditions}

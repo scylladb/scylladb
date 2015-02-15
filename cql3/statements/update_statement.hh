@@ -65,7 +65,7 @@ public:
     private static final Constants.Value EMPTY = new Constants.Value(ByteBufferUtil.EMPTY_BYTE_BUFFER);
 #endif
 
-    update_statement(statement_type type, int32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs)
+    update_statement(statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs)
         : modification_statement{type, bound_terms, std::move(s), std::move(attrs)}
     { }
 
@@ -75,7 +75,7 @@ private:
     }
 
     virtual void add_update_for_key(mutation& m, const clustering_prefix& prefix, const update_parameters& params) override;
-
+public:
     class parsed_insert : public modification_statement::parsed {
     private:
         const std::vector<::shared_ptr<column_identifier::raw>> _column_names;
@@ -89,14 +89,14 @@ private:
          * @param columnValues list of column values (corresponds to names)
          * @param attrs additional attributes for statement (CL, timestamp, timeToLive)
          */
-        parsed_insert(std::experimental::optional<cf_name> name,
+        parsed_insert(::shared_ptr<cf_name> name,
                       ::shared_ptr<attributes::raw> attrs,
                       std::vector<::shared_ptr<column_identifier::raw>> column_names,
                       std::vector<::shared_ptr<term::raw>> column_values,
                       bool if_not_exists)
-            : modification_statement::parsed{std::move(name), attrs, conditions_vector{}, if_not_exists, false}
-            , _column_names{column_names}
-            , _column_values{column_values}
+            : modification_statement::parsed{std::move(name), std::move(attrs), conditions_vector{}, if_not_exists, false}
+            , _column_names{std::move(column_names)}
+            , _column_values{std::move(column_values)}
         { }
 
         virtual ::shared_ptr<modification_statement> prepare_internal(schema_ptr schema,
@@ -119,7 +119,7 @@ private:
          * @param updates a map of column operations to perform
          * @param whereClause the where clause
          */
-        parsed_update(std::experimental::optional<cf_name> name,
+        parsed_update(::shared_ptr<cf_name> name,
             ::shared_ptr<attributes::raw> attrs,
             std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
             std::vector<relation_ptr> where_clause,

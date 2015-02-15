@@ -16,10 +16,17 @@
 #include "net/byteorder.hh"
 #include "db_clock.hh"
 
+namespace cql3 {
+
+class cql3_type;
+
+}
+
 // FIXME: should be int8_t
 using bytes = basic_sstring<char, uint32_t, 31>;
 using bytes_view = std::experimental::string_view;
 using bytes_opt = std::experimental::optional<bytes>;
+using sstring_view = std::experimental::string_view;
 
 sstring to_hex(const bytes& b);
 sstring to_hex(const bytes_opt& b);
@@ -113,10 +120,11 @@ public:
         return to_string(b);
     }
     virtual sstring to_string(const bytes& b) = 0;
-    virtual bytes from_string(const sstring& text) = 0;
+    virtual bytes from_string(sstring_view text) = 0;
     virtual bool is_counter() { return false; }
     virtual bool is_collection() { return false; }
     virtual bool is_multi_cell() { return false; }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() = 0;
 protected:
     template <typename T, typename Compare = std::less<T>>
     bool default_less(const bytes& b1, const bytes& b2, Compare compare = Compare());
@@ -191,6 +199,12 @@ inline
 bytes
 to_bytes(const std::string& x) {
     return bytes(reinterpret_cast<const char*>(x.data()), x.size());
+}
+
+inline
+bytes
+to_bytes(sstring_view x) {
+    return bytes(x.begin(), x.size());
 }
 
 inline

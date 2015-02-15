@@ -41,7 +41,7 @@ public:
         : _keyspace(keyspace)
     { }
 
-    virtual int get_bound_terms() override {
+    virtual uint32_t get_bound_terms() override {
         return 0;
     }
 
@@ -60,7 +60,7 @@ public:
     virtual void validate(const service::client_state& state) override {
     }
 
-    virtual future<std::experimental::optional<transport::messages::result_message>>
+    virtual future<::shared_ptr<transport::messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override {
         throw std::runtime_error("not implemented");
 #if 0
@@ -69,7 +69,7 @@ public:
 #endif
     }
 
-    virtual future<std::experimental::optional<transport::messages::result_message>>
+    virtual future<::shared_ptr<transport::messages::result_message>>
     execute_internal(database& db, service::query_state& state, const query_options& options) override {
         // Internal queries are exclusively on the system keyspace and 'use' is thus useless
         throw std::runtime_error("unsupported operation");
