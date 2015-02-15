@@ -586,13 +586,13 @@ qp::txq::post(circular_buffer<packet>& pb) {
                     // TCP checksum filed's offset within the TCP header is 16 bytes
                     vhdr.csum_offset = 16;
                 }
-                if (_dev._dev->hw_features().tx_tso && p.len() > mtu + eth_hdr_len) {
+                if (oi.tso_seg_size) {
                     // IPv4 TCP TSO
                     vhdr.gso_type = net_hdr::gso_tcpv4;
                     // Sum of Ethernet, IP and TCP header size
                     vhdr.hdr_len = eth_hdr_len + ip_hdr_len + tcp_hdr_len;
                     // Maximum segment size of packet after the offload
-                    vhdr.gso_size = mtu - ip_hdr_len - tcp_hdr_len;
+                    vhdr.gso_size = oi.tso_seg_size;
                 }
             } else if (oi.protocol == ip_protocol_num::udp) {
                 auto udp_hdr_len = oi.udp_hdr_len;
