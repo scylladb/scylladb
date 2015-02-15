@@ -21,6 +21,7 @@
 #include <system_error>
 #include <boost/optional.hpp>
 #include <pthread.h>
+#include <signal.h>
 #include <memory>
 #include "net/api.hh"
 
