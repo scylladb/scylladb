@@ -114,12 +114,12 @@ public:
     void serialize(const boost::any& obj, std::ostream& out) override {
         serialize_value(boost::any_cast<const value_type&>(obj), out);
     }
-    virtual bool less(const bytes& b1, const bytes& b2) override {
+    virtual bool less(bytes_view b1, bytes_view b2) override {
         return compare(b1, b2) < 0;
     }
-    virtual size_t hash(const bytes& v) override {
+    virtual size_t hash(bytes_view v) override {
         if (_byte_order_equal) {
-            return std::hash<bytes>()(v);
+            return std::hash<bytes_view>()(v);
         }
         size_t h = 0;
         auto current_type = types.begin();
@@ -131,7 +131,7 @@ public:
         }
         return h;
     }
-    virtual int32_t compare(const bytes& b1, const bytes& b2) override {
+    virtual int32_t compare(bytes_view b1, bytes_view b2) override {
         if (is_byte_order_comparable()) {
             return compare_unsigned(b1, b2);
         }

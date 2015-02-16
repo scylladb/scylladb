@@ -8,7 +8,7 @@
 
 template <typename T, typename Compare>
 bool
-abstract_type::default_less(const bytes& v1, const bytes& v2, Compare compare) {
+abstract_type::default_less(bytes_view v1, bytes_view v2, Compare compare) {
     auto o1 = deserialize(v1);
     auto o2 = deserialize(v2);
     if (!o1) {
@@ -26,14 +26,14 @@ abstract_type::default_less(const bytes& v1, const bytes& v2, Compare compare) {
 template <typename T>
 struct simple_type_impl : abstract_type {
     simple_type_impl(sstring name) : abstract_type(std::move(name)) {}
-    virtual bool less(const bytes& v1, const bytes& v2) override {
+    virtual bool less(bytes_view v1, bytes_view v2) override {
         return default_less<T>(v1, v2);
     }
     virtual bool is_byte_order_equal() const override {
         return true;
     }
-    virtual size_t hash(const bytes& v) override {
-        return std::hash<bytes>()(v);
+    virtual size_t hash(bytes_view v) override {
+        return std::hash<bytes_view>()(v);
     }
 };
 
@@ -131,7 +131,7 @@ struct string_type_impl : public abstract_type {
         // FIXME: validation?
         return boost::any(sstring(tmp.data(), tmp.size()));
     }
-    virtual bool less(const bytes& v1, const bytes& v2) override {
+    virtual bool less(bytes_view v1, bytes_view v2) override {
         return less_unsigned(v1, v2);
     }
     virtual bool is_byte_order_equal() const override {
@@ -140,8 +140,8 @@ struct string_type_impl : public abstract_type {
     virtual bool is_byte_order_comparable() const override {
         return true;
     }
-    virtual size_t hash(const bytes& v) override {
-        return std::hash<bytes>()(v);
+    virtual size_t hash(bytes_view v) override {
+        return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) override {
         return to_bytes(s);
@@ -166,7 +166,7 @@ struct bytes_type_impl final : public abstract_type {
             std::istreambuf_iterator<char>());
         return boost::any(bytes(reinterpret_cast<const char*>(tmp.data()), tmp.size()));
     }
-    virtual bool less(const bytes& v1, const bytes& v2) override {
+    virtual bool less(bytes_view v1, bytes_view v2) override {
         return less_unsigned(v1, v2);
     }
     virtual bool is_byte_order_equal() const override {
@@ -175,8 +175,8 @@ struct bytes_type_impl final : public abstract_type {
     virtual bool is_byte_order_comparable() const override {
         return true;
     }
-    virtual size_t hash(const bytes& v) override {
-        return std::hash<bytes>()(v);
+    virtual size_t hash(bytes_view v) override {
+        return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
@@ -235,14 +235,14 @@ struct date_type_impl : public abstract_type {
         tmp = net::ntoh(uint64_t(tmp));
         return boost::any(db_clock::time_point(db_clock::duration(tmp)));
     }
-    virtual bool less(const bytes& b1, const bytes& b2) override {
+    virtual bool less(bytes_view b1, bytes_view b2) override {
         return compare_unsigned(b1, b2);
     }
     virtual bool is_byte_order_comparable() const override {
         return true;
     }
-    virtual size_t hash(const bytes& v) override {
-        return std::hash<bytes>()(v);
+    virtual size_t hash(bytes_view v) override {
+        return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
@@ -273,7 +273,7 @@ struct timeuuid_type_impl : public abstract_type {
         }
         return boost::any(utils::UUID(net::ntoh(t.msb), net::ntoh(t.lsb)));
     }
-    virtual bool less(const bytes& b1, const bytes& b2) override {
+    virtual bool less(bytes_view b1, bytes_view b2) override {
         if (b1.empty()) {
             return b2.empty() ? false : true;
         }
@@ -290,8 +290,8 @@ struct timeuuid_type_impl : public abstract_type {
     virtual bool is_byte_order_equal() const override {
         return true;
     }
-    virtual size_t hash(const bytes& v) override {
-        return std::hash<bytes>()(v);
+    virtual size_t hash(bytes_view v) override {
+        return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
@@ -303,7 +303,7 @@ struct timeuuid_type_impl : public abstract_type {
         return cql3::native_cql3_type::timeuuid;
     }
 private:
-    static int compare_bytes(const bytes& o1, const bytes& o2) {
+    static int compare_bytes(bytes_view o1, bytes_view o2) {
         auto compare_pos = [&] (unsigned pos, int mask, int ifequal) {
             int d = (o1[pos] & mask) - (o2[pos] & mask);
             return d ? d : ifequal;
@@ -368,7 +368,7 @@ struct uuid_type_impl : abstract_type {
         }
         return boost::any(utils::UUID(net::ntoh(t.msb), net::ntoh(t.lsb)));
     }
-    virtual bool less(const bytes& b1, const bytes& b2) override {
+    virtual bool less(bytes_view b1, bytes_view b2) override {
         if (b1.size() < 16) {
             return b2.size() < 16 ? false : true;
         }
@@ -396,8 +396,8 @@ struct uuid_type_impl : abstract_type {
     virtual bool is_byte_order_equal() const override {
         return true;
     }
-    virtual size_t hash(const bytes& v) override {
-        return std::hash<bytes>()(v);
+    virtual size_t hash(bytes_view v) override {
+        return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
