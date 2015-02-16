@@ -188,44 +188,39 @@ public:
      *
      * The 'value' is assumed to be serialized using tuple_type<AllowPrefixes=false>
      */
-    bool is_prefix_of(const bytes& prefix, const bytes& value) const {
+    bool is_prefix_of(bytes_view prefix, bytes_view value) const {
         assert(AllowPrefixes);
 
-        if (prefix.size() > value.size()) {
-            return false;
-        }
-
-        bytes_view i1(prefix);
-        bytes_view i2(value);
-
-        for (auto&& type : types) {
-            if (i1.empty()) {
+        for (auto&& type : _types) {
+            if (prefix.empty()) {
                 return true;
             }
-            if (i2.empty()) {
-                return false;
-            }
-            assert(i1.size() >= sizeof(int32_t));
-            assert(i2.size() >= sizeof(int32_t));
-            auto len1 = (int32_t) net::ntoh(*reinterpret_cast<const uint32_t*>(i1.begin()));
-            auto len2 = (int32_t) net::ntoh(*reinterpret_cast<const uint32_t*>(i2.begin()));
-            i1.remove_prefix(sizeof(int32_t));
-            i2.remove_prefix(sizeof(int32_t));
+            assert(!value.empty());
+            auto len1 = read_simple<int32_t>(prefix);
+            auto len2 = read_simple<int32_t>(value);
             if ((len1 < 0) != (len2 < 0)) {
                 // one is empty and another one is not
                 return false;
             }
             if (len1 >= 0) {
                 // both are not empty
-                // TODO: make equal() accept bytes_view
-                if (!type->equal(bytes(i1.begin(), i1.begin() + len1),
-                    bytes(i2.begin(), i2.begin() + len2))) {
+                auto u_len1 = static_cast<uint32_t>(len1);
+                auto u_len2 = static_cast<uint32_t>(len2);
+                if (prefix.size() < u_len1 || value.size() < u_len2) {
+                    throw marshal_exception();
+                }
+                if (!type->equal(bytes_view(prefix.begin(), u_len1), bytes_view(value.begin(), u_len2))) {
                     return false;
                 }
-                i1.remove_prefix((uint32_t) len1);
-                i2.remove_prefix((uint32_t) len2);
+                prefix.remove_prefix(u_len1);
+                value.remove_prefix(u_len2);
             }
         }
+
+        if (!prefix.empty() || !value.empty()) {
+            throw marshal_exception();
+        }
+
         return true;
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
