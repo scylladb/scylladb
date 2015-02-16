@@ -55,6 +55,30 @@ namespace memcache {
 template<typename T>
 using optional = boost::optional<T>;
 
+struct expiration {
+    static constexpr uint32_t seconds_in_a_month = 60U * 60 * 24 * 30;
+    uint32_t _time;
+
+    expiration() : _time(0U) {}
+
+    expiration(uint32_t seconds) {
+        if (seconds == 0U) {
+            _time = 0U; // means never expire.
+        } else if (seconds <= seconds_in_a_month) {
+            _time = seconds + time(0); // from delta
+        } else {
+            _time = seconds; // from real time
+        }
+    }
+
+    bool ever_expires() {
+        return _time;
+    }
+
+    clock_type::time_point to_time_point() {
+        return clock_type::time_point(std::chrono::seconds(_time));
+    }
+};
 
 class item {
 public:
@@ -69,13 +93,13 @@ private:
     const sstring _ascii_prefix;
     version_type _version;
     int _ref_count;
+    expiration _expiry;
     hook_type _cache_link;
     bi::list_member_hook<> _lru_link;
     bi::list_member_hook<> _timer_link;
-    time_point _expiry;
     friend class cache;
 public:
-    item(item_key&& key, sstring&& ascii_prefix, sstring&& data, clock_type::time_point expiry, version_type version = 1)
+    item(item_key&& key, sstring&& ascii_prefix, sstring&& data, expiration expiry, version_type version = 1)
         : _key(std::move(key))
         , _data(std::move(data))
         , _ascii_prefix(std::move(ascii_prefix))
@@ -89,7 +113,7 @@ public:
     item(item&&) = delete;
 
     clock_type::time_point get_timeout() {
-        return _expiry;
+        return _expiry.to_time_point();
     }
 
     version_type version() {
@@ -236,7 +260,7 @@ struct item_insertion_data {
     item_key key;
     sstring ascii_prefix;
     sstring data;
-    clock_type::time_point expiry;
+    expiration expiry;
 };
 
 class cache {
@@ -268,7 +292,9 @@ private:
             _cache.erase(_cache.iterator_to(item_ref));
         }
         if (IsInTimerList) {
-            _alive.remove(item_ref);
+            if (item_ref._expiry.ever_expires()) {
+                _alive.remove(item_ref);
+            }
         }
         _lru.erase(_lru.iterator_to(item_ref));
         _stats._bytes -= item_footprint(item_ref);
@@ -304,7 +330,7 @@ private:
 
         auto insert_result = _cache.insert(*new_item);
         assert(insert_result.second);
-        if (_alive.insert(*new_item)) {
+        if (insertion.expiry.ever_expires() && _alive.insert(*new_item)) {
             _timer.rearm(new_item->get_timeout());
         }
         _lru.push_front(*new_item);
@@ -320,7 +346,7 @@ private:
         intrusive_ptr_add_ref(new_item);
         auto& item_ref = *new_item;
         _cache.insert(item_ref);
-        if (_alive.insert(item_ref)) {
+        if (insertion.expiry.ever_expires() && _alive.insert(item_ref)) {
             _timer.rearm(item_ref.get_timeout());
         }
         _lru.push_front(*new_item);
@@ -734,7 +760,6 @@ private:
     item_insertion_data _insertion;
     std::vector<item_ptr> _items;
 private:
-    static constexpr uint32_t seconds_in_a_month = 60 * 60 * 24 * 30;
     static constexpr const char *msg_crlf = "\r\n";
     static constexpr const char *msg_error = "ERROR\r\n";
     static constexpr const char *msg_stored = "STORED\r\n";
@@ -894,22 +919,12 @@ public:
         , _system_stats(system_stats)
     {}
 
-    clock_type::time_point seconds_to_time_point(uint32_t seconds) {
-        if (seconds == 0) {
-            return clock_type::time_point::max();
-        } else if (seconds <= seconds_in_a_month) {
-            return clock_type::now() + std::chrono::seconds(seconds);
-        } else {
-            return clock_type::time_point(std::chrono::seconds(seconds));
-        }
-    }
-
     void prepare_insertion() {
         _insertion = item_insertion_data{
             .key = std::move(_parser._key),
             .ascii_prefix = make_sstring(" ", _parser._flags_str, " ", _parser._size_str),
             .data = std::move(_parser._blob),
-            .expiry = seconds_to_time_point(_parser._expiration)
+            .expiry = expiration(_parser._expiration)
         };
     }
 
@@ -1005,7 +1020,8 @@ public:
                 {
                     _system_stats.local()._cmd_flush++;
                     if (_parser._expiration) {
-                        auto f = _cache.flush_at(seconds_to_time_point(_parser._expiration));
+                        auto expiry = expiration(_parser._expiration);
+                        auto f = _cache.flush_at(expiry.to_time_point());
                         if (_parser._noreply) {
                             return f;
                         }
