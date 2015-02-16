@@ -397,7 +397,7 @@ with open(buildfile, 'w') as f:
                 command = thrift -gen cpp:cob_style -out $builddir/{mode}/gen $in
                 description = THRIFT $in
             rule antlr3.{mode}
-                command = sed -e '/^#if 0/,/^#endif/d' $in > $builddir/{mode}/gen/cql3/Cql.g && antlr3 $builddir/{mode}/gen/cql3/Cql.g && sed -i 's/^\\( *\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$$/\\1const \\2/' build/{mode}/gen/cql3/CqlParser.cpp
+                command = sed -e '/^#if 0/,/^#endif/d' $in > $builddir/{mode}/gen/$in && antlr3 $builddir/{mode}/gen/$in && sed -i 's/^\\( *\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$$/\\1const \\2/' build/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
             ''').format(mode = mode, **modeval))
         f.write('build {mode}: phony {artifacts}\n'.format(mode = mode,
@@ -453,7 +453,8 @@ with open(buildfile, 'w') as f:
                 f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
         for grammar in antlr3_grammars:
             outs = ' '.join(grammar.generated('$builddir/{}/gen'.format(mode)))
-            f.write('build {}: antlr3.{} {}\n'.format(outs, mode, grammar.source))
+            f.write('build {}: antlr3.{} {}\n  stem = {}\n'.format(outs, mode, grammar.source,
+                                                                   grammar.source.rsplit('.', 1)[0]))
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
                 f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
