@@ -46,4 +46,40 @@ struct filter {
     uint32_t hashes;
     disk_array<uint32_t, uint64_t> buckets;
 };
+
+// FIXME: Not yet, can't know what an index entry is without a schema.
+struct summary_entry {
+    int notyet;
+};
+
+// Note: Sampling level is present in versions ka and higher. We ATM only support la,
+// so it's always there. But we need to make this conditional if we ever want to support
+// other formats (unlikely)
+struct summary_la {
+    struct header {
+        // The minimum possible amount of indexes per group (sampling level)
+        uint32_t min_index_interval;
+        // The number of entries in the Summary File
+        uint32_t size;
+        // The memory to be consumed to map the whole Summary into memory.
+        // We will ignore this.
+        uint64_t memory_size;
+        // The actual sampling level.
+        uint32_t sampling_level;
+        // The number of entries the Summary *would* have if the sampling
+        // level would be equal to min_index_interval.
+        uint32_t size_at_full_sampling;
+    } header;
+    // The position in the Summary file for each of the indexes.
+    // NOTE1 that its actual size is determined by the "size" parameter, not
+    // by its preceding size_at_full_sampling
+    // NOTE2: They are laid out in *MEMORY* order, not BE.
+    // NOTE3: The sizes in this array represent positions in the memory stream,
+    // not the file. The memory stream effectively begins after the header,
+    // so every position here has to be added of sizeof(header).
+    std::vector<uint32_t> positions;
+    // size given by the "size" parameter. Have to parse slightly different
+    disk_array<uint32_t, summary_entry> entries;
+};
+using summary = summary_la;
 }

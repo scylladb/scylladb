@@ -219,6 +219,29 @@ future<> parse(file_input_stream& in, filter& f) {
     return parse(in, f.hashes, f.buckets);
 }
 
+future<> parse(file_input_stream& in, summary& s) {
+    using pos_type = typename decltype(summary::positions)::value_type;
+
+    return parse(in, s.header.min_index_interval,
+                     s.header.size,
+                     s.header.memory_size,
+                     s.header.sampling_level,
+                     s.header.size_at_full_sampling).then([&in, &s] {
+        return in.read_exactly(s.header.size * sizeof(pos_type)).then([&in, &s] (auto buf) {
+            auto len = s.header.size * sizeof(pos_type);
+            check_buf_size(buf, len);
+
+            s.positions.resize(s.header.size);
+
+            auto *nr = reinterpret_cast<const pos_type *>(buf.get());
+            s.positions = std::vector<pos_type>(nr, nr + s.header.size);
+        }).then([&in, &s] {
+            // FIXME: Read the actual indexes
+            return make_ready_future<>();
+        });
+    });
+}
+
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc() {
@@ -316,6 +339,8 @@ future<> sstable::load() {
         return read_compression();
     }).then([this] {
         return read_filter();
+    }).then([this] {;
+        return read_summary();
     });
 }
 
