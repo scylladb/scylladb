@@ -128,9 +128,6 @@ public:
     virtual bool is_collection() { return false; }
     virtual bool is_multi_cell() { return false; }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() = 0;
-protected:
-    template <typename T, typename Compare = std::less<T>>
-    bool default_less(bytes_view b1, bytes_view b2, Compare compare = Compare());
 };
 
 using data_type = shared_ptr<abstract_type>;

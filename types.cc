@@ -6,28 +6,43 @@
 #include "cql3/cql3_type.hh"
 #include "types.hh"
 
-template <typename T, typename Compare>
-bool
-abstract_type::default_less(bytes_view v1, bytes_view v2, Compare compare) {
-    auto o1 = deserialize(v1);
-    auto o2 = deserialize(v2);
-    if (!o1) {
-        return bool(o2);
+template<typename T>
+struct simple_type_traits {
+    static T read_nonempty(bytes_view v) {
+        return read_simple_exactly<T>(v);
     }
-    if (!o2) {
-        return false;
-    }
-    auto& x1 = boost::any_cast<const T&>(*o1);
-    auto& x2 = boost::any_cast<const T&>(*o2);
-    return compare(x1, x2);
-}
+};
 
+template<>
+struct simple_type_traits<bool> {
+    static bool read_nonempty(bytes_view v) {
+        return read_simple_exactly<int8_t>(v) != 0;
+    }
+};
+
+template<>
+struct simple_type_traits<db_clock::time_point> {
+    static db_clock::time_point read_nonempty(bytes_view v) {
+        return db_clock::time_point(db_clock::duration(read_simple_exactly<int64_t>(v)));
+    }
+};
 
 template <typename T>
 struct simple_type_impl : abstract_type {
     simple_type_impl(sstring name) : abstract_type(std::move(name)) {}
+    virtual int32_t compare(bytes_view v1, bytes_view v2) override {
+        if (v1.empty()) {
+            return v2.empty() ? 0 : -1;
+        }
+        if (v2.empty()) {
+            return 1;
+        }
+        T a = simple_type_traits<T>::read_nonempty(v1);
+        T b = simple_type_traits<T>::read_nonempty(v2);
+        return a == b ? 0 : a < b ? -1 : 1;
+    }
     virtual bool less(bytes_view v1, bytes_view v2) override {
-        return default_less<T>(v1, v2);
+        return compare(v1, v2) < 0;
     }
     virtual bool is_byte_order_equal() const override {
         return true;
