@@ -51,7 +51,7 @@ public:
     { }
 };
 
-enum exception_code {
+enum class exception_code : int32_t {
     SERVER_ERROR    = 0x0000,
     PROTOCOL_ERROR  = 0x000A,
 

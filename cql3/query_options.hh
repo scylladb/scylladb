@@ -30,6 +30,7 @@
 #include "service/query_state.hh"
 #include "service/pager/paging_state.hh"
 #include "cql3/column_specification.hh"
+#include "cql3/column_identifier.hh"
 
 namespace cql3 {
 
@@ -44,7 +45,7 @@ public:
     struct specific_options final {
         static const specific_options DEFAULT;
 
-        const int page_size;
+        const int32_t page_size;
         const ::shared_ptr<service::pager::paging_state> state;
         const std::experimental::optional<db::consistency_level> serial_consistency;
         const api::timestamp_type timestamp;
@@ -120,169 +121,12 @@ public:
     // Mainly for the sake of BatchQueryOptions
     virtual const specific_options& get_specific_options() const = 0;
 
-    query_options& prepare(const std::vector<::shared_ptr<column_specification>>& specs) {
-        return *this;
+    virtual void prepare(const std::vector<::shared_ptr<column_specification>>& specs) {
     }
 
 #if 0
-    static abstract class QueryOptionsWrapper extends QueryOptions
-    {
-        protected final QueryOptions wrapped;
-
-        QueryOptionsWrapper(QueryOptions wrapped)
-        {
-            this.wrapped = wrapped;
-        }
-
-        public ConsistencyLevel getConsistency()
-        {
-            return wrapped.getConsistency();
-        }
-
-        public boolean skipMetadata()
-        {
-            return wrapped.skipMetadata();
-        }
-
-        public int getProtocolVersion()
-        {
-            return wrapped.getProtocolVersion();
-        }
-
-        SpecificOptions getSpecificOptions()
-        {
-            return wrapped.getSpecificOptions();
-        }
-
-        @Override
-        public QueryOptions prepare(List<ColumnSpecification> specs)
-        {
-            wrapped.prepare(specs);
-            return this;
-        }
-    }
-
-    static class OptionsWithNames extends QueryOptionsWrapper
-    {
-        private final List<String> names;
-        private List<ByteBuffer> orderedValues;
-
-        OptionsWithNames(DefaultQueryOptions wrapped, List<String> names)
-        {
-            super(wrapped);
-            this.names = names;
-        }
-
-        @Override
-        public QueryOptions prepare(List<ColumnSpecification> specs)
-        {
-            super.prepare(specs);
-
-            orderedValues = new ArrayList<ByteBuffer>(specs.size());
-            for (int i = 0; i < specs.size(); i++)
-            {
-                String name = specs.get(i).name.toString();
-                for (int j = 0; j < names.size(); j++)
-                {
-                    if (name.equals(names.get(j)))
-                    {
-                        orderedValues.add(wrapped.getValues().get(j));
-                        break;
-                    }
-                }
-            }
-            return this;
-        }
-
-        public List<ByteBuffer> getValues()
-        {
-            assert orderedValues != null; // We should have called prepare first!
-            return orderedValues;
-        }
-    }
-
     private static class Codec implements CBCodec<QueryOptions>
     {
-        private static enum Flag
-        {
-            // The order of that enum matters!!
-            VALUES,
-            SKIP_METADATA,
-            PAGE_SIZE,
-            PAGING_STATE,
-            SERIAL_CONSISTENCY,
-            TIMESTAMP,
-            NAMES_FOR_VALUES;
-
-            private static final Flag[] ALL_VALUES = values();
-
-            public static EnumSet<Flag> deserialize(int flags)
-            {
-                EnumSet<Flag> set = EnumSet.noneOf(Flag.class);
-                for (int n = 0; n < ALL_VALUES.length; n++)
-                {
-                    if ((flags & (1 << n)) != 0)
-                        set.add(ALL_VALUES[n]);
-                }
-                return set;
-            }
-
-            public static int serialize(EnumSet<Flag> flags)
-            {
-                int i = 0;
-                for (Flag flag : flags)
-                    i |= 1 << flag.ordinal();
-                return i;
-            }
-        }
-
-        public QueryOptions decode(ByteBuf body, int version)
-        {
-            assert version >= 2;
-
-            ConsistencyLevel consistency = CBUtil.readConsistencyLevel(body);
-            EnumSet<Flag> flags = Flag.deserialize((int)body.readByte());
-
-            List<ByteBuffer> values = Collections.<ByteBuffer>emptyList();
-            List<String> names = null;
-            if (flags.contains(Flag.VALUES))
-            {
-                if (flags.contains(Flag.NAMES_FOR_VALUES))
-                {
-                    Pair<List<String>, List<ByteBuffer>> namesAndValues = CBUtil.readNameAndValueList(body);
-                    names = namesAndValues.left;
-                    values = namesAndValues.right;
-                }
-                else
-                {
-                    values = CBUtil.readValueList(body);
-                }
-            }
-
-            boolean skipMetadata = flags.contains(Flag.SKIP_METADATA);
-            flags.remove(Flag.VALUES);
-            flags.remove(Flag.SKIP_METADATA);
-
-            SpecificOptions options = SpecificOptions.DEFAULT;
-            if (!flags.isEmpty())
-            {
-                int pageSize = flags.contains(Flag.PAGE_SIZE) ? body.readInt() : -1;
-                PagingState pagingState = flags.contains(Flag.PAGING_STATE) ? PagingState.deserialize(CBUtil.readValue(body)) : null;
-                ConsistencyLevel serialConsistency = flags.contains(Flag.SERIAL_CONSISTENCY) ? CBUtil.readConsistencyLevel(body) : ConsistencyLevel.SERIAL;
-                long timestamp = Long.MIN_VALUE;
-                if (flags.contains(Flag.TIMESTAMP))
-                {
-                    long ts = body.readLong();
-                    if (ts == Long.MIN_VALUE)
-                        throw new ProtocolException(String.format("Out of bound timestamp, must be in [%d, %d] (got %d)", Long.MIN_VALUE + 1, Long.MAX_VALUE, ts));
-                    timestamp = ts;
-                }
-
-                options = new SpecificOptions(pageSize, pagingState, serialConsistency, timestamp);
-            }
-            DefaultQueryOptions opts = new DefaultQueryOptions(consistency, values, skipMetadata, options, version);
-            return names == null ? opts : new OptionsWithNames(opts, names);
-        }
 
         public void encode(QueryOptions options, ByteBuf dest, int version)
         {
@@ -362,7 +206,7 @@ private:
     const int32_t _protocol_version; // transient
 public:
     default_query_options(db::consistency_level consistency, std::vector<bytes_opt> values, bool skip_metadata, specific_options options,
-        int protocol_version)
+        int32_t protocol_version)
         : _consistency(consistency)
         , _values(std::move(values))
         , _skip_metadata(skip_metadata)
@@ -383,6 +227,69 @@ public:
     }
     virtual const specific_options& get_specific_options() const override {
         return _options;
+    }
+};
+
+class query_options_wrapper : public query_options {
+protected:
+    std::unique_ptr<query_options> _wrapped;
+public:
+    query_options_wrapper(std::unique_ptr<query_options> wrapped) : _wrapped(std::move(wrapped)) {}
+
+    virtual db::consistency_level get_consistency() const override {
+        return _wrapped->get_consistency();
+    }
+
+    virtual const std::vector<bytes_opt>& get_values() const override {
+        return _wrapped->get_values();
+    }
+
+    virtual bool skip_metadata() const override {
+        return _wrapped->skip_metadata();
+    }
+
+    virtual int get_protocol_version() const override {
+        return _wrapped->get_protocol_version();
+    }
+
+    virtual const specific_options& get_specific_options() const override {
+        return _wrapped->get_specific_options();
+    }
+
+    virtual void prepare(const std::vector<::shared_ptr<column_specification>>& specs) override {
+        _wrapped->prepare(specs);
+    }
+};
+
+class options_with_names : public query_options_wrapper {
+private:
+    std::vector<sstring> _names;
+    std::vector<bytes_opt> _ordered_values;
+public:
+    options_with_names(std::unique_ptr<query_options> wrapped, std::vector<sstring> names)
+        : query_options_wrapper(std::move(wrapped))
+        , _names(std::move(names))
+    { }
+
+    void prepare(const std::vector<::shared_ptr<column_specification>>& specs) override {
+        query_options::prepare(specs);
+
+        _ordered_values.resize(specs.size());
+        auto& wrapped_values = _wrapped->get_values();
+
+        for (auto&& spec : specs) {
+            auto& spec_name = spec->name->text();
+            for (size_t j = 0; j < _names.size(); j++) {
+                if (_names[j] == spec_name) {
+                    _ordered_values.emplace_back(wrapped_values[j]);
+                    break;
+                }
+            }
+        }
+    }
+
+    virtual const std::vector<bytes_opt>& get_values() const override {
+        return _ordered_values;
     }
 };
 

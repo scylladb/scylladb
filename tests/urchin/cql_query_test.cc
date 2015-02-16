@@ -18,6 +18,7 @@ struct conversation_state {
     conversation_state(database& db, const sstring& ks_name)
         : proxy(db)
         , qp(proxy, db)
+        , client_state(service::client_state::for_internal_calls())
         , query_state(client_state)
         , options(cql3::query_options::DEFAULT)
     {

@@ -78,58 +78,49 @@ private:
         }
         cqlQueryHandler = handler;
     }
+#endif
+
+public:
+    struct internal_tag {};
+    struct external_tag {};
 
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
-    public final boolean isInternal;
-
-    // The remote address of the client - null for internal clients.
-    private final SocketAddress remoteAddress;
-#endif
+    const bool _is_internal;
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
     api::timestamp_type _last_timestamp_micros = 0;
 
+    // Note: Origin passes here a RemoteAddress parameter, but it doesn't seem to be used
+    // anywhere so I didn't bother converting it.
+    client_state(external_tag) : _is_internal(false) {
+        unimplemented::auth();
 #if 0
-    /**
-     * Construct a new, empty ClientState for internal calls.
-     */
-    private ClientState()
-    {
-        this.isInternal = true;
-        this.remoteAddress = null;
+            if (!DatabaseDescriptor.getAuthenticator().requireAuthentication())
+                this.user = AuthenticatedUser.ANONYMOUS_USER;
+#endif
     }
 
-    protected ClientState(SocketAddress remoteAddress)
-    {
-        this.isInternal = false;
-        this.remoteAddress = remoteAddress;
-        if (!DatabaseDescriptor.getAuthenticator().requireAuthentication())
-            this.user = AuthenticatedUser.ANONYMOUS_USER;
-    }
+    client_state(internal_tag) : _is_internal(true) {}
 
     /**
      * @return a ClientState object for internal C* calls (not limited by any kind of auth).
      */
-    public static ClientState forInternalCalls()
-    {
-        return new ClientState();
+    static client_state for_internal_calls() {
+        return client_state(internal_tag());
     }
 
     /**
      * @return a ClientState object for external clients (thrift/native protocol users).
      */
-    public static ClientState forExternalCalls(SocketAddress remoteAddress)
-    {
-        return new ClientState(remoteAddress);
+    static client_state for_external_calls() {
+        return client_state(external_tag());
     }
-#endif
 
     /**
      * This clock guarantees that updates for the same ClientState will be ordered
      * in the sequence seen, even if multiple updates happen in the same millisecond.
      */
-public:
     api::timestamp_type get_timestamp() {
         auto current = db_clock::now().time_since_epoch().count() * 1000;
         auto last = _last_timestamp_micros;

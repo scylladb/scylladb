@@ -84,9 +84,17 @@ struct super_enum {
 };
 
 template<typename Enum>
-struct enum_set {
+class enum_set {
+public:
     using mask_type = size_t; // TODO: use the smallest sufficient type
     using enum_type = typename Enum::enum_type;
+private:
+    mask_type _mask;
+    constexpr enum_set(mask_type mask) : _mask(mask) {}
+public:
+    static constexpr enum_set from_mask(mask_type mask) {
+        return enum_set(mask);
+    }
 
     static inline mask_type mask_for(enum_type e) {
         return mask_type(1) << Enum::sequence_for(e);
@@ -115,6 +123,28 @@ struct enum_set {
     }
 
     static_assert(std::numeric_limits<mask_type>::max() >= ((size_t)1 << Enum::max_sequence), "mask type too small");
+
+    template<enum_type e>
+    bool contains() const {
+        return bool(_mask & mask_for<e>());
+    }
+
+    bool contains(enum_type e) const {
+        return bool(_mask & mask_for(e));
+    }
+
+    template<enum_type e>
+    void remove() {
+        _mask &= ~mask_for<e>();
+    }
+
+    void remove(enum_type e) {
+        _mask &= ~mask_for(e);
+    }
+
+    explicit operator bool() const {
+        return bool(_mask);
+    }
 
     template<enum_type... items>
     struct frozen {
