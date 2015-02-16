@@ -458,7 +458,6 @@ with open(buildfile, 'w') as f:
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
                 f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
-                f.write('   cxxflags=$cxxflags -Wno-error -fpermissive\n')
     f.write(textwrap.dedent('''\
         rule configure
           command = python3 configure.py $configure_args
