@@ -50,6 +50,15 @@ public:
     template <typename... Args>
     future<> invoke_on_all(void (Service::*func)(Args...), Args... args);
 
+    // Invoke a function on all instances of @Service (the local instance
+    // of the service is passed by reference).
+    // The return value becomes ready when all instances have processed
+    // the message.
+    //
+    // @func a functor returning void or future<>
+    template <typename Func>
+    future<> invoke_on_all(Func&& func);
+
     // Invoke a method on all instances of @Service and reduce the results using
     // @Reducer. See ::map_reduce().
     template <typename Reducer, typename Ret, typename... FuncArgs, typename... Args>
@@ -100,6 +109,18 @@ public:
         auto inst = _instances[id];
         smp::submit_to(id, [inst, func, args...] () mutable {
             (inst->*func)(std::forward<Args>(args)...);
+        });
+    }
+
+    // Invoke a function object on a specific instance of the service.
+    //
+    // @func function object, which may return an future, a value, or void.
+    template <typename Func>
+    futurize_t<std::result_of<Func(Service&)>>
+    invoke_on(unsigned id, Func&& func) {
+        auto inst = _instances[id];
+        return smp::submit_to(id, [inst, func] {
+            return func(*inst);
         });
     }
 
@@ -179,6 +200,21 @@ distributed<Service>::invoke_on_all(void (Service::*func)(Args...), Args... args
     return parallel_for_each(_instances.begin(), _instances.end(), [&c, func, args...] (Service* inst) {
         return smp::submit_to(c++, [inst, func, args...] {
             (inst->*func)(args...);
+        });
+    });
+}
+
+template <typename Service>
+template <typename Func>
+inline
+future<>
+distributed<Service>::invoke_on_all(Func&& func) {
+    static_assert(std::is_same<futurize_t<std::result_of_t<Func(Service&)>>, future<>>::value,
+                  "invoke_on_all()'s func must return void or future<>");
+    unsigned c = 0;
+    return parallel_for_each(_instances.begin(), _instances.end(), [&c, &func] (Service* inst) {
+        return smp::submit_to(c++, [inst, func] {
+            return func(*inst);
         });
     });
 }
