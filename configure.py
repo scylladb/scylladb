@@ -397,7 +397,7 @@ with open(buildfile, 'w') as f:
                 command = thrift -gen cpp:cob_style -out $builddir/{mode}/gen $in
                 description = THRIFT $in
             rule antlr3.{mode}
-                command = sed -e '/^#if 0/,/^#endif/d' $in > $builddir/{mode}/gen/cql3/Cql.g && antlr3 $builddir/{mode}/gen/cql3/Cql.g && sed -i 's/^\\( *\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$$/\\1const \\2/' build/release/gen/cql3/CqlParser.cpp
+                command = sed -e '/^#if 0/,/^#endif/d' $in > $builddir/{mode}/gen/cql3/Cql.g && antlr3 $builddir/{mode}/gen/cql3/Cql.g && sed -i 's/^\\( *\)\\(ImplTraits::CommonTokenType\\* [a-zA-Z0-9_]* = NULL;\\)$$/\\1const \\2/' build/{mode}/gen/cql3/CqlParser.cpp
                 description = ANTLR3 $in
             ''').format(mode = mode, **modeval))
         f.write('build {mode}: phony {artifacts}\n'.format(mode = mode,
