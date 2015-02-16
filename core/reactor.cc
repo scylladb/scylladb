@@ -571,6 +571,16 @@ reactor::handle_signal(int signo, std::function<void ()>&& handler) {
             std::make_tuple(signo), std::make_tuple(signo, std::move(handler)));
 }
 
+void
+reactor::handle_signal_once(int signo, std::function<void ()>&& handler) {
+    return handle_signal(signo, [fired = false, handler = std::move(handler)] () mutable {
+        if (!fired) {
+            fired = true;
+            handler();
+        }
+    });
+}
+
 void sigaction(int signo, siginfo_t* siginfo, void* ignore) {
     engine()._pending_signals.fetch_or(1ull << signo, std::memory_order_relaxed);
 }
@@ -691,9 +701,9 @@ int reactor::run() {
 
     if (_id == 0) {
        if (_handle_sigint) {
-          handle_signal(SIGINT, [this] { stop(); });
+          handle_signal_once(SIGINT, [this] { stop(); });
        }
-       handle_signal(SIGTERM, [this] { stop(); });
+       handle_signal_once(SIGTERM, [this] { stop(); });
     }
 
     _cpu_started.wait(smp::count).then([this] {

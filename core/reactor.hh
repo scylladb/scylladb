@@ -729,6 +729,7 @@ public:
     future<io_event> submit_io(Func prepare_io);
 
     void handle_signal(int signo, std::function<void ()>&& handler);
+    void handle_signal_once(int signo, std::function<void ()>&& handler);
 
     int run();
     void exit(int ret);
