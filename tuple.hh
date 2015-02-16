@@ -76,40 +76,39 @@ public:
     bytes decompose_value(const value_type& values) {
         return ::serialize_value(*this, values);
     }
-    value_type deserialize_value(std::istream& in) {
+    value_type deserialize_value(bytes_view v) {
         std::vector<bytes_opt> result;
         result.reserve(types.size());
 
         for (auto&& type : types) {
-            uint32_t u;
-            auto n = in.rdbuf()->sgetn(reinterpret_cast<char *>(&u), sizeof(u));
-            if (!n) {
+            if (v.empty()) {
                 if (AllowPrefixes) {
                     return result;
                 } else {
                     throw marshal_exception();
                 }
             }
-            if (n != sizeof(u)) {
-                throw marshal_exception();
-            }
-            auto len = int32_t(net::ntoh(u));
+            auto len = read_simple<int32_t>(v);
             if (len < 0) {
                 result.emplace_back();
             } else {
-                result.emplace_back(bytes(bytes::initialized_later(), len));
-                auto& b = *result.back();
-                auto n = in.rdbuf()->sgetn(b.begin(), len);
-                if (n != len) {
+                auto positive_len = static_cast<uint32_t>(len);
+                if (v.size() < positive_len) {
                     throw marshal_exception();
                 }
+                result.emplace_back(bytes(v.begin(), v.begin() + positive_len));
+                v.remove_prefix(positive_len);
             }
+        }
+
+        if (!v.empty()) {
+            throw marshal_exception();
         }
 
         return result;
     }
-    object_opt deserialize(std::istream& in) override {
-        return {boost::any(deserialize_value(in))};
+    object_opt deserialize(bytes_view v) override {
+        return {boost::any(deserialize_value(v))};
     }
     void serialize(const boost::any& obj, std::ostream& out) override {
         serialize_value(boost::any_cast<const value_type&>(obj), out);

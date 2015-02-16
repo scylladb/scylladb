@@ -44,17 +44,8 @@ struct int32_type_impl : simple_type_impl<int32_t> {
         auto u = net::hton(uint32_t(v));
         out.write(reinterpret_cast<const char*>(&u), sizeof(u));
     }
-    virtual object_opt deserialize(std::istream& in) {
-        uint32_t u;
-        auto n = in.rdbuf()->sgetn(reinterpret_cast<char*>(&u), sizeof(u));
-        if (!n) {
-            return {};
-        }
-        if (n != 4) {
-            throw marshal_exception();
-        }
-        auto v = int32_t(net::ntoh(u));
-        return boost::any(v);
+    virtual object_opt deserialize(bytes_view v) override {
+        return read_simple_opt<int32_t>(v);
     }
     int32_t compose_value(const bytes& b) {
         if (b.size() != 4) {
@@ -95,17 +86,8 @@ struct long_type_impl : simple_type_impl<int64_t> {
         auto u = net::hton(uint64_t(v));
         out.write(reinterpret_cast<const char*>(&u), sizeof(u));
     }
-    virtual object_opt deserialize(std::istream& in) {
-        uint64_t u;
-        auto n = in.rdbuf()->sgetn(reinterpret_cast<char*>(&u), sizeof(u));
-        if (!n) {
-            return {};
-        }
-        if (n != 8) {
-            throw marshal_exception();
-        }
-        auto v = int64_t(net::ntoh(u));
-        return boost::any(v);
+    virtual object_opt deserialize(bytes_view v) override {
+        return read_simple_opt<int64_t>(v);
     }
     virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
@@ -125,11 +107,9 @@ struct string_type_impl : public abstract_type {
         auto& v = boost::any_cast<const sstring&>(value);
         out.write(v.c_str(), v.size());
     }
-    virtual object_opt deserialize(std::istream& in) {
-        std::vector<char> tmp(std::istreambuf_iterator<char>(in.rdbuf()),
-            std::istreambuf_iterator<char>());
+    virtual object_opt deserialize(bytes_view v) override {
         // FIXME: validation?
-        return boost::any(sstring(tmp.data(), tmp.size()));
+        return boost::any(sstring(v.begin(), v.end()));
     }
     virtual bool less(bytes_view v1, bytes_view v2) override {
         return less_unsigned(v1, v2);
@@ -161,10 +141,8 @@ struct bytes_type_impl final : public abstract_type {
         auto& v = boost::any_cast<const bytes&>(value);
         out.write(v.c_str(), v.size());
     }
-    virtual object_opt deserialize(std::istream& in) {
-        std::vector<char> tmp(std::istreambuf_iterator<char>(in.rdbuf()),
-            std::istreambuf_iterator<char>());
-        return boost::any(bytes(reinterpret_cast<const char*>(tmp.data()), tmp.size()));
+    virtual object_opt deserialize(bytes_view v) override {
+        return boost::any(bytes(v.begin(), v.end()));
     }
     virtual bool less(bytes_view v1, bytes_view v2) override {
         return less_unsigned(v1, v2);
@@ -196,13 +174,14 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         char c = v;
         out.put(c);
     }
-    virtual object_opt deserialize(std::istream& in) override {
-        char tmp;
-        auto n = in.rdbuf()->sgetn(&tmp, 1);
-        if (n == 0) {
+    virtual object_opt deserialize(bytes_view v) override {
+        if (v.empty()) {
             return {};
         }
-        return boost::any(tmp != 0);
+        if (v.size() != 1) {
+            throw marshal_exception();
+        }
+        return boost::any(*v.begin() != 0);
     }
     virtual bytes from_string(sstring_view s) override {
         throw std::runtime_error("not implemented");
@@ -223,16 +202,11 @@ struct date_type_impl : public abstract_type {
         i = net::hton(uint64_t(i));
         out.write(reinterpret_cast<char*>(&i), 8);
     }
-    virtual object_opt deserialize(std::istream& in) override {
-        int64_t tmp;
-        auto n = in.rdbuf()->sgetn(reinterpret_cast<char*>(&tmp), 8);
-        if (n == 0) {
+    virtual object_opt deserialize(bytes_view v) override {
+        if (v.empty()) {
             return {};
         }
-        if (n != 8) {
-            throw marshal_exception();
-        }
-        tmp = net::ntoh(uint64_t(tmp));
+        auto tmp = read_simple_exactly<uint64_t>(v);
         return boost::any(db_clock::time_point(db_clock::duration(tmp)));
     }
     virtual bool less(bytes_view b1, bytes_view b2) override {
@@ -262,16 +236,17 @@ struct timeuuid_type_impl : public abstract_type {
         auto& uuid = boost::any_cast<const utils::UUID&>(value);
         out.write(to_bytes(uuid).begin(), 16);
     }
-    virtual object_opt deserialize(std::istream& in) override {
-        struct tmp { uint64_t msb, lsb; } t;
-        auto n = in.rdbuf()->sgetn(reinterpret_cast<char*>(&t), 16);
-        if (n == 0) {
+    virtual object_opt deserialize(bytes_view v) override {
+        uint64_t msb, lsb;
+        if (v.empty()) {
             return {};
         }
-        if (n != 16) {
+        msb = read_simple<uint64_t>(v);
+        lsb = read_simple<uint64_t>(v);
+        if (!v.empty()) {
             throw marshal_exception();
         }
-        return boost::any(utils::UUID(net::ntoh(t.msb), net::ntoh(t.lsb)));
+        return boost::any(utils::UUID(msb, lsb));
     }
     virtual bool less(bytes_view b1, bytes_view b2) override {
         if (b1.empty()) {
@@ -327,16 +302,12 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
         v = net::hton(v);
         out.write(reinterpret_cast<char*>(&v), 8);
     }
-    virtual object_opt deserialize(std::istream& is) override {
-        uint64_t v;
-        auto n = is.rdbuf()->sgetn(reinterpret_cast<char*>(&v), 8);
-        if (n == 0) {
+    virtual object_opt deserialize(bytes_view in) override {
+        if (in.empty()) {
             return {};
         }
-        if (n != 8) {
-            throw marshal_exception();
-        }
-        return boost::any(db_clock::time_point(db_clock::duration(net::ntoh(v))));
+        auto v = read_simple_exactly<uint64_t>(in);
+        return boost::any(db_clock::time_point(db_clock::duration(v)));
     }
     // FIXME: isCompatibleWith(timestampuuid)
     virtual bytes from_string(sstring_view s) override {
@@ -357,16 +328,16 @@ struct uuid_type_impl : abstract_type {
         auto& uuid = boost::any_cast<const utils::UUID&>(value);
         out.write(to_bytes(uuid).begin(), 16);
     }
-    virtual object_opt deserialize(std::istream& in) override {
-        struct tmp { uint64_t msb, lsb; } t;
-        auto n = in.rdbuf()->sgetn(reinterpret_cast<char*>(&t), 16);
-        if (n == 0) {
+    virtual object_opt deserialize(bytes_view v) override {
+        if (v.empty()) {
             return {};
         }
-        if (n != 16) {
+        auto msb = read_simple<uint64_t>(v);
+        auto lsb = read_simple<uint64_t>(v);
+        if (!v.empty()) {
             throw marshal_exception();
         }
-        return boost::any(utils::UUID(net::ntoh(t.msb), net::ntoh(t.lsb)));
+        return boost::any(utils::UUID(msb, lsb));
     }
     virtual bool less(bytes_view b1, bytes_view b2) override {
         if (b1.size() < 16) {

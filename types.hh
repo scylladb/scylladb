@@ -62,7 +62,6 @@ public:
     abstract_type(sstring name) : _name(name) {}
     virtual ~abstract_type() {}
     virtual void serialize(const boost::any& value, std::ostream& out) = 0;
-    virtual object_opt deserialize(std::istream& in) = 0;
     virtual bool less(bytes_view v1, bytes_view v2) = 0;
     virtual size_t hash(bytes_view v) = 0;
     virtual bool equal(bytes_view v1, bytes_view v2) {
@@ -80,11 +79,7 @@ public:
             return 0;
         }
     }
-    object_opt deserialize(bytes_view v) {
-        // FIXME: optimize
-        std::istringstream iss(std::string(v.begin(), v.end()));
-        return deserialize(iss);
-    }
+    virtual object_opt deserialize(bytes_view v) = 0;
     virtual void validate(const bytes& v) {
         // FIXME
     }
@@ -273,9 +268,7 @@ public:
 template<typename Type>
 static inline
 typename Type::value_type deserialize_value(Type& t, bytes_view v) {
-    // FIXME: optimize
-    std::istringstream iss(std::string(v.begin(), v.end()));
-    return t.deserialize_value(iss);
+    return t.deserialize_value(v);
 }
 
 template<typename Type>
@@ -285,4 +278,37 @@ bytes serialize_value(Type& t, const typename Type::value_type& value) {
     t.serialize_value(value, oss);
     auto s = oss.str();
     return bytes(s.data(), s.size());
+}
+
+template<typename T>
+T read_simple(bytes_view& v) {
+    if (v.size() < sizeof(T)) {
+        throw marshal_exception();
+    }
+    auto p = v.begin();
+    v.remove_prefix(sizeof(T));
+    return net::ntoh(*reinterpret_cast<const T*>(p));
+}
+
+template<typename T>
+T read_simple_exactly(bytes_view& v) {
+    if (v.size() != sizeof(T)) {
+        throw marshal_exception();
+    }
+    auto p = v.begin();
+    v.remove_prefix(sizeof(T));
+    return net::ntoh(*reinterpret_cast<const T*>(p));
+}
+
+template<typename T>
+object_opt read_simple_opt(bytes_view& v) {
+    if (v.empty()) {
+        return {};
+    }
+    if (v.size() != sizeof(T)) {
+        throw marshal_exception();
+    }
+    auto p = v.begin();
+    v.remove_prefix(sizeof(T));
+    return boost::any(net::ntoh(*reinterpret_cast<const T*>(p)));
 }
