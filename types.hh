@@ -48,22 +48,29 @@ public:
     virtual const char* why() const { return _why.c_str(); }
 };
 
+inline int32_t compare_unsigned(bytes_view v1, bytes_view v2) {
+    auto n = memcmp(v1.begin(), v2.begin(), std::min(v1.size(), v2.size()));
+    if (n) {
+        return n;
+    }
+    return (int32_t) (v1.size() - v2.size());
+}
+
 class abstract_type {
     sstring _name;
 public:
     abstract_type(sstring name) : _name(name) {}
     virtual ~abstract_type() {}
     virtual void serialize(const boost::any& value, std::ostream& out) = 0;
-    virtual object_opt deserialize(std::istream& in) = 0;
-    virtual bool less(const bytes& v1, const bytes& v2) = 0;
-    virtual size_t hash(const bytes& v) = 0;
-    virtual bool equal(const bytes& v1, const bytes& v2) {
+    virtual bool less(bytes_view v1, bytes_view v2) = 0;
+    virtual size_t hash(bytes_view v) = 0;
+    virtual bool equal(bytes_view v1, bytes_view v2) {
         if (is_byte_order_equal()) {
-            return v1 == v2;
+            return compare_unsigned(v1, v2) == 0;
         }
         return compare(v1, v2) == 0;
     }
-    virtual int32_t compare(const bytes& v1, const bytes& v2) {
+    virtual int32_t compare(bytes_view v1, bytes_view v2) {
         if (less(v1, v2)) {
             return -1;
         } else if (less(v2, v1)) {
@@ -72,11 +79,7 @@ public:
             return 0;
         }
     }
-    object_opt deserialize(const bytes& v) {
-        // FIXME: optimize
-        std::istringstream iss(v);
-        return deserialize(iss);
-    }
+    virtual object_opt deserialize(bytes_view v) = 0;
     virtual void validate(const bytes& v) {
         // FIXME
     }
@@ -125,9 +128,6 @@ public:
     virtual bool is_collection() { return false; }
     virtual bool is_multi_cell() { return false; }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() = 0;
-protected:
-    template <typename T, typename Compare = std::less<T>>
-    bool default_less(const bytes& b1, const bytes& b2, Compare compare = Compare());
 };
 
 using data_type = shared_ptr<abstract_type>;
@@ -237,16 +237,8 @@ private:
     std::function<int32_t (T& v1, T& v2)> _compare_fn;
 };
 
-inline int32_t compare_unsigned(const bytes& v1, const bytes& v2) {
-    auto n = memcmp(v1.begin(), v2.begin(), std::min(v1.size(), v2.size()));
-    if (n) {
-        return n;
-    }
-    return (int32_t) (v1.size() - v2.size());
-}
-
 inline bool
-less_unsigned(const bytes& v1, const bytes& v2) {
+less_unsigned(bytes_view v1, bytes_view v2) {
     return compare_unsigned(v1, v2) < 0;
 }
 
@@ -272,10 +264,8 @@ public:
 
 template<typename Type>
 static inline
-typename Type::value_type deserialize_value(Type& t, const bytes& v) {
-    // FIXME: optimize
-    std::istringstream iss(v);
-    return t.deserialize_value(iss);
+typename Type::value_type deserialize_value(Type& t, bytes_view v) {
+    return t.deserialize_value(v);
 }
 
 template<typename Type>
@@ -285,4 +275,37 @@ bytes serialize_value(Type& t, const typename Type::value_type& value) {
     t.serialize_value(value, oss);
     auto s = oss.str();
     return bytes(s.data(), s.size());
+}
+
+template<typename T>
+T read_simple(bytes_view& v) {
+    if (v.size() < sizeof(T)) {
+        throw marshal_exception();
+    }
+    auto p = v.begin();
+    v.remove_prefix(sizeof(T));
+    return net::ntoh(*reinterpret_cast<const T*>(p));
+}
+
+template<typename T>
+T read_simple_exactly(bytes_view& v) {
+    if (v.size() != sizeof(T)) {
+        throw marshal_exception();
+    }
+    auto p = v.begin();
+    v.remove_prefix(sizeof(T));
+    return net::ntoh(*reinterpret_cast<const T*>(p));
+}
+
+template<typename T>
+object_opt read_simple_opt(bytes_view& v) {
+    if (v.empty()) {
+        return {};
+    }
+    if (v.size() != sizeof(T)) {
+        throw marshal_exception();
+    }
+    auto p = v.begin();
+    v.remove_prefix(sizeof(T));
+    return boost::any(net::ntoh(*reinterpret_cast<const T*>(p)));
 }
