@@ -1425,19 +1425,27 @@ void tcp<InetTraits>::tcb::output_one() {
     offload_info oi;
     checksummer csum;
     InetTraits::tcp_pseudo_header_checksum(csum, _local_ip, _foreign_ip, sizeof(*th) + options_size + len);
+    oi.tcp_hdr_len = sizeof(tcp_hdr) + options_size;
+
     if (_tcp.hw_features().tx_csum_l4_offload) {
         // tx checksum offloading - both virtio-net's VIRTIO_NET_F_CSUM
         // dpdk's PKT_TX_TCP_CKSUM - requires th->checksum to be
         // initialized to ones' complement sum of the pseudo header.
         th->checksum = ~csum.get();
         oi.needs_csum = true;
+
+        if (_tcp.hw_features().tx_tso &&
+            p.len() > _snd.mss + sizeof(eth_hdr) + oi.ip_hdr_len +
+                      oi.tcp_hdr_len) {
+            oi.tso_seg_size = _snd.mss;
+        }
     } else {
         csum.sum(p);
         th->checksum = csum.get();
         oi.needs_csum = false;
     }
     oi.protocol = ip_protocol_num::tcp;
-    oi.tcp_hdr_len = sizeof(tcp_hdr) + options_size;
+
     p.set_offload_info(oi);
 
     if (len || syn_on || fin_on) {

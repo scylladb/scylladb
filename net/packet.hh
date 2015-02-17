@@ -29,6 +29,7 @@ struct offload_info {
     uint8_t udp_hdr_len = 8;
     bool needs_ip_csum = false;
     bool reassembled = false;
+    uint16_t tso_seg_size = 0;
     // HW stripped VLAN header (CPU order)
     std::experimental::optional<uint16_t> vlan_tci;
 };

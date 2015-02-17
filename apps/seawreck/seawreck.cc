@@ -199,6 +199,7 @@ int main(int ac, char** av) {
                // properly, becasue we exit too earily and the FIN packets are
                // not exchanged.
                 delete http_clients;
+                engine().exit(0);
            });
         });
     });

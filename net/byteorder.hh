@@ -21,6 +21,8 @@ namespace net {
 inline void ntoh() {}
 inline void hton() {}
 
+inline uint8_t ntoh(uint8_t x) { return x; }
+inline uint8_t hton(uint8_t x) { return x; }
 inline uint16_t ntoh(uint16_t x) { return ntohs(x); }
 inline uint16_t hton(uint16_t x) { return htons(x); }
 inline uint32_t ntoh(uint32_t x) { return ntohl(x); }
@@ -28,6 +30,8 @@ inline uint32_t hton(uint32_t x) { return htonl(x); }
 inline uint64_t ntoh(uint64_t x) { return ntohq(x); }
 inline uint64_t hton(uint64_t x) { return htonq(x); }
 
+inline int8_t ntoh(int8_t x) { return x; }
+inline int8_t hton(int8_t x) { return x; }
 inline int16_t ntoh(int16_t x) { return ntohs(x); }
 inline int16_t hton(int16_t x) { return htons(x); }
 inline int32_t ntoh(int32_t x) { return ntohl(x); }
