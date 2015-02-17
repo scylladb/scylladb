@@ -337,16 +337,28 @@ class dpdk_qp : public net::qp {
             auto oi = p.offload_info();
             if (oi.needs_ip_csum) {
                 head->ol_flags |= PKT_TX_IP_CKSUM;
+                // TODO: Take a VLAN header into an account here
                 rte_mbuf_l2_len(head) = sizeof(struct ether_hdr);
                 rte_mbuf_l3_len(head) = oi.ip_hdr_len;
             }
             if (dev.hw_features().tx_csum_l4_offload) {
                 if (oi.protocol == ip_protocol_num::tcp) {
                     head->ol_flags |= PKT_TX_TCP_CKSUM;
+                    // TODO: Take a VLAN header into an account here
                     rte_mbuf_l2_len(head) = sizeof(struct ether_hdr);
                     rte_mbuf_l3_len(head) = oi.ip_hdr_len;
+
+#ifndef RTE_VERSION_1_7 // TSO is supported starting from 1.8
+                    if (oi.tso_seg_size) {
+                        assert(oi.needs_ip_csum);
+                        head->ol_flags |= PKT_TX_TCP_SEG;
+                        head->l4_len = oi.tcp_hdr_len;
+                        head->tso_segsz = oi.tso_seg_size;
+                    }
+#endif
                 } else if (oi.protocol == ip_protocol_num::udp) {
                     head->ol_flags |= PKT_TX_UDP_CKSUM;
+                    // TODO: Take a VLAN header into an account here
                     rte_mbuf_l2_len(head) = sizeof(struct ether_hdr);
                     rte_mbuf_l3_len(head) = oi.ip_hdr_len;
                 }
@@ -1032,6 +1044,22 @@ int dpdk_device::init_port_start()
         printf("TX ip checksum offload supported\n");
         _hw_features.tx_csum_ip_offload = 1;
     }
+
+    // TSO is supported starting from DPDK v1.8
+#ifndef RTE_VERSION_1_7
+    if (_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_TSO) {
+        printf("TSO is supported\n");
+        _hw_features.tx_tso = 1;
+    }
+
+    // There is no UFO support in the PMDs yet.
+#if 0
+    if (_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_TSO) {
+        printf("UFO is supported\n");
+        _hw_features.tx_ufo = 1;
+    }
+#endif
+#endif
 
     // Check that Tx TCP and UDP CSUM features are either all set all together
     // or not set all together. If this assumption breaks we need to rework the
