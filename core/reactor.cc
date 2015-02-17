@@ -962,8 +962,10 @@ void smp_message_queue::respond(work_item* item) {
 }
 
 void smp_message_queue::flush_response_batch() {
-    _completed.push(_completed_fifo.begin(), _completed_fifo.end());
-    _completed_fifo.clear();
+    if (!_completed_fifo.empty()) {
+        _completed.push(_completed_fifo.begin(), _completed_fifo.end());
+        _completed_fifo.clear();
+    }
 }
 
 template<size_t PrefetchCnt, typename Func>
