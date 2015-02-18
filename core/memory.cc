@@ -970,6 +970,16 @@ void* memalign(size_t align, size_t size) {
 }
 
 extern "C"
+[[gnu::visibility("default")]]
+void *aligned_alloc(size_t align, size_t size) {
+    try {
+        return allocate_aligned(align, size);
+    } catch (std::bad_alloc&) {
+        return NULL;
+    }
+}
+
+extern "C"
 [[gnu::alias("memalign")]]
 [[gnu::visibility("default")]]
 void* __libc_memalign(size_t align, size_t size);

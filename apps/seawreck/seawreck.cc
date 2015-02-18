@@ -113,7 +113,7 @@ public:
                 _sockets.push_back(std::move(fd));
                 http_debug("Established connection %6d on cpu %3d\n", _conn_connected.current(), engine().cpu_id());
                 _conn_connected.signal();
-            });
+            }).or_terminate();
         }
         return _conn_connected.wait(_conn_per_core);
     }
