@@ -323,7 +323,21 @@ private:
         void output() {
             if (!_poll_active) {
                 _poll_active = true;
-                _tcp.poll_tcb(_foreign_ip, this->shared_from_this());
+                _tcp.poll_tcb(_foreign_ip, this->shared_from_this()).rescue([this] (auto get) {
+                    try {
+                        get();
+                    } catch(arp_queue_full_error& ex) {
+                        // retry later
+                        _poll_active = false;
+                        this->start_retransmit_timer();
+                    } catch(arp_timeout_error& ex) {
+                        if (this->in_state(SYN_SENT)) {
+                            _connect_done.set_exception(ex);
+                            this->cleanup();
+                        }
+                        // in other states connection should time out
+                    }
+                });
             }
         }
         future<> connect_done() {
@@ -561,7 +575,7 @@ public:
     listener listen(uint16_t port, size_t queue_length = 100);
     future<connection> connect(socket_address sa);
     net::hw_features hw_features() { return _inet._inet.hw_features(); }
-    void poll_tcb(ipaddr to, lw_shared_ptr<tcb> tcb);
+    future<> poll_tcb(ipaddr to, lw_shared_ptr<tcb> tcb);
 private:
     void send_packet_without_tcb(ipaddr from, ipaddr to, packet p);
     void respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr foreign_ip);
@@ -596,9 +610,9 @@ tcp<InetTraits>::tcp(inet_type& inet) : _inet(inet), _e(_rd()) {
 }
 
 template <typename InetTraits>
-void tcp<InetTraits>::poll_tcb(ipaddr to, lw_shared_ptr<tcb> tcb) {
-    _inet.get_l2_dst_address(to).then([this, tcb = std::move(tcb)] (ethernet_address dst) {
-        _poll_tcbs.emplace_back(std::move(tcb), dst);
+future<> tcp<InetTraits>::poll_tcb(ipaddr to, lw_shared_ptr<tcb> tcb) {
+    return  _inet.get_l2_dst_address(to).then([this, tcb = std::move(tcb)] (ethernet_address dst) {
+            _poll_tcbs.emplace_back(std::move(tcb), dst);
     });
 }
 
