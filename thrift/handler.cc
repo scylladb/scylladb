@@ -2,6 +2,11 @@
  * Copyright 2014 Cloudius Systems
  */
 
+// Some thrift headers include other files from within namespaces,
+// which is totally broken.  Include those files here to avoid
+// breakage:
+#include <sys/param.h>
+// end thrift workaround
 #include "Cassandra.h"
 #include "database.hh"
 #include "core/sstring.hh"
