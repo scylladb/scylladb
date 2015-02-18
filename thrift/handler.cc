@@ -43,6 +43,27 @@ void complete_with_exception(tcxx::function<void (::apache::thrift::TDelayedExce
     exn_cob(TDelayedException::delayException(make_exception<Ex>(fmt, std::forward<Args>(args)...)));
 }
 
+class delayed_exception_wrapper : public ::apache::thrift::TDelayedException {
+    std::exception_ptr _ex;
+public:
+    delayed_exception_wrapper(std::exception_ptr ex) : _ex(std::move(ex)) {}
+    virtual void throw_it() override {
+        std::rethrow_exception(std::move(_ex));
+    }
+};
+
+template <typename... T>
+void complete(future<T...>& fut,
+        const tcxx::function<void (const T&...)>& cob,
+        const tcxx::function<void (::apache::thrift::TDelayedException* _throw)>& exn_cob) {
+    try {
+        apply(std::move(cob), fut.get());
+    } catch (...) {
+        delayed_exception_wrapper dew(std::current_exception());
+        exn_cob(&dew);
+    }
+}
+
 class CassandraAsyncHandler : public CassandraCobSvIf {
     database& _db;
     keyspace* _ks = nullptr;  // FIXME: reference counting for in-use detection?
