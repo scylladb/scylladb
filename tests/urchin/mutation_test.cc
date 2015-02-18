@@ -50,7 +50,6 @@ BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
 
     column_family cf(s);
 
-    column_definition& r1_col = *s->get_column_definition("r1");
     partition_key key = to_bytes("key1");
 
     clustering_key c_key1 = s->clustering_key_type->decompose_value(
