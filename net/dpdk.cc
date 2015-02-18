@@ -1013,6 +1013,8 @@ int dpdk_device::init_port_start()
             _rss_table_bits = std::lround(std::log2(_dev_info.max_rx_queues));
         }
 #endif
+    } else {
+        _redir_table.push_back(0);
     }
 
     // Set Rx VLAN stripping
