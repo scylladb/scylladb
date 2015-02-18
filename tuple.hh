@@ -88,10 +88,12 @@ public:
                 if (!_v.empty()) {
                     throw marshal_exception();
                 }
+                _v = bytes_view(nullptr, 0);
                 return;
             }
             if (_v.empty()) {
                 if (AllowPrefixes) {
+                    _v = bytes_view(nullptr, 0);
                     return;
                 } else {
                     throw marshal_exception();
@@ -114,9 +116,7 @@ public:
         component_iterator(const tuple_type& t, const bytes_view& v) : _types_left(t._types.size()), _v(v) {
             read_current();
         }
-        component_iterator(end_iterator_tag, const bytes_view& v) : _v(v) {
-            _v.remove_prefix(_v.size());
-        }
+        component_iterator(end_iterator_tag, const bytes_view& v) : _v(nullptr, 0) {}
         component_iterator& operator++() {
             --_types_left;
             read_current();
