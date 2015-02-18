@@ -6,6 +6,7 @@
 #include "core/reactor.hh"
 #include "core/scollectd.hh"
 #include "core/print.hh"
+#include "stdio.hh"
 #include <boost/program_options.hpp>
 #include <boost/make_shared.hpp>
 #include <fstream>
@@ -70,6 +71,8 @@ app_template::run(int ac, char ** av, std::function<void ()>&& func) {
         std::cout << _opts << "\n";
         return 1;
     }
+    // intentional leak
+    stdout = smp_synchronize_lines(stdout);
     smp::configure(configuration);
     _configuration = {std::move(configuration)};
     engine().when_started().then([this] {
