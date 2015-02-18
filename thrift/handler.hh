@@ -7,8 +7,9 @@
 
 #include "Cassandra.h"
 #include "database.hh"
+#include "core/distributed.hh"
 #include <memory>
 
-std::unique_ptr<org::apache::cassandra::CassandraCobSvIfFactory> create_handler_factory(database& db);
+std::unique_ptr<org::apache::cassandra::CassandraCobSvIfFactory> create_handler_factory(distributed<database>& db);
 
 #endif /* APPS_SEASTAR_THRIFT_HANDLER_HH_ */

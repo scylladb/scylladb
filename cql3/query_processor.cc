@@ -88,7 +88,7 @@ query_processor::get_statement(const sstring_view& query, service::client_state&
 #if 0
         Tracing.trace("Preparing statement");
 #endif
-    return statement->prepare(_db);
+    return statement->prepare(_db.local());
 }
 
 ::shared_ptr<parsed_statement>

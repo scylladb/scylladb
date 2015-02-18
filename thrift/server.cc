@@ -36,7 +36,7 @@ public:
     thrift_stats(thrift_server& server);
 };
 
-thrift_server::thrift_server(database& db)
+thrift_server::thrift_server(distributed<database>& db)
         : _stats(new thrift_stats(*this))
         , _handler_factory(create_handler_factory(db).release())
         , _protocol_factory(new TBinaryProtocolFactoryT<TMemoryBuffer>())

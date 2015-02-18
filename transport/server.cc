@@ -230,7 +230,7 @@ private:
     sstring make_frame(uint8_t version, size_t length);
 };
 
-cql_server::cql_server(database& db)
+cql_server::cql_server(distributed<database>& db)
     : _proxy(db)
     , _query_processor(_proxy, db)
 {

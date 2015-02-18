@@ -8,6 +8,7 @@
 #include <sys/param.h>
 // end thrift workaround
 #include "Cassandra.h"
+#include "core/distributed.hh"
 #include "database.hh"
 #include "core/sstring.hh"
 #include "core/print.hh"
@@ -65,12 +66,12 @@ void complete(future<T...>& fut,
 }
 
 class CassandraAsyncHandler : public CassandraCobSvIf {
-    database& _db;
+    distributed<database>& _db;
     keyspace* _ks = nullptr;  // FIXME: reference counting for in-use detection?
     sstring _ks_name;
     sstring _cql_version;
 public:
-    explicit CassandraAsyncHandler(database& db) : _db(db) {}
+    explicit CassandraAsyncHandler(distributed<database>& db) : _db(db) {}
     void login(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const AuthenticationRequest& auth_request) {
         // FIXME: implement
         return unimplemented(exn_cob);
@@ -78,7 +79,7 @@ public:
 
     void set_keyspace(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
         try {
-            _ks = &_db.keyspaces.at(keyspace);
+            _ks = &_db.local().keyspaces.at(keyspace);
             _ks_name = keyspace;
             cob();
         } catch (std::out_of_range& e) {
@@ -212,10 +213,15 @@ public:
         }
         static bytes null_clustering_key = to_bytes("");
         try {
-            for (auto&& key_cf : mutation_map) {
+            // Would like to use move_iterator below, but Mutation is filled with some const stuff.
+            parallel_for_each(mutation_map.begin(), mutation_map.end(),
+                    [this] (std::pair<std::string, std::map<std::string, std::vector<Mutation>>> key_cf) {
                 bytes key = to_bytes(key_cf.first);
-                const std::map<std::string, std::vector<Mutation>>& cf_mutations_map = key_cf.second;
-                for (auto&& cf_mutations : cf_mutations_map) {
+                std::map<std::string, std::vector<Mutation>>& cf_mutations_map = key_cf.second;
+                return parallel_for_each(
+                        boost::make_move_iterator(cf_mutations_map.begin()),
+                        boost::make_move_iterator(cf_mutations_map.end()),
+                        [this, key] (std::pair<std::string, std::vector<Mutation>> cf_mutations) {
                     sstring cf_name = cf_mutations.first;
                     const std::vector<Mutation>& mutations = cf_mutations.second;
                     auto& cf = lookup_column_family(cf_name);
@@ -259,13 +265,19 @@ public:
                             throw make_exception<InvalidRequestException>("Mutation must have either column or deletion");
                         }
                     }
-                    cf.apply(std::move(m_to_apply));
-                }
-            }
+                    return _db.invoke_on_all([this, cf_name, m_to_apply = std::move(m_to_apply)] (database& db) {
+                        auto& ks = db.keyspaces.at(_ks_name);
+                        auto& cf = ks.column_families.at(cf_name);
+                        cf.apply(std::move(m_to_apply));
+                    });
+                });
+            }).then_wrapped([this, cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<> ret) {
+                complete(ret, cob, exn_cob);
+                return make_ready_future<>();
+            });
         } catch (std::exception& ex) {
-            return exn_cob(TDelayedException::delayException(ex));
+            abort();
         }
-        cob();
     }
 
     void atomic_batch_mutate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::map<std::string, std::map<std::string, std::vector<Mutation> > > & mutation_map, const ConsistencyLevel::type consistency_level) {
@@ -376,31 +388,37 @@ public:
 
     void system_add_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
         std::string schema_id = "schema-id";  // FIXME: make meaningful
-        if (_db.keyspaces.count(ks_def.name)) {
+        if (_db.local().keyspaces.count(ks_def.name)) {
             InvalidRequestException ire;
             ire.why = sprint("Keyspace %s already exists", ks_def.name);
             exn_cob(TDelayedException::delayException(ire));
         }
-        keyspace& ks = _db.keyspaces[ks_def.name];
-        for (const CfDef& cf_def : ks_def.cf_defs) {
-            std::vector<schema::column> partition_key;
-            std::vector<schema::column> clustering_key;
-            std::vector<schema::column> regular_columns;
-            // FIXME: get this from comparator
-            auto column_name_type = utf8_type;
-            // FIXME: look at key_alias and key_validator first
-            partition_key.push_back({"key", bytes_type});
-            // FIXME: guess clustering keys
-            for (const ColumnDef& col_def : cf_def.column_metadata) {
-                // FIXME: look at all fields, not just name
-                regular_columns.push_back({to_bytes(col_def.name), bytes_type});
+        _db.invoke_on_all([this, ks_def = std::move(ks_def)] (database& db) {
+            keyspace& ks = db.keyspaces[ks_def.name];
+            for (const CfDef& cf_def : ks_def.cf_defs) {
+                std::vector<schema::column> partition_key;
+                std::vector<schema::column> clustering_key;
+                std::vector<schema::column> regular_columns;
+                // FIXME: get this from comparator
+                auto column_name_type = utf8_type;
+                // FIXME: look at key_alias and key_validator first
+                partition_key.push_back({"key", bytes_type});
+                // FIXME: guess clustering keys
+                for (const ColumnDef& col_def : cf_def.column_metadata) {
+                    // FIXME: look at all fields, not just name
+                    regular_columns.push_back({to_bytes(col_def.name), bytes_type});
+                }
+                auto s = make_lw_shared<schema>(ks_def.name, cf_def.name,
+                    std::move(partition_key), std::move(clustering_key), std::move(regular_columns), column_name_type);
+                column_family cf(s);
+                ks.column_families.emplace(cf_def.name, std::move(cf));
             }
-            auto s = make_lw_shared<schema>(ks_def.name, cf_def.name,
-                std::move(partition_key), std::move(clustering_key), std::move(regular_columns), column_name_type);
-            column_family cf(s);
-            ks.column_families.emplace(cf_def.name, std::move(cf));
-        }
-        cob(schema_id);
+        }).then([schema_id = std::move(schema_id)] {
+            return make_ready_future<std::string>(std::move(schema_id));
+        }).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<std::string> result) {
+            complete(result, cob, exn_cob);
+            return make_ready_future<>();
+        });
     }
 
     void system_drop_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
@@ -477,9 +495,9 @@ private:
 };
 
 class handler_factory : public CassandraCobSvIfFactory {
-    database& _db;
+    distributed<database>& _db;
 public:
-    explicit handler_factory(database& db) : _db(db) {}
+    explicit handler_factory(distributed<database>& db) : _db(db) {}
     typedef CassandraCobSvIf Handler;
     virtual CassandraCobSvIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) {
         return new CassandraAsyncHandler(_db);
@@ -490,6 +508,6 @@ public:
 };
 
 std::unique_ptr<CassandraCobSvIfFactory>
-create_handler_factory(database& db) {
+create_handler_factory(distributed<database>& db) {
     return std::make_unique<handler_factory>(db);
 }

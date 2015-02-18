@@ -223,12 +223,20 @@ public:
     column_family* find_column_family(const sstring& cf_name);
 };
 
+// Policy for distributed<database>:
+//   broadcast writes
+//   local reads
+
 class database {
 public:
     std::unordered_map<sstring, keyspace> keyspaces;
+    future<> init_from_data_directory(sstring datadir);
     static future<database> populate(sstring datadir);
     keyspace* find_keyspace(const sstring& name);
     future<> stop() { return make_ready_future<>(); }
+    void assign(database&& db) {
+        *this = std::move(db);
+    }
 };
 
 #endif /* DATABASE_HH_ */

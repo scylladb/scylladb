@@ -204,6 +204,13 @@ future<database> database::populate(sstring datadir) {
     });
 }
 
+future<>
+database::init_from_data_directory(sstring datadir) {
+    return populate(datadir).then([this] (database&& db) {
+        *this = db;
+    });
+}
+
 column_definition::column_definition(bytes name, data_type type, column_id id, column_kind kind)
     : _name(std::move(name))
     , type(std::move(type))
