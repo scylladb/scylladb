@@ -212,72 +212,68 @@ public:
             return complete_with_exception<InvalidRequestException>(std::move(exn_cob), "keyspace not set");
         }
         static bytes null_clustering_key = to_bytes("");
-        try {
-            // Would like to use move_iterator below, but Mutation is filled with some const stuff.
-            parallel_for_each(mutation_map.begin(), mutation_map.end(),
-                    [this] (std::pair<std::string, std::map<std::string, std::vector<Mutation>>> key_cf) {
-                bytes key = to_bytes(key_cf.first);
-                std::map<std::string, std::vector<Mutation>>& cf_mutations_map = key_cf.second;
-                return parallel_for_each(
-                        boost::make_move_iterator(cf_mutations_map.begin()),
-                        boost::make_move_iterator(cf_mutations_map.end()),
-                        [this, key] (std::pair<std::string, std::vector<Mutation>> cf_mutations) {
-                    sstring cf_name = cf_mutations.first;
-                    const std::vector<Mutation>& mutations = cf_mutations.second;
-                    auto& cf = lookup_column_family(cf_name);
-                    mutation m_to_apply(key, cf._schema);
-                    for (const Mutation& m : mutations) {
-                        if (m.__isset.column_or_supercolumn) {
-                            auto&& cosc = m.column_or_supercolumn;
-                            if (cosc.__isset.column) {
-                                auto&& col = cosc.column;
-                                bytes cname = to_bytes(col.name);
-                                auto def = cf._schema->get_column_definition(cname);
-                                if (!def) {
-                                    throw make_exception<InvalidRequestException>("column %s not found", col.name);
-                                }
-                                if (def->kind != column_definition::column_kind::REGULAR) {
-                                    throw make_exception<InvalidRequestException>("Column %s is not settable", col.name);
-                                }
-                                gc_clock::duration ttl;
-                                if (col.__isset.ttl) {
-                                    ttl = std::chrono::duration_cast<gc_clock::duration>(std::chrono::seconds(col.ttl));
-                                }
-                                if (ttl.count() <= 0) {
-                                    ttl = cf._schema->default_time_to_live;
-                                }
-                                auto ttl_option = ttl.count() > 0 ? ttl_opt(gc_clock::now() + ttl) : ttl_opt();
-                                m_to_apply.set_clustered_cell(null_clustering_key, *def,
-                                    atomic_cell{col.timestamp, atomic_cell::live{ttl_option, to_bytes(col.value)}});
-                            } else if (cosc.__isset.super_column) {
-                                // FIXME: implement
-                            } else if (cosc.__isset.counter_column) {
-                                // FIXME: implement
-                            } else if (cosc.__isset.counter_super_column) {
-                                // FIXME: implement
-                            } else {
-                                throw make_exception<InvalidRequestException>("Empty ColumnOrSuperColumn");
+        // Would like to use move_iterator below, but Mutation is filled with some const stuff.
+        parallel_for_each(mutation_map.begin(), mutation_map.end(),
+                [this] (std::pair<std::string, std::map<std::string, std::vector<Mutation>>> key_cf) {
+            bytes key = to_bytes(key_cf.first);
+            std::map<std::string, std::vector<Mutation>>& cf_mutations_map = key_cf.second;
+            return parallel_for_each(
+                    boost::make_move_iterator(cf_mutations_map.begin()),
+                    boost::make_move_iterator(cf_mutations_map.end()),
+                    [this, key] (std::pair<std::string, std::vector<Mutation>> cf_mutations) {
+                sstring cf_name = cf_mutations.first;
+                const std::vector<Mutation>& mutations = cf_mutations.second;
+                auto& cf = lookup_column_family(cf_name);
+                mutation m_to_apply(key, cf._schema);
+                for (const Mutation& m : mutations) {
+                    if (m.__isset.column_or_supercolumn) {
+                        auto&& cosc = m.column_or_supercolumn;
+                        if (cosc.__isset.column) {
+                            auto&& col = cosc.column;
+                            bytes cname = to_bytes(col.name);
+                            auto def = cf._schema->get_column_definition(cname);
+                            if (!def) {
+                                throw make_exception<InvalidRequestException>("column %s not found", col.name);
                             }
-                        } else if (m.__isset.deletion) {
+                            if (def->kind != column_definition::column_kind::REGULAR) {
+                                throw make_exception<InvalidRequestException>("Column %s is not settable", col.name);
+                            }
+                            gc_clock::duration ttl;
+                            if (col.__isset.ttl) {
+                                ttl = std::chrono::duration_cast<gc_clock::duration>(std::chrono::seconds(col.ttl));
+                            }
+                            if (ttl.count() <= 0) {
+                                ttl = cf._schema->default_time_to_live;
+                            }
+                            auto ttl_option = ttl.count() > 0 ? ttl_opt(gc_clock::now() + ttl) : ttl_opt();
+                            m_to_apply.set_clustered_cell(null_clustering_key, *def,
+                                atomic_cell{col.timestamp, atomic_cell::live{ttl_option, to_bytes(col.value)}});
+                        } else if (cosc.__isset.super_column) {
                             // FIXME: implement
-                            abort();
+                        } else if (cosc.__isset.counter_column) {
+                            // FIXME: implement
+                        } else if (cosc.__isset.counter_super_column) {
+                            // FIXME: implement
                         } else {
-                            throw make_exception<InvalidRequestException>("Mutation must have either column or deletion");
+                            throw make_exception<InvalidRequestException>("Empty ColumnOrSuperColumn");
                         }
+                    } else if (m.__isset.deletion) {
+                        // FIXME: implement
+                        abort();
+                    } else {
+                        throw make_exception<InvalidRequestException>("Mutation must have either column or deletion");
                     }
-                    return _db.invoke_on_all([this, cf_name, m_to_apply = std::move(m_to_apply)] (database& db) {
-                        auto& ks = db.keyspaces.at(_ks_name);
-                        auto& cf = ks.column_families.at(cf_name);
-                        cf.apply(std::move(m_to_apply));
-                    });
+                }
+                return _db.invoke_on_all([this, cf_name, m_to_apply = std::move(m_to_apply)] (database& db) {
+                    auto& ks = db.keyspaces.at(_ks_name);
+                    auto& cf = ks.column_families.at(cf_name);
+                    cf.apply(std::move(m_to_apply));
                 });
-            }).then_wrapped([this, cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<> ret) {
-                complete(ret, cob, exn_cob);
-                return make_ready_future<>();
             });
-        } catch (std::exception& ex) {
-            abort();
-        }
+        }).then_wrapped([this, cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<> ret) {
+            complete(ret, cob, exn_cob);
+            return make_ready_future<>();
+        });
     }
 
     void atomic_batch_mutate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::map<std::string, std::map<std::string, std::vector<Mutation> > > & mutation_map, const ConsistencyLevel::type consistency_level) {
