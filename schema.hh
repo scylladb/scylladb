@@ -6,6 +6,7 @@
 
 #include <unordered_map>
 #include <boost/range/iterator_range.hpp>
+#include <boost/range/join.hpp>
 
 #include "cql3/column_specification.hh"
 #include "core/shared_ptr.hh"
@@ -143,6 +144,12 @@ public:
     // Returns a range of column definitions
     auto regular_columns() const {
         return boost::make_iterator_range(_regular_columns.begin(), _regular_columns.end());
+    }
+    // Returns a range of column definitions
+    auto all_columns_in_select_order() const {
+        return boost::join(partition_key_columns(),
+            boost::join(clustering_key_columns(),
+            boost::join(static_columns(), regular_columns())));
     }
 };
 
