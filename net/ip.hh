@@ -368,7 +368,7 @@ public:
     tcp<ipv4_traits>& get_tcp() { return *_tcp._tcp; }
     ipv4_udp& get_udp() { return _udp; }
     void register_l4(proto_type id, ip_protocol* handler);
-    net::hw_features hw_features() { return _netif->hw_features(); }
+    const net::hw_features& hw_features() const { return _netif->hw_features(); }
     static bool needs_frag(packet& p, ip_protocol_num proto_num, net::hw_features hw_features);
     void learn(ethernet_address l2, ipv4_address l3) {
         _arp.learn(l2, l3);
