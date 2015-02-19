@@ -419,11 +419,15 @@ class smp_message_queue {
         size_t _last_cmpl_batch = 0;
         size_t _current_queue_length = 0;
     };
+    // keep this between two structures with statistics
+    // this makes sure that they have at least one cache line
+    // between them, so hw prefecther will not accidentally prefetch
+    // cache line used by aother cpu.
+    std::vector<scollectd::registration> _collectd_regs;
     struct alignas(64) {
         size_t _received = 0;
         size_t _last_rcv_batch = 0;
     };
-    std::vector<scollectd::registration> _collectd_regs;
     struct work_item {
         virtual ~work_item() {}
         virtual future<> process() = 0;
