@@ -75,13 +75,19 @@ static constexpr uint16_t mbufs_per_queue_tx     = 2 * default_ring_size;
 static constexpr uint16_t mbuf_cache_size        = 512;
 static constexpr uint16_t mbuf_overhead          =
                                  sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM;
-static constexpr size_t   mbuf_data_size         = 2048;
+//
+// We'll allocate 2K data buffers for an inline case because this would require
+// a single page per mbuf. If we used 4K data buffers here it would require 2
+// pages for a single buffer (due to "mbuf_overhead") and this is a much more
+// demanding memory constraint.
+//
+static constexpr size_t   inline_mbuf_data_size  = 2048;
 
-// (MBUF_DATA_SIZE(2K) * 32 = 64K = Max TSO/LRO size) + 1 mbuf for headers
+// (INLINE_MBUF_DATA_SIZE(2K)*32 = 64K = Max TSO/LRO size) + 1 mbuf for headers
 static constexpr uint8_t  max_frags              = 32 + 1;
 
-static constexpr uint16_t mbuf_size              =
-                                mbuf_data_size + mbuf_overhead;
+static constexpr uint16_t inline_mbuf_size       =
+                                inline_mbuf_data_size + mbuf_overhead;
 
 uint32_t qp_mempool_obj_size()
 {
@@ -94,14 +100,16 @@ uint32_t qp_mempool_obj_size()
     //
 
     // Rx
-    mp_size += align_up(rte_mempool_calc_obj_size(mbuf_size, 0, &mp_obj_sz) +
+    mp_size += 
+            align_up(rte_mempool_calc_obj_size(inline_mbuf_size, 0, &mp_obj_sz) +
                                         sizeof(struct rte_pktmbuf_pool_private),
-                                         memory::huge_page_size);
+                                               memory::huge_page_size);
     //Tx
     std::memset(&mp_obj_sz, 0, sizeof(mp_obj_sz));
-    mp_size += align_up(rte_mempool_calc_obj_size(mbuf_size, 0, &mp_obj_sz) +
+    mp_size += align_up(rte_mempool_calc_obj_size(inline_mbuf_size, 0,
+                                                  &mp_obj_sz)+
                                         sizeof(struct rte_pktmbuf_pool_private),
-                                         memory::huge_page_size);
+                                                  memory::huge_page_size);
     return mp_size;
 }
 
@@ -553,7 +561,7 @@ class dpdk_qp : public net::qp {
                 return 0;
             }
 
-            size_t len = std::min(buf_len, mbuf_data_size);
+            size_t len = std::min(buf_len, inline_mbuf_data_size);
 
             m = buf->rte_mbuf_p();
 
@@ -725,7 +733,8 @@ class dpdk_qp : public net::qp {
                 std::vector<phys_addr_t> mappings;
 
                 _xmem.reset(dpdk_qp::alloc_mempool_xmem(mbufs_per_queue_tx,
-                                                        mbuf_size, mappings));
+                                                        inline_mbuf_size,
+                                                        mappings));
                 if (!_xmem.get()) {
                     printf("Can't allocate a memory for Tx buffers\n");
                     exit(1);
@@ -738,7 +747,7 @@ class dpdk_qp : public net::qp {
                 //
                 _pool =
                     rte_mempool_xmem_create(name.c_str(),
-                                       mbufs_per_queue_tx, mbuf_size,
+                                       mbufs_per_queue_tx, inline_mbuf_size,
                                        mbuf_cache_size,
                                        sizeof(struct rte_pktmbuf_pool_private),
                                        rte_pktmbuf_pool_init, nullptr,
@@ -750,7 +759,7 @@ class dpdk_qp : public net::qp {
             } else {
                 _pool =
                      rte_mempool_create(name.c_str(),
-                                       mbufs_per_queue_tx, mbuf_size,
+                                       mbufs_per_queue_tx, inline_mbuf_size,
                                        mbuf_cache_size,
                                        sizeof(struct rte_pktmbuf_pool_private),
                                        rte_pktmbuf_pool_init, nullptr,
@@ -1182,7 +1191,7 @@ bool dpdk_qp<HugetlbfsMemBackend>::init_rx_mbuf_pool()
     if (HugetlbfsMemBackend) {
         std::vector<phys_addr_t> mappings;
 
-        _rx_xmem.reset(alloc_mempool_xmem(mbufs_per_queue_rx, mbuf_size,
+        _rx_xmem.reset(alloc_mempool_xmem(mbufs_per_queue_rx, inline_mbuf_size,
                                           mappings));
         if (!_rx_xmem.get()) {
             printf("Can't allocate a memory for Rx buffers\n");
@@ -1195,7 +1204,7 @@ bool dpdk_qp<HugetlbfsMemBackend>::init_rx_mbuf_pool()
         //
         _pktmbuf_pool_rx =
                 rte_mempool_xmem_create(name.c_str(),
-                                   mbufs_per_queue_rx, mbuf_size,
+                                   mbufs_per_queue_rx, inline_mbuf_size,
                                    mbuf_cache_size,
                                    sizeof(struct rte_pktmbuf_pool_private),
                                    rte_pktmbuf_pool_init, nullptr,
@@ -1207,7 +1216,7 @@ bool dpdk_qp<HugetlbfsMemBackend>::init_rx_mbuf_pool()
     } else {
         _pktmbuf_pool_rx =
                 rte_mempool_create(name.c_str(),
-                               mbufs_per_queue_rx, mbuf_size,
+                               mbufs_per_queue_rx, inline_mbuf_size,
                                mbuf_cache_size,
                                sizeof(struct rte_pktmbuf_pool_private),
                                rte_pktmbuf_pool_init, nullptr,
