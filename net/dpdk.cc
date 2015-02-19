@@ -1413,10 +1413,24 @@ void dpdk_qp<HugetlbfsMemBackend>::rx_start() {
 template<>
 inline packet dpdk_qp<false>::from_mbuf(rte_mbuf* m)
 {
-    fragment f{rte_pktmbuf_mtod(m, char *), rte_pktmbuf_data_len(m)};
-    packet p(f, make_deleter(deleter(), [m] { rte_pktmbuf_free(m); }));
+    //
+    // Try to allocate a buffer for packet's data. If we fail - give the
+    // application an mbuf itself. If we succeed - copy the data into this
+    // buffer, create a packet based on this buffer and return the mbuf to its
+    // pool.
+    //
+    auto len = rte_pktmbuf_data_len(m);
+    char* buf = (char*)malloc(len);
+    if (!buf) {
+        fragment f{rte_pktmbuf_mtod(m, char*), len};
+        return packet(f, make_deleter(deleter(), [m] { rte_pktmbuf_free(m); }));
+    } else {
+        rte_memcpy(buf, rte_pktmbuf_mtod(m, char*), len);
+        rte_pktmbuf_free(m);
 
-    return p;
+        fragment f{buf, len};
+        return packet(f, make_free_deleter(buf));
+    }
 }
 
 template<>
