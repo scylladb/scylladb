@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/enum.hh"
+
 namespace sstables {
 
 // Some in-disk structures have an associated integer (of varying sizes) that
@@ -22,4 +24,8 @@ struct disk_array {
     std::vector<Members> elements;
 };
 
+template <typename Size, typename Key, typename Value>
+struct disk_hash {
+    std::unordered_map<Key, Value, std::hash<Key>> map;
+};
 }

@@ -178,6 +178,34 @@ future<> parse(file_input_stream& in, disk_array<Size, Members>& arr) {
     });
 }
 
+template <typename Size, typename Key, typename Value>
+future<> parse(file_input_stream& in, Size& len, std::unordered_map<Key, Value>& map) {
+    auto count = make_lw_shared<Size>();
+    auto eos = [len, count] { return len == *count; };
+    return do_until(eos, [len, count, &in, &map] {
+        struct kv {
+            Key key;
+            Value value;
+        };
+        ++*count;
+
+        auto el = std::make_unique<kv>();
+        auto f = parse(in, el->key, el->value);
+        return f.then([el = std::move(el), &map] {
+            map.emplace(el->key, el->value);
+        });
+    });
+}
+
+template <typename Size, typename Key, typename Value>
+future<> parse(file_input_stream& in, disk_hash<Size, Key, Value>& h) {
+    auto w = std::make_unique<Size>();
+    auto f = parse(in, *w);
+    return f.then([&in, &h, w = std::move(w)] {
+        return parse(in, *w, h.map);
+    });
+}
+
 const bool sstable::has_component(component_type f) {
     return _components.count(f);
 }
