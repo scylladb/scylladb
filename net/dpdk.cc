@@ -794,8 +794,8 @@ class dpdk_qp : public net::qp {
                 return nullptr;
             }
 
-            pkt = _ring.front();
-            _ring.pop_front();
+            pkt = _ring.back();
+            _ring.pop_back();
 
             return pkt;
         }
@@ -804,7 +804,7 @@ class dpdk_qp : public net::qp {
             if (HugetlbfsMemBackend) {
                 buf->reset_zc();
             }
-            _ring.push_front(buf);
+            _ring.push_back(buf);
         }
 
         bool gc() {
@@ -849,7 +849,7 @@ class dpdk_qp : public net::qp {
         }
 
     private:
-        std::deque<tx_buf*> _ring;
+        std::vector<tx_buf*> _ring;
         rte_mempool* _pool = nullptr;
         std::unique_ptr<void, free_deleter> _xmem;
     };
