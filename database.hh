@@ -228,7 +228,7 @@ public:
     std::unordered_map<sstring, keyspace> keyspaces;
     static future<database> populate(sstring datadir);
     keyspace* find_keyspace(const sstring& name);
+    future<> stop() { return make_ready_future<>(); }
 };
-
 
 #endif /* DATABASE_HH_ */
