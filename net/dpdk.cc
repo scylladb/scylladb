@@ -1133,6 +1133,9 @@ int dpdk_device::init_port_start()
         port_conf.rxmode.hw_vlan_strip = 1;
     }
 
+    // Enable HW CRC stripping
+    port_conf.rxmode.hw_strip_crc = 1;
+
     // Check that all CSUM features are either all set all together or not set
     // all together. If this assumption breaks we need to rework the below logic
     // by splitting the csum offload feature bit into separate bits for IPv4,
