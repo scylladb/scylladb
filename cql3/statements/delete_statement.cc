@@ -34,7 +34,7 @@ void delete_statement::add_update_for_key(mutation& m, const clustering_prefix& 
         return;
     }
 
-    if (prefix.size() < s->clustering_key.size()) {
+    if (prefix.size() < s->clustering_key_size()) {
         // In general, we can't delete specific columns if not all clustering columns have been specified.
         // However, if we delete only static columns, it's fine since we won't really use the prefix anyway.
         for (auto&& deletion : _column_operations) {

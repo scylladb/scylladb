@@ -140,7 +140,7 @@ modification_statement::read_required_rows(
 
 const column_definition*
 modification_statement::get_first_empty_key() {
-    for (auto& def : s->clustering_key) {
+    for (auto& def : s->clustering_key_columns()) {
         if (_processed_keys.find(&def) == _processed_keys.end()) {
             return &def;
         }
@@ -153,7 +153,7 @@ modification_statement::create_clustering_prefix_internal(const query_options& o
     std::vector<bytes_opt> components;
     const column_definition* first_empty_key = nullptr;
 
-    for (auto& def : s->clustering_key) {
+    for (auto& def : s->clustering_key_columns()) {
         auto i = _processed_keys.find(&def);
         if (i == _processed_keys.end()) {
             first_empty_key = &def;
@@ -206,7 +206,7 @@ modification_statement::create_clustering_prefix(const query_options& options) {
         // but we still need to build a proper prefix, or it's not an INSERT, and then we want to reject
         // (see above)
         if (type != statement_type::INSERT) {
-            for (auto& def : s->clustering_key) {
+            for (auto& def : s->clustering_key_columns()) {
                 if (_processed_keys.count(&def)) {
                     throw exceptions::invalid_request_exception(sprint(
                             "Invalid restriction on clustering column %s since the %s statement modifies only static columns",
@@ -227,9 +227,9 @@ modification_statement::build_partition_keys(const query_options& options) {
     std::vector<partition_key> result;
     std::vector<bytes_opt> components;
 
-    auto remaining = s->partition_key.size();
+    auto remaining = s->partition_key_size();
 
-    for (auto& def : s->partition_key) {
+    for (auto& def : s->partition_key_columns()) {
         auto i = _processed_keys.find(&def);
         if (i == _processed_keys.end()) {
             throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <unordered_map>
+#include <boost/range/iterator_range.hpp>
 
 #include "cql3/column_specification.hh"
 #include "core/shared_ptr.hh"
@@ -45,6 +46,10 @@ class schema final {
 private:
     std::unordered_map<bytes, column_definition*> _columns_by_name;
     std::map<bytes, column_definition*, serialized_compare> _regular_columns_by_name;
+    std::vector<column_definition> _partition_key;
+    std::vector<column_definition> _clustering_key;
+    std::vector<column_definition> _regular_columns; // sorted by name
+    std::vector<column_definition> _static_columns; // sorted by name, present only when there's any clustering column
 public:
     struct column {
         bytes name;
@@ -64,10 +69,6 @@ public:
     gc_clock::duration default_time_to_live = gc_clock::duration::zero();
     const sstring ks_name;
     const sstring cf_name;
-    std::vector<column_definition> partition_key;
-    std::vector<column_definition> clustering_key;
-    std::vector<column_definition> regular_columns; // sorted by name
-    std::vector<column_definition> static_columns; // sorted by name, present only when there's any clustering column
     shared_ptr<tuple_type<>> partition_key_type;
     shared_ptr<tuple_type<>> clustering_key_type;
     shared_ptr<tuple_prefix> clustering_key_prefix_type;
@@ -88,10 +89,10 @@ public:
     }
     column_definition* get_column_definition(const bytes& name);
     auto regular_begin() {
-        return regular_columns.begin();
+        return _regular_columns.begin();
     }
     auto regular_end() {
-        return regular_columns.end();
+        return _regular_columns.end();
     }
     auto regular_lower_bound(const bytes& name) {
         // TODO: use regular_columns and a version of std::lower_bound() with heterogeneous comparator
@@ -99,7 +100,7 @@ public:
         if (i == _regular_columns_by_name.end()) {
             return regular_end();
         } else {
-            return regular_columns.begin() + i->second->id;
+            return _regular_columns.begin() + i->second->id;
         }
     }
     auto regular_upper_bound(const bytes& name) {
@@ -108,23 +109,40 @@ public:
         if (i == _regular_columns_by_name.end()) {
             return regular_end();
         } else {
-            return regular_columns.begin() + i->second->id;
+            return _regular_columns.begin() + i->second->id;
         }
-    }
-    column_id get_regular_columns_count() {
-        return regular_columns.size();
     }
     data_type column_name_type(column_definition& def) {
         return def.kind == column_definition::column_kind::REGULAR ? regular_column_name_type : utf8_type;
     }
     column_definition& regular_column_at(column_id id) {
-        return regular_columns[id];
+        return _regular_columns[id];
     }
     bool is_last_partition_key(column_definition& def) {
-        return &partition_key[partition_key.size() - 1] == &def;
+        return &_partition_key[_partition_key.size() - 1] == &def;
     }
     bool has_static_columns() {
-        return !static_columns.empty();
+        return !_static_columns.empty();
+    }
+    size_t partition_key_size() const { return _partition_key.size(); }
+    size_t clustering_key_size() const { return _clustering_key.size(); }
+    size_t static_columns_count() const { return _static_columns.size(); }
+    size_t regular_columns_count() const { return _regular_columns.size(); }
+    // Returns a range of column definitions
+    auto partition_key_columns() const {
+        return boost::make_iterator_range(_partition_key.begin(), _partition_key.end());
+    }
+    // Returns a range of column definitions
+    auto clustering_key_columns() const {
+        return boost::make_iterator_range(_clustering_key.begin(), _clustering_key.end());
+    }
+    // Returns a range of column definitions
+    auto static_columns() const {
+        return boost::make_iterator_range(_static_columns.begin(), _static_columns.end());
+    }
+    // Returns a range of column definitions
+    auto regular_columns() const {
+        return boost::make_iterator_range(_regular_columns.begin(), _regular_columns.end());
     }
 };
 

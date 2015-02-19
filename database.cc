@@ -63,17 +63,17 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_k
         throw std::runtime_error("not implemented");
     }
 
-    build_columns(partition_key, column_definition::column_kind::PARTITION, this->partition_key);
-    build_columns(clustering_key, column_definition::column_kind::CLUSTERING, this->clustering_key);
+    build_columns(partition_key, column_definition::column_kind::PARTITION, _partition_key);
+    build_columns(clustering_key, column_definition::column_kind::CLUSTERING, _clustering_key);
 
     std::sort(regular_columns.begin(), regular_columns.end(), column::name_compare(regular_column_name_type));
-    build_columns(regular_columns, column_definition::column_kind::REGULAR, this->regular_columns);
-    for (column_definition& def : this->regular_columns) {
+    build_columns(regular_columns, column_definition::column_kind::REGULAR, _regular_columns);
+    for (column_definition& def : _regular_columns) {
         _regular_columns_by_name[def.name()] = &def;
     }
 
     std::sort(static_columns.begin(), static_columns.end(), column::name_compare(utf8_type));
-    build_columns(static_columns, column_definition::column_kind::STATIC, this->static_columns);
+    build_columns(static_columns, column_definition::column_kind::STATIC, _static_columns);
 }
 
 column_family::column_family(schema_ptr schema)
@@ -389,10 +389,10 @@ void
 mutation_partition::apply_delete(schema_ptr schema, const clustering_prefix& prefix, tombstone t) {
     if (prefix.empty()) {
         apply(t);
-    } else if (prefix.size() == schema->clustering_key.size()) {
-        _rows[serialize_value(*schema->clustering_key_type, prefix)].t.apply(t);
+    } else if (prefix.size() == schema->clustering_key_size()) {
+        _rows[schema->clustering_key_type->serialize_value(prefix)].t.apply(t);
     } else {
-        apply_row_tombstone(schema, {serialize_value(*schema->clustering_key_prefix_type, prefix), t});
+        apply_row_tombstone(schema, {schema->clustering_key_prefix_type->serialize_value(prefix), t});
     }
 }
 
