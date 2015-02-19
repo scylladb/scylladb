@@ -46,6 +46,7 @@ schema::build_columns(const std::vector<column>& columns, column_definition::col
 schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_key,
     std::vector<column> clustering_key,
     std::vector<column> regular_columns,
+    std::vector<column> static_columns,
     data_type regular_column_name_type)
         : _regular_columns_by_name(serialized_compare(regular_column_name_type))
         , ks_name(std::move(ks_name))
@@ -70,6 +71,9 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_k
     for (column_definition& def : this->regular_columns) {
         _regular_columns_by_name[def.name()] = &def;
     }
+
+    std::sort(static_columns.begin(), static_columns.end(), column::name_compare(utf8_type));
+    build_columns(static_columns, column_definition::column_kind::STATIC, this->static_columns);
 }
 
 column_family::column_family(schema_ptr schema)

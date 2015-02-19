@@ -67,6 +67,7 @@ public:
     std::vector<column_definition> partition_key;
     std::vector<column_definition> clustering_key;
     std::vector<column_definition> regular_columns; // sorted by name
+    std::vector<column_definition> static_columns; // sorted by name, present only when there's any clustering column
     shared_ptr<tuple_type<>> partition_key_type;
     shared_ptr<tuple_type<>> clustering_key_type;
     shared_ptr<tuple_prefix> clustering_key_prefix_type;
@@ -77,6 +78,7 @@ public:
         std::vector<column> partition_key,
         std::vector<column> clustering_key,
         std::vector<column> regular_columns,
+        std::vector<column> static_columns,
         shared_ptr<abstract_type> regular_column_name_type);
     bool is_dense() const {
         return false;
@@ -120,6 +122,9 @@ public:
     }
     bool is_last_partition_key(column_definition& def) {
         return &partition_key[partition_key.size() - 1] == &def;
+    }
+    bool has_static_columns() {
+        return !static_columns.empty();
     }
 };
 

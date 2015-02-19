@@ -429,7 +429,8 @@ public:
                     regular_columns.push_back({to_bytes(col_def.name), bytes_type});
                 }
                 auto s = make_lw_shared<schema>(ks_def.name, cf_def.name,
-                    std::move(partition_key), std::move(clustering_key), std::move(regular_columns), column_name_type);
+                    std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
+                    std::vector<schema::column>(), column_name_type);
                 column_family cf(s);
                 ks.column_families.emplace(cf_def.name, std::move(cf));
             }

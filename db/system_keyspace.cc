@@ -45,6 +45,8 @@ schema_ptr hints() {
         {{"hint_id", timeuuid_type}, {"message_version", int32_type}},
         // regular columns
         {{"mutation", bytes_type}},
+        // static columns
+        {},
         // regular column name type
         utf8_type
         // FIXME: the original Java code also had:
@@ -67,6 +69,8 @@ schema_ptr batchlog() {
         {},
         // regular columns
         {{"data", bytes_type}, {"version", int32_type}, {"written_at", timestamp_type}},
+        // static columns
+        {},
         // regular column name type
         utf8_type
         // FIXME: the original Java code also had:
@@ -87,6 +91,8 @@ schema_ptr batchlog() {
         {{"cf_id", uuid_type}},
         // regular columns
         {{"in_progress_ballot", timeuuid_type}, {"most_recent_commit", bytes_type}, {"most_recent_commit_at", timeuuid_type}, {"proposal", bytes_type}, {"proposal_ballot", timeuuid_type}},
+        // static columns
+        {},
         // regular column name type
         utf8_type
         // FIXME: the original Java code also had:
@@ -105,6 +111,8 @@ schema_ptr built_indexes() {
         // clustering key
         {{"index_name", utf8_type}},
         // regular columns
+        {},
+        // static columns
         {},
         // regular column name type
         utf8_type
@@ -141,6 +149,8 @@ schema_ptr built_indexes() {
                 //    "tokens set<varchar>,"
                 //    "truncated_at map<uuid, blob>,"
         },
+        // static columns
+        {},
         // regular column name type
         utf8_type
         // FIXME: the original Java code also had:
@@ -168,6 +178,8 @@ schema_ptr built_indexes() {
                 // FIXME: Cassandra also had these columns:
                 //    "tokens set<varchar>,"
         },
+        // static columns
+        {},
         // regular column name type
         utf8_type
         // FIXME: the original Java code also had:
