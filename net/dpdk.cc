@@ -168,6 +168,7 @@ class dpdk_device : public device {
     net::hw_features _hw_features;
     uint8_t _queues_ready = 0;
     unsigned _home_cpu;
+    bool _use_lro;
     std::vector<uint8_t> _redir_table;
 #ifdef RTE_VERSION_1_7
     struct rte_eth_rxconf _rx_conf_default = {};
@@ -214,10 +215,11 @@ private:
     void check_port_link_status();
 
 public:
-    dpdk_device(uint8_t port_idx, uint16_t num_queues)
+    dpdk_device(uint8_t port_idx, uint16_t num_queues, bool use_lro)
         : _port_idx(port_idx)
         , _num_queues(num_queues)
-        , _home_cpu(engine().cpu_id()) {
+        , _home_cpu(engine().cpu_id())
+        , _use_lro(use_lro) {
 
         /* now initialise the port we will use */
         int ret = init_port_start();
@@ -234,6 +236,8 @@ public:
     net::hw_features hw_features() override {
         return _hw_features;
     }
+
+    net::hw_features& hw_features_ref() { return _hw_features; }
 
     const rte_eth_rxconf* def_rx_conf() const {
 #ifdef RTE_VERSION_1_7
@@ -1043,12 +1047,22 @@ private:
      */
     packet from_mbuf(rte_mbuf* m);
 
+    /**
+     * Transform an LRO rte_mbuf cluster into the "packet" object.
+     * @param m HEAD of the mbufs' cluster to transform
+     *
+     * @return a "packet" object representing the newly received LRO packet.
+     */
+    packet from_mbuf_lro(rte_mbuf* m);
+
 private:
     dpdk_device* _dev;
     uint8_t _qid;
     rte_mempool *_pktmbuf_pool_rx;
     std::vector<rte_mbuf*> _rx_free_pkts;
     std::vector<rte_mbuf*> _rx_free_bufs;
+    std::vector<fragment> _frags;
+    std::vector<char*> _bufs;
     size_t _num_rx_free_segs = 0;
     reactor::poller _rx_gc_poller;
     std::unique_ptr<void, free_deleter> _rx_xmem;
@@ -1135,6 +1149,16 @@ int dpdk_device::init_port_start()
 
     // Enable HW CRC stripping
     port_conf.rxmode.hw_strip_crc = 1;
+
+#ifdef RTE_ETHDEV_HAS_LRO_SUPPORT
+    // Enable LRO
+    if (_use_lro && (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_TCP_LRO)) {
+        printf("LRO is on\n");
+        port_conf.rxmode.enable_lro = 1;
+        _hw_features.rx_lro = true;
+    } else
+#endif
+        printf("LRO is off\n");
 
     // Check that all CSUM features are either all set all together or not set
     // all together. If this assumption breaks we need to rework the below logic
@@ -1416,40 +1440,106 @@ void dpdk_qp<HugetlbfsMemBackend>::rx_start() {
 }
 
 template<>
-inline packet dpdk_qp<false>::from_mbuf(rte_mbuf* m)
+inline packet dpdk_qp<false>::from_mbuf_lro(rte_mbuf* m)
 {
     //
-    // Try to allocate a buffer for packet's data. If we fail - give the
-    // application an mbuf itself. If we succeed - copy the data into this
-    // buffer, create a packet based on this buffer and return the mbuf to its
-    // pool.
+    // Try to allocate a buffer for the whole packet's data.
+    // If we fail - construct the packet from mbufs.
+    // If we succeed - copy the data into this buffer, create a packet based on
+    // this buffer and return the mbuf to its pool.
     //
-    auto len = rte_pktmbuf_data_len(m);
-    char* buf = (char*)malloc(len);
+    auto pkt_len = rte_pktmbuf_pkt_len(m);
+    char* buf = (char*)malloc(pkt_len);
     if (!buf) {
-        fragment f{rte_pktmbuf_mtod(m, char*), len};
-        return packet(f, make_deleter(deleter(), [m] { rte_pktmbuf_free(m); }));
+        _frags.clear();
+
+        for (rte_mbuf* m1 = m; m1 != nullptr; m1 = m1->next) {
+            char* data = rte_pktmbuf_mtod(m1, char*);
+            _frags.emplace_back(fragment{data, rte_pktmbuf_data_len(m1)});
+        }
+
+        return packet(_frags.begin(), _frags.end(),
+                      make_deleter(deleter(), [m] { rte_pktmbuf_free(m); }));
     } else {
-        rte_memcpy(buf, rte_pktmbuf_mtod(m, char*), len);
+        // Copy the contents of the packet into the buffer we've just allocated
+        size_t offset = 0;
+        for (rte_mbuf* m1 = m; m1 != nullptr; m1 = m1->next) {
+            char* data = rte_pktmbuf_mtod(m1, char*);
+            auto len = rte_pktmbuf_data_len(m1);
+
+            rte_memcpy(buf + offset, data, len);
+            offset += len;
+        }
+
         rte_pktmbuf_free(m);
 
-        fragment f{buf, len};
-        return packet(f, make_free_deleter(buf));
+        return packet(fragment{buf, pkt_len}, make_free_deleter(buf));
     }
+}
+
+template<>
+inline packet dpdk_qp<false>::from_mbuf(rte_mbuf* m)
+{
+    if (!_dev->hw_features_ref().rx_lro || rte_pktmbuf_is_contiguous(m)) {
+        //
+        // Try to allocate a buffer for packet's data. If we fail - give the
+        // application an mbuf itself. If we succeed - copy the data into this
+        // buffer, create a packet based on this buffer and return the mbuf to
+        // its pool.
+        //
+        auto len = rte_pktmbuf_data_len(m);
+        char* buf = (char*)malloc(len);
+        if (!buf) {
+            return packet(fragment{rte_pktmbuf_mtod(m, char*), len},
+                          make_deleter(deleter(),
+                                       [m] { rte_pktmbuf_free(m); }));
+        } else {
+            rte_memcpy(buf, rte_pktmbuf_mtod(m, char*), len);
+            rte_pktmbuf_free(m);
+
+            return packet(fragment{buf, len}, make_free_deleter(buf));
+        }
+    } else {
+        return from_mbuf_lro(m);
+    }
+}
+
+template<>
+inline packet dpdk_qp<true>::from_mbuf_lro(rte_mbuf* m)
+{
+    _frags.clear();
+    _bufs.clear();
+
+    for (; m != nullptr; m = m->next) {
+        char* data = rte_pktmbuf_mtod(m, char*);
+
+        _frags.emplace_back(fragment{data, rte_pktmbuf_data_len(m)});
+        _bufs.push_back(data);
+    }
+
+    return packet(_frags.begin(), _frags.end(),
+                  make_deleter(deleter(),
+                          [bufs_vec = std::move(_bufs)] {
+                              for (auto&& b : bufs_vec) {
+                                  free(b);
+                              }
+                          }));
 }
 
 template<>
 inline packet dpdk_qp<true>::from_mbuf(rte_mbuf* m)
 {
-    char* data = rte_pktmbuf_mtod(m, char*);
-
-    fragment f{data, rte_pktmbuf_data_len(m)};
-    packet p(f, make_free_deleter(data));
-
     _rx_free_pkts.push_back(m);
     _num_rx_free_segs += rte_mbuf_nb_segs(m);
 
-    return p;
+    if (!_dev->hw_features_ref().rx_lro || rte_pktmbuf_is_contiguous(m)) {
+        char* data = rte_pktmbuf_mtod(m, char*);
+
+        return packet(fragment{data, rte_pktmbuf_data_len(m)},
+                      make_free_deleter(data));
+    } else {
+        return from_mbuf_lro(m);
+    }
 }
 
 template <bool HugetlbfsMemBackend>
@@ -1517,12 +1607,6 @@ void dpdk_qp<HugetlbfsMemBackend>::process_packets(
     for (uint16_t i = 0; i < count; i++) {
         struct rte_mbuf *m = bufs[i];
         offload_info oi;
-
-        // TODO: Remove this when implement LRO support
-        if (!rte_pktmbuf_is_contiguous(m)) {
-            rte_exit(EXIT_FAILURE,
-                     "DPDK-Rx: Have got a fragmented buffer - not supported\n");
-        }
 
         packet p = from_mbuf(m);
 
@@ -1632,7 +1716,8 @@ std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variab
 
 std::unique_ptr<net::device> create_dpdk_net_device(
                                     uint8_t port_idx,
-                                    uint8_t num_queues)
+                                    uint8_t num_queues,
+                                    bool use_lro)
 {
     static bool called = false;
 
@@ -1648,7 +1733,7 @@ std::unique_ptr<net::device> create_dpdk_net_device(
         printf("ports number: %d\n", rte_eth_dev_count());
     }
 
-    return std::make_unique<dpdk::dpdk_device>(port_idx, num_queues);
+    return std::make_unique<dpdk::dpdk_device>(port_idx, num_queues, use_lro);
 }
 
 boost::program_options::options_description

@@ -71,6 +71,8 @@ struct hw_features {
     bool tx_csum_l4_offload = false;
     // Enable rx checksum offload
     bool rx_csum_offload = false;
+    // LRO is enabled
+    bool rx_lro = false;
     // Enable tx TCP segment offload
     bool tx_tso = false;
     // Enable tx UDP fragmentation offload
