@@ -71,6 +71,38 @@ parse(file_input_stream& in, T& i) {
 }
 
 template <typename T>
+typename std::enable_if_t<std::is_enum<T>::value, future<>>
+parse(file_input_stream& in, T& i) {
+    return parse(in, reinterpret_cast<typename std::underlying_type<T>::type&>(i));
+}
+
+future<> parse(file_input_stream& in, bool& i) {
+    return parse(in, reinterpret_cast<uint8_t&>(i));
+}
+
+template <typename To, typename From>
+static inline To convert(From f) {
+    static_assert(sizeof(To) == sizeof(From), "Sizes must match");
+    union {
+        To to;
+        From from;
+    } conv;
+
+    conv.from = f;
+    return conv.to;
+}
+
+future<> parse(file_input_stream& in, double& d) {
+    return in.read_exactly(sizeof(double)).then([&d] (auto buf) {
+        check_buf_size(buf, sizeof(double));
+
+        const unsigned long *nr = reinterpret_cast<const unsigned long *>(buf.get());
+        d = convert<double>(net::ntoh(*nr));
+        return make_ready_future<>();
+    });
+}
+
+template <typename T>
 future<> parse(file_input_stream& in, T& len, sstring& s) {
     return in.read_exactly(len).then([&s, len] (auto buf) {
         check_buf_size(buf, len);
@@ -109,7 +141,7 @@ future<> parse(file_input_stream& in, disk_string<Size>& s) {
 // to do is to convert each member because they are all stored big endian.
 // We'll offer a specialization for that case below.
 template <typename Size, typename Members>
-typename std::enable_if<!std::is_integral<Members>::value, future<>>::type
+typename std::enable_if_t<!std::is_integral<Members>::value, future<>>
 parse(file_input_stream& in, Size& len, std::vector<Members>& arr) {
 
     auto count = make_lw_shared<size_t>(0);
