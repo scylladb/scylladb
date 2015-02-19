@@ -82,4 +82,68 @@ struct summary_la {
     disk_array<uint32_t, summary_entry> entries;
 };
 using summary = summary_la;
+
+struct estimated_histogram {
+    struct eh_elem {
+        uint64_t offset;
+        uint64_t bucket;
+    };
+
+    disk_array<uint32_t, eh_elem> elements;
+};
+
+struct replay_position {
+    uint64_t segment;
+    uint32_t position;
+};
+
+struct streaming_histogram {
+    uint32_t max_bin_size;
+    disk_hash<uint32_t, double, uint64_t> hash;
+};
+
+struct metadata {
+};
+
+struct validation_metadata : public metadata {
+    disk_string<uint16_t> partitioner;
+    double filter_chance;
+};
+
+struct compaction_metadata : public metadata {
+    disk_array<uint32_t, uint32_t> ancestors;
+    disk_array<uint32_t, uint8_t> cardinality;
+};
+
+struct la_stats_metadata : public metadata {
+    estimated_histogram estimated_row_size;
+    estimated_histogram estimated_column_count;
+    replay_position position;
+    uint64_t min_timestamp;
+    uint64_t max_timestamp;
+    uint32_t max_local_deletion_time;
+    double compression_ratio;
+    streaming_histogram estimated_tombstone_drop_time;
+    uint32_t sstable_level;
+    uint64_t repaired_at;
+    disk_array<uint32_t, disk_string<uint16_t>> min_column_names;
+    disk_array<uint32_t, disk_string<uint16_t>> max_column_names;
+    bool has_legacy_counter_shards;
+};
+using stats_metadata = la_stats_metadata;
+
+// Numbers are found on disk, so they do matter. Also, setting their sizes of
+// that of an uint32_t is a bit wasteful, but it simplifies the code a lot
+// since we can now still use a strongly typed enum without introducing a
+// notion of "disk-size" vs "memory-size".
+enum class metadata_type : uint32_t {
+    Validation = 0,
+    Compaction = 1,
+    Stats = 2,
+};
+
+struct statistics {
+    disk_hash<uint32_t, metadata_type, uint32_t> hash;
+    std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
+};
 }

@@ -53,6 +53,7 @@ private:
     compression _compression;
     filter _filter;
     summary _summary;
+    statistics _statistics;
 
     sstring _dir;
     unsigned long _epoch = 0;
@@ -74,6 +75,7 @@ private:
     future<> read_summary() {
         return read_simple<summary, component_type::Summary, &sstable::_summary>();
     }
+    future<> read_statistics();
 
 public:
     sstable(sstring dir, unsigned long epoch, version_types v, format_types f) : _dir(dir), _epoch(epoch), _version(v), _format(f) {}

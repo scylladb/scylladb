@@ -242,6 +242,74 @@ future<> parse(file_input_stream& in, summary& s) {
     });
 }
 
+future<> parse(file_input_stream& in, struct replay_position& rp) {
+    return parse(in, rp.segment, rp.position);
+}
+
+future<> parse(file_input_stream& in, estimated_histogram::eh_elem &e) {
+    return parse(in, e.offset, e.bucket);
+}
+
+future<> parse(file_input_stream& in, estimated_histogram &e) {
+    return parse(in, e.elements);
+}
+
+future<> parse(file_input_stream& in, streaming_histogram &h) {
+    return parse(in, h.max_bin_size, h.hash);
+}
+
+future<> parse(file_input_stream& in, validation_metadata& m) {
+    return parse(in, m.partitioner, m.filter_chance);
+}
+
+future<> parse(file_input_stream& in, compaction_metadata& m) {
+    return parse(in, m.ancestors, m.cardinality);
+}
+
+template <typename Child>
+future<> parse(file_input_stream& in, std::unique_ptr<metadata>& p) {
+    p.reset(new Child);
+    return parse(in, *static_cast<Child *>(p.get()));
+}
+
+future<> parse(file_input_stream& in, stats_metadata& m) {
+    return parse(in,
+        m.estimated_row_size,
+        m.estimated_column_count,
+        m.position,
+        m.min_timestamp,
+        m.max_timestamp,
+        m.max_local_deletion_time,
+        m.compression_ratio,
+        m.estimated_tombstone_drop_time,
+        m.sstable_level,
+        m.repaired_at,
+        m.min_column_names,
+        m.max_column_names,
+        m.has_legacy_counter_shards
+    );
+}
+
+future<> parse(file_input_stream& in, statistics& s) {
+    return parse(in, s.hash).then([&in, &s] {
+        return do_for_each(s.hash.map.begin(), s.hash.map.end(), [&in, &s] (auto val) mutable {
+            in.seek(val.second);
+
+            switch (val.first) {
+                case metadata_type::Validation:
+                    return parse<validation_metadata>(in, s.contents[val.first]);
+                case metadata_type::Compaction:
+                    return parse<compaction_metadata>(in, s.contents[val.first]);
+                case metadata_type::Stats:
+                    return parse<stats_metadata>(in, s.contents[val.first]);
+                default:
+                    sstlog.warn("Invalid metadata type at Statistics file: {} ", int(val.first));
+                    return make_ready_future<>();
+                }
+        });
+    });
+}
+
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc() {
@@ -334,8 +402,14 @@ future<> sstable::read_compression() {
     return read_simple<compression, component_type::CompressionInfo, &sstable::_compression>();
 }
 
+future<> sstable::read_statistics() {
+    return read_simple<statistics, component_type::Statistics, &sstable::_statistics>();
+}
+
 future<> sstable::load() {
     return read_toc().then([this] {
+        return read_statistics();
+    }).then([this] {
         return read_compression();
     }).then([this] {
         return read_filter();
