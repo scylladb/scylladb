@@ -67,6 +67,7 @@ void complete(future<T...>& fut,
 class CassandraAsyncHandler : public CassandraCobSvIf {
     database& _db;
     keyspace* _ks = nullptr;  // FIXME: reference counting for in-use detection?
+    sstring _ks_name;
     sstring _cql_version;
 public:
     explicit CassandraAsyncHandler(database& db) : _db(db) {}
@@ -78,6 +79,7 @@ public:
     void set_keyspace(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
         try {
             _ks = &_db.keyspaces.at(keyspace);
+            _ks_name = keyspace;
             cob();
         } catch (std::out_of_range& e) {
             return complete_with_exception<InvalidRequestException>(std::move(exn_cob),
