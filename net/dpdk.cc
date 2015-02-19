@@ -64,7 +64,12 @@ namespace dpdk {
 /******************* Net device related constatns *****************************/
 static constexpr uint16_t default_ring_size      = 512;
 
-static constexpr uint16_t mbufs_per_queue_rx     = 3 * default_ring_size;
+// 
+// We need 2 times the ring size of buffers because of the way PMDs 
+// refill the ring.
+//
+static constexpr uint16_t mbufs_per_queue_rx     = 2 * default_ring_size;
+static constexpr uint16_t rx_gc_thresh           = 64;
 
 //
 // No need to keep more descriptors in the air than can be sent in a single
@@ -83,13 +88,22 @@ static constexpr uint16_t mbuf_overhead          =
 //
 static constexpr size_t   inline_mbuf_data_size  = 2048;
 
+//
+// Size of the data buffer in the non-inline case.
+//
+// We may want to change (increase) this value in future, while the
+// inline_mbuf_data_size value will unlikely change due to reasons described
+// above.
+//
+static constexpr size_t   mbuf_data_size         = 2048;
+
 // (INLINE_MBUF_DATA_SIZE(2K)*32 = 64K = Max TSO/LRO size) + 1 mbuf for headers
 static constexpr uint8_t  max_frags              = 32 + 1;
 
 static constexpr uint16_t inline_mbuf_size       =
                                 inline_mbuf_data_size + mbuf_overhead;
 
-uint32_t qp_mempool_obj_size()
+uint32_t qp_mempool_obj_size(bool hugetlbfs_membackend)
 {
     uint32_t mp_size = 0;
     struct rte_mempool_objsz mp_obj_sz = {};
@@ -100,10 +114,17 @@ uint32_t qp_mempool_obj_size()
     //
 
     // Rx
-    mp_size += 
-            align_up(rte_mempool_calc_obj_size(inline_mbuf_size, 0, &mp_obj_sz) +
+    if (hugetlbfs_membackend) {
+        mp_size +=
+            align_up(rte_mempool_calc_obj_size(mbuf_overhead, 0, &mp_obj_sz)+
                                         sizeof(struct rte_pktmbuf_pool_private),
                                                memory::huge_page_size);
+    } else {
+        mp_size +=
+            align_up(rte_mempool_calc_obj_size(inline_mbuf_size, 0, &mp_obj_sz)+
+                                        sizeof(struct rte_pktmbuf_pool_private),
+                                               memory::huge_page_size);
+    }
     //Tx
     std::memset(&mp_obj_sz, 0, sizeof(mp_obj_sz));
     mp_size += align_up(rte_mempool_calc_obj_size(inline_mbuf_size, 0,
@@ -923,7 +944,59 @@ private:
         return sent;
     }
 
+    /**
+     * Allocate a new data buffer and set the mbuf to point to it.
+     *
+     * Do some DPDK hacks to work on PMD: it assumes that the buf_addr
+     * points to the private data of RTE_PKTMBUF_HEADROOM before the actual
+     * data buffer.
+     *
+     * @param m mbuf to update
+     */
+    static bool refill_rx_mbuf(rte_mbuf* m, size_t size = mbuf_data_size) {
+        char* data;
+
+        if (posix_memalign((void**)&data, size, size)) {
+            return false;
+        }
+
+        using namespace memory;
+        translation tr = translate(data, size);
+
+        // TODO: assert() in a fast path! Remove me ASAP!
+        assert(tr.size == size);
+
+        //
+        // Set the mbuf to point to our data.
+        //
+        // Do some DPDK hacks to work on PMD: it assumes that the buf_addr
+        // points to the private data of RTE_PKTMBUF_HEADROOM before the
+        // actual data buffer.
+        //
+        rte_mbuf_buf_addr(m)      = data - RTE_PKTMBUF_HEADROOM;
+        rte_mbuf_buf_physaddr(m)  = tr.addr - RTE_PKTMBUF_HEADROOM;
+#ifdef RTE_VERSION_1_7
+        m->pkt.data               = data - RTE_PKTMBUF_HEADROOM;
+#endif
+        return true;
+    }
+
+    static bool init_noninline_rx_mbuf(rte_mbuf* m,
+                                       size_t size = mbuf_data_size) {
+        if (!refill_rx_mbuf(m, size)) {
+            return false;
+        }
+        // The below fields stay constant during the execution.
+        rte_mbuf_buf_len(m)       = size + RTE_PKTMBUF_HEADROOM;
+#ifndef RTE_VERSION_1_7
+        m->data_off               = RTE_PKTMBUF_HEADROOM;
+#endif
+        return true;
+    }
+
     bool init_rx_mbuf_pool();
+    bool rx_gc();
+    bool refill_one_cluster(rte_mbuf* head);
 
     /**
      * Allocates a memory chunk to accommodate the given number of buffers of
@@ -962,10 +1035,22 @@ private:
      */
     void process_packets(struct rte_mbuf **bufs, uint16_t count);
 
+    /**
+     * Translate rte_mbuf into the "packet".
+     * @param m mbuf to translate
+     *
+     * @return a "packet" object representing the newly received data
+     */
+    packet from_mbuf(rte_mbuf* m);
+
 private:
     dpdk_device* _dev;
     uint8_t _qid;
     rte_mempool *_pktmbuf_pool_rx;
+    std::vector<rte_mbuf*> _rx_free_pkts;
+    std::vector<rte_mbuf*> _rx_free_bufs;
+    size_t _num_rx_free_segs = 0;
+    reactor::poller _rx_gc_poller;
     std::unique_ptr<void, free_deleter> _rx_xmem;
     tx_buf_factory _tx_buf_factory;
     std::experimental::optional<reactor::poller> _rx_poller;
@@ -1191,7 +1276,7 @@ bool dpdk_qp<HugetlbfsMemBackend>::init_rx_mbuf_pool()
     if (HugetlbfsMemBackend) {
         std::vector<phys_addr_t> mappings;
 
-        _rx_xmem.reset(alloc_mempool_xmem(mbufs_per_queue_rx, inline_mbuf_size,
+        _rx_xmem.reset(alloc_mempool_xmem(mbufs_per_queue_rx, mbuf_overhead,
                                           mappings));
         if (!_rx_xmem.get()) {
             printf("Can't allocate a memory for Rx buffers\n");
@@ -1204,7 +1289,7 @@ bool dpdk_qp<HugetlbfsMemBackend>::init_rx_mbuf_pool()
         //
         _pktmbuf_pool_rx =
                 rte_mempool_xmem_create(name.c_str(),
-                                   mbufs_per_queue_rx, inline_mbuf_size,
+                                   mbufs_per_queue_rx, mbuf_overhead,
                                    mbuf_cache_size,
                                    sizeof(struct rte_pktmbuf_pool_private),
                                    rte_pktmbuf_pool_init, nullptr,
@@ -1213,6 +1298,34 @@ bool dpdk_qp<HugetlbfsMemBackend>::init_rx_mbuf_pool()
                                    _rx_xmem.get(), mappings.data(),
                                    mappings.size(),
                                    page_bits);
+
+        // reserve the memory for Rx buffers containers
+        _rx_free_pkts.reserve(mbufs_per_queue_rx);
+        _rx_free_bufs.reserve(mbufs_per_queue_rx);
+
+        //
+        // 1) Pull all entries from the pool.
+        // 2) Bind data buffers to each of them.
+        // 3) Return them back to the pool.
+        //
+        for (int i = 0; i < mbufs_per_queue_rx; i++) {
+            rte_mbuf* m = rte_pktmbuf_alloc(_pktmbuf_pool_rx);
+            assert(m);
+            _rx_free_bufs.push_back(m);
+        }
+
+        for (auto&& m : _rx_free_bufs) {
+            if (!init_noninline_rx_mbuf(m)) {
+                printf("Failed to allocate data buffers for Rx ring. "
+                       "Consider increasing the amount of memory.\n");
+                exit(1);
+            }
+        }
+
+        rte_mempool_put_bulk(_pktmbuf_pool_rx, (void**)_rx_free_bufs.data(),
+                             _rx_free_bufs.size());
+
+        _rx_free_bufs.clear();
     } else {
         _pktmbuf_pool_rx =
                 rte_mempool_create(name.c_str(),
@@ -1264,6 +1377,7 @@ void dpdk_device::check_port_link_status()
 template <bool HugetlbfsMemBackend>
 dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid)
      : _dev(dev), _qid(qid),
+       _rx_gc_poller([&] { return rx_gc(); }),
        _tx_buf_factory(qid),
        _tx_gc_poller([&] { return _tx_buf_factory.gc(); })
 {
@@ -1296,6 +1410,88 @@ void dpdk_qp<HugetlbfsMemBackend>::rx_start() {
     _rx_poller = reactor::poller([&] { return poll_rx_once(); });
 }
 
+template<>
+inline packet dpdk_qp<false>::from_mbuf(rte_mbuf* m)
+{
+    fragment f{rte_pktmbuf_mtod(m, char *), rte_pktmbuf_data_len(m)};
+    packet p(f, make_deleter(deleter(), [m] { rte_pktmbuf_free(m); }));
+
+    return p;
+}
+
+template<>
+inline packet dpdk_qp<true>::from_mbuf(rte_mbuf* m)
+{
+    char* data = rte_pktmbuf_mtod(m, char*);
+
+    fragment f{data, rte_pktmbuf_data_len(m)};
+    packet p(f, make_free_deleter(data));
+
+    _rx_free_pkts.push_back(m);
+    _num_rx_free_segs += rte_mbuf_nb_segs(m);
+
+    return p;
+}
+
+template <bool HugetlbfsMemBackend>
+inline bool dpdk_qp<HugetlbfsMemBackend>::refill_one_cluster(rte_mbuf* head)
+{
+    while (head != NULL) {
+        struct rte_mbuf *m_next = head->next;
+        if (!refill_rx_mbuf(head)) {
+            //
+            // If we failed to allocate a new buffer - push the rest of the
+            // cluster back to the free_packets list for a later retry.
+            //
+            _rx_free_pkts.push_back(head);
+            return false;
+        }
+        _rx_free_bufs.push_back(head);
+        head = m_next;
+    }
+
+    return true;
+}
+
+template <bool HugetlbfsMemBackend>
+bool dpdk_qp<HugetlbfsMemBackend>::rx_gc()
+{
+    if (_num_rx_free_segs >= rx_gc_thresh) {
+        while (!_rx_free_pkts.empty()) {
+            //
+            // Use back() + pop_back() semantics to avoid an extra
+            // _rx_free_pkts.clear() at the end of the function - clear() has a
+            // linear complexity.
+            //
+            auto m = _rx_free_pkts.back();
+            _rx_free_pkts.pop_back();
+
+            if (!refill_one_cluster(m)) {
+                break;
+            }
+        }
+
+        if (_rx_free_bufs.size()) {
+            rte_mempool_put_bulk(_pktmbuf_pool_rx,
+                                 (void **)_rx_free_bufs.data(),
+                                 _rx_free_bufs.size());
+
+            // TODO: assert() in a fast path! Remove me ASAP!
+            assert(_num_rx_free_segs >= _rx_free_bufs.size());
+
+            _num_rx_free_segs -= _rx_free_bufs.size();
+            _rx_free_bufs.clear();
+
+            // TODO: assert() in a fast path! Remove me ASAP!
+            assert((_rx_free_pkts.empty() && !_num_rx_free_segs) ||
+                   (!_rx_free_pkts.empty() && _num_rx_free_segs));
+        }
+    }
+
+    return _num_rx_free_segs >= rx_gc_thresh;
+}
+
+
 template <bool HugetlbfsMemBackend>
 void dpdk_qp<HugetlbfsMemBackend>::process_packets(
     struct rte_mbuf **bufs, uint16_t count)
@@ -1305,14 +1501,13 @@ void dpdk_qp<HugetlbfsMemBackend>::process_packets(
         struct rte_mbuf *m = bufs[i];
         offload_info oi;
 
+        // TODO: Remove this when implement LRO support
         if (!rte_pktmbuf_is_contiguous(m)) {
             rte_exit(EXIT_FAILURE,
                      "DPDK-Rx: Have got a fragmented buffer - not supported\n");
         }
 
-        fragment f{rte_pktmbuf_mtod(m, char*), rte_pktmbuf_data_len(m)};
-
-        packet p(f, make_deleter(deleter(), [m] { rte_pktmbuf_free(m); }));
+        packet p = from_mbuf(m);
 
         // Set stipped VLAN value if available
         if ((_dev->_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_STRIP) &&

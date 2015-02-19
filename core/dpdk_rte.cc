@@ -91,9 +91,12 @@ void eal::init(cpuset cpus, boost::program_options::variables_map opts)
     initialized = true;
 }
 
-uint32_t __attribute__((weak)) qp_mempool_obj_size() { return 0; }
+uint32_t __attribute__((weak)) qp_mempool_obj_size(bool hugetlbfs_membackend)
+{
+    return 0;
+}
 
-size_t eal::mem_size(int num_cpus)
+size_t eal::mem_size(int num_cpus, bool hugetlbfs_membackend)
 {
     size_t memsize = 0;
     //
@@ -102,7 +105,7 @@ size_t eal::mem_size(int num_cpus)
     // We don't know what is going to be our networking configuration so we
     // assume there is going to be a queue per-CPU.
     //
-    memsize += num_cpus * qp_mempool_obj_size();
+    memsize += num_cpus * qp_mempool_obj_size(hugetlbfs_membackend);
 
     // Plus we'll give a DPDK 64MB for "other stuff".
     memsize += (64UL << 20);

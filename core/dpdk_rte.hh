@@ -88,7 +88,7 @@ public:
      *
      * @return
      */
-    static size_t mem_size(int num_cpus);
+    static size_t mem_size(int num_cpus, bool hugetlbfs_membackend = true);
     static bool initialized;
 };
 
