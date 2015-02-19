@@ -9,8 +9,8 @@
 
 // FIXME: wraps around in 2038
 class gc_clock {
-    using base = std::chrono::system_clock;
 public:
+    using base = std::chrono::system_clock;
     using rep = int32_t;
     using period = std::ratio<1, 1>; // seconds
     using duration = std::chrono::duration<rep, period>;
