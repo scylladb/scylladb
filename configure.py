@@ -186,6 +186,7 @@ core = [
     'core/posix.cc',
     'core/memory.cc',
     'core/resource.cc',
+    'core/stdio.cc',
     'core/scollectd.cc',
     'core/app-template.cc',
     'core/dpdk_rte.cc',
