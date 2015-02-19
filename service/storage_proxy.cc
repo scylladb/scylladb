@@ -483,7 +483,7 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
         assert(ks); // FIXME: load keyspace meta-data from storage
         column_family* cf = ks->find_column_family(m.schema->cf_name);
         if (cf) {
-            cf->apply(std::move(m));
+            cf->apply(m);
         } else {
             // TODO: log a warning
         }

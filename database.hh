@@ -162,7 +162,7 @@ public:
         apply_row_tombstone(schema, {std::move(prefix), std::move(t)});
     }
     void apply_row_tombstone(schema_ptr schema, std::pair<bytes, tombstone> row_tombstone);
-    void apply(schema_ptr schema, mutation_partition&& p);
+    void apply(schema_ptr schema, const mutation_partition& p);
     const row_tombstone_set& row_tombstones() const { return _row_tombstones; }
     row& static_row() { return _static_row; }
     row& clustered_row(const clustering_key& key) { return _rows[key].cells; }
@@ -185,7 +185,7 @@ public:
     { }
 
     mutation(mutation&&) = default;
-    mutation(const mutation&) = delete;
+    mutation(const mutation&) = default;
 
     void set_static_cell(const column_definition& def, boost::any value) {
         p.static_row()[def.id] = std::move(value);
@@ -212,7 +212,7 @@ struct column_family {
     schema_ptr _schema;
     // partition key -> partition
     std::map<bytes, mutation_partition, key_compare> partitions;
-    void apply(mutation&& m);
+    void apply(const mutation& m);
 };
 
 class keyspace {
