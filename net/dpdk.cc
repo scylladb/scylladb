@@ -1137,8 +1137,15 @@ void* dpdk_qp<HugetlbfsMemBackend>::alloc_mempool_xmem(
 {
     using namespace memory;
     char* xmem;
+    struct rte_mempool_objsz mp_obj_sz = {};
 
-    size_t xmem_size = rte_mempool_xmem_size(num_bufs, buf_sz, page_bits);
+    rte_mempool_calc_obj_size(buf_sz, 0, &mp_obj_sz);
+
+    size_t xmem_size =
+        rte_mempool_xmem_size(num_bufs,
+                              mp_obj_sz.elt_size + mp_obj_sz.header_size +
+                                                   mp_obj_sz.trailer_size,
+                              page_bits);
 
     // Aligning to 2M causes the further failure in small allocations.
     // TODO: Check why - and fix.
