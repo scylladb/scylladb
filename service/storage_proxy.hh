@@ -25,15 +25,16 @@
 #pragma once
 
 #include "database.hh"
+#include "core/distributed.hh"
 #include "db/consistency_level.hh"
 
 namespace service {
 
 class storage_proxy /*implements StorageProxyMBean*/ {
 private:
-    database& _db;
+    distributed<database>& _db;
 public:
-    storage_proxy(database& db) : _db(db) {}
+    storage_proxy(distributed<database>& db) : _db(db) {}
 
     /**
     * Use this method to have these Mutations applied

@@ -32,15 +32,16 @@
 #include "cql3/statements/cf_statement.hh"
 #include "service/query_state.hh"
 #include "log.hh"
+#include "core/distributed.hh"
 
 namespace cql3 {
 
 class query_processor {
 private:
     service::storage_proxy& _proxy;
-    database& _db;
+    distributed<database>& _db;
 public:
-    query_processor(service::storage_proxy& proxy, database& db) : _proxy(proxy), _db(db) {}
+    query_processor(service::storage_proxy& proxy, distributed<database>& db) : _proxy(proxy), _db(db) {}
 
 #if 0
     public static final SemanticVersion CQL_VERSION = new SemanticVersion("3.2.0");

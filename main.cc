@@ -19,6 +19,7 @@ int main(int ac, char** av) {
         ("datadir", bpo::value<std::string>()->default_value("/var/lib/cassandra/data"), "data directory");
 
     auto server = std::make_unique<distributed<thrift_server>>();;
+    distributed<database> db;
 
     return app.run(ac, av, [&] {
         auto&& config = app.configuration();
@@ -26,16 +27,17 @@ int main(int ac, char** av) {
         uint16_t cql_port = config["cql-port"].as<uint16_t>();
         sstring datadir = config["datadir"].as<std::string>();
 
-        return database::populate(datadir).then([cql_port, thrift_port] (database db) {
-            auto pdb = new database(std::move(db));
+        return db.start().then([datadir, &db] {
+            return db.invoke_on_all(&database::init_from_data_directory, datadir);
+        }).then([&db, cql_port, thrift_port] {
             auto cserver = new distributed<cql_server>;
-            cserver->start(std::ref(*pdb)).then([server = std::move(cserver), cql_port] () mutable {
+            cserver->start(std::ref(db)).then([server = std::move(cserver), cql_port] () mutable {
                     server->invoke_on_all(&cql_server::listen, ipv4_addr{cql_port});
             }).then([cql_port] {
                 std::cout << "CQL server listening on port " << cql_port << " ...\n";
             });
             auto tserver = new distributed<thrift_server>;
-            tserver->start(std::ref(*pdb)).then([server = std::move(tserver), thrift_port] () mutable {
+            tserver->start(std::ref(db)).then([server = std::move(tserver), thrift_port] () mutable {
                     server->invoke_on_all(&thrift_server::listen, ipv4_addr{thrift_port});
             }).then([thrift_port] {
                 std::cout << "Thrift server listening on port " << thrift_port << " ...\n";

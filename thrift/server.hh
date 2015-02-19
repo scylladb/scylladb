@@ -6,6 +6,7 @@
 #define APPS_SEASTAR_THRIFT_SERVER_HH_
 
 #include "core/reactor.hh"
+#include "core/distributed.hh"
 #include <memory>
 #include <cstdint>
 
@@ -42,7 +43,7 @@ class thrift_server {
     uint64_t _current_connections = 0;
     uint64_t _requests_served = 0;
 public:
-    thrift_server(database& db);
+    thrift_server(distributed<database>& db);
     future<> listen(ipv4_addr addr);
     void do_accepts(int which);
     class connection;

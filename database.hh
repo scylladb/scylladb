@@ -162,13 +162,14 @@ public:
         apply_row_tombstone(schema, {std::move(prefix), std::move(t)});
     }
     void apply_row_tombstone(schema_ptr schema, std::pair<bytes, tombstone> row_tombstone);
-    void apply(schema_ptr schema, mutation_partition&& p);
+    void apply(schema_ptr schema, const mutation_partition& p);
     const row_tombstone_set& row_tombstones() const { return _row_tombstones; }
     row& static_row() { return _static_row; }
     row& clustered_row(const clustering_key& key) { return _rows[key].cells; }
     row& clustered_row(clustering_key&& key) { return _rows[std::move(key)].cells; }
     row* find_row(const clustering_key& key);
     tombstone tombstone_for_row(schema_ptr schema, const clustering_key& key);
+    friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
 };
 
 class mutation final {
@@ -184,7 +185,7 @@ public:
     { }
 
     mutation(mutation&&) = default;
-    mutation(const mutation&) = delete;
+    mutation(const mutation&) = default;
 
     void set_static_cell(const column_definition& def, boost::any value) {
         p.static_row()[def.id] = std::move(value);
@@ -199,6 +200,7 @@ public:
         auto& row = p.clustered_row(key);
         row[def.id] = std::move(value);
     }
+    friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
 
 struct column_family {
@@ -210,7 +212,7 @@ struct column_family {
     schema_ptr _schema;
     // partition key -> partition
     std::map<bytes, mutation_partition, key_compare> partitions;
-    void apply(mutation&& m);
+    void apply(const mutation& m);
 };
 
 class keyspace {
@@ -221,12 +223,20 @@ public:
     column_family* find_column_family(const sstring& cf_name);
 };
 
+// Policy for distributed<database>:
+//   broadcast writes
+//   local reads
+
 class database {
 public:
     std::unordered_map<sstring, keyspace> keyspaces;
+    future<> init_from_data_directory(sstring datadir);
     static future<database> populate(sstring datadir);
     keyspace* find_keyspace(const sstring& name);
+    future<> stop() { return make_ready_future<>(); }
+    void assign(database&& db) {
+        *this = std::move(db);
+    }
 };
-
 
 #endif /* DATABASE_HH_ */

@@ -477,18 +477,20 @@ namespace service {
 future<>
 storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl) {
     // FIXME: send it to replicas instead of applying locally
-    for (auto&& m : mutations) {
-        // FIXME: lookup column_family by UUID
-        keyspace* ks = _db.find_keyspace(m.schema->ks_name);
-        assert(ks); // FIXME: load keyspace meta-data from storage
-        column_family* cf = ks->find_column_family(m.schema->cf_name);
-        if (cf) {
-            cf->apply(std::move(m));
-        } else {
-            // TODO: log a warning
+    auto pmut = make_lw_shared(std::move(mutations));
+    return _db.invoke_on_all([pmut, cl] (database& db) {
+        for (auto&& m : *pmut) {
+            // FIXME: lookup column_family by UUID
+            keyspace* ks = db.find_keyspace(m.schema->ks_name);
+            assert(ks); // FIXME: load keyspace meta-data from storage
+            column_family* cf = ks->find_column_family(m.schema->cf_name);
+            if (cf) {
+                cf->apply(m);
+            } else {
+                // TODO: log a warning
+            }
         }
-    }
-    return make_ready_future<>();
+    });
 #if 0
         Tracing.trace("Determining replicas for mutation");
         final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
