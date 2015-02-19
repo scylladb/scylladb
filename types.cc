@@ -5,6 +5,7 @@
 #include <boost/lexical_cast.hpp>
 #include "cql3/cql3_type.hh"
 #include "types.hh"
+#include "core/print.hh"
 
 template<typename T>
 struct simple_type_traits {
@@ -395,6 +396,10 @@ struct uuid_type_impl : abstract_type {
         return cql3::native_cql3_type::uuid;
     }
 };
+
+std::ostream& operator<<(std::ostream& os, const bytes& b) {
+    return os << to_hex(b);
+}
 
 thread_local shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());

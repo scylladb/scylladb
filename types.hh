@@ -31,6 +31,8 @@ using sstring_view = std::experimental::string_view;
 sstring to_hex(const bytes& b);
 sstring to_hex(const bytes_opt& b);
 
+std::ostream& operator<<(std::ostream& os, const bytes& b);
+
 using object_opt = std::experimental::optional<boost::any>;
 
 class marshal_exception : public std::exception {

@@ -169,6 +169,7 @@ public:
     row& clustered_row(clustering_key&& key) { return _rows[std::move(key)].cells; }
     row* find_row(const clustering_key& key);
     tombstone tombstone_for_row(schema_ptr schema, const clustering_key& key);
+    friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
 };
 
 class mutation final {
@@ -199,6 +200,7 @@ public:
         auto& row = p.clustered_row(key);
         row[def.id] = std::move(value);
     }
+    friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
 
 struct column_family {

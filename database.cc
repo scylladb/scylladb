@@ -388,3 +388,11 @@ bool column_definition::is_compact_value() const {
     unimplemented::compact_tables();
     return false;
 }
+
+std::ostream& operator<<(std::ostream& os, const mutation& m) {
+    return fprint(os, "{mutation: schema %p key %s data %s}", m.schema.get(), m.key, m.p);
+}
+
+std::ostream& operator<<(std::ostream& os, const mutation_partition& mp) {
+    return fprint(os, "{mutation_partition: ...}");
+}
