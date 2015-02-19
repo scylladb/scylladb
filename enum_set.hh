@@ -92,6 +92,8 @@ private:
     mask_type _mask;
     constexpr enum_set(mask_type mask) : _mask(mask) {}
 public:
+    constexpr enum_set() : _mask(0) {}
+
     static constexpr enum_set from_mask(mask_type mask) {
         return enum_set(mask);
     }
@@ -140,6 +142,15 @@ public:
 
     void remove(enum_type e) {
         _mask &= ~mask_for(e);
+    }
+
+    template<enum_type e>
+    void set() {
+        _mask |= mask_for<e>();
+    }
+
+    void set(enum_type e) {
+        _mask |= mask_for(e);
     }
 
     explicit operator bool() const {
