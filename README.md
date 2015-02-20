@@ -11,6 +11,27 @@ It is based on [futures](http://en.wikipedia.org/wiki/Futures_and_promises).
 Building Seastar
 --------------------
 
+
+### Building seastar on Fedora 21
+
+Installing required packages:
+```
+yum install gcc-c++ libaio-devel ninja-build ragel hwloc-devel numactl-devel libpciaccess-devel cryptopp-devel
+```
+
+You then need to run the following to create the "build.ninja" file:
+```
+./configure.py
+```
+Note it is enough to run this once, and you don't need to repeat it before
+every build. build.ninja includes a rule which will automatically re-run
+./configure.py if it changes.
+
+Then finally:
+```
+ninja-build
+```
+
 ### Building seastar on Fedora 20
 
 Installing GCC 4.9 for gnu++1y:
