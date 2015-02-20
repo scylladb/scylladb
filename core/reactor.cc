@@ -481,7 +481,11 @@ posix_file_impl::list_directory(std::function<future<> (directory_entry de)> nex
                 ;
             }
             w->current += de->d_reclen;
-            return w->s.produce({de->d_name, type});
+            sstring name = de->d_name;
+            if (name == "." || name == "..") {
+                return make_ready_future<>();
+            }
+            return w->s.produce({std::move(name), type});
         });
     }).then([w] {
         w->s.close();
