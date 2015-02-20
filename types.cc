@@ -110,6 +110,9 @@ struct long_type_impl : integer_type_impl<int64_t> {
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
         return cql3::native_cql3_type::bigint;
     }
+    virtual bool is_value_compatible_with_internal(abstract_type& other) override {
+        return &other == this || &other == date_type.get() || &other == timestamp_type.get();
+    }
 };
 
 struct string_type_impl : public abstract_type {
@@ -177,6 +180,9 @@ struct bytes_type_impl final : public abstract_type {
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
         return cql3::native_cql3_type::blob;
     }
+    virtual bool is_value_compatible_with_internal(abstract_type& other) override {
+        return true;
+    }
 };
 
 struct boolean_type_impl : public simple_type_impl<bool> {
@@ -238,6 +244,9 @@ struct date_type_impl : public abstract_type {
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
         return cql3::native_cql3_type::timestamp;
+    }
+    virtual bool is_value_compatible_with_internal(abstract_type& other) override {
+        return &other == this || &other == timestamp_type.get() || &other == long_type.get();
     }
 };
 
@@ -331,6 +340,9 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
         return cql3::native_cql3_type::timestamp;
     }
+    virtual bool is_value_compatible_with_internal(abstract_type& other) override {
+        return &other == this || &other == date_type.get() || &other == long_type.get();
+    }
 };
 
 struct uuid_type_impl : abstract_type {
@@ -390,6 +402,9 @@ struct uuid_type_impl : abstract_type {
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
         return cql3::native_cql3_type::uuid;
+    }
+    virtual bool is_value_compatible_with_internal(abstract_type& other) override {
+        return &other == this || &other == timeuuid_type.get();
     }
 };
 
