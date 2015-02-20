@@ -16,7 +16,7 @@
  * under the License.
  */
 /*
- * Copyright 2014 Cloudius Systems
+ * Copyright 2014-2015 Cloudius Systems
  */
 
 #include <boost/intrusive/unordered_set.hpp>
@@ -35,10 +35,12 @@
 #include "core/units.hh"
 #include "core/distributed.hh"
 #include "core/vector-data-sink.hh"
+#include "core/bitops.hh"
+#include "core/slab.hh"
+#include "core/align.hh"
 #include "net/api.hh"
 #include "net/packet-data-source.hh"
 #include "apps/memcached/ascii.hh"
-#include "core/bitops.hh"
 #include "memcached.hh"
 #include <unistd.h>
 
@@ -51,6 +53,11 @@ using namespace net;
 namespace bi = boost::intrusive;
 
 namespace memcache {
+
+static constexpr double default_slab_growth_factor = 1.25;
+static constexpr uint64_t default_slab_page_size = 1UL*MB;
+static constexpr uint64_t default_per_cpu_slab_size = 64UL*MB;
+static __thread slab_allocator<item>* slab;
 
 template<typename T>
 using optional = boost::optional<T>;
@@ -80,33 +87,49 @@ struct expiration {
     }
 };
 
-class item {
+class item : public slab_item_base {
 public:
     using version_type = uint64_t;
     using time_point = clock_type::time_point;
     using duration = clock_type::duration;
+    static constexpr uint8_t field_alignment = alignof(void*);
 private:
     using hook_type = bi::unordered_set_member_hook<>;
     // TODO: align shared data to cache line boundary
-    item_key _key;
-    const sstring _data;
-    const sstring _ascii_prefix;
     version_type _version;
-    int _ref_count;
-    expiration _expiry;
     hook_type _cache_link;
-    bi::list_member_hook<> _lru_link;
     bi::list_member_hook<> _timer_link;
+    size_t _key_hash;
+    expiration _expiry;
+    uint32_t _value_size;
+    uint16_t _ref_count;
+    uint8_t _key_size;
+    uint8_t _ascii_prefix_size;
+    uint8_t _slab_class_id;
+    char _unused[3];
+    char _data[]; // layout: data=key, (data+key_size)=ascii_prefix, (data+key_size+ascii_prefix_size)=value.
     friend class cache;
 public:
-    item(item_key&& key, sstring&& ascii_prefix, sstring&& data, expiration expiry, version_type version = 1)
-        : _key(std::move(key))
-        , _data(std::move(data))
-        , _ascii_prefix(std::move(ascii_prefix))
-        , _version(version)
-        , _ref_count(0)
+    item(uint8_t slab_class_id, item_key&& key, sstring&& ascii_prefix,
+         sstring&& value, expiration expiry, version_type version = 1)
+        : _version(version)
+        , _key_hash(key.hash())
         , _expiry(expiry)
+        , _value_size(value.size())
+        , _ref_count(0)
+        , _key_size(key.key().size())
+        , _ascii_prefix_size(ascii_prefix.size())
+        , _slab_class_id(slab_class_id)
     {
+        assert(_key_size <= std::numeric_limits<uint8_t>::max());
+        assert(_ascii_prefix_size <= std::numeric_limits<uint8_t>::max());
+        // storing key
+        memcpy(_data, key.key().c_str(), _key_size);
+        // storing ascii_prefix
+        memcpy(_data + align_up(_key_size, field_alignment), ascii_prefix.c_str(), _ascii_prefix_size);
+        // storing value
+        memcpy(_data + align_up(_key_size, field_alignment) + align_up(_ascii_prefix_size, field_alignment),
+               value.c_str(), _value_size);
     }
 
     item(const item&) = delete;
@@ -120,25 +143,40 @@ public:
         return _version;
     }
 
-    const sstring& data() {
-        return _data;
+    const std::experimental::string_view key() const {
+        return std::experimental::string_view(_data, _key_size);
     }
 
-    const sstring& ascii_prefix() {
-        return _ascii_prefix;
+    const std::experimental::string_view ascii_prefix() const {
+        const char *p = _data + align_up(_key_size, field_alignment);
+        return std::experimental::string_view(p, _ascii_prefix_size);
     }
 
-    const sstring& key() {
-        return _key.key();
+    const std::experimental::string_view value() const {
+        const char *p = _data + align_up(_key_size, field_alignment) +
+            align_up(_ascii_prefix_size, field_alignment);
+        return std::experimental::string_view(p, _value_size);
+    }
+
+    size_t key_size() const {
+        return _key_size;
+    }
+
+    size_t ascii_prefix_size() const {
+        return _ascii_prefix_size;
+    }
+
+    size_t value_size() const {
+        return _value_size;
     }
 
     optional<uint64_t> data_as_integral() {
-        auto str = _data.c_str();
+        auto str = value().data();
         if (str[0] == '-') {
             return {};
         }
 
-        auto len = _data.size();
+        auto len = _value_size;
 
         // Strip trailing space
         while (len && str[len - 1] == ' ') {
@@ -154,26 +192,43 @@ public:
 
     // needed by timer_set
     bool cancel() {
-        assert(false);
         return false;
     }
 
+    // get_slab_class_id() and is_unlocked() are methods required by slab class.
+    const uint8_t get_slab_class_id() {
+        return _slab_class_id;
+    }
+    bool is_unlocked() {
+        return _ref_count == 1;
+    }
+
     friend bool operator==(const item &a, const item &b) {
-         return a._key == b._key;
+         return (a._key_hash == b._key_hash) &&
+            (a._key_size == b._key_size) &&
+            (memcmp(a._data, b._data, a._key_size) == 0);
     }
 
     friend std::size_t hash_value(const item &i) {
-        return std::hash<item_key>()(i._key);
+        return i._key_hash;
     }
 
     friend inline void intrusive_ptr_add_ref(item* it) {
+        assert(it->_ref_count >= 0);
         ++it->_ref_count;
+        if (it->_ref_count == 2) {
+            slab->lock_item(it);
+        }
     }
 
     friend inline void intrusive_ptr_release(item* it) {
-        if (--it->_ref_count == 0) {
-            delete it;
+        --it->_ref_count;
+        if (it->_ref_count == 1) {
+            slab->unlock_item(it);
+        } else if (it->_ref_count == 0) {
+            slab->free(it);
         }
+        assert(it->_ref_count >= 0);
     }
 
     friend class item_key_cmp;
@@ -181,12 +236,19 @@ public:
 
 struct item_key_cmp
 {
+private:
+    bool compare(const item_key& key, const item& it) const {
+        return (it._key_hash == key.hash()) &&
+            (it._key_size == key.key().size()) &&
+            (memcmp(it._data, key.key().c_str(), it._key_size) == 0);
+    }
+public:
     bool operator()(const item_key& key, const item& it) const {
-        return key == it._key;
+        return compare(key, it);
     }
 
     bool operator()(const item& it, const item_key& key) const {
-        return key == it._key;
+        return compare(key, it);
     }
 };
 
@@ -275,18 +337,40 @@ private:
     size_t _resize_up_threshold = load_factor * initial_bucket_count;
     cache_type::bucket_type* _buckets;
     cache_type _cache;
-    bi::list<item, bi::member_hook<item, bi::list_member_hook<>, &item::_lru_link>> _lru;
     timer_set<item, &item::_timer_link> _alive;
     timer<> _timer;
     cache_stats _stats;
     timer<> _flush_timer;
-    memory::reclaimer _reclaimer;
 private:
-    size_t item_footprint(item& item_ref) {
-        return sizeof(item) + item_ref._data.size() + item_ref._ascii_prefix.size() + item_ref.key().size();
+    size_t item_size(item& item_ref) {
+        constexpr size_t field_alignment = alignof(void*);
+        return sizeof(item) +
+            align_up(item_ref.key_size(), field_alignment) +
+            align_up(item_ref.ascii_prefix_size(), field_alignment) +
+            item_ref.value_size();
     }
 
-    template <bool IsInCache = true, bool IsInTimerList = true>
+    size_t item_size(item_insertion_data& insertion) {
+        constexpr size_t field_alignment = alignof(void*);
+        auto size = sizeof(item) +
+            align_up(insertion.key.key().size(), field_alignment) +
+            align_up(insertion.ascii_prefix.size(), field_alignment) +
+            insertion.data.size();
+#ifdef __DEBUG__
+        static bool print_item_footprint = true;
+        if (print_item_footprint) {
+            print_item_footprint = false;
+            std::cout << __FUNCTION__ << ": " << size << "\n";
+            std::cout << "sizeof(item)      " << sizeof(item) << "\n";
+            std::cout << "key.size          " << insertion.key.key().size() << "\n";
+            std::cout << "value.size        " << insertion.data.size() << "\n";
+            std::cout << "ascii_prefix.size " << insertion.ascii_prefix.size() << "\n";
+        }
+#endif
+        return size;
+    }
+
+    template <bool IsInCache = true, bool IsInTimerList = true, bool Release = true>
     void erase(item& item_ref) {
         if (IsInCache) {
             _cache.erase(_cache.iterator_to(item_ref));
@@ -296,9 +380,11 @@ private:
                 _alive.remove(item_ref);
             }
         }
-        _lru.erase(_lru.iterator_to(item_ref));
-        _stats._bytes -= item_footprint(item_ref);
-        intrusive_ptr_release(&item_ref);
+        _stats._bytes -= item_size(item_ref);
+        if (Release) {
+            // memory used by item shouldn't be freed when slab is replacing it with another item.
+            intrusive_ptr_release(&item_ref);
+        }
     }
 
     void expire() {
@@ -321,27 +407,29 @@ private:
     inline
     cache_iterator add_overriding(cache_iterator i, item_insertion_data& insertion) {
         auto& old_item = *i;
-
-        auto new_item = new item(Origin::move_if_local(insertion.key), Origin::move_if_local(insertion.ascii_prefix),
-            Origin::move_if_local(insertion.data), insertion.expiry, old_item._version + 1);
-        intrusive_ptr_add_ref(new_item);
+        uint64_t old_item_version = old_item._version;
 
         erase(old_item);
+
+        size_t size = item_size(insertion);
+        auto new_item = slab->create(size, Origin::move_if_local(insertion.key), Origin::move_if_local(insertion.ascii_prefix),
+            Origin::move_if_local(insertion.data), insertion.expiry, old_item_version + 1);
+        intrusive_ptr_add_ref(new_item);
 
         auto insert_result = _cache.insert(*new_item);
         assert(insert_result.second);
         if (insertion.expiry.ever_expires() && _alive.insert(*new_item)) {
             _timer.rearm(new_item->get_timeout());
         }
-        _lru.push_front(*new_item);
-        _stats._bytes += item_footprint(*new_item);
+        _stats._bytes += size;
         return insert_result.first;
     }
 
     template <typename Origin>
     inline
     void add_new(item_insertion_data& insertion) {
-        auto new_item = new item(Origin::move_if_local(insertion.key), Origin::move_if_local(insertion.ascii_prefix),
+        size_t size = item_size(insertion);
+        auto new_item = slab->create(size, Origin::move_if_local(insertion.key), Origin::move_if_local(insertion.ascii_prefix),
             Origin::move_if_local(insertion.data), insertion.expiry);
         intrusive_ptr_add_ref(new_item);
         auto& item_ref = *new_item;
@@ -349,8 +437,7 @@ private:
         if (insertion.expiry.ever_expires() && _alive.insert(item_ref)) {
             _timer.rearm(item_ref.get_timeout());
         }
-        _lru.push_front(*new_item);
-        _stats._bytes += item_footprint(item_ref);
+        _stats._bytes += size;
         maybe_rehash();
     }
 
@@ -362,7 +449,6 @@ private:
                 _buckets = new cache_type::bucket_type[new_size];
             } catch (const std::bad_alloc& e) {
                 _stats._resize_failure++;
-                evict(100); // In order to amortize the cost of resize failure
                 return;
             }
             _cache.rehash(typename cache_type::bucket_traits(_buckets, new_size));
@@ -370,57 +456,24 @@ private:
             _resize_up_threshold = _cache.bucket_count() * load_factor;
         }
     }
-
-    // Evicts at most @count items.
-    void evict(size_t count) {
-        while (!_lru.empty() && count--) {
-            erase(_lru.back());
-            _stats._evicted++;
-        }
-    }
-
-    void reclaim(size_t target) {
-        size_t reclaimed_so_far = 0;
-        _stats._reclaims++;
-
-        auto i = _lru.end();
-        if (i == _lru.begin()) {
-            return;
-        }
-
-        --i;
-
-        bool done = false;
-        do {
-            item& victim = *i;
-            if (i != _lru.begin()) {
-                --i;
-            } else {
-                done = true;
-            }
-
-            // If the item is shared, we can not assume that removing it from
-            // cache would cause the memory to be reclaimed in a timely manner
-            // so we reclaim only items which are not shared.
-            if (victim._ref_count == 1) {
-                reclaimed_so_far += item_footprint(victim);
-                erase(victim);
-                _stats._evicted++;
-
-                if (reclaimed_so_far >= target) {
-                    done = true;
-                }
-            }
-        } while (!done);
-    }
 public:
-    cache()
+    cache(uint64_t per_cpu_slab_size, uint64_t slab_page_size)
         : _buckets(new cache_type::bucket_type[initial_bucket_count])
         , _cache(cache_type::bucket_traits(_buckets, initial_bucket_count))
-        , _reclaimer([this] { reclaim(5*MB); })
     {
         _timer.set_callback([this] { expire(); });
         _flush_timer.set_callback([this] { flush_all(); });
+
+        // initialize per-thread slab allocator.
+        slab = new slab_allocator<item>(default_slab_growth_factor, per_cpu_slab_size, slab_page_size,
+                [this](item& item_ref) { erase<true, true, false>(item_ref); _stats._evicted++; });
+#ifdef __DEBUG__
+        static bool print_slab_classes = true;
+        if (print_slab_classes) {
+            print_slab_classes = false;
+            slab->print_slab_classes();
+        }
+#endif
     }
 
     ~cache() {
@@ -496,8 +549,6 @@ public:
         }
         _stats._get_hits++;
         auto& item_ref = *i;
-        _lru.erase(_lru.iterator_to(item_ref));
-        _lru.push_front(item_ref);
         return item_ptr(&item_ref);
     }
 
@@ -546,7 +597,7 @@ public:
         }
         item_insertion_data insertion {
             .key = Origin::move_if_local(key),
-            .ascii_prefix = item_ref._ascii_prefix,
+            .ascii_prefix = sstring(item_ref.ascii_prefix().data(), item_ref.ascii_prefix_size()),
             .data = to_sstring(*value + delta),
             .expiry = item_ref._expiry
         };
@@ -569,7 +620,7 @@ public:
         }
         item_insertion_data insertion {
             .key = Origin::move_if_local(key),
-            .ascii_prefix = item_ref._ascii_prefix,
+            .ascii_prefix = sstring(item_ref.ascii_prefix().data(), item_ref.ascii_prefix_size()),
             .data = to_sstring(*value - std::min(*value, delta)),
             .expiry = item_ref._expiry
         };
@@ -772,6 +823,7 @@ private:
     static constexpr const char *msg_version = "VERSION " VERSION_STRING "\r\n";
     static constexpr const char *msg_exists = "EXISTS\r\n";
     static constexpr const char *msg_stat = "STAT ";
+    static constexpr const char *msg_out_of_memory = "SERVER_ERROR Out of memory allocating new item\r\n";
     static constexpr const char *msg_error_non_numeric_value = "CLIENT_ERROR cannot increment or decrement non-numeric value\r\n";
 private:
     template <bool WithVersion>
@@ -790,7 +842,7 @@ private:
         }
 
         msg.append_static(msg_crlf);
-        msg.append_static(item->data());
+        msg.append_static(item->value());
         msg.append_static(msg_crlf);
         msg.on_delete([item = std::move(item)] {});
     }
@@ -1063,7 +1115,7 @@ public:
                         if (!incremented) {
                             return out.write(msg_error_non_numeric_value);
                         }
-                        return out.write(item->data()).then([&out] {
+                        return out.write(item->value().data(), item->value_size()).then([&out] {
                             return out.write(msg_crlf);
                         });
                     });
@@ -1084,13 +1136,25 @@ public:
                         if (!decremented) {
                             return out.write(msg_error_non_numeric_value);
                         }
-                        return out.write(item->data()).then([&out] {
+                        return out.write(item->value().data(), item->value_size()).then([&out] {
                             return out.write(msg_crlf);
                         });
                     });
                 }
             };
             std::abort();
+        }).rescue([this, &out] (auto get_ex) -> future<> {
+            // FIXME: rescue being scheduled even though no exception was triggered has a
+            // performance cost of about 2.6%. Not using it means maintainability penalty.
+            try {
+                get_ex();
+            } catch (std::bad_alloc& e) {
+                if (_parser._noreply) {
+                    return make_ready_future<>();
+                }
+                return out.write(msg_out_of_memory);
+            }
+            return make_ready_future<>();
         });
     };
 };
@@ -1293,6 +1357,10 @@ int main(int ac, char** av) {
     app.add_options()
         ("max-datagram-size", bpo::value<int>()->default_value(memcache::udp_server::default_max_datagram_size),
              "Maximum size of UDP datagram")
+        ("max-slab-size", bpo::value<uint64_t>()->default_value(memcache::default_per_cpu_slab_size/MB),
+             "Maximum memory to be used for items (value in megabytes)")
+        ("slab-page-size", bpo::value<uint64_t>()->default_value(memcache::default_slab_page_size/MB),
+             "Size of slab page (value in megabytes)")
         ("stats",
              "Print basic statistics periodically (every second)")
         ("port", bpo::value<uint16_t>()->default_value(11211),
@@ -1307,7 +1375,9 @@ int main(int ac, char** av) {
 
         auto&& config = app.configuration();
         uint16_t port = config["port"].as<uint16_t>();
-        return cache_peers.start().then([&system_stats] {
+        uint64_t per_cpu_slab_size = config["max-slab-size"].as<uint64_t>() * MB;
+        uint64_t slab_page_size = config["slab-page-size"].as<uint64_t>() * MB;
+        return cache_peers.start(std::move(per_cpu_slab_size), std::move(slab_page_size)).then([&system_stats] {
             return system_stats.start(clock_type::now());
         }).then([&] {
             std::cout << PLATFORM << " memcached " << VERSION << "\n";
@@ -1334,4 +1404,3 @@ int main(int ac, char** av) {
         });
     });
 }
-

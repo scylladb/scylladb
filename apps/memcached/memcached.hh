@@ -22,6 +22,7 @@
 
 namespace memcache {
 
+class item;
 class cache;
 
 class item_key {
