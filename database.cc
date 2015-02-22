@@ -211,6 +211,14 @@ database::init_from_data_directory(sstring datadir) {
     });
 }
 
+unsigned
+database::shard_of(const dht::token& t) {
+    if (t._data.empty()) {
+        return 0;
+    }
+    return uint8_t(t._data[0]) % smp::count;
+}
+
 column_definition::column_definition(bytes name, data_type type, column_id id, column_kind kind)
     : _name(std::move(name))
     , type(std::move(type))

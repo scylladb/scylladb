@@ -5,6 +5,7 @@
 #ifndef DATABASE_HH_
 #define DATABASE_HH_
 
+#include "dht/i_partitioner.hh"
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
 #include "net/byteorder.hh"
@@ -224,8 +225,9 @@ public:
 };
 
 // Policy for distributed<database>:
-//   broadcast writes
-//   local reads
+//   broadcast metadata writes
+//   local metadata reads
+//   use shard_of() for data
 
 class database {
 public:
@@ -237,6 +239,7 @@ public:
     void assign(database&& db) {
         *this = std::move(db);
     }
+    unsigned shard_of(const dht::token& t);
 };
 
 #endif /* DATABASE_HH_ */

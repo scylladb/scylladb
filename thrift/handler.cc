@@ -107,13 +107,18 @@ public:
     }
 
     void get_slice(tcxx::function<void(std::vector<ColumnOrSuperColumn>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
-        try {
+        auto keyb = to_bytes(key);
+        auto do_get = [this,
+                       key = std::move(key),
+                       column_parent = std::move(column_parent),
+                       predicate = std::move(predicate)] (database& db) {
             std::vector<ColumnOrSuperColumn> ret;
             auto keyb = to_bytes(key);
             if (!column_parent.super_column.empty()) {
                 throw unimplemented_exception();
             }
-            auto& cf = lookup_column_family(column_parent.column_family);
+            auto& ks = lookup_keyspace(db, _ks_name);
+            auto& cf = lookup_column_family(ks, column_parent.column_family);
             if (predicate.__isset.column_names) {
                 throw unimplemented_exception();
             } else if (predicate.__isset.slice_range) {
@@ -147,15 +152,20 @@ public:
                         }
                     }
                 }
+                return make_foreign(make_lw_shared(std::move(ret)));
             } else {
                 throw make_exception<InvalidRequestException>("empty SlicePredicate");
             }
-            cob(std::move(ret));
-        } catch (InvalidRequestException& ex) {
-            exn_cob(TDelayedException::delayException(ex));
-        } catch (std::exception& ex) {
-            exn_cob(TDelayedException::delayException(ex));
-        }
+        };
+        auto dk = dht::global_partitioner().decorate_key(keyb);
+        auto shard = _db.local().shard_of(dk._token);
+        _db.invoke_on(shard, [do_get = std::move(do_get)] (database& db) {
+            return do_get(db);
+        }).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)]
+                         (future<foreign_ptr<lw_shared_ptr<std::vector<ColumnOrSuperColumn>>>> ret) {
+            complete(ret, cob, exn_cob);
+            return make_ready_future<>();
+        });
     }
 
     void get_count(tcxx::function<void(int32_t const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
@@ -235,7 +245,7 @@ public:
                     [this, key] (std::pair<std::string, std::vector<Mutation>> cf_mutations) {
                 sstring cf_name = cf_mutations.first;
                 const std::vector<Mutation>& mutations = cf_mutations.second;
-                auto& cf = lookup_column_family(cf_name);
+                auto& cf = lookup_column_family(*_ks, cf_name);
                 mutation m_to_apply(key, cf._schema);
                 for (const Mutation& m : mutations) {
                     if (m.__isset.column_or_supercolumn) {
@@ -276,7 +286,9 @@ public:
                         throw make_exception<InvalidRequestException>("Mutation must have either column or deletion");
                     }
                 }
-                return _db.invoke_on_all([this, cf_name, m_to_apply = std::move(m_to_apply)] (database& db) {
+                auto dk = dht::global_partitioner().decorate_key(m_to_apply.key);
+                auto shard = _db.local().shard_of(dk._token);
+                return _db.invoke_on(shard, [this, cf_name, m_to_apply = std::move(m_to_apply)] (database& db) {
                     auto& ks = db.keyspaces.at(_ks_name);
                     auto& cf = ks.column_families.at(cf_name);
                     cf.apply(std::move(m_to_apply));
@@ -493,11 +505,18 @@ public:
     }
 
 private:
-    column_family& lookup_column_family(const sstring& cf_name) {
+    static column_family& lookup_column_family(keyspace& ks, const sstring& cf_name) {
         try {
-            return _ks->column_families.at(cf_name);
+            return ks.column_families.at(cf_name);
         } catch (std::out_of_range&) {
             throw make_exception<InvalidRequestException>("column family %s not found", cf_name);
+        }
+    }
+    keyspace& lookup_keyspace(database& db, const sstring ks_name) {
+        try {
+            return db.keyspaces.at(ks_name);
+        } catch (std::out_of_range&) {
+            throw make_exception<InvalidRequestException>("Keyspace %s not found", ks_name);
         }
     }
 };
