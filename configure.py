@@ -280,6 +280,7 @@ urchin_core = (['database.cc',
                  'utils/UUID_gen.cc',
                  'gms/version_generator.cc',
                  'dht/dht.cc',
+                 'dht/i_partitioner.cc',
                  'unimplemented.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
