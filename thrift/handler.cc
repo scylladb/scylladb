@@ -65,6 +65,18 @@ void complete(future<T...>& fut,
     }
 }
 
+template <typename T>
+void complete(future<foreign_ptr<lw_shared_ptr<T>>>& fut,
+        const tcxx::function<void (const T&)>& cob,
+        const tcxx::function<void (::apache::thrift::TDelayedException* _throw)>& exn_cob) {
+    try {
+        cob(*std::get<0>(fut.get()));
+    } catch (...) {
+        delayed_exception_wrapper dew(std::current_exception());
+        exn_cob(&dew);
+    }
+}
+
 class CassandraAsyncHandler : public CassandraCobSvIf {
     distributed<database>& _db;
     keyspace* _ks = nullptr;  // FIXME: reference counting for in-use detection?
