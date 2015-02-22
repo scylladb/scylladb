@@ -33,6 +33,8 @@ class decorated_key;
 class token;
 
 class i_partitioner {
+public:
+    virtual ~i_partitioner() {}
     /**
      * Transform key to object representation of the on-disk format.
      *
