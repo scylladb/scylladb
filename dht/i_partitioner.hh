@@ -133,4 +133,6 @@ public:
     virtual data_type get_token_validator() = 0;
 };
 
+i_partitioner& global_partitioner();
+
 } // dht

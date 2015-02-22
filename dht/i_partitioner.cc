@@ -3,6 +3,7 @@
  */
 
 #include "i_partitioner.hh"
+#include "murmur3_partitioner.hh"
 
 namespace dht {
 
@@ -69,5 +70,13 @@ midpoint(const token& t1, const token& t2) {
     return token{token::kind::key, std::move(avg)};
 }
 
+// FIXME: get from global config
+// FIXME: make it per-keyspace
+murmur3_partitioner default_partitioner;
+
+i_partitioner&
+global_partitioner() {
+    return default_partitioner;
+}
 
 }
