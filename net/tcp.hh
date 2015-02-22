@@ -1,4 +1,21 @@
 /*
+ * This file is open source software, licensed to you under the terms
+ * of the Apache License, Version 2.0 (the "License").  See the NOTICE file
+ * distributed with this work for additional information regarding copyright
+ * ownership.  You may not use this file except in compliance with the License.
+ *
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+/*
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
@@ -574,7 +591,7 @@ public:
     bool forward(forward_hash& out_hash_data, packet& p, size_t off);
     listener listen(uint16_t port, size_t queue_length = 100);
     future<connection> connect(socket_address sa);
-    net::hw_features hw_features() { return _inet._inet.hw_features(); }
+    const net::hw_features& hw_features() const { return _inet._inet.hw_features(); }
     future<> poll_tcb(ipaddr to, lw_shared_ptr<tcb> tcb);
 private:
     void send_packet_without_tcb(ipaddr from, ipaddr to, packet p);

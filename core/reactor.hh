@@ -1,4 +1,21 @@
 /*
+ * This file is open source software, licensed to you under the terms
+ * of the Apache License, Version 2.0 (the "License").  See the NOTICE file
+ * distributed with this work for additional information regarding copyright
+ * ownership.  You may not use this file except in compliance with the License.
+ *
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+/*
  * Copyright 2014 Cloudius Systems
  */
 
@@ -402,11 +419,15 @@ class smp_message_queue {
         size_t _last_cmpl_batch = 0;
         size_t _current_queue_length = 0;
     };
+    // keep this between two structures with statistics
+    // this makes sure that they have at least one cache line
+    // between them, so hw prefecther will not accidentally prefetch
+    // cache line used by aother cpu.
+    std::vector<scollectd::registration> _collectd_regs;
     struct alignas(64) {
         size_t _received = 0;
         size_t _last_rcv_batch = 0;
     };
-    std::vector<scollectd::registration> _collectd_regs;
     struct work_item {
         virtual ~work_item() {}
         virtual future<> process() = 0;
@@ -708,6 +729,7 @@ public:
     future<io_event> submit_io(Func prepare_io);
 
     void handle_signal(int signo, std::function<void ()>&& handler);
+    void handle_signal_once(int signo, std::function<void ()>&& handler);
 
     int run();
     void exit(int ret);

@@ -1,4 +1,21 @@
 /*
+ * This file is open source software, licensed to you under the terms
+ * of the Apache License, Version 2.0 (the "License").  See the NOTICE file
+ * distributed with this work for additional information regarding copyright
+ * ownership.  You may not use this file except in compliance with the License.
+ *
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+/*
  * Copyright 2014 Cloudius Systems
  */
 
@@ -464,7 +481,11 @@ posix_file_impl::list_directory(std::function<future<> (directory_entry de)> nex
                 ;
             }
             w->current += de->d_reclen;
-            return w->s.produce({de->d_name, type});
+            sstring name = de->d_name;
+            if (name == "." || name == "..") {
+                return make_ready_future<>();
+            }
+            return w->s.produce({std::move(name), type});
         });
     }).then([w] {
         w->s.close();
@@ -552,6 +573,16 @@ void
 reactor::handle_signal(int signo, std::function<void ()>&& handler) {
     _signal_handlers.emplace(std::piecewise_construct,
             std::make_tuple(signo), std::make_tuple(signo, std::move(handler)));
+}
+
+void
+reactor::handle_signal_once(int signo, std::function<void ()>&& handler) {
+    return handle_signal(signo, [fired = false, handler = std::move(handler)] () mutable {
+        if (!fired) {
+            fired = true;
+            handler();
+        }
+    });
 }
 
 void sigaction(int signo, siginfo_t* siginfo, void* ignore) {
@@ -674,9 +705,9 @@ int reactor::run() {
 
     if (_id == 0) {
        if (_handle_sigint) {
-          handle_signal(SIGINT, [this] { stop(); });
+          handle_signal_once(SIGINT, [this] { stop(); });
        }
-       handle_signal(SIGTERM, [this] { stop(); });
+       handle_signal_once(SIGTERM, [this] { stop(); });
     }
 
     _cpu_started.wait(smp::count).then([this] {
