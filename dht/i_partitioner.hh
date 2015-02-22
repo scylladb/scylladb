@@ -24,13 +24,13 @@
 #pragma once
 
 #include "core/shared_ptr.hh"
-#include "database.hh"
+#include "types.hh"
 #include <memory>
 
 namespace dht {
 
-class DecoratedKey;
-class Token;
+class decorated_key;
+class token;
 
 class i_partitioner {
     /**
@@ -39,39 +39,39 @@ class i_partitioner {
      * @param key the raw, client-facing key
      * @return decorated version of key
      */
-    virtual shared_ptr<DecoratedKey> decorate_key(bytes key) = 0;
+    virtual shared_ptr<decorated_key> decorate_key(bytes key) = 0;
 
     /**
-     * Calculate a Token representing the approximate "middle" of the given
+     * Calculate a token representing the approximate "middle" of the given
      * range.
      *
      * @return The approximate midpoint between left and right.
      */
-    virtual shared_ptr<Token> midpoint(Token& left, Token& right) = 0;
+    virtual shared_ptr<token> midpoint(token& left, token& right) = 0;
 
     /**
-     * @return A Token smaller than all others in the range that is being partitioned.
+     * @return A token smaller than all others in the range that is being partitioned.
      * Not legal to assign to a node or key.  (But legal to use in range scans.)
      */
-    virtual shared_ptr<Token> get_minimum_token() = 0;
+    virtual shared_ptr<token> get_minimum_token() = 0;
 
     /**
-     * @return a Token that can be used to route a given key
-     * (This is NOT a method to create a Token from its string representation;
-     * for that, use TokenFactory.fromString.)
+     * @return a token that can be used to route a given key
+     * (This is NOT a method to create a token from its string representation;
+     * for that, use tokenFactory.fromString.)
      */
-    virtual shared_ptr<Token> get_token(bytes key) = 0;
+    virtual shared_ptr<token> get_token(bytes key) = 0;
 
     /**
      * @return a randomly generated token
      */
-    virtual shared_ptr<Token> get_random_token() = 0;
+    virtual shared_ptr<token> get_random_token() = 0;
 
-    // FIXME: Token.TokenFactory
-    //virtual Token.TokenFactory getTokenFactory() = 0;
+    // FIXME: token.tokenFactory
+    //virtual token.tokenFactory gettokenFactory() = 0;
 
     /**
-     * @return True if the implementing class preserves key order in the Tokens
+     * @return True if the implementing class preserves key order in the tokens
      * it generates.
      */
     virtual bool preserves_order() = 0;
@@ -80,10 +80,10 @@ class i_partitioner {
      * Calculate the deltas between tokens in the ring in order to compare
      *  relative sizes.
      *
-     * @param sortedTokens a sorted List of Tokens
+     * @param sortedtokens a sorted List of tokens
      * @return the mapping from 'token' to 'percentage of the ring owned by that token'.
      */
-    virtual std::map<shared_ptr<Token>, float> describe_ownership(std::vector<shared_ptr<Token>> sorted_tokens) = 0;
+    virtual std::map<shared_ptr<token>, float> describe_ownership(std::vector<shared_ptr<token>> sorted_tokens) = 0;
 
     virtual data_type get_token_validator() = 0;
 };
