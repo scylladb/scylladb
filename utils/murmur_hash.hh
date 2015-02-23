@@ -39,12 +39,12 @@ namespace utils {
 
 namespace murmur_hash
 {
-    int32_t hash32(const bytes &data, int32_t offset, int32_t length,
+    uint32_t hash32(const bytes &data, uint32_t offset, uint32_t length,
                     int32_t seed);
-    int64_t hash2_64(const bytes &key, int32_t offset, int32_t length,
-                    int64_t seed);
-    void hash3_x64_128(const bytes &key, int32_t offset, int32_t length,
-                    int64_t seed, std::array<int64_t,2> &result);
+    uint64_t hash2_64(const bytes &key, uint32_t offset, uint32_t length,
+                    uint64_t seed);
+    void hash3_x64_128(const bytes &key, uint32_t offset, uint32_t length,
+                    uint64_t seed, std::array<uint64_t,2> &result);
 };
 
 } // namespace utils
