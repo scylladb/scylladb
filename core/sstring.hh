@@ -335,9 +335,6 @@ static String make_sstring(Args&&... args)
     return ret;
 }
 
-template <typename T, typename String = sstring, typename for_enable_if = void*>
-String to_sstring(T value, for_enable_if);
-
 template <typename string_type, typename T>
 inline
 string_type to_sstring_sprintf(T value, const char* fmt) {
