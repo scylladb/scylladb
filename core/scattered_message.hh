@@ -26,6 +26,7 @@
 #include "core/deleter.hh"
 #include "core/temporary_buffer.hh"
 #include "net/packet.hh"
+#include "sstring.hh"
 #include <memory>
 #include <vector>
 
