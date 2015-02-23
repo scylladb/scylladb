@@ -478,8 +478,10 @@ future<>
 storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl) {
     // FIXME: send it to replicas instead of applying locally
     auto pmut = make_lw_shared(std::move(mutations));
-    return _db.invoke_on_all([pmut, cl] (database& db) {
-        for (auto&& m : *pmut) {
+    return parallel_for_each(pmut->begin(), pmut->end(), [this, pmut] (const mutation& m) {
+        auto dk = dht::global_partitioner().decorate_key(m.key);
+        auto shard = _db.local().shard_of(dk._token);
+        return _db.invoke_on(shard, [&m, pmut] (database& db) -> void {
             // FIXME: lookup column_family by UUID
             keyspace* ks = db.find_keyspace(m.schema->ks_name);
             assert(ks); // FIXME: load keyspace meta-data from storage
@@ -489,7 +491,7 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
             } else {
                 // TODO: log a warning
             }
-        }
+        });
     });
 #if 0
         Tracing.trace("Determining replicas for mutation");

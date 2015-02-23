@@ -32,7 +32,7 @@ struct conversation_state {
 static const sstring ks_name = "ks";
 static const sstring table_name = "cf";
 
-static void require_column_has_value(distributed<database>& ddb, const sstring& ks_name, const sstring& table_name,
+static future<> require_column_has_value(distributed<database>& ddb, const sstring& ks_name, const sstring& table_name,
     std::vector<boost::any> pk, std::vector<boost::any> ck, const sstring& column_name, boost::any expected)
 {
     auto& db = ddb.local();
@@ -41,19 +41,34 @@ static void require_column_has_value(distributed<database>& ddb, const sstring& 
     auto cf = ks->find_column_family(table_name);
     assert(cf != nullptr);
     auto schema = cf->_schema;
-    auto p = cf->find_partition(schema->partition_key_type->serialize_value_deep(pk));
-    assert(p != nullptr);
-    auto row = p->find_row(schema->clustering_key_type->serialize_value_deep(ck));
-    assert(row != nullptr);
-    auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
-    assert(col_def != nullptr);
-    auto i = row->find(col_def->id);
-    if (i == row->end()) {
-        assert(((void)"column not set", 0));
-    }
-    auto& cell = boost::any_cast<const atomic_cell&>(i->second);
-    assert(cell.is_live());
-    assert(col_def->type->equal(cell.as_live().value, col_def->type->decompose(expected)));
+    auto pkey = schema->partition_key_type->serialize_value_deep(pk);
+    auto dk = dht::global_partitioner().decorate_key(pkey);
+    auto shard = db.shard_of(dk._token);
+    return ddb.invoke_on(shard, [pkey = std::move(pkey),
+                                 ck = std::move(ck),
+                                 ks_name = std::move(ks_name),
+                                 column_name = std::move(column_name),
+                                 expected = std::move(expected),
+                                 table_name = std::move(table_name)] (database& db) {
+        auto ks = db.find_keyspace(ks_name);
+        assert(ks != nullptr);
+        auto cf = ks->find_column_family(table_name);
+        assert(cf != nullptr);
+        auto schema = cf->_schema;
+        auto p = cf->find_partition(pkey);
+        assert(p != nullptr);
+        auto row = p->find_row(schema->clustering_key_type->serialize_value_deep(ck));
+        assert(row != nullptr);
+        auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
+        assert(col_def != nullptr);
+        auto i = row->find(col_def->id);
+        if (i == row->end()) {
+            assert(((void)"column not set", 0));
+        }
+        auto& cell = boost::any_cast<const atomic_cell&>(i->second);
+        assert(cell.is_live());
+        assert(col_def->type->equal(cell.as_live().value, col_def->type->decompose(expected)));
+    });
 }
 
 future<> test_insert_statement() {
@@ -76,11 +91,11 @@ future<> test_insert_statement() {
     }).then([state, db] {
             return state->execute_cql("insert into cf (p1, c1, r1) values ('key1', 1, 100);");
         }).then([state, db] {
-            require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {1}, "r1", 100);
+            return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {1}, "r1", 100);
         }).then([state, db] {
             return state->execute_cql("update cf set r1 = 66 where p1 = 'key1' and c1 = 1;");
         }).then([state, db] {
-            require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {1}, "r1", 66);
+            return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {1}, "r1", 66);
         }).then([db] {
         return db->stop();
     }).then([db] {
