@@ -31,11 +31,17 @@
 #include <iostream>
 #include <functional>
 #include <cstdio>
+#include <type_traits>
 #include <experimental/string_view>
 #include "core/temporary_buffer.hh"
 
 template <typename char_type, typename Size, Size max_size>
 class basic_sstring {
+    static_assert(
+            (std::is_same<char_type, char>::value
+             || std::is_same<char_type, signed char>::value
+             || std::is_same<char_type, unsigned char>::value),
+            "basic_sstring only supports single byte char types");
     union contents {
         struct external_type {
             char_type* str;
