@@ -26,6 +26,7 @@
 #define CQL3_MAPS_HH
 
 #include "cql3/abstract_marker.hh"
+#include "cql3/term.hh"
 
 namespace cql3 {
 
@@ -72,18 +73,19 @@ public:
     {
         return new ColumnSpecification(column.ksName, column.cfName, new ColumnIdentifier("value(" + column.name + ")", true), ((MapType)column.type).getValuesType());
     }
+#endif
 
-    public static class Literal implements Term.Raw
-    {
-        public final List<Pair<Term.Raw, Term.Raw>> entries;
+    class literal : public term::raw {
+    public:
+        const std::vector<std::pair<::shared_ptr<term::raw>, ::shared_ptr<term::raw>>> entries;
 
-        public Literal(List<Pair<Term.Raw, Term.Raw>> entries)
-        {
-            this.entries = entries;
-        }
+        literal(const std::vector<std::pair<::shared_ptr<term::raw>, ::shared_ptr<term::raw>>>& entries_)
+            : entries{entries_}
+        { }
 
-        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
+        virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
+            throw std::runtime_error("not implemented");
+#if 0
             validateAssignableTo(keyspace, receiver);
 
             ColumnSpecification keySpec = Maps.keySpecOf(receiver);
@@ -105,8 +107,10 @@ public:
             }
             DelayedValue value = new DelayedValue(((MapType)receiver.type).getKeysType(), values);
             return allTerminal ? value.bind(QueryOptions.DEFAULT) : value;
+#endif
         }
 
+#if 0
         private void validateAssignableTo(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
         {
             if (!(receiver.type instanceof MapType))
@@ -122,9 +126,11 @@ public:
                     throw new InvalidRequestException(String.format("Invalid map literal for %s: value %s is not of type %s", receiver.name, entry.right, valueSpec.type.asCQL3Type()));
             }
         }
+#endif
 
-        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver)
-        {
+        virtual assignment_testable::test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
+            throw std::runtime_error("not implemented");
+#if 0
             if (!(receiver.type instanceof MapType))
                 return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
 
@@ -146,23 +152,25 @@ public:
                     res = AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
             }
             return res;
+#endif
         }
 
-        @Override
-        public String toString()
-        {
-            StringBuilder sb = new StringBuilder();
-            sb.append("{");
-            for (int i = 0; i < entries.size(); i++)
-            {
-                if (i > 0) sb.append(", ");
-                sb.append(entries.get(i).left).append(":").append(entries.get(i).right);
+        virtual sstring to_string() override {
+            sstring result = "{";
+            for (size_t i = 0; i < entries.size(); i++) {
+                if (i > 0) {
+                    result += ", ";
+                }
+                result += entries[i].first->to_string();
+                result += ":";
+                result += entries[i].second->to_string();
             }
-            sb.append("}");
-            return sb.toString();
+            result += "}";
+            return result;
         }
-    }
+    };
 
+#if 0
     public static class Value extends Term.Terminal implements Term.CollectionTerminal
     {
         public final Map<ByteBuffer, ByteBuffer> map;
