@@ -1318,9 +1318,11 @@ inMarkerForTuple returns [Tuples.INRaw marker]
     : QMARK { $marker = newTupleINBindVariables(null); }
     | ':' name=ident { $marker = newTupleINBindVariables(name); }
     ;
+#endif
 
-comparatorType returns [CQL3Type.Raw t]
-    : n=native_type     { $t = CQL3Type.Raw.from(n); }
+comparatorType returns [shared_ptr<cql3_type::raw> t]
+    : n=native_type     { $t = cql3_type::raw::from(n); }
+#if 0
     | c=collection_type { $t = c; }
     | tt=tuple_type     { $t = tt; }
     | id=userTypeName   { $t = CQL3Type.Raw.userType(id); }
@@ -1342,8 +1344,8 @@ comparatorType returns [CQL3Type.Raw t]
             addRecognitionError("Error setting type " + $s.text + ": " + e.getMessage());
         }
       }
-    ;
 #endif
+    ;
 
 native_type returns [shared_ptr<cql3_type> t]
     : K_ASCII     { $t = native_cql3_type::ascii; }
