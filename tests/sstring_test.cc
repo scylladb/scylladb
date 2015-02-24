@@ -36,3 +36,42 @@ BOOST_AUTO_TEST_CASE(test_to_sstring) {
 BOOST_AUTO_TEST_CASE(test_add_literal_to_sstring) {
     BOOST_REQUIRE_EQUAL("x" + sstring("y"), sstring("xy"));
 }
+
+BOOST_AUTO_TEST_CASE(test_find_sstring) {
+    BOOST_REQUIRE_EQUAL(sstring("abcde").find('b'), 1);
+    BOOST_REQUIRE_EQUAL(sstring("babcde").find('b',1), 2);
+}
+
+BOOST_AUTO_TEST_CASE(test_not_find_sstring) {
+    BOOST_REQUIRE_EQUAL(sstring("abcde").find('x'), sstring::npos);
+}
+
+BOOST_AUTO_TEST_CASE(test_str_find_sstring) {
+    BOOST_REQUIRE_EQUAL(sstring("abcde").find("bc"), 1);
+    BOOST_REQUIRE_EQUAL(sstring("abcbcde").find("bc", 2), 3);
+}
+
+BOOST_AUTO_TEST_CASE(test_str_not_find_sstring) {
+    BOOST_REQUIRE_EQUAL(sstring("abcde").find("x"), sstring::npos);
+}
+
+BOOST_AUTO_TEST_CASE(test_substr_sstring) {
+    BOOST_REQUIRE_EQUAL(sstring("abcde").substr(1,2), "bc");
+    BOOST_REQUIRE_EQUAL(sstring("abc").substr(1,2), "bc");
+    BOOST_REQUIRE_EQUAL(sstring("abc").substr(1,3), "bc");
+    BOOST_REQUIRE_EQUAL(sstring("abc").substr(0, 2), "ab");
+    BOOST_REQUIRE_EQUAL(sstring("abc").substr(3, 2), "");
+    BOOST_REQUIRE_EQUAL(sstring("abc").substr(1), "bc");
+}
+
+BOOST_AUTO_TEST_CASE(test_substr_eor_sstring) {
+    BOOST_REQUIRE_THROW(sstring("abcde").substr(6,1), std::out_of_range);
+}
+
+BOOST_AUTO_TEST_CASE(test_at_sstring) {
+    BOOST_REQUIRE_EQUAL(sstring("abcde").at(1), 'b');
+    BOOST_REQUIRE_THROW(sstring("abcde").at(6), std::out_of_range);
+    sstring s("abcde");
+    s.at(1) = 'd';
+    BOOST_REQUIRE_EQUAL(s, "adcde");
+}
