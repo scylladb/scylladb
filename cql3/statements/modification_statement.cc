@@ -312,7 +312,7 @@ modification_statement::execute_without_condition(service::storage_proxy& proxy,
 
 future<::shared_ptr<transport::messages::result_message>>
 modification_statement::execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
-    unimplemented::lwt();
+    fail(unimplemented::cause::LWT);
 #if 0
         List<ByteBuffer> keys = buildPartitionKeyNames(options);
         // We don't support IN for CAS operation so far

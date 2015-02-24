@@ -577,7 +577,7 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
 future<>
 storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl,
         bool should_mutate_atomically) {
-    unimplemented::triggers();
+    warn(unimplemented::cause::TRIGGERS);
 #if 0
         Collection<Mutation> augmented = TriggerExecutor.instance.execute(mutations);
         if (augmented != null) {
@@ -604,7 +604,7 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
  */
 future<>
 storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl) {
-    unimplemented::lwt();
+    fail(unimplemented::cause::LWT);
 #if 0
         Tracing.trace("Determining replicas for atomic batch");
         long startTime = System.nanoTime();

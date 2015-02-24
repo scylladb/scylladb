@@ -43,7 +43,7 @@ query_processor::process(const sstring_view& query_string, service::query_state&
         throw exceptions::invalid_request_exception("Invalid amount of bind variables");
     }
 
-    unimplemented::metrics();
+    warn(unimplemented::cause::METRICS);
 #if 0
         if (!queryState.getClientState().isInternal)
             metrics.regularStatementsExecuted.inc();

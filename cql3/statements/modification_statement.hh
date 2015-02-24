@@ -191,7 +191,7 @@ public:
     }
 
     virtual void check_access(const service::client_state& state) override {
-        unimplemented::permissions();
+        warn(unimplemented::cause::PERMISSIONS);
 #if 0
         state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.MODIFY);
 

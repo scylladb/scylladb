@@ -94,7 +94,7 @@ public:
     // Note: Origin passes here a RemoteAddress parameter, but it doesn't seem to be used
     // anywhere so I didn't bother converting it.
     client_state(external_tag) : _is_internal(false) {
-        unimplemented::auth();
+        warn(unimplemented::cause::AUTH);
 #if 0
             if (!DatabaseDescriptor.getAuthenticator().requireAuthentication())
                 this.user = AuthenticatedUser.ANONYMOUS_USER;
@@ -260,7 +260,7 @@ public:
 
 public:
     void validate_login() const {
-        unimplemented::auth();
+        warn(unimplemented::cause::AUTH);
 #if 0
         if (user == null)
             throw new UnauthorizedException("You have not logged in");

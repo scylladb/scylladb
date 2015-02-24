@@ -62,7 +62,7 @@ void update_statement::add_update_for_key(mutation& m, const clustering_prefix& 
         update->execute(m, prefix, params);
     }
 
-    unimplemented::indexes();
+    warn(unimplemented::cause::INDEXES);
 #if 0
         SecondaryIndexManager indexManager = Keyspace.open(cfm.ksName).getColumnFamilyStore(cfm.cfId).indexManager;
         if (indexManager.hasIndexes())

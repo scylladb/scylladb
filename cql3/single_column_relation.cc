@@ -51,7 +51,7 @@ single_column_relation::new_EQ_restriction(schema_ptr schema, ::shared_ptr<varia
         auto term = to_term(to_receivers(schema, column_def), _value, schema->ks_name, bound_names);
         return ::make_shared<single_column_restriction::EQ>(column_def, std::move(term));
     }
-    unimplemented::collections();
+    fail(unimplemented::cause::COLLECTIONS);
 #if 0
         List<? extends ColumnSpecification> receivers = toReceivers(schema, columnDef);
         Term entryKey = toTerm(Collections.singletonList(receivers.get(0)), map_key, schema.ksName, bound_names);
@@ -101,7 +101,7 @@ single_column_relation::to_receivers(schema_ptr schema, column_definition& colum
     }
 
     if (is_contains_key()) {
-        unimplemented::collections();
+        fail(unimplemented::cause::COLLECTIONS);
 #if 0
         if (!(receiver.type instanceof MapType)) {
             throw exceptions::invalid_request_exception(sprint("Cannot use CONTAINS KEY on non-map column %s", receiver.name_as_text()));
@@ -110,7 +110,7 @@ single_column_relation::to_receivers(schema_ptr schema, column_definition& colum
     }
 
     if (_map_key) {
-        unimplemented::collections();
+        fail(unimplemented::cause::COLLECTIONS);
 #if 0
         checkFalse(receiver.type instanceof ListType, "Indexes on list entries (%s[index] = value) are not currently supported.", receiver.name);
         checkTrue(receiver.type instanceof MapType, "Column %s cannot be used as a map", receiver.name);
@@ -120,7 +120,7 @@ single_column_relation::to_receivers(schema_ptr schema, column_definition& colum
     }
 
     if (receiver->type->is_collection()) {
-        unimplemented::collections();
+        fail(unimplemented::cause::COLLECTIONS);
 #if 0
         // We don't support relations against entire collections (unless they're frozen), like "numbers = {1, 2, 3}"
         checkFalse(receiver.type.isMultiCell() && !isLegalRelationForNonFrozenCollection(),

@@ -311,7 +311,7 @@ compare_for_merge(const column_definition& def,
         return compare_for_merge(boost::any_cast<const atomic_cell&>(left.second),
             boost::any_cast<const atomic_cell&>(right.second));
     } else {
-        throw std::runtime_error("not implemented");
+        fail(unimplemented::cause::COLLECTIONS);
     }
 }
 
@@ -402,7 +402,7 @@ mutation_partition::find_row(const clustering_key& key) {
 }
 
 bool column_definition::is_compact_value() const {
-    unimplemented::compact_tables();
+    warn(unimplemented::cause::COMPACT_TABLES);
     return false;
 }
 

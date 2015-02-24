@@ -2,46 +2,41 @@
  * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
+#include <unordered_map>
 #include "unimplemented.hh"
 #include "core/sstring.hh"
+#include "core/enum.hh"
 
 namespace unimplemented {
 
-static inline
-void warn(sstring what) {
-    std::cerr << "WARNING: Not implemented: " << what << std::endl;
-}
+static std::unordered_map<cause, bool> _warnings;
 
-class warn_once {
-    sstring _msg;
-public:
-    warn_once(const char* msg) : _msg(msg) {}
-    void operator()() {
-        if (!_msg.empty()) {
-            warn(_msg);
-            _msg.reset();
-        }
+std::ostream& operator<<(std::ostream& out, cause c) {
+    switch(c) {
+        case cause::INDEXES: return out << "INDEXES";
+        case cause::LWT: return out << "LWT";
+        case cause::PAGING: return out << "PAGING";
+        case cause::AUTH: return out << "AUTH";
+        case cause::PERMISSIONS: return out << "PERMISSIONS";
+        case cause::TRIGGERS: return out << "TRIGGERS";
+        case cause::COLLECTIONS: return out << "COLLECTIONS";
+        case cause::COUNTERS: return out << "COUNTERS";
+        case cause::METRICS: return out << "METRICS";
+        case cause::COMPACT_TABLES: return out << "COMPACT_TABLES";
     }
-};
-
-void indexes() {
-    static thread_local warn_once w("indexes");
-    w();
+    assert(0);
 }
 
-void auth() {
-    static thread_local warn_once w("auth");
-    w();
+void warn(cause c) {
+    auto i = _warnings.find(c);
+    if (i == _warnings.end()) {
+        _warnings.insert({c, true});
+        std::cerr << "WARNING: Not implemented: " << c << std::endl;
+    }
 }
 
-void permissions() {
-    static thread_local warn_once w("permissions");
-    w();
-}
-
-void triggers() {
-    static thread_local warn_once w("triggers");
-    w();
+void fail(cause c) {
+    throw std::runtime_error(sprint("Not implemented: %s", c));
 }
 
 }
