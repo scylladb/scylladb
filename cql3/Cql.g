@@ -1037,9 +1037,7 @@ cfOrKsName[shared_ptr<cql3::cf_name> name, bool isKs]
     : t=IDENT              { if (isKs) $name->set_keyspace($t.text, false); else $name->set_column_family($t.text, false); }
     | t=QUOTED_NAME        { if (isKs) $name->set_keyspace($t.text, true); else $name->set_column_family($t.text, true); }
     | k=unreserved_keyword { if (isKs) $name->set_keyspace(k, false); else $name->set_column_family(k, false); }
-#if 0
-    | QMARK {addRecognitionError("Bind variables cannot be used for keyspace or table names");}
-#endif
+    | QMARK {add_recognition_error("Bind variables cannot be used for keyspace or table names");}
     ;
 
 constant returns [shared_ptr<cql3::constants::literal> constant]
