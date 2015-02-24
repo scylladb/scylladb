@@ -39,6 +39,10 @@
 #include <limits>
 #include <cctype>
 #include <vector>
+#include "reply.hh"
+
+namespace httpd {
+
 
 class http_server;
 class http_stats;
@@ -99,16 +103,11 @@ class http_server {
         static constexpr size_t limit = 4096;
         using tmp_buf = temporary_buffer<char>;
         using request = http_request;
-        struct response {
-            sstring _response_line;
-            sstring _body;
-            std::unordered_map<sstring, sstring> _headers;
-        };
         http_request_parser _parser;
         std::unique_ptr<request> _req;
-        std::unique_ptr<response> _resp;
+        std::unique_ptr<reply> _resp;
         // null element marks eof
-        queue<std::unique_ptr<response>> _responses { 10 };
+        queue<std::unique_ptr<reply>> _replies { 10 };
         bool _done = false;
         public:
         connection(http_server& server, connected_socket&& fd,
@@ -136,7 +135,7 @@ class http_server {
                     }).then_wrapped([this] (future<> f) {
                 // swallow error
                 // FIXME: count it?
-                    return _responses.push_eventually( {});
+                    return _replies.push_eventually( {});
                 });
         }
         future<> read_one() {
@@ -148,14 +147,14 @@ class http_server {
                 }
                 ++_server._requests_served;
                 _req = _parser.get_parsed_request();
-                return _responses.not_full().then([this] {
-                            _done = generate_response(std::move(_req));
+                return _replies.not_full().then([this] {
+                            _done = generate_reply(std::move(_req));
                         });
             });
         }
         future<> respond() {
-            return _responses.pop_eventually().then(
-                    [this] (std::unique_ptr<response> resp) {
+            return _replies.pop_eventually().then(
+                    [this] (std::unique_ptr<reply> resp) {
                         if (!resp) {
                             // eof
                             return make_ready_future<>();
@@ -169,11 +168,11 @@ class http_server {
         future<> start_response() {
             _resp->_headers["Server"] = "Seastar httpd";
             _resp->_headers["Date"] = _server._date;
-            _resp->_headers["Content-Length"] = to_sstring(_resp->_body.size());
+            _resp->_headers["Content-Length"] = to_sstring(_resp->_content.size());
             return _write_buf.write(_resp->_response_line.begin(),
                     _resp->_response_line.size()).then(
                     [this] {
-                        return write_response_headers(_resp->_headers.begin());
+                        return write_reply_headers(_resp->_headers.begin());
                     }).then([this] {
                 return _write_buf.write("\r\n", 2);
             }).then([this] {
@@ -184,7 +183,7 @@ class http_server {
                 _resp.reset();
             });
         }
-        future<> write_response_headers(
+        future<> write_reply_headers(
                 std::unordered_map<sstring, sstring>::iterator hi) {
             if (hi == _resp->_headers.end()) {
                 return make_ready_future<>();
@@ -197,11 +196,11 @@ class http_server {
             }).then([this] {
                 return _write_buf.write("\r\n", 2);
             }).then([hi, this] () mutable {
-                return write_response_headers(++hi);
+                return write_reply_headers(++hi);
             });
         }
-        bool generate_response(std::unique_ptr<request> req) {
-            auto resp = std::make_unique<response>();
+        bool generate_reply(std::unique_ptr<request> req) {
+            auto resp = std::make_unique<reply>();
             bool conn_keep_alive = false;
             bool conn_close = false;
             auto it = req->_headers.find("Connection");
@@ -214,29 +213,28 @@ class http_server {
             }
             bool should_close;
             // TODO: Handle HTTP/2.0 when it releases
+            resp->set_version(req->_version);
+
             if (req->_version == "1.0") {
-                resp->_response_line = "HTTP/1.0 200 OK\r\n";
                 if (conn_keep_alive) {
                     resp->_headers["Connection"] = "Keep-Alive";
                 }
                 should_close = !conn_keep_alive;
             } else if (req->_version == "1.1") {
-                resp->_response_line = "HTTP/1.1 200 OK\r\n";
                 should_close = conn_close;
             } else {
                 // HTTP/0.9 goes here
-                resp->_response_line = "HTTP/1.0 200 OK\r\n";
                 should_close = true;
             }
             resp->_headers["Content-Type"] = "text/html";
-            resp->_body =
+            resp->_content =
                     "<html><head><title>this is the future</title></head><body><p>Future!!</p></body></html>";
             // Caller guarantees enough room
-            _responses.push(std::move(resp));
+            _replies.push(std::move(resp));
             return should_close;
         }
         future<> write_body() {
-            return _write_buf.write(_resp->_body.begin(), _resp->_body.size());
+            return _write_buf.write(_resp->_content.begin(), _resp->_content.size());
         }
     };
     uint64_t total_connections() const {
@@ -257,5 +255,6 @@ class http_server {
         return tmp;
     }
 };
+}
 
 #endif /* APPS_HTTPD_HTTPD_HH_ */

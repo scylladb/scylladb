@@ -20,7 +20,10 @@
  */
 
 #include "httpd.hh"
+
 namespace bpo = boost::program_options;
+
+using namespace httpd;
 
 int main(int ac, char** av) {
     app_template app;

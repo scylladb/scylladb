@@ -40,6 +40,7 @@
 
 using namespace std::chrono_literals;
 
+namespace httpd {
 http_stats::http_stats(http_server& server)
     : _regs{
         scollectd::add_polled_metric(
@@ -58,4 +59,5 @@ http_stats::http_stats(http_server& server)
             scollectd::make_typed(scollectd::data_type::DERIVE,
                     [&server] { return server.requests_served(); })),
     } {
+}
 }
