@@ -30,3 +30,18 @@ to_string(std::vector<PtrToPrintable> items) {
     oss << "]";
     return oss.str();
 }
+
+template<typename PtrToPrintable>
+static inline
+sstring join(sstring delimiter, std::vector<PtrToPrintable> items) {
+    std::ostringstream oss;
+    size_t left = items.size();
+    for (auto&& item : items) {
+        oss << item->to_string();
+        if (left != 1) {
+            oss << delimiter;
+        }
+        --left;
+    }
+    return oss.str();
+}
