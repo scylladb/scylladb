@@ -40,6 +40,7 @@ options {
 #include "cql3/single_column_relation.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/cf_name.hh"
+#include "cql3/maps.hh"
 #include "core/sstring.hh"
 #include "CqlLexer.hpp"
 
@@ -1037,9 +1038,7 @@ cfOrKsName[shared_ptr<cql3::cf_name> name, bool isKs]
     : t=IDENT              { if (isKs) $name->set_keyspace($t.text, false); else $name->set_column_family($t.text, false); }
     | t=QUOTED_NAME        { if (isKs) $name->set_keyspace($t.text, true); else $name->set_column_family($t.text, true); }
     | k=unreserved_keyword { if (isKs) $name->set_keyspace(k, false); else $name->set_column_family(k, false); }
-#if 0
-    | QMARK {addRecognitionError("Bind variables cannot be used for keyspace or table names");}
-#endif
+    | QMARK {add_recognition_error("Bind variables cannot be used for keyspace or table names");}
     ;
 
 constant returns [shared_ptr<cql3::constants::literal> constant]
@@ -1053,13 +1052,14 @@ constant returns [shared_ptr<cql3::constants::literal> constant]
     | { sign=""; } ('-' {sign = "-"; } )? t=(K_NAN | K_INFINITY) { $constant = cql3::constants::literal::floating_point(sstring{sign + $t.text}); }
     ;
 
-#if 0
-mapLiteral returns [Maps.Literal map]
-    : '{' { List<Pair<Term.Raw, Term.Raw>> m = new ArrayList<Pair<Term.Raw, Term.Raw>>(); }
-          ( k1=term ':' v1=term { m.add(Pair.create(k1, v1)); } ( ',' kn=term ':' vn=term { m.add(Pair.create(kn, vn)); } )* )?
-      '}' { $map = new Maps.Literal(m); }
+mapLiteral returns [shared_ptr<cql3::maps::literal> map]
+    @init{std::vector<std::pair<::shared_ptr<cql3::term::raw>, ::shared_ptr<cql3::term::raw>>> m;}
+    : '{' { }
+          ( k1=term ':' v1=term { m.push_back(std::pair<shared_ptr<cql3::term::raw>, shared_ptr<cql3::term::raw>>{k1, v1}); } ( ',' kn=term ':' vn=term { m.push_back(std::pair<shared_ptr<cql3::term::raw>, shared_ptr<cql3::term::raw>>{kn, vn}); } )* )?
+      '}' { $map = ::make_shared<cql3::maps::literal>(m); }
     ;
 
+#if 0
 setOrMapLiteral[Term.Raw t] returns [Term.Raw value]
     : ':' v=term { List<Pair<Term.Raw, Term.Raw>> m = new ArrayList<Pair<Term.Raw, Term.Raw>>(); m.add(Pair.create(t, v)); }
           ( ',' kn=term ':' vn=term { m.add(Pair.create(kn, vn)); } )*
@@ -1318,9 +1318,11 @@ inMarkerForTuple returns [Tuples.INRaw marker]
     : QMARK { $marker = newTupleINBindVariables(null); }
     | ':' name=ident { $marker = newTupleINBindVariables(name); }
     ;
+#endif
 
-comparatorType returns [CQL3Type.Raw t]
-    : n=native_type     { $t = CQL3Type.Raw.from(n); }
+comparatorType returns [shared_ptr<cql3_type::raw> t]
+    : n=native_type     { $t = cql3_type::raw::from(n); }
+#if 0
     | c=collection_type { $t = c; }
     | tt=tuple_type     { $t = tt; }
     | id=userTypeName   { $t = CQL3Type.Raw.userType(id); }
@@ -1342,8 +1344,8 @@ comparatorType returns [CQL3Type.Raw t]
             addRecognitionError("Error setting type " + $s.text + ": " + e.getMessage());
         }
       }
-    ;
 #endif
+    ;
 
 native_type returns [shared_ptr<cql3_type> t]
     : K_ASCII     { $t = native_cql3_type::ascii; }
