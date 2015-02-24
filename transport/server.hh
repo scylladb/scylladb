@@ -21,6 +21,7 @@ public:
     future<> listen(ipv4_addr addr);
     void do_accepts(int which);
 private:
+    class fmt_visitor;
     class connection;
     class response;
 };

@@ -176,6 +176,7 @@ private:
     future<> write_error(int16_t stream, cql_binary_error err, sstring msg);
     future<> write_ready(int16_t stream);
     future<> write_supported(int16_t stream);
+    future<> write_result(int16_t stream, shared_ptr<transport::messages::result_message> msg);
     future<> write_response(shared_ptr<cql_server::response> response);
 
     void check_room(temporary_buffer<char>& buf, size_t n) {
@@ -403,8 +404,8 @@ future<> cql_server::connection::process_query(uint16_t stream, temporary_buffer
     print("processing query: '%s' ...\n", query);
     auto& q_state = get_query_state(stream);
     q_state.options = read_options(buf);
-    return _server._query_processor.process(query, q_state.query_state, *q_state.options).then([] (auto msg) {
-       // TODO: respond
+    return _server._query_processor.process(query, q_state.query_state, *q_state.options).then([this, stream] (auto msg) {
+         return this->write_result(stream, msg);
     });
 }
 
@@ -454,6 +455,32 @@ future<> cql_server::connection::write_supported(int16_t stream)
     opts.insert({"COMPRESSION", "snappy"});
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::SUPPORTED);
     response->write_string_multimap(opts);
+    return write_response(response);
+}
+
+class cql_server::fmt_visitor : public transport::messages::result_message::visitor {
+private:
+    shared_ptr<cql_server::response> _response;
+public:
+    fmt_visitor(shared_ptr<cql_server::response> response)
+        : _response{response}
+    { }
+
+    virtual void visit(const transport::messages::result_message::void_message&) override {
+        _response->write_int(0x0001);
+    }
+
+    virtual void visit(const transport::messages::result_message::set_keyspace& m) override {
+        _response->write_int(0x0003);
+        _response->write_string(m.get_keyspace());
+    }
+};
+
+future<> cql_server::connection::write_result(int16_t stream, shared_ptr<transport::messages::result_message> msg)
+{
+    auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::RESULT);
+    fmt_visitor fmt{response};
+    msg->accept(fmt);
     return write_response(response);
 }
 
