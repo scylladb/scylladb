@@ -62,11 +62,9 @@ public:
 
     virtual future<::shared_ptr<transport::messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override {
-        throw std::runtime_error("not implemented");
-#if 0
-        state.getClientState().setKeyspace(keyspace);
-        return new ResultMessage.SetKeyspace(keyspace);
-#endif
+        state.get_client_state().set_keyspace(_keyspace);
+        auto result =::make_shared<transport::messages::result_message::set_keyspace>(_keyspace);
+        return make_ready_future<::shared_ptr<transport::messages::result_message>>(result);
     }
 
     virtual future<::shared_ptr<transport::messages::result_message>>
