@@ -53,30 +53,31 @@ struct simple_type_impl : abstract_type {
     }
 };
 
-struct int32_type_impl : simple_type_impl<int32_t> {
-    int32_type_impl() : simple_type_impl<int32_t>("int32") {}
+template<typename T>
+struct integer_type_impl : simple_type_impl<T> {
+    integer_type_impl(sstring name) : simple_type_impl<T>(name) {}
     virtual void serialize(const boost::any& value, std::ostream& out) override {
-        auto v = boost::any_cast<const int32_t&>(value);
-        auto u = net::hton(uint32_t(v));
+        auto v = boost::any_cast<const T&>(value);
+        auto u = net::hton(v);
         out.write(reinterpret_cast<const char*>(&u), sizeof(u));
     }
     virtual object_opt deserialize(bytes_view v) override {
-        return read_simple_opt<int32_t>(v);
+        return read_simple_opt<T>(v);
     }
-    int32_t compose_value(const bytes& b) {
-        if (b.size() != sizeof(int32_t)) {
+    T compose_value(const bytes& b) {
+        if (b.size() != sizeof(T)) {
             throw marshal_exception();
         }
-        return (int32_t)net::ntoh(*reinterpret_cast<const uint32_t*>(b.begin()));
+        return (T)net::ntoh(*reinterpret_cast<const T*>(b.begin()));
     }
-    bytes decompose_value(int32_t v) {
+    bytes decompose_value(T v) {
         bytes b(bytes::initialized_later(), sizeof(v));
-        *reinterpret_cast<int32_t*>(b.begin()) = (int32_t)net::hton((uint32_t)v);
+        *reinterpret_cast<T*>(b.begin()) = (T)net::hton(v);
         return b;
     }
-    int32_t parse_int(sstring_view s) {
+    T parse_int(sstring_view s) {
         try {
-            return boost::lexical_cast<int32_t>(s.begin(), s.size());
+            return boost::lexical_cast<T>(s.begin(), s.size());
         } catch (const boost::bad_lexical_cast& e) {
             throw marshal_exception(sprint("Invalid number format '%s'", s));
         }
@@ -90,6 +91,12 @@ struct int32_type_impl : simple_type_impl<int32_t> {
         }
         return to_sstring(compose_value(b));
     }
+};
+
+struct int32_type_impl : integer_type_impl<int32_t> {
+    int32_type_impl() : integer_type_impl{"int32"}
+    { }
+
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
         return cql3::native_cql3_type::int_;
     }
