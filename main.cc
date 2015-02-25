@@ -28,6 +28,7 @@ int main(int ac, char** av) {
         sstring datadir = config["datadir"].as<std::string>();
 
         return db.start().then([datadir, &db] {
+            engine().at_exit([&db] { return db.stop(); });
             return db.invoke_on_all(&database::init_from_data_directory, datadir);
         }).then([&db, cql_port, thrift_port] {
             auto cserver = new distributed<cql_server>;
