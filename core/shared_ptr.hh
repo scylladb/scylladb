@@ -282,8 +282,7 @@ private:
         ++_b->count;
     }
     shared_ptr(shared_ptr_count_base* b, T* p) noexcept : _b(b), _p(p) {
-        // test _p, not _b, since dynamic_pointer_cast<>() can zero p but not b
-        if (_p) {
+        if (_b) {
             ++_b->count;
         }
     }
@@ -436,7 +435,8 @@ template <typename T, typename U>
 inline
 shared_ptr<T>
 dynamic_pointer_cast(const shared_ptr<U>& p) {
-    return shared_ptr<T>(p._b, dynamic_cast<T*>(p._p));
+    auto q = dynamic_cast<T*>(p._p);
+    return shared_ptr<T>(q ? p._b : nullptr, q);
 }
 
 template <typename T, typename U>

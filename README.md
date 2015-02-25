@@ -283,7 +283,7 @@ void f() {
     }).rescue([] (auto get_ex) {
         try {
             get_ex();
-        } (catch std::exception& e) {
+        } catch (std::exception& e) {
             // your handler goes here
         }
     });

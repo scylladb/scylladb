@@ -31,11 +31,17 @@
 #include <iostream>
 #include <functional>
 #include <cstdio>
+#include <type_traits>
 #include <experimental/string_view>
 #include "core/temporary_buffer.hh"
 
 template <typename char_type, typename Size, Size max_size>
 class basic_sstring {
+    static_assert(
+            (std::is_same<char_type, char>::value
+             || std::is_same<char_type, signed char>::value
+             || std::is_same<char_type, unsigned char>::value),
+            "basic_sstring only supports single byte char types");
     union contents {
         struct external_type {
             char_type* str;
@@ -335,69 +341,74 @@ static String make_sstring(Args&&... args)
     return ret;
 }
 
-template <typename T, typename String = sstring, typename for_enable_if = void*>
-String to_sstring(T value, for_enable_if);
+template <typename string_type, typename T>
+inline
+string_type to_sstring_sprintf(T value, const char* fmt) {
+    char tmp[sizeof(value) * 3 + 3];
+    auto len = std::sprintf(tmp, fmt, value);
+    using char_type = typename string_type::value_type;
+    return string_type(reinterpret_cast<char_type*>(tmp), len);
+}
 
 template <typename T>
 inline
-sstring to_sstring_sprintf(T value, const char* fmt) {
-    char tmp[sizeof(value) * 3 + 3];
-    auto len = std::sprintf(tmp, fmt, value);
-    return sstring(tmp, len);
+sstring
+to_sstring_sprintf(T value, const char* fmt) {
+    return to_sstring_sprintf<sstring>(value, fmt);
 }
 
 template <typename string_type = sstring>
 inline
 string_type to_sstring(int value, void* = nullptr) {
-    return to_sstring_sprintf(value, "%d");
+    return to_sstring_sprintf<string_type>(value, "%d");
 }
 
 template <typename string_type = sstring>
 inline
 string_type to_sstring(unsigned value, void* = nullptr) {
-    return to_sstring_sprintf(value, "%u");
+    return to_sstring_sprintf<string_type>(value, "%u");
 }
 
 template <typename string_type = sstring>
 inline
 string_type to_sstring(long value, void* = nullptr) {
-    return to_sstring_sprintf(value, "%ld");
+    return to_sstring_sprintf<string_type>(value, "%ld");
 }
 
 template <typename string_type = sstring>
 inline
 string_type to_sstring(unsigned long value, void* = nullptr) {
-    return to_sstring_sprintf(value, "%lu");
+    return to_sstring_sprintf<string_type>(value, "%lu");
 }
 
 template <typename string_type = sstring>
 inline
 string_type to_sstring(long long value, void* = nullptr) {
-    return to_sstring_sprintf(value, "%lld");
+    return to_sstring_sprintf<string_type>(value, "%lld");
 }
 
 template <typename string_type = sstring>
 inline
 string_type to_sstring(unsigned long long value, void* = nullptr) {
-    return to_sstring_sprintf(value, "%llu");
+    return to_sstring_sprintf<string_type>(value, "%llu");
 }
 
 template <typename string_type = sstring>
 inline
 string_type to_sstring(float value, void* = nullptr) {
-    return to_sstring_sprintf(value, "%f");
+    return to_sstring_sprintf<string_type>(value, "%f");
 }
 
 template <typename string_type = sstring>
 inline
 string_type to_sstring(double value, void* = nullptr) {
-    return to_sstring_sprintf(value, "%f");
+    return to_sstring_sprintf<string_type>(value, "%f");
 }
 
 template <typename string_type = sstring>
 inline
 string_type to_sstring(long double value, void* = nullptr) {
-    return to_sstring_sprintf(value, "%Lf");
+    return to_sstring_sprintf<string_type>(value, "%Lf");
 }
 
 template <typename string_type = sstring>

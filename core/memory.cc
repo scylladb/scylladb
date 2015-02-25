@@ -894,6 +894,7 @@ using namespace memory;
 
 extern "C"
 [[gnu::visibility("default")]]
+[[gnu::externally_visible]]
 void* malloc(size_t n) throw () {
     if (n == 0) {
         return nullptr;
@@ -911,6 +912,8 @@ extern "C"
 void* __libc_malloc(size_t n) throw ();
 
 extern "C"
+[[gnu::visibility("default")]]
+[[gnu::externally_visible]]
 void free(void* ptr) {
     if (ptr) {
         memory::free(ptr);
@@ -962,6 +965,7 @@ void* __libc_realloc(void* obj, size_t size) throw ();
 
 extern "C"
 [[gnu::visibility("default")]]
+[[gnu::externally_visible]]
 int posix_memalign(void** ptr, size_t align, size_t size) {
     try {
         *ptr = allocate_aligned(align, size);
