@@ -63,7 +63,7 @@ query_processor::process_statement(::shared_ptr<cql_statement> statement, servic
     statement->validate(client_state);
 
     return statement->execute(_proxy, query_state, options)
-        .then([] (auto msg) {
+        .then([statement] (auto msg) {
             if (msg) {
                 return make_ready_future<::shared_ptr<result_message>>(std::move(msg));
             }
