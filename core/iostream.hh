@@ -52,8 +52,10 @@ class data_source {
 protected:
     data_source_impl* impl() const { return _dsi.get(); }
 public:
+    data_source() = default;
     explicit data_source(std::unique_ptr<data_source_impl> dsi) : _dsi(std::move(dsi)) {}
     data_source(data_source&& x) = default;
+    data_source& operator=(data_source&& x) = default;
     future<temporary_buffer<char>> get() { return _dsi->get(); }
 };
 
@@ -78,8 +80,10 @@ public:
 class data_sink {
     std::unique_ptr<data_sink_impl> _dsi;
 public:
+    data_sink() = default;
     explicit data_sink(std::unique_ptr<data_sink_impl> dsi) : _dsi(std::move(dsi)) {}
     data_sink(data_sink&& x) = default;
+    data_sink& operator=(data_sink&& x) = default;
     future<> put(std::vector<temporary_buffer<char>> data) {
         return _dsi->put(std::move(data));
     }
@@ -113,7 +117,10 @@ public:
         void operator()(tmp_buf data, Done done);
     };
     using char_type = CharType;
+    input_stream() = default;
     explicit input_stream(data_source fd, size_t buf_size = 8192) : _fd(std::move(fd)), _buf(0) {}
+    input_stream(input_stream&&) = default;
+    input_stream& operator=(input_stream&&) = default;
     future<temporary_buffer<CharType>> read_exactly(size_t n);
     template <typename Consumer>
     future<> consume(Consumer& c);
@@ -135,18 +142,21 @@ class output_stream {
     static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
     data_sink _fd;
     temporary_buffer<CharType> _buf;
-    size_t _size;
+    size_t _size = 0;
     size_t _begin = 0;
     size_t _end = 0;
-    bool _trim_to_size;
+    bool _trim_to_size = false;
 private:
     size_t available() const { return _end - _begin; }
     size_t possibly_available() const { return _size - _begin; }
     future<> split_and_put(temporary_buffer<CharType> buf);
 public:
     using char_type = CharType;
+    output_stream() = default;
     output_stream(data_sink fd, size_t size, bool trim_to_size = false)
         : _fd(std::move(fd)), _size(size), _trim_to_size(trim_to_size) {}
+    output_stream(output_stream&&) = default;
+    output_stream& operator=(output_stream&&) = default;
     future<> write(const char_type* buf, size_t n);
     future<> write(const char_type* buf);
     future<> write(const sstring& s);

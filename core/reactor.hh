@@ -228,8 +228,11 @@ public:
 class connected_socket {
     std::unique_ptr<connected_socket_impl> _csi;
 public:
+    connected_socket() {};
     explicit connected_socket(std::unique_ptr<connected_socket_impl> csi)
         : _csi(std::move(csi)) {}
+    connected_socket(connected_socket&& cs) = default;
+    connected_socket& operator=(connected_socket&& cs) = default;
     input_stream<char> input();
     output_stream<char> output();
 };
