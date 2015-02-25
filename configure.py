@@ -101,6 +101,7 @@ tests = [
     'tests/allocator_test',
     'tests/output_stream_test',
     'tests/udp_zero_copy',
+    'tests/shared_ptr_test',
     ]
 
 apps = [
@@ -228,6 +229,7 @@ deps = {
     'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc', 'core/posix.cc'],
     'tests/output_stream_test': ['tests/output_stream_test.cc'] + core + libnet,
     'tests/udp_zero_copy': ['tests/udp_zero_copy.cc'] + core + libnet,
+    'tests/shared_ptr_test': ['tests/shared_ptr_test.cc'] + core,
 }
 
 warnings = [
