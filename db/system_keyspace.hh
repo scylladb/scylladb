@@ -15,208 +15,38 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db;
 
-import java.io.DataInputStream;
-import java.io.IOException;
-import java.net.InetAddress;
-import java.nio.ByteBuffer;
-import java.util.*;
-import java.util.concurrent.TimeUnit;
-import javax.management.openmbean.*;
+/*
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
+ */
 
-import com.google.common.base.Function;
-import com.google.common.collect.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+#pragma once
 
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.config.KSMetaData;
-import org.apache.cassandra.cql3.QueryProcessor;
-import org.apache.cassandra.cql3.UntypedResultSet;
-import org.apache.cassandra.db.compaction.CompactionHistoryTabularData;
-import org.apache.cassandra.db.commitlog.ReplayPosition;
-import org.apache.cassandra.db.compaction.LeveledCompactionStrategy;
-import org.apache.cassandra.db.filter.QueryFilter;
-import org.apache.cassandra.db.marshal.*;
-import org.apache.cassandra.dht.Token;
-import org.apache.cassandra.exceptions.ConfigurationException;
-import org.apache.cassandra.io.sstable.format.SSTableReader;
-import org.apache.cassandra.io.util.DataOutputBuffer;
-import org.apache.cassandra.locator.IEndpointSnitch;
-import org.apache.cassandra.locator.LocalStrategy;
-import org.apache.cassandra.metrics.RestorableMeter;
-import org.apache.cassandra.schema.LegacySchemaTables;
-import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.service.paxos.Commit;
-import org.apache.cassandra.service.paxos.PaxosState;
-import org.apache.cassandra.thrift.cassandraConstants;
-import org.apache.cassandra.transport.Server;
-import org.apache.cassandra.utils.*;
+#include "schema.hh"
 
-import static org.apache.cassandra.cql3.QueryProcessor.executeInternal;
-import static org.apache.cassandra.cql3.QueryProcessor.executeOnceInternal;
+namespace db {
+namespace system_keyspace {
 
-public final class SystemKeyspace
-{
-    private static final Logger logger = LoggerFactory.getLogger(SystemKeyspace.class);
+static constexpr auto NAME = "system";
+static constexpr auto HINTS = "hints";
+static constexpr auto BATCHLOG = "batchlog";
+static constexpr auto PAXOS = "paxos";
+static constexpr auto BUILT_INDEXES = "IndexInfo";
+static constexpr auto LOCAL = "local";
+static constexpr auto PEERS = "peers";
+static constexpr auto PEER_EVENTS = "peer_events";
+static constexpr auto RANGE_XFERS = "range_xfers";
+static constexpr auto COMPACTIONS_IN_PROGRESS = "compactions_in_progress";
+static constexpr auto COMPACTION_HISTORY = "compaction_history";
+static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
 
-    public static final String NAME = "system";
 
-    public static final String HINTS = "hints";
-    public static final String BATCHLOG = "batchlog";
-    public static final String PAXOS = "paxos";
-    public static final String BUILT_INDEXES = "IndexInfo";
-    public static final String LOCAL = "local";
-    public static final String PEERS = "peers";
-    public static final String PEER_EVENTS = "peer_events";
-    public static final String RANGE_XFERS = "range_xfers";
-    public static final String COMPACTIONS_IN_PROGRESS = "compactions_in_progress";
-    public static final String COMPACTION_HISTORY = "compaction_history";
-    public static final String SSTABLE_ACTIVITY = "sstable_activity";
+extern schema_ptr hints();
+extern schema_ptr batchlog();
+extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 
-    public static final CFMetaData Hints =
-        compile(HINTS,
-                "hints awaiting delivery",
-                "CREATE TABLE %s ("
-                + "target_id uuid,"
-                + "hint_id timeuuid,"
-                + "message_version int,"
-                + "mutation blob,"
-                + "PRIMARY KEY ((target_id), hint_id, message_version)) "
-                + "WITH COMPACT STORAGE")
-                .compactionStrategyOptions(Collections.singletonMap("enabled", "false"))
-                .gcGraceSeconds(0);
-
-    public static final CFMetaData Batchlog =
-        compile(BATCHLOG,
-                "batches awaiting replay",
-                "CREATE TABLE %s ("
-                + "id uuid,"
-                + "data blob,"
-                + "version int,"
-                + "written_at timestamp,"
-                + "PRIMARY KEY ((id)))")
-                .compactionStrategyOptions(Collections.singletonMap("min_threshold", "2"))
-                .gcGraceSeconds(0);
-
-    private static final CFMetaData Paxos =
-        compile(PAXOS,
-                "in-progress paxos proposals",
-                "CREATE TABLE %s ("
-                + "row_key blob,"
-                + "cf_id UUID,"
-                + "in_progress_ballot timeuuid,"
-                + "most_recent_commit blob,"
-                + "most_recent_commit_at timeuuid,"
-                + "proposal blob,"
-                + "proposal_ballot timeuuid,"
-                + "PRIMARY KEY ((row_key), cf_id))")
-                .compactionStrategyClass(LeveledCompactionStrategy.class);
-
-    // TODO: make private
-    public static final CFMetaData BuiltIndexes =
-        compile(BUILT_INDEXES,
-                "built column indexes",
-                "CREATE TABLE \"%s\" ("
-                + "table_name text,"
-                + "index_name text,"
-                + "PRIMARY KEY ((table_name), index_name)) "
-                + "WITH COMPACT STORAGE");
-
-    private static final CFMetaData Local =
-        compile(LOCAL,
-                "information about the local node",
-                "CREATE TABLE %s ("
-                + "key text,"
-                + "bootstrapped text,"
-                + "cluster_name text,"
-                + "cql_version text,"
-                + "data_center text,"
-                + "gossip_generation int,"
-                + "host_id uuid,"
-                + "native_protocol_version text,"
-                + "partitioner text,"
-                + "rack text,"
-                + "release_version text,"
-                + "schema_version uuid,"
-                + "thrift_version text,"
-                + "tokens set<varchar>,"
-                + "truncated_at map<uuid, blob>,"
-                + "PRIMARY KEY ((key)))");
-
-    private static final CFMetaData Peers =
-        compile(PEERS,
-                "information about known peers in the cluster",
-                "CREATE TABLE %s ("
-                + "peer inet,"
-                + "data_center text,"
-                + "host_id uuid,"
-                + "preferred_ip inet,"
-                + "rack text,"
-                + "release_version text,"
-                + "rpc_address inet,"
-                + "schema_version uuid,"
-                + "tokens set<varchar>,"
-                + "PRIMARY KEY ((peer)))");
-
-    private static final CFMetaData PeerEvents =
-        compile(PEER_EVENTS,
-                "events related to peers",
-                "CREATE TABLE %s ("
-                + "peer inet,"
-                + "hints_dropped map<uuid, int>,"
-                + "PRIMARY KEY ((peer)))");
-
-    private static final CFMetaData RangeXfers =
-        compile(RANGE_XFERS,
-                "ranges requested for transfer",
-                "CREATE TABLE %s ("
-                + "token_bytes blob,"
-                + "requested_at timestamp,"
-                + "PRIMARY KEY ((token_bytes)))");
-
-    private static final CFMetaData CompactionsInProgress =
-        compile(COMPACTIONS_IN_PROGRESS,
-                "unfinished compactions",
-                "CREATE TABLE %s ("
-                + "id uuid,"
-                + "columnfamily_name text,"
-                + "inputs set<int>,"
-                + "keyspace_name text,"
-                + "PRIMARY KEY ((id)))");
-
-    private static final CFMetaData CompactionHistory =
-        compile(COMPACTION_HISTORY,
-                "week-long compaction history",
-                "CREATE TABLE %s ("
-                + "id uuid,"
-                + "bytes_in bigint,"
-                + "bytes_out bigint,"
-                + "columnfamily_name text,"
-                + "compacted_at timestamp,"
-                + "keyspace_name text,"
-                + "rows_merged map<int, bigint>,"
-                + "PRIMARY KEY ((id)))")
-                .defaultTimeToLive((int) TimeUnit.DAYS.toSeconds(7));
-
-    private static final CFMetaData SSTableActivity =
-        compile(SSTABLE_ACTIVITY,
-                "historic sstable read rates",
-                "CREATE TABLE %s ("
-                + "keyspace_name text,"
-                + "columnfamily_name text,"
-                + "generation int,"
-                + "rate_120m double,"
-                + "rate_15m double,"
-                + "PRIMARY KEY ((keyspace_name, columnfamily_name, generation)))");
-
-    private static CFMetaData compile(String name, String description, String schema)
-    {
-        return CFMetaData.compile(String.format(schema, name), NAME)
-                         .comment(description);
-    }
+#if 0
 
     public static KSMetaData definition()
     {
@@ -899,4 +729,6 @@ public final class SystemKeyspace
         String cql = "DELETE FROM system.%s WHERE keyspace_name=? AND columnfamily_name=? and generation=?";
         executeInternal(String.format(cql, SSTABLE_ACTIVITY), keyspace, table, generation);
     }
-}
+#endif
+} // namespace system_keyspace
+} // namespace db
