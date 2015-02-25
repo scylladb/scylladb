@@ -18,6 +18,7 @@ thread_local shared_ptr<cql3_type> native_cql3_type::timestamp = make("timestamp
 thread_local shared_ptr<cql3_type> native_cql3_type::uuid = make("uuid", uuid_type, native_cql3_type::kind::UUID);
 thread_local shared_ptr<cql3_type> native_cql3_type::varchar = make("varchar", utf8_type, native_cql3_type::kind::TEXT);
 thread_local shared_ptr<cql3_type> native_cql3_type::timeuuid = make("timeuuid", timeuuid_type, native_cql3_type::kind::TIMEUUID);
+thread_local shared_ptr<cql3_type> native_cql3_type::inet = make("inet", inet_addr_type, native_cql3_type::kind::INET);
 
 const std::vector<shared_ptr<cql3_type>>&
 native_cql3_type::values() {
@@ -27,9 +28,12 @@ native_cql3_type::values() {
         native_cql3_type::blob,
         native_cql3_type::boolean,
 #if 0
+        native_cql3_type::counter,
+        native_cql3_type::decimal,
         native_cql3_type::double_,
         native_cql3_type::float_,
 #endif
+        native_cql3_type:inet,
         native_cql3_type::int_,
         native_cql3_type::text,
         native_cql3_type::timestamp,

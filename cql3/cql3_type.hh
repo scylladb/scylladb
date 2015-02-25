@@ -378,11 +378,11 @@ public:
     static thread_local shared_ptr<cql3_type> uuid;
     static thread_local shared_ptr<cql3_type> varchar;
     static thread_local shared_ptr<cql3_type> timeuuid;
+    static thread_local shared_ptr<cql3_type> inet;
 
 #if 0
         COUNTER  (CounterColumnType.instance),
         DECIMAL  (DecimalType.instance),
-        INET     (InetAddressType.instance),
         VARINT   (IntegerType.instance),
 #endif
     static const std::vector<shared_ptr<cql3_type>>& values();

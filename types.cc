@@ -6,6 +6,7 @@
 #include "cql3/cql3_type.hh"
 #include "types.hh"
 #include "core/print.hh"
+#include "net/ip.hh"
 
 template<typename T>
 struct simple_type_traits {
@@ -396,6 +397,50 @@ std::ostream& operator<<(std::ostream& os, const bytes& b) {
     return os << to_hex(b);
 }
 
+struct inet_addr_type_impl : abstract_type {
+    inet_addr_type_impl() : abstract_type("inet_addr") {}
+    virtual void serialize(const boost::any& value, std::ostream& out) override {
+        // FIXME: support ipv6
+        auto& ipv4 = boost::any_cast<const net::ipv4_address&>(value);
+        uint32_t u = htonl(ipv4.ip);
+        out.write(reinterpret_cast<const char*>(&u), 4);
+    }
+    virtual object_opt deserialize(bytes_view v) override {
+        if (v.empty()) {
+            return {};
+        }
+        if (v.size() == 16) {
+            throw std::runtime_error("IPv6 addresses not supported");
+        }
+        auto ip = read_simple<int32_t>(v);
+        if (!v.empty()) {
+            throw marshal_exception();
+        }
+        return boost::any(net::ipv4_address(ip));
+    }
+    virtual bool less(bytes_view v1, bytes_view v2) override {
+        return less_unsigned(v1, v2);
+    }
+    virtual bool is_byte_order_equal() const override {
+        return true;
+    }
+    virtual bool is_byte_order_comparable() const override {
+        return true;
+    }
+    virtual size_t hash(bytes_view v) override {
+        return std::hash<bytes_view>()(v);
+    }
+    virtual bytes from_string(sstring_view s) override {
+        throw std::runtime_error("not implemented");
+    }
+    virtual sstring to_string(const bytes& b) override {
+        throw std::runtime_error("not implemented");
+    }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        return cql3::native_cql3_type::inet;
+    }
+};
+
 thread_local shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
 thread_local shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii", cql3::native_cql3_type::ascii));
@@ -406,3 +451,4 @@ thread_local shared_ptr<abstract_type> date_type(make_shared<date_type_impl>());
 thread_local shared_ptr<abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
 thread_local shared_ptr<abstract_type> timestamp_type(make_shared<timestamp_type_impl>());
 thread_local shared_ptr<abstract_type> uuid_type(make_shared<uuid_type_impl>());
+thread_local shared_ptr<abstract_type> inet_addr_type(make_shared<inet_addr_type_impl>());
