@@ -362,6 +362,12 @@ future<> cql_server::connection::process_request() {
             default: assert(0);
             };
         });
+    }).rescue([] (auto get_ex) {
+        try {
+            get_ex();
+        } catch (std::exception& ex) {
+            std::cout << "request processing failed: " << ex.what() << "\n";
+        }
     });
 }
 
