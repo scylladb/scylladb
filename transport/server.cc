@@ -407,7 +407,6 @@ future<> cql_server::connection::process_query(uint16_t stream, temporary_buffer
     auto consistency = read_consistency(buf);
     auto flags = read_byte(buf);
 #endif
-    print("processing query: '%s' ...\n", query);
     auto& q_state = get_query_state(stream);
     q_state.options = read_options(buf);
     return _server._query_processor.process(query, q_state.query_state, *q_state.options).then([this, stream] (auto msg) {
