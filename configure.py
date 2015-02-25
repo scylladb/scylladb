@@ -123,6 +123,7 @@ urchin_tests = [
     'tests/perf/perf_cql_parser',
     'tests/urchin/cql_query_test',
     'tests/test-serialization',
+    'tests/urchin/sstable_test',
 ]
 
 tests = [
