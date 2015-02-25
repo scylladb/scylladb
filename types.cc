@@ -64,7 +64,7 @@ struct int32_type_impl : simple_type_impl<int32_t> {
         return read_simple_opt<int32_t>(v);
     }
     int32_t compose_value(const bytes& b) {
-        if (b.size() != 4) {
+        if (b.size() != sizeof(int32_t)) {
             throw marshal_exception();
         }
         return (int32_t)net::ntoh(*reinterpret_cast<const uint32_t*>(b.begin()));
