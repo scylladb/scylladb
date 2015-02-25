@@ -102,22 +102,10 @@ struct int32_type_impl : integer_type_impl<int32_t> {
     }
 };
 
-struct long_type_impl : simple_type_impl<int64_t> {
-    long_type_impl() : simple_type_impl<int64_t>("long") {}
-    virtual void serialize(const boost::any& value, std::ostream& out) override {
-        auto v = boost::any_cast<const int64_t&>(value);
-        auto u = net::hton(uint64_t(v));
-        out.write(reinterpret_cast<const char*>(&u), sizeof(u));
-    }
-    virtual object_opt deserialize(bytes_view v) override {
-        return read_simple_opt<int64_t>(v);
-    }
-    virtual bytes from_string(sstring_view s) override {
-        throw std::runtime_error("not implemented");
-    }
-    virtual sstring to_string(const bytes& b) override {
-        throw std::runtime_error("not implemented");
-    }
+struct long_type_impl : integer_type_impl<int64_t> {
+    long_type_impl() : integer_type_impl{"long"}
+    { }
+
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
         return cql3::native_cql3_type::bigint;
     }
