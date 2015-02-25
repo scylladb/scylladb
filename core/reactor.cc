@@ -42,6 +42,12 @@
 #include <rte_launch.h>
 #endif
 #include "prefetch.hh"
+#include <exception>
+#ifdef __GNUC__
+#include <iostream>
+#include <system_error>
+#include <cxxabi.h>
+#endif
 
 #ifdef HAVE_OSV
 #include <osv/newpoll.hh>
@@ -1523,3 +1529,47 @@ reactor_backend_osv::enable_timer(clock_type::time_point when) {
 }
 
 #endif
+
+/**
+ * engine_exit() exits the reactor. It should be given a pointer to the
+ * exception which prompted this exit - or a null pointer if the exit
+ * request was not caused by any exception.
+ */
+void engine_exit(std::exception_ptr eptr) {
+    if (!eptr) {
+        engine().exit(0);
+    }
+#ifndef __GNUC__
+    std::cerr << "Exiting on unhandled exception.\n";
+#else
+    try {
+        std::rethrow_exception(eptr);
+    } catch(...) {
+        auto tp = abi::__cxa_current_exception_type();
+        std::cerr << "Exiting on unhandled exception ";
+        if (tp) {
+            int status;
+            char *demangled = abi::__cxa_demangle(tp->name(), 0, 0, &status);
+            std::cerr << "of type '";
+            if (status == 0) {
+                std::cerr << demangled;
+                free(demangled);
+            } else {
+                std::cerr << tp->name();
+            }
+            std::cerr << "'.\n";
+        } else {
+            std::cerr << "of unknown type.\n";
+        }
+        // Print more information on some known exception types
+        try {
+            throw;
+        } catch(const std::system_error &e) {
+            std::cerr << "Error " << e.code() << " (" << e.code().message() << ")\n";
+        } catch(const std::exception& e) {
+            std::cerr << e.what() << "\n";
+        }
+    }
+#endif
+    engine().exit(1);
+}
