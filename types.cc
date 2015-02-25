@@ -168,10 +168,10 @@ struct bytes_type_impl final : public abstract_type {
         return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) override {
-        throw std::runtime_error("not implemented");
+        return to_bytes(s);
     }
     virtual sstring to_string(const bytes& b) override {
-        throw std::runtime_error("not implemented");
+        return sstring(b);
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
         return cql3::native_cql3_type::blob;
