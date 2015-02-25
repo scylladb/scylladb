@@ -79,12 +79,8 @@ future<> test_insert_statement() {
     return db->start().then([db] {
         return db->invoke_on_all([] (database& db) {
             keyspace ks;
-            auto cf_schema = make_lw_shared<schema>(ks_name, table_name,
-                std::vector<schema::column>({{"p1", utf8_type}}),
-                std::vector<schema::column>({{"c1", int32_type}}),
-                std::vector<schema::column>({{"r1", int32_type}}),
-                utf8_type
-            );
+            auto cf_schema = make_lw_shared(schema(ks_name, table_name,
+                {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, utf8_type));
             ks.column_families.emplace(table_name, column_family(cf_schema));
             db.keyspaces.emplace(ks_name, std::move(ks));
         });

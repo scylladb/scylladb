@@ -17,12 +17,8 @@ static boost::any make_atomic_cell(bytes value) {
 };
 
 BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
-    auto s = make_lw_shared<schema>(some_keyspace, some_column_family,
-        std::vector<schema::column>({{"p1", utf8_type}}),
-        std::vector<schema::column>({{"c1", int32_type}}),
-        std::vector<schema::column>({{"r1", int32_type}}),
-        utf8_type
-    );
+    auto s = make_lw_shared(schema(some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, utf8_type));
 
     column_family cf(s);
 
@@ -41,12 +37,8 @@ BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
 }
 
 BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
-    auto s = make_lw_shared<schema>(some_keyspace, some_column_family,
-        std::vector<schema::column>({{"p1", utf8_type}}),
-        std::vector<schema::column>({{"c1", int32_type}}),
-        std::vector<schema::column>({{"r1", int32_type}}),
-        utf8_type
-    );
+    auto s = make_lw_shared(schema(some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, utf8_type));
 
     column_family cf(s);
 
