@@ -340,7 +340,7 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
 
 void
 modification_statement::add_key_values(column_definition& def, ::shared_ptr<restrictions::restriction> values) {
-    if (def.kind == column_definition::CLUSTERING) {
+    if (def.is_clustering_key()) {
         _has_no_clustering_columns = false;
     }
 
@@ -373,16 +373,14 @@ modification_statement::process_where_clause(std::vector<relation_ptr> where_cla
             throw exceptions::invalid_request_exception(sprint("Unknown key identifier %s", *id));
         }
 
-        switch (def->kind) {
-            case column_definition::column_kind::PARTITION:
-            case column_definition::column_kind::CLUSTERING:
-                if (rel->is_EQ() || (def->is_partition_key() && rel->is_IN())) {
-                    add_key_values(*def, rel->to_restriction(s, std::move(names)));
-                    break;
-                }
+        if (def->is_primary_key()) {
+            if (rel->is_EQ() || (def->is_partition_key() && rel->is_IN())) {
+                add_key_values(*def, rel->to_restriction(s, std::move(names)));
+            } else {
                 throw exceptions::invalid_request_exception(sprint("Invalid operator %s for PRIMARY KEY part %s", rel->get_operator(), def->name_as_text()));
-            default:
-                throw exceptions::invalid_request_exception(sprint("Non PRIMARY KEY %s found in where clause", def->name_as_text()));
+            }
+        } else {
+            throw exceptions::invalid_request_exception(sprint("Non PRIMARY KEY %s found in where clause", def->name_as_text()));
         }
     }
 }
@@ -432,13 +430,10 @@ modification_statement::parsed::prepare(database& db, ::shared_ptr<variable_spec
                 auto condition = entry.second->prepare(keyspace(), *def);
                 condition->collect_marker_specificaton(bound_names);
 
-                switch (def->kind) {
-                    case column_definition::PARTITION:
-                    case column_definition::CLUSTERING:
-                        throw exceptions::invalid_request_exception(sprint("PRIMARY KEY column '%s' cannot have IF conditions", *id));
-                    default:
-                        stmt->add_condition(condition);
+                if (def->is_primary_key()) {
+                    throw exceptions::invalid_request_exception(sprint("PRIMARY KEY column '%s' cannot have IF conditions", *id));
                 }
+                stmt->add_condition(condition);
             }
         }
         stmt->validate_where_clause_for_conditions();
