@@ -180,6 +180,16 @@ column_definition* get_column_definition(schema_ptr schema, column_identifier& i
     return schema->get_column_definition(id.bytes_);
 }
 
+static inline
+std::vector<::shared_ptr<column_identifier>> to_identifiers(const std::vector<const column_definition*>& defs) {
+    std::vector<::shared_ptr<column_identifier>> r;
+    r.reserve(defs.size());
+    for (auto&& def : defs) {
+        r.push_back(def->column_specification->name);
+    }
+    return r;
+}
+
 }
 
 namespace std {
