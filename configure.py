@@ -285,7 +285,7 @@ urchin_core = (['database.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
-                + core)
+                + core + libnet)
 
 deps = {
     'seastar': ['main.cc'] + urchin_core,
