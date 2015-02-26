@@ -123,6 +123,7 @@ urchin_tests = [
     'tests/perf/perf_cql_parser',
     'tests/urchin/cql_query_test',
     'tests/test-serialization',
+    'tests/urchin/sstable_test',
 ]
 
 tests = [
@@ -247,6 +248,7 @@ memcache_base = [
 cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'Cassandra')
 
 urchin_core = (['database.cc',
+                 'sstables/sstables.cc',
                  'log.cc',
                  'transport/server.cc',
                  'cql3/abstract_marker.cc',
