@@ -18,7 +18,7 @@ class column_definition final {
 private:
     bytes _name;
 public:
-    enum column_kind { PARTITION, CLUSTERING, REGULAR, STATIC };
+    enum class column_kind { PARTITION, CLUSTERING, REGULAR, STATIC };
     column_definition(bytes name, data_type type, column_id id, column_kind kind);
     data_type type;
     column_id id; // unique within (kind, schema instance)
@@ -58,7 +58,7 @@ public:
         };
     };
 private:
-    void build_columns(std::vector<column> columns, column_definition::column_kind kind, std::vector<column_definition>& dst);
+    void build_columns(const std::vector<column>& columns, column_definition::column_kind kind, std::vector<column_definition>& dst);
     ::shared_ptr<cql3::column_specification> make_column_specification(column_definition& def);
 public:
     gc_clock::duration default_time_to_live = gc_clock::duration::zero();
@@ -113,7 +113,7 @@ public:
         return regular_columns.size();
     }
     data_type column_name_type(column_definition& def) {
-        return def.kind == column_definition::REGULAR ? regular_column_name_type : utf8_type;
+        return def.kind == column_definition::column_kind::REGULAR ? regular_column_name_type : utf8_type;
     }
     column_definition& regular_column_at(column_id id) {
         return regular_columns[id];

@@ -30,7 +30,7 @@ schema::make_column_specification(column_definition& def) {
 }
 
 void
-schema::build_columns(std::vector<column> columns, column_definition::column_kind kind,
+schema::build_columns(const std::vector<column>& columns, column_definition::column_kind kind,
     std::vector<column_definition>& dst)
 {
     dst.reserve(columns.size());
@@ -62,11 +62,11 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_k
         throw std::runtime_error("not implemented");
     }
 
-    build_columns(std::move(partition_key), column_definition::PARTITION, this->partition_key);
-    build_columns(std::move(clustering_key), column_definition::CLUSTERING, this->clustering_key);
+    build_columns(partition_key, column_definition::column_kind::PARTITION, this->partition_key);
+    build_columns(clustering_key, column_definition::column_kind::CLUSTERING, this->clustering_key);
 
     std::sort(regular_columns.begin(), regular_columns.end(), column::name_compare(regular_column_name_type));
-    build_columns(std::move(regular_columns), column_definition::REGULAR, this->regular_columns);
+    build_columns(regular_columns, column_definition::column_kind::REGULAR, this->regular_columns);
     for (column_definition& def : this->regular_columns) {
         _regular_columns_by_name[def.name()] = &def;
     }
