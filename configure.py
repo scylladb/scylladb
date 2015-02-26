@@ -102,6 +102,7 @@ tests = [
     'tests/output_stream_test',
     'tests/udp_zero_copy',
     'tests/shared_ptr_test',
+    'tests/slab_test'
     ]
 
 apps = [
@@ -109,7 +110,6 @@ apps = [
     'apps/seawreck/seawreck',
     'apps/seastar/seastar',
     'apps/memcached/memcached',
-    'apps/memcached/flashcached',
     ]
 
 all_artifacts = apps + tests
@@ -198,16 +198,11 @@ memcache_base = [
     'apps/memcached/ascii.rl'
 ] + libnet + core
 
-memcache = [
-    'apps/memcached/memcache.cc',
-] + memcache_base
-
 deps = {
     'apps/seastar/seastar': ['apps/seastar/main.cc'] + core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['apps/httpd/httpd.cc', 'apps/httpd/request_parser.rl'] + libnet + core,
-    'apps/memcached/memcached': ['apps/memcached/memcached.cc'] + memcache,
-    'apps/memcached/flashcached': ['apps/memcached/flashcached.cc'] + memcache,
+    'apps/memcached/memcached': ['apps/memcached/memcache.cc'] + memcache_base,
     'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
     'tests/directory_test': ['tests/directory_test.cc'] + core,
@@ -230,6 +225,7 @@ deps = {
     'tests/output_stream_test': ['tests/output_stream_test.cc'] + core + libnet,
     'tests/udp_zero_copy': ['tests/udp_zero_copy.cc'] + core + libnet,
     'tests/shared_ptr_test': ['tests/shared_ptr_test.cc'] + core,
+    'tests/slab_test': ['tests/slab_test.cc'] + core,
 }
 
 warnings = [
