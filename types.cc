@@ -7,6 +7,7 @@
 #include "types.hh"
 #include "core/print.hh"
 #include "net/ip.hh"
+#include "database.hh"
 #include <cmath>
 
 template<typename T>
@@ -540,6 +541,72 @@ struct float_type_impl : floating_type_impl<float> {
     }
 };
 
+
+thread_local logging::logger collection_type_impl::_logger("collection_type_impl");
+const size_t collection_type_impl::max_elements;
+
+const collection_type_impl::kind collection_type_impl::kind::map(
+        [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
+            // FIXME: implement
+            // return isKey ? Maps.keySpecOf(collection) : Maps.valueSpecOf(collection);
+            abort();
+        });
+const collection_type_impl::kind collection_type_impl::kind::set(
+        [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
+            // FIXME: implement
+            // return Sets.valueSpecOf(collection);
+            abort();
+        });
+const collection_type_impl::kind collection_type_impl::kind::list(
+        [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
+            // FIXME: implement
+            // return Lists.valueSpecOf(collection);
+            abort();
+        });
+
+shared_ptr<cql3::column_specification>
+collection_type_impl::kind::make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const {
+    return _impl(std::move(collection), is_key);
+}
+
+shared_ptr<cql3::column_specification>
+collection_type_impl::make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) {
+    return _kind.make_collection_receiver(std::move(collection), is_key);
+}
+
+std::vector<atomic_cell::one>
+collection_type_impl::enforce_limit(std::vector<atomic_cell::one> cells, int version) {
+    assert(is_multi_cell());
+    if (version >= 3 || cells.size() <= max_elements) {
+        return cells;
+    }
+    _logger.error("Detected collection with {} elements, more than the {} limit. Only the first {} elements will be returned to the client. "
+            "Please see http://cassandra.apache.org/doc/cql3/CQL.html#collections for more details.", cells.size(), max_elements, max_elements);
+    cells.erase(cells.begin() + max_elements, cells.end());
+    return cells;
+}
+
+bytes
+collection_type_impl::serialize_for_native_protocol(std::vector<atomic_cell::one> cells, int version) {
+    assert(is_multi_cell());
+    cells = enforce_limit(std::move(cells), version);
+    std::vector<bytes> values = serialized_values(std::move(cells));
+    // FIXME: implement
+    abort();
+    // return CollectionSerializer.pack(values, cells.size(), version);
+}
+
+bool
+collection_type_impl::is_compatible_with(abstract_type& previous) {
+    // FIXME: implement
+    abort();
+}
+
+shared_ptr<cql3::cql3_type>
+collection_type_impl::as_cql3_type() {
+    // FIXME: implement
+    abort();
+}
 
 thread_local shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());

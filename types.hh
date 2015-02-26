@@ -16,10 +16,13 @@
 #include "net/byteorder.hh"
 #include "db_clock.hh"
 #include "bytes.hh"
+#include "log.hh"
+#include "atomic_cell.hh"
 
 namespace cql3 {
 
 class cql3_type;
+class column_specification;
 
 }
 
@@ -154,6 +157,44 @@ public:
 };
 
 using data_type = shared_ptr<abstract_type>;
+
+class collection_type_impl : public abstract_type {
+    static thread_local logging::logger _logger;
+public:
+    static constexpr const size_t max_elements = 65535;
+
+    class kind {
+        std::function<shared_ptr<cql3::column_specification> (shared_ptr<cql3::column_specification> collection, bool is_key)> _impl;
+    public:
+        kind(std::function<shared_ptr<cql3::column_specification> (shared_ptr<cql3::column_specification> collection, bool is_key)> impl)
+            : _impl(std::move(impl)) {}
+        shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const;
+        static const kind map;
+        static const kind set;
+        static const kind list;
+    };
+
+    const kind& _kind;
+
+protected:
+    explicit collection_type_impl(sstring name, const kind& k)
+            : abstract_type(std::move(name)), _kind(k) {}
+public:
+    virtual data_type name_comparator() = 0;
+    virtual data_type value_comparator() = 0;
+    shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key);
+    virtual bool is_collection() override { return true; }
+    bool is_map() const { return &_kind == &kind::map; }
+    std::vector<atomic_cell::one> enforce_limit(std::vector<atomic_cell::one>, int version);
+    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) = 0;
+    bytes serialize_for_native_protocol(std::vector<atomic_cell::one> cells, int version);
+    virtual bool is_compatible_with(abstract_type& previous) override;
+    virtual bool is_compatible_with_frozen(collection_type_impl& previous) = 0;
+    virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) = 0;
+    virtual shared_ptr<cql3::cql3_type> as_cql3_type() override;
+};
+
+using collection_type = shared_ptr<collection_type_impl>;
 
 inline
 size_t hash_value(const shared_ptr<abstract_type>& x) {
