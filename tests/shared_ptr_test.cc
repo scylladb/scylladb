@@ -15,16 +15,38 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 /*
- * Copyright 2014 Cloudius Systems
- * memcached
+ * Copyright 2015 Cloudius Systems
  */
 
-#include "memcached.hh"
+#define BOOST_TEST_DYN_LINK
+#define BOOST_TEST_MODULE core
 
-int main(int ac, char** av)
-{
-    constexpr bool WithFlashCache = false;
-    memcache_instance<WithFlashCache> instance;
-    return instance.run(ac, av);
+#include <boost/test/included/unit_test.hpp>
+#include "core/shared_ptr.hh"
+
+struct A {
+    static bool destroyed;
+    A() {
+        destroyed = false;
+    }
+    virtual ~A() {
+        destroyed = true;
+    }
+};
+
+struct B {
+    virtual void x() {}
+};
+
+bool A::destroyed = false;
+
+BOOST_AUTO_TEST_CASE(explot_dynamic_cast_use_after_free_problem) {
+    shared_ptr<A> p = ::make_shared<A>();
+    {
+        auto p2 = dynamic_pointer_cast<B>(p);
+        BOOST_ASSERT(!p2);
+    }
+    BOOST_ASSERT(!A::destroyed);
 }

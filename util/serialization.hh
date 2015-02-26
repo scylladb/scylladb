@@ -30,12 +30,14 @@
 class UTFDataFormatException { };
 class EOFException { };
 
+inline
 void serialize_bool(std::ostream& out, bool b) {
     out.put(b ? (char)1 : (char)0);
 }
 
-constexpr size_t serialize_bool_size = 1;
+static constexpr size_t serialize_bool_size = 1;
 
+inline
 bool deserialize_bool(std::istream& in) {
     char ret;
     if (in.get(ret)) {
@@ -45,20 +47,24 @@ bool deserialize_bool(std::istream& in) {
     }
 }
 
+inline
 void serialize_int8(std::ostream& out, uint8_t val) {
     out.put(val);
 }
 
+inline
 void serialize_int8(std::ostream& out, int8_t val) {
     out.put(val);
 }
 
-constexpr size_t serialize_int8_size = 1;
+static constexpr size_t serialize_int8_size = 1;
 
+inline
 void serialize_int8(std::ostream& out, char val) {
     out.put(val);
 }
 
+inline
 int8_t deserialize_int8(std::istream& in) {
     char ret;
     if (in.get(ret)) {
@@ -68,15 +74,18 @@ int8_t deserialize_int8(std::istream& in) {
     }
 }
 
+inline
 void serialize_int16(std::ostream& out, uint16_t val) {
     out.put((char)((val >>  8) & 0xFF));
     out.put((char)((val >>  0) & 0xFF));
 }
 
+inline
 void serialize_int16(std::ostream& out, int16_t val) {
     serialize_int16(out, (uint16_t) val);
 }
 
+inline
 int16_t deserialize_int16(std::istream& in) {
     char a1, a2;
     in.get(a1);
@@ -87,8 +96,9 @@ int16_t deserialize_int16(std::istream& in) {
     return  ((int16_t)(uint8_t)a1 << 8) | ((int16_t)(uint8_t)a2 << 0);
 }
 
-constexpr size_t serialize_int16_size = 2;
+static constexpr size_t serialize_int16_size = 2;
 
+inline
 void serialize_int32(std::ostream& out, uint32_t val) {
     out.put((char)((val >> 24) & 0xFF));
     out.put((char)((val >> 16) & 0xFF));
@@ -96,12 +106,14 @@ void serialize_int32(std::ostream& out, uint32_t val) {
     out.put((char)((val >>  0) & 0xFF));
 }
 
+inline
 void serialize_int32(std::ostream& out, int32_t val) {
     serialize_int32(out, (uint32_t) val);
 }
 
-constexpr size_t serialize_int32_size = 4;
+static constexpr size_t serialize_int32_size = 4;
 
+inline
 int32_t deserialize_int32(std::istream& in) {
     char a1, a2, a3, a4;
     in.get(a1);
@@ -114,6 +126,7 @@ int32_t deserialize_int32(std::istream& in) {
             ((int32_t)(uint8_t)a4 << 0);
 }
 
+inline
 void serialize_int64(std::ostream& out, uint64_t val) {
     out.put((char)((val >> 56) & 0xFF));
     out.put((char)((val >> 48) & 0xFF));
@@ -125,12 +138,14 @@ void serialize_int64(std::ostream& out, uint64_t val) {
     out.put((char)((val >>  0) & 0xFF));
 }
 
+inline
 void serialize_int64(std::ostream& out, int64_t val) {
     serialize_int64(out, (uint64_t) val);
 }
 
-constexpr size_t serialize_int64_size = 8;
+static constexpr size_t serialize_int64_size = 8;
 
+inline
 int64_t deserialize_int64(std::istream& in) {
     char a1, a2, a3, a4, a5, a6, a7, a8;
     in.get(a1);
@@ -159,6 +174,7 @@ int64_t deserialize_int64(std::istream& in) {
 // http://docs.oracle.com/javase/7/docs/api/java/io/DataInput.html#modified-utf-8)
 // For now we'll just assume those aren't in the string...
 // TODO: fix the compatibility with Java even in this case.
+inline
 void serialize_string(std::ostream& out, const sstring& s) {
     // Java specifies that nulls in the string need to be replaced by the
     // two bytes 0xC0, 0x80. Let's not bother with such transformation
@@ -177,12 +193,14 @@ void serialize_string(std::ostream& out, const sstring& s) {
     out.write(s.c_str(), s.size());
 }
 
+inline
 size_t serialize_string_size(const sstring& s) {;
     // As above, this code is missing the case of modified utf-8
     return serialize_int16_size + s.size();
 }
 
 
+inline
 void serialize_string(std::ostream& out, const char *s) {
     // TODO: like above, need to change UTF-8 when above 16-bit.
     auto len = strlen(s);
@@ -195,6 +213,7 @@ void serialize_string(std::ostream& out, const char *s) {
     out.write(s, len);
 }
 
+inline
 sstring deserialize_string(std::istream& in) {
     int len = deserialize_int16(in);
     sstring ret(sstring::initialized_later(), len);

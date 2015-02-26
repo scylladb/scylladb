@@ -122,6 +122,7 @@ urchin_tests = [
     'tests/perf/perf_mutation',
     'tests/perf/perf_cql_parser',
     'tests/urchin/cql_query_test',
+    'tests/test-serialization',
 ]
 
 tests = [
@@ -146,7 +147,8 @@ tests = [
     'tests/allocator_test',
     'tests/output_stream_test',
     'tests/udp_zero_copy',
-    'tests/test-serialization'
+    'tests/shared_ptr_test',
+    'tests/slab_test'
     ] + urchin_tests
 
 apps = [
@@ -154,7 +156,6 @@ apps = [
     'seastar',
     'apps/seawreck/seawreck',
     'apps/memcached/memcached',
-    'apps/memcached/flashcached',
     ]
 
 all_artifacts = apps + tests
@@ -187,7 +188,6 @@ libnet = [
     'net/proxy.cc',
     'net/virtio.cc',
     'net/dpdk.cc',
-    'net/net.cc',
     'net/ip.cc',
     'net/ethernet.cc',
     'net/arp.cc',
@@ -210,7 +210,8 @@ core = [
     'util/conversions.cc',
     'net/packet.cc',
     'net/posix-stack.cc',
-    'tests/test_runner.cc'
+    'tests/test_runner.cc',
+    'net/net.cc',
     ]
 
 defines = []
@@ -242,10 +243,6 @@ if apply_tristate(args.xen, test = have_xen,
 memcache_base = [
     'apps/memcached/ascii.rl'
 ] + libnet + core
-
-memcache = [
-    'apps/memcached/memcache.cc',
-] + memcache_base
 
 cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'Cassandra')
 
@@ -294,8 +291,7 @@ deps = {
     'seastar': ['main.cc'] + urchin_core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['apps/httpd/httpd.cc', 'apps/httpd/request_parser.rl'] + libnet + core,
-    'apps/memcached/memcached': ['apps/memcached/memcached.cc'] + memcache,
-    'apps/memcached/flashcached': ['apps/memcached/flashcached.cc'] + memcache,
+    'apps/memcached/memcached': ['apps/memcached/memcache.cc'] + memcache_base,
     'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
     'tests/directory_test': ['tests/directory_test.cc'] + core,
@@ -317,7 +313,8 @@ deps = {
     'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc', 'core/posix.cc'],
     'tests/output_stream_test': ['tests/output_stream_test.cc'] + core + libnet,
     'tests/udp_zero_copy': ['tests/udp_zero_copy.cc'] + core + libnet,
-    'tests/test-serialization': ['tests/test-serialization.cc'],
+    'tests/shared_ptr_test': ['tests/shared_ptr_test.cc'] + core,
+    'tests/slab_test': ['tests/slab_test.cc'] + core,
 }
 
 for t in urchin_tests:

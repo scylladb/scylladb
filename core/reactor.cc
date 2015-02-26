@@ -42,6 +42,12 @@
 #include <rte_launch.h>
 #endif
 #include "prefetch.hh"
+#include <exception>
+#ifdef __GNUC__
+#include <iostream>
+#include <system_error>
+#include <cxxabi.h>
+#endif
 
 #ifdef HAVE_OSV
 #include <osv/newpoll.hh>
@@ -322,9 +328,9 @@ posix_file_impl::read_dma(uint64_t pos, std::vector<iovec> iov) {
 }
 
 future<file>
-reactor::open_file_dma(sstring name) {
-    return _thread_pool.submit<syscall_result<int>>([name] {
-        return wrap_syscall<int>(::open(name.c_str(), O_DIRECT | O_CLOEXEC | O_CREAT | O_RDWR, S_IRWXU));
+reactor::open_file_dma(sstring name, open_flags flags) {
+    return _thread_pool.submit<syscall_result<int>>([name, flags] {
+        return wrap_syscall<int>(::open(name.c_str(), O_DIRECT | O_CLOEXEC | static_cast<int>(flags), S_IRWXU));
     }).then([] (syscall_result<int> sr) {
         sr.throw_if_error();
         return make_ready_future<file>(file(sr.result));
@@ -1523,3 +1529,47 @@ reactor_backend_osv::enable_timer(clock_type::time_point when) {
 }
 
 #endif
+
+/**
+ * engine_exit() exits the reactor. It should be given a pointer to the
+ * exception which prompted this exit - or a null pointer if the exit
+ * request was not caused by any exception.
+ */
+void engine_exit(std::exception_ptr eptr) {
+    if (!eptr) {
+        engine().exit(0);
+    }
+#ifndef __GNUC__
+    std::cerr << "Exiting on unhandled exception.\n";
+#else
+    try {
+        std::rethrow_exception(eptr);
+    } catch(...) {
+        auto tp = abi::__cxa_current_exception_type();
+        std::cerr << "Exiting on unhandled exception ";
+        if (tp) {
+            int status;
+            char *demangled = abi::__cxa_demangle(tp->name(), 0, 0, &status);
+            std::cerr << "of type '";
+            if (status == 0) {
+                std::cerr << demangled;
+                free(demangled);
+            } else {
+                std::cerr << tp->name();
+            }
+            std::cerr << "'.\n";
+        } else {
+            std::cerr << "of unknown type.\n";
+        }
+        // Print more information on some known exception types
+        try {
+            throw;
+        } catch(const std::system_error &e) {
+            std::cerr << "Error " << e.code() << " (" << e.code().message() << ")\n";
+        } catch(const std::exception& e) {
+            std::cerr << e.what() << "\n";
+        }
+    }
+#endif
+    engine().exit(1);
+}

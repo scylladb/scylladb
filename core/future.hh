@@ -47,6 +47,7 @@ public:
 };
 
 void schedule(std::unique_ptr<task> t);
+void engine_exit(std::exception_ptr eptr = {});
 
 template <typename Func>
 class lambda_task : public task {
@@ -584,7 +585,7 @@ public:
             try {
                 get();
             } catch (...) {
-                std::terminate();
+                engine_exit(std::current_exception());
             }
         });
     }

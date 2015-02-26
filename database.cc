@@ -8,6 +8,8 @@
 #include "core/future-util.hh"
 
 #include "cql3/column_identifier.hh"
+#include <boost/algorithm/string/classification.hpp>
+#include <boost/algorithm/string/split.hpp>
 
 thread_local logging::logger dblog("database");
 

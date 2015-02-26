@@ -70,7 +70,7 @@ sudo apt-get install libaio-dev ninja-build ragel libhwloc-dev libnuma-dev libpc
 Installing GCC 4.9 for gnu++1y. Unlike the Fedora case above, this will
 not harm the existing installation of GCC 4.8, and will install an
 additional set of compilers, and additional commands named gcc-4.9,
-g++-4.9, etc., that need to be used explictly, while the "gcc", "g++",
+g++-4.9, etc., that need to be used explicitly, while the "gcc", "g++",
 etc., commands continue to point to the 4.8 versions.
 
 ```
@@ -183,7 +183,7 @@ void f() {
 }
 ```
 
-Here, we initate a *get()* operation, requesting that when it completes, a
+Here, we initiate a *get()* operation, requesting that when it completes, a
 *put()* operation will be scheduled with an incremented value.  We also
 request that when the *put()* completes, some text will be printed out.
 
@@ -255,7 +255,7 @@ code to it.
 
 After the I/O operation initiated by `put()` completes, it calls the
 continuation associated with `f12`, which simply tells it to call the
-continuation assoicated with `f2`.  This continuation simply calls
+continuation associated with `f2`.  This continuation simply calls
 `loop_to()`.  Both `f12` and `f2` are freed. `loop_to()` then calls
 `get()`, which starts the process all over again, allocating new versions
 of `f1` and `f2`.
@@ -290,7 +290,7 @@ void f() {
 }
 ```
 
-When the `get_ex` variable is called as a function, it will rethrow
+When the `get_ex` variable is called as a function, it will re-throw
 the exception that aborted processing, and you can then apply any
 needed error handling.  It is essentially a transformation of
 
@@ -312,3 +312,26 @@ void f() {
     }
 }
 ```
+
+### Setup notes
+
+SeaStar is a high performance framework and tuned to get the best 
+performance by default. As such, we're tuned towards polling vs interrupt
+driven. Our assumption is that applications written for SeaStar will be
+busy handling 100,000 IOPS and beyond. Polling means that each of our
+cores will consume 100% cpu even when no work is given to it. 
+
+
+Recommended hardware configuration for SeaStar
+----------------------------------------------
+
+* CPUs - As much as you need. SeaStar is highly friendly for multi-core and NUMA
+* NICs - As fast as possible, we recommend 10G or 40G cards. It's possible to use
+       1G to but you may be limited by their capacity.
+       In addition, the more hardware queue per cpu the better for SeaStar. 
+       Otherwise we have to emulate that in software.
+* Disks - Fast SSDs with high number of IOPS.
+* Client machines - Usually a single client machine can't load our servers.
+       Both memaslap (memcached) and WRK (httpd) cannot over load their matching
+       server counter parts. We recommend running the client on different machine
+       than the servers and use several of them.

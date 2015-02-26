@@ -42,7 +42,7 @@ int main(int ac, char** av) {
         auto&& config = app.configuration();
         auto filepath = config["dev"].as<std::string>();
 
-        engine().open_file_dma(filepath).then([] (file f) {
+        engine().open_file_dma(filepath, open_flags::rw | open_flags::create).then([] (file f) {
             auto ft = new file_test{std::move(f)};
 
             ft->f.stat().then([ft] (struct stat st) mutable {
