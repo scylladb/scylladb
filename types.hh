@@ -318,7 +318,7 @@ T read_simple(bytes_view& v) {
     }
     auto p = v.begin();
     v.remove_prefix(sizeof(T));
-    return net::ntoh(*reinterpret_cast<const T*>(p));
+    return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
 }
 
 template<typename T>
@@ -328,7 +328,7 @@ T read_simple_exactly(bytes_view& v) {
     }
     auto p = v.begin();
     v.remove_prefix(sizeof(T));
-    return net::ntoh(*reinterpret_cast<const T*>(p));
+    return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
 }
 
 template<typename T>
@@ -341,5 +341,5 @@ object_opt read_simple_opt(bytes_view& v) {
     }
     auto p = v.begin();
     v.remove_prefix(sizeof(T));
-    return boost::any(net::ntoh(*reinterpret_cast<const T*>(p)));
+    return boost::any(net::ntoh(*reinterpret_cast<const net::packed<T>*>(p)));
 }
