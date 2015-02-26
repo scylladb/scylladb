@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/print.hh"
+
 #include <chrono>
 #include <iostream>
 
