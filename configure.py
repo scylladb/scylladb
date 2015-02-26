@@ -142,7 +142,6 @@ libnet = [
     'net/proxy.cc',
     'net/virtio.cc',
     'net/dpdk.cc',
-    'net/net.cc',
     'net/ip.cc',
     'net/ethernet.cc',
     'net/arp.cc',
@@ -165,7 +164,8 @@ core = [
     'util/conversions.cc',
     'net/packet.cc',
     'net/posix-stack.cc',
-    'tests/test_runner.cc'
+    'tests/test_runner.cc',
+    'net/net.cc',
     ]
 
 defines = []

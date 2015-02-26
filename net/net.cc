@@ -20,11 +20,27 @@
  *
  */
 
+#include <boost/asio/ip/address_v4.hpp>
+#include <boost/algorithm/string.hpp>
 #include "net.hh"
 #include <utility>
 #include "toeplitz.hh"
 
 using std::move;
+
+ipv4_addr::ipv4_addr(const std::string &addr) {
+    std::vector<std::string> items;
+    boost::split(items, addr, boost::is_any_of(":"));
+    if (items.size() == 1) {
+        ip = boost::asio::ip::address_v4::from_string(addr).to_ulong();
+        port = 0;
+    } else if (items.size() == 2) {
+        ip = boost::asio::ip::address_v4::from_string(items[0]).to_ulong();
+        port = std::stoul(items[1]);
+    } else {
+        throw std::invalid_argument("invalid format: " + addr);
+    }
+}
 
 namespace net {
 
