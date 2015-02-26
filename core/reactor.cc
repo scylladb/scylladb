@@ -328,9 +328,9 @@ posix_file_impl::read_dma(uint64_t pos, std::vector<iovec> iov) {
 }
 
 future<file>
-reactor::open_file_dma(sstring name) {
-    return _thread_pool.submit<syscall_result<int>>([name] {
-        return wrap_syscall<int>(::open(name.c_str(), O_DIRECT | O_CLOEXEC | O_CREAT | O_RDWR, S_IRWXU));
+reactor::open_file_dma(sstring name, open_flags flags) {
+    return _thread_pool.submit<syscall_result<int>>([name, flags] {
+        return wrap_syscall<int>(::open(name.c_str(), O_DIRECT | O_CLOEXEC | static_cast<int>(flags), S_IRWXU));
     }).then([] (syscall_result<int> sr) {
         sr.throw_if_error();
         return make_ready_future<file>(file(sr.result));

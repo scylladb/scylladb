@@ -61,6 +61,7 @@
 #include "file.hh"
 #include "semaphore.hh"
 #include "core/scattered_message.hh"
+#include "core/enum.hh"
 
 #ifdef HAVE_OSV
 #include <osv/newpoll.hh>
@@ -598,6 +599,17 @@ public:
 };
 #endif /* HAVE_OSV */
 
+enum class open_flags {
+    rw = O_RDWR,
+    ro = O_RDONLY,
+    wo = O_WRONLY,
+    create = O_CREAT,
+};
+
+inline open_flags operator|(open_flags a, open_flags b) {
+    return open_flags(static_cast<unsigned int>(a) | static_cast<unsigned int>(b));
+}
+
 class reactor {
 private:
     struct pollfn {
@@ -726,7 +738,7 @@ public:
 
     future<> write_all(pollable_fd_state& fd, const void* buffer, size_t size);
 
-    future<file> open_file_dma(sstring name);
+    future<file> open_file_dma(sstring name, open_flags flags);
     future<file> open_directory(sstring name);
 
     template <typename Func>
