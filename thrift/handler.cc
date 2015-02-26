@@ -137,13 +137,13 @@ public:
                     // FIXME: force limit count?
                     while (beg != end && count--) {
                         column_definition& def = range.reversed ? *--end : *beg++;
+                        const bytes& cell = (*rw)[def.id];
                         if (def.is_atomic()) {
-                            const auto& cell = boost::any_cast<atomic_cell&>((*rw)[def.id]);
-                            if (cell.is_live()) { // FIXME: we should actually use tombstone information from all levels
+                            if (atomic_cell::is_live(cell)) { // FIXME: we should actually use tombstone information from all levels
                                 Column col;
                                 col.__set_name(def.name());
-                                col.__set_value(cell.as_live().value);
-                                col.__set_timestamp(cell.timestamp);
+                                col.__set_value(std::string(atomic_cell::value(cell)));
+                                col.__set_timestamp(atomic_cell::timestamp(cell));
                                 // FIXME: set ttl
                                 ColumnOrSuperColumn v;
                                 v.__set_column(std::move(col));
@@ -269,7 +269,7 @@ public:
                             }
                             auto ttl_option = ttl.count() > 0 ? ttl_opt(gc_clock::now() + ttl) : ttl_opt();
                             m_to_apply.set_clustered_cell(null_clustering_key, *def,
-                                atomic_cell{col.timestamp, atomic_cell::live{ttl_option, to_bytes(col.value)}});
+                                atomic_cell::make_live(col.timestamp, ttl_option, to_bytes(col.value)));
                         } else if (cosc.__isset.super_column) {
                             // FIXME: implement
                         } else if (cosc.__isset.counter_column) {

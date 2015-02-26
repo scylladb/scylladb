@@ -1,8 +1,8 @@
 #include "database.hh"
 #include "perf.hh"
 
-static boost::any make_atomic_cell(bytes value) {
-    return atomic_cell{0, atomic_cell::live{ttl_opt{}, std::move(value)}};
+static bytes make_atomic_cell(bytes value) {
+    return atomic_cell::make_live(0, ttl_opt{}, value);
 };
 
 int main(int argc, char* argv[]) {

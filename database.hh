@@ -120,24 +120,87 @@ struct tombstone final {
 
 using ttl_opt = std::experimental::optional<gc_clock::time_point>;
 
-struct atomic_cell final {
-    struct dead {
-        gc_clock::time_point ttl;
-    };
-    struct live {
-        ttl_opt ttl;
-        bytes value;
-    };
-    api::timestamp_type timestamp;
-    boost::variant<dead, live> value;
-    bool is_live() const { return value.which() == 1; }
-    // Call only when is_live() == true
-    const live& as_live() const { return boost::get<live>(value); }
-    // Call only when is_live() == false
-    const dead& as_dead() const { return boost::get<dead>(value); }
+template<typename T>
+static inline
+void set_field(bytes& v, unsigned offset, T val) {
+    reinterpret_cast<net::packed<T>*>(v.begin() + offset)->raw = net::hton(val);
+}
+
+template<typename T>
+static inline
+T get_field(const bytes_view& v, unsigned offset) {
+    return net::ntoh(*reinterpret_cast<const net::packed<T>*>(v.begin() + offset));
+}
+
+/*
+ * Represents atomic cell layout. Works on serialized form.
+ *
+ * Layout:
+ *
+ *  <live>  := <int8_t:flags><int64_t:timestamp><int32_t:ttl>?<value>
+ *  <dead>  := <int8_t:    0><int64_t:timestamp><int32_t:ttl>
+ */
+class atomic_cell final {
+private:
+    static constexpr int8_t DEAD_FLAGS = 0;
+    static constexpr int8_t LIVE_FLAG = 0x01;
+    static constexpr int8_t TTL_FLAG  = 0x02; // When present, TTL field is present. Set only for live cells
+    static constexpr unsigned flags_size = 1;
+    static constexpr unsigned timestamp_offset = flags_size;
+    static constexpr unsigned timestamp_size = 8;
+    static constexpr unsigned ttl_offset = timestamp_offset + timestamp_size;
+    static constexpr unsigned ttl_size = 4;
+public:
+    static bool is_live(const bytes_view& cell) {
+        return cell[0] != DEAD_FLAGS;
+    }
+    static bool is_live_and_has_ttl(const bytes_view& cell) {
+        return cell[0] & TTL_FLAG;
+    }
+    static bool is_dead(const bytes_view& cell) {
+        return cell[0] == DEAD_FLAGS;
+    }
+    // Can be called on live and dead cells
+    static api::timestamp_type timestamp(const bytes_view& cell) {
+        return get_field<api::timestamp_type>(cell, timestamp_offset);
+    }
+    // Can be called on live cells only
+    static bytes_view value(bytes_view cell) {
+        auto ttl_field_size = bool(cell[0] & TTL_FLAG) * ttl_size;
+        auto value_offset = flags_size + timestamp_size + ttl_field_size;
+        cell.remove_prefix(value_offset);
+        return cell;
+    }
+    // Can be called on live and dead cells. For dead cells, the result is never empty.
+    static ttl_opt ttl(const bytes_view& cell) {
+        auto flags = cell[0];
+        if (flags == DEAD_FLAGS || (flags & TTL_FLAG)) {
+            auto ttl = get_field<int32_t>(cell, ttl_offset);
+            return {gc_clock::time_point(gc_clock::duration(ttl))};
+        }
+        return {};
+    }
+    static bytes make_dead(api::timestamp_type timestamp, gc_clock::time_point ttl) {
+        bytes b(bytes::initialized_later(), flags_size + timestamp_size + ttl_size);
+        b[0] = DEAD_FLAGS;
+        set_field(b, timestamp_offset, timestamp);
+        set_field(b, ttl_offset, ttl.time_since_epoch().count());
+        return b;
+    }
+    static bytes make_live(api::timestamp_type timestamp, ttl_opt ttl, bytes_view value) {
+        auto value_offset = flags_size + timestamp_size + bool(ttl) * ttl_size;
+        bytes b(bytes::initialized_later(), value_offset + value.size());
+        b[0] = (ttl ? TTL_FLAG : 0) | LIVE_FLAG;
+        set_field(b, timestamp_offset, timestamp);
+        if (ttl) {
+            set_field(b, ttl_offset, ttl->time_since_epoch().count());
+        }
+        std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
+        return b;
+    }
 };
 
-using row = std::map<column_id, boost::any>;
+using row = std::map<column_id, bytes>;
 
 struct deletable_row final {
     tombstone t;
@@ -188,19 +251,20 @@ public:
     mutation(mutation&&) = default;
     mutation(const mutation&) = default;
 
-    void set_static_cell(const column_definition& def, boost::any value) {
+    void set_static_cell(const column_definition& def, bytes value) {
         p.static_row()[def.id] = std::move(value);
     }
 
-    void set_clustered_cell(const clustering_prefix& prefix, const column_definition& def, boost::any value) {
+    void set_clustered_cell(const clustering_prefix& prefix, const column_definition& def, bytes value) {
         auto& row = p.clustered_row(serialize_value(*schema->clustering_key_type, prefix));
         row[def.id] = std::move(value);
     }
 
-    void set_clustered_cell(const clustering_key& key, const column_definition& def, boost::any value) {
+    void set_clustered_cell(const clustering_key& key, const column_definition& def, bytes value) {
         auto& row = p.clustered_row(key);
         row[def.id] = std::move(value);
     }
+
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
 
