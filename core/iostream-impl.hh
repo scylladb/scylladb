@@ -81,6 +81,7 @@ input_stream<CharType>::read_exactly_part(size_t n, tmp_buf out, size_t complete
     // _buf is now empty
     return _fd.get().then([this, n, out = std::move(out), completed] (auto buf) mutable {
         if (buf.size() == 0) {
+            _eof = true;
             return make_ready_future<tmp_buf>(std::move(buf));
         }
         _buf = std::move(buf);
@@ -103,6 +104,7 @@ input_stream<CharType>::read_exactly(size_t n) {
         // buffer is empty: grab one and retry
         return _fd.get().then([this, n] (auto buf) mutable {
             if (buf.size() == 0) {
+                _eof = true;
                 return make_ready_future<tmp_buf>(std::move(buf));
             }
             _buf = std::move(buf);
