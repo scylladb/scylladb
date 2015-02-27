@@ -47,6 +47,12 @@ struct filter {
     disk_array<uint32_t, uint64_t> buckets;
 };
 
+struct index_entry {
+    disk_string<uint16_t> key;
+    uint64_t position;
+    disk_string<uint32_t> promoted_index;
+};
+
 // FIXME: Not yet, can't know what an index entry is without a schema.
 struct summary_entry {
     int notyet;

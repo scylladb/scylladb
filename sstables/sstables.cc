@@ -5,6 +5,7 @@
 #include "log.hh"
 #include <vector>
 #include <typeinfo>
+#include <limits>
 #include "core/future.hh"
 #include "core/future-util.hh"
 #include "core/sstring.hh"
@@ -298,6 +299,10 @@ future<> parse(file_input_stream& in, compaction_metadata& m) {
     return parse(in, m.ancestors, m.cardinality);
 }
 
+future<> parse(file_input_stream& in, index_entry& ie) {
+    return parse(in, ie.key, ie.position, ie.promoted_index);
+}
+
 template <typename Child>
 future<> parse(file_input_stream& in, std::unique_ptr<metadata>& p) {
     p.reset(new Child);
@@ -402,6 +407,60 @@ future<> sstable::read_toc() {
         }
     });
 
+}
+
+future<index_list> sstable::read_indexes(uint64_t position, uint64_t quantity) {
+    struct reader {
+        uint64_t count = 0;
+        std::vector<index_entry> indexes;
+        file_input_stream stream;
+        reader(lw_shared_ptr<file> f, uint64_t quantity) : stream(f) { indexes.reserve(quantity); }
+    };
+
+    auto r = make_lw_shared<reader>(_index_file, quantity);
+
+    r->stream.seek(position);
+
+    auto end = [r, quantity] { return r->count >= quantity; };
+
+    return do_until(end, [this, r] {
+        r->indexes.emplace_back();
+        auto fut = parse(r->stream, r->indexes.back());
+        return std::move(fut).then_wrapped([this, r] (future<> f) mutable {
+            try {
+               f.get();
+               r->count++;
+            } catch (bufsize_mismatch_exception &e) {
+                // We have optimistically emplaced back one element of the
+                // vector. If we have failed to parse, we should remove it
+                // so size() gives us the right picture.
+                r->indexes.pop_back();
+
+                // FIXME: If the file ends at an index boundary, there is
+                // no problem. Essentially, we can't know how many indexes
+                // are in a sampling group, so there isn't really any way
+                // to know, other than reading.
+                //
+                // If, however, we end in the middle of an index, this is a
+                // corrupted file. This code is not perfect because we only
+                // know that an exception happened, and it happened due to
+                // eof. We don't really know if eof happened at the index
+                // boundary.  To know that, we would have to keep track of
+                // the real position of the stream (including what's
+                // already in the buffer) before we start to read the
+                // index, and after. We won't go through such complexity at
+                // the moment.
+                if (r->stream.eof()) {
+                    r->count = std::numeric_limits<std::remove_reference<decltype(r->count)>::type>::max();
+                } else {
+                    throw e;
+                }
+            }
+            return make_ready_future<>();
+        });
+    }).then([r] {
+        return make_ready_future<index_list>(std::move(r->indexes));
+    });
 }
 
 template <typename T, sstable::component_type Type, T sstable::* Comptr>

@@ -10,7 +10,8 @@
 #include "core/future.hh"
 #include "core/sstring.hh"
 #include "core/enum.hh"
-#include <unordered_set> 
+#include "core/shared_ptr.hh"
+#include <unordered_set>
 #include <unordered_map>
 #include "types.hh"
 #include "core/enum.hh"
@@ -25,6 +26,8 @@ public:
         return _msg.c_str();
     }
 };
+
+using index_list = std::vector<index_entry>;
 
 class sstable {
 public:
@@ -79,12 +82,21 @@ private:
     future<> read_statistics();
     future<> open_data();
 
+    future<index_list> read_indexes(uint64_t position, uint64_t quantity);
+
 public:
     sstable(sstring dir, unsigned long epoch, version_types v, format_types f) : _dir(dir), _epoch(epoch), _version(v), _format(f) {}
     sstable& operator=(const sstable&) = delete;
     sstable(const sstable&) = delete;
     sstable(sstable&&) = default;
 
+    future<index_list> read_indexes(uint64_t position) {
+        return read_indexes(position, _summary.header.sampling_level);
+    }
+
+    future<index_list> read_indexes_for_testing(uint64_t position, uint64_t quantity) {
+        return read_indexes(position, quantity);
+    }
     future<> load();
 };
 }
