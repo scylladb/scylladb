@@ -23,6 +23,7 @@
 #define EXCEPTION_HH_
 
 #include "reply.hh"
+#include "json/json_elements.hh"
 
 namespace httpd {
 
@@ -106,6 +107,30 @@ class server_error_exception : public base_exception {
 public:
     server_error_exception(const std::string& msg)
             : base_exception(msg, reply::status_type::internal_server_error) {
+    }
+};
+
+class json_exception : public json::json_base {
+public:
+    json::json_element<std::string> _msg;
+    json::json_element<int> _code;
+    void register_params() {
+        add(&_msg, "message");
+        add(&_code, "code");
+    }
+
+    json_exception(const base_exception & e) {
+        set(e.str(), e.status());
+    }
+
+    json_exception(const std::exception& e) {
+        set(e.what(), reply::status_type::internal_server_error);
+    }
+private:
+    void set(const std::string& msg, reply::status_type code) {
+        register_params();
+        _msg = msg;
+        _code = (int) code;
     }
 };
 
