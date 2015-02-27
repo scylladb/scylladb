@@ -73,7 +73,7 @@ std::unordered_map<sstable::component_type, sstring, enum_hash<sstable::componen
 
 struct bufsize_mismatch_exception : malformed_sstable_exception {
     bufsize_mismatch_exception(size_t size, size_t expected) :
-        malformed_sstable_exception("Buffer to small to hold requested data. Got: " + to_sstring(size) + ". Expected: " + to_sstring(expected))
+        malformed_sstable_exception(sprint("Buffer improperly sized to hold requested data. Got: %ld. Expected: %ld", size, expected))
     {}
 };
 
