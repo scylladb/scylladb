@@ -77,6 +77,7 @@ future<> test_insert_statement() {
 
     // CQL: create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));
     return db->start().then([db] {
+        engine().at_exit([db] { db->stop(); });
         return db->invoke_on_all([] (database& db) {
             keyspace ks;
             auto cf_schema = make_lw_shared(schema(ks_name, table_name,
