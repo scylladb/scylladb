@@ -325,7 +325,7 @@ future<> sstable::read_toc() {
             // This file is supposed to be very small. Theoretically we should check its size,
             // but if we so much as read a whole page from it, there is definitely something fishy
             // going on - and this simplifies the code.
-            if (size > 4096) {
+            if (size >= 4096) {
                 throw malformed_sstable_exception("SSTable too big: " + to_sstring(size) + " bytes.");
             }
 
