@@ -83,7 +83,7 @@ column_condition::raw::prepare(const sstring& keyspace, column_definition& recei
         throw exceptions::invalid_request_exception(sprint("Invalid element access syntax for non-collection column %s", receiver.name_as_text()));
     }
 
-    unimplemented::collections();
+    fail(unimplemented::cause::COLLECTIONS);
 #if 0
             ColumnSpecification elementSpec, valueSpec;
             switch ((((CollectionType)receiver.type).kind))

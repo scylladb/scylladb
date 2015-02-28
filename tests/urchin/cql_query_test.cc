@@ -65,9 +65,10 @@ static future<> require_column_has_value(distributed<database>& ddb, const sstri
         if (i == row->end()) {
             assert(((void)"column not set", 0));
         }
-        auto& cell = boost::any_cast<const atomic_cell&>(i->second);
-        assert(cell.is_live());
-        assert(col_def->type->equal(cell.as_live().value, col_def->type->decompose(expected)));
+        auto& cell = i->second;
+        assert(atomic_cell::is_live(cell));
+        assert(col_def->type->equal(atomic_cell::value(cell), col_def->type->decompose(expected)));
+        row->find(col_def->id);
     });
 }
 
@@ -77,10 +78,11 @@ future<> test_insert_statement() {
 
     // CQL: create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));
     return db->start().then([db] {
+        engine().at_exit([db] { db->stop(); });
         return db->invoke_on_all([] (database& db) {
             keyspace ks;
             auto cf_schema = make_lw_shared(schema(ks_name, table_name,
-                {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, utf8_type));
+                {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
             ks.column_families.emplace(table_name, column_family(cf_schema));
             db.keyspaces.emplace(ks_name, std::move(ks));
         });

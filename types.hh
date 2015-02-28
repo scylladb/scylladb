@@ -93,6 +93,36 @@ public:
         abort();
         return false;
     }
+    /*
+     * Types which are wrappers over other types should override this.
+     * For example the reversed_type returns the type it is reversing.
+     */
+    virtual abstract_type& underlying_type() {
+        return *this;
+    }
+    /**
+     * Returns true if values of the other AbstractType can be read and "reasonably" interpreted by the this
+     * AbstractType. Note that this is a weaker version of isCompatibleWith, as it does not require that both type
+     * compare values the same way.
+     *
+     * The restriction on the other type being "reasonably" interpreted is to prevent, for example, IntegerType from
+     * being compatible with all other types.  Even though any byte string is a valid IntegerType value, it doesn't
+     * necessarily make sense to interpret a UUID or a UTF8 string as an integer.
+     *
+     * Note that a type should be compatible with at least itself.
+     */
+    bool is_value_compatible_with(abstract_type& other) {
+        return is_value_compatible_with_internal(other.underlying_type());
+    }
+protected:
+    /**
+     * Needed to handle ReversedType in value-compatibility checks.  Subclasses should implement this instead of
+     * is_value_compatible_with().
+     */
+    virtual bool is_value_compatible_with_internal(abstract_type& other) {
+        return is_compatible_with(other);
+    }
+public:
     virtual object_opt compose(const bytes& v) {
         return deserialize(v);
     }
@@ -160,6 +190,7 @@ extern thread_local shared_ptr<abstract_type> ascii_type;
 extern thread_local shared_ptr<abstract_type> bytes_type;
 extern thread_local shared_ptr<abstract_type> utf8_type;
 extern thread_local shared_ptr<abstract_type> boolean_type;
+extern thread_local shared_ptr<abstract_type> date_type;
 extern thread_local shared_ptr<abstract_type> timeuuid_type;
 extern thread_local shared_ptr<abstract_type> timestamp_type;
 extern thread_local shared_ptr<abstract_type> uuid_type;
@@ -287,7 +318,7 @@ T read_simple(bytes_view& v) {
     }
     auto p = v.begin();
     v.remove_prefix(sizeof(T));
-    return net::ntoh(*reinterpret_cast<const T*>(p));
+    return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
 }
 
 template<typename T>
@@ -297,7 +328,7 @@ T read_simple_exactly(bytes_view& v) {
     }
     auto p = v.begin();
     v.remove_prefix(sizeof(T));
-    return net::ntoh(*reinterpret_cast<const T*>(p));
+    return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
 }
 
 template<typename T>
@@ -310,5 +341,5 @@ object_opt read_simple_opt(bytes_view& v) {
     }
     auto p = v.begin();
     v.remove_prefix(sizeof(T));
-    return boost::any(net::ntoh(*reinterpret_cast<const T*>(p)));
+    return boost::any(net::ntoh(*reinterpret_cast<const net::packed<T>*>(p)));
 }

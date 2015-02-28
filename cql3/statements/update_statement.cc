@@ -62,7 +62,7 @@ void update_statement::add_update_for_key(mutation& m, const clustering_prefix& 
         update->execute(m, prefix, params);
     }
 
-    unimplemented::indexes();
+    warn(unimplemented::cause::INDEXES);
 #if 0
         SecondaryIndexManager indexManager = Keyspace.open(cfm.ksName).getColumnFamilyStore(cfm.cfId).indexManager;
         if (indexManager.hasIndexes())
@@ -117,20 +117,14 @@ update_statement::parsed_insert::prepare_internal(schema_ptr schema,
 
         auto&& value = _column_values[i];
 
-        switch(def->kind) {
-            case column_definition::PARTITION:
-            case column_definition::CLUSTERING: {
-                auto t = value->prepare(keyspace(), def->column_specification);
-                t->collect_marker_specification(bound_names);
-                stmt->add_key_value(*def, std::move(t));
-                break;
-            }
-            default: {
-                auto operation = operation::set_value(value).prepare(keyspace(), *def);
-                operation->collect_marker_specification(bound_names);
-                stmt->add_operation(std::move(operation));
-                break;
-            }
+        if (def->is_primary_key()) {
+            auto t = value->prepare(keyspace(), def->column_specification);
+            t->collect_marker_specification(bound_names);
+            stmt->add_key_value(*def, std::move(t));
+        } else {
+            auto operation = operation::set_value(value).prepare(keyspace(), *def);
+            operation->collect_marker_specification(bound_names);
+            stmt->add_operation(std::move(operation));
         };
     }
     return stmt;
@@ -152,14 +146,10 @@ update_statement::parsed_update::prepare_internal(schema_ptr schema,
         auto operation = entry.second->prepare(keyspace(), *def);
         operation->collect_marker_specification(bound_names);
 
-        switch (def->kind) {
-            case column_definition::column_kind::PARTITION:
-            case column_definition::column_kind::CLUSTERING:
-                throw exceptions::invalid_request_exception(sprint("PRIMARY KEY part %s found in SET part", *entry.first));
-            default:
-                stmt->add_operation(std::move(operation));
-                break;
+        if (def->is_primary_key()) {
+            throw exceptions::invalid_request_exception(sprint("PRIMARY KEY part %s found in SET part", *entry.first));
         }
+        stmt->add_operation(std::move(operation));
     }
 
     stmt->process_where_clause(_where_clause, bound_names);

@@ -1,13 +1,13 @@
 #include "database.hh"
 #include "perf.hh"
 
-static boost::any make_atomic_cell(bytes value) {
-    return atomic_cell{0, atomic_cell::live{ttl_opt{}, std::move(value)}};
+static bytes make_atomic_cell(bytes value) {
+    return atomic_cell::make_live(0, ttl_opt{}, value);
 };
 
 int main(int argc, char* argv[]) {
     auto s = make_lw_shared(schema("ks", "cf",
-        {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, utf8_type));
+        {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
     column_family cf(s);
 

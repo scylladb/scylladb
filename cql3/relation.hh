@@ -154,8 +154,7 @@ public:
      * @throws InvalidRequestException if the relation cannot be converted into an EQ restriction.
      */
     virtual ::shared_ptr<restrictions::restriction> new_EQ_restriction(schema_ptr schema,
-                                                    ::shared_ptr<
-                                                        variable_specifications> bound_names) = 0;
+        ::shared_ptr<variable_specifications> bound_names) = 0;
 
     /**
      * Creates a new IN restriction instance.
@@ -166,8 +165,7 @@ public:
      * @throws InvalidRequestException if the relation cannot be converted into an IN restriction.
      */
     virtual ::shared_ptr<restrictions::restriction> new_IN_restriction(schema_ptr schema,
-                                                    ::
-                                                    shared_ptr<variable_specifications> bound_names) = 0;
+        ::shared_ptr<variable_specifications> bound_names) = 0;
 
     /**
      * Creates a new Slice restriction instance.
@@ -179,12 +177,10 @@ public:
      * @return a new slice restriction instance
      * @throws InvalidRequestException if the <code>Relation</code> is not valid
      */
-    virtual ::shared_ptr<restrictions::restriction> new_slice_restriction(
-        schema_ptr schema,
-                                                       ::shared_ptr<variable_specifications> bound_names,
-                                                       statements::bound bound,
-                                                       bool
-                                                       inclusive) = 0;
+    virtual ::shared_ptr<restrictions::restriction> new_slice_restriction(schema_ptr schema,
+        ::shared_ptr<variable_specifications> bound_names,
+        statements::bound bound,
+        bool inclusive) = 0;
 
     /**
      * Creates a new Contains restriction instance.
@@ -195,11 +191,8 @@ public:
      * @return a new Contains <code>::shared_ptr<restrictions::restriction></code> instance
      * @throws InvalidRequestException if the <code>Relation</code> is not valid
      */
-    virtual ::
-    shared_ptr<restrictions::restriction>
-        new_contains_restriction(schema_ptr schema,
-                                                          ::shared_ptr<variable_specifications> bound_names,
-                                                          bool isKey) = 0;
+    virtual ::shared_ptr<restrictions::restriction> new_contains_restriction(schema_ptr schema,
+        ::shared_ptr<variable_specifications> bound_names, bool isKey) = 0;
 
 #if 0
 

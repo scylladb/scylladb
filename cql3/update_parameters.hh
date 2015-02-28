@@ -63,19 +63,19 @@ public:
         }
     }
 
-    atomic_cell make_dead_cell() const {
-        return atomic_cell{_timestamp, atomic_cell::dead{_local_deletion_time}};
+    bytes make_dead_cell() const {
+        return atomic_cell::make_dead(_timestamp, _local_deletion_time);
     }
 
-    atomic_cell make_cell(bytes value) const {
+    bytes make_cell(bytes_view value) const {
         auto ttl = _ttl;
 
         if (ttl.count() <= 0) {
             ttl = _schema->default_time_to_live;
         }
 
-        return atomic_cell{_timestamp,
-            atomic_cell::live{ttl.count() > 0 ? ttl_opt{_local_deletion_time + ttl} : ttl_opt{}, std::move(value)}};
+        return atomic_cell::make_live(_timestamp,
+            ttl.count() > 0 ? ttl_opt{_local_deletion_time + ttl} : ttl_opt{}, value);
     };
 
 #if 0

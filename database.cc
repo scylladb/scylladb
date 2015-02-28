@@ -30,7 +30,7 @@ schema::make_column_specification(column_definition& def) {
 }
 
 void
-schema::build_columns(std::vector<column> columns, column_definition::column_kind kind,
+schema::build_columns(const std::vector<column>& columns, column_definition::column_kind kind,
     std::vector<column_definition>& dst)
 {
     dst.reserve(columns.size());
@@ -46,6 +46,7 @@ schema::build_columns(std::vector<column> columns, column_definition::column_kin
 schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_key,
     std::vector<column> clustering_key,
     std::vector<column> regular_columns,
+    std::vector<column> static_columns,
     data_type regular_column_name_type)
         : _regular_columns_by_name(serialized_compare(regular_column_name_type))
         , ks_name(std::move(ks_name))
@@ -62,14 +63,17 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_k
         throw std::runtime_error("not implemented");
     }
 
-    build_columns(std::move(partition_key), column_definition::PARTITION, this->partition_key);
-    build_columns(std::move(clustering_key), column_definition::CLUSTERING, this->clustering_key);
+    build_columns(partition_key, column_definition::column_kind::PARTITION, _partition_key);
+    build_columns(clustering_key, column_definition::column_kind::CLUSTERING, _clustering_key);
 
     std::sort(regular_columns.begin(), regular_columns.end(), column::name_compare(regular_column_name_type));
-    build_columns(std::move(regular_columns), column_definition::REGULAR, this->regular_columns);
-    for (column_definition& def : this->regular_columns) {
+    build_columns(regular_columns, column_definition::column_kind::REGULAR, _regular_columns);
+    for (column_definition& def : _regular_columns) {
         _regular_columns_by_name[def.name()] = &def;
     }
+
+    std::sort(static_columns.begin(), static_columns.end(), column::name_compare(utf8_type));
+    build_columns(static_columns, column_definition::column_kind::STATIC, _static_columns);
 }
 
 column_family::column_family(schema_ptr schema)
@@ -282,21 +286,20 @@ column_family::apply(const mutation& m) {
 // Based on org.apache.cassandra.db.AbstractCell#reconcile()
 static inline
 int
-compare_for_merge(const atomic_cell& left, const atomic_cell& right) {
-    if (left.timestamp != right.timestamp) {
-        return left.timestamp > right.timestamp ? 1 : -1;
+compare_atomic_cell_for_merge(bytes_view left, bytes_view right) {
+    if (atomic_cell::timestamp(left) != atomic_cell::timestamp(right)) {
+        return atomic_cell::timestamp(left) > atomic_cell::timestamp(right) ? 1 : -1;
     }
-    if (left.value.which() != right.value.which()) {
-        return left.is_live() ? -1 : 1;
+    if (atomic_cell::is_live(left) != atomic_cell::is_live(right)) {
+        return atomic_cell::is_live(left) ? -1 : 1;
     }
-    if (left.is_live()) {
-        return compare_unsigned(left.as_live().value, right.as_live().value);
+    if (atomic_cell::is_live(left)) {
+        return compare_unsigned(atomic_cell::value(left), atomic_cell::value(right));
     } else {
-        auto& c1 = left.as_dead();
-        auto& c2 = right.as_dead();
-        if (c1.ttl != c2.ttl) {
+        if (*atomic_cell::ttl(left) != *atomic_cell::ttl(right)) {
             // Origin compares big-endian serialized TTL
-            return (uint32_t)c1.ttl.time_since_epoch().count() < (uint32_t)c2.ttl.time_since_epoch().count() ? -1 : 1;
+            return (uint32_t)atomic_cell::ttl(left)->time_since_epoch().count()
+                 < (uint32_t)atomic_cell::ttl(right)->time_since_epoch().count() ? -1 : 1;
         }
         return 0;
     }
@@ -305,13 +308,12 @@ compare_for_merge(const atomic_cell& left, const atomic_cell& right) {
 static inline
 int
 compare_for_merge(const column_definition& def,
-                  const std::pair<column_id, boost::any>& left,
-                  const std::pair<column_id, boost::any>& right) {
+                  const std::pair<column_id, bytes>& left,
+                  const std::pair<column_id, bytes>& right) {
     if (def.is_atomic()) {
-        return compare_for_merge(boost::any_cast<const atomic_cell&>(left.second),
-            boost::any_cast<const atomic_cell&>(right.second));
+        return compare_atomic_cell_for_merge(left.second, right.second);
     } else {
-        throw std::runtime_error("not implemented");
+        fail(unimplemented::cause::COLLECTIONS);
     }
 }
 
@@ -385,10 +387,10 @@ void
 mutation_partition::apply_delete(schema_ptr schema, const clustering_prefix& prefix, tombstone t) {
     if (prefix.empty()) {
         apply(t);
-    } else if (prefix.size() == schema->clustering_key.size()) {
-        _rows[serialize_value(*schema->clustering_key_type, prefix)].t.apply(t);
+    } else if (prefix.size() == schema->clustering_key_size()) {
+        _rows[schema->clustering_key_type->serialize_value(prefix)].t.apply(t);
     } else {
-        apply_row_tombstone(schema, {serialize_value(*schema->clustering_key_prefix_type, prefix), t});
+        apply_row_tombstone(schema, {schema->clustering_key_prefix_type->serialize_value(prefix), t});
     }
 }
 
@@ -402,7 +404,7 @@ mutation_partition::find_row(const clustering_key& key) {
 }
 
 bool column_definition::is_compact_value() const {
-    unimplemented::compact_tables();
+    warn(unimplemented::cause::COMPACT_TABLES);
     return false;
 }
 

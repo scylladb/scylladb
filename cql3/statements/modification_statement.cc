@@ -140,7 +140,7 @@ modification_statement::read_required_rows(
 
 const column_definition*
 modification_statement::get_first_empty_key() {
-    for (auto& def : s->clustering_key) {
+    for (auto& def : s->clustering_key_columns()) {
         if (_processed_keys.find(&def) == _processed_keys.end()) {
             return &def;
         }
@@ -153,7 +153,7 @@ modification_statement::create_clustering_prefix_internal(const query_options& o
     std::vector<bytes_opt> components;
     const column_definition* first_empty_key = nullptr;
 
-    for (auto& def : s->clustering_key) {
+    for (auto& def : s->clustering_key_columns()) {
         auto i = _processed_keys.find(&def);
         if (i == _processed_keys.end()) {
             first_empty_key = &def;
@@ -206,7 +206,7 @@ modification_statement::create_clustering_prefix(const query_options& options) {
         // but we still need to build a proper prefix, or it's not an INSERT, and then we want to reject
         // (see above)
         if (type != statement_type::INSERT) {
-            for (auto& def : s->clustering_key) {
+            for (auto& def : s->clustering_key_columns()) {
                 if (_processed_keys.count(&def)) {
                     throw exceptions::invalid_request_exception(sprint(
                             "Invalid restriction on clustering column %s since the %s statement modifies only static columns",
@@ -227,9 +227,9 @@ modification_statement::build_partition_keys(const query_options& options) {
     std::vector<partition_key> result;
     std::vector<bytes_opt> components;
 
-    auto remaining = s->partition_key.size();
+    auto remaining = s->partition_key_size();
 
-    for (auto& def : s->partition_key) {
+    for (auto& def : s->partition_key_columns()) {
         auto i = _processed_keys.find(&def);
         if (i == _processed_keys.end()) {
             throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
@@ -312,7 +312,7 @@ modification_statement::execute_without_condition(service::storage_proxy& proxy,
 
 future<::shared_ptr<transport::messages::result_message>>
 modification_statement::execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) {
-    unimplemented::lwt();
+    fail(unimplemented::cause::LWT);
 #if 0
         List<ByteBuffer> keys = buildPartitionKeyNames(options);
         // We don't support IN for CAS operation so far
@@ -340,7 +340,7 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
 
 void
 modification_statement::add_key_values(column_definition& def, ::shared_ptr<restrictions::restriction> values) {
-    if (def.kind == column_definition::CLUSTERING) {
+    if (def.is_clustering_key()) {
         _has_no_clustering_columns = false;
     }
 
@@ -373,16 +373,14 @@ modification_statement::process_where_clause(std::vector<relation_ptr> where_cla
             throw exceptions::invalid_request_exception(sprint("Unknown key identifier %s", *id));
         }
 
-        switch (def->kind) {
-            case column_definition::column_kind::PARTITION:
-            case column_definition::column_kind::CLUSTERING:
-                if (rel->is_EQ() || (def->is_partition_key() && rel->is_IN())) {
-                    add_key_values(*def, rel->to_restriction(s, std::move(names)));
-                    break;
-                }
+        if (def->is_primary_key()) {
+            if (rel->is_EQ() || (def->is_partition_key() && rel->is_IN())) {
+                add_key_values(*def, rel->to_restriction(s, std::move(names)));
+            } else {
                 throw exceptions::invalid_request_exception(sprint("Invalid operator %s for PRIMARY KEY part %s", rel->get_operator(), def->name_as_text()));
-            default:
-                throw exceptions::invalid_request_exception(sprint("Non PRIMARY KEY %s found in where clause", def->name_as_text()));
+            }
+        } else {
+            throw exceptions::invalid_request_exception(sprint("Non PRIMARY KEY %s found in where clause", def->name_as_text()));
         }
     }
 }
@@ -432,13 +430,10 @@ modification_statement::parsed::prepare(database& db, ::shared_ptr<variable_spec
                 auto condition = entry.second->prepare(keyspace(), *def);
                 condition->collect_marker_specificaton(bound_names);
 
-                switch (def->kind) {
-                    case column_definition::PARTITION:
-                    case column_definition::CLUSTERING:
-                        throw exceptions::invalid_request_exception(sprint("PRIMARY KEY column '%s' cannot have IF conditions", *id));
-                    default:
-                        stmt->add_condition(condition);
+                if (def->is_primary_key()) {
+                    throw exceptions::invalid_request_exception(sprint("PRIMARY KEY column '%s' cannot have IF conditions", *id));
                 }
+                stmt->add_condition(condition);
             }
         }
         stmt->validate_where_clause_for_conditions();
