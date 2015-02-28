@@ -329,7 +329,7 @@ future<> sstable::read_toc() {
                 throw malformed_sstable_exception("SSTable too big: " + to_sstring(size) + " bytes.");
             }
 
-            auto buf = bufptr.get();
+            std::experimental::string_view buf(bufptr.get(), size);
             std::vector<sstring> comps;
 
             boost::split(comps , buf, boost::is_any_of("\n"));
