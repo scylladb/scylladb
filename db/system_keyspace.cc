@@ -189,64 +189,121 @@ schema_ptr built_indexes() {
     return peers;
 }
 
+/*static*/ schema_ptr peer_events() {
+    static thread_local auto peer_events = make_lw_shared(schema(NAME, PEER_EVENTS,
+        // partition key
+        {{"peer", inet_addr_type}},
+        // clustering key
+        {},
+        // regular columns
+        // FIXME: Cassandra also had this column:
+        // hints_dropped map<uuid, int>,
+        {},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type
+        // FIXME: the original Java code also had:
+        // comment: "events related to peers"
+        ));
+    return peer_events;
+}
+
+/*static*/ schema_ptr range_xfers() {
+    static thread_local auto range_xfers = make_lw_shared(schema(NAME, RANGE_XFERS,
+        // partition key
+        {{"token_bytes", bytes_type}},
+        // clustering key
+        {},
+        // regular columns
+        {{"requested_at", timestamp_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type
+        // FIXME: the original Java code also had:
+        // comment: "ranges requested for transfer"
+        ));
+    return range_xfers;
+}
+
+/*static*/ schema_ptr compactions_in_progress() {
+    static thread_local auto compactions_in_progress = make_lw_shared(schema(NAME, COMPACTIONS_IN_PROGRESS,
+        // partition key
+        {{"id", uuid_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+            {"columnfamily_name", utf8_type},
+            // FIXME: Cassandra also had an additional column here:
+            // "inputs set<int>,"
+            {"keyspace_name", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type
+        // FIXME: the original Java code also had:
+        // comment: "unfinished compactions"
+        ));
+    return compactions_in_progress;
+}
+
+/*static*/ schema_ptr compaction_history() {
+    static thread_local auto compaction_history = make_lw_shared(schema(NAME, COMPACTION_HISTORY,
+        // partition key
+        {{"id", uuid_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+            {"bytes_in", long_type},
+            {"bytes_out", long_type},
+            {"columnfamily_name", utf8_type},
+            {"compacted_at", timestamp_type},
+            {"keyspace_name", utf8_type},
+            // FIXME: Cassandra also had an additional column here:
+            // rows_merged map<int, bigint>
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type
+        // FIXME: the original Java code also had:
+        // comment: "week-long compaction history"
+        //.defaultTimeToLive((int) TimeUnit.DAYS.toSeconds(7));
+        ));
+    return compaction_history;
+}
+
+/*static*/ schema_ptr sstable_activity() {
+    static thread_local auto sstable_activity = make_lw_shared(schema(NAME, SSTABLE_ACTIVITY,
+        // partition key
+        {
+            {"keyspace_name", utf8_type},
+            {"columnfamily_name", utf8_type},
+            {"generation", int32_type},
+        },
+        // clustering key
+        {},
+        // regular columns
+        {
+            // FIXME: Cassandra also had two additional columns here:
+            // "rate_120m double,"
+            // "rate_15m double,"
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type
+        // FIXME: the original Java code also had:
+        // comment: "historic sstable read rates"
+        ));
+    return sstable_activity;
+}
 
 #if 0
-    private static final CFMetaData PeerEvents =
-        compile(PEER_EVENTS,
-                "events related to peers",
-                "CREATE TABLE %s ("
-                + "peer inet,"
-                + "hints_dropped map<uuid, int>,"
-                + "PRIMARY KEY ((peer)))");
-
-    private static final CFMetaData RangeXfers =
-        compile(RANGE_XFERS,
-                "ranges requested for transfer",
-                "CREATE TABLE %s ("
-                + "token_bytes blob,"
-                + "requested_at timestamp,"
-                + "PRIMARY KEY ((token_bytes)))");
-
-    private static final CFMetaData CompactionsInProgress =
-        compile(COMPACTIONS_IN_PROGRESS,
-                "unfinished compactions",
-                "CREATE TABLE %s ("
-                + "id uuid,"
-                + "columnfamily_name text,"
-                + "inputs set<int>,"
-                + "keyspace_name text,"
-                + "PRIMARY KEY ((id)))");
-
-    private static final CFMetaData CompactionHistory =
-        compile(COMPACTION_HISTORY,
-                "week-long compaction history",
-                "CREATE TABLE %s ("
-                + "id uuid,"
-                + "bytes_in bigint,"
-                + "bytes_out bigint,"
-                + "columnfamily_name text,"
-                + "compacted_at timestamp,"
-                + "keyspace_name text,"
-                + "rows_merged map<int, bigint>,"
-                + "PRIMARY KEY ((id)))")
-                .defaultTimeToLive((int) TimeUnit.DAYS.toSeconds(7));
-
-    private static final CFMetaData SSTableActivity =
-        compile(SSTABLE_ACTIVITY,
-                "historic sstable read rates",
-                "CREATE TABLE %s ("
-                + "keyspace_name text,"
-                + "columnfamily_name text,"
-                + "generation int,"
-                + "rate_120m double,"
-                + "rate_15m double,"
-                + "PRIMARY KEY ((keyspace_name, columnfamily_name, generation)))");
-
-    private static CFMetaData compile(String name, String description, String schema)
-    {
-        return CFMetaData.compile(String.format(schema, name), NAME)
-                         .comment(description);
-    }
 
     public static KSMetaData definition()
     {
