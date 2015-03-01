@@ -806,15 +806,17 @@ void tcp<InetTraits>::respond_with_reset(tcp_hdr* rth, ipaddr local_ip, ipaddr f
     *th = hton(*th);
 
     checksummer csum;
+    offload_info oi;
     InetTraits::tcp_pseudo_header_checksum(csum, local_ip, foreign_ip, sizeof(*th));
     if (hw_features().tx_csum_l4_offload) {
         th->checksum = ~csum.get();
+        oi.needs_csum = true;
     } else {
         csum.sum(p);
         th->checksum = csum.get();
+        oi.needs_csum = false;
     }
 
-    offload_info oi;
     oi.protocol = ip_protocol_num::tcp;
     oi.tcp_hdr_len = sizeof(tcp_hdr);
     p.set_offload_info(oi);
