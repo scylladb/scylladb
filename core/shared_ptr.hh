@@ -599,4 +599,22 @@ struct shared_ptr_value_hash {
     }
 };
 
+namespace std {
+
+template <typename T>
+struct hash<lw_shared_ptr<T>> : private hash<T*> {
+    size_t operator()(const lw_shared_ptr<T>& p) const {
+        return hash<T*>::operator()(p.get());
+    }
+};
+
+template <typename T>
+struct hash<::shared_ptr<T>> : private hash<T*> {
+    size_t operator()(const ::shared_ptr<T>& p) const {
+        return hash<T*>::operator()(p.get());
+    }
+};
+
+}
+
 #endif /* SHARED_PTR_HH_ */

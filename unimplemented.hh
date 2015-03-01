@@ -7,6 +7,7 @@
 #include <iostream>
 #include "core/print.hh"
 #include "core/sstring.hh"
+#include "core/enum.hh"
 
 namespace unimplemented {
 
@@ -25,5 +26,12 @@ enum class cause {
 
 void fail(cause what) __attribute__((noreturn));
 void warn(cause what);
+
+}
+
+namespace std {
+
+template <>
+struct hash<unimplemented::cause> : enum_hash<unimplemented::cause> {};
 
 }

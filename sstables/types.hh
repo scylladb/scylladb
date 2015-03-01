@@ -142,8 +142,21 @@ enum class metadata_type : uint32_t {
     Stats = 2,
 };
 
+}
+
+namespace std {
+
+template <>
+struct hash<sstables::metadata_type> : enum_hash<sstables::metadata_type> {};
+
+}
+
+namespace sstables {
+
 struct statistics {
     disk_hash<uint32_t, metadata_type, uint32_t> hash;
     std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
 };
+
 }
+

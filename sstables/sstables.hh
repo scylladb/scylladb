@@ -12,11 +12,9 @@
 #include <unordered_set> 
 #include <unordered_map>
 #include "types.hh"
+#include "core/enum.hh"
 
 namespace sstables {
-
-template <typename T, typename V>
-using unordered_map = std::unordered_map<T, V>;
 
 class malformed_sstable_exception : public std::exception {
     sstring _msg;
@@ -44,11 +42,11 @@ public:
     enum class format_types { big };
 
 private:
-    static unordered_map<version_types, sstring> _version_string;
-    static unordered_map<format_types, sstring> _format_string;
-    static unordered_map<component_type, sstring> _component_map;
+    static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
+    static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
+    static std::unordered_map<component_type, sstring, enum_hash<component_type>> _component_map;
 
-    std::unordered_set<component_type> _components;
+    std::unordered_set<component_type, enum_hash<component_type>> _components;
 
     compression _compression;
     filter _filter;

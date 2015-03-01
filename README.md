@@ -313,6 +313,33 @@ void f() {
 }
 ```
 
+Note, however, that the `.rescue()` clause will be scheduled even if no
+exception occur. Therefore, the mere fact that `.rescue()` is executed does not
+mean that an exception was thrown. Only the execution of the catch block can
+guarantee that.
+
+Another alternative to the `.rescue()` clause is the use of `.then_wrapped()`.
+With that construct, the previous future is passed as a parameter to the
+lambda, and its value can be inspected with `f.get()`. Using that inside a
+try-catch block, yields similar results than `.rescue()`
+
+This is shown below:
+
+```C++
+
+future<my_type> my_future();
+
+void f() {
+    receive().then_wrapped([] (future<my_type> f) {
+        try {
+            my_type x = f.get();
+            return do_something(x);
+        } catch (std::exception& e) {
+            // your handler goes here
+        }
+    });
+}
+```
 ### Setup notes
 
 SeaStar is a high performance framework and tuned to get the best 

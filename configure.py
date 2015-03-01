@@ -374,6 +374,9 @@ defines = ' '.join(['-D' + d for d in defines])
 
 globals().update(vars(args))
 
+total_memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+link_pool_depth = max(int(total_memory / 15e9), 1)
+
 build_modes = modes if args.mode == 'all' else [args.mode]
 build_artifacts = all_artifacts if not args.artifacts else args.artifacts
 
@@ -392,7 +395,7 @@ with open(buildfile, 'w') as f:
         ldflags = {dbgflag} -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags}
         libs = {libs}
         pool link_pool
-            depth = 1
+            depth = {link_pool_depth}
         rule ragel
             command = ragel -G2 -o $out $in
             description = RAGEL $out
