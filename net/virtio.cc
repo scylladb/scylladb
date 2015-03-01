@@ -554,6 +554,7 @@ protected:
     private:
         future<> prepare_buffers();
         void complete_buffer(single_buffer&& b, size_t len);
+        void debug_mode_adjust_fragments();
     };
 protected:
     device* _dev;
@@ -667,6 +668,22 @@ qp::rxq::prepare_buffers() {
 }
 
 void
+qp::rxq::debug_mode_adjust_fragments() {
+#ifdef DEBUG
+    // For debug mode, reallocate last fragment to detect buffer overruns
+    auto last = _fragments.back();
+    auto sz = last.size;
+    std::unique_ptr<char[], free_deleter> buf(reinterpret_cast<char*>(malloc(sz)));
+    if (!buf) {
+        throw std::bad_alloc();
+    }
+    std::copy_n(last.base, sz, buf.get());
+    _fragments.back() = { buf.get(), sz };
+    _buffers.back() = std::move(buf);
+#endif
+}
+
+void
 qp::rxq::complete_buffer(single_buffer&& bc, size_t len) {
     auto&& sb = bc[0];
     auto&& buf = sb.buf;
@@ -690,6 +707,7 @@ qp::rxq::complete_buffer(single_buffer&& bc, size_t len) {
 
     // Last buffer
     if (_remaining_buffers == 0) {
+        debug_mode_adjust_fragments();
         deleter del;
         if (_buffers.size() == 1) {
             del = make_free_deleter(_buffers[0].release());
