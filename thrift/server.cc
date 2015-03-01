@@ -105,13 +105,20 @@ public:
     }
     future<> read() {
         return _read_buf.read_exactly(4).then([this] (temporary_buffer<char> size_buf) {
+            if (size_buf.size() != 4) {
+                return make_ready_future<>();
+            }
             union {
                 uint32_t n;
                 char b[4];
             } data;
             std::copy_n(size_buf.get(), 4, data.b);
             auto n = ntohl(data.n);
-            return _read_buf.read_exactly(n).then([this] (temporary_buffer<char> buf) {
+            return _read_buf.read_exactly(n).then([this, n] (temporary_buffer<char> buf) {
+                if (buf.size() != n) {
+                    // FIXME: exception perhaps?
+                    return;
+                }
                 _in_tmp = std::move(buf); // keep ownership of the data
                 auto b = reinterpret_cast<uint8_t*>(_in_tmp.get_write());
                 _input->resetBuffer(b, _in_tmp.size());
