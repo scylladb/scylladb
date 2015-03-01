@@ -22,6 +22,8 @@
 #ifndef XENSTORE_HH_
 #define XENSTORE_HH_
 
+#include <list>
+
 extern "C" {
     #include <xenstore.h>
 }
