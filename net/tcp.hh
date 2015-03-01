@@ -915,8 +915,9 @@ void tcp<InetTraits>::tcb::init_from_options(tcp_hdr* th, uint8_t* opt_start, ui
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::input_handle_listen_state(tcp_hdr* th, packet p) {
-    auto opt_start = p.get_header<uint8_t>(sizeof(tcp_hdr));
-    auto opt_end = opt_start + th->data_offset * 4;
+    auto opt_len = th->data_offset * 4 - sizeof(tcp_hdr);
+    auto opt_start = reinterpret_cast<uint8_t*>(p.get_header(0, th->data_offset * 4)) + sizeof(tcp_hdr);
+    auto opt_end = opt_start + opt_len;
     p.trim_front(th->data_offset * 4);
     tcp_seq seg_seq = th->seq;
 
@@ -943,8 +944,9 @@ void tcp<InetTraits>::tcb::input_handle_listen_state(tcp_hdr* th, packet p) {
 
 template <typename InetTraits>
 void tcp<InetTraits>::tcb::input_handle_syn_sent_state(tcp_hdr* th, packet p) {
-    auto opt_start = p.get_header<uint8_t>(sizeof(tcp_hdr));
-    auto opt_end = opt_start + th->data_offset * 4;
+    auto opt_len = th->data_offset * 4 - sizeof(tcp_hdr);
+    auto opt_start = reinterpret_cast<uint8_t*>(p.get_header(0, th->data_offset * 4)) + sizeof(tcp_hdr);
+    auto opt_end = opt_start + opt_len;
     p.trim_front(th->data_offset * 4);
     tcp_seq seg_seq = th->seq;
     auto seg_ack = th->ack;
