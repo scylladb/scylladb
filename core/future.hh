@@ -341,6 +341,9 @@ private:
     friend class future;
 };
 
+template<>
+class promise<void> : public promise<> {};
+
 template <typename... T> struct is_future : std::false_type {};
 template <typename... T> struct is_future<future<T...>> : std::true_type {};
 
