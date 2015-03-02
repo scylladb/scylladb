@@ -48,7 +48,7 @@ inline int32_t compare_unsigned(bytes_view v1, bytes_view v2) {
     return (int32_t) (v1.size() - v2.size());
 }
 
-class abstract_type {
+class abstract_type : public enable_shared_from_this<abstract_type> {
     sstring _name;
 public:
     abstract_type(sstring name) : _name(name) {}
@@ -150,6 +150,7 @@ public:
     virtual bool is_collection() { return false; }
     virtual bool is_multi_cell() { return false; }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() = 0;
+    virtual shared_ptr<abstract_type> freeze() { return shared_from_this(); }
 };
 
 using data_type = shared_ptr<abstract_type>;
