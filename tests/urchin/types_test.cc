@@ -9,6 +9,10 @@
 #include "types.hh"
 #include "tuple.hh"
 
+BOOST_AUTO_TEST_CASE(test_bytes_type_string_conversions) {
+    BOOST_REQUIRE(bytes_type->equal(bytes_type->from_string("616263646566"), bytes_type->decompose(bytes{"abcdef"})));
+}
+
 BOOST_AUTO_TEST_CASE(test_int32_type_string_conversions) {
     BOOST_REQUIRE(int32_type->equal(int32_type->from_string("1234567890"), int32_type->decompose(1234567890)));
     BOOST_REQUIRE_EQUAL(int32_type->to_string(int32_type->decompose(1234567890)), "1234567890");

@@ -172,10 +172,10 @@ struct bytes_type_impl final : public abstract_type {
         return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) override {
-        return to_bytes(s);
+        return from_hex(s);
     }
     virtual sstring to_string(const bytes& b) override {
-        return sstring(b);
+        return to_hex(b);
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
         return cql3::native_cql3_type::blob;
