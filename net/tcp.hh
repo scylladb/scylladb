@@ -237,7 +237,6 @@ private:
         struct unacked_segment {
             packet p;
             uint16_t data_len;
-            uint16_t data_remaining;
             unsigned nr_transmits;
             clock_type::time_point tx_time;
         };
@@ -325,7 +324,7 @@ private:
         void input_handle_listen_state(tcp_hdr* th, packet p);
         void input_handle_syn_sent_state(tcp_hdr* th, packet p);
         void input_handle_other_state(tcp_hdr* th, packet p);
-        void output_one();
+        void output_one(bool data_retransmit = false);
         future<> wait_for_data();
         future<> wait_for_all_data_acked();
         future<> send(packet p);
@@ -371,6 +370,10 @@ private:
         bool should_send_ack(uint16_t seg_len);
         void clear_delayed_ack();
         packet get_transmit_packet();
+        void retransmit_one() {
+            bool data_retransmit = true;
+            output_one(data_retransmit);
+        }
         void start_retransmit_timer() {
             auto now = clock_type::now();
             start_retransmit_timer(now);
@@ -423,7 +426,7 @@ private:
         }
         uint32_t flight_size() {
             uint32_t size = 0;
-            std::for_each(_snd.data.begin(), _snd.data.end(), [&] (unacked_segment& seg) { size += seg.data_remaining; });
+            std::for_each(_snd.data.begin(), _snd.data.end(), [&] (unacked_segment& seg) { size += seg.p.len(); });
             return size;
         }
         uint16_t local_mss() {
@@ -829,8 +832,8 @@ uint32_t tcp<InetTraits>::tcb::data_segment_acked(tcp_seq seg_ack) {
     uint32_t total_acked_bytes = 0;
     // Full ACK of segment
     while (!_snd.data.empty()
-            && (_snd.unacknowledged + _snd.data.front().data_remaining <= seg_ack)) {
-        auto acked_bytes = _snd.data.front().data_remaining;
+            && (_snd.unacknowledged + _snd.data.front().p.len() <= seg_ack)) {
+        auto acked_bytes = _snd.data.front().p.len();
         _snd.unacknowledged += acked_bytes;
         // Ignore retransmitted segments when setting the RTO
         if (_snd.data.front().nr_transmits == 0) {
@@ -843,13 +846,11 @@ uint32_t tcp<InetTraits>::tcb::data_segment_acked(tcp_seq seg_ack) {
     }
     // Partial ACK of segment
     if (_snd.unacknowledged < seg_ack) {
-        // For simplicity sake, do not trim the partially acked data
-        // off the unacked segment. So we do not need to recalculate
-        // the tcp header when retransmit the segment, but the downside
-        // is that we will retransmit the whole segment although part
-        // of them are already acked.
         auto acked_bytes = seg_ack - _snd.unacknowledged;
-        _snd.data.front().data_remaining -= acked_bytes;
+        if (!_snd.data.empty()) {
+            auto& unacked_seg = _snd.data.front();
+            unacked_seg.p.trim_front(acked_bytes);
+        }
         _snd.unacknowledged = seg_ack;
         update_cwnd(acked_bytes);
         total_acked_bytes += acked_bytes;
@@ -1417,12 +1418,12 @@ packet tcp<InetTraits>::tcb::get_transmit_packet() {
 }
 
 template <typename InetTraits>
-void tcp<InetTraits>::tcb::output_one() {
+void tcp<InetTraits>::tcb::output_one(bool data_retransmit) {
     if (in_state(CLOSED)) {
         return;
     }
 
-    packet p = get_transmit_packet();
+    packet p = data_retransmit ? _snd.data.front().p.share() : get_transmit_packet();
     uint16_t len = p.len();
     bool syn_on = syn_needs_on();
     bool ack_on = ack_needs_on();
@@ -1441,13 +1442,18 @@ void tcp<InetTraits>::tcb::output_one() {
     th->f_urg = false;
     th->f_psh = false;
 
-    th->seq = syn_on ? _snd.initial : _snd.next;
+    tcp_seq seq;
+    if (data_retransmit) {
+        seq = _snd.unacknowledged;
+    } else {
+        seq = syn_on ? _snd.initial : _snd.next;
+        _snd.next += len;
+    }
+    th->seq = seq;
     th->ack = _rcv.next;
     th->data_offset = (sizeof(*th) + options_size) / 4;
     th->window = _rcv.window >> _rcv.window_scale;
     th->checksum = 0;
-
-    _snd.next += len;
 
     // FIXME: does the FIN have to fit in the window?
     bool fin_on = fin_needs_on();
@@ -1501,11 +1507,12 @@ void tcp<InetTraits>::tcb::output_one() {
 
     p.set_offload_info(oi);
 
-    if (len || syn_on || fin_on) {
+    if (!data_retransmit && (len || syn_on || fin_on)) {
         auto now = clock_type::now();
         if (len) {
             unsigned nr_transmits = 0;
-            _snd.data.emplace_back(unacked_segment{p.share(), len, len, nr_transmits, now});
+            _snd.data.emplace_back(unacked_segment{p.share(sizeof(tcp_hdr) + options_size, len),
+                                   len, nr_transmits, now});
         }
         if (!_retransmit.armed()) {
             start_retransmit_timer(now);
@@ -1763,8 +1770,7 @@ void tcp<InetTraits>::tcb::retransmit() {
         cleanup();
         return;
     }
-    // TODO: If the Path MTU changes, we need to split the segment if it is larger than current MSS
-    queue_packet(unacked_seg.p.share());
+    retransmit_one();
 
     output_update_rto();
 }
@@ -1774,7 +1780,7 @@ void tcp<InetTraits>::tcb::fast_retransmit() {
     if (!_snd.data.empty()) {
         auto& unacked_seg = _snd.data.front();
         unacked_seg.nr_transmits++;
-        queue_packet(unacked_seg.p.share());
+        retransmit_one();
         output();
     }
 }
