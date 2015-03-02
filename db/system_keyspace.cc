@@ -48,10 +48,10 @@ schema_ptr hints() {
         // static columns
         {},
         // regular column name type
-        utf8_type
+        utf8_type,
+        // comment
+        "hints awaiting delivery"
         // FIXME: the original Java code also had:
-        // comment:
-        //    "hints awaiting delivery",
         // in CQL statement creating the table:
         //    "WITH COMPACT STORAGE"
         // operations on resulting CFMetaData:
@@ -72,10 +72,10 @@ schema_ptr batchlog() {
         // static columns
         {},
         // regular column name type
-        utf8_type
+        utf8_type,
+        // comment
+        "batches awaiting replay"
         // FIXME: the original Java code also had:
-        // comment:
-        //    "batches awaiting replay",
         // operations on resulting CFMetaData:
         //    .compactionStrategyOptions(Collections.singletonMap("min_threshold", "2"))
         //    .gcGraceSeconds(0);
@@ -94,10 +94,10 @@ schema_ptr batchlog() {
         // static columns
         {},
         // regular column name type
-        utf8_type
+        utf8_type,
+        // comment
+        "in-progress paxos proposals"
         // FIXME: the original Java code also had:
-        // comment:
-        //    "in-progress paxos proposals",
         // operations on resulting CFMetaData:
         //    .compactionStrategyClass(LeveledCompactionStrategy.class);
        ));
@@ -115,10 +115,10 @@ schema_ptr built_indexes() {
         // static columns
         {},
         // regular column name type
-        utf8_type
+        utf8_type,
+        // comment
+        "built column indexes"
         // FIXME: the original Java code also had:
-        // comment:
-        //    "built column indexes",
         // in CQL statement creating the table:
         //    "WITH COMPACT STORAGE"
        ));
@@ -152,10 +152,9 @@ schema_ptr built_indexes() {
         // static columns
         {},
         // regular column name type
-        utf8_type
-        // FIXME: the original Java code also had:
-        // comment:
-        //    "information about the local node",
+        utf8_type,
+        // comment
+        "information about the local node"
        ));
     return local;
 }
@@ -181,10 +180,9 @@ schema_ptr built_indexes() {
         // static columns
         {},
         // regular column name type
-        utf8_type
-        // FIXME: the original Java code also had:
-        // comment:
-        //    "information about known peers in the cluster",
+        utf8_type,
+        // comment
+        "information about known peers in the cluster"
        ));
     return peers;
 }
@@ -202,9 +200,9 @@ schema_ptr built_indexes() {
         // static columns
         {},
         // regular column name type
-        utf8_type
-        // FIXME: the original Java code also had:
-        // comment: "events related to peers"
+        utf8_type,
+        // comment
+        "events related to peers"
         ));
     return peer_events;
 }
@@ -220,9 +218,9 @@ schema_ptr built_indexes() {
         // static columns
         {},
         // regular column name type
-        utf8_type
-        // FIXME: the original Java code also had:
-        // comment: "ranges requested for transfer"
+        utf8_type,
+        // comment
+        "ranges requested for transfer"
         ));
     return range_xfers;
 }
@@ -243,9 +241,9 @@ schema_ptr built_indexes() {
         // static columns
         {},
         // regular column name type
-        utf8_type
-        // FIXME: the original Java code also had:
-        // comment: "unfinished compactions"
+        utf8_type,
+        // comment
+        "unfinished compactions"
         ));
     return compactions_in_progress;
 }
@@ -269,9 +267,10 @@ schema_ptr built_indexes() {
         // static columns
         {},
         // regular column name type
-        utf8_type
+        utf8_type,
+        // comment
+        "week-long compaction history"
         // FIXME: the original Java code also had:
-        // comment: "week-long compaction history"
         //.defaultTimeToLive((int) TimeUnit.DAYS.toSeconds(7));
         ));
     return compaction_history;
@@ -296,9 +295,9 @@ schema_ptr built_indexes() {
         // static columns
         {},
         // regular column name type
-        utf8_type
-        // FIXME: the original Java code also had:
-        // comment: "historic sstable read rates"
+        utf8_type,
+        // comment
+        "historic sstable read rates"
         ));
     return sstable_activity;
 }
