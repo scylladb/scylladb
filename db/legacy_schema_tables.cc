@@ -15,172 +15,236 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.schema;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.*;
-import java.util.concurrent.TimeUnit;
+/*
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
+ */
 
-import com.google.common.base.Function;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.MapDifference;
-import com.google.common.collect.Maps;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+#include "legacy_schema_tables.hh"
+#include "system_keyspace.hh"
 
-import org.apache.cassandra.cache.CachingOptions;
-import org.apache.cassandra.config.*;
-import org.apache.cassandra.cql3.*;
-import org.apache.cassandra.cql3.functions.*;
-import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.columniterator.IdentityQueryFilter;
-import org.apache.cassandra.db.composites.CellNameType;
-import org.apache.cassandra.db.composites.CellNames;
-import org.apache.cassandra.db.composites.Composite;
-import org.apache.cassandra.db.filter.QueryFilter;
-import org.apache.cassandra.db.index.SecondaryIndexManager;
-import org.apache.cassandra.db.marshal.*;
-import org.apache.cassandra.dht.Range;
-import org.apache.cassandra.dht.Token;
-import org.apache.cassandra.exceptions.ConfigurationException;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.exceptions.SyntaxException;
-import org.apache.cassandra.io.compress.CompressionParameters;
-import org.apache.cassandra.locator.AbstractReplicationStrategy;
-import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.FBUtilities;
-
-import static org.apache.cassandra.cql3.QueryProcessor.executeOnceInternal;
-import static org.apache.cassandra.utils.FBUtilities.fromJsonMap;
-import static org.apache.cassandra.utils.FBUtilities.json;
+using namespace db::system_keyspace;
 
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
-public class LegacySchemaTables
-{
+namespace db {
+namespace legacy_schema_tables {
+
+std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, FUNCTIONS, AGGREGATES };
+
+#if 0
     private static final Logger logger = LoggerFactory.getLogger(LegacySchemaTables.class);
+#endif
 
-    public static final String KEYSPACES = "schema_keyspaces";
-    public static final String COLUMNFAMILIES = "schema_columnfamilies";
-    public static final String COLUMNS = "schema_columns";
-    public static final String TRIGGERS = "schema_triggers";
-    public static final String USERTYPES = "schema_usertypes";
-    public static final String FUNCTIONS = "schema_functions";
-    public static final String AGGREGATES = "schema_aggregates";
+/* static */ schema_ptr keyspaces() {
+    static thread_local auto keyspaces = make_lw_shared(schema(NAME, KEYSPACES,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+            {"durable_writes", boolean_type},
+            {"strategy_class", utf8_type},
+            {"strategy_options", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "keyspace definitions"
+        // FIXME: the original Java code also had:
+        // in CQL statement creating the table:
+        //    "WITH COMPACT STORAGE"
+        // operations on resulting CFMetaData:
+        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
+        ));
+    return keyspaces;
+}
 
-    public static final List<String> ALL = Arrays.asList(KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USERTYPES, FUNCTIONS, AGGREGATES);
+/* static */ schema_ptr columnfamilies() {
+    static thread_local auto columnfamilies = make_lw_shared(schema(NAME, COLUMNFAMILIES,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"columnfamily_name", utf8_type}},
+        // regular columns
+        {
+            // {"bloom_filter_fp_chance", double_type}, // FIXME: add this type
+            {"caching", utf8_type},
+            {"cf_id", uuid_type},
+            {"comment", utf8_type},
+            {"compaction_strategy_class", utf8_type},
+            {"compaction_strategy_options", utf8_type},
+            {"comparator", utf8_type},
+            {"compression_parameters", utf8_type},
+            {"default_time_to_live", int32_type},
+            {"default_validator", utf8_type},
+            //    + "dropped_columns map<text, bigint>," // FIXME: add this type
+            {"gc_grace_seconds", int32_type},
+            {"is_dense", boolean_type},
+            {"key_validator", utf8_type},
+            //{"local_read_repair_chance", double_type}, // FIXME: add this type
+            {"max_compaction_threshold", int32_type},
+            {"max_index_interval", int32_type},
+            {"memtable_flush_period_in_ms", int32_type},
+            {"min_compaction_threshold", int32_type},
+            {"min_index_interval", int32_type},
+            //{"read_repair_chance", double_type}, // FIXME: add this type
+            {"speculative_retry", utf8_type},
+            {"subcomparator", utf8_type},
+            {"type", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "table definitions"
+        // FIXME: the original Java code also had:
+        // operations on resulting CFMetaData:
+        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
+        ));
+    return columnfamilies;
+}
 
-    private static final CFMetaData Keyspaces =
-        compile(KEYSPACES,
-                "keyspace definitions",
-                "CREATE TABLE %s ("
-                + "keyspace_name text,"
-                + "durable_writes boolean,"
-                + "strategy_class text,"
-                + "strategy_options text,"
-                + "PRIMARY KEY ((keyspace_name))) "
-                + "WITH COMPACT STORAGE");
+/* static */ schema_ptr columns() {
+    static thread_local auto columns = make_lw_shared(schema(NAME, COLUMNS,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"columnfamily_name", utf8_type}, {"column_name", utf8_type}},
+        // regular columns
+        {
+            {"component_index", int32_type},
+            {"index_name", utf8_type},
+            {"index_options", utf8_type},
+            {"index_type", utf8_type},
+            {"type", utf8_type},
+            {"validator", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "column definitions"
+        // FIXME: the original Java code also had:
+        // operations on resulting CFMetaData:
+        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
+        ));
+    return columns;
+}
 
-    private static final CFMetaData Columnfamilies =
-        compile(COLUMNFAMILIES,
-                "table definitions",
-                "CREATE TABLE %s ("
-                + "keyspace_name text,"
-                + "columnfamily_name text,"
-                + "bloom_filter_fp_chance double,"
-                + "caching text,"
-                + "cf_id uuid," // post-2.1 UUID cfid
-                + "comment text,"
-                + "compaction_strategy_class text,"
-                + "compaction_strategy_options text,"
-                + "comparator text,"
-                + "compression_parameters text,"
-                + "default_time_to_live int,"
-                + "default_validator text,"
-                + "dropped_columns map<text, bigint>,"
-                + "gc_grace_seconds int,"
-                + "is_dense boolean,"
-                + "key_validator text,"
-                + "local_read_repair_chance double,"
-                + "max_compaction_threshold int,"
-                + "max_index_interval int,"
-                + "memtable_flush_period_in_ms int,"
-                + "min_compaction_threshold int,"
-                + "min_index_interval int,"
-                + "read_repair_chance double,"
-                + "speculative_retry text,"
-                + "subcomparator text,"
-                + "type text,"
-                + "PRIMARY KEY ((keyspace_name), columnfamily_name))");
+/* static */ schema_ptr triggers() {
+    static thread_local auto triggers = make_lw_shared(schema(NAME, TRIGGERS,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"columnfamily_name", utf8_type}, {"trigger_name", utf8_type}},
+        // regular columns
+        {
+            // FIXME: Cassandra had this:
+            // "trigger_options map<text, text>,"
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "trigger definitions"
+        // FIXME: the original Java code also had:
+        // operations on resulting CFMetaData:
+        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
+        ));
+    return triggers;
+}
 
-    private static final CFMetaData Columns =
-        compile(COLUMNS,
-                "column definitions",
-                "CREATE TABLE %s ("
-                + "keyspace_name text,"
-                + "columnfamily_name text,"
-                + "column_name text,"
-                + "component_index int,"
-                + "index_name text,"
-                + "index_options text,"
-                + "index_type text,"
-                + "type text,"
-                + "validator text,"
-                + "PRIMARY KEY ((keyspace_name), columnfamily_name, column_name))");
+/* static */ schema_ptr usertypes() {
+    static thread_local auto usertypes = make_lw_shared(schema(NAME, USERTYPES,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"type_name", utf8_type}},
+        // regular columns
+        {
+            // FIXME: Cassandra had this:
+            // "field_names list<text>,"
+            // "field_types list<text>,"
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "user defined type definitions"
+        // FIXME: the original Java code also had:
+        // operations on resulting CFMetaData:
+        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
+        ));
+    return usertypes;
+}
 
-    private static final CFMetaData Triggers =
-        compile(TRIGGERS,
-                "trigger definitions",
-                "CREATE TABLE %s ("
-                + "keyspace_name text,"
-                + "columnfamily_name text,"
-                + "trigger_name text,"
-                + "trigger_options map<text, text>,"
-                + "PRIMARY KEY ((keyspace_name), columnfamily_name, trigger_name))");
+/* static */ schema_ptr functions() {
+    static thread_local auto functions = make_lw_shared(schema(NAME, FUNCTIONS,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"function_name", utf8_type}, {"signature", bytes_type}},
+        // regular columns
+        {
+            // FIXME: Cassandra had this:
+            // "argument_names list<text>,"
+            // "argument_types list<text>,"
+            {"body", utf8_type},
+            {"is_deterministic", boolean_type},
+            {"language", utf8_type},
+            {"return_type", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "user defined type definitions"
+        // FIXME: the original Java code also had:
+        // operations on resulting CFMetaData:
+        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
+        ));
+    return functions;
+}
 
-    private static final CFMetaData Usertypes =
-        compile(USERTYPES,
-                "user defined type definitions",
-                "CREATE TABLE %s ("
-                + "keyspace_name text,"
-                + "type_name text,"
-                + "field_names list<text>,"
-                + "field_types list<text>,"
-                + "PRIMARY KEY ((keyspace_name), type_name))");
+/* static */ schema_ptr aggregates() {
+    static thread_local auto aggregates = make_lw_shared(schema(NAME, AGGREGATES,
+        // partition key
+        {{"keyspace_name", utf8_type}},
+        // clustering key
+        {{"aggregate_name", utf8_type}, {"signature", bytes_type}},
+        // regular columns
+        {
+            // FIXME: Cassandra had this:
+            // "argument_types list<text>,"
+            {"final_func", utf8_type},
+            {"intercond", bytes_type},
+            {"return_type", utf8_type},
+            {"state_func", utf8_type},
+            {"state_type", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "user defined aggregate definitions"
+        // FIXME: the original Java code also had:
+        // operations on resulting CFMetaData:
+        //    .gcGraceSeconds((int) TimeUnit.DAYS.toSeconds(7));
+        ));
+    return aggregates;
+}
 
-    private static final CFMetaData Functions =
-        compile(FUNCTIONS,
-                "user defined function definitions",
-                "CREATE TABLE %s ("
-                + "keyspace_name text,"
-                + "function_name text,"
-                + "signature blob,"
-                + "argument_names list<text>,"
-                + "argument_types list<text>,"
-                + "body text,"
-                + "is_deterministic boolean,"
-                + "language text,"
-                + "return_type text,"
-                + "PRIMARY KEY ((keyspace_name), function_name, signature))");
-
-    private static final CFMetaData Aggregates =
-        compile(AGGREGATES,
-                "user defined aggregate definitions",
-                "CREATE TABLE %s ("
-                + "keyspace_name text,"
-                + "aggregate_name text,"
-                + "signature blob,"
-                + "argument_types list<text>,"
-                + "final_func text,"
-                + "initcond blob,"
-                + "return_type text,"
-                + "state_func text,"
-                + "state_type text,"
-                + "PRIMARY KEY ((keyspace_name), aggregate_name, signature))");
-
+#if 0
     public static final List<CFMetaData> All = Arrays.asList(Keyspaces, Columnfamilies, Columns, Triggers, Usertypes, Functions, Aggregates);
 
     private static CFMetaData compile(String name, String description, String schema)
@@ -1478,3 +1542,7 @@ public class LegacySchemaTables
         }
     }
 }
+#endif
+
+} // namespace legacy_schema_tables
+} // namespace schema
