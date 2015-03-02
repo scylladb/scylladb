@@ -47,8 +47,10 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_k
     std::vector<column> clustering_key,
     std::vector<column> regular_columns,
     std::vector<column> static_columns,
-    data_type regular_column_name_type)
+    data_type regular_column_name_type,
+    sstring comment)
         : _regular_columns_by_name(serialized_compare(regular_column_name_type))
+        , _comment(comment)
         , ks_name(std::move(ks_name))
         , cf_name(std::move(cf_name))
         , partition_key_type(::make_shared<tuple_type<>>(get_column_types(partition_key)))

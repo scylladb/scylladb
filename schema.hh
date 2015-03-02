@@ -51,6 +51,7 @@ private:
     std::vector<column_definition> _clustering_key;
     std::vector<column_definition> _regular_columns; // sorted by name
     std::vector<column_definition> _static_columns; // sorted by name, present only when there's any clustering column
+    sstring _comment;
 public:
     struct column {
         bytes name;
@@ -81,7 +82,8 @@ public:
         std::vector<column> clustering_key,
         std::vector<column> regular_columns,
         std::vector<column> static_columns,
-        shared_ptr<abstract_type> regular_column_name_type);
+        shared_ptr<abstract_type> regular_column_name_type,
+        sstring comment = {});
     bool is_dense() const {
         return false;
     }
