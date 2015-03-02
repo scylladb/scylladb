@@ -19,6 +19,8 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
+#pragma once
+
 #include "core/ragel.hh"
 #include <memory>
 #include <unordered_map>
