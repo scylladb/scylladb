@@ -30,10 +30,12 @@ options {
 }
 
 @parser::includes {
+#include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/update_statement.hh"
 #include "cql3/statements/use_statement.hh"
+#include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/constants.hh"
 #include "cql3/operation_impl.hh"
@@ -277,7 +279,9 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st6= useStatement                { $stmt = st6; }
 #if 0
     | st7= truncateStatement           { $stmt = st7; }
+#endif
     | st8= createKeyspaceStatement     { $stmt = st8; }
+#if 0
     | st9= createTableStatement        { $stmt = st9; }
     | st10=createIndexStatement        { $stmt = st10; }
     | st11=dropKeyspaceStatement       { $stmt = st11; }
@@ -658,19 +662,21 @@ dropFunctionStatement returns [DropFunctionStatement expr]
       )?
       { $expr = new DropFunctionStatement(fn, argsTypes, argsPresent, ifExists); }
     ;
+#endif
 
 /**
  * CREATE KEYSPACE [IF NOT EXISTS] <KEYSPACE> WITH attr1 = value1 AND attr2 = value2;
  */
-createKeyspaceStatement returns [CreateKeyspaceStatement expr]
+createKeyspaceStatement returns [shared_ptr<cql3::statements::create_keyspace_statement> expr]
     @init {
-        KSPropDefs attrs = new KSPropDefs();
-        boolean ifNotExists = false;
+        auto attrs = make_shared<cql3::statements::ks_prop_defs>();
+        bool if_not_exists = false;
     }
-    : K_CREATE K_KEYSPACE (K_IF K_NOT K_EXISTS { ifNotExists = true; } )? ks=keyspaceName
-      K_WITH properties[attrs] { $expr = new CreateKeyspaceStatement(ks, attrs, ifNotExists); }
+    : K_CREATE K_KEYSPACE (K_IF K_NOT K_EXISTS { if_not_exists = true; } )? ks=keyspaceName
+      K_WITH properties[attrs] { $expr = make_shared<cql3::statements::create_keyspace_statement>(ks, attrs, if_not_exists); }
     ;
 
+#if 0
 /**
  * CREATE COLUMNFAMILY [IF NOT EXISTS] <CF> (
  *     <name1> <type>,
