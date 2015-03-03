@@ -688,16 +688,28 @@ private:
     template <typename Func> // signature: bool ()
     static std::unique_ptr<pollfn> make_pollfn(Func&& func);
 
-    struct signal_handler {
-        signal_handler(int signo, std::function<void ()>&& handler);
-        std::function<void ()> _handler;
-    };
-    std::atomic<uint64_t> _pending_signals;
-    std::unordered_map<int, signal_handler> _signal_handlers;
-    bool poll_signal();
-    friend void sigaction(int signo, siginfo_t* siginfo, void* ignore);
+    class signals {
+    public:
+        signals();
+        ~signals();
 
+        bool poll_signal();
+        void handle_signal(int signo, std::function<void ()>&& handler);
+        void handle_signal_once(int signo, std::function<void ()>&& handler);
+        static void action(int signo, siginfo_t* siginfo, void* ignore);
+
+    private:
+        struct signal_handler {
+            signal_handler(int signo, std::function<void ()>&& handler);
+            std::function<void ()> _handler;
+        };
+        std::atomic<uint64_t> _pending_signals;
+        std::unordered_map<int, signal_handler> _signal_handlers;
+    };
+
+    signals _signals;
     thread_pool _thread_pool;
+    friend thread_pool;
 
     void run_tasks(circular_buffer<std::unique_ptr<task>>& tasks, size_t task_quota);
     bool posix_reuseport_detect();
@@ -743,9 +755,6 @@ public:
 
     template <typename Func>
     future<io_event> submit_io(Func prepare_io);
-
-    void handle_signal(int signo, std::function<void ()>&& handler);
-    void handle_signal_once(int signo, std::function<void ()>&& handler);
 
     int run();
     void exit(int ret);
