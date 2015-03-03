@@ -370,8 +370,8 @@ public:
     static thread_local shared_ptr<cql3_type> bigint;
     static thread_local shared_ptr<cql3_type> blob;
     static thread_local shared_ptr<cql3_type> boolean;
-    //static thread_local shared_ptr<cql3_type> double;
-    //static thread_local shared_ptr<cql3_type> float;
+    static thread_local shared_ptr<cql3_type> double_;
+    static thread_local shared_ptr<cql3_type> float_;
     static thread_local shared_ptr<cql3_type> int_;
     static thread_local shared_ptr<cql3_type> text;
     static thread_local shared_ptr<cql3_type> timestamp;

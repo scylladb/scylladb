@@ -7,6 +7,7 @@
 #include "types.hh"
 #include "core/print.hh"
 #include "net/ip.hh"
+#include <cmath>
 
 template<typename T>
 struct simple_type_traits {
@@ -456,6 +457,90 @@ struct inet_addr_type_impl : abstract_type {
     }
 };
 
+// Integer of same length of a given type. This is useful because our
+// ntoh functions only know how to operate on integers.
+template <typename T> struct int_of_size;
+template <typename D, typename I> struct int_of_size_impl {
+    using dtype = D;
+    using itype = I;
+    static_assert(sizeof(dtype) == sizeof(itype), "size mismatch");
+    static_assert(alignof(dtype) == alignof(itype), "align mismatch");
+};
+template <> struct int_of_size<double> :
+    public int_of_size_impl<double, uint64_t> {};
+template <> struct int_of_size<float> :
+    public int_of_size_impl<float, uint32_t> {};
+
+template <typename T>
+struct float_type_traits {
+    static double read_nonempty(bytes_view v) {
+        union {
+            T d;
+            typename int_of_size<T>::itype i;
+        } x;
+        x.i = read_simple_exactly<typename int_of_size<T>::itype>(v);
+        return x.d;
+    }
+};
+template<> struct simple_type_traits<float> : public float_type_traits<float> {};
+template<> struct simple_type_traits<double> : public float_type_traits<double> {};
+
+
+template <typename T>
+struct floating_type_impl : public simple_type_impl<T> {
+    floating_type_impl(sstring name) : simple_type_impl<T>(std::move(name)) {}
+    virtual void serialize(const boost::any& value, std::ostream& out) override {
+        T d = boost::any_cast<const T&>(value);
+        if (std::isnan(d)) {
+            // Java's Double.doubleToLongBits() documentation specifies that
+            // any nan must be serialized to the same specific value
+            d = std::numeric_limits<T>::quiet_NaN();
+        }
+        union {
+            T d;
+            typename int_of_size<T>::itype i;
+        } x;
+        x.d = d;
+        auto u = net::hton(x.i);
+        out.write(reinterpret_cast<const char*>(&u), sizeof(u));
+    }
+    virtual object_opt deserialize(bytes_view v) override {
+        if (v.empty()) {
+            return {};
+        }
+        union {
+            T d;
+            typename int_of_size<T>::itype i;
+        } x;
+        x.i = read_simple<typename int_of_size<T>::itype>(v);
+        if (!v.empty()) {
+            throw marshal_exception();
+        }
+        return boost::any(x.d);
+    }
+    virtual bytes from_string(sstring_view s) override {
+        throw std::runtime_error("not implemented");
+    }
+    virtual sstring to_string(const bytes& b) override {
+        throw std::runtime_error("not implemented");
+    }
+};
+
+struct double_type_impl : floating_type_impl<double> {
+    double_type_impl() : floating_type_impl{"double"} { }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        return cql3::native_cql3_type::double_;
+    }
+};
+
+struct float_type_impl : floating_type_impl<float> {
+    float_type_impl() : floating_type_impl{"float"} { }
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        return cql3::native_cql3_type::float_;
+    }
+};
+
+
 thread_local shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
 thread_local shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii", cql3::native_cql3_type::ascii));
@@ -467,3 +552,5 @@ thread_local shared_ptr<abstract_type> timeuuid_type(make_shared<timeuuid_type_i
 thread_local shared_ptr<abstract_type> timestamp_type(make_shared<timestamp_type_impl>());
 thread_local shared_ptr<abstract_type> uuid_type(make_shared<uuid_type_impl>());
 thread_local shared_ptr<abstract_type> inet_addr_type(make_shared<inet_addr_type_impl>());
+thread_local shared_ptr<abstract_type> float_type(make_shared<double_type_impl>());
+thread_local shared_ptr<abstract_type> double_type(make_shared<double_type_impl>());

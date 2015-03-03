@@ -196,6 +196,8 @@ extern thread_local shared_ptr<abstract_type> timeuuid_type;
 extern thread_local shared_ptr<abstract_type> timestamp_type;
 extern thread_local shared_ptr<abstract_type> uuid_type;
 extern thread_local shared_ptr<abstract_type> inet_addr_type;
+extern thread_local shared_ptr<abstract_type> float_type;
+extern thread_local shared_ptr<abstract_type> double_type;
 
 template <>
 inline
