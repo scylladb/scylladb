@@ -1455,8 +1455,7 @@ inline packet dpdk_qp<true>::from_mbuf(rte_mbuf* m)
 template <bool HugetlbfsMemBackend>
 inline bool dpdk_qp<HugetlbfsMemBackend>::refill_one_cluster(rte_mbuf* head)
 {
-    while (head != NULL) {
-        struct rte_mbuf *m_next = head->next;
+    for (; head != nullptr; head = head->next) {
         if (!refill_rx_mbuf(head)) {
             //
             // If we failed to allocate a new buffer - push the rest of the
@@ -1466,7 +1465,6 @@ inline bool dpdk_qp<HugetlbfsMemBackend>::refill_one_cluster(rte_mbuf* head)
             return false;
         }
         _rx_free_bufs.push_back(head);
-        head = m_next;
     }
 
     return true;
