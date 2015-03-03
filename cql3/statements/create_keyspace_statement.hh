@@ -15,6 +15,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#pragma once
+
+#include "cql3/statements/schema_altering_statement.hh"
+#include "cql3/statements/ks_prop_defs.hh"
+
+#include "core/shared_ptr.hh"
+
+#if 0
 package org.apache.cassandra.cql3.statements;
 
 import org.apache.cassandra.exceptions.ConfigurationException;
@@ -31,14 +46,20 @@ import org.apache.cassandra.service.MigrationManager;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.thrift.ThriftValidation;
 import org.apache.cassandra.transport.Event;
+#endif
+
+namespace cql3 {
+
+namespace statements {
 
 /** A <code>CREATE KEYSPACE</code> statement parsed from a CQL query. */
-public class CreateKeyspaceStatement extends SchemaAlteringStatement
-{
-    private final String name;
-    private final KSPropDefs attrs;
-    private final boolean ifNotExists;
+class create_keyspace_statement : public schema_altering_statement {
+private:
+    sstring _name;
+    shared_ptr<ks_prop_defs> _attrs;
+    bool _if_not_exists;
 
+public:
     /**
      * Creates a new <code>CreateKeyspaceStatement</code> instance for a given
      * keyspace name and keyword arguments.
@@ -46,23 +67,21 @@ public class CreateKeyspaceStatement extends SchemaAlteringStatement
      * @param name the name of the keyspace to create
      * @param attrs map of the raw keyword arguments that followed the <code>WITH</code> keyword.
      */
-    public CreateKeyspaceStatement(String name, KSPropDefs attrs, boolean ifNotExists)
-    {
-        super();
-        this.name = name;
-        this.attrs = attrs;
-        this.ifNotExists = ifNotExists;
+    create_keyspace_statement(const sstring& name, shared_ptr<ks_prop_defs> attrs, bool if_not_exists)
+        : _name{name}
+        , _attrs{attrs}
+        , _if_not_exists{if_not_exists}
+    { }
+
+    virtual const sstring& keyspace() const override {
+        return _name;
     }
 
-    @Override
-    public String keyspace()
-    {
-        return name;
-    }
-
-    public void checkAccess(ClientState state) throws UnauthorizedException
-    {
+    virtual void check_access(const service::client_state& state) override {
+        warn(unimplemented::cause::PERMISSIONS);
+#if 0
         state.hasAllKeyspacesAccess(Permission.CREATE);
+#endif
     }
 
     /**
@@ -72,8 +91,8 @@ public class CreateKeyspaceStatement extends SchemaAlteringStatement
      *
      * @throws InvalidRequestException if arguments are missing or unacceptable
      */
-    public void validate(ClientState state) throws RequestValidationException
-    {
+    virtual void validate(const service::client_state& state) override {
+#if 0
         ThriftValidation.validateKeyspaceNotSystem(name);
 
         // keyspace name
@@ -95,8 +114,10 @@ public class CreateKeyspaceStatement extends SchemaAlteringStatement
                                                                 StorageService.instance.getTokenMetadata(),
                                                                 DatabaseDescriptor.getEndpointSnitch(),
                                                                 attrs.getReplicationOptions());
+#endif
     }
 
+#if 0
     public boolean announceMigration(boolean isLocalOnly) throws RequestValidationException
     {
         try
@@ -116,4 +137,9 @@ public class CreateKeyspaceStatement extends SchemaAlteringStatement
     {
         return new Event.SchemaChange(Event.SchemaChange.Change.CREATED, keyspace());
     }
+#endif
+};
+
+}
+
 }
