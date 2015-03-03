@@ -19,7 +19,6 @@
  * Copyright 2015 Cloudius Systems
  */
 
-#include "apps/httpd/request_parser.hh"
 #include "core/reactor.hh"
 #include "core/sstring.hh"
 #include "core/app-template.hh"

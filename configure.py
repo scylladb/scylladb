@@ -201,7 +201,7 @@ memcache_base = [
 deps = {
     'apps/seastar/seastar': ['apps/seastar/main.cc'] + core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
-    'apps/httpd/httpd': ['apps/httpd/httpd.cc', 'apps/httpd/main.cc', 'apps/httpd/request_parser.rl'] + libnet + core,
+    'apps/httpd/httpd': ['http/common.cc', 'http/routes.cc', 'json/json_elements.cc', 'json/formatter.cc', 'http/matcher.cc', 'http/mime_types.cc', 'http/httpd.cc', 'http/reply.cc', 'http/request_parser.rl', 'apps/httpd/main.cc'] + libnet + core,
     'apps/memcached/memcached': ['apps/memcached/memcache.cc'] + memcache_base,
     'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,

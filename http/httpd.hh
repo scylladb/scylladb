@@ -22,7 +22,8 @@
 #ifndef APPS_HTTPD_HTTPD_HH_
 #define APPS_HTTPD_HTTPD_HH_
 
-#include "apps/httpd/request_parser.hh"
+#include "http/request_parser.hh"
+#include "http/request.hh"
 #include "core/reactor.hh"
 #include "core/sstring.hh"
 #include "core/app-template.hh"
@@ -40,9 +41,9 @@
 #include <cctype>
 #include <vector>
 #include "reply.hh"
+#include "http/routes.hh"
 
 namespace httpd {
-
 
 class http_server;
 class http_stats;
@@ -51,7 +52,7 @@ using namespace std::chrono_literals;
 
 class http_stats {
     std::vector<scollectd::registration> _regs;
-    public:
+public:
     http_stats(http_server& server);
 };
 
@@ -63,7 +64,9 @@ class http_server {
     uint64_t _requests_served = 0;
     sstring _date = http_date();
     timer<> _date_format_timer { [this] {_date = http_date();} };
-    public:
+public:
+    routes _routes;
+
     http_server() {
         _date_format_timer.arm_periodic(1s);
     }
@@ -102,18 +105,16 @@ class http_server {
         output_stream<char> _write_buf;
         static constexpr size_t limit = 4096;
         using tmp_buf = temporary_buffer<char>;
-        using request = http_request;
         http_request_parser _parser;
         std::unique_ptr<request> _req;
         std::unique_ptr<reply> _resp;
         // null element marks eof
-        queue<std::unique_ptr<reply>> _replies { 10 };
-        bool _done = false;
-        public:
+        queue<std::unique_ptr<reply>> _replies { 10 };bool _done = false;
+    public:
         connection(http_server& server, connected_socket&& fd,
                 socket_address addr)
-                : _server(server), _fd(std::move(fd)), _read_buf(_fd.input())
-                        , _write_buf(_fd.output()) {
+                : _server(server), _fd(std::move(fd)), _read_buf(_fd.input()), _write_buf(
+                        _fd.output()) {
             ++_server._total_connections;
             ++_server._current_connections;
         }
@@ -129,10 +130,9 @@ class http_server {
                     });
         }
         future<> read() {
-            return do_until([this] {return _done;},
-                    [this] {
-                        return read_one();
-                    }).then_wrapped([this] (future<> f) {
+            return do_until([this] {return _done;}, [this] {
+                return read_one();
+            }).then_wrapped([this] (future<> f) {
                 // swallow error
                 // FIXME: count it?
                     return _replies.push_eventually( {});
@@ -168,12 +168,12 @@ class http_server {
         future<> start_response() {
             _resp->_headers["Server"] = "Seastar httpd";
             _resp->_headers["Date"] = _server._date;
-            _resp->_headers["Content-Length"] = to_sstring(_resp->_content.size());
+            _resp->_headers["Content-Length"] = to_sstring(
+                    _resp->_content.size());
             return _write_buf.write(_resp->_response_line.begin(),
-                    _resp->_response_line.size()).then(
-                    [this] {
-                        return write_reply_headers(_resp->_headers.begin());
-                    }).then([this] {
+                    _resp->_response_line.size()).then([this] {
+                return write_reply_headers(_resp->_headers.begin());
+            }).then([this] {
                 return _write_buf.write("\r\n", 2);
             }).then([this] {
                 return write_body();
@@ -226,15 +226,14 @@ class http_server {
                 // HTTP/0.9 goes here
                 should_close = true;
             }
-            resp->_headers["Content-Type"] = "text/html";
-            resp->_content =
-                    "<html><head><title>this is the future</title></head><body><p>Future!!</p></body></html>";
+            _server._routes.handle(req->_url, *(req.get()), *(resp.get()));
             // Caller guarantees enough room
             _replies.push(std::move(resp));
             return should_close;
         }
         future<> write_body() {
-            return _write_buf.write(_resp->_content.begin(), _resp->_content.size());
+            return _write_buf.write(_resp->_content.begin(),
+                    _resp->_content.size());
         }
     };
     uint64_t total_connections() const {

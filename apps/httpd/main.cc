@@ -19,22 +19,36 @@
  * Copyright 2015 Cloudius Systems
  */
 
-#include "httpd.hh"
+#include "http/httpd.hh"
+#include "http/handlers.hh"
 
 namespace bpo = boost::program_options;
 
 using namespace httpd;
 
+class handl : public httpd::handler_base {
+public:
+    virtual void handle(const sstring& path, parameters* params,
+            httpd::const_req& req, httpd::reply& rep) {
+        rep._content = "hello";
+        rep.done("html");
+    }
+};
+
 int main(int ac, char** av) {
     app_template app;
-    app.add_options()
-    ("port", bpo::value<uint16_t>()->default_value(10000), "HTTP Server port");
+    app.add_options()("port", bpo::value<uint16_t>()->default_value(10000),
+            "HTTP Server port");
     return app.run(ac, av,
             [&] {
                 auto&& config = app.configuration();
                 uint16_t port = config["port"].as<uint16_t>();
                 auto server = new distributed<http_server>;
                 server->start().then([server = std::move(server), port] () mutable {
+                            server->invoke_on_all([](http_server& server) {
+                                handl* h1 = new handl();
+                                server._routes.add(operation_type::GET, url("/"), h1);
+                            });
                             server->invoke_on_all(&http_server::listen, ipv4_addr {port});
                         }).then([port] {
                             std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
