@@ -25,6 +25,15 @@
 #ifndef CQL3_STATEMENTS_PROPERTY_DEFINITIONS_HH
 #define CQL3_STATEMENTS_PROPERTY_DEFINITIONS_HH
 
+#include "exceptions/exceptions.hh"
+#include "core/print.hh"
+#include "core/sstring.hh"
+
+#include <unordered_map>
+#include <map>
+
+#include <boost/any.hpp>
+
 namespace cql3 {
 
 namespace statements {
@@ -41,23 +50,33 @@ import org.apache.cassandra.exceptions.SyntaxException;
 #endif
 
 class property_definitions {
+protected:
 #if 0
     protected static final Logger logger = LoggerFactory.getLogger(PropertyDefinitions.class);
+#endif
+    std::unordered_map<sstring, boost::any> _properties;
 
-    protected final Map<String, Object> properties = new HashMap<String, Object>();
-
-    public void addProperty(String name, String value) throws SyntaxException
-    {
-        if (properties.put(name, value) != null)
-            throw new SyntaxException(String.format("Multiple definition for property '%s'", name));
+    property_definitions()
+        : _properties{}
+    { }
+public:
+    virtual void add_property(const sstring& name, sstring value) {
+        auto it = _properties.find(name);
+        if (it != _properties.end()) {
+            throw exceptions::syntax_exception(sprint("Multiple definition for property '%s'", name));
+        }
+        _properties.emplace(name, value);
     }
 
-    public void addProperty(String name, Map<String, String> value) throws SyntaxException
-    {
-        if (properties.put(name, value) != null)
-            throw new SyntaxException(String.format("Multiple definition for property '%s'", name));
+    virtual void add_property(const sstring& name, const std::map<sstring, sstring>& value) {
+        auto it = _properties.find(name);
+        if (it != _properties.end()) {
+            throw exceptions::syntax_exception(sprint("Multiple definition for property '%s'", name));
+        }
+        _properties.emplace(name, value);
     }
 
+#if 0
     public void validate(Set<String> keywords, Set<String> obsolete) throws SyntaxException
     {
         for (String name : properties.keySet())

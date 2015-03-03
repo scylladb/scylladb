@@ -20,6 +20,7 @@
 #include "functions/bytes_conversion_fcts.hh"
 #include "functions/functions.hh"
 
+#include "statements/create_keyspace_statement.hh"
 #include "statements/alter_keyspace_statement.hh"
 #include "statements/alter_type_statement.hh"
 #include "statements/cf_statement.hh"

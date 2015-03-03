@@ -30,9 +30,12 @@ options {
 }
 
 @parser::includes {
+#include "cql3/statements/create_keyspace_statement.hh"
+#include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/update_statement.hh"
 #include "cql3/statements/use_statement.hh"
+#include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/constants.hh"
 #include "cql3/operation_impl.hh"
@@ -150,9 +153,9 @@ using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifi
         listener->syntax_error(*this, msg);
     }
 
+    std::map<sstring, sstring> convert_property_map(shared_ptr<cql3::maps::literal> map) {
+        throw std::runtime_error("not implemented");
 #if 0
-    public Map<String, String> convertPropertyMap(Maps.Literal map)
-    {
         if (map == null || map.entries == null || map.entries.isEmpty())
             return Collections.<String, String>emptyMap();
 
@@ -187,9 +190,9 @@ using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifi
         }
 
         return res;
+#endif
     }
 
-#endif
     void add_raw_update(std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>& operations,
         ::shared_ptr<cql3::column_identifier::raw> key, ::shared_ptr<cql3::operation::raw_update> update)
     {
@@ -276,7 +279,9 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st6= useStatement                { $stmt = st6; }
 #if 0
     | st7= truncateStatement           { $stmt = st7; }
+#endif
     | st8= createKeyspaceStatement     { $stmt = st8; }
+#if 0
     | st9= createTableStatement        { $stmt = st9; }
     | st10=createIndexStatement        { $stmt = st10; }
     | st11=dropKeyspaceStatement       { $stmt = st11; }
@@ -657,19 +662,21 @@ dropFunctionStatement returns [DropFunctionStatement expr]
       )?
       { $expr = new DropFunctionStatement(fn, argsTypes, argsPresent, ifExists); }
     ;
+#endif
 
 /**
  * CREATE KEYSPACE [IF NOT EXISTS] <KEYSPACE> WITH attr1 = value1 AND attr2 = value2;
  */
-createKeyspaceStatement returns [CreateKeyspaceStatement expr]
+createKeyspaceStatement returns [shared_ptr<cql3::statements::create_keyspace_statement> expr]
     @init {
-        KSPropDefs attrs = new KSPropDefs();
-        boolean ifNotExists = false;
+        auto attrs = make_shared<cql3::statements::ks_prop_defs>();
+        bool if_not_exists = false;
     }
-    : K_CREATE K_KEYSPACE (K_IF K_NOT K_EXISTS { ifNotExists = true; } )? ks=keyspaceName
-      K_WITH properties[attrs] { $expr = new CreateKeyspaceStatement(ks, attrs, ifNotExists); }
+    : K_CREATE K_KEYSPACE (K_IF K_NOT K_EXISTS { if_not_exists = true; } )? ks=keyspaceName
+      K_WITH properties[attrs] { $expr = make_shared<cql3::statements::create_keyspace_statement>(ks, attrs, if_not_exists); }
     ;
 
+#if 0
 /**
  * CREATE COLUMNFAMILY [IF NOT EXISTS] <CF> (
  *     <name1> <type>,
@@ -1220,22 +1227,19 @@ columnCondition[conditions_type& conditions]
         )
     ;
 
-#if 0
-
-properties[PropertyDefinitions props]
+properties[::shared_ptr<cql3::statements::property_definitions> props]
     : property[props] (K_AND property[props])*
     ;
 
-property[PropertyDefinitions props]
-    : k=ident '=' (simple=propertyValue { try { $props.addProperty(k.toString(), simple); } catch (SyntaxException e) { addRecognitionError(e.getMessage()); } }
-                  |   map=mapLiteral    { try { $props.addProperty(k.toString(), convertPropertyMap(map)); } catch (SyntaxException e) { addRecognitionError(e.getMessage()); } })
+property[::shared_ptr<cql3::statements::property_definitions> props]
+    : k=ident '=' (simple=propertyValue { try { $props->add_property(k->to_string(), simple); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
+                  |   map=mapLiteral    { try { $props->add_property(k->to_string(), convert_property_map(map)); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } })
     ;
 
-propertyValue returns [String str]
-    : c=constant           { $str = c.getRawText(); }
+propertyValue returns [sstring str]
+    : c=constant           { $str = c->get_raw_text(); }
     | u=unreserved_keyword { $str = u; }
     ;
-#endif
 
 relationType returns [const cql3::operator_type* op = nullptr]
     : '='  { $op = &cql3::operator_type::EQ; }
