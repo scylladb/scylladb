@@ -54,6 +54,9 @@ protected:
         , _is_column_family_level{true}
     { }
 
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
+        return cf_statement::uses_function(ks_name, function_name);
+    }
 
     virtual uint32_t get_bound_terms() override {
         return 0;
