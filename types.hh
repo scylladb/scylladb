@@ -152,6 +152,7 @@ public:
     virtual bool is_counter() { return false; }
     virtual bool is_collection() { return false; }
     virtual bool is_multi_cell() { return false; }
+    virtual bool is_reversed() { return false; }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() = 0;
     virtual shared_ptr<abstract_type> freeze() { return shared_from_this(); }
 };

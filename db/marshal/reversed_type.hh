@@ -133,6 +133,11 @@ class reversed_type : public abstract_type {
         return getClass().getName() + "(" + baseType + ")";
     }
 #endif
+
+public:
+    virtual bool is_reversed() override {
+        return true;
+    }
 };
 
 }
