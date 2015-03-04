@@ -1,0 +1,62 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#pragma once
+
+#include "cql3/restrictions/forwarding_primary_key_restrictions.hh"
+
+namespace cql3 {
+
+namespace restrictions {
+
+/**
+ * <code>PrimaryKeyRestrictions</code> decorator that reverse the slices.
+ */
+class reversed_primary_key_restrictions : public forwarding_primary_key_restrictions {
+private:
+    ::shared_ptr<primary_key_restrictions> _restrictions;
+protected:
+    virtual ::shared_ptr<primary_key_restrictions> get_delegate() override {
+        return _restrictions;
+    }
+public:
+    reversed_primary_key_restrictions(shared_ptr<primary_key_restrictions> restrictions)
+        : _restrictions(std::move(restrictions))
+    { }
+
+    virtual std::vector<query::range> bounds(const query_options& options) override {
+        auto ranges = _restrictions->bounds(options);
+        for (auto&& range : ranges) {
+            range.reverse();
+        }
+        return ranges;
+    }
+
+    virtual bool is_inclusive(statements::bound bound) override {
+        return _restrictions->is_inclusive(reverse(bound));
+    }
+};
+
+}
+}
