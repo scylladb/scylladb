@@ -105,6 +105,8 @@ public:
                                      QueryOptions options)
                                      throws InvalidRequestException;
 #endif
+
+    virtual sstring to_string() = 0;
 };
 
 }

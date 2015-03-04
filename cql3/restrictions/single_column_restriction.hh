@@ -485,12 +485,11 @@ public:
         return v;
     }
 
+    virtual sstring to_string() override {
+        return sprint("EQ(%s)", _value->to_string());
+    }
+
 #if 0
-        @Override
-        public String toString()
-        {
-            return String.format("EQ(%s)", value);
-        }
 
         @Override
         public Restriction mergeWith(Restriction otherRestriction) throws InvalidRequestException
