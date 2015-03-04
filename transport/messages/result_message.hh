@@ -1,6 +1,8 @@
 #ifndef TRANSPORT_MESSAGES_RESULT_MESSAGE_HH
 #define TRANSPORT_MESSAGES_RESULT_MESSAGE_HH
 
+#include "core/sstring.hh"
+
 namespace transport {
 
 namespace messages {
