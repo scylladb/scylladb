@@ -262,6 +262,7 @@ public:
 using key_compare = serialized_compare;
 
 // FIXME: add missing types
+// Remember to update type_codec in transport/server.cc and cql3/cql3_type.cc
 extern thread_local const shared_ptr<abstract_type> int32_type;
 extern thread_local const shared_ptr<abstract_type> long_type;
 extern thread_local const shared_ptr<abstract_type> ascii_type;
