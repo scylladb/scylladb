@@ -34,37 +34,33 @@ namespace selection {
 
 class raw_selector {
 public:
-    const shared_ptr<selectable::raw> selectable_;
-    const shared_ptr<column_identifier> alias;
+    const ::shared_ptr<selectable::raw> selectable_;
+    const ::shared_ptr<column_identifier> alias;
 
     raw_selector(shared_ptr<selectable::raw> selectable__, shared_ptr<column_identifier> alias_)
         : selectable_{selectable__}
         , alias{alias_}
     { }
 
-#if 0
     /**
      * Converts the specified list of <code>RawSelector</code>s into a list of <code>Selectable</code>s.
      *
      * @param raws the <code>RawSelector</code>s to converts.
      * @return a list of <code>Selectable</code>s
      */
-    public static List<Selectable> toSelectables(List<RawSelector> raws, final CFMetaData cfm)
-    {
-        return Lists.transform(raws, new Function<RawSelector, Selectable>()
-        {
-            public Selectable apply(RawSelector raw)
-            {
-                return raw.selectable.prepare(cfm);
-            }
-        });
+    static std::vector<::shared_ptr<selectable>> to_selectables(const std::vector<::shared_ptr<raw_selector>>& raws,
+            schema_ptr schema) {
+        std::vector<::shared_ptr<selectable>> r;
+        r.reserve(raws.size());
+        for (auto&& raw : raws) {
+            r.emplace_back(raw->selectable_->prepare(schema));
+        }
+        return r;
     }
 
-    public boolean processesSelection()
-    {
-        return selectable.processesSelection();
+    bool processes_selection() const {
+        return selectable_->processes_selection();
     }
-#endif
 };
 
 }

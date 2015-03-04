@@ -125,16 +125,10 @@ public:
     {
         return new ColumnIdentifier(allocator.clone(bytes), text);
     }
-
-    public Selector.Factory newSelectorFactory(CFMetaData cfm, List<ColumnDefinition> defs) throws InvalidRequestException
-    {
-        ColumnDefinition def = cfm.getColumnDefinition(this);
-        if (def == null)
-            throw new InvalidRequestException(String.format("Undefined name %s in selection clause", this));
-
-        return SimpleSelector.newFactory(def.name.toString(), addAndGetIndex(def, defs), def.type);
-    }
 #endif
+
+    virtual ::shared_ptr<selection::selector::factory> new_selector_factory(schema_ptr schema,
+        std::vector<const column_definition*>& defs) override;
 
     /**
      * Because Thrift-created tables may have a non-text comparator, we cannot determine the proper 'key' until

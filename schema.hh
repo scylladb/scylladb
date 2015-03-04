@@ -14,6 +14,7 @@
 #include "types.hh"
 #include "tuple.hh"
 #include "gc_clock.hh"
+#include "unimplemented.hh"
 
 using column_id = uint32_t;
 
@@ -148,6 +149,10 @@ public:
     }
     bool is_last_partition_key(column_definition& def) {
         return &_partition_key[_partition_key.size() - 1] == &def;
+    }
+    bool has_collections() {
+        warn(unimplemented::cause::COLLECTIONS);
+        return false; // FIXME
     }
     bool has_static_columns() {
         return !_static_columns.empty();

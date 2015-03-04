@@ -26,8 +26,9 @@
 #ifndef CQL3_SELECTION_SELECTABLE_HH
 #define CQL3_SELECTION_SELECTABLE_HH
 
-#include "database.hh"
+#include "schema.hh"
 #include "core/shared_ptr.hh"
+#include "cql3/selection/selector.hh"
 
 namespace cql3 {
 
@@ -51,24 +52,22 @@ import org.apache.commons.lang3.text.StrBuilder;
 
 class selectable {
 public:
-#if 0
-    public abstract Selector.Factory newSelectorFactory(CFMetaData cfm, List<ColumnDefinition> defs)
-            throws InvalidRequestException;
-
-    protected static int addAndGetIndex(ColumnDefinition def, List<ColumnDefinition> l)
-    {
-        int idx = l.indexOf(def);
-        if (idx < 0)
-        {
-            idx = l.size();
-            l.add(def);
+    virtual ~selectable() {}
+    virtual ::shared_ptr<selector::factory> new_selector_factory(schema_ptr schema, std::vector<const column_definition*>& defs) = 0;
+protected:
+    static size_t add_and_get_index(const column_definition& def, std::vector<const column_definition*>& defs) {
+        auto i = std::find(defs.begin(), defs.end(), &def);
+        if (i != defs.end()) {
+            return std::distance(defs.begin(), i);
         }
-        return idx;
+        defs.push_back(&def);
+        return defs.size() - 1;
     }
-#endif
-
+public:
     class raw {
     public:
+        virtual ~raw() {}
+
         virtual ::shared_ptr<selectable> prepare(schema_ptr s) = 0;
 
         /**
