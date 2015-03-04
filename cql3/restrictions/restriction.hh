@@ -53,11 +53,11 @@ public:
     /**
      * Returns <code>true</code> if one of the restrictions use the specified function.
      *
-     * @param ksName the keyspace name
-     * @param functionName the function name
+     * @param ks_name the keyspace name
+     * @param function_name the function name
      * @return <code>true</code> if one of the restrictions use the specified function, <code>false</code> otherwise.
      */
-    virtual bool uses_function(const sstring& ksName, const sstring& functionName) = 0;
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) = 0;
 
     /**
      * Checks if the specified bound is set or not.
