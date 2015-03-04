@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <boost/range/iterator_range.hpp>
 #include <boost/range/join.hpp>
+#include <boost/range/algorithm/transform.hpp>
 
 #include "cql3/column_specification.hh"
 #include "core/shared_ptr.hh"
@@ -17,6 +18,13 @@
 using column_id = uint32_t;
 
 class column_definition final {
+public:
+    template<typename ColumnRange>
+    static std::vector<const column_definition*> vectorize(ColumnRange&& columns) {
+        std::vector<const column_definition*> r;
+        boost::transform(std::forward<ColumnRange>(columns), std::back_inserter(r), [] (auto& def) { return &def; });
+        return r;
+    }
 private:
     bytes _name;
 public:
