@@ -558,31 +558,6 @@ public:
         return next_fut;
     }
 
-    template <typename Func>
-    future<> rescue(Func&& func) && noexcept {
-        if (state()->available()) {
-            try {
-                func([&state = *state()] { return state.get(); });
-                return make_ready_future();
-            } catch (...) {
-                return make_exception_future(std::current_exception());
-            }
-        }
-        promise<> pr;
-        auto f = pr.get_future();
-        _promise->schedule([pr = std::move(pr), func = std::forward<Func>(func)] (auto& state) mutable {
-            try {
-                func([&state]() mutable { return state.get(); });
-                pr.set_value();
-            } catch (...) {
-                pr.set_exception(std::current_exception());
-            }
-        });
-        _promise->_future = nullptr;
-        _promise = nullptr;
-        return f;
-    }
-
     /**
      * Finally continuation for statements that require waiting for the result. I.e. you need to "finally" call
      * a function that returns a possibly unavailable future.
@@ -632,9 +607,9 @@ public:
     }
 
     future<> or_terminate() && noexcept {
-        return std::move(*this).rescue([] (auto get) {
+        return std::move(*this).then_wrapped([] (auto&& f) {
             try {
-                get();
+                f.get();
             } catch (...) {
                 engine_exit(std::current_exception());
             }

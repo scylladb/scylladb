@@ -339,9 +339,9 @@ private:
         void output() {
             if (!_poll_active) {
                 _poll_active = true;
-                _tcp.poll_tcb(_foreign_ip, this->shared_from_this()).rescue([this] (auto get) {
+                _tcp.poll_tcb(_foreign_ip, this->shared_from_this()).then_wrapped([this] (auto&& f) {
                     try {
-                        get();
+                        f.get();
                     } catch(arp_queue_full_error& ex) {
                         // retry later
                         _poll_active = false;

@@ -1142,11 +1142,11 @@ public:
                 }
             };
             std::abort();
-        }).rescue([this, &out] (auto get_ex) -> future<> {
-            // FIXME: rescue being scheduled even though no exception was triggered has a
+        }).then_wrapped([this, &out] (auto&& f) -> future<> {
+            // FIXME: then_wrapped() being scheduled even though no exception was triggered has a
             // performance cost of about 2.6%. Not using it means maintainability penalty.
             try {
-                get_ex();
+                f.get();
             } catch (std::bad_alloc& e) {
                 if (_parser._noreply) {
                     return make_ready_future<>();

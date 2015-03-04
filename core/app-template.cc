@@ -93,9 +93,9 @@ app_template::run(int ac, char ** av, std::function<void ()>&& func) {
         scollectd::configure( this->configuration());
     }).then(
         std::move(func)
-    ).rescue([] (auto get_ex) {
+    ).then_wrapped([] (auto&& f) {
         try {
-            get_ex();
+            f.get();
         } catch (std::exception& ex) {
             std::cout << "program failed with uncaught exception: " << ex.what() << "\n";
             engine().exit(1);
@@ -105,5 +105,3 @@ app_template::run(int ac, char ** av, std::function<void ()>&& func) {
     smp::cleanup();
     return exit_code;
 }
-
-
