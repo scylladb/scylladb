@@ -8,3 +8,4 @@
 #include "gms/application_state.hh"
 #include "gms/version_generator.hh"
 #include "gms/versioned_value.hh"
+#include "gms/gossip_digest.hh"
