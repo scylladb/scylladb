@@ -15,68 +15,84 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.restrictions;
 
-import java.util.Collection;
-import java.util.List;
 
-import org.apache.cassandra.config.ColumnDefinition;
-import org.apache.cassandra.cql3.QueryOptions;
-import org.apache.cassandra.db.IndexExpression;
-import org.apache.cassandra.db.index.SecondaryIndexManager;
-import org.apache.cassandra.exceptions.InvalidRequestException;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#pragma once
+
+#include <vector>
+
+#include "cql3/query_options.hh"
+#include "types.hh"
+#include "database.hh"
+
+namespace cql3 {
+
+namespace restrictions {
 
 /**
  * Sets of restrictions
  */
-interface Restrictions
-{
+class restrictions {
+public:
+    virtual ~restrictions() {}
+
     /**
      * Returns the column definitions in position order.
      * @return the column definitions in position order.
      */
-    public Collection<ColumnDefinition> getColumnDefs();
+    virtual std::vector<const column_definition*> get_column_defs() = 0;
 
     /**
      * Returns <code>true</code> if one of the restrictions use the specified function.
      *
-     * @param ksName the keyspace name
-     * @param functionName the function name
+     * @param ks_name the keyspace name
+     * @param function_name the function name
      * @return <code>true</code> if one of the restrictions use the specified function, <code>false</code> otherwise.
      */
-    public boolean usesFunction(String ksName, String functionName);
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) = 0;
 
+#if 0
     /**
      * Check if the restriction is on indexed columns.
      *
-     * @param indexManager the index manager
+     * @param index_manager the index manager
      * @return <code>true</code> if the restriction is on indexed columns, <code>false</code>
      */
-    public boolean hasSupportingIndex(SecondaryIndexManager indexManager);
+    virtual bool has_supporting_index(::shared_ptr<secondary_index_manager> index_manager) = 0;
 
     /**
-     * Adds to the specified list the <code>IndexExpression</code>s corresponding to this <code>Restriction</code>.
+     * Adds to the specified list the <code>index_expression</code>s corresponding to this <code>Restriction</code>.
      *
-     * @param expressions the list to add the <code>IndexExpression</code>s to
+     * @param expressions the list to add the <code>index_expression</code>s to
      * @param options the query options
      * @throws InvalidRequestException if this <code>Restriction</code> cannot be converted into
-     * <code>IndexExpression</code>s
+     * <code>index_expression</code>s
      */
-    public void addIndexExpressionTo(List<IndexExpression> expressions,
-                                     QueryOptions options)
-                                     throws InvalidRequestException;
+    virtual void add_index_expression_to(std::vector<::shared_ptr<index_expression>>& expressions,
+                                         const query_options& options) = 0;
+#endif
 
     /**
-     * Checks if this <code>SingleColumnPrimaryKeyRestrictions</code> is empty or not.
+     * Checks if this <code>SingleColumnprimary_key_restrictions</code> is empty or not.
      *
-     * @return <code>true</code> if this <code>SingleColumnPrimaryKeyRestrictions</code> is empty, <code>false</code> otherwise.
+     * @return <code>true</code> if this <code>SingleColumnprimary_key_restrictions</code> is empty, <code>false</code> otherwise.
      */
-    boolean isEmpty();
+    virtual bool empty() = 0;
 
     /**
      * Returns the number of columns that have a restriction.
      *
      * @return the number of columns that have a restriction.
      */
-    public int size();
+    virtual uint32_t size() = 0;
+};
+
+}
+
 }
