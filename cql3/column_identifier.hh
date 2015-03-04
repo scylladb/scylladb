@@ -181,11 +181,16 @@ column_definition* get_column_definition(schema_ptr schema, column_identifier& i
 }
 
 static inline
+::shared_ptr<column_identifier> to_identifier(const column_definition& def) {
+    return def.column_specification->name;
+}
+
+static inline
 std::vector<::shared_ptr<column_identifier>> to_identifiers(const std::vector<const column_definition*>& defs) {
     std::vector<::shared_ptr<column_identifier>> r;
     r.reserve(defs.size());
     for (auto&& def : defs) {
-        r.push_back(def->column_specification->name);
+        r.push_back(to_identifier(*def));
     }
     return r;
 }

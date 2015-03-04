@@ -34,6 +34,8 @@ public:
             }))
     { }
 
+    tuple_type(tuple_type&&) = default;
+
     prefix_type as_prefix() {
         return prefix_type(_types);
     }
