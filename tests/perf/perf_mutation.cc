@@ -1,8 +1,8 @@
 #include "database.hh"
 #include "perf.hh"
 
-static bytes make_atomic_cell(bytes value) {
-    return atomic_cell::make_live(0, ttl_opt{}, value);
+static atomic_cell::one make_atomic_cell(bytes value) {
+    return atomic_cell::one::make_live(0, ttl_opt{}, value);
 };
 
 int main(int argc, char* argv[]) {

@@ -328,20 +328,20 @@ column_family::apply(const mutation& m) {
 // Based on org.apache.cassandra.db.AbstractCell#reconcile()
 static inline
 int
-compare_atomic_cell_for_merge(bytes_view left, bytes_view right) {
-    if (atomic_cell::timestamp(left) != atomic_cell::timestamp(right)) {
-        return atomic_cell::timestamp(left) > atomic_cell::timestamp(right) ? 1 : -1;
+compare_atomic_cell_for_merge(atomic_cell::view left, atomic_cell::view right) {
+    if (left.timestamp() != right.timestamp()) {
+        return left.timestamp() > right.timestamp() ? 1 : -1;
     }
-    if (atomic_cell::is_live(left) != atomic_cell::is_live(right)) {
-        return atomic_cell::is_live(left) ? -1 : 1;
+    if (left.is_live() != right.is_live()) {
+        return left.is_live() ? -1 : 1;
     }
-    if (atomic_cell::is_live(left)) {
-        return compare_unsigned(atomic_cell::value(left), atomic_cell::value(right));
+    if (left.is_live()) {
+        return compare_unsigned(left.value(), right.value());
     } else {
-        if (*atomic_cell::ttl(left) != *atomic_cell::ttl(right)) {
+        if (*left.ttl() != *right.ttl()) {
             // Origin compares big-endian serialized TTL
-            return (uint32_t)atomic_cell::ttl(left)->time_since_epoch().count()
-                 < (uint32_t)atomic_cell::ttl(right)->time_since_epoch().count() ? -1 : 1;
+            return (uint32_t)left.ttl()->time_since_epoch().count()
+                 < (uint32_t)right.ttl()->time_since_epoch().count() ? -1 : 1;
         }
         return 0;
     }
@@ -350,10 +350,10 @@ compare_atomic_cell_for_merge(bytes_view left, bytes_view right) {
 static inline
 int
 compare_for_merge(const column_definition& def,
-                  const std::pair<column_id, bytes>& left,
-                  const std::pair<column_id, bytes>& right) {
+                  const std::pair<column_id, atomic_cell_or_collection>& left,
+                  const std::pair<column_id, atomic_cell_or_collection>& right) {
     if (def.is_atomic()) {
-        return compare_atomic_cell_for_merge(left.second, right.second);
+        return compare_atomic_cell_for_merge(left.second.as_atomic_cell(), right.second.as_atomic_cell());
     } else {
         fail(unimplemented::cause::COLLECTIONS);
     }

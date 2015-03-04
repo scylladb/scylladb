@@ -12,8 +12,8 @@
 static sstring some_keyspace("ks");
 static sstring some_column_family("cf");
 
-static bytes make_atomic_cell(bytes value) {
-    return atomic_cell::make_live(0, ttl_opt{}, std::move(value));
+static atomic_cell::one make_atomic_cell(bytes value) {
+    return atomic_cell::one::make_live(0, ttl_opt{}, std::move(value));
 };
 
 BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
@@ -33,9 +33,9 @@ BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
     row& r = cf.find_or_create_row(key, c_key);
     auto i = r.find(r1_col.id);
     BOOST_REQUIRE(i != r.end());
-    auto& cell = i->second;
-    BOOST_REQUIRE(atomic_cell::is_live(cell));
-    BOOST_REQUIRE(int32_type->equal(atomic_cell::value(cell), int32_type->decompose(3)));
+    auto cell = i->second.as_atomic_cell();
+    BOOST_REQUIRE(cell.is_live());
+    BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(3)));
 }
 
 BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {

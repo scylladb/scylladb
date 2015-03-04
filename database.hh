@@ -132,6 +132,8 @@ T get_field(const bytes_view& v, unsigned offset) {
     return net::ntoh(*reinterpret_cast<const net::packed<T>*>(v.begin() + offset));
 }
 
+class atomic_cell_or_collection;
+
 /*
  * Represents atomic cell layout. Works on serialized form.
  *
@@ -151,6 +153,9 @@ private:
     static constexpr unsigned ttl_offset = timestamp_offset + timestamp_size;
     static constexpr unsigned ttl_size = 4;
 public:
+    class view;
+    class one;
+private:
     static bool is_live(const bytes_view& cell) {
         return cell[0] != DEAD_FLAGS;
     }
@@ -198,9 +203,99 @@ public:
         std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
         return b;
     }
+    friend class one;
+    friend class view;
 };
 
-using row = std::map<column_id, bytes>;
+class atomic_cell::view final {
+    bytes_view _data;
+private:
+    view(bytes_view data) : _data(data) {}
+public:
+    static view from_bytes(bytes_view data) { return view(data); }
+    bool is_live() const {
+        return atomic_cell::is_live(_data);
+    }
+    bool is_live_and_has_ttl() const {
+        return atomic_cell::is_live_and_has_ttl(_data);
+    }
+    bool is_dead(const bytes_view& cell) const {
+        return atomic_cell::is_dead(_data);
+    }
+    // Can be called on live and dead cells
+    api::timestamp_type timestamp() const {
+        return atomic_cell::timestamp(_data);
+    }
+    // Can be called on live cells only
+    bytes_view value() const {
+        return atomic_cell::value(_data);
+    }
+    // Can be called on live and dead cells. For dead cells, the result is never empty.
+    ttl_opt ttl() const {
+        return atomic_cell::ttl(_data);
+    }
+    friend class atomic_cell::one;
+};
+
+class atomic_cell::one final {
+    bytes _data;
+private:
+    one(bytes b) : _data(std::move(b)) {}
+public:
+    one(const one&) = default;
+    one(one&&) = default;
+    one& operator=(const one&) = default;
+    one& operator=(one&&) = default;
+    static one from_bytes(bytes b) {
+        return one(std::move(b));
+    }
+    one(atomic_cell::view other) : _data(other._data.begin(), other._data.end()) {}
+    bool is_live() const {
+        return atomic_cell::is_live(_data);
+    }
+    bool is_live_and_has_ttl() const {
+        return atomic_cell::is_live_and_has_ttl(_data);
+    }
+    bool is_dead(const bytes_view& cell) const {
+        return atomic_cell::is_dead(_data);
+    }
+    // Can be called on live and dead cells
+    api::timestamp_type timestamp() const {
+        return atomic_cell::timestamp(_data);
+    }
+    // Can be called on live cells only
+    bytes_view value() const {
+        return atomic_cell::value(_data);
+    }
+    // Can be called on live and dead cells. For dead cells, the result is never empty.
+    ttl_opt ttl() const {
+        return atomic_cell::ttl(_data);
+    }
+    operator atomic_cell::view() const {
+        return atomic_cell::view(_data);
+    }
+    static one make_dead(api::timestamp_type timestamp, gc_clock::time_point ttl) {
+        return atomic_cell::make_dead(timestamp, ttl);
+    }
+    static one make_live(api::timestamp_type timestamp, ttl_opt ttl, bytes_view value) {
+        return atomic_cell::make_live(timestamp, ttl, value);
+    }
+    friend class atomic_cell_or_collection;
+};
+
+// A variant type that can hold either an atomic_cell, or a serialized collection.
+// Which type is stored is determinied by the schema.
+class atomic_cell_or_collection final {
+    bytes _data;
+private:
+    atomic_cell_or_collection(bytes&& data) : _data(std::move(data)) {}
+public:
+    static atomic_cell_or_collection from_atomic_cell(atomic_cell::one data) { return { std::move(data._data) }; }
+    atomic_cell::view as_atomic_cell() const { return atomic_cell::view::from_bytes(_data); }
+    // FIXME: insert collection variant here
+};
+
+using row = std::map<column_id, atomic_cell_or_collection>;
 
 struct deletable_row final {
     tombstone t;
@@ -251,20 +346,29 @@ public:
     mutation(mutation&&) = default;
     mutation(const mutation&) = default;
 
-    void set_static_cell(const column_definition& def, bytes value) {
-        p.static_row()[def.id] = std::move(value);
+    void set_static_cell(const column_definition& def, atomic_cell::one value) {
+        emplace_or_insert(p.static_row(), def.id, std::move(value));
     }
 
-    void set_clustered_cell(const clustering_prefix& prefix, const column_definition& def, bytes value) {
+    void set_clustered_cell(const clustering_prefix& prefix, const column_definition& def, atomic_cell::one value) {
         auto& row = p.clustered_row(serialize_value(*schema->clustering_key_type, prefix));
-        row[def.id] = std::move(value);
+        emplace_or_insert(row, def.id, std::move(value));
     }
 
-    void set_clustered_cell(const clustering_key& key, const column_definition& def, bytes value) {
+    void set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell::one value) {
         auto& row = p.clustered_row(key);
-        row[def.id] = std::move(value);
+        emplace_or_insert(row, def.id, std::move(value));
     }
-
+private:
+    static void emplace_or_insert(row& row, column_id id, atomic_cell::one&& value) {
+        // our mutations are not yet immutable
+        auto i = row.lower_bound(id);
+        if (i == row.end() || i->first != id) {
+            row.emplace_hint(i, id, atomic_cell_or_collection::from_atomic_cell(std::move(value)));
+        } else {
+            i->second = atomic_cell_or_collection::from_atomic_cell(std::move(value));
+        }
+    }
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
 

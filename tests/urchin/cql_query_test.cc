@@ -65,9 +65,9 @@ static future<> require_column_has_value(distributed<database>& ddb, const sstri
         if (i == row->end()) {
             assert(((void)"column not set", 0));
         }
-        auto& cell = i->second;
-        assert(atomic_cell::is_live(cell));
-        assert(col_def->type->equal(atomic_cell::value(cell), col_def->type->decompose(expected)));
+        auto cell = i->second.as_atomic_cell();
+        assert(cell.is_live());
+        assert(col_def->type->equal(cell.value(), col_def->type->decompose(expected)));
         row->find(col_def->id);
     });
 }
