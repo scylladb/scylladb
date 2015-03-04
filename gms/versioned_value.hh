@@ -19,6 +19,8 @@
  * Copyright 2015 Cloudius Systems.
  */
 
+#pragma once
+
 #include <vector>
 
 #include "core/sstring.hh"
