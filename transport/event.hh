@@ -15,25 +15,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.transport;
 
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import com.google.common.base.Objects;
-import io.netty.buffer.ByteBuf;
+#pragma once
 
-public abstract class Event
-{
-    public enum Type { TOPOLOGY_CHANGE, STATUS_CHANGE, SCHEMA_CHANGE }
+#include "core/sstring.hh"
 
-    public final Type type;
+namespace transport {
 
-    private Event(Type type)
-    {
-        this.type = type;
-    }
+class event {
+public:
+    enum class event_type { TOPOLOGY_CHANGE, STATUS_CHANGE, SCHEMA_CHANGE };
 
+    const event_type type;
+
+private:
+    event(const event_type& type_)
+        : type{type_}
+    { }
+public:
+
+#if 0
     public static Event deserialize(ByteBuf cb, int version)
     {
         switch (CBUtil.readEnumValue(Type.class, cb))
@@ -61,7 +68,11 @@ public abstract class Event
 
     protected abstract void serializeEvent(ByteBuf dest, int version);
     protected abstract int eventSerializedSize(int version);
+#endif
+    class schema_change;
+};
 
+#if 0
     public static class TopologyChange extends Event
     {
         public enum Change { NEW_NODE, REMOVED_NODE, MOVED_NODE }
@@ -200,28 +211,32 @@ public abstract class Event
                 && Objects.equal(node, stc.node);
         }
     }
+#endif
 
-    public static class SchemaChange extends Event
-    {
-        public enum Change { CREATED, UPDATED, DROPPED }
-        public enum Target { KEYSPACE, TABLE, TYPE }
+    class event::schema_change : public event {
+    public:
+        enum class change_type { CREATED, UPDATED, DROPPED };
+        enum class target_type { KEYSPACE, TABLE, TYPE };
 
-        public final Change change;
-        public final Target target;
-        public final String keyspace;
-        public final String tableOrTypeOrFunction;
+        const change_type change;
+        const target_type target;
+        const sstring keyspace;
+        const sstring table_or_type_or_function;
 
-        public SchemaChange(Change change, Target target, String keyspace, String tableOrTypeOrFunction)
+        schema_change(const change_type change_, const target_type target_, const sstring& keyspace_, const sstring& table_or_type_or_function_)
+            : event{event_type::SCHEMA_CHANGE}
+            , change{change_}
+            , target{target_}
+            , keyspace{keyspace_}
+            , table_or_type_or_function{table_or_type_or_function_}
         {
-            super(Type.SCHEMA_CHANGE);
-            this.change = change;
-            this.target = target;
-            this.keyspace = keyspace;
-            this.tableOrTypeOrFunction = tableOrTypeOrFunction;
+#if 0
             if (target != Target.KEYSPACE)
                 assert this.tableOrTypeOrFunction != null : "Table or type should be set for non-keyspace schema change events";
+#endif
         }
 
+#if 0
         public SchemaChange(Change change, String keyspace)
         {
             this(change, Target.KEYSPACE, keyspace, null);
@@ -326,5 +341,7 @@ public abstract class Event
                 && Objects.equal(keyspace, scc.keyspace)
                 && Objects.equal(tableOrTypeOrFunction, scc.tableOrTypeOrFunction);
         }
-    }
+#endif
+    };
+
 }
