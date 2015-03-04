@@ -35,6 +35,7 @@
 #include "tombstone.hh"
 #include "atomic_cell.hh"
 #include "bytes.hh"
+#include "query.hh"
 
 using partition_key_type = tuple_type<>;
 using clustering_key_type = tuple_type<>;
@@ -131,6 +132,12 @@ struct column_family {
     // partition key -> partition
     std::map<bytes, mutation_partition, key_compare> partitions;
     void apply(const mutation& m);
+    // Returns at most "cmd.limit" rows
+    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
+private:
+    // Returns at most "limit" rows
+    query::result::partition get_partition_slice(mutation_partition& partition,
+        const query::partition_slice& slice, uint32_t limit);
 };
 
 class keyspace {
@@ -157,6 +164,7 @@ public:
         *this = std::move(db);
     }
     unsigned shard_of(const dht::token& t);
+    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
 };
 
 // FIXME: stub

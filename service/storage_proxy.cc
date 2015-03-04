@@ -25,6 +25,7 @@
 #include "db/consistency_level.hh"
 #include "storage_proxy.hh"
 #include "unimplemented.hh"
+#include "query_result_merger.hh"
 
 namespace service {
 
@@ -1150,7 +1151,43 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
                 return false;
         return true;
     }
+#endif
 
+future<foreign_ptr<lw_shared_ptr<query::result>>>
+storage_proxy::query(lw_shared_ptr<query::read_command> cmd, db::consistency_level cl) {
+    if (cmd->partition_ranges.empty()) {
+        return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(make_foreign(make_lw_shared<query::result>()));
+    }
+
+    if (cmd->partition_ranges.size() != 1) {
+        // FIXME: implement
+        throw std::runtime_error("more than one range not supported yet");
+    }
+
+    auto& range = cmd->partition_ranges[0];
+
+    if (range.is_singular()) {
+        auto& key = range.start();
+        auto dk = dht::global_partitioner().decorate_key(key);
+        auto shard = _db.local().shard_of(dk._token);
+        return _db.invoke_on(shard, [cmd] (database& db) {
+            return db.query(*cmd).then([] (auto&& f) {
+                return make_foreign(std::move(f));
+            });
+        }).finally([cmd] {});
+    }
+
+    // FIXME: Respect cmd->row_limit to avoid unnecessary transfer
+    query::result_merger merger;
+    merger.reserve(smp::count);
+    return _db.map_reduce(std::move(merger), [cmd] (database& db) {
+        return db.query(*cmd).then([] (auto&& f) {
+            return make_foreign(std::move(f));
+        });
+    }).finally([cmd] {});
+}
+
+#if 0
     public static List<Row> read(List<ReadCommand> commands, ConsistencyLevel consistencyLevel)
     throws UnavailableException, IsBootstrappingException, ReadTimeoutException, InvalidRequestException
     {

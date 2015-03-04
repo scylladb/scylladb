@@ -25,6 +25,7 @@ enum class cause {
     GOSSIP,
     TOKEN_RESTRICTION,
     LEGACY_COMPOSITE_KEYS,
+    RANGE_QUERIES
 };
 
 void fail(cause what) __attribute__((noreturn));
