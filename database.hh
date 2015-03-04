@@ -159,4 +159,7 @@ public:
     unsigned shard_of(const dht::token& t);
 };
 
+// FIXME: stub
+class secondary_index_manager {};
+
 #endif /* DATABASE_HH_ */
