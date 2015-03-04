@@ -124,6 +124,7 @@ urchin_tests = [
     'tests/urchin/cql_query_test',
     'tests/test-serialization',
     'tests/urchin/sstable_test',
+    'tests/urchin/commitlog_test',
 ]
 
 tests = [
@@ -275,8 +276,9 @@ urchin_core = (['database.cc',
                  'cql3/single_column_relation.cc',
                  'cql3/column_condition.cc',
                  'db/db.cc',
-		 'db/system_keyspace.cc',
-		 'db/legacy_schema_tables.cc',
+		 		 'db/system_keyspace.cc',
+		 		 'db/legacy_schema_tables.cc',
+                 'db/commitlog/commitlog.cc',
                  'io/io.cc',
                  'utils/utils.cc',
                  'utils/UUID_gen.cc',
