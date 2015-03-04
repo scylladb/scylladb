@@ -504,7 +504,8 @@ public:
 
     template <typename Func>
     std::result_of_t<Func(future<T...>)>
-    then_wrapped(Func&& func) && noexcept {
+    then_wrapped(Func&& func,
+            std::enable_if_t<is_future<std::result_of_t<Func(future<T...>)>>::value, void*> = nullptr) && noexcept {
         using P = typename std::result_of_t<Func(future<T...>)>::promise_type;
         if (state()->available()) {
             try {
@@ -521,6 +522,33 @@ public:
             try {
                 auto next_fut = func(future(std::move(state)));
                 next_fut.forward_to(std::move(pr));
+            } catch (...) {
+                pr.set_exception(std::current_exception());
+            }
+        });
+        _promise->_future = nullptr;
+        _promise = nullptr;
+        return next_fut;
+    }
+
+    template <typename Func>
+    future<>
+    then_wrapped(Func&& func,
+            std::enable_if_t<std::is_same<std::result_of_t<Func(future<T...>)>, void>::value, void*> = nullptr) && noexcept {
+        if (state()->available()) {
+            try {
+                func(std::move(*this));
+                return make_ready_future<>();
+            } catch (...) {
+                return make_exception_future(std::current_exception());
+            }
+        }
+        promise<> pr;
+        auto next_fut = pr.get_future();
+        _promise->schedule([func = std::forward<Func>(func), pr = std::move(pr)] (auto& state) mutable {
+            try {
+                func(future(std::move(state)));
+                pr.set_value();
             } catch (...) {
                 pr.set_exception(std::current_exception());
             }
