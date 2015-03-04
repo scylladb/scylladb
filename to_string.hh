@@ -18,7 +18,7 @@ sstring
 to_string(const std::vector<PtrToPrintable>& items) {
     // TODO: optimize
     std::ostringstream oss;
-    int left = items.size();
+    size_t left = items.size();
     oss << "[";
     for (auto&& item : items) {
         oss << item->to_string();
