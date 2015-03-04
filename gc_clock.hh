@@ -5,6 +5,7 @@
 #pragma once
 
 #include <chrono>
+#include <experimental/optional>
 
 // FIXME: wraps around in 2038
 class gc_clock {
@@ -19,3 +20,7 @@ public:
         return time_point(std::chrono::duration_cast<duration>(base::now().time_since_epoch()));
     }
 };
+
+
+using ttl_opt = std::experimental::optional<gc_clock::time_point>;
+

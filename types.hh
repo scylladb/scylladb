@@ -15,24 +15,13 @@
 #include "utils/UUID.hh"
 #include "net/byteorder.hh"
 #include "db_clock.hh"
+#include "bytes.hh"
 
 namespace cql3 {
 
 class cql3_type;
 
 }
-
-// FIXME: should be int8_t
-using bytes = basic_sstring<char, uint32_t, 31>;
-using bytes_view = std::experimental::string_view;
-using bytes_opt = std::experimental::optional<bytes>;
-using sstring_view = std::experimental::string_view;
-
-bytes from_hex(sstring_view s);
-sstring to_hex(const bytes& b);
-sstring to_hex(const bytes_opt& b);
-
-std::ostream& operator<<(std::ostream& os, const bytes& b);
 
 using object_opt = std::experimental::optional<boost::any>;
 
