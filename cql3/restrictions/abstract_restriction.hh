@@ -108,7 +108,7 @@ protected:
      * @param function_name the function name
      * @return <code>true</code> if one of the specified term is using the specified function, <code>false</code> otherwise.
      */
-    static bool uses_function(std::vector<::shared_ptr<term>> terms, const sstring& ks_name, const sstring& function_name) {
+    static bool uses_function(const std::vector<::shared_ptr<term>>& terms, const sstring& ks_name, const sstring& function_name) {
         for (auto&& value : terms) {
             if (uses_function(value, ks_name, function_name)) {
                 return true;
