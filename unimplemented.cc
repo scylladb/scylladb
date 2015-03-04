@@ -9,7 +9,7 @@
 
 namespace unimplemented {
 
-static std::unordered_map<cause, bool> _warnings;
+static thread_local std::unordered_map<cause, bool> _warnings;
 
 std::ostream& operator<<(std::ostream& out, cause c) {
     switch(c) {
