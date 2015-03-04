@@ -54,8 +54,25 @@ public:
                 ((uint64_t)least_sig_bits >> 48 & 0xffff),
                 ((uint64_t)least_sig_bits & 0xffffffffffffLL));
     }
+
+    bool operator==(const UUID& v) const {
+        return most_sig_bits == v.most_sig_bits
+                && least_sig_bits == v.least_sig_bits
+                ;
+    }
 };
 
 UUID make_random_uuid();
 
+}
+
+namespace std {
+template<>
+struct hash<utils::UUID> {
+    size_t operator()(const utils::UUID& id) const {
+        auto hilo = id.get_most_significant_bits()
+                ^ id.get_least_significant_bits();
+        return size_t((hilo >> 32) ^ hilo);
+    }
+};
 }
