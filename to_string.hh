@@ -15,7 +15,7 @@
 template<typename PtrToPrintable>
 static inline
 sstring
-to_string(std::vector<PtrToPrintable> items) {
+to_string(const std::vector<PtrToPrintable>& items) {
     // TODO: optimize
     std::ostringstream oss;
     int left = items.size();
@@ -33,7 +33,7 @@ to_string(std::vector<PtrToPrintable> items) {
 
 template<typename PtrToPrintable>
 static inline
-sstring join(sstring delimiter, std::vector<PtrToPrintable> items) {
+sstring join(sstring delimiter, const std::vector<PtrToPrintable>& items) {
     std::ostringstream oss;
     size_t left = items.size();
     for (auto&& item : items) {
