@@ -489,14 +489,12 @@ public:
         return sprint("EQ(%s)", _value->to_string());
     }
 
+    virtual void merge_with(::shared_ptr<restriction> other) override {
+        throw exceptions::invalid_request_exception(sprint(
+            "%s cannot be restricted by more than one relation if it includes an Equal", _column_def.name_as_text()));
+    }
+
 #if 0
-
-        @Override
-        public Restriction mergeWith(Restriction otherRestriction) throws InvalidRequestException
-        {
-            throw invalidRequest("%s cannot be restricted by more than one relation if it includes an Equal", columnDef.name);
-        }
-
         @Override
         protected boolean isSupportedBy(SecondaryIndex index)
         {
