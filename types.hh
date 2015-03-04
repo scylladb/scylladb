@@ -90,8 +90,8 @@ public:
      * Types which are wrappers over other types should override this.
      * For example the reversed_type returns the type it is reversing.
      */
-    virtual abstract_type& underlying_type() {
-        return *this;
+    virtual shared_ptr<abstract_type> underlying_type() {
+        return shared_from_this();
     }
     /**
      * Returns true if values of the other AbstractType can be read and "reasonably" interpreted by the this
@@ -105,7 +105,7 @@ public:
      * Note that a type should be compatible with at least itself.
      */
     bool is_value_compatible_with(abstract_type& other) {
-        return is_value_compatible_with_internal(other.underlying_type());
+        return is_value_compatible_with_internal(*other.underlying_type());
     }
 protected:
     /**
