@@ -23,7 +23,12 @@ public:
     enum class column_kind { PARTITION, CLUSTERING, REGULAR, STATIC };
     column_definition(bytes name, data_type type, column_id id, column_kind kind);
     data_type type;
-    column_id id; // unique within (kind, schema instance)
+
+    // Unique within (kind, schema instance).
+    // schema::position() depends on the fact that for PK columns this is
+    // equivalent to component index.
+    column_id id;
+
     column_kind kind;
     ::shared_ptr<cql3::column_specification> column_specification;
     bool is_static() const { return kind == column_kind::STATIC; }
@@ -158,6 +163,12 @@ public:
         return boost::join(partition_key_columns(),
             boost::join(clustering_key_columns(),
             boost::join(static_columns(), regular_columns())));
+    }
+    uint32_t position(const column_definition& column) const {
+        if (column.is_primary_key()) {
+            return column.id;
+        }
+        return _clustering_key.size();
     }
 };
 
