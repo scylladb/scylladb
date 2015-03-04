@@ -6,6 +6,7 @@
 
 #include "bytes.hh"
 #include "timestamp.hh"
+#include "gc_clock.hh"
 #include <cstdint>
 
 template<typename T>
