@@ -38,13 +38,13 @@ protected:
     /**
      * The definition of the column to which apply the restriction.
      */
-    column_definition& _column_def;
+    const column_definition& _column_def;
 public:
-    single_column_restriction(column_definition& column_def)
+    single_column_restriction(const column_definition& column_def)
         : _column_def(column_def)
     { }
 
-    column_definition& get_column_def() {
+    const column_definition& get_column_def() {
         return _column_def;
     }
 #if 0
