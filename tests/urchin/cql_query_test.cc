@@ -5,7 +5,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
 #include "core/distributed.hh"
-#include "core/app-template.hh"
+#include "tests/test-utils.hh"
 
 struct conversation_state {
     service::storage_proxy proxy;
@@ -72,13 +72,12 @@ static future<> require_column_has_value(distributed<database>& ddb, const sstri
     });
 }
 
-future<> test_insert_statement() {
+SEASTAR_TEST_CASE(test_insert_statement) {
     auto db = make_shared<distributed<database>>();
     auto state = make_shared<conversation_state>(*db, ks_name);
 
     // CQL: create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));
     return db->start().then([db] {
-        engine().at_exit([db] { db->stop(); });
         return db->invoke_on_all([] (database& db) {
             keyspace ks;
             auto cf_schema = make_lw_shared(schema(ks_name, table_name,
@@ -96,12 +95,7 @@ future<> test_insert_statement() {
             return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {1}, "r1", 66);
         }).then([db] {
         return db->stop();
-    }).then([db] {
-        // keep db alive until stop(), above
-        engine().exit(0);
+        }).then_wrapped([db] (future<> f) mutable {
+        return make_ready_future<>();
     });
-}
-
-int main(int ac, char** av) {
-    return app_template().run(ac, av, test_insert_statement);
 }
