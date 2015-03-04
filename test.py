@@ -20,6 +20,7 @@ import os
 import sys
 import argparse
 import subprocess
+import signal
 
 all_tests = [
     'futures_test',
@@ -37,6 +38,11 @@ def print_status(msg):
     last_len = len(msg)
     print('\r' + msg, end='')
 
+class Alarm(Exception):
+    pass
+def alarm_handler(signum, frame):
+    raise Alarm
+
 if __name__ == "__main__":
     all_modes = ['debug', 'release']
 
@@ -44,6 +50,7 @@ if __name__ == "__main__":
     parser.add_argument('--fast',  action="store_true", help="Run only fast tests")
     parser.add_argument('--name',  action="store", help="Run only test whose name contains given string")
     parser.add_argument('--mode', choices=all_modes, help="Run only tests for given build mode")
+    parser.add_argument('--timeout', action="store",default="300",type=int, help="timeout value for test execution")
     args = parser.parse_args()
 
     black_hole = open('/dev/null', 'w')
@@ -77,10 +84,20 @@ if __name__ == "__main__":
     for n, path in enumerate(test_to_run):
         prefix = '[%d/%d]' % (n + 1, n_total)
         print_status('%s RUNNING %s' % (prefix, path))
-        proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-        out, err = proc.communicate()
+        signal.signal(signal.SIGALRM, alarm_handler)
+        proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,preexec_fn=os.setsid)
+        signal.alarm(args.timeout)
+        try:
+            out, err = proc.communicate()
+            signal.alarm(0)
+        except:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.kill()
+            proc.returncode = -1
         if proc.returncode:
             print_status('FAILED: %s\n' % (path))
+            if proc.returncode == -1:
+                print_status('TIMED OUT\n')
             if out:
                 print('=== stdout START ===')
                 print(out.decode())
