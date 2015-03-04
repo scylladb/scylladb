@@ -157,6 +157,10 @@ public:
         return bool(_mask);
     }
 
+    mask_type mask() const {
+        return _mask;
+    }
+
     template<enum_type... items>
     struct frozen {
         template<enum_type first>
