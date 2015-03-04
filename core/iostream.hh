@@ -118,7 +118,7 @@ public:
     };
     using char_type = CharType;
     input_stream() = default;
-    explicit input_stream(data_source fd, size_t buf_size = 8192) : _fd(std::move(fd)), _buf(0) {}
+    explicit input_stream(data_source fd) : _fd(std::move(fd)), _buf(0) {}
     input_stream(input_stream&&) = default;
     input_stream& operator=(input_stream&&) = default;
     future<temporary_buffer<CharType>> read_exactly(size_t n);
