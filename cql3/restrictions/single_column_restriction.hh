@@ -28,6 +28,8 @@
 #include "cql3/term.hh"
 #include "core/shared_ptr.hh"
 #include "database.hh"
+#include "to_string.hh"
+#include "exceptions/exceptions.hh"
 
 namespace cql3 {
 
@@ -270,196 +272,9 @@ public:
             this.slice = slice;
         }
     }
-
-    // This holds CONTAINS, CONTAINS_KEY, and map[key] = value restrictions because we might want to have any combination of them.
-    public static final class Contains extends SingleColumnRestriction
-    {
-        private List<Term> values = new ArrayList<>(); // for CONTAINS
-        private List<Term> keys = new ArrayList<>(); // for CONTAINS_KEY
-        private List<Term> entryKeys = new ArrayList<>(); // for map[key] = value
-        private List<Term> entryValues = new ArrayList<>(); // for map[key] = value
-
-        public Contains(ColumnDefinition columnDef, Term t, boolean isKey)
-        {
-            super(columnDef);
-            if (isKey)
-                keys.add(t);
-            else
-                values.add(t);
-        }
-
-        public Contains(ColumnDefinition columnDef, Term mapKey, Term mapValue)
-        {
-            super(columnDef);
-            entryKeys.add(mapKey);
-            entryValues.add(mapValue);
-        }
-
-        @Override
-        public List<ByteBuffer> values(QueryOptions options) throws InvalidRequestException
-        {
-            return bindAndGet(values, options);
-        }
-
-        @Override
-        public boolean isContains()
-        {
-            return true;
-        }
-
-        @Override
-        public Restriction mergeWith(Restriction otherRestriction) throws InvalidRequestException
-        {
-            checkTrue(otherRestriction.isContains(),
-                      "Collection column %s can only be restricted by CONTAINS, CONTAINS KEY, or map-entry equality",
-                      getColumnDef().name);
-
-            SingleColumnRestriction.Contains newContains = new Contains(getColumnDef());
-
-            copyKeysAndValues(this, newContains);
-            copyKeysAndValues((Contains) otherRestriction, newContains);
-
-            return newContains;
-        }
-
-        @Override
-        public void addIndexExpressionTo(List<IndexExpression> expressions,
-                                         QueryOptions options)
-                                         throws InvalidRequestException
-        {
-            addExpressionsFor(expressions, values(options), Operator.CONTAINS);
-            addExpressionsFor(expressions, keys(options), Operator.CONTAINS_KEY);
-            addExpressionsFor(expressions, entries(options), Operator.EQ);
-        }
-
-        private void addExpressionsFor(List<IndexExpression> target, List<ByteBuffer> values,
-                                       Operator op) throws InvalidRequestException
-        {
-            for (ByteBuffer value : values)
-            {
-                validateIndexedValue(columnDef, value);
-                target.add(new IndexExpression(columnDef.name.bytes, op, value));
-            }
-        }
-
-        @Override
-        protected boolean isSupportedBy(SecondaryIndex index)
-        {
-            boolean supported = false;
-
-            if (numberOfValues() > 0)
-                supported |= index.supportsOperator(Operator.CONTAINS);
-
-            if (numberOfKeys() > 0)
-                supported |= index.supportsOperator(Operator.CONTAINS_KEY);
-
-            if (numberOfEntries() > 0)
-                supported |= index.supportsOperator(Operator.EQ);
-
-            return supported;
-        }
-
-        public int numberOfValues()
-        {
-            return values.size();
-        }
-
-        public int numberOfKeys()
-        {
-            return keys.size();
-        }
-
-        public int numberOfEntries()
-        {
-            return entryKeys.size();
-        }
-
-        @Override
-        public boolean usesFunction(String ksName, String functionName)
-        {
-            return usesFunction(values, ksName, functionName) || usesFunction(keys, ksName, functionName) ||
-                   usesFunction(entryKeys, ksName, functionName) || usesFunction(entryValues, ksName, functionName);
-        }
-
-        @Override
-        public String toString()
-        {
-            return String.format("CONTAINS(values=%s, keys=%s, entryKeys=%s, entryValues=%s)", values, keys, entryKeys, entryValues);
-        }
-
-        @Override
-        public boolean hasBound(Bound b)
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public List<ByteBuffer> bounds(Bound b, QueryOptions options) throws InvalidRequestException
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public boolean isInclusive(Bound b)
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        private List<ByteBuffer> keys(QueryOptions options) throws InvalidRequestException
-        {
-            return bindAndGet(keys, options);
-        }
-
-        private List<ByteBuffer> entries(QueryOptions options) throws InvalidRequestException
-        {
-            List<ByteBuffer> entryBuffers = new ArrayList<>(entryKeys.size());
-            List<ByteBuffer> keyBuffers = bindAndGet(entryKeys, options);
-            List<ByteBuffer> valueBuffers = bindAndGet(entryValues, options);
-            for (int i = 0; i < entryKeys.size(); i++)
-            {
-                if (valueBuffers.get(i) == null)
-                    throw new InvalidRequestException("Unsupported null value for map-entry equality");
-                entryBuffers.add(CompositeType.build(keyBuffers.get(i), valueBuffers.get(i)));
-            }
-            return entryBuffers;
-        }
-
-        /**
-         * Binds the query options to the specified terms and returns the resulting values.
-         *
-         * @param terms the terms
-         * @param options the query options
-         * @return the value resulting from binding the query options to the specified terms
-         * @throws InvalidRequestException if a problem occurs while binding the query options
-         */
-        private static List<ByteBuffer> bindAndGet(List<Term> terms, QueryOptions options) throws InvalidRequestException
-        {
-            List<ByteBuffer> buffers = new ArrayList<>(terms.size());
-            for (Term value : terms)
-                buffers.add(value.bindAndGet(options));
-            return buffers;
-        }
-
-        /**
-         * Copies the keys and value from the first <code>Contains</code> to the second one.
-         *
-         * @param from the <code>Contains</code> to copy from
-         * @param to the <code>Contains</code> to copy to
-         */
-        private static void copyKeysAndValues(Contains from, Contains to)
-        {
-            to.values.addAll(from.values);
-            to.keys.addAll(from.keys);
-            to.entryKeys.addAll(from.entryKeys);
-            to.entryValues.addAll(from.entryValues);
-        }
-
-        private Contains(ColumnDefinition columnDef)
-        {
-            super(columnDef);
-        }
-    }
 #endif
+
+    class contains;
 };
 
 class single_column_restriction::EQ final : public single_column_restriction {
@@ -489,7 +304,7 @@ public:
         return sprint("EQ(%s)", _value->to_string());
     }
 
-    virtual void merge_with(::shared_ptr<restriction> other) override {
+    virtual void merge_with(::shared_ptr<restriction> other) {
         throw exceptions::invalid_request_exception(sprint(
             "%s cannot be restricted by more than one relation if it includes an Equal", _column_def.name_as_text()));
     }
@@ -501,6 +316,159 @@ public:
             return index.supportsOperator(Operator.EQ);
         }
 #endif
+};
+
+// This holds CONTAINS, CONTAINS_KEY, and map[key] = value restrictions because we might want to have any combination of them.
+class single_column_restriction::contains final : public single_column_restriction {
+private:
+    std::vector<::shared_ptr<term>> _values;
+    std::vector<::shared_ptr<term>> _keys;
+    std::vector<::shared_ptr<term>> _entry_keys;
+    std::vector<::shared_ptr<term>> _entry_values;
+public:
+    contains(column_definition& column_def, ::shared_ptr<term> t, bool is_key)
+            : single_column_restriction(column_def) {
+        if (is_key) {
+            _keys.emplace_back(std::move(t));
+        } else {
+            _values.emplace_back(std::move(t));
+        }
+    }
+
+    contains(column_definition& column_def, ::shared_ptr<term> map_key, ::shared_ptr<term> map_value)
+            : single_column_restriction(column_def) {
+        _entry_keys.emplace_back(std::move(map_key));
+        _entry_values.emplace_back(std::move(map_value));
+    }
+
+    virtual std::vector<bytes_opt> values(const query_options& options) override {
+        return bind_and_get(_values, options);
+    }
+
+    virtual bool is_contains() override {
+        return true;
+    }
+
+    virtual void merge_with(::shared_ptr<restriction> other_restriction) override {
+        if (!other_restriction->is_contains()) {
+            throw exceptions::invalid_request_exception(sprint(
+                      "Collection column %s can only be restricted by CONTAINS, CONTAINS KEY, or map-entry equality",
+                      get_column_def().name_as_text()));
+        }
+
+        auto other = static_pointer_cast<contains>(other_restriction);
+        std::copy(other->_values.begin(), other->_values.end(), std::back_inserter(_values));
+        std::copy(other->_keys.begin(), other->_keys.end(), std::back_inserter(_keys));
+        std::copy(other->_entry_keys.begin(), other->_entry_keys.end(), std::back_inserter(_entry_keys));
+        std::copy(other->_entry_values.begin(), other->_entry_values.end(), std::back_inserter(_entry_values));
+    }
+
+#if 0
+        virtual void add_index_expression_to(std::vector<::shared_ptr<index_expression>>& expressions,
+                const query_options& options) override {
+            add_expressions_for(expressions, values(options), operator_type::CONTAINS);
+            add_expressions_for(expressions, keys(options), operator_type::CONTAINS_KEY);
+            add_expressions_for(expressions, entries(options), operator_type::EQ);
+        }
+
+        private void add_expressions_for(std::vector<::shared_ptr<index_expression>>& target, std::vector<bytes_opt> values,
+                                       const operator_type& op) {
+            for (ByteBuffer value : values)
+            {
+                validateIndexedValue(columnDef, value);
+                target.add(new IndexExpression(columnDef.name.bytes, op, value));
+            }
+        }
+
+        virtual bool is_supported_by(SecondaryIndex index) override {
+            bool supported = false;
+
+            if (numberOfValues() > 0)
+                supported |= index.supportsOperator(Operator.CONTAINS);
+
+            if (numberOfKeys() > 0)
+                supported |= index.supportsOperator(Operator.CONTAINS_KEY);
+
+            if (numberOfEntries() > 0)
+                supported |= index.supportsOperator(Operator.EQ);
+
+            return supported;
+        }
+#endif
+
+    uint32_t number_of_values() {
+        return _values.size();
+    }
+
+    uint32_t number_of_keys() {
+        return _keys.size();
+    }
+
+    uint32_t number_of_entries() {
+        return _entry_keys.size();
+    }
+
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+        return abstract_restriction::uses_function(_values, ks_name, function_name)
+            || abstract_restriction::uses_function(_keys, ks_name, function_name)
+            || abstract_restriction::uses_function(_entry_keys, ks_name, function_name)
+            || abstract_restriction::uses_function(_entry_values, ks_name, function_name);
+    }
+
+    virtual sstring to_string() override {
+        return sprint("CONTAINS(values=%s, keys=%s, entryKeys=%s, entryValues=%s)",
+            ::to_string(_values), ::to_string(_keys), ::to_string(_entry_keys), ::to_string(_entry_values));
+    }
+
+    virtual bool has_bound(statements::bound b) override {
+        throw exceptions::unsupported_operation_exception();
+    }
+
+    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) override {
+        throw exceptions::unsupported_operation_exception();
+    }
+
+    virtual bool is_inclusive(statements::bound b) override {
+        throw exceptions::unsupported_operation_exception();
+    }
+
+#if 0
+        private List<ByteBuffer> keys(const query_options& options) {
+            return bindAndGet(keys, options);
+        }
+
+        private List<ByteBuffer> entries(QueryOptions options) throws InvalidRequestException
+        {
+            List<ByteBuffer> entryBuffers = new ArrayList<>(_entry_keys.size());
+            List<ByteBuffer> keyBuffers = bindAndGet(_entry_keys, options);
+            List<ByteBuffer> valueBuffers = bindAndGet(_entry_values, options);
+            for (int i = 0; i < _entry_keys.size(); i++)
+            {
+                if (valueBuffers.get(i) == null)
+                    throw new InvalidRequestException("Unsupported null value for map-entry equality");
+                entryBuffers.add(CompositeType.build(keyBuffers.get(i), valueBuffers.get(i)));
+            }
+            return entryBuffers;
+        }
+#endif
+
+private:
+    /**
+     * Binds the query options to the specified terms and returns the resulting values.
+     *
+     * @param terms the terms
+     * @param options the query options
+     * @return the value resulting from binding the query options to the specified terms
+     * @throws invalid_request_exception if a problem occurs while binding the query options
+     */
+    static std::vector<bytes_opt> bind_and_get(std::vector<::shared_ptr<term>> terms, const query_options& options) {
+        std::vector<bytes_opt> values;
+        values.reserve(terms.size());
+        for (auto&& term : terms) {
+            values.emplace_back(term->bind_and_get(options));
+        }
+        return values;
+    }
 };
 
 
