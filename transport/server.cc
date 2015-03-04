@@ -501,6 +501,10 @@ public:
             assert(0);
         }
     }
+
+    virtual void visit(const transport::messages::result_message::rows& m) override {
+        throw std::runtime_error("not implemented");
+    }
 private:
     sstring to_string(const transport::event::schema_change::change_type t) const {
         switch (t) {
