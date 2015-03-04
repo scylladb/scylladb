@@ -111,6 +111,11 @@ public:
     recognition_exception(const std::string& msg) : std::runtime_error(msg) {};
 };
 
+class unsupported_operation_exception : public std::runtime_error {
+public:
+    unsupported_operation_exception() : std::runtime_error("unsupported operation") {}
+};
+
 }
 
 #endif
