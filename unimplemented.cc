@@ -24,6 +24,7 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::METRICS: return out << "METRICS";
         case cause::COMPACT_TABLES: return out << "COMPACT_TABLES";
         case cause::GOSSIP: return out << "GOSSIP";
+        case cause::TOKEN_RESTRICTION: return out << "TOKEN_RESTRICTION";
     }
     assert(0);
 }
