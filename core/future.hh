@@ -555,8 +555,28 @@ public:
         return f;
     }
 
+    /**
+     * Finally continuation for statements that require waiting for the result. I.e. you need to "finally" call
+     * a function that returns a possibly unavailable future.
+     * The returned future will be "waited for", any exception generated will be propagated, but the return value
+     * is ignored. I.e. the original return value (the future upon which you are making this call) will be preserved.
+     */
     template <typename Func>
-    future<T...> finally(Func&& func) noexcept {
+    future<T...> finally(Func&& func, std::enable_if_t<is_future<std::result_of_t<Func()>>::value, void*> = nullptr) noexcept {
+        return std::move(*this).then_wrapped([func = std::forward<Func>(func)](future<T...> result) {
+            return func().then_wrapped([result = std::move(result)](auto f_res) mutable {
+                try {
+                    f_res.get(); // force excepion if one
+                    return std::move(result);
+                } catch (...) {
+                    return make_exception_future<T...>(std::current_exception());
+                }
+            });
+        });
+    }
+
+    template <typename Func>
+    future<T...> finally(Func&& func, std::enable_if_t<!is_future<std::result_of_t<Func()>>::value, void*> = nullptr) noexcept {
         promise<T...> pr;
         auto f = pr.get_future();
         if (state()->available()) {
