@@ -95,26 +95,27 @@ public:
     mutation(const mutation&) = default;
 
     void set_static_cell(const column_definition& def, atomic_cell_or_collection value) {
-        emplace_or_insert(p.static_row(), def.id, std::move(value));
+        update_column(p.static_row(), def, std::move(value));
     }
 
     void set_clustered_cell(const clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value) {
         auto& row = p.clustered_row(serialize_value(*schema->clustering_key_type, prefix));
-        emplace_or_insert(row, def.id, std::move(value));
+        update_column(row, def, std::move(value));
     }
 
     void set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection value) {
         auto& row = p.clustered_row(key);
-        emplace_or_insert(row, def.id, std::move(value));
+        update_column(row, def, std::move(value));
     }
 private:
-    static void emplace_or_insert(row& row, column_id id, atomic_cell_or_collection&& value) {
+    static void update_column(row& row, const column_definition& def, atomic_cell_or_collection&& value) {
         // our mutations are not yet immutable
+        auto id = def.id;
         auto i = row.lower_bound(id);
         if (i == row.end() || i->first != id) {
             row.emplace_hint(i, id, std::move(value));
         } else {
-            i->second = std::move(value);
+            merge_column(def, i->second, value);
         }
     }
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
