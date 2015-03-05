@@ -369,7 +369,7 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
         apply_row_tombstone(schema, entry);
     }
 
-    auto merge_cells = [this, schema] (row& old_row, const row& new_row) {
+    auto merge_cells = [this, schema] (row& old_row, const row& new_row, auto&& find_column_def) {
         for (auto&& new_column : new_row) {
             auto col = new_column.first;
             auto i = old_row.find(col);
@@ -377,13 +377,16 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
                 old_row.emplace_hint(i, new_column);
             } else {
                 auto& old_column = *i;
-                auto& def = schema->regular_column_at(col);
+                auto& def = find_column_def(col);
                 merge_column(def, old_column.second, new_column.second);
             }
         }
     };
 
-    merge_cells(_static_row, p._static_row);
+    auto find_static_column_def = [schema] (auto col) -> column_definition& { return schema->static_column_at(col); };
+    auto find_regular_column_def = [schema] (auto col) -> column_definition& { return schema->regular_column_at(col); };
+
+    merge_cells(_static_row, p._static_row, find_static_column_def);
 
     for (auto&& entry : p._rows) {
         auto& key = entry.first;
@@ -392,7 +395,7 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
             _rows.emplace_hint(i, entry);
         } else {
             i->second.t.apply(entry.second.t);
-            merge_cells(i->second.cells, entry.second.cells);
+            merge_cells(i->second.cells, entry.second.cells, find_regular_column_def);
         }
     }
 }
