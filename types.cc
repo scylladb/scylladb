@@ -871,16 +871,16 @@ thread_local std::unordered_map<std::pair<data_type, data_type>, map_type_impl::
 thread_local std::unordered_map<std::pair<data_type, data_type>, map_type_impl::map_type> map_type_impl::_frozen_instances;
 
 
-thread_local shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
-thread_local shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
-thread_local shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii", cql3::native_cql3_type::ascii));
-thread_local shared_ptr<abstract_type> bytes_type(make_shared<bytes_type_impl>());
-thread_local shared_ptr<abstract_type> utf8_type(make_shared<string_type_impl>("utf8", cql3::native_cql3_type::text));
-thread_local shared_ptr<abstract_type> boolean_type(make_shared<boolean_type_impl>());
-thread_local shared_ptr<abstract_type> date_type(make_shared<date_type_impl>());
-thread_local shared_ptr<abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
-thread_local shared_ptr<abstract_type> timestamp_type(make_shared<timestamp_type_impl>());
-thread_local shared_ptr<abstract_type> uuid_type(make_shared<uuid_type_impl>());
-thread_local shared_ptr<abstract_type> inet_addr_type(make_shared<inet_addr_type_impl>());
-thread_local shared_ptr<abstract_type> float_type(make_shared<double_type_impl>());
-thread_local shared_ptr<abstract_type> double_type(make_shared<double_type_impl>());
+thread_local const shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
+thread_local const shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
+thread_local const shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii", cql3::native_cql3_type::ascii));
+thread_local const shared_ptr<abstract_type> bytes_type(make_shared<bytes_type_impl>());
+thread_local const shared_ptr<abstract_type> utf8_type(make_shared<string_type_impl>("utf8", cql3::native_cql3_type::text));
+thread_local const shared_ptr<abstract_type> boolean_type(make_shared<boolean_type_impl>());
+thread_local const shared_ptr<abstract_type> date_type(make_shared<date_type_impl>());
+thread_local const shared_ptr<abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
+thread_local const shared_ptr<abstract_type> timestamp_type(make_shared<timestamp_type_impl>());
+thread_local const shared_ptr<abstract_type> uuid_type(make_shared<uuid_type_impl>());
+thread_local const shared_ptr<abstract_type> inet_addr_type(make_shared<inet_addr_type_impl>());
+thread_local const shared_ptr<abstract_type> float_type(make_shared<double_type_impl>());
+thread_local const shared_ptr<abstract_type> double_type(make_shared<double_type_impl>());
