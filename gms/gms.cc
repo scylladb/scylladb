@@ -10,3 +10,4 @@
 #include "gms/versioned_value.hh"
 #include "gms/gossip_digest.hh"
 #include "gms/gossip_digest_syn.hh"
+#include "gms/gossip_digest_ack.hh"
