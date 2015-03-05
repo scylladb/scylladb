@@ -182,6 +182,7 @@ class atomic_cell_or_collection final {
 private:
     atomic_cell_or_collection(bytes&& data) : _data(std::move(data)) {}
 public:
+    atomic_cell_or_collection(atomic_cell::one ac) : _data(std::move(ac._data)) {}
     static atomic_cell_or_collection from_atomic_cell(atomic_cell::one data) { return { std::move(data._data) }; }
     atomic_cell::view as_atomic_cell() const { return atomic_cell::view::from_bytes(_data); }
     // FIXME: insert collection variant here
