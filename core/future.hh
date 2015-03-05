@@ -518,7 +518,7 @@ public:
 
     template <typename Func>
     futurize_t<std::result_of_t<Func(future<T...>)>>
-    then_wrapped(Func&& func) && noexcept {
+    then_wrapped(Func&& func) noexcept {
         using futurator = futurize<std::result_of_t<Func(future<T...>)>>;
         using P = typename futurator::promise_type;
         if (state()->available()) {
