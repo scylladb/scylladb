@@ -1158,9 +1158,7 @@ columnOperation[operations_type& operations]
 
 columnOperationDifferentiator[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
     : '=' normalColumnOperation[operations, key]
-#if 0
     | '[' k=term ']' specializedColumnOperation[operations, key, k]
-#endif
     ;
 
 normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
@@ -1196,14 +1194,16 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
 #endif
     ;
 
-#if 0
-specializedColumnOperation[List<Pair<ColumnIdentifier.Raw, Operation.RawUpdate>> operations, ColumnIdentifier.Raw key, Term.Raw k]
+specializedColumnOperation[std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>,
+                                                 shared_ptr<cql3::operation::raw_update>>> operations,
+                           shared_ptr<cql3::column_identifier::raw> key,
+                           shared_ptr<cql3::term::raw> k]
+                           
     : '=' t=term
       {
-          addRawUpdate(operations, key, new Operation.SetElement(k, t));
+          add_raw_update(operations, key, make_shared<cql3::operation::set_element>(k, t));
       }
     ;
-#endif
 
 columnCondition[conditions_type& conditions]
     // Note: we'll reject duplicates later
