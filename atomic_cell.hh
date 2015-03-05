@@ -123,6 +123,9 @@ public:
     ttl_opt ttl() const {
         return atomic_cell::ttl(_data);
     }
+    bytes_view serialize() const {
+        return _data;
+    }
     friend class atomic_cell::one;
 };
 
