@@ -107,7 +107,7 @@ public:
     bool is_live_and_has_ttl() const {
         return atomic_cell::is_live_and_has_ttl(_data);
     }
-    bool is_dead(const bytes_view& cell) const {
+    bool is_dead() const {
         return atomic_cell::is_dead(_data);
     }
     // Can be called on live and dead cells
