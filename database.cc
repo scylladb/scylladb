@@ -348,12 +348,15 @@ compare_atomic_cell_for_merge(atomic_cell::view left, atomic_cell::view right) {
 }
 
 static inline
-int
-compare_for_merge(const column_definition& def,
-                  const std::pair<column_id, atomic_cell_or_collection>& left,
-                  const std::pair<column_id, atomic_cell_or_collection>& right) {
+void
+merge_column(const column_definition& def,
+             atomic_cell_or_collection& old,
+             const atomic_cell_or_collection& neww) {
     if (def.is_atomic()) {
-        return compare_atomic_cell_for_merge(left.second.as_atomic_cell(), right.second.as_atomic_cell());
+        if (compare_atomic_cell_for_merge(old.as_atomic_cell(), neww.as_atomic_cell()) < 0) {
+            // FIXME: move()?
+            old = neww;
+        }
     } else {
         fail(unimplemented::cause::COLLECTIONS);
     }
@@ -376,9 +379,7 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
             } else {
                 auto& old_column = *i;
                 auto& def = schema->regular_column_at(col);
-                if (compare_for_merge(def, old_column, new_column) < 0) {
-                    old_column.second = new_column.second;
-                }
+                merge_column(def, old_column.second, new_column.second);
             }
         }
     };
