@@ -9,6 +9,7 @@
 #include "net/ip.hh"
 #include "database.hh"
 #include "util/serialization.hh"
+#include "combine.hh"
 #include <cmath>
 #include <sstream>
 
@@ -844,7 +845,27 @@ map_type_impl::serialize_mutation_form(mutation mut) {
     return collection_mutation::one{bytes(s.data(), s.size())};
 }
 
-
+collection_mutation::one
+map_type_impl::merge(collection_mutation::view a, collection_mutation::view b) {
+    auto aa = deserialize_mutation_form(a.data);
+    auto bb = deserialize_mutation_form(b.data);
+    mutation merged;
+    merged.reserve(aa.size() + bb.size());
+    using element_type = std::pair<bytes_view, atomic_cell::view>;
+    auto compare = [this] (const element_type& e1, const element_type& e2) {
+        return _keys->less(e1.first, e2.first);
+    };
+    auto merge = [this] (const element_type& e1, const element_type& e2) {
+        // FIXME: use std::max()?
+        return std::make_pair(e1.first, compare_atomic_cell_for_merge(e1.second, e2.second) < 0 ? e1.second : e2.second);
+    };
+    combine(aa.begin(), aa.end(),
+            bb.begin(), bb.end(),
+            std::back_inserter(merged),
+            compare,
+            merge);
+    return serialize_mutation_form(merged);
+}
 
 thread_local std::unordered_map<std::pair<data_type, data_type>, map_type_impl::map_type> map_type_impl::_instances;
 thread_local std::unordered_map<std::pair<data_type, data_type>, map_type_impl::map_type> map_type_impl::_frozen_instances;

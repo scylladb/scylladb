@@ -192,6 +192,7 @@ public:
     virtual bool is_compatible_with_frozen(collection_type_impl& previous) = 0;
     virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) = 0;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() override;
+    virtual collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b) = 0;
 };
 
 using collection_type = shared_ptr<collection_type_impl>;
@@ -235,6 +236,7 @@ public:
     mutation deserialize_mutation_form(bytes_view in);
     // FIXME: use iterators?
     collection_mutation::one serialize_mutation_form(mutation mut);
+    virtual collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b) override;
 };
 
 using map_type = shared_ptr<map_type_impl>;
