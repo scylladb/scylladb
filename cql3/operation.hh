@@ -26,12 +26,15 @@
 #define CQL3_OPERATION_HH
 
 #include "core/shared_ptr.hh"
-
+#include "exceptions/exceptions.hh"
 #include "database.hh"
+#include "term.hh"
 
 #include <experimental/optional>
 
 namespace cql3 {
+
+class update_parameters;
 
 #if 0
 package org.apache.cassandra.cql3;
@@ -174,54 +177,26 @@ public:
 
     class set_value;
 
+    class set_element : public raw_update {
+        const shared_ptr<term::raw> _selector;
+        const shared_ptr<term::raw> _value;
+    public:
+        set_element(shared_ptr<term::raw> selector, shared_ptr<term::raw> value)
+            : _selector(std::move(selector)), _value(std::move(value)) {
+        }
+
+        virtual shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver);
 #if 0
-    public static class SetElement implements RawUpdate
-    {
-        private final Term.Raw selector;
-        private final Term.Raw value;
-
-        public SetElement(Term.Raw selector, Term.Raw value)
-        {
-            this.selector = selector;
-            this.value = value;
-        }
-
-        public Operation prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException
-        {
-            if (!(receiver.type instanceof CollectionType))
-                throw new InvalidRequestException(String.format("Invalid operation (%s) for non collection column %s", toString(receiver), receiver.name));
-            else if (!(receiver.type.isMultiCell()))
-                throw new InvalidRequestException(String.format("Invalid operation (%s) for frozen collection column %s", toString(receiver), receiver.name));
-
-            switch (((CollectionType)receiver.type).kind)
-            {
-                case LIST:
-                    Term idx = selector.prepare(keyspace, Lists.indexSpecOf(receiver));
-                    Term lval = value.prepare(keyspace, Lists.valueSpecOf(receiver));
-                    return new Lists.SetterByIndex(receiver, idx, lval);
-                case SET:
-                    throw new InvalidRequestException(String.format("Invalid operation (%s) for set column %s", toString(receiver), receiver.name));
-                case MAP:
-                    Term key = selector.prepare(keyspace, Maps.keySpecOf(receiver));
-                    Term mval = value.prepare(keyspace, Maps.valueSpecOf(receiver));
-                    return new Maps.SetterByKey(receiver, key, mval);
-            }
-            throw new AssertionError();
-        }
-
         protected String toString(ColumnSpecification column)
         {
             return String.format("%s[%s] = %s", column.name, selector, value);
         }
 
-        public boolean isCompatibleWith(RawUpdate other)
-        {
-            // TODO: we could check that the other operation is not setting the same element
-            // too (but since the index/key set may be a bind variables we can't always do it at this point)
-            return !(other instanceof SetValue);
-        }
-    }
+#endif
+        virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
+    };
 
+#if 0
     public static class Addition implements RawUpdate
     {
         private final Term.Raw value;
