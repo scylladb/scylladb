@@ -335,3 +335,14 @@ object_opt read_simple_opt(bytes_view& v) {
     v.remove_prefix(sizeof(T));
     return boost::any(net::ntoh(*reinterpret_cast<const net::packed<T>*>(p)));
 }
+
+inline sstring read_simple_short_string(bytes_view& v) {
+    uint16_t len = read_simple<uint16_t>(v);
+    if (v.size() < len) {
+        throw marshal_exception();
+    }
+    sstring ret(sstring::initialized_later(), len);
+    std::copy(v.begin(), v.begin() + len, ret.begin());
+    v.remove_prefix(len);
+    return ret;
+}
