@@ -374,7 +374,7 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
             auto col = new_column.first;
             auto i = old_row.find(col);
             if (i == old_row.end()) {
-                _static_row.emplace_hint(i, new_column);
+                old_row.emplace_hint(i, new_column);
             } else {
                 auto& old_column = *i;
                 auto& def = schema->regular_column_at(col);
