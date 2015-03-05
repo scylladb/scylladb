@@ -346,7 +346,6 @@ compare_atomic_cell_for_merge(atomic_cell::view left, atomic_cell::view right) {
     }
 }
 
-static inline
 void
 merge_column(const column_definition& def,
              atomic_cell_or_collection& old,

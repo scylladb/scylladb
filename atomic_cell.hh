@@ -210,4 +210,9 @@ public:
     }
 };
 
+class column_definition;
+
 int compare_atomic_cell_for_merge(atomic_cell::view left, atomic_cell::view right);
+void merge_column(const column_definition& def,
+        atomic_cell_or_collection& old,
+        const atomic_cell_or_collection& neww);
