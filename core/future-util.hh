@@ -58,9 +58,14 @@ void do_until_continued(StopCondition&& stop_cond, AsyncAction&& action, promise
         try {
             auto&& f = action();
             if (!f.available()) {
-                f.then([action = std::forward<AsyncAction>(action),
-                    stop_cond = std::forward<StopCondition>(stop_cond), p = std::move(p)]() mutable {
-                    do_until_continued(stop_cond, std::forward<AsyncAction>(action), std::move(p));
+                std::move(f).then_wrapped([action = std::forward<AsyncAction>(action),
+                    stop_cond = std::forward<StopCondition>(stop_cond), p = std::move(p)](std::result_of_t<AsyncAction()> fut) mutable {
+                    try {
+                        fut.get();
+                        do_until_continued(stop_cond, std::forward<AsyncAction>(action), std::move(p));
+                    } catch(...) {
+                        p.set_exception(std::current_exception());
+                    }
                 });
                 return;
             }
