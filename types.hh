@@ -16,10 +16,13 @@
 #include "net/byteorder.hh"
 #include "db_clock.hh"
 #include "bytes.hh"
+#include "log.hh"
+#include "atomic_cell.hh"
 
 namespace cql3 {
 
 class cql3_type;
+class column_specification;
 
 }
 
@@ -48,7 +51,7 @@ inline int32_t compare_unsigned(bytes_view v1, bytes_view v2) {
     return (int32_t) (v1.size() - v2.size());
 }
 
-class abstract_type {
+class abstract_type : public enable_shared_from_this<abstract_type> {
     sstring _name;
 public:
     abstract_type(sstring name) : _name(name) {}
@@ -150,9 +153,93 @@ public:
     virtual bool is_collection() { return false; }
     virtual bool is_multi_cell() { return false; }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() = 0;
+    virtual shared_ptr<abstract_type> freeze() { return shared_from_this(); }
 };
 
 using data_type = shared_ptr<abstract_type>;
+
+class collection_type_impl : public abstract_type {
+    static thread_local logging::logger _logger;
+public:
+    static constexpr const size_t max_elements = 65535;
+
+    class kind {
+        std::function<shared_ptr<cql3::column_specification> (shared_ptr<cql3::column_specification> collection, bool is_key)> _impl;
+    public:
+        kind(std::function<shared_ptr<cql3::column_specification> (shared_ptr<cql3::column_specification> collection, bool is_key)> impl)
+            : _impl(std::move(impl)) {}
+        shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const;
+        static const kind map;
+        static const kind set;
+        static const kind list;
+    };
+
+    const kind& _kind;
+
+protected:
+    explicit collection_type_impl(sstring name, const kind& k)
+            : abstract_type(std::move(name)), _kind(k) {}
+public:
+    virtual data_type name_comparator() = 0;
+    virtual data_type value_comparator() = 0;
+    shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key);
+    virtual bool is_collection() override { return true; }
+    bool is_map() const { return &_kind == &kind::map; }
+    std::vector<atomic_cell::one> enforce_limit(std::vector<atomic_cell::one>, int version);
+    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) = 0;
+    bytes serialize_for_native_protocol(std::vector<atomic_cell::one> cells, int version);
+    virtual bool is_compatible_with(abstract_type& previous) override;
+    virtual bool is_compatible_with_frozen(collection_type_impl& previous) = 0;
+    virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) = 0;
+    virtual shared_ptr<cql3::cql3_type> as_cql3_type() override;
+    virtual collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b) = 0;
+};
+
+using collection_type = shared_ptr<collection_type_impl>;
+
+class map_type_impl final : public collection_type_impl {
+    using map_type = shared_ptr<map_type_impl>;
+    static thread_local std::unordered_map<std::pair<data_type, data_type>, map_type> _instances;
+    static thread_local std::unordered_map<std::pair<data_type, data_type>, map_type> _frozen_instances;
+    data_type _keys;
+    data_type _values;
+    data_type _key_value_pair_type;
+    bool _is_multi_cell;
+public:
+    // type returned by deserialize() and expected by serialize
+    // does not support mutations/ttl/tombstone - purely for I/O.
+    using native_type = std::vector<std::pair<boost::any, boost::any>>;
+    // representation of a map mutation, key/value pairs, value is a mutation itself
+    using mutation = std::vector<std::pair<bytes_view, atomic_cell::view>>;
+    static shared_ptr<map_type_impl> get_instance(data_type keys, data_type values, bool is_multi_cell);
+    map_type_impl(data_type keys, data_type values, bool is_multi_cell);
+    data_type get_keys_type() const { return _keys; }
+    data_type get_values_type() const { return _values; }
+    virtual data_type name_comparator() override { return _keys; }
+    virtual data_type value_comparator() override { return _values; }
+    virtual bool is_multi_cell() override { return _is_multi_cell; }
+    virtual data_type freeze() override;
+    virtual bool is_compatible_with_frozen(collection_type_impl& previous) override;
+    virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) override;
+    virtual bool less(bytes_view o1, bytes_view o2) override;
+    static int32_t compare_maps(data_type keys_comparator, data_type values_comparator,
+                        bytes_view o1, bytes_view o2);
+    virtual bool is_byte_order_comparable() const override { return false; }
+    virtual void serialize(const boost::any& value, std::ostream& out) override;
+    void serialize(const boost::any& value, std::ostream& out, int protocol_version);
+    virtual object_opt deserialize(bytes_view v) override;
+    object_opt deserialize(bytes_view v, int protocol_version);
+    virtual sstring to_string(const bytes& b) override;
+    virtual size_t hash(bytes_view v) override;
+    virtual bytes from_string(sstring_view text) override;
+    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
+    mutation deserialize_mutation_form(bytes_view in);
+    // FIXME: use iterators?
+    collection_mutation::one serialize_mutation_form(mutation mut);
+    virtual collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b) override;
+};
+
+using map_type = shared_ptr<map_type_impl>;
 
 inline
 size_t hash_value(const shared_ptr<abstract_type>& x) {
@@ -321,6 +408,17 @@ T read_simple_exactly(bytes_view& v) {
     auto p = v.begin();
     v.remove_prefix(sizeof(T));
     return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
+}
+
+inline
+bytes_view
+read_simple_bytes(bytes_view& v, size_t n) {
+    if (v.size() < n) {
+        throw marshal_exception();
+    }
+    bytes_view ret(v.begin(), n);
+    v.remove_prefix(n);
+    return ret;
 }
 
 template<typename T>

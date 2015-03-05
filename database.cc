@@ -326,7 +326,6 @@ column_family::apply(const mutation& m) {
 }
 
 // Based on org.apache.cassandra.db.AbstractCell#reconcile()
-static inline
 int
 compare_atomic_cell_for_merge(atomic_cell::view left, atomic_cell::view right) {
     if (left.timestamp() != right.timestamp()) {
@@ -347,15 +346,18 @@ compare_atomic_cell_for_merge(atomic_cell::view left, atomic_cell::view right) {
     }
 }
 
-static inline
-int
-compare_for_merge(const column_definition& def,
-                  const std::pair<column_id, atomic_cell_or_collection>& left,
-                  const std::pair<column_id, atomic_cell_or_collection>& right) {
+void
+merge_column(const column_definition& def,
+             atomic_cell_or_collection& old,
+             const atomic_cell_or_collection& neww) {
     if (def.is_atomic()) {
-        return compare_atomic_cell_for_merge(left.second.as_atomic_cell(), right.second.as_atomic_cell());
+        if (compare_atomic_cell_for_merge(old.as_atomic_cell(), neww.as_atomic_cell()) < 0) {
+            // FIXME: move()?
+            old = neww;
+        }
     } else {
-        fail(unimplemented::cause::COLLECTIONS);
+        auto ct = static_pointer_cast<collection_type_impl>(def.type);
+        old = ct->merge(old.as_collection_mutation(), neww.as_collection_mutation());
     }
 }
 
@@ -367,23 +369,24 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
         apply_row_tombstone(schema, entry);
     }
 
-    auto merge_cells = [this, schema] (row& old_row, const row& new_row) {
+    auto merge_cells = [this, schema] (row& old_row, const row& new_row, auto&& find_column_def) {
         for (auto&& new_column : new_row) {
             auto col = new_column.first;
             auto i = old_row.find(col);
             if (i == old_row.end()) {
-                _static_row.emplace_hint(i, new_column);
+                old_row.emplace_hint(i, new_column);
             } else {
                 auto& old_column = *i;
-                auto& def = schema->regular_column_at(col);
-                if (compare_for_merge(def, old_column, new_column) < 0) {
-                    old_column.second = new_column.second;
-                }
+                auto& def = find_column_def(col);
+                merge_column(def, old_column.second, new_column.second);
             }
         }
     };
 
-    merge_cells(_static_row, p._static_row);
+    auto find_static_column_def = [schema] (auto col) -> column_definition& { return schema->static_column_at(col); };
+    auto find_regular_column_def = [schema] (auto col) -> column_definition& { return schema->regular_column_at(col); };
+
+    merge_cells(_static_row, p._static_row, find_static_column_def);
 
     for (auto&& entry : p._rows) {
         auto& key = entry.first;
@@ -392,7 +395,7 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
             _rows.emplace_hint(i, entry);
         } else {
             i->second.t.apply(entry.second.t);
-            merge_cells(i->second.cells, entry.second.cells);
+            merge_cells(i->second.cells, entry.second.cells, find_regular_column_def);
         }
     }
 }

@@ -27,6 +27,8 @@
 
 #include "cql3/abstract_marker.hh"
 #include "cql3/term.hh"
+#include "operation.hh"
+#include "update_parameters.hh"
 
 namespace cql3 {
 
@@ -60,20 +62,20 @@ import org.apache.cassandra.utils.Pair;
  * Static helper methods and classes for maps.
  */
 class maps {
+private:
+    maps() = delete;
 public:
-#if 0
-    private Maps() {}
-
-    public static ColumnSpecification keySpecOf(ColumnSpecification column)
-    {
-        return new ColumnSpecification(column.ksName, column.cfName, new ColumnIdentifier("key(" + column.name + ")", true), ((MapType)column.type).getKeysType());
+    static shared_ptr<column_specification> key_spec_of(column_specification& column) {
+        return ::make_shared<column_specification>(column.ks_name, column.cf_name,
+                ::make_shared<column_identifier>(sprint("key(%s)", *column.name), true),
+                dynamic_pointer_cast<map_type_impl>(column.type)->get_keys_type());
     }
 
-    public static ColumnSpecification valueSpecOf(ColumnSpecification column)
-    {
-        return new ColumnSpecification(column.ksName, column.cfName, new ColumnIdentifier("value(" + column.name + ")", true), ((MapType)column.type).getValuesType());
+    static shared_ptr<column_specification> value_spec_of(column_specification& column) {
+        return ::make_shared<column_specification>(column.ks_name, column.cf_name,
+                ::make_shared<column_identifier>(sprint("value(%s)", *column.name), true),
+                dynamic_pointer_cast<map_type_impl>(column.type)->get_values_type());
     }
-#endif
 
     class literal : public term::raw {
     public:
@@ -329,51 +331,47 @@ public:
             Putter.doPut(t, cf, prefix, column, params);
         }
     }
+#endif
 
-    public static class SetterByKey extends Operation
-    {
-        private final Term k;
-
-        public SetterByKey(ColumnDefinition column, Term k, Term t)
-        {
-            super(column, t);
-            this.k = k;
+    class setter_by_key : public operation {
+        const shared_ptr<term> _k;
+    public:
+        setter_by_key(column_definition& column, shared_ptr<term> k, shared_ptr<term> t)
+            : operation(column, std::move(t)), _k(std::move(k)) {
         }
 
-        @Override
-        public void collectMarkerSpecification(VariableSpecifications boundNames)
-        {
-            super.collectMarkerSpecification(boundNames);
-            k.collectMarkerSpecification(boundNames);
+        virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names) override {
+            operation::collect_marker_specification(bound_names);
+            _k->collect_marker_specification(bound_names);
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            assert column.type.isMultiCell() : "Attempted to set a value for a single key on a frozen map";
-            ByteBuffer key = k.bindAndGet(params.options);
-            ByteBuffer value = t.bindAndGet(params.options);
-            if (key == null)
-                throw new InvalidRequestException("Invalid null map key");
-
-            CellName cellName = cf.getComparator().create(prefix, column, key);
-
-            if (value == null)
-            {
-                cf.addColumn(params.makeTombstone(cellName));
+        virtual void execute(mutation& m, const clustering_prefix& prefix, const update_parameters& params) override {
+            using exceptions::invalid_request_exception;
+            assert(column.type->is_multi_cell()); // "Attempted to set a value for a single key on a frozen map"m
+            bytes_opt key = _k->bind_and_get(params._options);
+            bytes_opt value = _t->bind_and_get(params._options);
+            if (!key) {
+                throw invalid_request_exception("Invalid null map key");
             }
-            else
-            {
-                // We don't support value > 64K because the serialization format encode the length as an unsigned short.
-                if (value.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
-                    throw new InvalidRequestException(String.format("Map value is too long. Map values are limited to %d bytes but %d bytes value provided",
-                                                                    FBUtilities.MAX_UNSIGNED_SHORT,
-                                                                    value.remaining()));
-
-                cf.addColumn(params.makeColumn(cellName, value));
+            if (value && value->size() >= std::numeric_limits<uint16_t>::max()) {
+                throw invalid_request_exception(
+                        sprint("Map value is too long. Map values are limited to %d bytes but %d bytes value provided",
+                               std::numeric_limits<uint16_t>::max(),
+                               value->size()));
+            }
+            auto avalue = value ? params.make_cell(*value) : params.make_dead_cell();
+            map_type_impl::mutation update = { { std::move(*key), std::move(avalue) } };
+            // should have been verified as map earlier?
+            auto ctype = static_pointer_cast<map_type_impl>(column.type);
+            auto col_mut = ctype->serialize_mutation_form(std::move(update));
+            if (column.is_static()) {
+                m.set_static_cell(column, std::move(col_mut));
+            } else {
+                m.set_clustered_cell(prefix, column, std::move(col_mut));
             }
         }
-    }
-
+    };
+#if 0
     public static class Putter extends Operation
     {
         public Putter(ColumnDefinition column, Term t)

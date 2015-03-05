@@ -66,3 +66,36 @@ BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
     m.p.apply_row_tombstone(s, c_key2, tombstone(1, ttl));
     BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, c_key2), tombstone(1, ttl));
 }
+
+BOOST_AUTO_TEST_CASE(test_map_mutations) {
+    auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
+    auto s = make_lw_shared(schema(some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_map_type}}, utf8_type));
+    column_family cf(s);
+    partition_key key = to_bytes("key1");
+    auto& column = *s->get_column_definition("s1");
+    map_type_impl::mutation mmut1{{int32_type->decompose(101), make_atomic_cell(utf8_type->decompose(sstring("101")))}};
+    mutation m1(key, s);
+    m1.set_static_cell(column, my_map_type->serialize_mutation_form(mmut1));
+    cf.apply(m1);
+    map_type_impl::mutation mmut2{{int32_type->decompose(102), make_atomic_cell(utf8_type->decompose(sstring("102")))}};
+    mutation m2(key, s);
+    m2.set_static_cell(column, my_map_type->serialize_mutation_form(mmut2));
+    cf.apply(m2);
+    map_type_impl::mutation mmut3{{int32_type->decompose(103), make_atomic_cell(utf8_type->decompose(sstring("103")))}};
+    mutation m3(key, s);
+    m3.set_static_cell(column, my_map_type->serialize_mutation_form(mmut3));
+    cf.apply(m3);
+    map_type_impl::mutation mmut2o{{int32_type->decompose(102), make_atomic_cell(utf8_type->decompose(sstring("102 override")))}};
+    mutation m2o(key, s);
+    m2o.set_static_cell(column, my_map_type->serialize_mutation_form(mmut2o));
+    cf.apply(m2o);
+
+    row& r = cf.find_or_create_partition(key).static_row();
+    auto i = r.find(column.id);
+    BOOST_REQUIRE(i != r.end());
+    auto cell = i->second.as_collection_mutation();
+    auto muts = my_map_type->deserialize_mutation_form(cell.data);
+    BOOST_REQUIRE(muts.size() == 3);
+    // FIXME: more strict tests
+}

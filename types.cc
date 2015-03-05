@@ -7,7 +7,11 @@
 #include "types.hh"
 #include "core/print.hh"
 #include "net/ip.hh"
+#include "database.hh"
+#include "util/serialization.hh"
+#include "combine.hh"
 #include <cmath>
+#include <sstream>
 
 template<typename T>
 struct simple_type_traits {
@@ -539,6 +543,332 @@ struct float_type_impl : floating_type_impl<float> {
         return cql3::native_cql3_type::float_;
     }
 };
+
+
+thread_local logging::logger collection_type_impl::_logger("collection_type_impl");
+const size_t collection_type_impl::max_elements;
+
+const collection_type_impl::kind collection_type_impl::kind::map(
+        [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
+            // FIXME: implement
+            // return isKey ? Maps.keySpecOf(collection) : Maps.valueSpecOf(collection);
+            abort();
+        });
+const collection_type_impl::kind collection_type_impl::kind::set(
+        [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
+            // FIXME: implement
+            // return Sets.valueSpecOf(collection);
+            abort();
+        });
+const collection_type_impl::kind collection_type_impl::kind::list(
+        [] (shared_ptr<cql3::column_specification> collection, bool is_key) -> shared_ptr<cql3::column_specification> {
+            // FIXME: implement
+            // return Lists.valueSpecOf(collection);
+            abort();
+        });
+
+shared_ptr<cql3::column_specification>
+collection_type_impl::kind::make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const {
+    return _impl(std::move(collection), is_key);
+}
+
+shared_ptr<cql3::column_specification>
+collection_type_impl::make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) {
+    return _kind.make_collection_receiver(std::move(collection), is_key);
+}
+
+std::vector<atomic_cell::one>
+collection_type_impl::enforce_limit(std::vector<atomic_cell::one> cells, int version) {
+    assert(is_multi_cell());
+    if (version >= 3 || cells.size() <= max_elements) {
+        return cells;
+    }
+    _logger.error("Detected collection with {} elements, more than the {} limit. Only the first {} elements will be returned to the client. "
+            "Please see http://cassandra.apache.org/doc/cql3/CQL.html#collections for more details.", cells.size(), max_elements, max_elements);
+    cells.erase(cells.begin() + max_elements, cells.end());
+    return cells;
+}
+
+bytes
+collection_type_impl::serialize_for_native_protocol(std::vector<atomic_cell::one> cells, int version) {
+    assert(is_multi_cell());
+    cells = enforce_limit(std::move(cells), version);
+    std::vector<bytes> values = serialized_values(std::move(cells));
+    // FIXME: implement
+    abort();
+    // return CollectionSerializer.pack(values, cells.size(), version);
+}
+
+bool
+collection_type_impl::is_compatible_with(abstract_type& previous) {
+    // FIXME: implement
+    abort();
+}
+
+shared_ptr<cql3::cql3_type>
+collection_type_impl::as_cql3_type() {
+    // FIXME: implement
+    abort();
+}
+
+int read_collection_size(bytes_view& in, int version) {
+    if (version >= 3) {
+        return read_simple<int32_t>(in);
+    } else {
+        return read_simple<uint16_t>(in);
+    }
+}
+
+void write_collection_size(std::ostream& out, int size, int version) {
+    if (version >= 3) {
+        serialize_int32(out, size);
+    } else {
+        serialize_int16(out, uint16_t(size));
+    }
+}
+
+bytes read_collection_value(bytes_view& in, int version) {
+    auto size = version >= 3 ? read_simple<int32_t>(in) : read_simple<uint16_t>(in);
+    auto v = read_simple_bytes(in, size);
+    return bytes(v.begin(), v.end());
+}
+
+void write_collection_value(std::ostream& out, int version, data_type type, const boost::any& value) {
+    // We have to copy here, because we can't guess the size.
+    // FIXME: somehow.
+    std::ostringstream tmp;
+    type->serialize(value, tmp);
+    auto val_bytes = tmp.str();
+    if (version >= 3) {
+        serialize_int32(out, int32_t(val_bytes.size()));
+    } else {
+        serialize_int16(out, uint16_t(val_bytes.size()));
+    }
+    out.rdbuf()->sputn(val_bytes.data(), val_bytes.size());
+}
+
+namespace std {
+
+template <>
+struct hash<pair<data_type, data_type>> : private std::hash<data_type> {
+    size_t operator()(const pair<data_type, data_type>& p) const {
+        // don't simply xor, it will generate the same result for sequential
+        // pointers
+        auto f = hash<data_type>::operator()(p.first);
+        auto s = hash<data_type>::operator()(p.second);
+        return f ^ ((s << 7) | s >> (std::numeric_limits<decltype(s)>::digits - 7));
+    }
+};
+
+}
+
+shared_ptr<map_type_impl>
+map_type_impl::get_instance(data_type keys, data_type values, bool is_multi_cell) {
+    auto& map = is_multi_cell ? _instances : _frozen_instances;
+    auto p = std::make_pair(keys, values);
+    auto i = map.find(p);
+    if (i == map.end()) {
+        auto t = make_shared<map_type_impl>(keys, values, is_multi_cell);
+        i = map.insert(std::make_pair(std::move(p), std::move(t))).first;
+    }
+    return i->second;
+}
+
+map_type_impl::map_type_impl(data_type keys, data_type values, bool is_multi_cell)
+        : collection_type_impl("map<" + keys->name() + ", " + values->name() + ">", kind::map)
+        , _keys(std::move(keys))
+        , _values(std::move(values))
+        , _is_multi_cell(is_multi_cell) {
+}
+
+data_type
+map_type_impl::freeze() {
+    if (_is_multi_cell) {
+        return get_instance(_keys, _values, false);
+    } else {
+        return shared_from_this();
+    }
+}
+
+bool
+map_type_impl::is_compatible_with_frozen(collection_type_impl& previous) {
+    assert(!_is_multi_cell);
+    auto* p = dynamic_cast<map_type_impl*>(&previous);
+    if (!p) {
+        return false;
+    }
+    return _keys->is_compatible_with(*p->_keys)
+            && _values->is_compatible_with(*p->_values);
+}
+
+bool
+map_type_impl::is_value_compatible_with_frozen(collection_type_impl& previous) {
+    assert(!_is_multi_cell);
+    auto* p = dynamic_cast<map_type_impl*>(&previous);
+    if (!p) {
+        return false;
+    }
+    return _keys->is_compatible_with(*p->_keys)
+            && _values->is_value_compatible_with(*p->_values);
+}
+
+bool
+map_type_impl::less(bytes_view o1, bytes_view o2) {
+    return compare_maps(_keys, _values, o1, o2) < 0;
+}
+
+int32_t
+map_type_impl::compare_maps(data_type keys, data_type values, bytes_view o1, bytes_view o2) {
+    if (o1.empty()) {
+        return o2.empty() ? 0 : -1;
+    } else if (o2.empty()) {
+        return 1;
+    }
+    int protocol_version = 3;
+    int size1 = read_collection_size(o1, protocol_version);
+    int size2 = read_collection_size(o2, protocol_version);
+    // FIXME: use std::lexicographical_compare()
+    for (int i = 0; i < std::min(size1, size2); ++i) {
+        auto k1 = read_collection_value(o1, protocol_version);
+        auto k2 = read_collection_value(o2, protocol_version);
+        auto cmp = keys->compare(k1, k2);
+        if (cmp != 0) {
+            return cmp;
+        }
+        auto v1 = read_collection_value(o1, protocol_version);
+        auto v2 = read_collection_value(o2, protocol_version);
+        cmp = values->compare(v1, v2);
+        if (cmp != 0) {
+            return cmp;
+        }
+    }
+    return size1 == size2 ? 0 : (size1 < size2 ? -1 : 1);
+}
+
+void
+map_type_impl::serialize(const boost::any& value, std::ostream& out) {
+    return serialize(value, out, 3);
+}
+
+void
+map_type_impl::serialize(const boost::any& value, std::ostream& out, int protocol_version) {
+    auto& m = boost::any_cast<const native_type&>(value);
+    write_collection_size(out, m.size(), protocol_version);
+    for (auto&& kv : m) {
+        write_collection_value(out, protocol_version, _keys, kv.first);
+        write_collection_value(out, protocol_version, _values, kv.second);
+    }
+}
+
+object_opt
+map_type_impl::deserialize(bytes_view v) {
+    return deserialize(v, 3);
+}
+
+object_opt
+map_type_impl::deserialize(bytes_view in, int protocol_version) {
+    if (in.empty()) {
+        return {};
+    }
+    native_type m;
+    auto size = read_collection_size(in, protocol_version);
+    for (int i = 0; i < size; ++i) {
+        bytes kb = read_collection_value(in, protocol_version);
+        auto k = _keys->deserialize(kb);
+        bytes vb = read_collection_value(in, protocol_version);
+        auto v = _values->deserialize(vb);
+        m.insert(m.end(), std::make_pair(std::move(k), std::move(v)));
+    }
+    return { std::move(m) };
+}
+
+sstring
+map_type_impl::to_string(const bytes& b) {
+    // FIXME:
+    abort();
+}
+
+size_t
+map_type_impl::hash(bytes_view v) {
+    // FIXME:
+    abort();
+}
+
+bytes
+map_type_impl::from_string(sstring_view text) {
+    // FIXME:
+    abort();
+}
+
+std::vector<bytes>
+map_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
+    // FIXME:
+    abort();
+}
+
+auto map_type_impl::deserialize_mutation_form(bytes_view in) -> mutation {
+    auto nr = read_simple<uint32_t>(in);
+    mutation ret;
+    ret.reserve(nr);
+    for (uint32_t i = 0; i != nr; ++i) {
+        // FIXME: we could probably avoid the need for size
+        auto ksize = read_simple<uint32_t>(in);
+        auto key = read_simple_bytes(in, ksize);
+        auto vsize = read_simple<uint32_t>(in);
+        auto value = atomic_cell::view::from_bytes(read_simple_bytes(in, vsize));
+        ret.emplace_back(key, value);
+    }
+    assert(in.empty());
+    return ret;
+}
+
+collection_mutation::one
+map_type_impl::serialize_mutation_form(mutation mut) {
+    std::ostringstream out;
+    auto write32 = [&out] (uint32_t v) {
+        v = net::hton(v);
+        out.write(reinterpret_cast<char*>(&v), sizeof(v));
+    };
+    auto writeb = [&out, write32] (bytes_view v) {
+        write32(v.size());
+        out.write(v.begin(), v.size());
+    };
+    // FIXME: overflow?
+    write32(mut.size());
+    for (auto&& kv : mut) {
+        auto&& k = kv.first;
+        auto&& v = kv.second;
+        writeb(k);
+        writeb(v.serialize());
+    }
+    auto s = out.str();
+    return collection_mutation::one{bytes(s.data(), s.size())};
+}
+
+collection_mutation::one
+map_type_impl::merge(collection_mutation::view a, collection_mutation::view b) {
+    auto aa = deserialize_mutation_form(a.data);
+    auto bb = deserialize_mutation_form(b.data);
+    mutation merged;
+    merged.reserve(aa.size() + bb.size());
+    using element_type = std::pair<bytes_view, atomic_cell::view>;
+    auto compare = [this] (const element_type& e1, const element_type& e2) {
+        return _keys->less(e1.first, e2.first);
+    };
+    auto merge = [this] (const element_type& e1, const element_type& e2) {
+        // FIXME: use std::max()?
+        return std::make_pair(e1.first, compare_atomic_cell_for_merge(e1.second, e2.second) < 0 ? e1.second : e2.second);
+    };
+    combine(aa.begin(), aa.end(),
+            bb.begin(), bb.end(),
+            std::back_inserter(merged),
+            compare,
+            merge);
+    return serialize_mutation_form(merged);
+}
+
+thread_local std::unordered_map<std::pair<data_type, data_type>, map_type_impl::map_type> map_type_impl::_instances;
+thread_local std::unordered_map<std::pair<data_type, data_type>, map_type_impl::map_type> map_type_impl::_frozen_instances;
 
 
 thread_local shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());

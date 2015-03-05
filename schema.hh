@@ -34,6 +34,9 @@ public:
     bool is_compact_value() const;
     const sstring& name_as_text() const;
     const bytes& name() const;
+    friend std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
+        return os << cd.name_as_text();
+    }
 };
 
 struct thrift_schema {
@@ -120,6 +123,9 @@ public:
     }
     column_definition& regular_column_at(column_id id) {
         return _regular_columns[id];
+    }
+    column_definition& static_column_at(column_id id) {
+        return _static_columns[id];
     }
     bool is_last_partition_key(column_definition& def) {
         return &_partition_key[_partition_key.size() - 1] == &def;
