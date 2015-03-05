@@ -60,20 +60,20 @@ import org.apache.cassandra.utils.Pair;
  * Static helper methods and classes for maps.
  */
 class maps {
+private:
+    maps() = delete;
 public:
-#if 0
-    private Maps() {}
-
-    public static ColumnSpecification keySpecOf(ColumnSpecification column)
-    {
-        return new ColumnSpecification(column.ksName, column.cfName, new ColumnIdentifier("key(" + column.name + ")", true), ((MapType)column.type).getKeysType());
+    static shared_ptr<column_specification> key_spec_of(column_specification& column) {
+        return ::make_shared<column_specification>(column.ks_name, column.cf_name,
+                ::make_shared<column_identifier>(sprint("key(%s)", *column.name), true),
+                dynamic_pointer_cast<map_type_impl>(column.type)->get_keys_type());
     }
 
-    public static ColumnSpecification valueSpecOf(ColumnSpecification column)
-    {
-        return new ColumnSpecification(column.ksName, column.cfName, new ColumnIdentifier("value(" + column.name + ")", true), ((MapType)column.type).getValuesType());
+    static shared_ptr<column_specification> value_spec_of(column_specification& column) {
+        return ::make_shared<column_specification>(column.ks_name, column.cf_name,
+                ::make_shared<column_identifier>(sprint("value(%s)", *column.name), true),
+                dynamic_pointer_cast<map_type_impl>(column.type)->get_values_type());
     }
-#endif
 
     class literal : public term::raw {
     public:
