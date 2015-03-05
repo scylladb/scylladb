@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "types.hh"
 #include "core/sstring.hh"
 #include "util/serialization.hh"
 #include "gms/inet_address.hh"
@@ -74,10 +75,10 @@ public:
         serialize_int32(out, _max_version);
     }
 
-    static gossip_digest deserialize(std::istream& in) {
-        auto endpoint = inet_address::deserialize(in);
-        auto generation = deserialize_int32(in);
-        auto max_version = deserialize_int32(in);
+    static gossip_digest deserialize(bytes_view& v) {
+        auto endpoint = inet_address::deserialize(v);
+        auto generation = read_simple<int32_t>(v);
+        auto max_version = read_simple<int32_t>(v);
         return gossip_digest(endpoint, generation, max_version);
     }
 
@@ -96,11 +97,11 @@ public:
         }
     }
 
-    static std::vector<gossip_digest> deserialize(std::istream& in) {
-        int32_t size = deserialize_int32(in);
+    static std::vector<gossip_digest> deserialize(bytes_view& v) {
+        int32_t size = read_simple<int32_t>(v);
         std::vector<gossip_digest> digests;
         for (int32_t i = 0; i < size; ++i)
-            digests.push_back(gossip_digest::deserialize(in));
+            digests.push_back(gossip_digest::deserialize(v));
         return digests;
     }
 

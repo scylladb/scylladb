@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "types.hh"
 #include "net/ip.hh"
 #include "util/serialization.hh"
 #include <sstream>
@@ -24,10 +25,10 @@ public:
         serialize_int8(out, inet_address_size);
         serialize_int32(out, _addr.ip);
     }
-    static inet_address deserialize(std::istream& in) {
-        int8_t inet_address_size = deserialize_int8(in);
+    static inet_address deserialize(bytes_view& v) {
+        int8_t inet_address_size = read_simple<int8_t>(v);
         assert(inet_address_size == sizeof(inet_address));
-        return inet_address(deserialize_int32(in));
+        return inet_address(read_simple<int32_t>(v));
     }
     size_t serialized_size() const {
         return serialize_int8_size + serialize_int32_size;

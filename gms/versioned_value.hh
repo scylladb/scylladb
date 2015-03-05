@@ -22,7 +22,7 @@
 #pragma once
 
 #include <vector>
-
+#include "types.hh"
 #include "core/sstring.hh"
 #include "util/serialization.hh"
 #include "utils/UUID.hh"
@@ -260,9 +260,9 @@ public:
         serialize_int32(out, version);
     }
 
-    static versioned_value deserialize(std::istream& in) {
-        auto value = deserialize_string(in);
-        auto version = deserialize_int32(in);
+    static versioned_value deserialize(bytes_view& v) {
+        auto value = read_simple_short_string(v);
+        auto version = read_simple<int32_t>(v);
         return versioned_value(std::move(value), version);
     }
 

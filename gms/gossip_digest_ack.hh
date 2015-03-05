@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "types.hh"
 #include "util/serialization.hh"
 #include "gms/gossip_digest.hh"
 #include "gms/inet_address.hh"
@@ -33,7 +34,7 @@ public:
     void serialize(std::ostream& out) const {
     }
 
-    static endpoint_state deserialize(std::istream& in) {
+    static endpoint_state deserialize(bytes_view& in) {
         return endpoint_state();
     }
 
@@ -80,16 +81,16 @@ public:
         }
     }
 
-    static gossip_digest_ack deserialize(std::istream& in) {
+    static gossip_digest_ack deserialize(bytes_view& v) {
         // 1) Digest
-        std::vector<gossip_digest> _digests = gossip_digest_serialization_helper::deserialize(in);
+        std::vector<gossip_digest> _digests = gossip_digest_serialization_helper::deserialize(v);
         // 2) Map size
-        int32_t map_size = deserialize_int32(in);
+        int32_t map_size = read_simple<int32_t>(v);
         // 3) Map contents
         std::map<inet_address, endpoint_state> _map;
         for (int32_t i = 0; i < map_size; ++i) {
-            inet_address ep = inet_address::deserialize(in);
-            endpoint_state st = endpoint_state::deserialize(in);
+            inet_address ep = inet_address::deserialize(v);
+            endpoint_state st = endpoint_state::deserialize(v);
             _map.emplace(std::move(ep), std::move(st));
         }
         return gossip_digest_ack(std::move(_digests), std::move(_map));

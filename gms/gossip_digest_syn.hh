@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "types.hh"
 #include "core/sstring.hh"
 #include "util/serialization.hh"
 #include "gms/gossip_digest.hh"
@@ -54,10 +55,10 @@ public:
         gossip_digest_serialization_helper::serialize(out, _digests);
     }
 
-    static gossip_digest_syn deserialize(std::istream& in) {
-        sstring cluster_id = deserialize_string(in);
-        sstring partioner = deserialize_string(in);
-        std::vector<gossip_digest> digests = gossip_digest_serialization_helper::deserialize(in);
+    static gossip_digest_syn deserialize(bytes_view& v) {
+        sstring cluster_id = read_simple_short_string(v);
+        sstring partioner = read_simple_short_string(v);
+        std::vector<gossip_digest> digests = gossip_digest_serialization_helper::deserialize(v);
         return gossip_digest_syn(cluster_id, partioner, std::move(digests));
     }
 
