@@ -210,3 +210,4 @@ public:
     }
 };
 
+int compare_atomic_cell_for_merge(atomic_cell::view left, atomic_cell::view right);

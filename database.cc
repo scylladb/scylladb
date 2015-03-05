@@ -326,7 +326,6 @@ column_family::apply(const mutation& m) {
 }
 
 // Based on org.apache.cassandra.db.AbstractCell#reconcile()
-static inline
 int
 compare_atomic_cell_for_merge(atomic_cell::view left, atomic_cell::view right) {
     if (left.timestamp() != right.timestamp()) {
