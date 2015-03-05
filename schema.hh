@@ -124,6 +124,9 @@ public:
     column_definition& regular_column_at(column_id id) {
         return _regular_columns[id];
     }
+    column_definition& static_column_at(column_id id) {
+        return _static_columns[id];
+    }
     bool is_last_partition_key(column_definition& def) {
         return &_partition_key[_partition_key.size() - 1] == &def;
     }
