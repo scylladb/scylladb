@@ -27,33 +27,6 @@
 
 namespace gms {
 
-// serialization helper for std::vector<gossip_digest>
-class gossip_digest_serialization_helper {
-public:
-    static void serialize(std::ostream& out, const std::vector<gossip_digest>& digests) {
-        serialize_int32(out, int32_t(digests.size()));
-        for (auto& digest : digests) {
-           digest.serialize(out);
-        }
-    }
-
-    static std::vector<gossip_digest> deserialize(std::istream& in) {
-        int32_t size = deserialize_int32(in);
-        std::vector<gossip_digest> digests;
-        for (int32_t i = 0; i < size; ++i)
-            digests.push_back(gossip_digest::deserialize(in));
-        return digests;
-    }
-
-    static size_t serialized_size(const std::vector<gossip_digest>& digests) {
-        size_t size = serialize_int32_size;
-        for (auto& digest : digests)
-            size += digest.serialized_size();
-        return size;
-    }
-};
-
-
 /**
  * This is the first message that gets sent out as a start of the Gossip protocol in a
  * round.
