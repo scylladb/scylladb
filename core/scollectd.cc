@@ -371,9 +371,9 @@ private:
                         _millis += std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
                         _bytes += out.size();
                         _avg = double(_millis) / _num_packets;
-                    }).rescue([] (auto get_ex) {
+                    }).then_wrapped([] (auto&& f) {
                         try {
-                            get_ex();
+                            f.get();
                         } catch (std::exception & ex) {
                             std::cout << "send failed: " << ex.what() << std::endl;
                         } catch (...) {

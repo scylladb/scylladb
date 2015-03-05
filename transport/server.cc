@@ -250,17 +250,17 @@ void
 cql_server::do_accepts(int which) {
     _listeners[which].accept().then([this, which] (connected_socket fd, socket_address addr) mutable {
         auto conn = make_shared<connection>(*this, std::move(fd), addr);
-        conn->process().rescue([this, conn] (auto&& get_ex) {
+        conn->process().then_wrapped([this, conn] (future<> f) {
             try {
-                get_ex();
+                f.get();
             } catch (std::exception& ex) {
                 std::cout << "request error " << ex.what() << "\n";
             }
         });
         do_accepts(which);
-    }).rescue([] (auto get_ex) {
+    }).then_wrapped([] (future<> f) {
         try {
-            get_ex();
+            f.get();
         } catch (std::exception& ex) {
             std::cout << "accept failed: " << ex.what() << "\n";
         }
@@ -362,9 +362,9 @@ future<> cql_server::connection::process_request() {
             default: assert(0);
             };
         });
-    }).rescue([] (auto get_ex) {
+    }).then_wrapped([] (future<> f) {
         try {
-            get_ex();
+            f.get();
         } catch (std::exception& ex) {
             std::cout << "request processing failed: " << ex.what() << "\n";
         }

@@ -265,7 +265,7 @@ Handling exceptions
 
 If a `.then()` clause throws an exception, the scheduler will catch it
 and cancel any dependent `.then()` clauses.  If you want to trap the
-exception, add a `.rescue()` clause at the end:
+exception, add a `.then_wrapped()` clause at the end:
 
 ```C++
 future<buffer> receive();
@@ -280,9 +280,9 @@ void f() {
         return send(std::move(resp));
     }).then([] {
         f();
-    }).rescue([] (auto get_ex) {
+    }).then_wrapped([] (auto&& f) {
         try {
-            get_ex();
+            f.get();
         } catch (std::exception& e) {
             // your handler goes here
         }
@@ -290,9 +290,10 @@ void f() {
 }
 ```
 
-When the `get_ex` variable is called as a function, it will re-throw
-the exception that aborted processing, and you can then apply any
-needed error handling.  It is essentially a transformation of
+The previous future is passed as a parameter to the lambda, and its value can
+be inspected with `f.get()`. When the `get()` variable is called as a
+function, it will re-throw the exception that aborted processing, and you can
+then apply any needed error handling.  It is essentially a transformation of
 
 ```C++
 buffer receive();
@@ -313,15 +314,11 @@ void f() {
 }
 ```
 
-Note, however, that the `.rescue()` clause will be scheduled even if no
-exception occur. Therefore, the mere fact that `.rescue()` is executed does not
-mean that an exception was thrown. Only the execution of the catch block can
-guarantee that.
+Note, however, that the `.then_wrapped()` clause will be scheduled both when
+exception occurs or not. Therefore, the mere fact that `.then_wrapped()` is
+executed does not mean that an exception was thrown. Only the execution of the
+catch block can guarantee that.
 
-Another alternative to the `.rescue()` clause is the use of `.then_wrapped()`.
-With that construct, the previous future is passed as a parameter to the
-lambda, and its value can be inspected with `f.get()`. Using that inside a
-try-catch block, yields similar results than `.rescue()`
 
 This is shown below:
 

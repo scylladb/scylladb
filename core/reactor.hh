@@ -448,9 +448,9 @@ class smp_message_queue {
         async_work_item(Func&& func) : _func(std::move(func)) {}
         virtual future<> process() override {
             try {
-                return this->_func().rescue([this] (auto&& get_result) {
+                return this->_func().then_wrapped([this] (auto&& f) {
                     try {
-                        _result = get_result();
+                        _result = f.get();
                     } catch (...) {
                         _ex = std::current_exception();
                     }

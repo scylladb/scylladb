@@ -30,12 +30,12 @@ static constexpr size_t max_object_size = 1024*1024;
 class item : public slab_item_base {
 public:
     bi::list_member_hook<> _cache_link;
-    uint8_t _slab_class_id;
+    uint32_t _slab_page_index;
 
-    item(uint8_t slab_class_id) : _slab_class_id(slab_class_id) {}
+    item(uint32_t slab_page_index) : _slab_page_index(slab_page_index) {}
 
-    const uint8_t get_slab_class_id() {
-        return _slab_class_id;
+    const uint32_t get_slab_page_index() {
+        return _slab_page_index;
     }
     const bool is_unlocked() {
         return true;

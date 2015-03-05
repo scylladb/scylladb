@@ -206,10 +206,10 @@ public:
         for (unsigned i = 0; i < ncon; i++) {
             engine().net().connect(make_ipv4_address(server_addr)).then([this, server_addr, test] (connected_socket fd) {
                 auto conn = new connection(std::move(fd));
-                (this->*tests.at(test))(conn).rescue([this, conn] (auto get_ex) {
+                (this->*tests.at(test))(conn).then_wrapped([this, conn] (auto&& f) {
                     delete conn;
                     try {
-                        get_ex();
+                        f.get();
                     } catch (std::exception& ex) {
                         fprint(std::cerr, "request error: %s\n", ex.what());
                     }

@@ -63,7 +63,7 @@ class file_input_stream : public input_stream<char> {
     }
 public:
     explicit file_input_stream(file&& f, size_t buffer_size = 8192)
-        : input_stream(file_data_source(std::move(f), buffer_size), buffer_size) {}
+        : input_stream(file_data_source(std::move(f), buffer_size)) {}
     void seek(uint64_t pos) {
         reset();
         fd()->seek(pos);

@@ -56,7 +56,7 @@ namespace memcache {
 
 static constexpr double default_slab_growth_factor = 1.25;
 static constexpr uint64_t default_slab_page_size = 1UL*MB;
-static constexpr uint64_t default_per_cpu_slab_size = 64UL*MB;
+static constexpr uint64_t default_per_cpu_slab_size = 0UL; // zero means reclaimer is enabled.
 static __thread slab_allocator<item>* slab;
 
 template<typename T>
@@ -102,24 +102,23 @@ private:
     size_t _key_hash;
     expiration _expiry;
     uint32_t _value_size;
+    uint32_t _slab_page_index;
     uint16_t _ref_count;
     uint8_t _key_size;
     uint8_t _ascii_prefix_size;
-    uint8_t _slab_class_id;
-    char _unused[3];
     char _data[]; // layout: data=key, (data+key_size)=ascii_prefix, (data+key_size+ascii_prefix_size)=value.
     friend class cache;
 public:
-    item(uint8_t slab_class_id, item_key&& key, sstring&& ascii_prefix,
+    item(uint32_t slab_page_index, item_key&& key, sstring&& ascii_prefix,
          sstring&& value, expiration expiry, version_type version = 1)
         : _version(version)
         , _key_hash(key.hash())
         , _expiry(expiry)
         , _value_size(value.size())
-        , _ref_count(0)
+        , _slab_page_index(slab_page_index)
+        , _ref_count(0U)
         , _key_size(key.key().size())
         , _ascii_prefix_size(ascii_prefix.size())
-        , _slab_class_id(slab_class_id)
     {
         assert(_key_size <= std::numeric_limits<uint8_t>::max());
         assert(_ascii_prefix_size <= std::numeric_limits<uint8_t>::max());
@@ -195,11 +194,11 @@ public:
         return false;
     }
 
-    // get_slab_class_id() and is_unlocked() are methods required by slab class.
-    const uint8_t get_slab_class_id() {
-        return _slab_class_id;
+    // Methods required by slab allocator.
+    uint32_t get_slab_page_index() const {
+        return _slab_page_index;
     }
-    bool is_unlocked() {
+    bool is_unlocked() const {
         return _ref_count == 1;
     }
 
@@ -1143,11 +1142,11 @@ public:
                 }
             };
             std::abort();
-        }).rescue([this, &out] (auto get_ex) -> future<> {
-            // FIXME: rescue being scheduled even though no exception was triggered has a
+        }).then_wrapped([this, &out] (auto&& f) -> future<> {
+            // FIXME: then_wrapped() being scheduled even though no exception was triggered has a
             // performance cost of about 2.6%. Not using it means maintainability penalty.
             try {
-                get_ex();
+                f.get();
             } catch (std::bad_alloc& e) {
                 if (_parser._noreply) {
                     return make_ready_future<>();
@@ -1358,7 +1357,7 @@ int main(int ac, char** av) {
         ("max-datagram-size", bpo::value<int>()->default_value(memcache::udp_server::default_max_datagram_size),
              "Maximum size of UDP datagram")
         ("max-slab-size", bpo::value<uint64_t>()->default_value(memcache::default_per_cpu_slab_size/MB),
-             "Maximum memory to be used for items (value in megabytes)")
+             "Maximum memory to be used for items (value in megabytes) (reclaimer is disabled if set)")
         ("slab-page-size", bpo::value<uint64_t>()->default_value(memcache::default_slab_page_size/MB),
              "Size of slab page (value in megabytes)")
         ("stats",

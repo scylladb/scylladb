@@ -360,9 +360,9 @@ future<> sstable::read_toc() {
             }
             return make_ready_future<>();
         });
-    }).rescue([file_path] (auto get_ex) {
+    }).then_wrapped([file_path] (future<> f) {
         try {
-            get_ex();
+            f.get();
         } catch (std::system_error& e) {
             if (e.code() == std::error_code(ENOENT, std::system_category())) {
                 throw malformed_sstable_exception(file_path + ": file not found");
@@ -382,9 +382,9 @@ future<> sstable::read_simple() {
         auto r = std::make_unique<file_input_stream>(std::move(f), 4096);
         auto fut = parse(*r, *this.*Comptr);
         return fut.then([r = std::move(r)] {});
-    }).rescue([this, file_path] (auto get_ex) {
+    }).then_wrapped([this, file_path] (future<> f) {
         try {
-            get_ex();
+            f.get();
         } catch (std::system_error& e) {
             if (e.code() == std::error_code(ENOENT, std::system_category())) {
                 throw malformed_sstable_exception(file_path + ": file not found");

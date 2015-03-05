@@ -50,9 +50,9 @@ public:
 
         keep_doing([this, server_addr] {
             return _chan.send(server_addr, "hello!\n")
-                .rescue([this] (auto get) {
+                .then_wrapped([this] (auto&& f) {
                     try {
-                        get();
+                        f.get();
                         n_sent++;
                     } catch (...) {
                         n_failed++;

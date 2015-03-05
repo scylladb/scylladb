@@ -41,13 +41,13 @@ SEASTAR_TEST_CASE(test_finally_is_called_on_success_and_failure) {
         throw std::runtime_error("");
     }).finally([=] {
         *finally2 = true;
-    }).rescue([=] (auto get) {
+    }).then_wrapped([=] (auto&& f) {
         BOOST_REQUIRE(*finally1);
         BOOST_REQUIRE(*finally2);
 
         // Should be failed.
         try {
-            get();
+            f.get();
             BOOST_REQUIRE(false);
         } catch (...) {}
     });
@@ -60,7 +60,7 @@ SEASTAR_TEST_CASE(test_exception_from_finally_fails_the_target) {
         throw std::runtime_error("");
     }).then([] {
         BOOST_REQUIRE(false);
-    }).rescue([] (auto get) {});
+    }).then_wrapped([] (auto&& f) {});
 
     pr.set_value();
     return f;
@@ -71,28 +71,28 @@ SEASTAR_TEST_CASE(test_exception_from_finally_fails_the_target_on_already_resolv
         throw std::runtime_error("");
     }).then([] {
         BOOST_REQUIRE(false);
-    }).rescue([] (auto get) {});
+    }).then_wrapped([] (auto&& f) {});
 }
 
-SEASTAR_TEST_CASE(test_exception_thrown_from_rescue_causes_future_to_fail) {
-    return make_ready_future().rescue([] (auto get) {
+SEASTAR_TEST_CASE(test_exception_thrown_from_then_wrapped_causes_future_to_fail) {
+    return make_ready_future().then_wrapped([] (auto&& f) {
         throw std::runtime_error("");
-    }).rescue([] (auto get) {
+    }).then_wrapped([] (auto&& f) {
         try {
-            get();
+            f.get();
             BOOST_REQUIRE(false);
         } catch (...) {}
     });
 }
 
-SEASTAR_TEST_CASE(test_exception_thrown_from_rescue_causes_future_to_fail__async_case) {
+SEASTAR_TEST_CASE(test_exception_thrown_from_then_wrapped_causes_future_to_fail__async_case) {
     promise<> p;
 
-    auto f = p.get_future().rescue([] (auto get) {
+    auto f = p.get_future().then_wrapped([] (auto&& f) {
         throw std::runtime_error("");
-    }).rescue([] (auto get) {
+    }).then_wrapped([] (auto&& f) {
         try {
-            get();
+            f.get();
             BOOST_REQUIRE(false);
         } catch (...) {}
     });
@@ -115,9 +115,9 @@ SEASTAR_TEST_CASE(test_failing_intermediate_promise_should_fail_the_master_futur
     p1.set_value();
     p2.set_exception(std::runtime_error("boom"));
 
-    return std::move(f).rescue([](auto get) {
+    return std::move(f).then_wrapped([](auto&& f) {
         try {
-            get();
+            f.get();
             BOOST_REQUIRE(false);
         } catch (...) {}
     });
@@ -203,9 +203,9 @@ SEASTAR_TEST_CASE(test_exception_can_be_thrown_from_do_until_body) {
     return do_until([] { return false; }, [] {
         throw expected_exception();
         return now();
-    }).rescue([] (auto get) {
+    }).then_wrapped([] (auto&& f) {
        try {
-           get();
+           f.get();
            BOOST_FAIL("should have failed");
        } catch (const expected_exception& e) {
            // expected

@@ -143,13 +143,13 @@ public:
         }
         for (auto&& fd : _sockets) {
             auto conn = new connection(std::move(fd), this);
-            conn->do_req().rescue([this, conn] (auto get_ex) {
+            conn->do_req().then_wrapped([this, conn] (auto&& f) {
                 http_debug("Finished connection %6d on cpu %3d\n", _conn_finished.current(), engine().cpu_id());
                 _total_reqs += conn->nr_done();
                 _conn_finished.signal();
                 delete conn;
                 try {
-                    get_ex();
+                    f.get();
                 } catch (std::exception& ex) {
                     print("http request error: %s\n", ex.what());
                 }

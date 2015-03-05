@@ -504,7 +504,8 @@ public:
 
     template <typename Func>
     std::result_of_t<Func(future<T...>)>
-    then_wrapped(Func&& func) && noexcept {
+    then_wrapped(Func&& func,
+            std::enable_if_t<is_future<std::result_of_t<Func(future<T...>)>>::value, void*> = nullptr) && noexcept {
         using P = typename std::result_of_t<Func(future<T...>)>::promise_type;
         if (state()->available()) {
             try {
@@ -531,20 +532,22 @@ public:
     }
 
     template <typename Func>
-    future<> rescue(Func&& func) && noexcept {
+    future<>
+    then_wrapped(Func&& func,
+            std::enable_if_t<std::is_same<std::result_of_t<Func(future<T...>)>, void>::value, void*> = nullptr) && noexcept {
         if (state()->available()) {
             try {
-                func([&state = *state()] { return state.get(); });
-                return make_ready_future();
+                func(std::move(*this));
+                return make_ready_future<>();
             } catch (...) {
                 return make_exception_future(std::current_exception());
             }
         }
         promise<> pr;
-        auto f = pr.get_future();
-        _promise->schedule([pr = std::move(pr), func = std::forward<Func>(func)] (auto& state) mutable {
+        auto next_fut = pr.get_future();
+        _promise->schedule([func = std::forward<Func>(func), pr = std::move(pr)] (auto& state) mutable {
             try {
-                func([&state]() mutable { return state.get(); });
+                func(future(std::move(state)));
                 pr.set_value();
             } catch (...) {
                 pr.set_exception(std::current_exception());
@@ -552,11 +555,31 @@ public:
         });
         _promise->_future = nullptr;
         _promise = nullptr;
-        return f;
+        return next_fut;
+    }
+
+    /**
+     * Finally continuation for statements that require waiting for the result. I.e. you need to "finally" call
+     * a function that returns a possibly unavailable future.
+     * The returned future will be "waited for", any exception generated will be propagated, but the return value
+     * is ignored. I.e. the original return value (the future upon which you are making this call) will be preserved.
+     */
+    template <typename Func>
+    future<T...> finally(Func&& func, std::enable_if_t<is_future<std::result_of_t<Func()>>::value, void*> = nullptr) noexcept {
+        return std::move(*this).then_wrapped([func = std::forward<Func>(func)](future<T...> result) {
+            return func().then_wrapped([result = std::move(result)](auto f_res) mutable {
+                try {
+                    f_res.get(); // force excepion if one
+                    return std::move(result);
+                } catch (...) {
+                    return make_exception_future<T...>(std::current_exception());
+                }
+            });
+        });
     }
 
     template <typename Func>
-    future<T...> finally(Func&& func) noexcept {
+    future<T...> finally(Func&& func, std::enable_if_t<!is_future<std::result_of_t<Func()>>::value, void*> = nullptr) noexcept {
         promise<T...> pr;
         auto f = pr.get_future();
         if (state()->available()) {
@@ -584,9 +607,9 @@ public:
     }
 
     future<> or_terminate() && noexcept {
-        return std::move(*this).rescue([] (auto get) {
+        return std::move(*this).then_wrapped([] (auto&& f) {
             try {
-                get();
+                f.get();
             } catch (...) {
                 engine_exit(std::current_exception());
             }
