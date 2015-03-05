@@ -175,6 +175,22 @@ public:
     friend class atomic_cell_or_collection;
 };
 
+// Represents a mutation of a collection.  Actual format is determined by collection type,
+// and is:
+//   set:  list of atomic_cell
+//   map:  list of pair<atomic_cell, bytes> (for key/value)
+//   list: tbd, probably ugly
+class collection_mutation {
+public:
+    struct view {
+        bytes_view data;
+    };
+    struct one {
+        bytes data;
+        operator view() const { return { data }; }
+    };
+};
+
 // A variant type that can hold either an atomic_cell, or a serialized collection.
 // Which type is stored is determinied by the schema.
 class atomic_cell_or_collection final {
@@ -185,6 +201,12 @@ public:
     atomic_cell_or_collection(atomic_cell::one ac) : _data(std::move(ac._data)) {}
     static atomic_cell_or_collection from_atomic_cell(atomic_cell::one data) { return { std::move(data._data) }; }
     atomic_cell::view as_atomic_cell() const { return atomic_cell::view::from_bytes(_data); }
-    // FIXME: insert collection variant here
+    atomic_cell_or_collection(collection_mutation::one cm) : _data(std::move(cm.data)) {}
+    static atomic_cell_or_collection from_collection_mutation(collection_mutation::one data) {
+        return std::move(data.data);
+    }
+    collection_mutation::view as_collection_mutation() const {
+        return collection_mutation::view{_data};
+    }
 };
 
