@@ -34,6 +34,9 @@ public:
     bool is_compact_value() const;
     const sstring& name_as_text() const;
     const bytes& name() const;
+    friend std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
+        return os << cd.name_as_text();
+    }
 };
 
 struct thrift_schema {
