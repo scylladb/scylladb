@@ -479,6 +479,42 @@ public:
         _response->write_int(0x0003);
         _response->write_string(m.get_keyspace());
     }
+
+    virtual void visit(const transport::messages::result_message::schema_change& m) override {
+        auto change = m.get_change();
+        switch (change->type) {
+        case transport::event::event_type::SCHEMA_CHANGE: {
+            auto sc = static_pointer_cast<transport::event::schema_change>(change);
+            _response->write_int(0x0005);
+            _response->write_string(to_string(sc->change));
+            _response->write_string(to_string(sc->target));
+            _response->write_string(sc->keyspace);
+            if (sc->target != transport::event::schema_change::target_type::KEYSPACE) {
+                _response->write_string(sc->table_or_type_or_function);
+            }
+            break;
+        }
+        default:
+            assert(0);
+        }
+    }
+private:
+    sstring to_string(const transport::event::schema_change::change_type t) const {
+        switch (t) {
+        case transport::event::schema_change::change_type::CREATED: return "CREATED";
+        case transport::event::schema_change::change_type::UPDATED: return "UPDATED";
+        case transport::event::schema_change::change_type::DROPPED: return "DROPPED";
+        }
+        assert(0);
+    }
+    sstring to_string(const transport::event::schema_change::target_type t) const {
+        switch (t) {
+        case transport::event::schema_change::target_type::KEYSPACE: return "KEYSPACE";
+        case transport::event::schema_change::target_type::TABLE:    return "TABLE";
+        case transport::event::schema_change::target_type::TYPE:     return "TYPE";
+        }
+        assert(0);
+    }
 };
 
 future<> cql_server::connection::write_result(int16_t stream, shared_ptr<transport::messages::result_message> msg)

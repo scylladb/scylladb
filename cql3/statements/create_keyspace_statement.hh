@@ -121,27 +121,26 @@ public:
 #endif
     }
 
+    virtual bool announce_migration(bool is_local_only) override {
+        throw std::runtime_error("not implemented");
 #if 0
-    public boolean announceMigration(boolean isLocalOnly) throws RequestValidationException
-    {
-        try
-        {
+        try {
             MigrationManager.announceNewKeyspace(attrs.asKSMetadata(name), isLocalOnly);
             return true;
-        }
-        catch (AlreadyExistsException e)
-        {
+        } catch (AlreadyExistsException e) {
             if (ifNotExists)
                 return false;
             throw e;
         }
+#endif
     }
 
-    public Event.SchemaChange changeEvent()
-    {
+    virtual shared_ptr<transport::event::schema_change> change_event() override {
+        throw std::runtime_error("not implemented");
+#if 0
         return new Event.SchemaChange(Event.SchemaChange.Change.CREATED, keyspace());
-    }
 #endif
+    }
 };
 
 }

@@ -25,6 +25,9 @@
 #ifndef CQL3_STATEMENTS_SCHEMA_ALTERING_STATEMENT_HH
 #define CQL3_STATEMENTS_SCHEMA_ALTERING_STATEMENT_HH
 
+#include "transport/messages/result_message.hh"
+#include "transport/event.hh"
+
 #include "cql3/statements/cf_statement.hh"
 #include "cql3/cql_statement.hh"
 
@@ -35,6 +38,8 @@
 namespace cql3 {
 
 namespace statements {
+
+namespace messages = transport::messages;
 
 /**
  * Abstract class for statements that alter the schema.
@@ -68,8 +73,7 @@ protected:
         }
     }
 
-#if 0
-    public abstract Event.SchemaChange changeEvent();
+    virtual shared_ptr<transport::event::schema_change> change_event() = 0;
 
     /**
      * Announces the migration to other nodes in the cluster.
@@ -77,25 +81,28 @@ protected:
      * is used, for example)
      * @throws RequestValidationException
      */
-    public abstract boolean announceMigration(boolean isLocalOnly) throws RequestValidationException;
-#endif
+    virtual bool announce_migration(bool is_local_only) = 0;
 
-    virtual future<::shared_ptr<transport::messages::result_message>>
+    virtual future<::shared_ptr<messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override {
-        throw std::runtime_error("not implemented");
-#if 0
         // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
         // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
-        boolean didChangeSchema = announceMigration(false);
-        if (!didChangeSchema)
-            return new ResultMessage.Void();
-
-        Event.SchemaChange ce = changeEvent();
-        return ce == null ? new ResultMessage.Void() : new ResultMessage.SchemaChange(ce);
-#endif
+        bool did_change_schema = announce_migration(false);
+        if (!did_change_schema) {
+            auto result = ::make_shared<messages::result_message::void_message>();
+            return make_ready_future<::shared_ptr<messages::result_message>>(result);
+        }
+        auto ce = change_event();
+        ::shared_ptr<messages::result_message> result;
+        if (!ce) {
+            result = ::make_shared<messages::result_message::void_message>();
+        } else {
+            result = ::make_shared<messages::result_message::schema_change>(ce);
+        }
+        return make_ready_future<::shared_ptr<messages::result_message>>(result);
     }
 
-    virtual future<::shared_ptr<transport::messages::result_message>>
+    virtual future<::shared_ptr<messages::result_message>>
     execute_internal(database& db, service::query_state& state, const query_options& options) override {
         throw std::runtime_error("unsupported operation");
 #if 0
