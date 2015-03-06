@@ -353,6 +353,31 @@ struct exception_future_marker {};
 
 extern __thread size_t future_avail_count;
 
+// Converts a type to a future type, if it isn't already.
+//
+// Result in member type 'type'.
+template <typename T>
+struct futurize;
+
+template <typename T>
+struct futurize {
+    using type = future<T>;
+};
+
+template <>
+struct futurize<void> {
+    using type = future<>;
+};
+
+template <typename... Args>
+struct futurize<future<Args...>> {
+    using type = future<Args...>;
+};
+
+// Converts a type to a future type, if it isn't already.
+template <typename T>
+using futurize_t = typename futurize<T>::type;
+
 template <typename... T>
 class future {
     promise<T...>* _promise;
