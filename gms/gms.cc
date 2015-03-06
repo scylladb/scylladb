@@ -13,3 +13,4 @@
 #include "gms/gossip_digest_ack.hh"
 #include "gms/gossip_digest_ack2.hh"
 #include "gms/heart_beat_state.hh"
+#include "gms/token_serializer.hh"

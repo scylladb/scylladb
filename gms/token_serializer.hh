@@ -14,27 +14,16 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.gms;
+#pragma once
 
-import org.apache.cassandra.dht.IPartitioner;
-import org.apache.cassandra.dht.Token;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.*;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Collection;
-
-
-public class TokenSerializer
-{
-    private static final Logger logger = LoggerFactory.getLogger(TokenSerializer.class);
-
-    public static void serialize(IPartitioner partitioner, Collection<Token> tokens, DataOutput out) throws IOException
-    {
+namespace gms {
+namespace token_serializer {
+#if 0
+    static void serialize(IPartitioner partitioner, Collection<Token> tokens, DataOutput out) {
         for (Token token : tokens)
         {
             byte[] bintoken = partitioner.getTokenFactory().toByteArray(token).array();
@@ -44,8 +33,7 @@ public class TokenSerializer
         out.writeInt(0);
     }
 
-    public static Collection<Token> deserialize(IPartitioner partitioner, DataInput in) throws IOException
-    {
+    static Collection<Token> deserialize(IPartitioner partitioner, DataInput in) {
         Collection<Token> tokens = new ArrayList<Token>();
         while (true)
         {
@@ -59,4 +47,6 @@ public class TokenSerializer
         }
         return tokens;
     }
-}
+#endif
+} // namespace token_serializer
+} // namespace gms
