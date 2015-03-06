@@ -362,16 +362,19 @@ struct futurize;
 template <typename T>
 struct futurize {
     using type = future<T>;
+    using promise_type = promise<T>;
 };
 
 template <>
 struct futurize<void> {
     using type = future<>;
+    using promise_type = promise<>;
 };
 
 template <typename... Args>
 struct futurize<future<Args...>> {
     using type = future<Args...>;
+    using promise_type = promise<Args...>;
 };
 
 // Converts a type to a future type, if it isn't already.
