@@ -25,23 +25,9 @@
 #include "util/serialization.hh"
 #include "gms/gossip_digest.hh"
 #include "gms/inet_address.hh"
+#include "gms/endpoint_state.hh"
 
 namespace gms {
-
-// FIXME: Stub
-class endpoint_state {
-public:
-    void serialize(std::ostream& out) const {
-    }
-
-    static endpoint_state deserialize(bytes_view& in) {
-        return endpoint_state();
-    }
-
-    size_t serialized_size() const {
-        return 0;
-    }
-};
 
 /**
  * This ack gets sent out as a result of the receipt of a GossipDigestSynMessage by an

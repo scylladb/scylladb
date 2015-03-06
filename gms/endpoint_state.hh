@@ -14,7 +14,36 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
+
+#pragma once
+
+#include "types.hh"
+#include "util/serialization.hh"
+
+namespace gms {
+
+// FIXME: Stub
+class endpoint_state {
+public:
+    void serialize(std::ostream& out) const {
+    }
+
+    static endpoint_state deserialize(bytes_view& in) {
+        return endpoint_state();
+    }
+
+    size_t serialized_size() const {
+        return 0;
+    }
+};
+
+}
+
+#if 0
 package org.apache.cassandra.gms;
 
 import java.io.*;
@@ -167,3 +196,4 @@ class EndpointStateSerializer implements IVersionedSerializer<EndpointState>
         return size;
     }
 }
+#endif
