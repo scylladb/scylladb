@@ -23,177 +23,128 @@
 
 #include "types.hh"
 #include "util/serialization.hh"
+#include "gms/heart_beat_state.hh"
+#include "gms/application_state.hh"
+#include "gms/versioned_value.hh"
+#include "db_clock.hh"
 
 namespace gms {
-
-// FIXME: Stub
-class endpoint_state {
-public:
-    void serialize(std::ostream& out) const {
-    }
-
-    static endpoint_state deserialize(bytes_view& in) {
-        return endpoint_state();
-    }
-
-    size_t serialized_size() const {
-        return 0;
-    }
-};
-
-}
-
-#if 0
-package org.apache.cassandra.gms;
-
-import java.io.*;
-import java.util.Map;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import org.apache.cassandra.db.TypeSizes;
-import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.util.DataOutputPlus;
-
-import org.cliffc.high_scale_lib.NonBlockingHashMap;
 
 /**
  * This abstraction represents both the HeartBeatState and the ApplicationState in an EndpointState
  * instance. Any state for a given endpoint can be retrieved from this instance.
  */
-
-
-public class EndpointState
-{
-    protected static final Logger logger = LoggerFactory.getLogger(EndpointState.class);
-
-    public final static IVersionedSerializer<EndpointState> serializer = new EndpointStateSerializer();
-
-    private volatile HeartBeatState hbState;
-    final Map<ApplicationState, VersionedValue> applicationState = new NonBlockingHashMap<ApplicationState, VersionedValue>();
-
+class endpoint_state {
+private:
+    heart_beat_state _heart_beat_state;
+    std::map<application_state, versioned_value> _application_state;
     /* fields below do not get serialized */
-    private volatile long updateTimestamp;
-    private volatile boolean isAlive;
-
-    EndpointState(HeartBeatState initialHbState)
-    {
-        hbState = initialHbState;
-        updateTimestamp = System.nanoTime();
-        isAlive = true;
+    db_clock::time_point _update_timestamp;
+    bool _is_alive;
+public:
+    endpoint_state(heart_beat_state initial_hb_state)
+        : _heart_beat_state(initial_hb_state)
+        , _update_timestamp(db_clock::now())
+        , _is_alive(true) {
     }
 
-    HeartBeatState getHeartBeatState()
-    {
-        return hbState;
+    heart_beat_state get_heart_beat_state() {
+        return _heart_beat_state;
     }
 
-    void setHeartBeatState(HeartBeatState newHbState)
-    {
-        updateTimestamp();
-        hbState = newHbState;
+    void set_heart_beat_state(heart_beat_state hbs) {
+        update_timestamp();
+        _heart_beat_state = hbs;
     }
 
-    public VersionedValue getApplicationState(ApplicationState key)
-    {
-        return applicationState.get(key);
+    versioned_value getapplication_state(application_state key) {
+        return _application_state.at(key);
     }
 
     /**
      * TODO replace this with operations that don't expose private state
      */
-    @Deprecated
-    public Map<ApplicationState, VersionedValue> getApplicationStateMap()
-    {
-        return applicationState;
+    // @Deprecated
+    std::map<application_state, versioned_value> get_application_state_map() {
+        return _application_state;
     }
 
-    void addApplicationState(ApplicationState key, VersionedValue value)
-    {
-        applicationState.put(key, value);
+    void add_application_state(application_state key, versioned_value value) {
+        _application_state.emplace(key, value);
     }
 
     /* getters and setters */
     /**
      * @return System.nanoTime() when state was updated last time.
      */
-    public long getUpdateTimestamp()
-    {
-        return updateTimestamp;
+    db_clock::time_point get_update_timestamp() {
+        return _update_timestamp;
     }
 
-    void updateTimestamp()
-    {
-        updateTimestamp = System.nanoTime();
+    void update_timestamp() {
+        _update_timestamp = db_clock::now();
     }
 
-    public boolean isAlive()
-    {
-        return isAlive;
+    bool is_alive() {
+        return _is_alive;
     }
 
-    void markAlive()
-    {
-        isAlive = true;
+    void mark_alive() {
+        _is_alive = true;
     }
 
-    void markDead()
-    {
-        isAlive = false;
+    void mark_dead() {
+        _is_alive = false;
     }
 
-    public String toString()
-    {
-        return "EndpointState: HeartBeatState = " + hbState + ", AppStateMap = " + applicationState;
+    friend inline std::ostream& operator<<(std::ostream& os, const endpoint_state& x) {
+        os << "EndpointState: HeartBeatState = " << x._heart_beat_state << ", AppStateMap = ";
+        for (auto&entry : x._application_state) {
+            const application_state& state = entry.first;
+            const versioned_value& value = entry.second;
+            os << " { " << int32_t(state) << " : " << value << " } ";
+        }
+        return os;
     }
-}
 
-class EndpointStateSerializer implements IVersionedSerializer<EndpointState>
-{
-    public void serialize(EndpointState epState, DataOutputPlus out, int version) throws IOException
-    {
+    // The following replaces EndpointStateSerializer from the Java code
+    void serialize(std::ostream& out) const {
         /* serialize the HeartBeatState */
-        HeartBeatState hbState = epState.getHeartBeatState();
-        HeartBeatState.serializer.serialize(hbState, out, version);
+        _heart_beat_state.serialize(out);
 
         /* serialize the map of ApplicationState objects */
-        int size = epState.applicationState.size();
-        out.writeInt(size);
-        for (Map.Entry<ApplicationState, VersionedValue> entry : epState.applicationState.entrySet())
-        {
-            VersionedValue value = entry.getValue();
-            out.writeInt(entry.getKey().ordinal());
-            VersionedValue.serializer.serialize(value, out, version);
+        int32_t app_state_size = _application_state.size();
+        serialize_int32(out, app_state_size);
+        for (auto& entry : _application_state) {
+            const application_state& state = entry.first;
+            const versioned_value& value = entry.second;
+            serialize_int32(out, int32_t(state));
+            value.serialize(out);
         }
     }
 
-    public EndpointState deserialize(DataInput in, int version) throws IOException
-    {
-        HeartBeatState hbState = HeartBeatState.serializer.deserialize(in, version);
-        EndpointState epState = new EndpointState(hbState);
-
-        int appStateSize = in.readInt();
-        for (int i = 0; i < appStateSize; ++i)
-        {
-            int key = in.readInt();
-            VersionedValue value = VersionedValue.serializer.deserialize(in, version);
-            epState.addApplicationState(Gossiper.STATES[key], value);
+    static endpoint_state deserialize(bytes_view& v) {
+        heart_beat_state hbs = heart_beat_state::deserialize(v);
+        endpoint_state es = endpoint_state(hbs);
+        int32_t app_state_size = read_simple<int32_t>(v);
+        for (int32_t i = 0; i < app_state_size; ++i) {
+            auto state = static_cast<application_state>(read_simple<int32_t>(v));
+            auto value = versioned_value::deserialize(v);
+            es.add_application_state(state, value);
         }
-        return epState;
+        return es;
     }
 
-    public long serializedSize(EndpointState epState, int version)
-    {
-        long size = HeartBeatState.serializer.serializedSize(epState.getHeartBeatState(), version);
-        size += TypeSizes.NATIVE.sizeof(epState.applicationState.size());
-        for (Map.Entry<ApplicationState, VersionedValue> entry : epState.applicationState.entrySet())
-        {
-            VersionedValue value = entry.getValue();
-            size += TypeSizes.NATIVE.sizeof(entry.getKey().ordinal());
-            size += VersionedValue.serializer.serializedSize(value, version);
+    size_t serialized_size() const {
+        long size = _heart_beat_state.serialized_size();
+        size += serialize_int32_size;
+        for (auto& entry : _application_state) {
+            const versioned_value& value = entry.second;
+            size += serialize_int32_size;
+            size += value.serialized_size();
         }
         return size;
     }
-}
-#endif
+};
+
+} // gms
