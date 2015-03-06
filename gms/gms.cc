@@ -12,3 +12,4 @@
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
 #include "gms/gossip_digest_ack2.hh"
+#include "gms/heart_beat_state.hh"
