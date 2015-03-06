@@ -363,18 +363,36 @@ template <typename T>
 struct futurize {
     using type = future<T>;
     using promise_type = promise<T>;
+
+    template<typename Func, typename... FuncArgs>
+    static inline type apply(Func&& func, std::tuple<FuncArgs...>&& args);
+
+    template<typename Func, typename... FuncArgs>
+    static inline type apply(Func&& func, FuncArgs&&... args);
 };
 
 template <>
 struct futurize<void> {
     using type = future<>;
     using promise_type = promise<>;
+
+    template<typename Func, typename... FuncArgs>
+    static inline type apply(Func&& func, std::tuple<FuncArgs...>&& args);
+
+    template<typename Func, typename... FuncArgs>
+    static inline type apply(Func&& func, FuncArgs&&... args);
 };
 
 template <typename... Args>
 struct futurize<future<Args...>> {
     using type = future<Args...>;
     using promise_type = promise<Args...>;
+
+    template<typename Func, typename... FuncArgs>
+    static inline type apply(Func&& func, std::tuple<FuncArgs...>&& args);
+
+    template<typename Func, typename... FuncArgs>
+    static inline type apply(Func&& func, FuncArgs&&... args);
 };
 
 // Converts a type to a future type, if it isn't already.
@@ -719,6 +737,42 @@ template <typename... T, typename Exception>
 inline
 future<T...> make_exception_future(Exception&& ex) noexcept {
     return make_exception_future<T...>(std::make_exception_ptr(std::forward<Exception>(ex)));
+}
+
+template<typename T>
+template<typename Func, typename... FuncArgs>
+typename futurize<T>::type futurize<T>::apply(Func&& func, std::tuple<FuncArgs...>&& args) {
+    return make_ready_future<T>(::apply(std::forward<Func>(func), std::move(args)));
+}
+
+template<typename T>
+template<typename Func, typename... FuncArgs>
+typename futurize<T>::type futurize<T>::apply(Func&& func, FuncArgs&&... args) {
+    return make_ready_future<T>(func(std::forward<FuncArgs>(args)...));
+}
+
+template<typename Func, typename... FuncArgs>
+typename futurize<void>::type futurize<void>::apply(Func&& func, std::tuple<FuncArgs...>&& args) {
+    ::apply(std::forward<Func>(func), std::move(args));
+    return make_ready_future<>();
+}
+
+template<typename Func, typename... FuncArgs>
+typename futurize<void>::type futurize<void>::apply(Func&& func, FuncArgs&&... args) {
+    func(std::forward<FuncArgs>(args)...);
+    return make_ready_future<>();
+}
+
+template<typename... Args>
+template<typename Func, typename... FuncArgs>
+typename futurize<future<Args...>>::type futurize<future<Args...>>::apply(Func&& func, std::tuple<FuncArgs...>&& args) {
+    return ::apply(std::forward<Func>(func), std::move(args));
+}
+
+template<typename... Args>
+template<typename Func, typename... FuncArgs>
+typename futurize<future<Args...>>::type futurize<future<Args...>>::apply(Func&& func, FuncArgs&&... args) {
+    return func(std::forward<FuncArgs>(args)...);
 }
 
 #endif /* FUTURE_HH_ */
