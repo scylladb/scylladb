@@ -232,3 +232,11 @@ SEASTAR_TEST_CASE(test_broken_semaphore) {
     sem->broken(oops());
     return ret;
 }
+
+SEASTAR_TEST_CASE(test_bare_value_can_be_returned_from_callback) {
+    return now().then([] {
+        return 3;
+    }).then([] (int x) {
+        BOOST_REQUIRE(x == 3);
+    });
+}
