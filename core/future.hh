@@ -482,27 +482,23 @@ public:
         return state()->failed();
     }
 
-    template <typename Func, typename Enable>
-    void then(Func, Enable) noexcept;
-
     template <typename Func>
-    future<> then(Func&& func,
-            std::enable_if_t<std::is_same<std::result_of_t<Func(T&&...)>, void>::value, void*> = nullptr) noexcept {
+    futurize_t<std::result_of_t<Func(T&&...)>> then(Func&& func) noexcept {
+        using futurator = futurize<std::result_of_t<Func(T&&...)>>;
         if (state()->available() && (++future_avail_count % 256)) {
             try {
-                apply(std::move(func), std::move(state()->get()));
-                return make_ready_future<>();
+                return futurator::apply(std::forward<Func>(func), std::move(state()->get()));
             } catch (...) {
-                return make_exception_future(std::current_exception());
+                typename futurator::promise_type p;
+                p.set_exception(std::current_exception());
+                return p.get_future();
             }
         }
-        promise<> pr;
+        typename futurator::promise_type pr;
         auto fut = pr.get_future();
-
         schedule([pr = std::move(pr), func = std::forward<Func>(func)] (auto& state) mutable {
             try {
-                apply(std::move(func), state.get());
-                pr.set_value();
+                futurator::apply(std::forward<Func>(func), state.get()).forward_to(std::move(pr));
             } catch (...) {
                 pr.set_exception(std::current_exception());
             }
@@ -518,34 +514,6 @@ public:
             *_promise = std::move(pr);
             _promise = nullptr;
         }
-    }
-
-    template <typename Func>
-    std::result_of_t<Func(T&&...)>
-    then(Func&& func,
-            std::enable_if_t<is_future<std::result_of_t<Func(T&&...)>>::value, void*> = nullptr) noexcept {
-        using P = typename std::result_of_t<Func(T&&...)>::promise_type;
-        if (state()->available() && (++future_avail_count % 256)) {
-            try {
-                return apply(std::move(func), std::move(state()->get()));
-            } catch (...) {
-                P pr;
-                pr.set_exception(std::current_exception());
-                return pr.get_future();
-            }
-        }
-        P pr;
-        auto next_fut = pr.get_future();
-        schedule([func = std::forward<Func>(func), pr = std::move(pr)] (auto& state) mutable {
-            try {
-                auto result = state.get();
-                auto next_fut = apply(std::move(func), std::move(result));
-                next_fut.forward_to(std::move(pr));
-            } catch (...) {
-                pr.set_exception(std::current_exception());
-            }
-        });
-        return next_fut;
     }
 
     template <typename Func>
