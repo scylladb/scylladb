@@ -250,7 +250,6 @@ private:
             last_nanos = nanos_since;
         else
             nanos_since = ++last_nanos;
-        std::cout << "millis=" << millis << ", nanos_since=" << nanos_since << "\n";
 
         return create_time(nanos_since);
     }
