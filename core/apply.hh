@@ -36,6 +36,7 @@ struct apply_helper<Func, std::tuple<T...>, std::index_sequence<I...>> {
 };
 
 template <typename Func, typename... T>
+inline
 auto apply(Func func, std::tuple<T...>&& args) {
     using helper = apply_helper<Func, std::tuple<T...>, std::index_sequence_for<T...>>;
     return helper::apply(std::move(func), std::move(args));
