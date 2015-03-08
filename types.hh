@@ -283,6 +283,38 @@ public:
 
 using map_type = shared_ptr<map_type_impl>;
 
+class set_type_impl final : public collection_type_impl {
+    using set_type = shared_ptr<set_type_impl>;
+    using intern = type_interning_helper<set_type_impl, data_type, bool>;
+    data_type _elements;
+    bool _is_multi_cell;
+public:
+    // type returned by deserialize() and expected by serialize
+    // does not support mutations/ttl/tombstone - purely for I/O.
+    using native_type = std::vector<boost::any>;
+    static set_type get_instance(data_type elements, bool is_multi_cell);
+    set_type_impl(data_type elements, bool is_multi_cell);
+    data_type get_elements_type() const { return _elements; }
+    virtual data_type name_comparator() override { return _elements; }
+    virtual data_type value_comparator() override;
+    virtual bool is_multi_cell() override { return _is_multi_cell; }
+    virtual data_type freeze() override;
+    virtual bool is_compatible_with_frozen(collection_type_impl& previous) override;
+    virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) override;
+    virtual bool less(bytes_view o1, bytes_view o2) override;
+    virtual bool is_byte_order_comparable() const override { return _elements->is_byte_order_comparable(); }
+    virtual void serialize(const boost::any& value, std::ostream& out) override;
+    void serialize(const boost::any& value, std::ostream& out, int protocol_version);
+    virtual object_opt deserialize(bytes_view v) override;
+    object_opt deserialize(bytes_view v, int protocol_version);
+    virtual sstring to_string(const bytes& b) override;
+    virtual size_t hash(bytes_view v) override;
+    virtual bytes from_string(sstring_view text) override;
+    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
+};
+
+using set_type = shared_ptr<set_type_impl>;
+
 inline
 size_t hash_value(const shared_ptr<abstract_type>& x) {
     return std::hash<abstract_type*>()(x.get());
