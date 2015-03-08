@@ -32,6 +32,7 @@ all_tests = [
     'urchin/mutation_test',
     'urchin/cql_query_test',
     'urchin/sstable_test',
+    'urchin/commitlog_test',
 ]
 
 last_len = 0
