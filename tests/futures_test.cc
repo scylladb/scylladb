@@ -53,9 +53,28 @@ SEASTAR_TEST_CASE(test_finally_is_called_on_success_and_failure) {
     });
 }
 
+SEASTAR_TEST_CASE(test_finally_is_called_on_success_and_failure__not_ready_to_armed) {
+    auto finally1 = make_shared<bool>();
+    auto finally2 = make_shared<bool>();
+
+    promise<> p;
+    p.get_future().finally([=] {
+        *finally1 = true;
+    }).then([] {
+        throw std::runtime_error("");
+    }).finally([=] {
+        *finally2 = true;
+    }).then_wrapped([=] (auto &&f) {
+        BOOST_REQUIRE(*finally1);
+        BOOST_REQUIRE(*finally2);
+    });
+
+    p.set_value();
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_exception_from_finally_fails_the_target) {
     promise<> pr;
-
     auto f = pr.get_future().finally([=] {
         throw std::runtime_error("");
     }).then([] {
