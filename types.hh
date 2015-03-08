@@ -180,6 +180,8 @@ protected:
     explicit collection_type_impl(sstring name, const kind& k)
             : abstract_type(std::move(name)), _kind(k) {}
 public:
+    // representation of a collection mutation, key/value pairs, value is a mutation itself
+    using mutation = std::vector<std::pair<bytes_view, atomic_cell::view>>;
     virtual data_type name_comparator() = 0;
     virtual data_type value_comparator() = 0;
     shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key);
@@ -192,7 +194,10 @@ public:
     virtual bool is_compatible_with_frozen(collection_type_impl& previous) = 0;
     virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) = 0;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() override;
-    virtual collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b) = 0;
+    mutation deserialize_mutation_form(bytes_view in);
+    // FIXME: use iterators?
+    collection_mutation::one serialize_mutation_form(mutation mut);
+    collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b);
 };
 
 using collection_type = shared_ptr<collection_type_impl>;
@@ -252,8 +257,6 @@ public:
     // type returned by deserialize() and expected by serialize
     // does not support mutations/ttl/tombstone - purely for I/O.
     using native_type = std::vector<std::pair<boost::any, boost::any>>;
-    // representation of a map mutation, key/value pairs, value is a mutation itself
-    using mutation = std::vector<std::pair<bytes_view, atomic_cell::view>>;
     static shared_ptr<map_type_impl> get_instance(data_type keys, data_type values, bool is_multi_cell);
     map_type_impl(data_type keys, data_type values, bool is_multi_cell);
     data_type get_keys_type() const { return _keys; }
@@ -276,10 +279,6 @@ public:
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
-    mutation deserialize_mutation_form(bytes_view in);
-    // FIXME: use iterators?
-    collection_mutation::one serialize_mutation_form(mutation mut);
-    virtual collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b) override;
 };
 
 using map_type = shared_ptr<map_type_impl>;

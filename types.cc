@@ -811,7 +811,7 @@ map_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
     abort();
 }
 
-auto map_type_impl::deserialize_mutation_form(bytes_view in) -> mutation {
+auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation {
     auto nr = read_simple<uint32_t>(in);
     mutation ret;
     ret.reserve(nr);
@@ -828,7 +828,7 @@ auto map_type_impl::deserialize_mutation_form(bytes_view in) -> mutation {
 }
 
 collection_mutation::one
-map_type_impl::serialize_mutation_form(mutation mut) {
+collection_type_impl::serialize_mutation_form(mutation mut) {
     std::ostringstream out;
     auto write32 = [&out] (uint32_t v) {
         v = net::hton(v);
@@ -851,14 +851,15 @@ map_type_impl::serialize_mutation_form(mutation mut) {
 }
 
 collection_mutation::one
-map_type_impl::merge(collection_mutation::view a, collection_mutation::view b) {
+collection_type_impl::merge(collection_mutation::view a, collection_mutation::view b) {
     auto aa = deserialize_mutation_form(a.data);
     auto bb = deserialize_mutation_form(b.data);
     mutation merged;
     merged.reserve(aa.size() + bb.size());
     using element_type = std::pair<bytes_view, atomic_cell::view>;
-    auto compare = [this] (const element_type& e1, const element_type& e2) {
-        return _keys->less(e1.first, e2.first);
+    auto key_type = name_comparator();
+    auto compare = [key_type] (const element_type& e1, const element_type& e2) {
+        return key_type->less(e1.first, e2.first);
     };
     auto merge = [this] (const element_type& e1, const element_type& e2) {
         // FIXME: use std::max()?
