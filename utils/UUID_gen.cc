@@ -99,7 +99,7 @@ static int64_t make_clock_seq_and_node()
 }
 
 const int64_t UUID_gen::clock_seq_and_node = make_clock_seq_and_node();
-const std::unique_ptr<UUID_gen> UUID_gen::instance (new UUID_gen());
+thread_local const std::unique_ptr<UUID_gen> UUID_gen::instance (new UUID_gen());
 
 
 } // namespace utils
