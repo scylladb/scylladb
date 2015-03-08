@@ -647,31 +647,9 @@ void write_collection_value(std::ostream& out, int version, data_type type, cons
     out.rdbuf()->sputn(val_bytes.data(), val_bytes.size());
 }
 
-namespace std {
-
-template <>
-struct hash<pair<data_type, data_type>> : private std::hash<data_type> {
-    size_t operator()(const pair<data_type, data_type>& p) const {
-        // don't simply xor, it will generate the same result for sequential
-        // pointers
-        auto f = hash<data_type>::operator()(p.first);
-        auto s = hash<data_type>::operator()(p.second);
-        return f ^ ((s << 7) | s >> (std::numeric_limits<decltype(s)>::digits - 7));
-    }
-};
-
-}
-
 shared_ptr<map_type_impl>
 map_type_impl::get_instance(data_type keys, data_type values, bool is_multi_cell) {
-    auto& map = is_multi_cell ? _instances : _frozen_instances;
-    auto p = std::make_pair(keys, values);
-    auto i = map.find(p);
-    if (i == map.end()) {
-        auto t = make_shared<map_type_impl>(keys, values, is_multi_cell);
-        i = map.insert(std::make_pair(std::move(p), std::move(t))).first;
-    }
-    return i->second;
+    return intern::get_instance(std::move(keys), std::move(values), is_multi_cell);
 }
 
 map_type_impl::map_type_impl(data_type keys, data_type values, bool is_multi_cell)
@@ -866,10 +844,6 @@ map_type_impl::merge(collection_mutation::view a, collection_mutation::view b) {
             merge);
     return serialize_mutation_form(merged);
 }
-
-thread_local std::unordered_map<std::pair<data_type, data_type>, map_type_impl::map_type> map_type_impl::_instances;
-thread_local std::unordered_map<std::pair<data_type, data_type>, map_type_impl::map_type> map_type_impl::_frozen_instances;
-
 
 thread_local const shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local const shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());

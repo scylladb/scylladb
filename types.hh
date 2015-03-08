@@ -197,10 +197,53 @@ public:
 
 using collection_type = shared_ptr<collection_type_impl>;
 
+template <typename... T>
+struct simple_tuple_hash;
+
+template <>
+struct simple_tuple_hash<> {
+    size_t operator()() const { return 0; }
+};
+
+template <typename Arg0, typename... Args>
+struct simple_tuple_hash<Arg0, Args...> {
+    size_t operator()(const Arg0& arg0, const Args&... args) const {
+        size_t h0 = std::hash<Arg0>()(arg0);
+        size_t h1 = simple_tuple_hash<Args...>()(args...);
+        return h0 ^ ((h1 << 7) | (h1 >> (std::numeric_limits<size_t>::digits - 7)));
+    }
+};
+
+template <typename InternedType, typename... BaseTypes>
+class type_interning_helper {
+    using key_type = std::tuple<BaseTypes...>;
+    using value_type = shared_ptr<InternedType>;
+    struct hash_type {
+        size_t operator()(const key_type& k) const {
+            return apply(simple_tuple_hash<BaseTypes...>(), k);
+        }
+    };
+    using map_type = std::unordered_map<key_type, value_type, hash_type>;
+    static thread_local map_type _instances;
+public:
+    static shared_ptr<InternedType> get_instance(BaseTypes... keys) {
+        auto key = std::make_tuple(keys...);
+        auto i = _instances.find(key);
+        if (i == _instances.end()) {
+            auto v = make_shared<InternedType>(keys...);
+            i = _instances.insert(std::make_pair(std::move(key), std::move(v))).first;
+        }
+        return i->second;
+    }
+};
+
+template <typename InternedType, typename... BaseTypes>
+thread_local typename type_interning_helper<InternedType, BaseTypes...>::map_type
+    type_interning_helper<InternedType, BaseTypes...>::_instances;
+
 class map_type_impl final : public collection_type_impl {
     using map_type = shared_ptr<map_type_impl>;
-    static thread_local std::unordered_map<std::pair<data_type, data_type>, map_type> _instances;
-    static thread_local std::unordered_map<std::pair<data_type, data_type>, map_type> _frozen_instances;
+    using intern = type_interning_helper<map_type_impl, data_type, data_type, bool>;
     data_type _keys;
     data_type _values;
     data_type _key_value_pair_type;
