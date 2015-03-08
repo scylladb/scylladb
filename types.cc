@@ -544,6 +544,33 @@ struct float_type_impl : floating_type_impl<float> {
     }
 };
 
+struct empty_type_impl : abstract_type {
+    empty_type_impl() : abstract_type("void") {}
+    virtual void serialize(const boost::any& value, std::ostream& out) override {
+    }
+    virtual bool less(bytes_view v1, bytes_view v2) override {
+        return false;
+    }
+    virtual size_t hash(bytes_view v) override {
+        return 0;
+    }
+    virtual object_opt deserialize(bytes_view v) override {
+        return {};
+    }
+    virtual sstring to_string(const bytes& b) override {
+        // FIXME:
+        abort();
+    }
+    virtual bytes from_string(sstring_view text) override {
+        // FIXME:
+        abort();
+    }
+    virtual shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        // Can't happen
+        abort();
+    }
+};
+
 
 thread_local logging::logger collection_type_impl::_logger("collection_type_impl");
 const size_t collection_type_impl::max_elements;
@@ -858,3 +885,4 @@ thread_local const shared_ptr<abstract_type> uuid_type(make_shared<uuid_type_imp
 thread_local const shared_ptr<abstract_type> inet_addr_type(make_shared<inet_addr_type_impl>());
 thread_local const shared_ptr<abstract_type> float_type(make_shared<double_type_impl>());
 thread_local const shared_ptr<abstract_type> double_type(make_shared<double_type_impl>());
+thread_local const data_type empty_type(make_shared<empty_type_impl>());

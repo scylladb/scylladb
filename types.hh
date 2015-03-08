@@ -317,6 +317,7 @@ extern thread_local const shared_ptr<abstract_type> uuid_type;
 extern thread_local const shared_ptr<abstract_type> inet_addr_type;
 extern thread_local const shared_ptr<abstract_type> float_type;
 extern thread_local const shared_ptr<abstract_type> double_type;
+extern thread_local const data_type empty_type;
 
 template <>
 inline
