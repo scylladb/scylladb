@@ -872,6 +872,57 @@ collection_type_impl::merge(collection_mutation::view a, collection_mutation::vi
     return serialize_mutation_form(merged);
 }
 
+// iterator that takes a set or list in serialized form, and emits
+// each element, still in serialized form
+class listlike_partial_deserializing_iterator
+          : public std::iterator<std::input_iterator_tag, bytes_view> {
+    bytes_view* _in;
+    int _remain;
+    bytes_view _cur;
+    int _protocol_version;
+private:
+    struct end_tag {};
+    listlike_partial_deserializing_iterator(bytes_view in, int protocol_version)
+            : _in(&in), _protocol_version(protocol_version) {
+        _remain = read_collection_size(*_in, _protocol_version);
+        parse();
+    }
+    listlike_partial_deserializing_iterator(end_tag)
+            : _remain(0) {
+    }
+public:
+    bytes_view operator*() const { return _cur; }
+    listlike_partial_deserializing_iterator& operator++() {
+        --_remain;
+        parse();
+        return *this;
+    }
+    void operator++(int) {
+        --_remain;
+        parse();
+    }
+    bool operator==(const listlike_partial_deserializing_iterator& x) const {
+        return _remain == x._remain;
+    }
+    bool operator!=(const listlike_partial_deserializing_iterator& x) const {
+        return _remain != x._remain;
+    }
+    static listlike_partial_deserializing_iterator begin(bytes_view in, int protocol_version) {
+        return { in, protocol_version };
+    }
+    static listlike_partial_deserializing_iterator end(bytes_view in, int protocol_version) {
+        return { end_tag() };
+    }
+private:
+    void parse() {
+        if (_remain) {
+            _cur = read_collection_value(*_in, _protocol_version);
+        } else {
+            _cur = {};
+        }
+    }
+};
+
 thread_local const shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local const shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
 thread_local const shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii", cql3::native_cql3_type::ascii));
