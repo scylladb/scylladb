@@ -145,6 +145,7 @@ class cql_server::connection {
     connected_socket _fd;
     input_stream<char> _read_buf;
     output_stream<char> _write_buf;
+    future<> _ready_to_respond = make_ready_future<>();
     uint8_t _version = 0;
     service::client_state _client_state;
     std::unordered_map<uint16_t, cql_query_state> _query_states;
@@ -254,7 +255,7 @@ cql_server::do_accepts(int which) {
             try {
                 f.get();
             } catch (std::exception& ex) {
-                std::cout << "request error " << ex.what() << "\n";
+                std::cout << "connection error " << ex.what() << "\n";
             }
         });
         do_accepts(which);
@@ -361,13 +362,15 @@ future<> cql_server::connection::process_request() {
             case cql_binary_opcode::REGISTER:      return process_register(f.stream, std::move(buf));
             default: assert(0);
             };
+        }).then_wrapped([stream = f.stream, this] (future<> f) {
+            try {
+                f.get();
+            } catch (std::exception& ex) {
+                write_error(stream, cql_binary_error::SERVER_ERROR, ex.what());
+            } catch (...) {
+                write_error(stream, cql_binary_error::SERVER_ERROR, "unknown error");
+            }
         });
-    }).then_wrapped([] (future<> f) {
-        try {
-            f.get();
-        } catch (std::exception& ex) {
-            std::cout << "request processing failed: " << ex.what() << "\n";
-        }
     });
 }
 
@@ -528,9 +531,12 @@ future<> cql_server::connection::write_result(int16_t stream, shared_ptr<transpo
 future<> cql_server::connection::write_response(shared_ptr<cql_server::response> response)
 {
     auto msg = response->make_message(_version);
-    return _write_buf.write(std::move(msg)).then([this] {
-        return _write_buf.flush();
+    _ready_to_respond = _ready_to_respond.then([this, msg = std::move(msg)] () mutable {
+        return _write_buf.write(std::move(msg)).then([this] {
+            return _write_buf.flush();
+        });
     });
+    return make_ready_future<>();
 }
 
 int8_t cql_server::connection::read_byte(temporary_buffer<char>& buf)
