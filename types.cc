@@ -1044,6 +1044,133 @@ set_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
     abort();
 }
 
+list_type
+list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
+    return intern::get_instance(elements, is_multi_cell);
+}
+
+list_type_impl::list_type_impl(data_type elements, bool is_multi_cell)
+        : collection_type_impl("list<" + elements->name() + ">", kind::list)
+        , _elements(std::move(elements))
+        , _is_multi_cell(is_multi_cell) {
+}
+
+data_type
+list_type_impl::name_comparator() {
+    return timeuuid_type;
+}
+
+data_type
+list_type_impl::value_comparator() {
+    return _elements;
+}
+
+data_type
+list_type_impl::freeze() {
+    if (_is_multi_cell) {
+        return get_instance(_elements, false);
+    } else {
+        return shared_from_this();
+    }
+}
+
+bool
+list_type_impl::is_compatible_with_frozen(collection_type_impl& previous) {
+    assert(!_is_multi_cell);
+    auto* p = dynamic_cast<list_type_impl*>(&previous);
+    if (!p) {
+        return false;
+    }
+    return _elements->is_compatible_with(*p->_elements);
+
+}
+
+bool
+list_type_impl::is_value_compatible_with_frozen(collection_type_impl& previous) {
+    auto& lp = dynamic_cast<list_type_impl&>(previous);
+    return _elements->is_value_compatible_with_internal(*lp._elements);
+}
+
+bool
+list_type_impl::less(bytes_view o1, bytes_view o2) {
+    using llpdi = listlike_partial_deserializing_iterator;
+    return std::lexicographical_compare(
+            llpdi::begin(o1, 3), llpdi::end(o1, 3),
+            llpdi::begin(o2, 3), llpdi::end(o2, 3),
+            [this] (bytes_view o1, bytes_view o2) { return _elements->less(o1, o2); });
+}
+
+void
+list_type_impl::serialize(const boost::any& value, std::ostream& out) {
+    return serialize(value, out, 3);
+}
+
+void
+list_type_impl::serialize(const boost::any& value, std::ostream& out, int protocol_version) {
+    auto s = boost::any_cast<const native_type&>(value);
+    write_collection_size(out, s.size(), protocol_version);
+    for (auto&& e : s) {
+        write_collection_value(out, protocol_version, _elements, e);
+    }
+}
+
+object_opt
+list_type_impl::deserialize(bytes_view in) {
+    return deserialize(in, 3);
+}
+
+object_opt
+list_type_impl::deserialize(bytes_view in, int protocol_version) {
+    if (in.empty()) {
+        return {};
+    }
+    auto nr = read_collection_size(in, protocol_version);
+    native_type s;
+    s.reserve(nr);
+    for (int i = 0; i != nr; ++i) {
+        auto e = _elements->deserialize(read_collection_value(in, protocol_version));
+        if (!e) {
+            throw marshal_exception();
+        }
+        s.push_back(std::move(*e));
+    }
+    return { s };
+}
+
+sstring
+list_type_impl::to_string(const bytes& b) {
+    using llpdi = listlike_partial_deserializing_iterator;
+    std::ostringstream out;
+    bool first = true;
+    std::for_each(llpdi::begin(b, 3), llpdi::end(b, 3), [&first, &out, this] (bytes_view e) {
+        if (first) {
+            first = false;
+        } else {
+            out << ", ";
+        }
+        out << _elements->to_string(bytes(e.begin(), e.end()));
+    });
+    return out.str();
+}
+
+size_t
+list_type_impl::hash(bytes_view v) {
+    // FIXME:
+    abort();
+}
+
+bytes
+list_type_impl::from_string(sstring_view text) {
+    // FIXME:
+    abort();
+}
+
+std::vector<bytes>
+list_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
+    // FIXME:
+    abort();
+}
+
 thread_local const shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local const shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
 thread_local const shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii", cql3::native_cql3_type::ascii));
