@@ -58,9 +58,14 @@ void do_until_continued(StopCondition&& stop_cond, AsyncAction&& action, promise
         try {
             auto&& f = action();
             if (!f.available()) {
-                f.then([action = std::forward<AsyncAction>(action),
-                    stop_cond = std::forward<StopCondition>(stop_cond), p = std::move(p)]() mutable {
-                    do_until_continued(stop_cond, std::forward<AsyncAction>(action), std::move(p));
+                std::move(f).then_wrapped([action = std::forward<AsyncAction>(action),
+                    stop_cond = std::forward<StopCondition>(stop_cond), p = std::move(p)](std::result_of_t<AsyncAction()> fut) mutable {
+                    try {
+                        fut.get();
+                        do_until_continued(stop_cond, std::forward<AsyncAction>(action), std::move(p));
+                    } catch(...) {
+                        p.set_exception(std::current_exception());
+                    }
                 });
                 return;
             }
@@ -242,30 +247,5 @@ static inline
 future<> now() {
     return make_ready_future<>();
 }
-
-// Converts a type to a future type, if it isn't already.
-//
-// Result in member type 'type'.
-template <typename T>
-struct futurize;
-
-template <typename T>
-struct futurize {
-    using type = future<T>;
-};
-
-template <>
-struct futurize<void> {
-    using type = future<>;
-};
-
-template <typename... Args>
-struct futurize<future<Args...>> {
-    using type = future<Args...>;
-};
-
-// Converts a type to a future type, if it isn't already.
-template <typename T>
-using futurize_t = typename futurize<T>::type;
 
 #endif /* CORE_FUTURE_UTIL_HH_ */

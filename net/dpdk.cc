@@ -1287,12 +1287,13 @@ bool dpdk_qp<HugetlbfsMemBackend>::init_rx_mbuf_pool()
         // Don't pass single-producer/single-consumer flags to mbuf create as it
         // seems faster to use a cache instead.
         //
+        uintptr_t roomsz = mbuf_data_size + RTE_PKTMBUF_HEADROOM;
         _pktmbuf_pool_rx =
                 rte_mempool_xmem_create(name.c_str(),
                                    mbufs_per_queue_rx, mbuf_overhead,
                                    mbuf_cache_size,
                                    sizeof(struct rte_pktmbuf_pool_private),
-                                   rte_pktmbuf_pool_init, nullptr,
+                                   rte_pktmbuf_pool_init, (void*)roomsz,
                                    rte_pktmbuf_init, nullptr,
                                    rte_socket_id(), 0,
                                    _rx_xmem.get(), mappings.data(),
@@ -1327,12 +1328,13 @@ bool dpdk_qp<HugetlbfsMemBackend>::init_rx_mbuf_pool()
 
         _rx_free_bufs.clear();
     } else {
+        uintptr_t roomsz = inline_mbuf_data_size + RTE_PKTMBUF_HEADROOM;
         _pktmbuf_pool_rx =
                 rte_mempool_create(name.c_str(),
                                mbufs_per_queue_rx, inline_mbuf_size,
                                mbuf_cache_size,
                                sizeof(struct rte_pktmbuf_pool_private),
-                               rte_pktmbuf_pool_init, nullptr,
+                               rte_pktmbuf_pool_init, (void*)roomsz,
                                rte_pktmbuf_init, nullptr,
                                rte_socket_id(), 0);
     }
