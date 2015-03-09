@@ -26,6 +26,9 @@
 
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "service/migration_manager.hh"
+#include "config/ks_meta_data.hh"
+#include "transport/event.hh"
 
 #include "core/shared_ptr.hh"
 
@@ -104,12 +107,14 @@ public:
             throw new InvalidRequestException(String.format("\"%s\" is not a valid keyspace name", name));
         if (name.length() > Schema.NAME_LENGTH)
             throw new InvalidRequestException(String.format("Keyspace names shouldn't be more than %s characters long (got \"%s\")", Schema.NAME_LENGTH, name));
+#endif
 
-        attrs.validate();
+        _attrs->validate();
 
-        if (attrs.getReplicationStrategyClass() == null)
-            throw new ConfigurationException("Missing mandatory replication strategy class");
-
+        if (!bool(_attrs->get_replication_strategy_class())) {
+            throw exceptions::configuration_exception("Missing mandatory replication strategy class");
+        }
+#if 0
         // The strategy is validated through KSMetaData.validate() in announceNewKeyspace below.
         // However, for backward compatibility with thrift, this doesn't validate unexpected options yet,
         // so doing proper validation here.
@@ -122,24 +127,19 @@ public:
     }
 
     virtual bool announce_migration(bool is_local_only) override {
-        throw std::runtime_error("not implemented");
-#if 0
         try {
-            MigrationManager.announceNewKeyspace(attrs.asKSMetadata(name), isLocalOnly);
+            service::migration_manager::announce_new_keyspace(_attrs->as_ks_metadata(_name), is_local_only);
             return true;
-        } catch (AlreadyExistsException e) {
-            if (ifNotExists)
+        } catch (const exceptions::already_exists_exception& e) {
+            if (_if_not_exists) {
                 return false;
+            }
             throw e;
         }
-#endif
     }
 
     virtual shared_ptr<transport::event::schema_change> change_event() override {
-        throw std::runtime_error("not implemented");
-#if 0
-        return new Event.SchemaChange(Event.SchemaChange.Change.CREATED, keyspace());
-#endif
+        return make_shared<transport::event::schema_change>(transport::event::schema_change::change_type::CREATED, keyspace());
     }
 };
 
