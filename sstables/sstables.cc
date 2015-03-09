@@ -438,6 +438,14 @@ future<> sstable::read_statistics() {
     return read_simple<statistics, component_type::Statistics, &sstable::_statistics>();
 }
 
+future<> sstable::open_data() {
+    return when_all(engine().open_file_dma(filename(component_type::Index), open_flags::ro),
+                    engine().open_file_dma(filename(component_type::Data), open_flags::ro)).then([this] (auto files) {
+        _index_file = make_lw_shared<file>(std::move(std::get<file>(std::get<0>(files).get())));
+        _data_file  = make_lw_shared<file>(std::move(std::get<file>(std::get<1>(files).get())));
+    });
+}
+
 future<> sstable::load() {
     return read_toc().then([this] {
         return read_statistics();
@@ -447,6 +455,8 @@ future<> sstable::load() {
         return read_filter();
     }).then([this] {;
         return read_summary();
+    }).then([this] {
+        return open_data();
     });
 }
 

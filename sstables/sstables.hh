@@ -6,6 +6,7 @@
 #pragma once
 
 #include "core/file.hh"
+#include "core/fstream.hh"
 #include "core/future.hh"
 #include "core/sstring.hh"
 #include "core/enum.hh"
@@ -52,6 +53,8 @@ private:
     filter _filter;
     summary _summary;
     statistics _statistics;
+    lw_shared_ptr<file> _index_file;
+    lw_shared_ptr<file> _data_file;
 
     sstring _dir;
     unsigned long _epoch = 0;
@@ -74,6 +77,7 @@ private:
         return read_simple<summary, component_type::Summary, &sstable::_summary>();
     }
     future<> read_statistics();
+    future<> open_data();
 
 public:
     sstable(sstring dir, unsigned long epoch, version_types v, format_types f) : _dir(dir), _epoch(epoch), _version(v), _format(f) {}
