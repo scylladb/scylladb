@@ -14,10 +14,18 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.gms;
 
-import java.net.InetAddress;
+#pragma once
+
+#include "gms/inet_address.hh"
+#include "gms/i_failure_detection_event_listener.hh"
+#include "core/shared_ptr.hh"
+
+namespace gms {
 
 /**
  * An interface that provides an application with the ability
@@ -26,8 +34,9 @@ import java.net.InetAddress;
  * for notifications of liveness information of nodes.
  */
 
-public interface IFailureDetector
-{
+class i_failure_detector {
+public:
+    virtual ~i_failure_detector() {}
     /**
      * Failure Detector's knowledge of whether a node is up or
      * down.
@@ -35,7 +44,7 @@ public interface IFailureDetector
      * @param ep endpoint in question.
      * @return true if UP and false if DOWN.
      */
-    public boolean isAlive(InetAddress ep);
+    virtual bool is_alive(inet_address ep) = 0;
 
     /**
      * This method is invoked by any entity wanting to interrogate the status of an endpoint.
@@ -44,7 +53,7 @@ public interface IFailureDetector
      * <p/>
      * param ep endpoint for which we interpret the inter arrival times.
      */
-    public void interpret(InetAddress ep);
+    virtual void interpret(inet_address ep) = 0;
 
     /**
      * This method is invoked by the receiver of the heartbeat. In our case it would be
@@ -53,29 +62,31 @@ public interface IFailureDetector
      * <p/>
      * param ep endpoint being reported.
      */
-    public void report(InetAddress ep);
+    virtual void report(inet_address ep) = 0;
 
     /**
      * remove endpoint from failure detector
      */
-    public void remove(InetAddress ep);
+    virtual void remove(inet_address ep) = 0;
 
     /**
      * force conviction of endpoint in the failure detector
      */
-    public void forceConviction(InetAddress ep);
+    virtual void force_conviction(inet_address ep) = 0;
 
     /**
      * Register interest for Failure Detector events.
      *
      * @param listener implementation of an application provided IFailureDetectionEventListener
      */
-    public void registerFailureDetectionEventListener(IFailureDetectionEventListener listener);
+    virtual void register_failure_detection_event_listener(shared_ptr<i_failure_detection_event_listener> listener) = 0;
 
     /**
      * Un-register interest for Failure Detector events.
      *
      * @param listener implementation of an application provided IFailureDetectionEventListener
      */
-    public void unregisterFailureDetectionEventListener(IFailureDetectionEventListener listener);
-}
+    virtual void unregister_failure_detection_event_listener(shared_ptr<i_failure_detection_event_listener> listener) = 0;
+};
+
+} // namespace gms

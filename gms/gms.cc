@@ -16,3 +16,4 @@
 #include "gms/token_serializer.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/i_failure_detection_event_listener.hh"
+#include "gms/i_failure_detector.hh"
