@@ -21,6 +21,7 @@ enum class cause {
     COLLECTIONS,
     COUNTERS,
     METRICS,
+    MIGRATIONS,
     COMPACT_TABLES,
     GOSSIP,
     TOKEN_RESTRICTION,
