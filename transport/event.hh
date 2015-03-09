@@ -26,6 +26,8 @@
 
 #include "core/sstring.hh"
 
+#include <experimental/optional>
+
 namespace transport {
 
 class event {
@@ -221,9 +223,9 @@ public:
         const change_type change;
         const target_type target;
         const sstring keyspace;
-        const sstring table_or_type_or_function;
+        const std::experimental::optional<sstring> table_or_type_or_function;
 
-        schema_change(const change_type change_, const target_type target_, const sstring& keyspace_, const sstring& table_or_type_or_function_)
+        schema_change(const change_type change_, const target_type target_, const sstring& keyspace_, const std::experimental::optional<sstring>& table_or_type_or_function_)
             : event{event_type::SCHEMA_CHANGE}
             , change{change_}
             , target{target_}
@@ -236,12 +238,10 @@ public:
 #endif
         }
 
+        schema_change(const change_type change_, const sstring keyspace_)
+            : schema_change{change_, target_type::KEYSPACE, keyspace_, std::experimental::optional<sstring>{}}
+        { }
 #if 0
-        public SchemaChange(Change change, String keyspace)
-        {
-            this(change, Target.KEYSPACE, keyspace, null);
-        }
-
         // Assumes the type has already been deserialized
         public static SchemaChange deserializeEvent(ByteBuf cb, int version)
         {
