@@ -208,7 +208,7 @@ public:
     future<sseg_ptr> finish_and_get_new() {
         _closed = true;
         return sync().then([](auto seg) {
-            return seg->_segment_manager->new_segment();
+            return seg->_segment_manager->active_segment();
         });
     }
     future<sseg_ptr> sync() {
