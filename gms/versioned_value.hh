@@ -92,13 +92,9 @@ public:
         return version - value.version;
     }
 
-#if 0
-    @Override
-    public String toString()
-    {
-        return "Value(" + value + "," + version + ")";
+    friend inline std::ostream& operator<<(std::ostream& os, const versioned_value& x) {
+        return os << "Value(" << x.value << "," << x.version <<  ")";
     }
-#endif
 
 #if 0
     private static String versionString(String... args)
