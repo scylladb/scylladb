@@ -75,3 +75,39 @@ BOOST_AUTO_TEST_CASE(test_tuple_is_prefix_of) {
     BOOST_REQUIRE(prefix_type.is_prefix_of(prefix_type.serialize_value({{bytes("a")}, {bytes("b")}, {}}), val2));
     BOOST_REQUIRE(!prefix_type.is_prefix_of(prefix_type.serialize_value({{bytes("a")}, {bytes("b")}, {bytes()}}), val2));
 }
+
+BOOST_AUTO_TEST_CASE(test_tuple_type_compare) {
+    tuple_type<> type({utf8_type, utf8_type, utf8_type});
+
+    BOOST_REQUIRE(type.compare(
+        type.serialize_value({{bytes("a")}, {bytes("b")}, {bytes("c")}}),
+        type.serialize_value({{bytes("a")}, {bytes("b")}, {bytes("c")}})) == 0);
+
+    BOOST_REQUIRE(type.compare(
+        type.serialize_value({{bytes("a")}, {bytes("b")}, {bytes("c")}}),
+        type.serialize_value({{bytes("a")}, {bytes("b")}, {bytes("d")}})) < 0);
+
+    BOOST_REQUIRE(type.compare(
+        type.serialize_value({{bytes("a")}, {bytes("b")}, {bytes("d")}}),
+        type.serialize_value({{bytes("a")}, {bytes("b")}, {bytes("c")}})) > 0);
+
+    BOOST_REQUIRE(type.compare(
+        type.serialize_value({{bytes("a")}, {bytes("b")}, {bytes("d")}}),
+        type.serialize_value({{bytes("a")}, {bytes("d")}, {bytes("c")}})) < 0);
+
+    BOOST_REQUIRE(type.compare(
+        type.serialize_value({{bytes("a")}, {bytes("d")}, {bytes("c")}}),
+        type.serialize_value({{bytes("c")}, {bytes("b")}, {bytes("c")}})) < 0);
+
+    BOOST_REQUIRE(type.compare(
+        type.serialize_value({{bytes("a")}, {}, {bytes("c")}}),
+        type.serialize_value({{bytes("a")}, {bytes("b")}, {bytes("c")}})) < 0);
+
+    BOOST_REQUIRE(type.compare(
+        type.serialize_value({{bytes("a")}, {bytes("b")}, {bytes("c")}}),
+        type.serialize_value({{bytes("a")}, {}, {bytes("c")}})) > 0);
+
+    BOOST_REQUIRE(type.compare(
+        type.serialize_value({{}, {}, {}}),
+        type.serialize_value({{}, {}, {}})) == 0);
+}
