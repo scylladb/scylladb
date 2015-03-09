@@ -191,9 +191,11 @@ public:
             if (bool(v1) != bool(v2)) {
                 return v2 ? -1 : 1;
             }
-            auto c = type->compare(*v1, *v2);
-            if (c != 0) {
-                return c;
+            if (v1) {
+                auto c = type->compare(*v1, *v2);
+                if (c != 0) {
+                    return c;
+                }
             }
             ++i1;
             ++i2;
