@@ -14,24 +14,32 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.gms;
 
-import java.net.InetAddress;
+#pragma once
 
+#include "gms/inet_address.hh"
+
+namespace gms {
 /**
  * Implemented by the Gossiper to convict an endpoint
  * based on the PHI calculated by the Failure Detector on the inter-arrival
  * times of the heart beats.
  */
 
-public interface IFailureDetectionEventListener
-{
+class i_failure_detection_event_listener {
+public:
+    virtual ~i_failure_detection_event_listener() {}
     /**
      * Convict the specified endpoint.
      *
      * @param ep  endpoint to be convicted
      * @param phi the value of phi with with ep was convicted
      */
-    public void convict(InetAddress ep, double phi);
-}
+    virtual void convict(inet_address ep, double phi) = 0;
+};
+
+} // namespace gms
