@@ -15,6 +15,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#pragma once
+
+#include "config/ks_meta_data.hh"
+
+#if 0
 package org.apache.cassandra.service;
 
 import java.io.DataInput;
@@ -52,9 +64,12 @@ import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.schema.LegacySchemaTables;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.WrappedRunnable;
+#endif
 
-public class MigrationManager
-{
+namespace service {
+
+class migration_manager {
+#if 0
     private static final Logger logger = LoggerFactory.getLogger(MigrationManager.class);
 
     public static final MigrationManager instance = new MigrationManager();
@@ -152,7 +167,9 @@ public class MigrationManager
                 && MessagingService.instance().getRawVersion(endpoint) == MessagingService.current_version
                 && !Gossiper.instance.isGossipOnlyMember(endpoint);
     }
-
+#endif
+public:
+#if 0
     public static boolean isReadyForBootstrap()
     {
         return ((ThreadPoolExecutor) StageManager.getStage(Stage.MIGRATION)).getActiveCount() == 0;
@@ -252,12 +269,16 @@ public class MigrationManager
     {
         announceNewKeyspace(ksm, false);
     }
+#endif
 
-    public static void announceNewKeyspace(KSMetaData ksm, boolean announceLocally) throws ConfigurationException
-    {
+    static void announce_new_keyspace(lw_shared_ptr<config::ks_meta_data> ksm, bool announce_locally) {
+        warn(unimplemented::cause::MIGRATIONS);
+#if 0
         announceNewKeyspace(ksm, FBUtilities.timestampMicros(), announceLocally);
+#endif
     }
 
+#if 0
     public static void announceNewKeyspace(KSMetaData ksm, long timestamp, boolean announceLocally) throws ConfigurationException
     {
         ksm.validate();
@@ -537,4 +558,7 @@ public class MigrationManager
             return size;
         }
     }
+#endif
+};
+
 }
