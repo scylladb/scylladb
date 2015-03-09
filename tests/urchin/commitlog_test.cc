@@ -144,7 +144,7 @@ return make_commitlog().then([](tmplog_ptr log) {
                     }).then([](db::replay_position rp) {
                         BOOST_CHECK_NE(rp, db::replay_position());
                     }).finally([log]() {
-                        return log->second.clear();
+                        return log->second.clear().then([log] {});
                     });
         });
 }
@@ -163,7 +163,7 @@ return make_commitlog(cfg).then([](tmplog_ptr log) {
                                     BOOST_REQUIRE(n > 0);
                                 });
                     }).finally([log]() {
-                        return log->second.clear();
+                        return log->second.clear().then([log] {});
                     });
         });
 }
@@ -185,7 +185,7 @@ return make_commitlog().then([](tmplog_ptr log) {
                                 });
 
                     }).finally([log]() {
-                        return log->second.clear();
+                        return log->second.clear().then([log] {});
                     });
         });
 }
@@ -211,7 +211,7 @@ return make_commitlog(cfg).then([](tmplog_ptr log) {
                                     BOOST_REQUIRE(n > 1);
                                 });
                     }).finally([log]() {
-                        return log->second.clear();
+                        return log->second.clear().then([log] {});
                     });
         }).then([]{});
 }
@@ -260,7 +260,7 @@ return make_commitlog(cfg).then([](tmplog_ptr log) {
                                             });
                                 });
                     }).finally([log]() {
-                        return log->second.clear();
+                        return log->second.clear().then([log] {});
                     });
         });
 }
@@ -273,7 +273,7 @@ return make_commitlog().then([](tmplog_ptr log) {
                     }).then([](db::replay_position rp) {
                         BOOST_CHECK_NE(rp, db::replay_position());
                     }).finally([log]() {
-                        return log->second.clear();
+                        return log->second.clear().then([log] {});
                     });
         });
 }
@@ -294,7 +294,7 @@ return make_commitlog().then([](tmplog_ptr log) {
                         }
                         throw std::runtime_error("Did not get expected exception from writing too large record");
                     }).finally([log]() {
-                        return log->second.clear();
+                        return log->second.clear().then([log] {});
                     });
         });
 }
