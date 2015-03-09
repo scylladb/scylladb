@@ -5,6 +5,7 @@
 // Used to ensure that all .hh files build, as well as a place to put
 // out-of-line implementations.
 
+#include "gms/gossiper.hh"
 #include "gms/application_state.hh"
 #include "gms/version_generator.hh"
 #include "gms/versioned_value.hh"
@@ -16,4 +17,7 @@
 #include "gms/token_serializer.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "gms/i_failure_detection_event_listener.hh"
-#include "gms/i_failure_detector.hh"
+
+namespace gms {
+    gossiper _the_gossiper;
+}

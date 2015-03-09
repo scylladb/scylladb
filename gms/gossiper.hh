@@ -14,43 +14,34 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.gms;
 
-import java.lang.management.ManagementFactory;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.util.*;
-import java.util.Map.Entry;
-import java.util.concurrent.*;
-import java.util.concurrent.locks.ReentrantLock;
+#pragma once
 
-import javax.management.MBeanServer;
-import javax.management.ObjectName;
+#include "gms/inet_address.hh"
+#include "gms/endpoint_state.hh"
 
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.util.concurrent.Uninterruptibles;
+namespace gms {
 
-import org.apache.cassandra.utils.Pair;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import org.apache.cassandra.concurrent.DebuggableScheduledThreadPoolExecutor;
-import org.apache.cassandra.concurrent.JMXEnabledThreadPoolExecutor;
-import org.apache.cassandra.concurrent.Stage;
-import org.apache.cassandra.concurrent.StageManager;
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.dht.Token;
-import org.apache.cassandra.net.IAsyncCallback;
-import org.apache.cassandra.net.MessageIn;
-import org.apache.cassandra.net.MessageOut;
-import org.apache.cassandra.net.MessagingService;
-import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.JVMStabilityInspector;
+class gossiper {
+public:
+    std::map<inet_address, endpoint_state> endpoint_state_map;
+    endpoint_state get_endpoint_state_for_endpoint(inet_address ep) {
+        return endpoint_state_map.at(ep);
+    }
+};
 
-import com.google.common.collect.ImmutableList;
+extern gossiper _the_gossiper;
 
+inline gossiper& the_gossiper() {
+    return _the_gossiper;
+}
+
+#if 0
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
  * maintains the list of live and dead endpoints. Periodically i.e. every 1 second this module
@@ -1415,3 +1406,6 @@ public class Gossiper implements IFailureDetectionEventListener, GossiperMBean
     }
 
 }
+#endif
+
+} // namespace gms
