@@ -19,18 +19,16 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
+#pragma once
+
 #include "core/ragel.hh"
 #include <memory>
 #include <unordered_map>
+#include "http/request.hh"
 
-struct http_request {
-    sstring _method;
-    sstring _url;
-    sstring _version;
-    std::unordered_map<sstring, sstring> _headers;
-};
+using namespace httpd;
 
-%% machine http_request;
+%% machine request;
 
 %%{
 
@@ -106,14 +104,14 @@ public:
         eof,
         done,
     };
-    std::unique_ptr<http_request> _req;
+    std::unique_ptr<httpd::request> _req;
     sstring _field_name;
     sstring _value;
     state _state;
 public:
     void init() {
         init_base();
-        _req.reset(new http_request());
+        _req.reset(new httpd::request());
         _state = state::eof;
         %% write init;
     }

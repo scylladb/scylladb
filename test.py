@@ -28,6 +28,7 @@ all_tests = [
     'memcached/test_ascii_parser',
     'sstring_test',
     'output_stream_test',
+    'httpd',
 ]
 
 last_len = 0
