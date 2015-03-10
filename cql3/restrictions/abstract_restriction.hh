@@ -29,6 +29,7 @@
 #include "core/shared_ptr.hh"
 #include "core/sstring.hh"
 #include "cql3/restrictions/restriction.hh"
+#include "cql3/term.hh"
 #include "types.hh"
 
 namespace cql3 {
