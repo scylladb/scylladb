@@ -94,6 +94,10 @@ public:
         return _text;
     }
 
+    const bytes& name() const {
+        return bytes_;
+    }
+
     sstring to_string() const {
         return _text;
     }
