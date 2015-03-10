@@ -24,6 +24,7 @@
 
 #include "deleter.hh"
 #include "util/eclipse.hh"
+#include <malloc.h>
 
 // A temporary_buffer either points inside a larger buffer, or, if the requested size
 // is too large, or if the larger buffer is scattered, contains its own storage.
@@ -96,6 +97,13 @@ public:
     }
     deleter release() {
         return std::move(_deleter);
+    }
+    static temporary_buffer aligned(size_t alignment, size_t size) {
+        auto buf = static_cast<CharType*>(::memalign(alignment, size * sizeof(CharType)));
+        if (size && !buf) {
+            throw std::bad_alloc();
+        }
+        return temporary_buffer(buf, size, make_free_deleter(buf));
     }
 };
 
