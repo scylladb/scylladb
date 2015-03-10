@@ -83,7 +83,7 @@ public:
 
     column_identifier(bytes bytes_, sstring text)
         : bytes_(std::move(bytes_))
-        , _text(text)
+        , _text(std::move(text))
     { }
 
     bool operator==(const column_identifier& other) const {
