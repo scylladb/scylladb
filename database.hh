@@ -136,7 +136,7 @@ struct column_family {
 class keyspace {
 public:
     std::unordered_map<sstring, column_family> column_families;
-    static future<keyspace> populate(sstring datadir);
+    future<> populate(sstring datadir);
     schema_ptr find_schema(const sstring& cf_name);
     column_family* find_column_family(const sstring& cf_name);
 };
@@ -150,7 +150,7 @@ class database {
 public:
     std::unordered_map<sstring, keyspace> keyspaces;
     future<> init_from_data_directory(sstring datadir);
-    static future<database> populate(sstring datadir);
+    future<> populate(sstring datadir);
     keyspace* find_keyspace(const sstring& name);
     future<> stop() { return make_ready_future<>(); }
     void assign(database&& db) {

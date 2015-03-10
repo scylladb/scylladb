@@ -6,6 +6,7 @@
 #include "database.hh"
 #include "unimplemented.hh"
 #include "core/future-util.hh"
+#include "db/system_keyspace.hh"
 
 #include "cql3/column_identifier.hh"
 #include <boost/algorithm/string/classification.hpp>
@@ -220,10 +221,8 @@ static std::vector<sstring> parse_fname(sstring filename) {
     return comps;
 }
 
-future<keyspace> keyspace::populate(sstring ksdir) {
-
-    auto ks = make_lw_shared<keyspace>();
-    return lister::scan_dir(ksdir, directory_entry_type::directory, [ks, ksdir] (directory_entry de) {
+future<> keyspace::populate(sstring ksdir) {
+    return lister::scan_dir(ksdir, directory_entry_type::directory, [this, ksdir] (directory_entry de) {
         auto comps = parse_fname(de.name);
         if (comps.size() != 2) {
             dblog.error("Keyspace {}: Skipping malformed CF {} ", ksdir, de.name);
@@ -234,30 +233,29 @@ future<keyspace> keyspace::populate(sstring ksdir) {
         auto sstdir = ksdir + "/" + de.name;
         dblog.warn("Keyspace {}: Reading CF {} ", ksdir, comps[0]);
         return make_ready_future<>();
-    }).then([ks] {
-        return make_ready_future<keyspace>(std::move(*ks));
     });
 }
 
-future<database> database::populate(sstring datadir) {
-
-    auto db = make_lw_shared<database>();
-    return lister::scan_dir(datadir, directory_entry_type::directory, [db, datadir] (directory_entry de) {
-        dblog.warn("Populating Keyspace {}", de.name);
+future<> database::populate(sstring datadir) {
+    return lister::scan_dir(datadir, directory_entry_type::directory, [this, datadir] (directory_entry de) {
+        auto& ks_name = de.name;
         auto ksdir = datadir + "/" + de.name;
-        return keyspace::populate(ksdir).then([db, de] (keyspace ks){
-            db->keyspaces.emplace(de.name, std::move(ks));
-        });
-    }).then([db] {
-        return make_ready_future<database>(std::move(*db));
+
+        auto i = keyspaces.find(ks_name);
+        if (i == keyspaces.end()) {
+            dblog.warn("Skipping undefined keyspace: {}", ks_name);
+        } else {
+            dblog.warn("Populating Keyspace {}", ks_name);
+            return i->second.populate(ksdir);
+        }
+        return make_ready_future<>();
     });
 }
 
 future<>
 database::init_from_data_directory(sstring datadir) {
-    return populate(datadir).then([this] (database&& db) {
-        *this = db;
-    });
+    keyspaces.emplace("system", db::system_keyspace::make());
+    return populate(datadir);
 }
 
 unsigned
