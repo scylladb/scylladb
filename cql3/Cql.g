@@ -373,8 +373,9 @@ unaliasedSelector returns [shared_ptr<selectable::raw> s]
 #endif
        )
 #if 0
-       ( '.' fi=cident { tmp = new Selectable.WithFieldSelection.Raw(tmp, fi); } )* { $s = tmp; }
+       ( '.' fi=cident { tmp = new Selectable.WithFieldSelection.Raw(tmp, fi); } )*
 #endif
+    { $s = tmp; }
     ;
 
 #if 0
