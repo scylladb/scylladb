@@ -14,55 +14,55 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.utils;
 
-import java.util.Iterator;
-import java.util.concurrent.LinkedBlockingDeque;
-import java.util.concurrent.atomic.AtomicLong;
+#pragma once
+
+namespace utils {
+
+#include <deque>
 
 /**
  * bounded threadsafe deque
  */
-public class BoundedStatsDeque implements Iterable<Long>
-{
-    private final LinkedBlockingDeque<Long> deque;
-    private final AtomicLong sum;
-
-    public BoundedStatsDeque(int size)
-    {
-        deque = new LinkedBlockingDeque<>(size);
-        sum = new AtomicLong(0);
+class bounded_stats_deque {
+private:
+    std::deque<long> _deque;
+    long _sum = 0;
+    int _max_size;
+public:
+    bounded_stats_deque(int size)
+        : _max_size(size) {
     }
 
-    public Iterator<Long> iterator()
-    {
-        return deque.iterator();
+    int size() {
+        return _deque.size();
     }
 
-    public int size()
-    {
-        return deque.size();
-    }
-
-    public void add(long i)
-    {
-        if (!deque.offer(i))
-        {
-            Long removed = deque.remove();
-            sum.addAndGet(-removed);
-            deque.offer(i);
+    void add(long i) {
+        if (size() >= _max_size) {
+            auto removed = _deque.front();
+            _deque.pop_front();
+            _sum -= removed;
+            _deque.push_back(i);
         }
-        sum.addAndGet(i);
+        _sum += i;
     }
 
-    public long sum()
-    {
-        return sum.get();
+    long sum() {
+        return _sum;
     }
 
-    public double mean()
-    {
+    double mean() {
         return size() > 0 ? ((double) sum()) / size() : 0;
     }
+
+    const std::deque<long>& deque() const {
+        return _deque;
+    }
+};
+
 }
