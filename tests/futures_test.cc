@@ -58,7 +58,7 @@ SEASTAR_TEST_CASE(test_finally_is_called_on_success_and_failure__not_ready_to_ar
     auto finally2 = make_shared<bool>();
 
     promise<> p;
-    p.get_future().finally([=] {
+    auto f = p.get_future().finally([=] {
         *finally1 = true;
     }).then([] {
         throw std::runtime_error("");
@@ -70,7 +70,7 @@ SEASTAR_TEST_CASE(test_finally_is_called_on_success_and_failure__not_ready_to_ar
     });
 
     p.set_value();
-    return make_ready_future<>();
+    return f;
 }
 
 SEASTAR_TEST_CASE(test_exception_from_finally_fails_the_target) {
