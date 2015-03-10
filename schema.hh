@@ -33,7 +33,7 @@ public:
     data_type type;
 
     // Unique within (kind, schema instance).
-    // schema::position() depends on the fact that for PK columns this is
+    // schema::position() and component_index() depend on the fact that for PK columns this is
     // equivalent to component index.
     column_id id;
 
@@ -50,6 +50,10 @@ public:
     const bytes& name() const;
     friend std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
         return os << cd.name_as_text();
+    }
+    uint32_t component_index() const {
+        assert(is_primary_key());
+        return id;
     }
 };
 
