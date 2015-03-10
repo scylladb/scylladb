@@ -79,9 +79,9 @@ public:
 
 class result_message::rows : public result_message {
 private:
-    ::shared_ptr<cql3::result_set> _rs;
+    std::unique_ptr<cql3::result_set> _rs;
 public:
-    rows(::shared_ptr<cql3::result_set> rs) : _rs(std::move(rs)) {}
+    rows(std::unique_ptr<cql3::result_set> rs) : _rs(std::move(rs)) {}
 
     const cql3::result_set& rs() const {
         return *_rs;
