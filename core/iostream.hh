@@ -144,7 +144,7 @@ private:
 // The data sink will not receive empty chunks.
 //
 template <typename CharType>
-class output_stream {
+class output_stream final {
     static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
     data_sink _fd;
     temporary_buffer<CharType> _buf;
