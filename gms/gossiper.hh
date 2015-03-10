@@ -23,6 +23,7 @@
 
 #include "gms/inet_address.hh"
 #include "gms/endpoint_state.hh"
+#include <experimental/optional>
 
 namespace gms {
 
@@ -30,8 +31,13 @@ namespace gms {
 class gossiper {
 public:
     std::map<inet_address, endpoint_state> endpoint_state_map;
-    endpoint_state get_endpoint_state_for_endpoint(inet_address ep) {
-        return endpoint_state_map.at(ep);
+    std::experimental::optional<endpoint_state> get_endpoint_state_for_endpoint(inet_address ep) {
+        auto it = endpoint_state_map.find(ep);
+        if (it == endpoint_state_map.end()) {
+            return {};
+        } else {
+            return it->second;
+        }
     }
 };
 
