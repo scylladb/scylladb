@@ -93,7 +93,7 @@ parse(file_input_stream& in, T& i) {
     return in.read_exactly(sizeof(T)).then([&i] (auto buf) {
         check_buf_size(buf, sizeof(T));
 
-        auto *nr = reinterpret_cast<const T *>(buf.get());
+        auto *nr = reinterpret_cast<const net::packed<T> *>(buf.get());
         i = net::ntoh(*nr);
         return make_ready_future<>();
     });
@@ -125,7 +125,7 @@ future<> parse(file_input_stream& in, double& d) {
     return in.read_exactly(sizeof(double)).then([&d] (auto buf) {
         check_buf_size(buf, sizeof(double));
 
-        const unsigned long *nr = reinterpret_cast<const unsigned long *>(buf.get());
+        auto *nr = reinterpret_cast<const net::packed<unsigned long> *>(buf.get());
         d = convert<double>(net::ntoh(*nr));
         return make_ready_future<>();
     });
@@ -187,7 +187,7 @@ parse(file_input_stream& in, Size& len, std::vector<Members>& arr) {
     return in.read_exactly(len * sizeof(Members)).then([&arr, len] (auto buf) {
         check_buf_size(buf, len * sizeof(Members));
 
-        auto *nr = reinterpret_cast<const Members *>(buf.get());
+        auto *nr = reinterpret_cast<const net::packed<Members> *>(buf.get());
         for (size_t i = 0; i < len; ++i) {
             arr[i] = net::ntoh(nr[i]);
         }
