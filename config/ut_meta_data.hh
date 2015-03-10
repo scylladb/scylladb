@@ -15,12 +15,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.config;
 
-import java.nio.ByteBuffer;
-import java.util.*;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import org.apache.cassandra.db.marshal.*;
+#pragma once
+
+namespace config {
 
 /**
  * Defined (and loaded) user types.
@@ -28,8 +32,8 @@ import org.apache.cassandra.db.marshal.*;
  * In practice, because user types are global, we have only one instance of
  * this class that retrieve through the Schema class.
  */
-public final class UTMetaData
-{
+class ut_meta_data final {
+#if 0
     private final Map<ByteBuffer, UserType> userTypes;
 
     public UTMetaData()
@@ -73,4 +77,7 @@ public final class UTMetaData
             return false;
         return userTypes.equals(((UTMetaData) that).userTypes);
     }
+#endif
+};
+
 }
