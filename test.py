@@ -28,6 +28,7 @@ all_tests = [
     'memcached/test_ascii_parser',
     'sstring_test',
     'output_stream_test',
+    'httpd',
     'urchin/types_test',
     'urchin/mutation_test',
     'urchin/cql_query_test',

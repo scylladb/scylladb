@@ -80,6 +80,7 @@ public:
     // FIXME: add reverse_iterator and friend
     using difference_type = ssize_t;  // std::make_signed_t<Size> can be too small
     using size_type = Size;
+    static constexpr size_type  npos = static_cast<size_type>(-1);
 public:
     struct initialized_later {};
 
@@ -170,6 +171,71 @@ public:
     size_t size() const noexcept {
         return is_internal() ? u.internal.size : u.external.size;
     }
+
+    size_t length() const noexcept {
+        return size();
+    }
+
+    size_t find(char_type t, size_t pos = 0) const noexcept {
+        const char_type* it = str() + pos;
+        const char_type* end = it + size();
+        while (it < end) {
+            if (*it == t) {
+                return it - str();
+            }
+            it++;
+        }
+        return npos;
+    }
+
+    size_t find(const basic_sstring& s, size_t pos = 0) const noexcept {
+        const char_type* it = str() + pos;
+        const char_type* end = it + size();
+        const char_type* c_str = s.str();
+        const char_type* c_str_end = s.str() + s.size();
+
+        while (it < end) {
+            auto i = it;
+            auto j = c_str;
+            while ( i < end && j < c_str_end && *i == *j) {
+                i++;
+                j++;
+            }
+            if (j == c_str_end) {
+                return it - str();
+            }
+            it++;
+        }
+        return npos;
+    }
+
+    basic_sstring substr(size_t from, size_t len = npos)  const {
+        if (from > size()) {
+            throw std::out_of_range("sstring::substr out of range");
+        }
+        if (len > size() - from) {
+            len = size() - from;
+        }
+        if (len == 0) {
+            return "";
+        }
+        return { str() + from , len };
+    }
+
+    const char_type& at(size_t pos) const {
+        if (pos >= size()) {
+            throw std::out_of_range("sstring::at out of range");
+        }
+        return *(str() + pos);
+    }
+
+    char_type& at(size_t pos) {
+        if (pos >= size()) {
+            throw std::out_of_range("sstring::at out of range");
+        }
+        return *(str() + pos);
+    }
+
     bool empty() const noexcept {
         return u.internal.size == 0;
     }
@@ -250,6 +316,8 @@ public:
         return std::experimental::string_view(str(), size());
     }
 };
+template <typename char_type, typename Size, Size max_size>
+constexpr Size basic_sstring<char_type, Size, max_size>::npos;
 
 template <typename char_type, typename size_type, size_type Max, size_type N>
 inline
