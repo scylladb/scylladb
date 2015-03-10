@@ -152,7 +152,7 @@ output_stream<CharType>::split_and_put(temporary_buffer<CharType> buf) {
 
     if (buf.size() < _size) {
         if (!_buf) {
-            _buf = temporary_buffer<char>(_size);
+            _buf = _fd.allocate_buffer(_size);
         }
         std::copy(buf.get(), buf.get() + buf.size(), _buf.get_write());
         _end = buf.size();
@@ -175,7 +175,7 @@ output_stream<CharType>::write(const char_type* buf, size_t n) {
             auto now = _size - _end;
             std::copy(buf, buf + now, _buf.get_write() + _end);
             _end = _size;
-            temporary_buffer<char> tmp(n - now);
+            temporary_buffer<char> tmp = _fd.allocate_buffer(n - now);
             std::copy(buf + now, buf + n, tmp.get_write());
             return flush().then([this, tmp = std::move(tmp)]() mutable {
                 if (_trim_to_size) {
@@ -185,7 +185,7 @@ output_stream<CharType>::write(const char_type* buf, size_t n) {
                 }
             });
         } else {
-            temporary_buffer<char> tmp(n);
+            temporary_buffer<char> tmp = _fd.allocate_buffer(n);
             std::copy(buf, buf + n, tmp.get_write());
             if (_trim_to_size) {
                 return split_and_put(std::move(tmp));
@@ -196,7 +196,7 @@ output_stream<CharType>::write(const char_type* buf, size_t n) {
     }
 
     if (!_buf) {
-        _buf = temporary_buffer<char>(_size);
+        _buf = _fd.allocate_buffer(_size);
     }
 
     auto now = std::min(n, _size - _end);
@@ -205,7 +205,7 @@ output_stream<CharType>::write(const char_type* buf, size_t n) {
     if (now == n) {
         return make_ready_future<>();
     } else {
-        temporary_buffer<CharType> next(_size);
+        temporary_buffer<char> next = _fd.allocate_buffer(_size);
         std::copy(buf + now, buf + n, next.get_write());
         _end = n - now;
         std::swap(next, _buf);

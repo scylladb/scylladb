@@ -62,6 +62,9 @@ public:
 class data_sink_impl {
 public:
     virtual ~data_sink_impl() {}
+    virtual temporary_buffer<char> allocate_buffer(size_t size) {
+        return temporary_buffer<char>(size);
+    }
     virtual future<> put(net::packet data) = 0;
     virtual future<> put(std::vector<temporary_buffer<char>> data) {
         net::packet p;
@@ -84,6 +87,9 @@ public:
     explicit data_sink(std::unique_ptr<data_sink_impl> dsi) : _dsi(std::move(dsi)) {}
     data_sink(data_sink&& x) = default;
     data_sink& operator=(data_sink&& x) = default;
+    temporary_buffer<char> allocate_buffer(size_t size) {
+        return _dsi->allocate_buffer(size);
+    }
     future<> put(std::vector<temporary_buffer<char>> data) {
         return _dsi->put(std::move(data));
     }
