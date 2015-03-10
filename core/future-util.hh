@@ -165,10 +165,11 @@ struct do_when_all {
     }
 };
 
-template <typename Future, typename... Rest>
+template <typename... FutureArgs, typename... Rest>
 inline
-future<std::tuple<Future, Rest...>>
-when_all(Future&& fut, Rest&&... rest) {
+future<std::tuple<future<FutureArgs...>, Rest...>>
+when_all(future<FutureArgs...>&& fut, Rest&&... rest) {
+    using Future = future<FutureArgs...>;
     return std::move(fut).then_wrapped(
             [rest = std::make_tuple(std::move(rest)...)] (Future&& fut) mutable {
         return apply(do_when_all(), std::move(rest)).then_wrapped(
