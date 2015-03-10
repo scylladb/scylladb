@@ -41,5 +41,7 @@ static constexpr auto AGGREGATES = "schema_aggregates";
 
 extern std::vector<const char*> ALL;
 
+std::vector<schema_ptr> all_tables();
+
 } // namespace legacy_schema_tables
 } // namespace db

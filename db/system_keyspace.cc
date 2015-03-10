@@ -986,5 +986,32 @@ schema_ptr built_indexes() {
         executeInternal(String.format(cql, SSTABLE_ACTIVITY), keyspace, table, generation);
     }
 #endif
+
+std::vector<schema_ptr> all_tables() {
+    std::vector<schema_ptr> r;
+    auto legacy_tables = db::legacy_schema_tables::all_tables();
+    std::copy(legacy_tables.begin(), legacy_tables.end(), std::back_inserter(r));
+    r.push_back(built_indexes());
+    r.push_back(hints());
+    r.push_back(batchlog());
+    r.push_back(paxos());
+    r.push_back(local());
+    r.push_back(peers());
+    r.push_back(peer_events());
+    r.push_back(range_xfers());
+    r.push_back(compactions_in_progress());
+    r.push_back(compaction_history());
+    r.push_back(sstable_activity());
+    return r;
+}
+
+keyspace make() {
+    keyspace ks;
+    for (auto&& table : all_tables()) {
+        ks.column_families.emplace(table->cf_name, column_family(table));
+    }
+    return ks;
+}
+
 } // namespace system_keyspace
 } // namespace db

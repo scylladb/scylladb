@@ -1544,5 +1544,11 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 }
 #endif
 
+std::vector<schema_ptr> all_tables() {
+    return {
+        keyspaces(), columnfamilies(), columns(), triggers(), usertypes(), functions(), aggregates()
+    };
+}
+
 } // namespace legacy_schema_tables
 } // namespace schema
