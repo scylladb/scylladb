@@ -22,32 +22,23 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_STATEMENTS_PROPERTY_DEFINITIONS_HH
-#define CQL3_STATEMENTS_PROPERTY_DEFINITIONS_HH
+#pragma once
 
 #include "exceptions/exceptions.hh"
 #include "core/print.hh"
 #include "core/sstring.hh"
 
+#include <experimental/optional>
 #include <unordered_map>
-#include <map>
+#include <algorithm>
+#include <cctype>
+#include <string>
 
 #include <boost/any.hpp>
 
 namespace cql3 {
 
 namespace statements {
-
-#if 0
-package org.apache.cassandra.cql3.statements;
-
-import java.util.*;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import org.apache.cassandra.exceptions.SyntaxException;
-#endif
 
 class property_definitions {
 protected:
@@ -60,7 +51,7 @@ protected:
         : _properties{}
     { }
 public:
-    virtual void add_property(const sstring& name, sstring value) {
+    void add_property(const sstring& name, sstring value) {
         auto it = _properties.find(name);
         if (it != _properties.end()) {
             throw exceptions::syntax_exception(sprint("Multiple definition for property '%s'", name));
@@ -68,7 +59,7 @@ public:
         _properties.emplace(name, value);
     }
 
-    virtual void add_property(const sstring& name, const std::map<sstring, sstring>& value) {
+    void add_property(const sstring& name, const std::unordered_map<sstring, sstring>& value) {
         auto it = _properties.find(name);
         if (it != _properties.end()) {
             throw exceptions::syntax_exception(sprint("Multiple definition for property '%s'", name));
@@ -76,110 +67,106 @@ public:
         _properties.emplace(name, value);
     }
 
-#if 0
-    public void validate(Set<String> keywords, Set<String> obsolete) throws SyntaxException
-    {
-        for (String name : properties.keySet())
-        {
-            if (keywords.contains(name))
+    void validate(std::set<sstring> keywords, std::set<sstring> obsolete) {
+        for (auto&& kv : _properties) {
+            auto&& name = kv.first;
+            if (keywords.count(name)) {
                 continue;
-
-            if (obsolete.contains(name))
+            }
+            if (obsolete.count(name)) {
+#if 0
                 logger.warn("Ignoring obsolete property {}", name);
-            else
-                throw new SyntaxException(String.format("Unknown property '%s'", name));
+#endif
+            } else {
+                throw exceptions::syntax_exception(sprint("Unknown property '%s'", name));
+            }
+        }
+    }
+protected:
+    std::experimental::optional<sstring> get_simple(const sstring& name) const {
+        auto it = _properties.find(name);
+        if (it == _properties.end()) {
+            return std::experimental::optional<sstring>{};
+        }
+        try {
+            return boost::any_cast<sstring>(it->second);
+        } catch (const boost::bad_any_cast& e) {
+            throw exceptions::syntax_exception(sprint("Invalid value for property '%s'. It should be a string", name));
         }
     }
 
-    protected String getSimple(String name) throws SyntaxException
-    {
-        Object val = properties.get(name);
-        if (val == null)
-            return null;
-        if (!(val instanceof String))
-            throw new SyntaxException(String.format("Invalid value for property '%s'. It should be a string", name));
-        return (String)val;
+    std::experimental::optional<std::unordered_map<sstring, sstring>> get_map(const sstring& name) const {
+        auto it = _properties.find(name);
+        if (it == _properties.end()) {
+            return std::experimental::optional<std::unordered_map<sstring, sstring>>{};
+        }
+        try {
+            return boost::any_cast<std::unordered_map<sstring, sstring>>(it->second);
+        } catch (const boost::bad_any_cast& e) {
+            throw exceptions::syntax_exception(sprint("Invalid value for property '%s'. It should be a map.", name));
+        }
+    }
+public:
+    bool has_property(const sstring& name) const {
+        return _properties.find(name) != _properties.end();
     }
 
-    protected Map<String, String> getMap(String name) throws SyntaxException
-    {
-        Object val = properties.get(name);
-        if (val == null)
-            return null;
-        if (!(val instanceof Map))
-            throw new SyntaxException(String.format("Invalid value for property '%s'. It should be a map.", name));
-        return (Map<String, String>)val;
-    }
-
-    public Boolean hasProperty(String name)
-    {
-        return properties.containsKey(name);
-    }
-
-    public String getString(String key, String defaultValue) throws SyntaxException
-    {
-        String value = getSimple(key);
-        return value != null ? value : defaultValue;
+    sstring get_string(sstring key, sstring default_value) const {
+        auto value = get_simple(key);
+        if (value) {
+            return value.value();
+        } else {
+            return default_value;
+        }
     }
 
     // Return a property value, typed as a Boolean
-    public Boolean getBoolean(String key, Boolean defaultValue) throws SyntaxException
-    {
-        String value = getSimple(key);
-        return (value == null) ? defaultValue : value.toLowerCase().matches("(1|true|yes)");
+    bool get_boolean(sstring key, bool default_value) const {
+        auto value = get_simple(key);
+        if (value) {
+            std::string s{value.value()};
+            std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+            return s == "1" || s == "true" || s == "yes";
+        } else {
+            return default_value;
+        }
     }
 
     // Return a property value, typed as a double
-    public double getDouble(String key, double defaultValue) throws SyntaxException
-    {
-        String value = getSimple(key);
-        if (value == null)
-        {
-            return defaultValue;
-        }
-        else
-        {
-            try
-            {
-                return Double.parseDouble(value);
+    double get_double(sstring key, double default_value) const {
+        auto value = get_simple(key);
+        if (value) {
+            auto val = value.value();
+            try {
+                return std::stod(val);
+            } catch (const std::exception& e) {
+                throw exceptions::syntax_exception(sprint("Invalid double value %s for '%s'", val, key));
             }
-            catch (NumberFormatException e)
-            {
-                throw new SyntaxException(String.format("Invalid double value %s for '%s'", value, key));
-            }
+        } else {
+            return default_value;
         }
     }
 
     // Return a property value, typed as an Integer
-    public Integer getInt(String key, Integer defaultValue) throws SyntaxException
-    {
-        String value = getSimple(key);
-        return toInt(key, value, defaultValue);
+    int32_t get_int(sstring key, int32_t default_value) const {
+        auto value = get_simple(key);
+        return to_int(key, value, default_value);
     }
 
-    public static Integer toInt(String key, String value, Integer defaultValue) throws SyntaxException
-    {
-        if (value == null)
-        {
-            return defaultValue;
-        }
-        else
-        {
-            try
-            {
-                return Integer.valueOf(value);
+    static int32_t to_int(sstring key, std::experimental::optional<sstring> value, int32_t default_value) {
+        if (value) {
+            auto val = value.value();
+            try {
+                return std::stoi(val);
+            } catch (const std::exception& e) {
+                throw exceptions::syntax_exception(sprint("Invalid integer value %s for '%s'", val, key));
             }
-            catch (NumberFormatException e)
-            {
-                throw new SyntaxException(String.format("Invalid integer value %s for '%s'", value, key));
-            }
+        } else {
+            return default_value;
         }
     }
-#endif
 };
 
 }
 
 }
-
-#endif
