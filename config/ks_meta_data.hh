@@ -15,18 +15,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.config;
 
-import java.util.*;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import com.google.common.base.Objects;
+#pragma once
 
-import org.apache.cassandra.exceptions.ConfigurationException;
-import org.apache.cassandra.locator.*;
-import org.apache.cassandra.service.StorageService;
+#include "config/ut_meta_data.hh"
+#include "schema.hh"
 
-public final class KSMetaData
-{
+#include "core/shared_ptr.hh"
+
+namespace config {
+
+class ks_meta_data final {
+public:
+#if 0
     public final String name;
     public final Class<? extends AbstractReplicationStrategy> strategyClass;
     public final Map<String, String> strategyOptions;
@@ -51,14 +58,15 @@ public final class KSMetaData
     {
         this(name, strategyClass, strategyOptions, durableWrites, cfDefs, new UTMetaData());
     }
-
-    private KSMetaData(String name,
-                       Class<? extends AbstractReplicationStrategy> strategyClass,
-                       Map<String, String> strategyOptions,
-                       boolean durableWrites,
-                       Iterable<CFMetaData> cfDefs,
-                       UTMetaData userTypes)
+#endif
+    ks_meta_data(sstring name,
+                       sstring strategy_name,
+                       std::unordered_map<sstring, sstring> strategy_options,
+                       bool durable_writes,
+                       std::vector<schema_ptr> cf_defs,
+                       shared_ptr<ut_meta_data> user_types)
     {
+#if 0
         this.name = name;
         this.strategyClass = strategyClass == null ? NetworkTopologyStrategy.class : strategyClass;
         this.strategyOptions = strategyOptions;
@@ -68,23 +76,25 @@ public final class KSMetaData
         this.cfMetaData = Collections.unmodifiableMap(cfmap);
         this.durableWrites = durableWrites;
         this.userTypes = userTypes;
+#endif
     }
 
     // For new user created keyspaces (through CQL)
-    public static KSMetaData newKeyspace(String name, String strategyName, Map<String, String> options, boolean durableWrites) throws ConfigurationException
-    {
+    static lw_shared_ptr<ks_meta_data> new_keyspace(sstring name, sstring strategy_name, std::unordered_map<sstring, sstring> options, bool durable_writes) {
+#if 0
         Class<? extends AbstractReplicationStrategy> cls = AbstractReplicationStrategy.getClass(strategyName);
         if (cls.equals(LocalStrategy.class))
             throw new ConfigurationException("Unable to use given strategy class: LocalStrategy is reserved for internal use.");
-
-        return newKeyspace(name, cls, options, durableWrites, Collections.<CFMetaData>emptyList());
+#endif
+        return new_keyspace(name, strategy_name, options, durable_writes, std::vector<schema_ptr>{});
     }
 
-    public static KSMetaData newKeyspace(String name, Class<? extends AbstractReplicationStrategy> strategyClass, Map<String, String> options, boolean durablesWrites, Iterable<CFMetaData> cfDefs)
+    static lw_shared_ptr<ks_meta_data> new_keyspace(sstring name, sstring strategy_name, std::unordered_map<sstring, sstring> options, bool durables_writes, std::vector<schema_ptr> cf_defs)
     {
-        return new KSMetaData(name, strategyClass, options, durablesWrites, cfDefs, new UTMetaData());
+        return ::make_lw_shared<ks_meta_data>(name, strategy_name, options, durables_writes, cf_defs, ::make_shared<ut_meta_data>());
     }
 
+#if 0
     public KSMetaData cloneWithTableRemoved(CFMetaData table)
     {
         // clone ksm but do not include the new table
@@ -181,4 +191,7 @@ public final class KSMetaData
 
         return this;
     }
+#endif
+};
+
 }
