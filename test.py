@@ -21,15 +21,24 @@ import sys
 import argparse
 import subprocess
 import signal
+import re
 
-all_tests = [
+boost_tests = [
     'futures_test',
-    'smp_test',
     'memcached/test_ascii_parser',
     'sstring_test',
     'output_stream_test',
     'httpd',
 ]
+
+other_tests = [
+    'smp_test',
+]
+
+all_tests = []
+
+all_tests.extend(other_tests)
+all_tests.extend(boost_tests)
 
 last_len = 0
 
@@ -52,6 +61,7 @@ if __name__ == "__main__":
     parser.add_argument('--name',  action="store", help="Run only test whose name contains given string")
     parser.add_argument('--mode', choices=all_modes, help="Run only tests for given build mode")
     parser.add_argument('--timeout', action="store",default="300",type=int, help="timeout value for test execution")
+    parser.add_argument('--jenkins', action="store",help="jenkins output file prefix")
     args = parser.parse_args()
 
     black_hole = open('/dev/null', 'w')
@@ -76,6 +86,11 @@ if __name__ == "__main__":
     if args.name:
         test_to_run = [t for t in test_to_run if args.name in t]
 
+
+    if args.jenkins:
+       jenkins_boost_log = open(args.jenkins+".boost.xml",'wb')
+       jenkins_boost_log.write(b'<TestLog><TestSuite name="all">')
+
     all_ok = True
 
     n_total = len(test_to_run)
@@ -86,6 +101,11 @@ if __name__ == "__main__":
         prefix = '[%d/%d]' % (n + 1, n_total)
         print_status('%s RUNNING %s' % (prefix, path))
         signal.signal(signal.SIGALRM, alarm_handler)
+        boost_test = False
+        if args.jenkins:
+            if path.split(' ',1)[0].split('/')[-1] in boost_tests:
+                path = path + " --output_format=XML --log_level=all --report_level=no"
+                boost_test = True
         proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,preexec_fn=os.setsid)
         signal.alarm(args.timeout)
         try:
@@ -110,6 +130,11 @@ if __name__ == "__main__":
             all_ok = False
         else:
             print_status('%s PASSED %s' % (prefix, path))
+        if args.jenkins and boost_test:
+           jenkins_boost_log.write(out[9:-10])
+
+    if args.jenkins:
+        jenkins_boost_log.write(b'</TestSuite></TestLog>')
 
     if all_ok:
         print('\nOK.')
