@@ -324,9 +324,7 @@ useStatement returns [::shared_ptr<use_statement> stmt]
 selectStatement returns [shared_ptr<select_statement::raw_statement> expr]
     @init {
         bool is_distinct = false;
-#if 0
-        Term.Raw limit = null;
-#endif
+        ::shared_ptr<cql3::term::raw> limit;
         select_statement::parameters::orderings_type orderings;
         bool allow_filtering = false;
     }
@@ -337,25 +335,20 @@ selectStatement returns [shared_ptr<select_statement::raw_statement> expr]
 #endif
                )
       K_FROM cf=columnFamilyName
-#if 0
       ( K_WHERE wclause=whereClause )?
       ( K_ORDER K_BY orderByClause[orderings] ( ',' orderByClause[orderings] )* )?
       ( K_LIMIT rows=intValue { limit = rows; } )?
-      ( K_ALLOW K_FILTERING  { allowFiltering = true; } )?
-#endif
+      ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
       {
-          auto params = ::make_shared<select_statement::parameters>(orderings, is_distinct, allow_filtering);
-#if 0
-          $expr = new SelectStatement.RawStatement(cf, params, sclause, wclause, limit);
-#endif
+          auto params = ::make_shared<select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering);
+          $expr = ::make_shared<select_statement::raw_statement>(std::move(cf), std::move(params),
+            std::move(sclause), std::move(wclause), std::move(limit));
       }
     ;
 
 selectClause returns [std::vector<shared_ptr<raw_selector>> expr]
-    : t1=selector { $expr = std::vector<shared_ptr<raw_selector>>(); $expr.push_back(t1); } (',' tN=selector { $expr.push_back(tN); })*
-#if 0
-    | '\*' { $expr = Collections.<RawSelector>emptyList();}
-#endif
+    : t1=selector { $expr.push_back(t1); } (',' tN=selector { $expr.push_back(tN); })*
+    | '*' { }
     ;
 
 selector returns [shared_ptr<raw_selector> s]
@@ -401,14 +394,12 @@ whereClause returns [std::vector<cql3::relation_ptr> clause]
     : relation[$clause] (K_AND relation[$clause])*
     ;
 
-#if 0
-orderByClause[Map<ColumnIdentifier.Raw, Boolean> orderings]
+orderByClause[select_statement::parameters::orderings_type orderings]
     @init{
-        boolean reversed = false;
+        bool reversed = false;
     }
-    : c=cident (K_ASC | K_DESC { reversed = true; })? { orderings.put(c, reversed); }
+    : c=cident (K_ASC | K_DESC { reversed = true; })? { orderings.emplace(c, reversed); }
     ;
-#endif
 
 /**
  * INSERT INTO <CF> (<column>, <column>, <column>, ...)
