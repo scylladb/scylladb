@@ -23,6 +23,7 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::COUNTERS: return out << "COUNTERS";
         case cause::METRICS: return out << "METRICS";
         case cause::COMPACT_TABLES: return out << "COMPACT_TABLES";
+        case cause::GOSSIP: return out << "GOSSIP";
     }
     assert(0);
 }
