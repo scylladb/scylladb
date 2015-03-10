@@ -425,6 +425,21 @@ posix_file_impl::stat(void) {
 }
 
 future<>
+posix_file_impl::truncate(uint64_t length) {
+    return engine()._thread_pool.submit<syscall_result<int>>([this, length] {
+        return wrap_syscall<int>(::ftruncate(_fd, length));
+    }).then([] (syscall_result<int> sr) {
+        sr.throw_if_error();
+        return make_ready_future<>();
+    });
+}
+
+future<>
+blockdev_file_impl::truncate(uint64_t length) {
+    return make_ready_future<>();
+}
+
+future<>
 posix_file_impl::discard(uint64_t offset, uint64_t length) {
     return engine()._thread_pool.submit<syscall_result<int>>([this, offset, length] () mutable {
         return wrap_syscall<int>(::fallocate(_fd, FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,
