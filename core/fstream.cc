@@ -31,12 +31,9 @@ public:
             : _file(std::move(f)), _pos(pos), _buffer_size(buffer_size) {}
     virtual future<temporary_buffer<char>> get() override {
         // must align allocation for dma
-        auto p = ::memalign(std::min<size_t>(_buffer_size, 4096), _buffer_size);
-        if (!p) {
-            throw std::bad_alloc();
-        }
-        auto q = static_cast<char*>(p);
-        temporary_buffer<char> buf(q, _buffer_size, make_free_deleter(p));
+        auto alignment = std::min<size_t>(_buffer_size, 4096);
+        auto buf = temporary_buffer<char>::aligned(alignment, _buffer_size);
+        auto q = buf.get_write(); // alive while "buf" is kept alive
         auto old_pos = _pos;
         // dma_read needs to be aligned. It doesn't have to be page-aligned,
         // though, and we could get away with something much smaller. However, if
