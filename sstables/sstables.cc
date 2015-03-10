@@ -5,6 +5,7 @@
 #include "log.hh"
 #include <vector>
 #include <typeinfo>
+#include <limits>
 #include "core/future.hh"
 #include "core/future-util.hh"
 #include "core/sstring.hh"
@@ -28,6 +29,7 @@ public:
     void seek(uint64_t pos) {
         _in = open_at(pos);
     }
+    bool eof() { return _in.eof(); }
     virtual ~random_access_reader() { }
 };
 
@@ -39,7 +41,10 @@ public:
         return make_file_input_stream(_file, pos, _buffer_size);
     }
     explicit file_input_stream(file&& f, size_t buffer_size = 8192)
-        : _file(make_lw_shared<file>(std::move(f))), _buffer_size(buffer_size)
+        : file_input_stream(make_lw_shared<file>(std::move(f)), buffer_size) {}
+
+    explicit file_input_stream(lw_shared_ptr<file> f, size_t buffer_size = 8192)
+        : _file(f), _buffer_size(buffer_size)
     {
         seek(0);
     }
@@ -69,7 +74,7 @@ std::unordered_map<sstable::component_type, sstring, enum_hash<sstable::componen
 
 struct bufsize_mismatch_exception : malformed_sstable_exception {
     bufsize_mismatch_exception(size_t size, size_t expected) :
-        malformed_sstable_exception("Buffer to small to hold requested data. Got: " + to_sstring(size) + ". Expected: " + to_sstring(expected))
+        malformed_sstable_exception(sprint("Buffer improperly sized to hold requested data. Got: %ld. Expected: %ld", size, expected))
     {}
 };
 
@@ -294,6 +299,10 @@ future<> parse(file_input_stream& in, compaction_metadata& m) {
     return parse(in, m.ancestors, m.cardinality);
 }
 
+future<> parse(file_input_stream& in, index_entry& ie) {
+    return parse(in, ie.key, ie.position, ie.promoted_index);
+}
+
 template <typename Child>
 future<> parse(file_input_stream& in, std::unique_ptr<metadata>& p) {
     p.reset(new Child);
@@ -400,6 +409,60 @@ future<> sstable::read_toc() {
 
 }
 
+future<index_list> sstable::read_indexes(uint64_t position, uint64_t quantity) {
+    struct reader {
+        uint64_t count = 0;
+        std::vector<index_entry> indexes;
+        file_input_stream stream;
+        reader(lw_shared_ptr<file> f, uint64_t quantity) : stream(f) { indexes.reserve(quantity); }
+    };
+
+    auto r = make_lw_shared<reader>(_index_file, quantity);
+
+    r->stream.seek(position);
+
+    auto end = [r, quantity] { return r->count >= quantity; };
+
+    return do_until(end, [this, r] {
+        r->indexes.emplace_back();
+        auto fut = parse(r->stream, r->indexes.back());
+        return std::move(fut).then_wrapped([this, r] (future<> f) mutable {
+            try {
+               f.get();
+               r->count++;
+            } catch (bufsize_mismatch_exception &e) {
+                // We have optimistically emplaced back one element of the
+                // vector. If we have failed to parse, we should remove it
+                // so size() gives us the right picture.
+                r->indexes.pop_back();
+
+                // FIXME: If the file ends at an index boundary, there is
+                // no problem. Essentially, we can't know how many indexes
+                // are in a sampling group, so there isn't really any way
+                // to know, other than reading.
+                //
+                // If, however, we end in the middle of an index, this is a
+                // corrupted file. This code is not perfect because we only
+                // know that an exception happened, and it happened due to
+                // eof. We don't really know if eof happened at the index
+                // boundary.  To know that, we would have to keep track of
+                // the real position of the stream (including what's
+                // already in the buffer) before we start to read the
+                // index, and after. We won't go through such complexity at
+                // the moment.
+                if (r->stream.eof()) {
+                    r->count = std::numeric_limits<std::remove_reference<decltype(r->count)>::type>::max();
+                } else {
+                    throw e;
+                }
+            }
+            return make_ready_future<>();
+        });
+    }).then([r] {
+        return make_ready_future<index_list>(std::move(r->indexes));
+    });
+}
+
 template <typename T, sstable::component_type Type, T sstable::* Comptr>
 future<> sstable::read_simple() {
 
@@ -434,6 +497,14 @@ future<> sstable::read_statistics() {
     return read_simple<statistics, component_type::Statistics, &sstable::_statistics>();
 }
 
+future<> sstable::open_data() {
+    return when_all(engine().open_file_dma(filename(component_type::Index), open_flags::ro),
+                    engine().open_file_dma(filename(component_type::Data), open_flags::ro)).then([this] (auto files) {
+        _index_file = make_lw_shared<file>(std::move(std::get<file>(std::get<0>(files).get())));
+        _data_file  = make_lw_shared<file>(std::move(std::get<file>(std::get<1>(files).get())));
+    });
+}
+
 future<> sstable::load() {
     return read_toc().then([this] {
         return read_statistics();
@@ -443,6 +514,8 @@ future<> sstable::load() {
         return read_filter();
     }).then([this] {;
         return read_summary();
+    }).then([this] {
+        return open_data();
     });
 }
 
