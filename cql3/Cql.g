@@ -153,44 +153,39 @@ using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifi
         listener->syntax_error(*this, msg);
     }
 
-    std::map<sstring, sstring> convert_property_map(shared_ptr<cql3::maps::literal> map) {
-        throw std::runtime_error("not implemented");
-#if 0
-        if (map == null || map.entries == null || map.entries.isEmpty())
-            return Collections.<String, String>emptyMap();
-
-        Map<String, String> res = new HashMap<String, String>(map.entries.size());
-
-        for (Pair<Term.Raw, Term.Raw> entry : map.entries)
-        {
+    std::unordered_map<sstring, sstring> convert_property_map(shared_ptr<cql3::maps::literal> map) {
+        if (!map || map->entries.empty()) {
+            return std::unordered_map<sstring, sstring>{};
+        }
+        std::unordered_map<sstring, sstring> res{map->entries.size()};
+        for (auto&& entry : map->entries) {
             // Because the parser tries to be smart and recover on error (to
             // allow displaying more than one error I suppose), we have null
             // entries in there. Just skip those, a proper error will be thrown in the end.
-            if (entry.left == null || entry.right == null)
-                break;
-
-            if (!(entry.left instanceof Constants.Literal))
-            {
-                String msg = "Invalid property name: " + entry.left;
-                if (entry.left instanceof AbstractMarker.Raw)
-                    msg += " (bind variables are not supported in DDL queries)";
-                addRecognitionError(msg);
+            if (!entry.first || !entry.second) {
                 break;
             }
-            if (!(entry.right instanceof Constants.Literal))
-            {
-                String msg = "Invalid property value: " + entry.right + " for property: " + entry.left;
-                if (entry.right instanceof AbstractMarker.Raw)
+            auto left = dynamic_pointer_cast<cql3::constants::literal>(entry.first);
+            if (!left) {
+                sstring msg = "Invalid property name: " + entry.first->to_string();
+                if (dynamic_pointer_cast<cql3::abstract_marker::raw>(entry.first)) {
                     msg += " (bind variables are not supported in DDL queries)";
-                addRecognitionError(msg);
+                }
+                add_recognition_error(msg);
                 break;
             }
-
-            res.put(((Constants.Literal)entry.left).getRawText(), ((Constants.Literal)entry.right).getRawText());
+            auto right = dynamic_pointer_cast<cql3::constants::literal>(entry.second);
+            if (!right) {
+                sstring msg = "Invalid property value: " + entry.first->to_string() + " for property: " + entry.second->to_string();
+                if (dynamic_pointer_cast<cql3::abstract_marker::raw>(entry.second)) {
+                    msg += " (bind variables are not supported in DDL queries)";
+                }
+                add_recognition_error(msg);
+                break;
+            }
+            res.emplace(left->get_raw_text(), right->get_raw_text());
         }
-
         return res;
-#endif
     }
 
     void add_raw_update(std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>& operations,
