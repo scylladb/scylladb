@@ -97,7 +97,7 @@ public:
 };
 
 template <typename CharType>
-class input_stream {
+class input_stream final {
     static_assert(sizeof(CharType) == 1, "must buffer stream of bytes");
     data_source _fd;
     temporary_buffer<CharType> _buf;

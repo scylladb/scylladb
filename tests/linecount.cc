@@ -25,11 +25,13 @@
 #include "core/fstream.hh"
 #include "core/app-template.hh"
 #include "core/shared_ptr.hh"
+#include "core/reactor.hh"
 #include <algorithm>
 
 struct reader {
-    reader(file f) : is(std::move(f), 4096) {}
-    file_input_stream is;
+    reader(file f) : is(make_file_input_stream(
+            make_lw_shared<file>(std::move(f)), 0, 4096)) {}
+    input_stream<char> is;
     size_t count = 0;
 
     // for input_stream::consume():
