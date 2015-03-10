@@ -259,3 +259,23 @@ SEASTAR_TEST_CASE(test_bare_value_can_be_returned_from_callback) {
         BOOST_REQUIRE(x == 3);
     });
 }
+
+SEASTAR_TEST_CASE(test_when_all_iterator_range) {
+    std::vector<future<size_t>> futures;
+    for (size_t i = 0; i != 1000000; ++i) {
+        // .then() usually returns a ready future, but sometimes it
+        // doesn't, so call it a million times.  This exercises both
+        // available and unavailable paths in when_all().
+        futures.push_back(make_ready_future<>().then([i] { return i; }));
+    }
+    // Verify the above statement is correct
+    BOOST_REQUIRE(!std::all_of(futures.begin(), futures.end(),
+            [] (auto& f) { return f.available(); }));
+    auto p = make_shared(std::move(futures));
+    return when_all(p->begin(), p->end()).then([p] (std::vector<future<size_t>> ret) {
+        for (auto&& f : ret) {
+            BOOST_REQUIRE(f.available());
+            BOOST_REQUIRE_EQUAL(std::get<0>(f.get()), &f - ret.data());
+        }
+    });
+}
