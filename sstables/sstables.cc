@@ -28,6 +28,7 @@ public:
     void seek(uint64_t pos) {
         _in = open_at(pos);
     }
+    bool eof() { return _in.eof(); }
     virtual ~random_access_reader() { }
 };
 
