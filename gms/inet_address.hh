@@ -23,6 +23,9 @@ public:
     inet_address(const sstring& addr)
         : _addr(addr) {
     }
+    bool is_broadcast_address() {
+        return _addr == net::ipv4::broadcast_address();
+    }
     void serialize(std::ostream& out) const {
         int8_t inet_address_size = sizeof(inet_address);
         serialize_int8(out, inet_address_size);
