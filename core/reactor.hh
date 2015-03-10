@@ -1047,9 +1047,6 @@ void reactor::complete_timers(T& timers, E& expired_timers, EnableFunc&& enable_
     enable_fn();
 }
 
-#include <iostream>
-#include "sstring.hh"
-
 inline
 future<size_t> pollable_fd::read_some(char* buffer, size_t size) {
     return engine().read_some(*_s, buffer, size);
