@@ -63,7 +63,7 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_k
         thrift.partition_key_type = partition_key[0].type;
     } else {
         // TODO: the type should be composite_type
-        throw std::runtime_error("not implemented");
+        warn(unimplemented::cause::LEGACY_COMPOSITE_KEYS);
     }
 
     build_columns(partition_key, column_definition::column_kind::PARTITION, _partition_key);

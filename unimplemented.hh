@@ -24,6 +24,7 @@ enum class cause {
     COMPACT_TABLES,
     GOSSIP,
     TOKEN_RESTRICTION,
+    LEGACY_COMPOSITE_KEYS,
 };
 
 void fail(cause what) __attribute__((noreturn));
