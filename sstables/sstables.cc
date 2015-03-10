@@ -17,6 +17,34 @@
 
 namespace sstables {
 
+class random_access_reader {
+    input_stream<char> _in;
+protected:
+    virtual input_stream<char> open_at(uint64_t pos) = 0;
+public:
+    future<temporary_buffer<char>> read_exactly(size_t n) {
+        return _in.read_exactly(n);
+    }
+    void seek(uint64_t pos) {
+        _in = open_at(pos);
+    }
+    virtual ~random_access_reader() { }
+};
+
+class file_input_stream : public random_access_reader {
+    lw_shared_ptr<file> _file;
+    size_t _buffer_size;
+public:
+    virtual input_stream<char> open_at(uint64_t pos) override {
+        return make_file_input_stream(_file, pos, _buffer_size);
+    }
+    explicit file_input_stream(file&& f, size_t buffer_size = 8192)
+        : _file(make_lw_shared<file>(std::move(f))), _buffer_size(buffer_size)
+    {
+        seek(0);
+    }
+};
+
 thread_local logging::logger sstlog("sstable");
 
 std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {

@@ -74,12 +74,6 @@ class pollable_fd;
 class pollable_fd_state;
 class lowres_clock;
 
-template <typename CharType>
-class input_stream;
-
-template <typename CharType>
-class output_stream;
-
 struct free_deleter {
     void operator()(void* p) { ::free(p); }
 };

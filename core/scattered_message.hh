@@ -22,7 +22,6 @@
 #ifndef SCATTERED_MESSAGE_HH
 #define SCATTERED_MESSAGE_HH
 
-#include "core/reactor.hh"
 #include "core/deleter.hh"
 #include "core/temporary_buffer.hh"
 #include "net/packet.hh"

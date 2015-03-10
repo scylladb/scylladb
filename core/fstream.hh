@@ -29,43 +29,12 @@
 // seastar files.
 
 #include "file.hh"
-#include "reactor.hh"
+#include "iostream.hh"
+#include "shared_ptr.hh"
 
-// FIXME: caching support
-
-class file_data_source_impl : public data_source_impl {
-    file _file;
-    size_t _buffer_size;
-    uint64_t _pos = 0;
-public:
-    file_data_source_impl(file&& f, size_t buffer_size)
-            : _file(std::move(f)), _buffer_size(buffer_size) {}
-    virtual future<temporary_buffer<char>> get() override;
-    file& fd() { return _file; }
-    void seek(uint64_t pos) { _pos = pos; }
-};
-
-class file_data_source : public data_source {
-    file_data_source_impl* impl() {
-        return static_cast<file_data_source_impl*>(data_source::impl());
-    }
-public:
-    file_data_source(file&& f, size_t buffer_size = 8192)
-        : data_source(std::make_unique<file_data_source_impl>(std::move(f), buffer_size)) {}
-    file& fd() { return impl()->fd(); }
-    void seek(uint64_t pos) { impl()->seek(pos); }
-};
-
-// Extends input_stream with file-specific operations, such as seeking.
-class file_input_stream : public input_stream<char> {
-    file_data_source* fd() {
-        return static_cast<file_data_source*>(input_stream::fd());
-    }
-public:
-    explicit file_input_stream(file&& f, size_t buffer_size = 8192)
-        : input_stream(file_data_source(std::move(f), buffer_size)) {}
-    void seek(uint64_t pos) {
-        reset();
-        fd()->seek(pos);
-    }
-};
+// Create an input_stream for reading starting at a given position of the
+// given file. Multiple fibers of execution (continuations) may safely open
+// multiple input streams concurrently for the same file.
+input_stream<char> make_file_input_stream(
+        lw_shared_ptr<file> file, uint64_t offset = 0,
+        uint64_t buffer_size = 8192);
