@@ -40,7 +40,10 @@ public:
         return make_file_input_stream(_file, pos, _buffer_size);
     }
     explicit file_input_stream(file&& f, size_t buffer_size = 8192)
-        : _file(make_lw_shared<file>(std::move(f))), _buffer_size(buffer_size)
+        : file_input_stream(make_lw_shared<file>(std::move(f)), buffer_size) {}
+
+    explicit file_input_stream(lw_shared_ptr<file> f, size_t buffer_size = 8192)
+        : _file(f), _buffer_size(buffer_size)
     {
         seek(0);
     }
