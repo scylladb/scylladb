@@ -659,18 +659,22 @@ bytes_view read_collection_value(bytes_view& in, int version) {
     return read_simple_bytes(in, size);
 }
 
-void write_collection_value(std::ostream& out, int version, data_type type, const boost::any& value) {
-    // We have to copy here, because we can't guess the size.
-    // FIXME: somehow.
-    std::ostringstream tmp;
-    type->serialize(value, tmp);
-    auto val_bytes = tmp.str();
+void write_collection_value(std::ostream& out, int version, bytes_view val_bytes) {
     if (version >= 3) {
         serialize_int32(out, int32_t(val_bytes.size()));
     } else {
         serialize_int16(out, uint16_t(val_bytes.size()));
     }
     out.rdbuf()->sputn(val_bytes.data(), val_bytes.size());
+}
+
+void write_collection_value(std::ostream& out, int version, data_type type, const boost::any& value) {
+    // We have to copy here, because we can't guess the size.
+    // FIXME: somehow.
+    std::ostringstream tmp;
+    type->serialize(value, tmp);
+    auto val_bytes = tmp.str();
+    write_collection_value(out, version, val_bytes);
 }
 
 shared_ptr<map_type_impl>
