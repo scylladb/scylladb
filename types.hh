@@ -552,3 +552,8 @@ inline sstring read_simple_short_string(bytes_view& v) {
     v.remove_prefix(len);
     return ret;
 }
+
+void write_collection_size(std::ostream& out, int size, int version);
+void write_collection_value(std::ostream& out, int version, bytes_view val_bytes);
+void write_collection_value(std::ostream& out, int version, data_type type, const boost::any& value);
+
