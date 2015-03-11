@@ -26,6 +26,7 @@
 
 #include "operation.hh"
 #include "constants.hh"
+#include "maps.hh"
 
 namespace cql3 {
 
@@ -46,19 +47,18 @@ public:
             return ::make_shared<constants::setter>(receiver, v);
         }
 
-        throw std::runtime_error("not implemented"); // FIXME
-#if 0
-            switch (((CollectionType)receiver.type).kind)
-            {
-                case LIST:
-                    return new Lists.Setter(receiver, v);
-                case SET:
-                    return new Sets.Setter(receiver, v);
-                case MAP:
-                    return new Maps.Setter(receiver, v);
-            }
-            throw new AssertionError();
-#endif
+        auto& k = static_pointer_cast<collection_type_impl>(receiver.type)->_kind;
+        if (&k == &collection_type_impl::kind::list) {
+            throw std::runtime_error("not implemented"); // FIXME
+            // return new Lists.Setter(receiver, v);
+        } else if (&k == &collection_type_impl::kind::set) {
+            throw std::runtime_error("not implemented"); // FIXME
+            // return new Sets.Setter(receiver, v);
+        } else if (&k == &collection_type_impl::kind::map) {
+            return make_shared<maps::setter>(receiver, v);
+        } else {
+            abort();
+        }
     }
 
 #if 0
