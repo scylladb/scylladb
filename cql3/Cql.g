@@ -1195,7 +1195,7 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
     ;
 
 specializedColumnOperation[std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>,
-                                                 shared_ptr<cql3::operation::raw_update>>> operations,
+                                                 shared_ptr<cql3::operation::raw_update>>>& operations,
                            shared_ptr<cql3::column_identifier::raw> key,
                            shared_ptr<cql3::term::raw> k]
                            
