@@ -35,11 +35,6 @@ other_tests = [
     'smp_test',
 ]
 
-all_tests = []
-
-all_tests.extend(other_tests)
-all_tests.extend(boost_tests)
-
 last_len = 0
 
 def print_status(msg):
@@ -70,22 +65,25 @@ if __name__ == "__main__":
     modes_to_run = all_modes if not args.mode else [args.mode]
     for mode in modes_to_run:
         prefix = os.path.join('build', mode, 'tests')
-        for test in all_tests:
-            test_to_run.append(os.path.join(prefix, test))
-        test_to_run.append('tests/memcached/test.py --mode ' + mode + (' --fast' if args.fast else ''))
-        test_to_run.append(os.path.join(prefix, 'map_reduce_test') + ' -c 2')
+        for test in other_tests:
+            test_to_run.append((os.path.join(prefix, test),'other'))
+        for test in boost_tests:
+            test_to_run.append((os.path.join(prefix, test),'boost'))
+        test_to_run.append(('tests/memcached/test.py --mode ' + mode + (' --fast' if args.fast else ''),'other'))
+        test_to_run.append((os.path.join(prefix, 'map_reduce_test') + ' -c 2','other'))
+
 
         allocator_test_path = os.path.join(prefix, 'allocator_test')
         if args.fast:
             if mode == 'debug':
-                test_to_run.append(allocator_test_path + ' --iterations 5')
+                test_to_run.append((allocator_test_path + ' --iterations 5','other'))
             else:
-                test_to_run.append(allocator_test_path + ' --time 0.1')
+                test_to_run.append((allocator_test_path + ' --time 0.1','other'))
         else:
-            test_to_run.append(allocator_test_path)
+            test_to_run.append((allocator_test_path,'other'))
 
     if args.name:
-        test_to_run = [t for t in test_to_run if args.name in t]
+        test_to_run = [t for t in test_to_run if args.name in t[0]]
 
 
     if args.jenkins:
@@ -98,15 +96,13 @@ if __name__ == "__main__":
     env = os.environ
     # disable false positive due to new (with_alignment(...)) ...
     env['ASAN_OPTIONS'] = 'alloc_dealloc_mismatch=0'
-    for n, path in enumerate(test_to_run):
+    for n, test in enumerate(test_to_run):
+        path = test[0]
         prefix = '[%d/%d]' % (n + 1, n_total)
         print_status('%s RUNNING %s' % (prefix, path))
         signal.signal(signal.SIGALRM, alarm_handler)
-        boost_test = False
-        if args.jenkins:
-            if path.split(' ',1)[0].split('/')[-1] in boost_tests:
-                path = path + " --output_format=XML --log_level=all --report_level=no"
-                boost_test = True
+        if args.jenkins and test[1] == 'boost':
+           path = path + " --output_format=XML --log_level=all --report_level=no"
         proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,preexec_fn=os.setsid)
         signal.alarm(args.timeout)
         try:
@@ -131,7 +127,8 @@ if __name__ == "__main__":
             all_ok = False
         else:
             print_status('%s PASSED %s' % (prefix, path))
-        if args.jenkins and boost_test:
+        if args.jenkins and test[1] == 'boost':
+           # remove the <TestLog> and </TestLog>
            jenkins_boost_log.write(out[9:-10])
 
     if args.jenkins:
