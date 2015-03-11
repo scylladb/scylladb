@@ -53,11 +53,11 @@ public:
     /**
      * Returns <code>true</code> if one of the restrictions use the specified function.
      *
-     * @param ksName the keyspace name
-     * @param functionName the function name
+     * @param ks_name the keyspace name
+     * @param function_name the function name
      * @return <code>true</code> if one of the restrictions use the specified function, <code>false</code> otherwise.
      */
-    virtual bool uses_function(const sstring& ksName, const sstring& functionName) = 0;
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) = 0;
 
     /**
      * Checks if the specified bound is set or not.
@@ -75,7 +75,6 @@ public:
      */
     virtual bool is_inclusive(statements::bound b) = 0;
 
-#if 0
     /**
      * Merges this restriction with the specified one.
      *
@@ -83,8 +82,9 @@ public:
      * @return the restriction resulting of the merge
      * @throws InvalidRequestException if the restrictions cannot be merged
      */
-    public Restriction mergeWith(Restriction otherRestriction) throws InvalidRequestException;
+    virtual void merge_with(::shared_ptr<restriction> other) = 0;
 
+#if 0
     /**
      * Check if the restriction is on indexed columns.
      *
@@ -105,6 +105,8 @@ public:
                                      QueryOptions options)
                                      throws InvalidRequestException;
 #endif
+
+    virtual sstring to_string() = 0;
 };
 
 }

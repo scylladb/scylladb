@@ -15,26 +15,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3.restrictions;
 
-import java.util.List;
-
-import org.apache.cassandra.cql3.QueryOptions;
-import org.apache.cassandra.cql3.statements.Bound;
-import org.apache.cassandra.db.composites.Composite;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-
-/**
- * A set of restrictions on a primary key part (partition key or clustering key).
+/*
+ * Copyright 2015 Cloudius Systems
  *
+ * Modified by Cloudius Systems
  */
-interface PrimaryKeyRestrictions extends Restriction, Restrictions
-{
 
-    @Override
-    public PrimaryKeyRestrictions mergeWith(Restriction restriction) throws InvalidRequestException;
+#include "cql3/selection/simple_selector.hh"
 
-    public List<Composite> valuesAsComposites(QueryOptions options) throws InvalidRequestException;
+namespace cql3 {
 
-    public List<Composite> boundsAsComposites(Bound bound, QueryOptions options) throws InvalidRequestException;
+namespace selection {
+
+::shared_ptr<selector>
+simple_selector_factory::new_instance() {
+    return ::make_shared<simple_selector>(_column_name, _idx, _type);
+}
+
+}
+
 }

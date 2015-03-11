@@ -7,26 +7,41 @@
 #include <unordered_map>
 #include <boost/range/iterator_range.hpp>
 #include <boost/range/join.hpp>
+#include <boost/range/algorithm/transform.hpp>
 
 #include "cql3/column_specification.hh"
 #include "core/shared_ptr.hh"
 #include "types.hh"
 #include "tuple.hh"
 #include "gc_clock.hh"
+#include "unimplemented.hh"
 
 using column_id = uint32_t;
 
 class column_definition final {
+public:
+    template<typename ColumnRange>
+    static std::vector<const column_definition*> vectorize(ColumnRange&& columns) {
+        std::vector<const column_definition*> r;
+        boost::transform(std::forward<ColumnRange>(columns), std::back_inserter(r), [] (auto& def) { return &def; });
+        return r;
+    }
 private:
     bytes _name;
 public:
     enum class column_kind { PARTITION, CLUSTERING, REGULAR, STATIC };
     column_definition(bytes name, data_type type, column_id id, column_kind kind);
     data_type type;
-    column_id id; // unique within (kind, schema instance)
+
+    // Unique within (kind, schema instance).
+    // schema::position() and component_index() depend on the fact that for PK columns this is
+    // equivalent to component index.
+    column_id id;
+
     column_kind kind;
     ::shared_ptr<cql3::column_specification> column_specification;
     bool is_static() const { return kind == column_kind::STATIC; }
+    bool is_regular() const { return kind == column_kind::REGULAR; }
     bool is_partition_key() const { return kind == column_kind::PARTITION; }
     bool is_clustering_key() const { return kind == column_kind::CLUSTERING; }
     bool is_primary_key() const { return kind == column_kind::PARTITION || kind == column_kind::CLUSTERING; }
@@ -36,6 +51,10 @@ public:
     const bytes& name() const;
     friend std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
         return os << cd.name_as_text();
+    }
+    uint32_t component_index() const {
+        assert(is_primary_key());
+        return id;
     }
 };
 
@@ -77,6 +96,7 @@ public:
     shared_ptr<tuple_type<>> partition_key_type;
     shared_ptr<tuple_type<>> clustering_key_type;
     shared_ptr<tuple_prefix> clustering_key_prefix_type;
+    shared_ptr<tuple_prefix> partition_key_prefix_type;
     data_type regular_column_name_type;
     thrift_schema thrift;
 public:
@@ -130,6 +150,10 @@ public:
     bool is_last_partition_key(column_definition& def) {
         return &_partition_key[_partition_key.size() - 1] == &def;
     }
+    bool has_collections() {
+        warn(unimplemented::cause::COLLECTIONS);
+        return false; // FIXME
+    }
     bool has_static_columns() {
         return !_static_columns.empty();
     }
@@ -158,6 +182,12 @@ public:
         return boost::join(partition_key_columns(),
             boost::join(clustering_key_columns(),
             boost::join(static_columns(), regular_columns())));
+    }
+    uint32_t position(const column_definition& column) const {
+        if (column.is_primary_key()) {
+            return column.id;
+        }
+        return _clustering_key.size();
     }
 };
 

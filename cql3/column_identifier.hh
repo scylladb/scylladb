@@ -83,7 +83,7 @@ public:
 
     column_identifier(bytes bytes_, sstring text)
         : bytes_(std::move(bytes_))
-        , _text(text)
+        , _text(std::move(text))
     { }
 
     bool operator==(const column_identifier& other) const {
@@ -92,6 +92,10 @@ public:
 
     const sstring& text() const {
         return _text;
+    }
+
+    const bytes& name() const {
+        return bytes_;
     }
 
     sstring to_string() const {
@@ -121,16 +125,10 @@ public:
     {
         return new ColumnIdentifier(allocator.clone(bytes), text);
     }
-
-    public Selector.Factory newSelectorFactory(CFMetaData cfm, List<ColumnDefinition> defs) throws InvalidRequestException
-    {
-        ColumnDefinition def = cfm.getColumnDefinition(this);
-        if (def == null)
-            throw new InvalidRequestException(String.format("Undefined name %s in selection clause", this));
-
-        return SimpleSelector.newFactory(def.name.toString(), addAndGetIndex(def, defs), def.type);
-    }
 #endif
+
+    virtual ::shared_ptr<selection::selector::factory> new_selector_factory(schema_ptr schema,
+        std::vector<const column_definition*>& defs) override;
 
     /**
      * Because Thrift-created tables may have a non-text comparator, we cannot determine the proper 'key' until
@@ -178,6 +176,21 @@ public:
 static inline
 column_definition* get_column_definition(schema_ptr schema, column_identifier& id) {
     return schema->get_column_definition(id.bytes_);
+}
+
+static inline
+::shared_ptr<column_identifier> to_identifier(const column_definition& def) {
+    return def.column_specification->name;
+}
+
+static inline
+std::vector<::shared_ptr<column_identifier>> to_identifiers(const std::vector<const column_definition*>& defs) {
+    std::vector<::shared_ptr<column_identifier>> r;
+    r.reserve(defs.size());
+    for (auto&& def : defs) {
+        r.push_back(to_identifier(*def));
+    }
+    return r;
 }
 
 }

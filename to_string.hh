@@ -15,10 +15,10 @@
 template<typename PtrToPrintable>
 static inline
 sstring
-to_string(std::vector<PtrToPrintable> items) {
+to_string(const std::vector<PtrToPrintable>& items) {
     // TODO: optimize
     std::ostringstream oss;
-    int left = items.size();
+    size_t left = items.size();
     oss << "[";
     for (auto&& item : items) {
         oss << item->to_string();
@@ -28,5 +28,20 @@ to_string(std::vector<PtrToPrintable> items) {
         --left;
     }
     oss << "]";
+    return oss.str();
+}
+
+template<typename PtrToPrintable>
+static inline
+sstring join(sstring delimiter, const std::vector<PtrToPrintable>& items) {
+    std::ostringstream oss;
+    size_t left = items.size();
+    for (auto&& item : items) {
+        oss << item->to_string();
+        if (left != 1) {
+            oss << delimiter;
+        }
+        --left;
+    }
     return oss.str();
 }

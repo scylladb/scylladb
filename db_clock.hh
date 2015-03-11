@@ -7,12 +7,13 @@
 
 #include <chrono>
 #include <cstdint>
+#include "gc_clock.hh"
 
 // the database clock follows Java - 1ms granularity, 64-bit counter, 1970 epoch
 
 class db_clock {
-    using base = std::chrono::system_clock;
 public:
+    using base = std::chrono::system_clock;
     using rep = int64_t;
     using period = std::ratio<1, 1000>; // milliseconds
     using duration = std::chrono::duration<rep, period>;
@@ -30,5 +31,11 @@ public:
         return time_point(std::chrono::duration_cast<duration>(now_since_epoch));
     }
 };
+
+static inline
+gc_clock::time_point to_gc_clock(db_clock::time_point tp) {
+    static_assert(std::is_same<db_clock::base, gc_clock::base>::value, "Below we assume that base is the same");
+    return gc_clock::time_point(std::chrono::duration_cast<gc_clock::duration>(tp.time_since_epoch()));
+}
 
 #endif /* DB_CLOCK_HH_ */

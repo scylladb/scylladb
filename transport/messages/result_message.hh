@@ -1,5 +1,6 @@
-#ifndef TRANSPORT_MESSAGES_RESULT_MESSAGE_HH
-#define TRANSPORT_MESSAGES_RESULT_MESSAGE_HH
+#pragma once
+
+#include "cql3/result_set.hh"
 
 #include "transport/event.hh"
 
@@ -24,6 +25,7 @@ public:
     class void_message;
     class set_keyspace;
     class schema_change;
+    class rows;
 };
 
 class result_message::visitor {
@@ -31,6 +33,7 @@ public:
     virtual void visit(const result_message::void_message&) = 0;
     virtual void visit(const result_message::set_keyspace&) = 0;
     virtual void visit(const result_message::schema_change&) = 0;
+    virtual void visit(const result_message::rows&) = 0;
 };
 
 class result_message::void_message : public result_message {
@@ -74,8 +77,21 @@ public:
     }
 };
 
-}
+class result_message::rows : public result_message {
+private:
+    std::unique_ptr<cql3::result_set> _rs;
+public:
+    rows(std::unique_ptr<cql3::result_set> rs) : _rs(std::move(rs)) {}
+
+    const cql3::result_set& rs() const {
+        return *_rs;
+    }
+
+    virtual void accept(result_message::visitor& v) override {
+        v.visit(*this);
+    }
+};
 
 }
 
-#endif
+}

@@ -4,6 +4,10 @@
 
 #include "server.hh"
 
+#include <boost/bimap/unordered_set_of.hpp>
+#include <boost/bimap.hpp>
+#include <boost/assign.hpp>
+
 #include "db/consistency_level.hh"
 #include "core/future-util.hh"
 #include "core/reactor.hh"
@@ -228,6 +232,8 @@ public:
     void write_consistency(db::consistency_level c);
     void write_string_map(std::map<sstring, sstring> string_map);
     void write_string_multimap(std::multimap<sstring, sstring> string_map);
+    void write_value(bytes_opt value);
+    void write(const cql3::metadata& m);
 private:
     sstring make_frame(uint8_t version, size_t length);
 };
@@ -499,6 +505,18 @@ public:
         }
         default:
             assert(0);
+        }
+    }
+
+    virtual void visit(const transport::messages::result_message::rows& m) override {
+        _response->write_int(0x0002);
+        auto& rs = m.rs();
+        _response->write(rs.get_metadata());
+        _response->write_int(rs.size());
+        for (auto&& row : rs.rows()) {
+            for (auto&& cell : row) {
+                _response->write_value(cell);
+            }
         }
     }
 private:
@@ -892,4 +910,120 @@ void cql_server::response::write_string_multimap(std::multimap<sstring, sstring>
         write_string(key);
         write_string_list(values);
     }
+}
+
+void cql_server::response::write_value(bytes_opt value)
+{
+    if (!value) {
+        write_int(-1);
+        return;
+    }
+
+    write_int(value->size());
+    _body << *value;
+}
+
+class type_codec {
+private:
+    enum class type_id : int16_t {
+        CUSTOM = 0,
+        ASCII,
+        BIGINT,
+        BLOB,
+        BOOLEAN,
+        COUNTER,
+        DECIMAL,
+        DOUBLE,
+        FLOAT,
+        INT,
+        TEXT,
+        TIMESTAMP,
+        UUID,
+        VARCHAR,
+        VARINT,
+        TIMEUUID,
+        INET,
+        LIST = 32,
+        MAP,
+        SET,
+        UDT = 48,
+        TUPLE
+    };
+
+    using type_id_to_type_type = boost::bimap<
+        boost::bimaps::unordered_set_of<type_id>,
+        boost::bimaps::unordered_set_of<data_type>>;
+
+    static const type_id_to_type_type type_id_to_type;
+public:
+    static void encode(cql_server::response& r, data_type type) {
+        type = type->underlying_type();
+
+        // For compatibility sake, we still return DateType as the timestamp type in resultSet metadata (#5723)
+        if (type == date_type) {
+            type = timestamp_type;
+        }
+
+        auto i = type_id_to_type.right.find(type);
+        if (i != type_id_to_type.right.end()) {
+            r.write_short(static_cast<std::underlying_type<type_id>::type>(i->second));
+            return;
+        }
+
+        // See org.apache.cassandra.transport.DataType#fromType and org.apache.cassandra.transport.OptionCodec#writeOne
+        fail(unimplemented::cause::COLLECTIONS);
+    }
+};
+
+const type_codec::type_id_to_type_type type_codec::type_id_to_type = boost::assign::list_of<type_id_to_type_type::relation>
+    (type_id::ASCII     , ascii_type)
+    (type_id::BIGINT    , long_type)
+    (type_id::BLOB      , bytes_type)
+    (type_id::BOOLEAN   , boolean_type)
+    //(type_id::COUNTER   , CounterColumn_type)
+    //(type_id::DECIMAL   , Decimal_type)
+    (type_id::DOUBLE    , double_type)
+    (type_id::FLOAT     , float_type)
+    (type_id::INT       , int32_type)
+    (type_id::TEXT      , utf8_type)
+    (type_id::TIMESTAMP , timestamp_type)
+    (type_id::UUID      , uuid_type)
+    (type_id::VARCHAR   , utf8_type)
+    //(type_id::VARINT    , integer_type)
+    (type_id::TIMEUUID  , timeuuid_type)
+    (type_id::INET      , inet_addr_type);
+
+void cql_server::response::write(const cql3::metadata& m) {
+    bool no_metadata = m.flags().contains<cql3::metadata::flag::NO_METADATA>();
+    bool global_tables_spec = m.flags().contains<cql3::metadata::flag::GLOBAL_TABLES_SPEC>();
+    bool has_more_pages = m.flags().contains<cql3::metadata::flag::HAS_MORE_PAGES>();
+
+    write_int(m.flags().mask());
+    write_int(m.column_count());
+
+    if (has_more_pages) {
+        write_value(m.paging_state()->serialize());
+    }
+
+    if (no_metadata) {
+        return;
+    }
+
+    auto names_i = m.get_names().begin();
+
+    if (global_tables_spec) {
+        auto first_spec = *names_i;
+        write_string(first_spec->ks_name);
+        write_string(first_spec->cf_name);
+    }
+
+    for (uint32_t i = 0; i < m.column_count(); ++i, ++names_i) {
+        ::shared_ptr<cql3::column_specification> name = *names_i;
+        if (!global_tables_spec) {
+            write_string(name->ks_name);
+            write_string(name->cf_name);
+        }
+        write_string(name->name->text());
+        type_codec::encode(*this, name->type);
+    };
 }

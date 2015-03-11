@@ -24,6 +24,8 @@
 #pragma once
 
 #include "schema.hh"
+#include "database.hh"
+#include "legacy_schema_tables.hh"
 
 namespace db {
 namespace system_keyspace {
@@ -46,25 +48,10 @@ extern schema_ptr hints();
 extern schema_ptr batchlog();
 extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 
-#if 0
+std::vector<schema_ptr> all_tables();
+keyspace make();
 
-    public static KSMetaData definition()
-    {
-        Iterable<CFMetaData> tables =
-            Iterables.concat(LegacySchemaTables.All,
-                             Arrays.asList(BuiltIndexes,
-                                           Hints,
-                                           Batchlog,
-                                           Paxos,
-                                           Local,
-                                           Peers,
-                                           PeerEvents,
-                                           RangeXfers,
-                                           CompactionsInProgress,
-                                           CompactionHistory,
-                                           SSTableActivity));
-        return new KSMetaData(NAME, LocalStrategy.class, Collections.<String, String>emptyMap(), true, tables);
-    }
+#if 0
 
     private static volatile Map<UUID, Pair<ReplayPosition, Long>> truncationRecords;
 

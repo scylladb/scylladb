@@ -34,6 +34,8 @@ public:
             }))
     { }
 
+    tuple_type(tuple_type&&) = default;
+
     prefix_type as_prefix() {
         return prefix_type(_types);
     }
@@ -257,6 +259,11 @@ public:
         }
 
         return true;
+    }
+    // Retruns true iff given prefix has no missing components
+    bool is_full(bytes_view v) const {
+        assert(AllowPrefixes);
+        return std::distance(begin(v), end(v)) == (ssize_t)_types.size();
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
         assert(0);

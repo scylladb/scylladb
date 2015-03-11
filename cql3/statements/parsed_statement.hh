@@ -62,13 +62,17 @@ public:
         const ::shared_ptr<cql_statement> statement;
         const std::vector<::shared_ptr<column_specification>> bound_names;
 
-        prepared(::shared_ptr<cql_statement> statement_, const std::vector<::shared_ptr<column_specification>>& bound_names_)
+        prepared(::shared_ptr<cql_statement> statement_, std::vector<::shared_ptr<column_specification>> bound_names_)
             : statement(std::move(statement_))
-            , bound_names(bound_names_)
+            , bound_names(std::move(bound_names_))
         { }
 
         prepared(::shared_ptr<cql_statement> statement_, const variable_specifications& names)
             : prepared(statement_, names.get_specifications())
+        { }
+
+        prepared(::shared_ptr<cql_statement> statement_, variable_specifications&& names)
+            : prepared(statement_, std::move(names).get_specifications())
         { }
 
         prepared(::shared_ptr<cql_statement>&& statement_)

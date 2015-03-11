@@ -22,7 +22,10 @@ enum class cause {
     COUNTERS,
     METRICS,
     COMPACT_TABLES,
-    GOSSIP
+    GOSSIP,
+    TOKEN_RESTRICTION,
+    LEGACY_COMPOSITE_KEYS,
+    RANGE_QUERIES
 };
 
 void fail(cause what) __attribute__((noreturn));

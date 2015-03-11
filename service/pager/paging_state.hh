@@ -24,6 +24,9 @@
 
 #pragma once
 
+#include "unimplemented.hh"
+#include "bytes.hh"
+
 namespace service {
 
 namespace pager {
@@ -59,9 +62,13 @@ class paging_state final {
             throw new ProtocolException("Invalid value for the paging state");
         }
     }
+#endif
 
-    public ByteBuffer serialize()
-    {
+public:
+
+    bytes_opt serialize() {
+        fail(unimplemented::cause::PAGING);
+#if 0
         try
         {
             DataOutputBuffer out = new DataOutputBuffer(serializedSize());
@@ -74,8 +81,10 @@ class paging_state final {
         {
             throw new RuntimeException(e);
         }
+#endif
     }
 
+#if 0
     private int serializedSize()
     {
         return 2 + partitionKey.remaining()

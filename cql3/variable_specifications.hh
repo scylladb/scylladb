@@ -56,8 +56,12 @@ public:
         return _variable_names.size();
     }
 
-    std::vector<::shared_ptr<column_specification>> get_specifications() const {
+    std::vector<::shared_ptr<column_specification>> get_specifications() const & {
         return std::vector<::shared_ptr<column_specification>>(_specs.begin(), _specs.end());
+    }
+
+    std::vector<::shared_ptr<column_specification>> get_specifications() && {
+        return std::move(_specs);
     }
 
     void add(int32_t bind_index, ::shared_ptr<column_specification> spec) {

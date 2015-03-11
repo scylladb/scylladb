@@ -6,6 +6,7 @@
 #include "database.hh"
 #include "unimplemented.hh"
 #include "core/future-util.hh"
+#include "db/system_keyspace.hh"
 
 #include "cql3/column_identifier.hh"
 #include <boost/algorithm/string/classification.hpp>
@@ -55,14 +56,15 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_k
         , cf_name(std::move(cf_name))
         , partition_key_type(::make_shared<tuple_type<>>(get_column_types(partition_key)))
         , clustering_key_type(::make_shared<tuple_type<>>(get_column_types(clustering_key)))
-        , clustering_key_prefix_type(::make_shared<tuple_prefix>(get_column_types(clustering_key)))
+        , clustering_key_prefix_type(::make_shared(clustering_key_type->as_prefix()))
+        , partition_key_prefix_type(::make_shared(partition_key_type->as_prefix()))
         , regular_column_name_type(regular_column_name_type)
 {
     if (partition_key.size() == 1) {
         thrift.partition_key_type = partition_key[0].type;
     } else {
         // TODO: the type should be composite_type
-        throw std::runtime_error("not implemented");
+        warn(unimplemented::cause::LEGACY_COMPOSITE_KEYS);
     }
 
     build_columns(partition_key, column_definition::column_kind::PARTITION, _partition_key);
@@ -219,10 +221,8 @@ static std::vector<sstring> parse_fname(sstring filename) {
     return comps;
 }
 
-future<keyspace> keyspace::populate(sstring ksdir) {
-
-    auto ks = make_lw_shared<keyspace>();
-    return lister::scan_dir(ksdir, directory_entry_type::directory, [ks, ksdir] (directory_entry de) {
+future<> keyspace::populate(sstring ksdir) {
+    return lister::scan_dir(ksdir, directory_entry_type::directory, [this, ksdir] (directory_entry de) {
         auto comps = parse_fname(de.name);
         if (comps.size() != 2) {
             dblog.error("Keyspace {}: Skipping malformed CF {} ", ksdir, de.name);
@@ -233,30 +233,29 @@ future<keyspace> keyspace::populate(sstring ksdir) {
         auto sstdir = ksdir + "/" + de.name;
         dblog.warn("Keyspace {}: Reading CF {} ", ksdir, comps[0]);
         return make_ready_future<>();
-    }).then([ks] {
-        return make_ready_future<keyspace>(std::move(*ks));
     });
 }
 
-future<database> database::populate(sstring datadir) {
-
-    auto db = make_lw_shared<database>();
-    return lister::scan_dir(datadir, directory_entry_type::directory, [db, datadir] (directory_entry de) {
-        dblog.warn("Populating Keyspace {}", de.name);
+future<> database::populate(sstring datadir) {
+    return lister::scan_dir(datadir, directory_entry_type::directory, [this, datadir] (directory_entry de) {
+        auto& ks_name = de.name;
         auto ksdir = datadir + "/" + de.name;
-        return keyspace::populate(ksdir).then([db, de] (keyspace ks){
-            db->keyspaces.emplace(de.name, std::move(ks));
-        });
-    }).then([db] {
-        return make_ready_future<database>(std::move(*db));
+
+        auto i = keyspaces.find(ks_name);
+        if (i == keyspaces.end()) {
+            dblog.warn("Skipping undefined keyspace: {}", ks_name);
+        } else {
+            dblog.warn("Populating Keyspace {}", ks_name);
+            return i->second.populate(ksdir);
+        }
+        return make_ready_future<>();
     });
 }
 
 future<>
 database::init_from_data_directory(sstring datadir) {
-    return populate(datadir).then([this] (database&& db) {
-        *this = db;
-    });
+    keyspaces.emplace("system", db::system_keyspace::make());
+    return populate(datadir);
 }
 
 unsigned
@@ -459,4 +458,124 @@ std::ostream& operator<<(std::ostream& os, const mutation& m) {
 
 std::ostream& operator<<(std::ostream& os, const mutation_partition& mp) {
     return fprint(os, "{mutation_partition: ...}");
+}
+
+query::result::partition
+column_family::get_partition_slice(mutation_partition& partition, const query::partition_slice& slice, uint32_t limit) {
+    query::result::partition result;
+
+    for (auto&& range : slice.row_ranges) {
+        if (limit == 0) {
+            break;
+        }
+        if (!range.is_singular()) {
+            fail(unimplemented::cause::RANGE_QUERIES);
+        }
+        auto& key = range.start();
+        if (!_schema->clustering_key_prefix_type->is_full(key)) {
+            fail(unimplemented::cause::RANGE_QUERIES);
+        }
+        auto row = partition.find_row(key);
+        if (!row) {
+            continue;
+        }
+
+        // FIXME: handle removed rows properly. In CQL rows are separate entities (can be live or dead).
+        auto row_tombstone = partition.tombstone_for_row(_schema, key);
+
+        query::result::row result_row;
+        result_row.cells.reserve(slice.regular_columns.size());
+
+        for (auto id : slice.regular_columns) {
+            auto i = row->find(id);
+            if (i == row->end()) {
+                result_row.cells.emplace_back();
+            } else {
+                auto def = _schema->regular_column_at(id);
+                if (def.is_atomic()) {
+                    auto c = i->second.as_atomic_cell();
+                    if (c.timestamp() < row_tombstone.timestamp) {
+                        result_row.cells.emplace_back(std::experimental::make_optional(
+                            atomic_cell_or_collection::from_atomic_cell(
+                                atomic_cell::one::make_dead(row_tombstone.timestamp, row_tombstone.ttl))));
+                    } else {
+                        result_row.cells.emplace_back(std::experimental::make_optional(i->second));
+                    }
+                } else {
+                    fail(unimplemented::cause::COLLECTIONS);
+                }
+            }
+        }
+        result.rows.emplace_back(key, std::move(result_row));
+        --limit;
+    }
+
+    if (!slice.static_columns.empty()) {
+        // When there are no clustered rows, static row counts as one row with respect to row limit
+        if (!result.rows.empty() || limit > 0)  {
+            // FIXME: implement
+            throw std::runtime_error("quering static columns not implemented");
+        }
+    }
+
+    return result;
+}
+
+future<lw_shared_ptr<query::result>>
+column_family::query(const query::read_command& cmd) {
+    auto result = make_lw_shared<query::result>();
+
+    uint32_t limit = cmd.row_limit;
+    for (auto&& range : cmd.partition_ranges) {
+        if (range.is_singular()) {
+            auto& key = range.start();
+            if (!_schema->partition_key_prefix_type->is_full(key)) {
+                fail(unimplemented::cause::RANGE_QUERIES);
+            }
+            auto partition = find_partition(key);
+            if (!partition) {
+                return make_ready_future<lw_shared_ptr<query::result>>(result);
+            }
+            result->partitions.emplace_back(key,
+                get_partition_slice(*partition, cmd.slice, limit));
+            limit -= result->partitions.back().second.row_count();
+            if (limit == 0) {
+                return make_ready_future<lw_shared_ptr<query::result>>(result);
+            }
+        } else if (range.is_full()) {
+            for (auto&& e : partitions) {
+                auto& key = e.first;
+                auto& partition = e.second;
+                result->partitions.emplace_back(key,
+                    get_partition_slice(partition, cmd.slice, limit));
+                limit -= result->partitions.back().second.row_count();
+                if (limit == 0) {
+                    return make_ready_future<lw_shared_ptr<query::result>>(result);
+                }
+            }
+        } else {
+            fail(unimplemented::cause::RANGE_QUERIES);
+        }
+    }
+    return make_ready_future<lw_shared_ptr<query::result>>(result);
+}
+
+future<lw_shared_ptr<query::result>>
+database::query(const query::read_command& cmd) {
+    static auto make_empty = [] {
+        return make_ready_future<lw_shared_ptr<query::result>>(make_lw_shared(query::result()));
+    };
+
+    auto ks = find_keyspace(cmd.keyspace);
+    if (!ks) {
+        // FIXME: load from sstables
+        return make_empty();
+    }
+
+    auto cf = ks->find_column_family(cmd.column_family);
+    if (!cf) {
+        return make_empty();
+    }
+
+    return cf->query(cmd);
 }

@@ -24,6 +24,7 @@ private:
     class fmt_visitor;
     class connection;
     class response;
+    friend class type_codec;
 };
 
 #endif

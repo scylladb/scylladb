@@ -90,8 +90,8 @@ public:
      * Types which are wrappers over other types should override this.
      * For example the reversed_type returns the type it is reversing.
      */
-    virtual abstract_type& underlying_type() {
-        return *this;
+    virtual shared_ptr<abstract_type> underlying_type() {
+        return shared_from_this();
     }
     /**
      * Returns true if values of the other AbstractType can be read and "reasonably" interpreted by the this
@@ -105,7 +105,7 @@ public:
      * Note that a type should be compatible with at least itself.
      */
     bool is_value_compatible_with(abstract_type& other) {
-        return is_value_compatible_with_internal(other.underlying_type());
+        return is_value_compatible_with_internal(*other.underlying_type());
     }
 protected:
     /**
@@ -152,6 +152,7 @@ public:
     virtual bool is_counter() { return false; }
     virtual bool is_collection() { return false; }
     virtual bool is_multi_cell() { return false; }
+    virtual bool is_reversed() { return false; }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() = 0;
     virtual shared_ptr<abstract_type> freeze() { return shared_from_this(); }
 };
@@ -261,6 +262,7 @@ public:
 using key_compare = serialized_compare;
 
 // FIXME: add missing types
+// Remember to update type_codec in transport/server.cc and cql3/cql3_type.cc
 extern thread_local const shared_ptr<abstract_type> int32_type;
 extern thread_local const shared_ptr<abstract_type> long_type;
 extern thread_local const shared_ptr<abstract_type> ascii_type;

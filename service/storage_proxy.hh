@@ -25,6 +25,7 @@
 #pragma once
 
 #include "database.hh"
+#include "query.hh"
 #include "core/distributed.hh"
 #include "db/consistency_level.hh"
 
@@ -60,6 +61,8 @@ public:
     * @param consistency_level the consistency level for the operation
     */
     future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl);
+
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query(lw_shared_ptr<query::read_command> cmd, db::consistency_level cl);
 };
 
 }

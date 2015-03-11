@@ -3,6 +3,8 @@
  */
 
 #include "cql3/column_identifier.hh"
+#include "exceptions/exceptions.hh"
+#include "cql3/selection/simple_selector.hh"
 
 namespace cql3 {
 
@@ -26,6 +28,16 @@ column_identifier::raw::prepare_column_identifier(schema_ptr schema) {
 
 std::ostream& operator<<(std::ostream& out, const column_identifier::raw& id) {
     return out << id._text;
+}
+
+::shared_ptr<selection::selector::factory>
+column_identifier::new_selector_factory(schema_ptr schema, std::vector<const column_definition*>& defs) {
+    auto def = get_column_definition(schema, *this);
+    if (!def) {
+        throw exceptions::invalid_request_exception(sprint("Undefined name %s in selection clause", _text));
+    }
+
+    return selection::simple_selector::new_factory(def->name_as_text(), add_and_get_index(*def, defs), def->type);
 }
 
 }
