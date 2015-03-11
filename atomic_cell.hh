@@ -163,6 +163,9 @@ public:
     ttl_opt ttl() const {
         return atomic_cell::ttl(_data);
     }
+    bytes_view serialize() const {
+        return _data;
+    }
     operator atomic_cell::view() const {
         return atomic_cell::view(_data);
     }
