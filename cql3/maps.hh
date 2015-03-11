@@ -29,6 +29,8 @@
 #include "cql3/term.hh"
 #include "operation.hh"
 #include "update_parameters.hh"
+#include "exceptions/exceptions.hh"
+#include "cql3/cql3_type.hh"
 
 namespace cql3 {
 
@@ -86,49 +88,52 @@ public:
         { }
 
         virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
-            throw std::runtime_error("not implemented");
-#if 0
-            validateAssignableTo(keyspace, receiver);
+            validate_assignable_to(keyspace, *receiver);
 
-            ColumnSpecification keySpec = Maps.keySpecOf(receiver);
-            ColumnSpecification valueSpec = Maps.valueSpecOf(receiver);
-            Map<Term, Term> values = new HashMap<Term, Term>(entries.size());
-            boolean allTerminal = true;
-            for (Pair<Term.Raw, Term.Raw> entry : entries)
-            {
-                Term k = entry.left.prepare(keyspace, keySpec);
-                Term v = entry.right.prepare(keyspace, valueSpec);
+            auto key_spec = maps::key_spec_of(*receiver);
+            auto value_spec = maps::value_spec_of(*receiver);
+            std::unordered_map<shared_ptr<term>, shared_ptr<term>> values;
+            values.reserve(entries.size());
+            bool all_terminal = true;
+            for (auto&& entry : entries) {
+                auto k = entry.first->prepare(keyspace, key_spec);
+                auto v = entry.second->prepare(keyspace, value_spec);
 
-                if (k.containsBindMarker() || v.containsBindMarker())
-                    throw new InvalidRequestException(String.format("Invalid map literal for %s: bind variables are not supported inside collection literals", receiver.name));
+                if (k->contains_bind_marker() || v->contains_bind_marker()) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid map literal for %s: bind variables are not supported inside collection literals", *receiver->name));
+                }
 
-                if (k instanceof Term.NonTerminal || v instanceof Term.NonTerminal)
-                    allTerminal = false;
+                if (dynamic_pointer_cast<non_terminal>(k) || dynamic_pointer_cast<non_terminal>(v)) {
+                    all_terminal = false;
+                }
 
-                values.put(k, v);
+                values.emplace(k, v);
             }
-            DelayedValue value = new DelayedValue(((MapType)receiver.type).getKeysType(), values);
-            return allTerminal ? value.bind(QueryOptions.DEFAULT) : value;
-#endif
-        }
-
-#if 0
-        private void validateAssignableTo(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
-            if (!(receiver.type instanceof MapType))
-                throw new InvalidRequestException(String.format("Invalid map literal for %s of type %s", receiver.name, receiver.type.asCQL3Type()));
-
-            ColumnSpecification keySpec = Maps.keySpecOf(receiver);
-            ColumnSpecification valueSpec = Maps.valueSpecOf(receiver);
-            for (Pair<Term.Raw, Term.Raw> entry : entries)
-            {
-                if (!entry.left.testAssignment(keyspace, keySpec).isAssignable())
-                    throw new InvalidRequestException(String.format("Invalid map literal for %s: key %s is not of type %s", receiver.name, entry.left, keySpec.type.asCQL3Type()));
-                if (!entry.right.testAssignment(keyspace, valueSpec).isAssignable())
-                    throw new InvalidRequestException(String.format("Invalid map literal for %s: value %s is not of type %s", receiver.name, entry.right, valueSpec.type.asCQL3Type()));
+            delayed_value value(static_pointer_cast<map_type_impl>(receiver->type)->get_keys_type()->as_less_comparator(), values);
+            if (all_terminal) {
+                return value.bind(query_options::DEFAULT);
+            } else {
+                return make_shared(std::move(value));
             }
         }
-#endif
+
+    private:
+        void validate_assignable_to(const sstring& keyspace, column_specification& receiver) {
+            if (!dynamic_pointer_cast<map_type_impl>(receiver.type)) {
+                throw exceptions::invalid_request_exception(sprint("Invalid map literal for %s of type %s", *receiver.name, *receiver.type->as_cql3_type()));
+            }
+            auto&& key_spec = maps::key_spec_of(receiver);
+            auto&& value_spec = maps::value_spec_of(receiver);
+            for (auto&& entry : entries) {
+                if (!is_assignable(entry.first->test_assignment(keyspace, key_spec))) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid map literal for %s: key %s is not of type %s", *receiver.name, *entry.first, *key_spec->type->as_cql3_type()));
+                }
+                if (!is_assignable(entry.second->test_assignment(keyspace, value_spec))) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid map literal for %s: value %s is not of type %s", *receiver.name, *entry.second, *value_spec->type->as_cql3_type()));
+                }
+            }
+        }
+    public:
 
         virtual assignment_testable::test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
             throw std::runtime_error("not implemented");

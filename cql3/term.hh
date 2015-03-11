@@ -122,7 +122,6 @@ public:
         virtual ::shared_ptr<term> prepare(const sstring& keyspace, const std::vector<column_specification>& receiver) = 0;
     };
 };
-
     /**
      * A terminal term, one that can be reduced to a byte buffer directly.
      *
@@ -204,6 +203,7 @@ public:
             return {};
         };
     };
+
 }
 
 #endif
