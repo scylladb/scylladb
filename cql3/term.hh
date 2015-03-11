@@ -44,7 +44,7 @@ class term;
  * from a raw term (Term.Raw) by poviding the actual receiver to which the term is supposed to be a
  * value of.
  */
-class term {
+class term : public ::enable_shared_from_this<term> {
 public:
     virtual ~term() {}
 
@@ -137,13 +137,13 @@ public:
      * Note that a terminal term will always have been type checked, and thus
      * consumer can (and should) assume so.
      */
-    class terminal : public term, public ::enable_shared_from_this<terminal> {
+    class terminal : public term {
     public:
         virtual void collect_marker_specification(::shared_ptr<variable_specifications> bound_names) {
         }
 
         virtual ::shared_ptr<terminal> bind(const query_options& options) override {
-            return this->shared_from_this();
+            return static_pointer_cast<terminal>(this->shared_from_this());
         }
 
         virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
