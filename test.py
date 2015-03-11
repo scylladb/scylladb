@@ -73,6 +73,7 @@ if __name__ == "__main__":
         for test in all_tests:
             test_to_run.append(os.path.join(prefix, test))
         test_to_run.append('tests/memcached/test.py --mode ' + mode + (' --fast' if args.fast else ''))
+        test_to_run.append(os.path.join(prefix, 'map_reduce_test') + ' -c 2')
 
         allocator_test_path = os.path.join(prefix, 'allocator_test')
         if args.fast:
