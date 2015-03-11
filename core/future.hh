@@ -553,7 +553,7 @@ public:
      */
     template <typename Func>
     future<T...> finally(Func&& func, std::enable_if_t<is_future<std::result_of_t<Func()>>::value, void*> = nullptr) noexcept {
-        return std::move(*this).then_wrapped([func = std::forward<Func>(func)](future<T...> result) {
+        return then_wrapped([func = std::forward<Func>(func)](future<T...> result) {
             return func().then_wrapped([result = std::move(result)](auto f_res) mutable {
                 try {
                     f_res.get(); // force excepion if one
@@ -594,7 +594,7 @@ public:
     }
 
     future<> or_terminate() && noexcept {
-        return std::move(*this).then_wrapped([] (auto&& f) {
+        return then_wrapped([] (auto&& f) {
             try {
                 f.get();
             } catch (...) {

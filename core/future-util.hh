@@ -59,7 +59,7 @@ void do_until_continued(StopCondition&& stop_cond, AsyncAction&& action, promise
         try {
             auto&& f = action();
             if (!f.available()) {
-                std::move(f).then_wrapped([action = std::forward<AsyncAction>(action),
+                f.then_wrapped([action = std::forward<AsyncAction>(action),
                     stop_cond = std::forward<StopCondition>(stop_cond), p = std::move(p)](std::result_of_t<AsyncAction()> fut) mutable {
                     try {
                         fut.get();
@@ -171,7 +171,7 @@ inline
 future<std::tuple<future<FutureArgs...>, Rest...>>
 when_all(future<FutureArgs...>&& fut, Rest&&... rest) {
     using Future = future<FutureArgs...>;
-    return std::move(fut).then_wrapped(
+    return fut.then_wrapped(
             [rest = std::make_tuple(std::move(rest)...)] (Future&& fut) mutable {
         return apply(do_when_all(), std::move(rest)).then_wrapped(
                 [fut = std::move(fut)] (future<std::tuple<Rest...>>&& rest) mutable {
