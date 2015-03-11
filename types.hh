@@ -200,6 +200,8 @@ public:
     virtual bool is_compatible_with_frozen(collection_type_impl& previous) = 0;
     virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) = 0;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() override;
+    template <typename BytesViewIterator>
+    static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, int version);
     mutation_view deserialize_mutation_form(bytes_view in);
     // FIXME: use iterators?
     collection_mutation::one serialize_mutation_form(const mutation& mut);

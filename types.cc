@@ -677,6 +677,17 @@ void write_collection_value(std::ostream& out, int version, data_type type, cons
     write_collection_value(out, version, val_bytes);
 }
 
+template <typename BytesViewIterator>
+bytes
+collection_type_impl::pack(BytesViewIterator start, BytesViewIterator finish, int elements, int protocol_version) {
+    std::ostringstream out;
+    write_collection_size(out, elements, protocol_version);
+    while (start != finish) {
+        write_collection_value(out, protocol_version, *start++);
+    }
+    return out.str();
+}
+
 shared_ptr<map_type_impl>
 map_type_impl::get_instance(data_type keys, data_type values, bool is_multi_cell) {
     return intern::get_instance(std::move(keys), std::move(values), is_multi_cell);
