@@ -22,6 +22,7 @@
 #ifndef REACTOR_HH_
 #define REACTOR_HH_
 
+#include "seastar.hh"
 #include "iostream.hh"
 #include <memory>
 #include <type_traits>
