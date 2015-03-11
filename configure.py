@@ -103,7 +103,8 @@ tests = [
     'tests/output_stream_test',
     'tests/udp_zero_copy',
     'tests/shared_ptr_test',
-    'tests/slab_test'
+    'tests/slab_test',
+    'tests/fstream_test'
     ]
 
 apps = [
@@ -228,6 +229,7 @@ deps = {
     'tests/udp_zero_copy': ['tests/udp_zero_copy.cc'] + core + libnet,
     'tests/shared_ptr_test': ['tests/shared_ptr_test.cc'] + core,
     'tests/slab_test': ['tests/slab_test.cc'] + core,
+    'tests/fstream_test': ['tests/fstream_test.cc'] + core,
 }
 
 warnings = [
