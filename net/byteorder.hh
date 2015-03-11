@@ -26,6 +26,8 @@
 #include <iosfwd>
 #include <utility>
 
+#include "core/unaligned.hh"
+
 inline uint64_t ntohq(uint64_t v) {
     return __builtin_bswap64(v);
 }
@@ -56,25 +58,12 @@ inline int32_t hton(int32_t x) { return htonl(x); }
 inline int64_t ntoh(int64_t x) { return ntohq(x); }
 inline int64_t hton(int64_t x) { return htonq(x); }
 
-
-// Wrapper around a primitive type to provide an unaligned version.
-// This is because gcc (correctly) doesn't allow binding an unaligned
-// scalar variable to a reference, and (unfortunately) doesn't allow
-// specifying unaligned references.
-//
-// So, packed<uint32_t>& is our way of passing a reference (or pointer)
-// to a uint32_t around, without losing the knowledge about its alignment
-// or lack thereof.
+// Define net::packed<> using unaligned<> from unaligned.hh.
 template <typename T>
-struct packed {
-    T raw;
-    packed() = default;
-    packed(T x) : raw(x) {}
-    packed& operator=(const T& x) { raw = x; return *this; }
-    operator T() const { return raw; }
-
+struct packed : public unaligned<T> {
+    using unaligned<T>::unaligned; // inherit constructors
     template <typename Adjuster>
-    void adjust_endianness(Adjuster a) { a(raw); }
+    void adjust_endianness(Adjuster a) { a(this->raw); }
 } __attribute__((packed));
 
 template <typename T>
