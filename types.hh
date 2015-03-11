@@ -186,7 +186,8 @@ protected:
             : abstract_type(std::move(name)), _kind(k) {}
 public:
     // representation of a collection mutation, key/value pairs, value is a mutation itself
-    using mutation = std::vector<std::pair<bytes_view, atomic_cell::view>>;
+    using mutation = std::vector<std::pair<bytes, atomic_cell::one>>;
+    using mutation_view = std::vector<std::pair<bytes_view, atomic_cell::view>>;
     virtual data_type name_comparator() = 0;
     virtual data_type value_comparator() = 0;
     shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key);
@@ -199,9 +200,10 @@ public:
     virtual bool is_compatible_with_frozen(collection_type_impl& previous) = 0;
     virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) = 0;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() override;
-    mutation deserialize_mutation_form(bytes_view in);
+    mutation_view deserialize_mutation_form(bytes_view in);
     // FIXME: use iterators?
-    collection_mutation::one serialize_mutation_form(mutation mut);
+    collection_mutation::one serialize_mutation_form(const mutation& mut);
+    collection_mutation::one serialize_mutation_form(mutation_view mut);
     collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b);
 };
 

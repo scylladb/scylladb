@@ -814,9 +814,9 @@ map_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
     abort();
 }
 
-auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation {
+auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation_view {
     auto nr = read_simple<uint32_t>(in);
-    mutation ret;
+    mutation_view ret;
     ret.reserve(nr);
     for (uint32_t i = 0; i != nr; ++i) {
         // FIXME: we could probably avoid the need for size
@@ -830,8 +830,9 @@ auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation 
     return ret;
 }
 
+template <typename Iterator>
 collection_mutation::one
-collection_type_impl::serialize_mutation_form(mutation mut) {
+do_serialize_mutation_form(Iterator begin, Iterator end) {
     std::ostringstream out;
     auto write32 = [&out] (uint32_t v) {
         v = net::hton(v);
@@ -842,8 +843,9 @@ collection_type_impl::serialize_mutation_form(mutation mut) {
         out.write(v.begin(), v.size());
     };
     // FIXME: overflow?
-    write32(mut.size());
-    for (auto&& kv : mut) {
+    write32(std::distance(begin, end));
+    while (begin != end) {
+        auto&& kv = *begin++;
         auto&& k = kv.first;
         auto&& v = kv.second;
         writeb(k);
@@ -854,10 +856,20 @@ collection_type_impl::serialize_mutation_form(mutation mut) {
 }
 
 collection_mutation::one
+collection_type_impl::serialize_mutation_form(const mutation& mut) {
+    return do_serialize_mutation_form(mut.begin(), mut.end());
+}
+
+collection_mutation::one
+collection_type_impl::serialize_mutation_form(mutation_view mut) {
+    return do_serialize_mutation_form(mut.begin(), mut.end());
+}
+
+collection_mutation::one
 collection_type_impl::merge(collection_mutation::view a, collection_mutation::view b) {
     auto aa = deserialize_mutation_form(a.data);
     auto bb = deserialize_mutation_form(b.data);
-    mutation merged;
+    mutation_view merged;
     merged.reserve(aa.size() + bb.size());
     using element_type = std::pair<bytes_view, atomic_cell::view>;
     auto key_type = name_comparator();
