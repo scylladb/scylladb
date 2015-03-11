@@ -598,6 +598,7 @@ enum class open_flags {
     ro = O_RDONLY,
     wo = O_WRONLY,
     create = O_CREAT,
+    truncate = O_TRUNC,
 };
 
 inline open_flags operator|(open_flags a, open_flags b) {

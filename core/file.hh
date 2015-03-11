@@ -56,6 +56,7 @@ public:
     virtual future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov) = 0;
     virtual future<> flush(void) = 0;
     virtual future<struct stat> stat(void) = 0;
+    virtual future<> truncate(uint64_t length) = 0;
     virtual future<> discard(uint64_t offset, uint64_t length) = 0;
     virtual future<size_t> size(void) = 0;
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) = 0;
@@ -79,6 +80,7 @@ public:
     future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov);
     future<> flush(void);
     future<struct stat> stat(void);
+    future<> truncate(uint64_t length);
     future<> discard(uint64_t offset, uint64_t length);
     future<size_t> size(void);
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override;
@@ -87,6 +89,7 @@ public:
 class blockdev_file_impl : public posix_file_impl {
 public:
     blockdev_file_impl(int fd) : posix_file_impl(fd) {}
+    future<> truncate(uint64_t length) override;
     future<> discard(uint64_t offset, uint64_t length) override;
     future<size_t> size(void) override;
 };
@@ -134,6 +137,10 @@ public:
 
     future<struct stat> stat() {
         return _file_impl->stat();
+    }
+
+    future<> truncate(uint64_t length) {
+        return _file_impl->truncate(length);
     }
 
     future<> discard(uint64_t offset, uint64_t length) {
