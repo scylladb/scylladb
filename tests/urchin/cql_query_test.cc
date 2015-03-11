@@ -65,9 +65,17 @@ static future<> require_column_has_value(distributed<database>& ddb, const sstri
         if (i == row->end()) {
             assert(((void)"column not set", 0));
         }
-        auto cell = i->second.as_atomic_cell();
-        assert(cell.is_live());
-        assert(col_def->type->equal(cell.value(), col_def->type->decompose(expected)));
+        bytes actual;
+        if (!col_def->type->is_multi_cell()) {
+            auto cell = i->second.as_atomic_cell();
+            assert(cell.is_live());
+            actual = { cell.value().begin(), cell.value().end() };
+        } else {
+            auto cell = i->second.as_collection_mutation();
+            auto type = dynamic_pointer_cast<collection_type_impl>(col_def->type);
+            actual = type->to_value(type->deserialize_mutation_form(cell.data), 3);
+        }
+        assert(col_def->type->equal(actual, col_def->type->decompose(expected)));
         row->find(col_def->id);
     });
 }
@@ -97,5 +105,42 @@ SEASTAR_TEST_CASE(test_insert_statement) {
         return db->stop();
         }).then_wrapped([db] (future<> f) mutable {
         return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(test_map_insert_update) {
+    auto db = make_shared<distributed<database>>();
+    auto state = make_shared<conversation_state>(*db, ks_name);
+
+    // CQL: create table cf (p1 varchar primary key, map1 map<int, int>);
+    return db->start().then([db] {
+        return db->invoke_on_all([] (database& db) {
+            keyspace ks;
+            auto my_map_type = map_type_impl::get_instance(int32_type, int32_type, true);
+            auto cf_schema = make_lw_shared(schema(ks_name, table_name,
+                {{"p1", utf8_type}}, {}, {{"map1", my_map_type}}, {}, utf8_type));
+            ks.column_families.emplace(table_name, column_family(cf_schema));
+            db.keyspaces.emplace(ks_name, std::move(ks));
+        });
+    }).then([state, db] {
+            return state->execute_cql("insert into cf (p1, map1) values ('key1', { 1001: 2001 });");
+        }).then([state, db] {
+            return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                    "map1", map_type_impl::native_type({{1001, 2001}}));
+        }).then([state, db] {
+            return state->execute_cql("update cf set map1[1002] = 2002 where p1 = 'key1';");
+        }).then([state, db] {
+            return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                    "map1", map_type_impl::native_type({{1001, 2001}, {1002, 2002}}));
+        }).then([state, db] {
+            // overwrite an element
+            return state->execute_cql("update cf set map1[1001] = 3001 where p1 = 'key1';");
+        }).then([state, db] {
+            return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                    "map1", map_type_impl::native_type({{1001, 3001}, {1002, 2002}}));
+        }).then([db] {
+            return db->stop();
+        }).then_wrapped([db] (future<> f) mutable {
+            return make_ready_future<>();
     });
 }
