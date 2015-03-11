@@ -51,6 +51,8 @@ inline int32_t compare_unsigned(bytes_view v1, bytes_view v2) {
     return (int32_t) (v1.size() - v2.size());
 }
 
+class serialized_compare;
+
 class abstract_type : public enable_shared_from_this<abstract_type> {
     sstring _name;
 public:
@@ -58,6 +60,8 @@ public:
     virtual ~abstract_type() {}
     virtual void serialize(const boost::any& value, std::ostream& out) = 0;
     virtual bool less(bytes_view v1, bytes_view v2) = 0;
+    // returns a callable that can be called with two byte_views, and calls this->less() on them.
+    serialized_compare as_less_comparator();
     virtual size_t hash(bytes_view v) = 0;
     virtual bool equal(bytes_view v1, bytes_view v2) {
         if (is_byte_order_equal()) {
@@ -364,6 +368,12 @@ public:
         return _type->less(v1, v2);
     }
 };
+
+inline
+serialized_compare
+abstract_type::as_less_comparator() {
+    return serialized_compare(shared_from_this());
+}
 
 using key_compare = serialized_compare;
 
