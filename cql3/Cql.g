@@ -1066,25 +1066,33 @@ mapLiteral returns [shared_ptr<cql3::maps::literal> map]
       '}' { $map = ::make_shared<cql3::maps::literal>(m); }
     ;
 
+setOrMapLiteral[shared_ptr<cql3::term::raw> t] returns [shared_ptr<cql3::term::raw> value]
+	@init{ std::vector<std::pair<shared_ptr<cql3::term::raw>, shared_ptr<cql3::term::raw>>> m; }
+    : ':' v=term { m.push_back({t, v}); }
+          ( ',' kn=term ':' vn=term { m.push_back({kn, vn}); } )*
+      { $value = ::make_shared<cql3::maps::literal>(std::move(m)); }
 #if 0
-setOrMapLiteral[Term.Raw t] returns [Term.Raw value]
-    : ':' v=term { List<Pair<Term.Raw, Term.Raw>> m = new ArrayList<Pair<Term.Raw, Term.Raw>>(); m.add(Pair.create(t, v)); }
-          ( ',' kn=term ':' vn=term { m.add(Pair.create(kn, vn)); } )*
-      { $value = new Maps.Literal(m); }
     | { List<Term.Raw> s = new ArrayList<Term.Raw>(); s.add(t); }
           ( ',' tn=term { s.add(tn); } )*
       { $value = new Sets.Literal(s); }
+#endif
     ;
 
-collectionLiteral returns [Term.Raw value]
+collectionLiteral returns [shared_ptr<cql3::term::raw> value]
+#if 0
     : '[' { List<Term.Raw> l = new ArrayList<Term.Raw>(); }
           ( t1=term { l.add(t1); } ( ',' tn=term { l.add(tn); } )* )?
       ']' { $value = new Lists.Literal(l); }
-    | '{' t=term v=setOrMapLiteral[t] { $value = v; } '}'
+#endif  // turn ':' below to '|': 
+    : '{' t=term v=setOrMapLiteral[t] { $value = v; } '}'
     // Note that we have an ambiguity between maps and set for "{}". So we force it to a set literal,
     // and deal with it later based on the type of the column (SetLiteral.java).
+#if 0
     | '{' '}' { $value = new Sets.Literal(Collections.<Term.Raw>emptyList()); }
+#endif
     ;
+
+#if 0
 
 usertypeLiteral returns [UserTypes.Literal ut]
     @init{ Map<ColumnIdentifier, Term.Raw> m = new HashMap<ColumnIdentifier, Term.Raw>(); }
@@ -1102,8 +1110,8 @@ tupleLiteral returns [Tuples.Literal tt]
 
 value returns [::shared_ptr<cql3::term::raw> value]
     : c=constant           { $value = c; }
-#if 0
     | l=collectionLiteral  { $value = l; }
+#if 0
     | u=usertypeLiteral    { $value = u; }
     | t=tupleLiteral       { $value = t; }
 #endif
