@@ -203,6 +203,7 @@ public:
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, int version);
     mutation_view deserialize_mutation_form(bytes_view in);
+    virtual bytes to_value(mutation_view mut, int protocol_version) = 0;
     // FIXME: use iterators?
     collection_mutation::one serialize_mutation_form(const mutation& mut);
     collection_mutation::one serialize_mutation_form(mutation_view mut);
@@ -290,6 +291,7 @@ public:
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
     static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,
             int protocol_version);
+    virtual bytes to_value(mutation_view mut, int protocol_version) override;
 };
 
 using map_type = shared_ptr<map_type_impl>;
@@ -322,6 +324,7 @@ public:
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
+    virtual bytes to_value(mutation_view mut, int protocol_version) override;
 };
 
 using set_type = shared_ptr<set_type_impl>;
@@ -354,6 +357,7 @@ public:
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
+    virtual bytes to_value(mutation_view mut, int protocol_version) override;
 };
 
 using list_type = shared_ptr<list_type_impl>;

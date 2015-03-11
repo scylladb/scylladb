@@ -825,6 +825,18 @@ map_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
     abort();
 }
 
+bytes
+map_type_impl::to_value(mutation_view mut, int protocol_version) {
+    std::vector<bytes_view> tmp;
+    tmp.reserve(mut.size() * 2);
+    for (auto&& e : mut) {
+        if (e.second.is_live()) {
+            tmp.emplace_back(e.first);
+            tmp.emplace_back(e.second.value());
+        }
+    }
+    return pack(tmp.begin(), tmp.end(), tmp.size() / 2, protocol_version);
+}
 
 bytes
 map_type_impl::serialize_partially_deserialized_form(
@@ -1084,6 +1096,18 @@ set_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
     abort();
 }
 
+bytes
+set_type_impl::to_value(mutation_view mut, int protocol_version) {
+    std::vector<bytes_view> tmp;
+    tmp.reserve(mut.size());
+    for (auto&& e : mut) {
+        if (e.second.is_live()) {
+            tmp.emplace_back(e.first);
+        }
+    }
+    return pack(tmp.begin(), tmp.end(), tmp.size(), protocol_version);
+}
+
 list_type
 list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);
@@ -1209,6 +1233,18 @@ std::vector<bytes>
 list_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
     // FIXME:
     abort();
+}
+
+bytes
+list_type_impl::to_value(mutation_view mut, int protocol_version) {
+    std::vector<bytes_view> tmp;
+    tmp.reserve(mut.size());
+    for (auto&& e : mut) {
+        if (e.second.is_live()) {
+            tmp.emplace_back(e.second.value());
+        }
+    }
+    return pack(tmp.begin(), tmp.end(), tmp.size(), protocol_version);
 }
 
 thread_local const shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
