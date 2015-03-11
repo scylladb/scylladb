@@ -172,70 +172,61 @@ public:
         }
     };
 
-#if 0
-    public static class Value extends Term.Terminal implements Term.CollectionTerminal
-    {
-        public final Map<ByteBuffer, ByteBuffer> map;
+    class value : public terminal, collection_terminal {
+    public:
+        std::map<bytes, bytes, serialized_compare> map;
 
-        public Value(Map<ByteBuffer, ByteBuffer> map)
-        {
-            this.map = map;
+        value(std::map<bytes, bytes, serialized_compare> map)
+            : map(std::move(map)) {
         }
 
-        public static Value fromSerialized(ByteBuffer value, MapType type, int version) throws InvalidRequestException
-        {
-            try
-            {
+        static value from_serialized(bytes value, map_type type, int version) {
+            try {
                 // Collections have this small hack that validate cannot be called on a serialized object,
                 // but compose does the validation (so we're fine).
-                Map<?, ?> m = (Map<?, ?>)type.getSerializer().deserializeForNativeProtocol(value, version);
-                Map<ByteBuffer, ByteBuffer> map = new LinkedHashMap<ByteBuffer, ByteBuffer>(m.size());
-                for (Map.Entry<?, ?> entry : m.entrySet())
-                    map.put(type.getKeysType().decompose(entry.getKey()), type.getValuesType().decompose(entry.getValue()));
-                return new Value(map);
-            }
-            catch (MarshalException e)
-            {
-                throw new InvalidRequestException(e.getMessage());
+                // FIXME: deserialize_for_native_protocol?!
+                auto m = boost::any_cast<map_type_impl::native_type&&>(type->deserialize(value, version));
+                std::map<bytes, bytes, serialized_compare> map(type->get_keys_type()->as_less_comparator());
+                for (auto&& e : m) {
+                    map.emplace(type->get_keys_type()->decompose(e.first),
+                                type->get_values_type()->decompose(e.second));
+                }
+                return { std::move(map) };
+            } catch (marshal_exception& e) {
+                throw exceptions::invalid_request_exception(e.why());
             }
         }
 
-        public ByteBuffer get(QueryOptions options)
-        {
-            return getWithProtocolVersion(options.getProtocolVersion());
+        virtual bytes_opt get(const query_options& options) override {
+            return get_with_protocol_version(options.get_protocol_version());
         }
 
-        public ByteBuffer getWithProtocolVersion(int protocolVersion)
-        {
-            List<ByteBuffer> buffers = new ArrayList<>(2 * map.size());
-            for (Map.Entry<ByteBuffer, ByteBuffer> entry : map.entrySet())
-            {
-                buffers.add(entry.getKey());
-                buffers.add(entry.getValue());
+        virtual bytes get_with_protocol_version(int protocol_version) {
+            std::ostringstream out;
+            write_collection_size(out, protocol_version, map.size());
+            for (auto&& e : map) {
+                write_collection_value(out, protocol_version, e.first);
+                write_collection_value(out, protocol_version, e.second);
             }
-            return CollectionSerializer.pack(buffers, map.size(), protocolVersion);
+            return out.str();
         }
 
-        public boolean equals(MapType mt, Value v)
-        {
-            if (map.size() != v.map.size())
-                return false;
-
-            // We use the fact that we know the maps iteration will both be in comparator order
-            Iterator<Map.Entry<ByteBuffer, ByteBuffer>> thisIter = map.entrySet().iterator();
-            Iterator<Map.Entry<ByteBuffer, ByteBuffer>> thatIter = v.map.entrySet().iterator();
-            while (thisIter.hasNext())
-            {
-                Map.Entry<ByteBuffer, ByteBuffer> thisEntry = thisIter.next();
-                Map.Entry<ByteBuffer, ByteBuffer> thatEntry = thatIter.next();
-                if (mt.getKeysType().compare(thisEntry.getKey(), thatEntry.getKey()) != 0 || mt.getValuesType().compare(thisEntry.getValue(), thatEntry.getValue()) != 0)
-                    return false;
-            }
-
-            return true;
+        bool equals(map_type mt, const value& v) {
+            return std::equal(map.begin(), map.end(),
+                              v.map.begin(), v.map.end(),
+                              [mt] (auto&& e1, auto&& e2) {
+                return mt->get_keys_type()->compare(e1.first, e2.first) == 0
+                        && mt->get_values_type()->compare(e1.second, e2.second) == 0;
+            });
         }
-    }
 
+        virtual sstring to_string() const {
+            // FIXME:
+            abort();
+        }
+    };
+
+#if 0
     // See Lists.DelayedValue
     public static class DelayedValue extends Term.NonTerminal
     {
