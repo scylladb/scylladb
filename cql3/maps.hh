@@ -305,26 +305,24 @@ public:
 #endif
     };
 
-#if 0
-    public static class Setter extends Operation
-    {
-        public Setter(ColumnDefinition column, Term t)
-        {
-            super(column, t);
+    class setter : public operation {
+    public:
+        setter(column_definition& column, shared_ptr<term> t)
+                : operation(column, std::move(t)) {
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            if (column.type.isMultiCell())
-            {
+        virtual void execute(mutation& m, const clustering_prefix& row_key, const update_parameters& params) override {
+            if (column.type->is_multi_cell()) {
                 // delete + put
+                // FIXME: we don't have tombstones for entire collections yet
+#if 0
                 CellName name = cf.getComparator().create(prefix, column);
                 cf.addAtom(params.makeTombstoneForOverwrite(name.slice()));
-            }
-            Putter.doPut(t, cf, prefix, column, params);
-        }
-    }
 #endif
+            }
+            do_put(m, row_key, params, _t, column);
+        }
+    };
 
     class setter_by_key : public operation {
         const shared_ptr<term> _k;
@@ -378,33 +376,52 @@ public:
             doPut(t, cf, prefix, column, params);
         }
 
-        static void doPut(Term t, ColumnFamily cf, Composite prefix, ColumnDefinition column, UpdateParameters params) throws InvalidRequestException
-        {
-            Term.Terminal value = t.bind(params.options);
-            Maps.Value mapValue = (Maps.Value) value;
-            if (column.type.isMultiCell())
-            {
-                if (value == null)
-                    return;
+    }
 
-                for (Map.Entry<ByteBuffer, ByteBuffer> entry : mapValue.map.entrySet())
-                {
-                    CellName cellName = cf.getComparator().create(prefix, column, entry.getKey());
-                    cf.addColumn(params.makeColumn(cellName, entry.getValue()));
-                }
+#endif
+
+    static void do_put(mutation& m, const clustering_prefix& prefix, const update_parameters& params,
+            shared_ptr<term> t, const column_definition& column) {
+    {
+        auto value = t->bind(params._options);
+        auto map_value = dynamic_pointer_cast<maps::value>(value);
+        if (column.type->is_multi_cell()) {
+            if (!value) {
+                return;
             }
-            else
-            {
-                // for frozen maps, we're overwriting the whole cell
-                CellName cellName = cf.getComparator().create(prefix, column);
-                if (value == null)
-                    cf.addAtom(params.makeTombstone(cellName));
-                else
-                    cf.addColumn(params.makeColumn(cellName, mapValue.getWithProtocolVersion(Server.CURRENT_VERSION)));
+
+            collection_type_impl::mutation mut;
+            for (auto&& e : map_value->map) {
+                mut.emplace_back(e.first, params.make_cell(e.second));
+            }
+            auto ctype = static_pointer_cast<map_type_impl>(column.type);
+            auto col_mut = ctype->serialize_mutation_form(std::move(mut));
+            if (column.is_static()) {
+                m.set_static_cell(column, std::move(col_mut));
+            } else {
+                m.set_clustered_cell(prefix, column, std::move(col_mut));
+            }
+        } else {
+            // for frozen maps, we're overwriting the whole cell
+            if (!value) {
+                // FIXME: encapsulate this if
+                if (column.is_static()) {
+                    m.set_static_cell(column, params.make_dead_cell());
+                } else {
+                    m.set_clustered_cell(prefix, column, params.make_dead_cell());
+                }
+            } else {
+                auto v = map_type_impl::serialize_partially_deserialized_form({map_value->map.begin(), map_value->map.end()}, 3);
+                if (column.is_static()) {
+                    m.set_static_cell(column, params.make_cell(std::move(v)));
+                } else {
+                    m.set_clustered_cell(prefix, column, params.make_cell(std::move(v)));
+                }
             }
         }
     }
 
+#if 0
     public static class DiscarderByKey extends Operation
     {
         public DiscarderByKey(ColumnDefinition column, Term k)
@@ -425,6 +442,8 @@ public:
         }
     }
 #endif
+};
+
 };
 
 }
