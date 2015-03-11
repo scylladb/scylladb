@@ -288,6 +288,8 @@ public:
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
+    static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,
+            int protocol_version);
 };
 
 using map_type = shared_ptr<map_type_impl>;

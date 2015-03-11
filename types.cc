@@ -825,6 +825,19 @@ map_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
     abort();
 }
 
+
+bytes
+map_type_impl::serialize_partially_deserialized_form(
+        const std::vector<std::pair<bytes_view, bytes_view>>& v, int protocol_version) {
+    std::ostringstream os;
+    write_collection_size(os, v.size(), protocol_version);
+    for (auto&& e : v) {
+        write_collection_value(os, protocol_version, e.first);
+        write_collection_value(os, protocol_version, e.second);
+    }
+    return os.str();
+}
+
 auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation_view {
     auto nr = read_simple<uint32_t>(in);
     mutation_view ret;
