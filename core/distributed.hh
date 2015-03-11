@@ -95,6 +95,22 @@ public:
             }, std::forward<Reducer>(r));
     }
 
+    // Invoke a method on all instances of @Service and reduce the results using
+    // @Reducer. See ::map_reduce().
+    // @Func gets local instance reference as argument.
+    template <typename Reducer, typename Func>
+    inline
+    auto map_reduce(Reducer&& r, Func&& func) -> typename reducer_traits<Reducer>::future_type
+    {
+        unsigned c = 0;
+        return ::map_reduce(_instances.begin(), _instances.end(),
+            [&c, &func] (Service* inst) mutable {
+                return smp::submit_to(c++, [inst, func] () mutable {
+                    return func(*inst);
+                });
+            }, std::forward<Reducer>(r));
+    }
+
     // Invoke a method on a specific instance of @Service.
     // The return value (which must be a future) contains the future
     // returned by @Service.
