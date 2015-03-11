@@ -26,6 +26,7 @@
 #include "shared_ptr.hh"
 #include "reactor.hh"
 #include <tuple>
+#include <iterator>
 
 // parallel_for_each - run tasks in parallel
 //
@@ -165,10 +166,11 @@ struct do_when_all {
     }
 };
 
-template <typename Future, typename... Rest>
+template <typename... FutureArgs, typename... Rest>
 inline
-future<std::tuple<Future, Rest...>>
-when_all(Future&& fut, Rest&&... rest) {
+future<std::tuple<future<FutureArgs...>, Rest...>>
+when_all(future<FutureArgs...>&& fut, Rest&&... rest) {
+    using Future = future<FutureArgs...>;
     return std::move(fut).then_wrapped(
             [rest = std::make_tuple(std::move(rest)...)] (Future&& fut) mutable {
         return apply(do_when_all(), std::move(rest)).then_wrapped(
@@ -177,6 +179,59 @@ when_all(Future&& fut, Rest&&... rest) {
                     std::tuple_cat(std::make_tuple(std::move(fut)), std::get<0>(rest.get())));
         });
     });
+}
+
+template <typename Iterator, typename IteratorCategory>
+inline
+size_t
+when_all_estimate_vector_capacity(Iterator begin, Iterator end, IteratorCategory category) {
+    // For InputIterators we can't estimate needed capacity
+    return 0;
+}
+
+template <typename Iterator>
+inline
+size_t
+when_all_estimate_vector_capacity(Iterator begin, Iterator end, std::forward_iterator_tag category) {
+    // May be linear time below random_access_iterator_tag, but still better than reallocation
+    return std::distance(begin, end);
+}
+
+// Internal function for when_all().
+template <typename Future>
+inline
+future<std::vector<Future>>
+complete_when_all(std::vector<Future>&& futures, typename std::vector<Future>::iterator pos) {
+    // If any futures are already ready, skip them.
+    while (pos != futures.end() && pos->available()) {
+        ++pos;
+    }
+    // Done?
+    if (pos == futures.end()) {
+        return make_ready_future<std::vector<Future>>(std::move(futures));
+    }
+    // Wait for unready future, store, and continue.
+    return pos->then_wrapped([futures = std::move(futures), pos] (auto fut) mutable {
+        *pos++ = std::move(fut);
+        return complete_when_all(std::move(futures), pos);
+    });
+}
+
+// Given a range of futures (denoted by an iterator pair), wait for
+// all of them to be available, and return a future containing a
+// vector of each input future (in available state, with either a
+// value or exception stored).
+template <typename FutureIterator>
+inline
+future<std::vector<typename std::iterator_traits<FutureIterator>::value_type>>
+when_all(FutureIterator begin, FutureIterator end) {
+    using itraits = std::iterator_traits<FutureIterator>;
+    std::vector<typename itraits::value_type> ret;
+    ret.reserve(when_all_estimate_vector_capacity(begin, end, typename itraits::iterator_category()));
+    // Important to invoke the *begin here, in case it's a function iterator,
+    // so we launch all computation in parallel.
+    std::move(begin, end, std::back_inserter(ret));
+    return complete_when_all(std::move(ret), ret.begin());
 }
 
 template <typename T>
