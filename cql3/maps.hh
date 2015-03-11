@@ -226,57 +226,54 @@ public:
         }
     };
 
-#if 0
     // See Lists.DelayedValue
-    public static class DelayedValue extends Term.NonTerminal
-    {
-        private final Comparator<ByteBuffer> comparator;
-        private final Map<Term, Term> elements;
-
-        public DelayedValue(Comparator<ByteBuffer> comparator, Map<Term, Term> elements)
-        {
-            this.comparator = comparator;
-            this.elements = elements;
+    class delayed_value : public non_terminal {
+        serialized_compare _comparator;
+        std::unordered_map<shared_ptr<term>, shared_ptr<term>> _elements;
+    public:
+        delayed_value(serialized_compare comparator,
+                      std::unordered_map<shared_ptr<term>, shared_ptr<term>> elements)
+                : _comparator(std::move(comparator)), _elements(std::move(elements)) {
         }
 
-        public boolean containsBindMarker()
-        {
+        virtual bool contains_bind_marker() const override {
             // False since we don't support them in collection
             return false;
         }
 
-        public void collectMarkerSpecification(VariableSpecifications boundNames)
-        {
+        virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names) override {
         }
 
-        public Value bind(QueryOptions options) throws InvalidRequestException
-        {
-            Map<ByteBuffer, ByteBuffer> buffers = new TreeMap<ByteBuffer, ByteBuffer>(comparator);
-            for (Map.Entry<Term, Term> entry : elements.entrySet())
-            {
+        shared_ptr<terminal> bind(const query_options& options) {
+            std::map<bytes, bytes, serialized_compare> buffers(_comparator);
+            for (auto&& entry : _elements) {
+                auto&& key = entry.first;
+                auto&& value = entry.second;
+
                 // We don't support values > 64K because the serialization format encode the length as an unsigned short.
-                ByteBuffer keyBytes = entry.getKey().bindAndGet(options);
-                if (keyBytes == null)
-                    throw new InvalidRequestException("null is not supported inside collections");
-                if (keyBytes.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
-                    throw new InvalidRequestException(String.format("Map key is too long. Map keys are limited to %d bytes but %d bytes keys provided",
-                                                                    FBUtilities.MAX_UNSIGNED_SHORT,
-                                                                    keyBytes.remaining()));
-
-                ByteBuffer valueBytes = entry.getValue().bindAndGet(options);
-                if (valueBytes == null)
-                    throw new InvalidRequestException("null is not supported inside collections");
-                if (valueBytes.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
-                    throw new InvalidRequestException(String.format("Map value is too long. Map values are limited to %d bytes but %d bytes value provided",
-                                                                    FBUtilities.MAX_UNSIGNED_SHORT,
-                                                                    valueBytes.remaining()));
-
-                buffers.put(keyBytes, valueBytes);
+                bytes_opt key_bytes = key->bind_and_get(options);
+                if (!key_bytes) {
+                    throw exceptions::invalid_request_exception("null is not supported inside collections");
+                }
+                if (key_bytes->size() > std::numeric_limits<uint16_t>::max()) {
+                    throw exceptions::invalid_request_exception(sprint("Map key is too long. Map keys are limited to %d bytes but %d bytes keys provided",
+                                                           std::numeric_limits<uint16_t>::max(),
+                                                           key_bytes->size()));
+                }
+                bytes_opt value_bytes = value->bind_and_get(options);
+                if (!value_bytes) {
+                    throw exceptions::invalid_request_exception("null is not supported inside collections");\
+                }
+                if (value_bytes->size() > std::numeric_limits<uint16_t>::max()) {
+                    throw exceptions::invalid_request_exception(sprint("Map value is too long. Map values are limited to %d bytes but %d bytes value provided",
+                                                            std::numeric_limits<uint16_t>::max(),
+                                                            value_bytes->size()));
+                }
+                buffers.emplace(std::move(*key_bytes), std::move(*value_bytes));
             }
-            return new Value(buffers);
+            return ::make_shared<value>(std::move(buffers));
         }
-    }
-#endif
+    };
 
     class marker : public abstract_marker {
     public:
