@@ -862,7 +862,7 @@ collection_type_impl::merge(collection_mutation::view a, collection_mutation::vi
     };
     auto merge = [this] (const element_type& e1, const element_type& e2) {
         // FIXME: use std::max()?
-        return std::make_pair(e1.first, compare_atomic_cell_for_merge(e1.second, e2.second) < 0 ? e1.second : e2.second);
+        return std::make_pair(e1.first, compare_atomic_cell_for_merge(e1.second, e2.second) > 0 ? e1.second : e2.second);
     };
     combine(aa.begin(), aa.end(),
             bb.begin(), bb.end(),
