@@ -335,6 +335,11 @@ private:
             }
         }
 #endif
+
+    friend std::ostream& operator<<(std::ostream& os, const cql3_type& t) {
+        return os << t.to_string();
+    }
+
 };
 
 class native_cql3_type : public cql3_type {
