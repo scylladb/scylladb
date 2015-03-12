@@ -25,6 +25,7 @@
 #include "core/fstream.hh"
 #include "core/shared_ptr.hh"
 #include "core/app-template.hh"
+#include "test-utils.hh"
 
 struct writer {
     output_stream<char> out;
@@ -38,10 +39,9 @@ struct reader {
             make_lw_shared<file>(std::move(f)))) {}
 };
 
-int main(int ac, char** av) {
-    app_template app;
+SEASTAR_TEST_CASE(test_fstream) {
+    static auto sem = make_lw_shared<semaphore>(0);
 
-    return app.run(ac, av, [&app] {
         engine().open_file_dma("testfile.tmp",
                 open_flags::rw | open_flags::create | open_flags::truncate).then([] (file f) {
             auto w = make_shared<writer>(std::move(f));
@@ -80,15 +80,14 @@ int main(int ac, char** av) {
                 auto r = make_shared<reader>(std::move(f));
                 return r->in.read_exactly(4096 + 8192).then([r] (temporary_buffer<char> buf) {
                     auto p = buf.get();
-                    auto first_test = p[0] == '[' && p[1] == 'A' && p[4095] == ']';
-                    auto second_test = p[4096] == '[' && p[4096 + 1] == 'B' && p[4096 + 8191] == ']';
-                    auto ret = first_test && second_test ? 0 : -1;
-                    return make_ready_future<int>(ret);
+                    BOOST_REQUIRE(p[0] == '[' && p[1] == 'A' && p[4095] == ']');
+                    BOOST_REQUIRE(p[4096] == '[' && p[4096 + 1] == 'B' && p[4096 + 8191] == ']');
+                    return make_ready_future<>();
                 });
-            }).then([] (int exit_status) {
-                std::cout << "done: " << exit_status << "\n";
-                engine().exit(exit_status);
+            }).finally([] () {
+                sem->signal();
             });
         });
-    });
+
+    return sem->wait();
 }
