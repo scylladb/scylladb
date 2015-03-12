@@ -82,6 +82,16 @@ public:
     virtual test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver) = 0;
 };
 
+inline bool is_assignable(assignment_testable::test_result tr) {
+    return assignment_testable::is_assignable(tr);
+}
+
+inline bool is_exact_match(assignment_testable::test_result tr) {
+    return assignment_testable::is_exact_match(tr);
+}
+
+
+
 }
 
 #endif

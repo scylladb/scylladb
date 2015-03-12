@@ -544,6 +544,33 @@ struct float_type_impl : floating_type_impl<float> {
     }
 };
 
+struct empty_type_impl : abstract_type {
+    empty_type_impl() : abstract_type("void") {}
+    virtual void serialize(const boost::any& value, std::ostream& out) override {
+    }
+    virtual bool less(bytes_view v1, bytes_view v2) override {
+        return false;
+    }
+    virtual size_t hash(bytes_view v) override {
+        return 0;
+    }
+    virtual object_opt deserialize(bytes_view v) override {
+        return {};
+    }
+    virtual sstring to_string(const bytes& b) override {
+        // FIXME:
+        abort();
+    }
+    virtual bytes from_string(sstring_view text) override {
+        // FIXME:
+        abort();
+    }
+    virtual shared_ptr<cql3::cql3_type> as_cql3_type() override {
+        // Can't happen
+        abort();
+    }
+};
+
 
 thread_local logging::logger collection_type_impl::_logger("collection_type_impl");
 const size_t collection_type_impl::max_elements;
@@ -627,18 +654,12 @@ void write_collection_size(std::ostream& out, int size, int version) {
     }
 }
 
-bytes read_collection_value(bytes_view& in, int version) {
+bytes_view read_collection_value(bytes_view& in, int version) {
     auto size = version >= 3 ? read_simple<int32_t>(in) : read_simple<uint16_t>(in);
-    auto v = read_simple_bytes(in, size);
-    return bytes(v.begin(), v.end());
+    return read_simple_bytes(in, size);
 }
 
-void write_collection_value(std::ostream& out, int version, data_type type, const boost::any& value) {
-    // We have to copy here, because we can't guess the size.
-    // FIXME: somehow.
-    std::ostringstream tmp;
-    type->serialize(value, tmp);
-    auto val_bytes = tmp.str();
+void write_collection_value(std::ostream& out, int version, bytes_view val_bytes) {
     if (version >= 3) {
         serialize_int32(out, int32_t(val_bytes.size()));
     } else {
@@ -647,31 +668,29 @@ void write_collection_value(std::ostream& out, int version, data_type type, cons
     out.rdbuf()->sputn(val_bytes.data(), val_bytes.size());
 }
 
-namespace std {
+void write_collection_value(std::ostream& out, int version, data_type type, const boost::any& value) {
+    // We have to copy here, because we can't guess the size.
+    // FIXME: somehow.
+    std::ostringstream tmp;
+    type->serialize(value, tmp);
+    auto val_bytes = tmp.str();
+    write_collection_value(out, version, val_bytes);
+}
 
-template <>
-struct hash<pair<data_type, data_type>> : private std::hash<data_type> {
-    size_t operator()(const pair<data_type, data_type>& p) const {
-        // don't simply xor, it will generate the same result for sequential
-        // pointers
-        auto f = hash<data_type>::operator()(p.first);
-        auto s = hash<data_type>::operator()(p.second);
-        return f ^ ((s << 7) | s >> (std::numeric_limits<decltype(s)>::digits - 7));
+template <typename BytesViewIterator>
+bytes
+collection_type_impl::pack(BytesViewIterator start, BytesViewIterator finish, int elements, int protocol_version) {
+    std::ostringstream out;
+    write_collection_size(out, elements, protocol_version);
+    while (start != finish) {
+        write_collection_value(out, protocol_version, *start++);
     }
-};
-
+    return out.str();
 }
 
 shared_ptr<map_type_impl>
 map_type_impl::get_instance(data_type keys, data_type values, bool is_multi_cell) {
-    auto& map = is_multi_cell ? _instances : _frozen_instances;
-    auto p = std::make_pair(keys, values);
-    auto i = map.find(p);
-    if (i == map.end()) {
-        auto t = make_shared<map_type_impl>(keys, values, is_multi_cell);
-        i = map.insert(std::make_pair(std::move(p), std::move(t))).first;
-    }
-    return i->second;
+    return intern::get_instance(std::move(keys), std::move(values), is_multi_cell);
 }
 
 map_type_impl::map_type_impl(data_type keys, data_type values, bool is_multi_cell)
@@ -773,9 +792,9 @@ map_type_impl::deserialize(bytes_view in, int protocol_version) {
     native_type m;
     auto size = read_collection_size(in, protocol_version);
     for (int i = 0; i < size; ++i) {
-        bytes kb = read_collection_value(in, protocol_version);
+        auto kb = read_collection_value(in, protocol_version);
         auto k = _keys->deserialize(kb);
-        bytes vb = read_collection_value(in, protocol_version);
+        auto vb = read_collection_value(in, protocol_version);
         auto v = _values->deserialize(vb);
         m.insert(m.end(), std::make_pair(std::move(k), std::move(v)));
     }
@@ -806,9 +825,34 @@ map_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
     abort();
 }
 
-auto map_type_impl::deserialize_mutation_form(bytes_view in) -> mutation {
+bytes
+map_type_impl::to_value(mutation_view mut, int protocol_version) {
+    std::vector<bytes_view> tmp;
+    tmp.reserve(mut.size() * 2);
+    for (auto&& e : mut) {
+        if (e.second.is_live()) {
+            tmp.emplace_back(e.first);
+            tmp.emplace_back(e.second.value());
+        }
+    }
+    return pack(tmp.begin(), tmp.end(), tmp.size() / 2, protocol_version);
+}
+
+bytes
+map_type_impl::serialize_partially_deserialized_form(
+        const std::vector<std::pair<bytes_view, bytes_view>>& v, int protocol_version) {
+    std::ostringstream os;
+    write_collection_size(os, v.size(), protocol_version);
+    for (auto&& e : v) {
+        write_collection_value(os, protocol_version, e.first);
+        write_collection_value(os, protocol_version, e.second);
+    }
+    return os.str();
+}
+
+auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation_view {
     auto nr = read_simple<uint32_t>(in);
-    mutation ret;
+    mutation_view ret;
     ret.reserve(nr);
     for (uint32_t i = 0; i != nr; ++i) {
         // FIXME: we could probably avoid the need for size
@@ -822,8 +866,9 @@ auto map_type_impl::deserialize_mutation_form(bytes_view in) -> mutation {
     return ret;
 }
 
+template <typename Iterator>
 collection_mutation::one
-map_type_impl::serialize_mutation_form(mutation mut) {
+do_serialize_mutation_form(Iterator begin, Iterator end) {
     std::ostringstream out;
     auto write32 = [&out] (uint32_t v) {
         v = net::hton(v);
@@ -834,8 +879,9 @@ map_type_impl::serialize_mutation_form(mutation mut) {
         out.write(v.begin(), v.size());
     };
     // FIXME: overflow?
-    write32(mut.size());
-    for (auto&& kv : mut) {
+    write32(std::distance(begin, end));
+    while (begin != end) {
+        auto&& kv = *begin++;
         auto&& k = kv.first;
         auto&& v = kv.second;
         writeb(k);
@@ -846,18 +892,29 @@ map_type_impl::serialize_mutation_form(mutation mut) {
 }
 
 collection_mutation::one
-map_type_impl::merge(collection_mutation::view a, collection_mutation::view b) {
+collection_type_impl::serialize_mutation_form(const mutation& mut) {
+    return do_serialize_mutation_form(mut.begin(), mut.end());
+}
+
+collection_mutation::one
+collection_type_impl::serialize_mutation_form(mutation_view mut) {
+    return do_serialize_mutation_form(mut.begin(), mut.end());
+}
+
+collection_mutation::one
+collection_type_impl::merge(collection_mutation::view a, collection_mutation::view b) {
     auto aa = deserialize_mutation_form(a.data);
     auto bb = deserialize_mutation_form(b.data);
-    mutation merged;
+    mutation_view merged;
     merged.reserve(aa.size() + bb.size());
     using element_type = std::pair<bytes_view, atomic_cell::view>;
-    auto compare = [this] (const element_type& e1, const element_type& e2) {
-        return _keys->less(e1.first, e2.first);
+    auto key_type = name_comparator();
+    auto compare = [key_type] (const element_type& e1, const element_type& e2) {
+        return key_type->less(e1.first, e2.first);
     };
     auto merge = [this] (const element_type& e1, const element_type& e2) {
         // FIXME: use std::max()?
-        return std::make_pair(e1.first, compare_atomic_cell_for_merge(e1.second, e2.second) < 0 ? e1.second : e2.second);
+        return std::make_pair(e1.first, compare_atomic_cell_for_merge(e1.second, e2.second) > 0 ? e1.second : e2.second);
     };
     combine(aa.begin(), aa.end(),
             bb.begin(), bb.end(),
@@ -867,9 +924,328 @@ map_type_impl::merge(collection_mutation::view a, collection_mutation::view b) {
     return serialize_mutation_form(merged);
 }
 
-thread_local std::unordered_map<std::pair<data_type, data_type>, map_type_impl::map_type> map_type_impl::_instances;
-thread_local std::unordered_map<std::pair<data_type, data_type>, map_type_impl::map_type> map_type_impl::_frozen_instances;
+// iterator that takes a set or list in serialized form, and emits
+// each element, still in serialized form
+class listlike_partial_deserializing_iterator
+          : public std::iterator<std::input_iterator_tag, bytes_view> {
+    bytes_view* _in;
+    int _remain;
+    bytes_view _cur;
+    int _protocol_version;
+private:
+    struct end_tag {};
+    listlike_partial_deserializing_iterator(bytes_view in, int protocol_version)
+            : _in(&in), _protocol_version(protocol_version) {
+        _remain = read_collection_size(*_in, _protocol_version);
+        parse();
+    }
+    listlike_partial_deserializing_iterator(end_tag)
+            : _remain(0) {
+    }
+public:
+    bytes_view operator*() const { return _cur; }
+    listlike_partial_deserializing_iterator& operator++() {
+        --_remain;
+        parse();
+        return *this;
+    }
+    void operator++(int) {
+        --_remain;
+        parse();
+    }
+    bool operator==(const listlike_partial_deserializing_iterator& x) const {
+        return _remain == x._remain;
+    }
+    bool operator!=(const listlike_partial_deserializing_iterator& x) const {
+        return _remain != x._remain;
+    }
+    static listlike_partial_deserializing_iterator begin(bytes_view in, int protocol_version) {
+        return { in, protocol_version };
+    }
+    static listlike_partial_deserializing_iterator end(bytes_view in, int protocol_version) {
+        return { end_tag() };
+    }
+private:
+    void parse() {
+        if (_remain) {
+            _cur = read_collection_value(*_in, _protocol_version);
+        } else {
+            _cur = {};
+        }
+    }
+};
 
+set_type
+set_type_impl::get_instance(data_type elements, bool is_multi_cell) {
+    return intern::get_instance(elements, is_multi_cell);
+}
+
+set_type_impl::set_type_impl(data_type elements, bool is_multi_cell)
+        : collection_type_impl("sey<" + elements->name() + ">", kind::set)
+        , _elements(std::move(elements))
+        , _is_multi_cell(is_multi_cell) {
+}
+
+data_type
+set_type_impl::value_comparator() {
+    return empty_type;
+}
+
+data_type
+set_type_impl::freeze() {
+    if (_is_multi_cell) {
+        return get_instance(_elements, false);
+    } else {
+        return shared_from_this();
+    }
+}
+
+bool
+set_type_impl::is_compatible_with_frozen(collection_type_impl& previous) {
+    assert(!_is_multi_cell);
+    auto* p = dynamic_cast<set_type_impl*>(&previous);
+    if (!p) {
+        return false;
+    }
+    return _elements->is_compatible_with(*p->_elements);
+
+}
+
+bool
+set_type_impl::is_value_compatible_with_frozen(collection_type_impl& previous) {
+    return is_compatible_with(previous);
+}
+
+bool
+set_type_impl::less(bytes_view o1, bytes_view o2) {
+    using llpdi = listlike_partial_deserializing_iterator;
+    return std::lexicographical_compare(
+            llpdi::begin(o1, 3), llpdi::end(o1, 3),
+            llpdi::begin(o2, 3), llpdi::end(o2, 3),
+            [this] (bytes_view o1, bytes_view o2) { return _elements->less(o1, o2); });
+}
+
+void
+set_type_impl::serialize(const boost::any& value, std::ostream& out) {
+    return serialize(value, out, 3);
+}
+
+void
+set_type_impl::serialize(const boost::any& value, std::ostream& out, int protocol_version) {
+    auto s = boost::any_cast<const native_type&>(value);
+    write_collection_size(out, s.size(), protocol_version);
+    for (auto&& e : s) {
+        write_collection_value(out, protocol_version, _elements, e);
+    }
+}
+
+object_opt
+set_type_impl::deserialize(bytes_view in) {
+    return deserialize(in, 3);
+}
+
+object_opt
+set_type_impl::deserialize(bytes_view in, int protocol_version) {
+    if (in.empty()) {
+        return {};
+    }
+    auto nr = read_collection_size(in, protocol_version);
+    native_type s;
+    s.reserve(nr);
+    for (int i = 0; i != nr; ++i) {
+        auto e = _elements->deserialize(read_collection_value(in, protocol_version));
+        if (!e) {
+            throw marshal_exception();
+        }
+        s.push_back(std::move(*e));
+    }
+    return { s };
+}
+
+sstring
+set_type_impl::to_string(const bytes& b) {
+    using llpdi = listlike_partial_deserializing_iterator;
+    std::ostringstream out;
+    bool first = true;
+    std::for_each(llpdi::begin(b, 3), llpdi::end(b, 3), [&first, &out, this] (bytes_view e) {
+        if (first) {
+            first = false;
+        } else {
+            out << "; ";
+        }
+        out << _elements->to_string(bytes(e.begin(), e.end()));
+    });
+    return out.str();
+}
+
+size_t
+set_type_impl::hash(bytes_view v) {
+    // FIXME:
+    abort();
+}
+
+bytes
+set_type_impl::from_string(sstring_view text) {
+    // FIXME:
+    abort();
+}
+
+std::vector<bytes>
+set_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
+    // FIXME:
+    abort();
+}
+
+bytes
+set_type_impl::to_value(mutation_view mut, int protocol_version) {
+    std::vector<bytes_view> tmp;
+    tmp.reserve(mut.size());
+    for (auto&& e : mut) {
+        if (e.second.is_live()) {
+            tmp.emplace_back(e.first);
+        }
+    }
+    return pack(tmp.begin(), tmp.end(), tmp.size(), protocol_version);
+}
+
+list_type
+list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
+    return intern::get_instance(elements, is_multi_cell);
+}
+
+list_type_impl::list_type_impl(data_type elements, bool is_multi_cell)
+        : collection_type_impl("list<" + elements->name() + ">", kind::list)
+        , _elements(std::move(elements))
+        , _is_multi_cell(is_multi_cell) {
+}
+
+data_type
+list_type_impl::name_comparator() {
+    return timeuuid_type;
+}
+
+data_type
+list_type_impl::value_comparator() {
+    return _elements;
+}
+
+data_type
+list_type_impl::freeze() {
+    if (_is_multi_cell) {
+        return get_instance(_elements, false);
+    } else {
+        return shared_from_this();
+    }
+}
+
+bool
+list_type_impl::is_compatible_with_frozen(collection_type_impl& previous) {
+    assert(!_is_multi_cell);
+    auto* p = dynamic_cast<list_type_impl*>(&previous);
+    if (!p) {
+        return false;
+    }
+    return _elements->is_compatible_with(*p->_elements);
+
+}
+
+bool
+list_type_impl::is_value_compatible_with_frozen(collection_type_impl& previous) {
+    auto& lp = dynamic_cast<list_type_impl&>(previous);
+    return _elements->is_value_compatible_with_internal(*lp._elements);
+}
+
+bool
+list_type_impl::less(bytes_view o1, bytes_view o2) {
+    using llpdi = listlike_partial_deserializing_iterator;
+    return std::lexicographical_compare(
+            llpdi::begin(o1, 3), llpdi::end(o1, 3),
+            llpdi::begin(o2, 3), llpdi::end(o2, 3),
+            [this] (bytes_view o1, bytes_view o2) { return _elements->less(o1, o2); });
+}
+
+void
+list_type_impl::serialize(const boost::any& value, std::ostream& out) {
+    return serialize(value, out, 3);
+}
+
+void
+list_type_impl::serialize(const boost::any& value, std::ostream& out, int protocol_version) {
+    auto s = boost::any_cast<const native_type&>(value);
+    write_collection_size(out, s.size(), protocol_version);
+    for (auto&& e : s) {
+        write_collection_value(out, protocol_version, _elements, e);
+    }
+}
+
+object_opt
+list_type_impl::deserialize(bytes_view in) {
+    return deserialize(in, 3);
+}
+
+object_opt
+list_type_impl::deserialize(bytes_view in, int protocol_version) {
+    if (in.empty()) {
+        return {};
+    }
+    auto nr = read_collection_size(in, protocol_version);
+    native_type s;
+    s.reserve(nr);
+    for (int i = 0; i != nr; ++i) {
+        auto e = _elements->deserialize(read_collection_value(in, protocol_version));
+        if (!e) {
+            throw marshal_exception();
+        }
+        s.push_back(std::move(*e));
+    }
+    return { s };
+}
+
+sstring
+list_type_impl::to_string(const bytes& b) {
+    using llpdi = listlike_partial_deserializing_iterator;
+    std::ostringstream out;
+    bool first = true;
+    std::for_each(llpdi::begin(b, 3), llpdi::end(b, 3), [&first, &out, this] (bytes_view e) {
+        if (first) {
+            first = false;
+        } else {
+            out << ", ";
+        }
+        out << _elements->to_string(bytes(e.begin(), e.end()));
+    });
+    return out.str();
+}
+
+size_t
+list_type_impl::hash(bytes_view v) {
+    // FIXME:
+    abort();
+}
+
+bytes
+list_type_impl::from_string(sstring_view text) {
+    // FIXME:
+    abort();
+}
+
+std::vector<bytes>
+list_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
+    // FIXME:
+    abort();
+}
+
+bytes
+list_type_impl::to_value(mutation_view mut, int protocol_version) {
+    std::vector<bytes_view> tmp;
+    tmp.reserve(mut.size());
+    for (auto&& e : mut) {
+        if (e.second.is_live()) {
+            tmp.emplace_back(e.second.value());
+        }
+    }
+    return pack(tmp.begin(), tmp.end(), tmp.size(), protocol_version);
+}
 
 thread_local const shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local const shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
@@ -884,3 +1260,4 @@ thread_local const shared_ptr<abstract_type> uuid_type(make_shared<uuid_type_imp
 thread_local const shared_ptr<abstract_type> inet_addr_type(make_shared<inet_addr_type_impl>());
 thread_local const shared_ptr<abstract_type> float_type(make_shared<double_type_impl>());
 thread_local const shared_ptr<abstract_type> double_type(make_shared<double_type_impl>());
+thread_local const data_type empty_type(make_shared<empty_type_impl>());

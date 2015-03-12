@@ -8,6 +8,7 @@
 #include <boost/test/included/unit_test.hpp>
 #include "core/sstring.hh"
 #include "database.hh"
+#include "utils/UUID_gen.hh"
 
 static sstring some_keyspace("ks");
 static sstring some_column_family("cf");
@@ -99,3 +100,72 @@ BOOST_AUTO_TEST_CASE(test_map_mutations) {
     BOOST_REQUIRE(muts.size() == 3);
     // FIXME: more strict tests
 }
+
+BOOST_AUTO_TEST_CASE(test_set_mutations) {
+    auto my_set_type = set_type_impl::get_instance(int32_type, true);
+    auto s = make_lw_shared(schema(some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_set_type}}, utf8_type));
+    column_family cf(s);
+    partition_key key = to_bytes("key1");
+    auto& column = *s->get_column_definition("s1");
+    map_type_impl::mutation mmut1{{int32_type->decompose(101), make_atomic_cell({})}};
+    mutation m1(key, s);
+    m1.set_static_cell(column, my_set_type->serialize_mutation_form(mmut1));
+    cf.apply(m1);
+    map_type_impl::mutation mmut2{{int32_type->decompose(102), make_atomic_cell({})}};
+    mutation m2(key, s);
+    m2.set_static_cell(column, my_set_type->serialize_mutation_form(mmut2));
+    cf.apply(m2);
+    map_type_impl::mutation mmut3{{int32_type->decompose(103), make_atomic_cell({})}};
+    mutation m3(key, s);
+    m3.set_static_cell(column, my_set_type->serialize_mutation_form(mmut3));
+    cf.apply(m3);
+    map_type_impl::mutation mmut2o{{int32_type->decompose(102), make_atomic_cell({})}};
+    mutation m2o(key, s);
+    m2o.set_static_cell(column, my_set_type->serialize_mutation_form(mmut2o));
+    cf.apply(m2o);
+
+    row& r = cf.find_or_create_partition(key).static_row();
+    auto i = r.find(column.id);
+    BOOST_REQUIRE(i != r.end());
+    auto cell = i->second.as_collection_mutation();
+    auto muts = my_set_type->deserialize_mutation_form(cell.data);
+    BOOST_REQUIRE(muts.size() == 3);
+    // FIXME: more strict tests
+}
+
+BOOST_AUTO_TEST_CASE(test_list_mutations) {
+    auto my_list_type = list_type_impl::get_instance(int32_type, true);
+    auto s = make_lw_shared(schema(some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_list_type}}, utf8_type));
+    column_family cf(s);
+    partition_key key = to_bytes("key1");
+    auto key_type = timeuuid_type;
+    auto& column = *s->get_column_definition("s1");
+    auto make_key = [] { return timeuuid_type->decompose(utils::UUID_gen::get_time_UUID()); };
+    collection_type_impl::mutation mmut1{{make_key(), make_atomic_cell(int32_type->decompose(101))}};
+    mutation m1(key, s);
+    m1.set_static_cell(column, my_list_type->serialize_mutation_form(mmut1));
+    cf.apply(m1);
+    collection_type_impl::mutation mmut2{{make_key(), make_atomic_cell(int32_type->decompose(102))}};
+    mutation m2(key, s);
+    m2.set_static_cell(column, my_list_type->serialize_mutation_form(mmut2));
+    cf.apply(m2);
+    collection_type_impl::mutation mmut3{{make_key(), make_atomic_cell(int32_type->decompose(103))}};
+    mutation m3(key, s);
+    m3.set_static_cell(column, my_list_type->serialize_mutation_form(mmut3));
+    cf.apply(m3);
+    collection_type_impl::mutation mmut2o{{make_key(), make_atomic_cell(int32_type->decompose(102))}};
+    mutation m2o(key, s);
+    m2o.set_static_cell(column, my_list_type->serialize_mutation_form(mmut2o));
+    cf.apply(m2o);
+
+    row& r = cf.find_or_create_partition(key).static_row();
+    auto i = r.find(column.id);
+    BOOST_REQUIRE(i != r.end());
+    auto cell = i->second.as_collection_mutation();
+    auto muts = my_list_type->deserialize_mutation_form(cell.data);
+    BOOST_REQUIRE(muts.size() == 4);
+    // FIXME: more strict tests
+}
+

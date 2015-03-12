@@ -57,7 +57,7 @@ private:
     static constexpr int64_t MAX_CLOCK_SEQ_AND_NODE = 0x7f7f7f7f7f7f7f7fL;
 
     // placement of this singleton is important.  It needs to be instantiated *AFTER* the other statics.
-    static const std::unique_ptr<UUID_gen> instance;
+    static thread_local const std::unique_ptr<UUID_gen> instance;
 
     int64_t last_nanos = 0;
 
@@ -250,7 +250,6 @@ private:
             last_nanos = nanos_since;
         else
             nanos_since = ++last_nanos;
-        std::cout << "millis=" << millis << ", nanos_since=" << nanos_since << "\n";
 
         return create_time(nanos_since);
     }

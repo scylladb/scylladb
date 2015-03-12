@@ -29,6 +29,8 @@
 #include "cql3/term.hh"
 #include "operation.hh"
 #include "update_parameters.hh"
+#include "exceptions/exceptions.hh"
+#include "cql3/cql3_type.hh"
 
 namespace cql3 {
 
@@ -86,49 +88,52 @@ public:
         { }
 
         virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
-            throw std::runtime_error("not implemented");
-#if 0
-            validateAssignableTo(keyspace, receiver);
+            validate_assignable_to(keyspace, *receiver);
 
-            ColumnSpecification keySpec = Maps.keySpecOf(receiver);
-            ColumnSpecification valueSpec = Maps.valueSpecOf(receiver);
-            Map<Term, Term> values = new HashMap<Term, Term>(entries.size());
-            boolean allTerminal = true;
-            for (Pair<Term.Raw, Term.Raw> entry : entries)
-            {
-                Term k = entry.left.prepare(keyspace, keySpec);
-                Term v = entry.right.prepare(keyspace, valueSpec);
+            auto key_spec = maps::key_spec_of(*receiver);
+            auto value_spec = maps::value_spec_of(*receiver);
+            std::unordered_map<shared_ptr<term>, shared_ptr<term>> values;
+            values.reserve(entries.size());
+            bool all_terminal = true;
+            for (auto&& entry : entries) {
+                auto k = entry.first->prepare(keyspace, key_spec);
+                auto v = entry.second->prepare(keyspace, value_spec);
 
-                if (k.containsBindMarker() || v.containsBindMarker())
-                    throw new InvalidRequestException(String.format("Invalid map literal for %s: bind variables are not supported inside collection literals", receiver.name));
+                if (k->contains_bind_marker() || v->contains_bind_marker()) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid map literal for %s: bind variables are not supported inside collection literals", *receiver->name));
+                }
 
-                if (k instanceof Term.NonTerminal || v instanceof Term.NonTerminal)
-                    allTerminal = false;
+                if (dynamic_pointer_cast<non_terminal>(k) || dynamic_pointer_cast<non_terminal>(v)) {
+                    all_terminal = false;
+                }
 
-                values.put(k, v);
+                values.emplace(k, v);
             }
-            DelayedValue value = new DelayedValue(((MapType)receiver.type).getKeysType(), values);
-            return allTerminal ? value.bind(QueryOptions.DEFAULT) : value;
-#endif
-        }
-
-#if 0
-        private void validateAssignableTo(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
-            if (!(receiver.type instanceof MapType))
-                throw new InvalidRequestException(String.format("Invalid map literal for %s of type %s", receiver.name, receiver.type.asCQL3Type()));
-
-            ColumnSpecification keySpec = Maps.keySpecOf(receiver);
-            ColumnSpecification valueSpec = Maps.valueSpecOf(receiver);
-            for (Pair<Term.Raw, Term.Raw> entry : entries)
-            {
-                if (!entry.left.testAssignment(keyspace, keySpec).isAssignable())
-                    throw new InvalidRequestException(String.format("Invalid map literal for %s: key %s is not of type %s", receiver.name, entry.left, keySpec.type.asCQL3Type()));
-                if (!entry.right.testAssignment(keyspace, valueSpec).isAssignable())
-                    throw new InvalidRequestException(String.format("Invalid map literal for %s: value %s is not of type %s", receiver.name, entry.right, valueSpec.type.asCQL3Type()));
+            delayed_value value(static_pointer_cast<map_type_impl>(receiver->type)->get_keys_type()->as_less_comparator(), values);
+            if (all_terminal) {
+                return value.bind(query_options::DEFAULT);
+            } else {
+                return make_shared(std::move(value));
             }
         }
-#endif
+
+    private:
+        void validate_assignable_to(const sstring& keyspace, column_specification& receiver) {
+            if (!dynamic_pointer_cast<map_type_impl>(receiver.type)) {
+                throw exceptions::invalid_request_exception(sprint("Invalid map literal for %s of type %s", *receiver.name, *receiver.type->as_cql3_type()));
+            }
+            auto&& key_spec = maps::key_spec_of(receiver);
+            auto&& value_spec = maps::value_spec_of(receiver);
+            for (auto&& entry : entries) {
+                if (!is_assignable(entry.first->test_assignment(keyspace, key_spec))) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid map literal for %s: key %s is not of type %s", *receiver.name, *entry.first, *key_spec->type->as_cql3_type()));
+                }
+                if (!is_assignable(entry.second->test_assignment(keyspace, value_spec))) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid map literal for %s: value %s is not of type %s", *receiver.name, *entry.second, *value_spec->type->as_cql3_type()));
+                }
+            }
+        }
+    public:
 
         virtual assignment_testable::test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
             throw std::runtime_error("not implemented");
@@ -172,120 +177,108 @@ public:
         }
     };
 
-#if 0
-    public static class Value extends Term.Terminal implements Term.CollectionTerminal
-    {
-        public final Map<ByteBuffer, ByteBuffer> map;
+    class value : public terminal, collection_terminal {
+    public:
+        std::map<bytes, bytes, serialized_compare> map;
 
-        public Value(Map<ByteBuffer, ByteBuffer> map)
-        {
-            this.map = map;
+        value(std::map<bytes, bytes, serialized_compare> map)
+            : map(std::move(map)) {
         }
 
-        public static Value fromSerialized(ByteBuffer value, MapType type, int version) throws InvalidRequestException
-        {
-            try
-            {
+        static value from_serialized(bytes value, map_type type, int version) {
+            try {
                 // Collections have this small hack that validate cannot be called on a serialized object,
                 // but compose does the validation (so we're fine).
-                Map<?, ?> m = (Map<?, ?>)type.getSerializer().deserializeForNativeProtocol(value, version);
-                Map<ByteBuffer, ByteBuffer> map = new LinkedHashMap<ByteBuffer, ByteBuffer>(m.size());
-                for (Map.Entry<?, ?> entry : m.entrySet())
-                    map.put(type.getKeysType().decompose(entry.getKey()), type.getValuesType().decompose(entry.getValue()));
-                return new Value(map);
-            }
-            catch (MarshalException e)
-            {
-                throw new InvalidRequestException(e.getMessage());
+                // FIXME: deserialize_for_native_protocol?!
+                auto m = boost::any_cast<map_type_impl::native_type>(type->deserialize(value, version));
+                std::map<bytes, bytes, serialized_compare> map(type->get_keys_type()->as_less_comparator());
+                for (auto&& e : m) {
+                    map.emplace(type->get_keys_type()->decompose(e.first),
+                                type->get_values_type()->decompose(e.second));
+                }
+                return { std::move(map) };
+            } catch (marshal_exception& e) {
+                throw exceptions::invalid_request_exception(e.why());
             }
         }
 
-        public ByteBuffer get(QueryOptions options)
-        {
-            return getWithProtocolVersion(options.getProtocolVersion());
+        virtual bytes_opt get(const query_options& options) override {
+            return get_with_protocol_version(options.get_protocol_version());
         }
 
-        public ByteBuffer getWithProtocolVersion(int protocolVersion)
-        {
-            List<ByteBuffer> buffers = new ArrayList<>(2 * map.size());
-            for (Map.Entry<ByteBuffer, ByteBuffer> entry : map.entrySet())
-            {
-                buffers.add(entry.getKey());
-                buffers.add(entry.getValue());
+        virtual bytes get_with_protocol_version(int protocol_version) {
+            std::ostringstream out;
+            write_collection_size(out, protocol_version, map.size());
+            for (auto&& e : map) {
+                write_collection_value(out, protocol_version, e.first);
+                write_collection_value(out, protocol_version, e.second);
             }
-            return CollectionSerializer.pack(buffers, map.size(), protocolVersion);
+            return out.str();
         }
 
-        public boolean equals(MapType mt, Value v)
-        {
-            if (map.size() != v.map.size())
-                return false;
-
-            // We use the fact that we know the maps iteration will both be in comparator order
-            Iterator<Map.Entry<ByteBuffer, ByteBuffer>> thisIter = map.entrySet().iterator();
-            Iterator<Map.Entry<ByteBuffer, ByteBuffer>> thatIter = v.map.entrySet().iterator();
-            while (thisIter.hasNext())
-            {
-                Map.Entry<ByteBuffer, ByteBuffer> thisEntry = thisIter.next();
-                Map.Entry<ByteBuffer, ByteBuffer> thatEntry = thatIter.next();
-                if (mt.getKeysType().compare(thisEntry.getKey(), thatEntry.getKey()) != 0 || mt.getValuesType().compare(thisEntry.getValue(), thatEntry.getValue()) != 0)
-                    return false;
-            }
-
-            return true;
+        bool equals(map_type mt, const value& v) {
+            return std::equal(map.begin(), map.end(),
+                              v.map.begin(), v.map.end(),
+                              [mt] (auto&& e1, auto&& e2) {
+                return mt->get_keys_type()->compare(e1.first, e2.first) == 0
+                        && mt->get_values_type()->compare(e1.second, e2.second) == 0;
+            });
         }
-    }
+
+        virtual sstring to_string() const {
+            // FIXME:
+            abort();
+        }
+    };
 
     // See Lists.DelayedValue
-    public static class DelayedValue extends Term.NonTerminal
-    {
-        private final Comparator<ByteBuffer> comparator;
-        private final Map<Term, Term> elements;
-
-        public DelayedValue(Comparator<ByteBuffer> comparator, Map<Term, Term> elements)
-        {
-            this.comparator = comparator;
-            this.elements = elements;
+    class delayed_value : public non_terminal {
+        serialized_compare _comparator;
+        std::unordered_map<shared_ptr<term>, shared_ptr<term>> _elements;
+    public:
+        delayed_value(serialized_compare comparator,
+                      std::unordered_map<shared_ptr<term>, shared_ptr<term>> elements)
+                : _comparator(std::move(comparator)), _elements(std::move(elements)) {
         }
 
-        public boolean containsBindMarker()
-        {
+        virtual bool contains_bind_marker() const override {
             // False since we don't support them in collection
             return false;
         }
 
-        public void collectMarkerSpecification(VariableSpecifications boundNames)
-        {
+        virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names) override {
         }
 
-        public Value bind(QueryOptions options) throws InvalidRequestException
-        {
-            Map<ByteBuffer, ByteBuffer> buffers = new TreeMap<ByteBuffer, ByteBuffer>(comparator);
-            for (Map.Entry<Term, Term> entry : elements.entrySet())
-            {
+        shared_ptr<terminal> bind(const query_options& options) {
+            std::map<bytes, bytes, serialized_compare> buffers(_comparator);
+            for (auto&& entry : _elements) {
+                auto&& key = entry.first;
+                auto&& value = entry.second;
+
                 // We don't support values > 64K because the serialization format encode the length as an unsigned short.
-                ByteBuffer keyBytes = entry.getKey().bindAndGet(options);
-                if (keyBytes == null)
-                    throw new InvalidRequestException("null is not supported inside collections");
-                if (keyBytes.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
-                    throw new InvalidRequestException(String.format("Map key is too long. Map keys are limited to %d bytes but %d bytes keys provided",
-                                                                    FBUtilities.MAX_UNSIGNED_SHORT,
-                                                                    keyBytes.remaining()));
-
-                ByteBuffer valueBytes = entry.getValue().bindAndGet(options);
-                if (valueBytes == null)
-                    throw new InvalidRequestException("null is not supported inside collections");
-                if (valueBytes.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
-                    throw new InvalidRequestException(String.format("Map value is too long. Map values are limited to %d bytes but %d bytes value provided",
-                                                                    FBUtilities.MAX_UNSIGNED_SHORT,
-                                                                    valueBytes.remaining()));
-
-                buffers.put(keyBytes, valueBytes);
+                bytes_opt key_bytes = key->bind_and_get(options);
+                if (!key_bytes) {
+                    throw exceptions::invalid_request_exception("null is not supported inside collections");
+                }
+                if (key_bytes->size() > std::numeric_limits<uint16_t>::max()) {
+                    throw exceptions::invalid_request_exception(sprint("Map key is too long. Map keys are limited to %d bytes but %d bytes keys provided",
+                                                           std::numeric_limits<uint16_t>::max(),
+                                                           key_bytes->size()));
+                }
+                bytes_opt value_bytes = value->bind_and_get(options);
+                if (!value_bytes) {
+                    throw exceptions::invalid_request_exception("null is not supported inside collections");\
+                }
+                if (value_bytes->size() > std::numeric_limits<uint16_t>::max()) {
+                    throw exceptions::invalid_request_exception(sprint("Map value is too long. Map values are limited to %d bytes but %d bytes value provided",
+                                                            std::numeric_limits<uint16_t>::max(),
+                                                            value_bytes->size()));
+                }
+                buffers.emplace(std::move(*key_bytes), std::move(*value_bytes));
             }
-            return new Value(buffers);
+            return ::make_shared<value>(std::move(buffers));
         }
-    }
-#endif
+    };
 
     class marker : public abstract_marker {
     public:
@@ -312,26 +305,24 @@ public:
 #endif
     };
 
-#if 0
-    public static class Setter extends Operation
-    {
-        public Setter(ColumnDefinition column, Term t)
-        {
-            super(column, t);
+    class setter : public operation {
+    public:
+        setter(column_definition& column, shared_ptr<term> t)
+                : operation(column, std::move(t)) {
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            if (column.type.isMultiCell())
-            {
+        virtual void execute(mutation& m, const clustering_prefix& row_key, const update_parameters& params) override {
+            if (column.type->is_multi_cell()) {
                 // delete + put
+                // FIXME: we don't have tombstones for entire collections yet
+#if 0
                 CellName name = cf.getComparator().create(prefix, column);
                 cf.addAtom(params.makeTombstoneForOverwrite(name.slice()));
-            }
-            Putter.doPut(t, cf, prefix, column, params);
-        }
-    }
 #endif
+            }
+            do_put(m, row_key, params, _t, column);
+        }
+    };
 
     class setter_by_key : public operation {
         const shared_ptr<term> _k;
@@ -385,33 +376,52 @@ public:
             doPut(t, cf, prefix, column, params);
         }
 
-        static void doPut(Term t, ColumnFamily cf, Composite prefix, ColumnDefinition column, UpdateParameters params) throws InvalidRequestException
-        {
-            Term.Terminal value = t.bind(params.options);
-            Maps.Value mapValue = (Maps.Value) value;
-            if (column.type.isMultiCell())
-            {
-                if (value == null)
-                    return;
+    }
 
-                for (Map.Entry<ByteBuffer, ByteBuffer> entry : mapValue.map.entrySet())
-                {
-                    CellName cellName = cf.getComparator().create(prefix, column, entry.getKey());
-                    cf.addColumn(params.makeColumn(cellName, entry.getValue()));
-                }
+#endif
+
+    static void do_put(mutation& m, const clustering_prefix& prefix, const update_parameters& params,
+            shared_ptr<term> t, const column_definition& column) {
+    {
+        auto value = t->bind(params._options);
+        auto map_value = dynamic_pointer_cast<maps::value>(value);
+        if (column.type->is_multi_cell()) {
+            if (!value) {
+                return;
             }
-            else
-            {
-                // for frozen maps, we're overwriting the whole cell
-                CellName cellName = cf.getComparator().create(prefix, column);
-                if (value == null)
-                    cf.addAtom(params.makeTombstone(cellName));
-                else
-                    cf.addColumn(params.makeColumn(cellName, mapValue.getWithProtocolVersion(Server.CURRENT_VERSION)));
+
+            collection_type_impl::mutation mut;
+            for (auto&& e : map_value->map) {
+                mut.emplace_back(e.first, params.make_cell(e.second));
+            }
+            auto ctype = static_pointer_cast<map_type_impl>(column.type);
+            auto col_mut = ctype->serialize_mutation_form(std::move(mut));
+            if (column.is_static()) {
+                m.set_static_cell(column, std::move(col_mut));
+            } else {
+                m.set_clustered_cell(prefix, column, std::move(col_mut));
+            }
+        } else {
+            // for frozen maps, we're overwriting the whole cell
+            if (!value) {
+                // FIXME: encapsulate this if
+                if (column.is_static()) {
+                    m.set_static_cell(column, params.make_dead_cell());
+                } else {
+                    m.set_clustered_cell(prefix, column, params.make_dead_cell());
+                }
+            } else {
+                auto v = map_type_impl::serialize_partially_deserialized_form({map_value->map.begin(), map_value->map.end()}, 3);
+                if (column.is_static()) {
+                    m.set_static_cell(column, params.make_cell(std::move(v)));
+                } else {
+                    m.set_clustered_cell(prefix, column, params.make_cell(std::move(v)));
+                }
             }
         }
     }
 
+#if 0
     public static class DiscarderByKey extends Operation
     {
         public DiscarderByKey(ColumnDefinition column, Term k)
@@ -432,6 +442,8 @@ public:
         }
     }
 #endif
+};
+
 };
 
 }

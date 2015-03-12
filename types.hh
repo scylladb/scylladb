@@ -51,6 +51,8 @@ inline int32_t compare_unsigned(bytes_view v1, bytes_view v2) {
     return (int32_t) (v1.size() - v2.size());
 }
 
+class serialized_compare;
+
 class abstract_type : public enable_shared_from_this<abstract_type> {
     sstring _name;
 public:
@@ -58,6 +60,8 @@ public:
     virtual ~abstract_type() {}
     virtual void serialize(const boost::any& value, std::ostream& out) = 0;
     virtual bool less(bytes_view v1, bytes_view v2) = 0;
+    // returns a callable that can be called with two byte_views, and calls this->less() on them.
+    serialized_compare as_less_comparator();
     virtual size_t hash(bytes_view v) = 0;
     virtual bool equal(bytes_view v1, bytes_view v2) {
         if (is_byte_order_equal()) {
@@ -155,6 +159,7 @@ public:
     virtual bool is_reversed() { return false; }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() = 0;
     virtual shared_ptr<abstract_type> freeze() { return shared_from_this(); }
+    friend class list_type_impl;
 };
 
 using data_type = shared_ptr<abstract_type>;
@@ -181,6 +186,9 @@ protected:
     explicit collection_type_impl(sstring name, const kind& k)
             : abstract_type(std::move(name)), _kind(k) {}
 public:
+    // representation of a collection mutation, key/value pairs, value is a mutation itself
+    using mutation = std::vector<std::pair<bytes, atomic_cell::one>>;
+    using mutation_view = std::vector<std::pair<bytes_view, atomic_cell::view>>;
     virtual data_type name_comparator() = 0;
     virtual data_type value_comparator() = 0;
     shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key);
@@ -193,15 +201,65 @@ public:
     virtual bool is_compatible_with_frozen(collection_type_impl& previous) = 0;
     virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) = 0;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() override;
-    virtual collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b) = 0;
+    template <typename BytesViewIterator>
+    static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, int version);
+    mutation_view deserialize_mutation_form(bytes_view in);
+    virtual bytes to_value(mutation_view mut, int protocol_version) = 0;
+    // FIXME: use iterators?
+    collection_mutation::one serialize_mutation_form(const mutation& mut);
+    collection_mutation::one serialize_mutation_form(mutation_view mut);
+    collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b);
 };
 
 using collection_type = shared_ptr<collection_type_impl>;
 
+template <typename... T>
+struct simple_tuple_hash;
+
+template <>
+struct simple_tuple_hash<> {
+    size_t operator()() const { return 0; }
+};
+
+template <typename Arg0, typename... Args>
+struct simple_tuple_hash<Arg0, Args...> {
+    size_t operator()(const Arg0& arg0, const Args&... args) const {
+        size_t h0 = std::hash<Arg0>()(arg0);
+        size_t h1 = simple_tuple_hash<Args...>()(args...);
+        return h0 ^ ((h1 << 7) | (h1 >> (std::numeric_limits<size_t>::digits - 7)));
+    }
+};
+
+template <typename InternedType, typename... BaseTypes>
+class type_interning_helper {
+    using key_type = std::tuple<BaseTypes...>;
+    using value_type = shared_ptr<InternedType>;
+    struct hash_type {
+        size_t operator()(const key_type& k) const {
+            return apply(simple_tuple_hash<BaseTypes...>(), k);
+        }
+    };
+    using map_type = std::unordered_map<key_type, value_type, hash_type>;
+    static thread_local map_type _instances;
+public:
+    static shared_ptr<InternedType> get_instance(BaseTypes... keys) {
+        auto key = std::make_tuple(keys...);
+        auto i = _instances.find(key);
+        if (i == _instances.end()) {
+            auto v = make_shared<InternedType>(keys...);
+            i = _instances.insert(std::make_pair(std::move(key), std::move(v))).first;
+        }
+        return i->second;
+    }
+};
+
+template <typename InternedType, typename... BaseTypes>
+thread_local typename type_interning_helper<InternedType, BaseTypes...>::map_type
+    type_interning_helper<InternedType, BaseTypes...>::_instances;
+
 class map_type_impl final : public collection_type_impl {
     using map_type = shared_ptr<map_type_impl>;
-    static thread_local std::unordered_map<std::pair<data_type, data_type>, map_type> _instances;
-    static thread_local std::unordered_map<std::pair<data_type, data_type>, map_type> _frozen_instances;
+    using intern = type_interning_helper<map_type_impl, data_type, data_type, bool>;
     data_type _keys;
     data_type _values;
     data_type _key_value_pair_type;
@@ -210,8 +268,6 @@ public:
     // type returned by deserialize() and expected by serialize
     // does not support mutations/ttl/tombstone - purely for I/O.
     using native_type = std::vector<std::pair<boost::any, boost::any>>;
-    // representation of a map mutation, key/value pairs, value is a mutation itself
-    using mutation = std::vector<std::pair<bytes_view, atomic_cell::view>>;
     static shared_ptr<map_type_impl> get_instance(data_type keys, data_type values, bool is_multi_cell);
     map_type_impl(data_type keys, data_type values, bool is_multi_cell);
     data_type get_keys_type() const { return _keys; }
@@ -234,13 +290,78 @@ public:
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
-    mutation deserialize_mutation_form(bytes_view in);
-    // FIXME: use iterators?
-    collection_mutation::one serialize_mutation_form(mutation mut);
-    virtual collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b) override;
+    static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,
+            int protocol_version);
+    virtual bytes to_value(mutation_view mut, int protocol_version) override;
 };
 
 using map_type = shared_ptr<map_type_impl>;
+
+class set_type_impl final : public collection_type_impl {
+    using set_type = shared_ptr<set_type_impl>;
+    using intern = type_interning_helper<set_type_impl, data_type, bool>;
+    data_type _elements;
+    bool _is_multi_cell;
+public:
+    // type returned by deserialize() and expected by serialize
+    // does not support mutations/ttl/tombstone - purely for I/O.
+    using native_type = std::vector<boost::any>;
+    static set_type get_instance(data_type elements, bool is_multi_cell);
+    set_type_impl(data_type elements, bool is_multi_cell);
+    data_type get_elements_type() const { return _elements; }
+    virtual data_type name_comparator() override { return _elements; }
+    virtual data_type value_comparator() override;
+    virtual bool is_multi_cell() override { return _is_multi_cell; }
+    virtual data_type freeze() override;
+    virtual bool is_compatible_with_frozen(collection_type_impl& previous) override;
+    virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) override;
+    virtual bool less(bytes_view o1, bytes_view o2) override;
+    virtual bool is_byte_order_comparable() const override { return _elements->is_byte_order_comparable(); }
+    virtual void serialize(const boost::any& value, std::ostream& out) override;
+    void serialize(const boost::any& value, std::ostream& out, int protocol_version);
+    virtual object_opt deserialize(bytes_view v) override;
+    object_opt deserialize(bytes_view v, int protocol_version);
+    virtual sstring to_string(const bytes& b) override;
+    virtual size_t hash(bytes_view v) override;
+    virtual bytes from_string(sstring_view text) override;
+    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
+    virtual bytes to_value(mutation_view mut, int protocol_version) override;
+};
+
+using set_type = shared_ptr<set_type_impl>;
+
+class list_type_impl final : public collection_type_impl {
+    using list_type = shared_ptr<list_type_impl>;
+    using intern = type_interning_helper<list_type_impl, data_type, bool>;
+    data_type _elements;
+    bool _is_multi_cell;
+public:
+    // type returned by deserialize() and expected by serialize
+    // does not support mutations/ttl/tombstone - purely for I/O.
+    using native_type = std::vector<boost::any>;
+    static list_type get_instance(data_type elements, bool is_multi_cell);
+    list_type_impl(data_type elements, bool is_multi_cell);
+    data_type get_elements_type() const { return _elements; }
+    virtual data_type name_comparator() override;
+    virtual data_type value_comparator() override;
+    virtual bool is_multi_cell() override { return _is_multi_cell; }
+    virtual data_type freeze() override;
+    virtual bool is_compatible_with_frozen(collection_type_impl& previous) override;
+    virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) override;
+    virtual bool less(bytes_view o1, bytes_view o2) override;
+    // FIXME: origin doesn't override is_byte_order_comparable().  Why?
+    virtual void serialize(const boost::any& value, std::ostream& out) override;
+    void serialize(const boost::any& value, std::ostream& out, int protocol_version);
+    virtual object_opt deserialize(bytes_view v) override;
+    object_opt deserialize(bytes_view v, int protocol_version);
+    virtual sstring to_string(const bytes& b) override;
+    virtual size_t hash(bytes_view v) override;
+    virtual bytes from_string(sstring_view text) override;
+    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
+    virtual bytes to_value(mutation_view mut, int protocol_version) override;
+};
+
+using list_type = shared_ptr<list_type_impl>;
 
 inline
 size_t hash_value(const shared_ptr<abstract_type>& x) {
@@ -259,6 +380,12 @@ public:
     }
 };
 
+inline
+serialized_compare
+abstract_type::as_less_comparator() {
+    return serialized_compare(shared_from_this());
+}
+
 using key_compare = serialized_compare;
 
 // FIXME: add missing types
@@ -276,6 +403,7 @@ extern thread_local const shared_ptr<abstract_type> uuid_type;
 extern thread_local const shared_ptr<abstract_type> inet_addr_type;
 extern thread_local const shared_ptr<abstract_type> float_type;
 extern thread_local const shared_ptr<abstract_type> double_type;
+extern thread_local const data_type empty_type;
 
 template <>
 inline
@@ -446,3 +574,8 @@ inline sstring read_simple_short_string(bytes_view& v) {
     v.remove_prefix(len);
     return ret;
 }
+
+void write_collection_size(std::ostream& out, int size, int version);
+void write_collection_value(std::ostream& out, int version, bytes_view val_bytes);
+void write_collection_value(std::ostream& out, int version, data_type type, const boost::any& value);
+
