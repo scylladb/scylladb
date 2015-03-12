@@ -46,6 +46,22 @@ bool lexicographical_compare(TypesIterator types, InputIt1 first1, InputIt1 last
     return (first1 == last1) && (first2 != last2);
 }
 
+// Returns true iff the second sequence is a prefix of the first sequence
+// Equality is an abstract_type-aware equality checker which takes the type as first argument.
+template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Equality>
+bool is_prefixed_by(TypesIterator types, InputIt1 first1, InputIt1 last1,
+        InputIt2 first2, InputIt2 last2, Equality equality) {
+    while (first1 != last1 && first2 != last2) {
+        if (!equality(*types, *first1, *first2)) {
+            return false;
+        }
+        ++first1;
+        ++first2;
+        ++types;
+    }
+    return first2 == last2;
+}
+
 using object_opt = std::experimental::optional<boost::any>;
 
 class marshal_exception : public std::exception {
