@@ -654,10 +654,9 @@ void write_collection_size(std::ostream& out, int size, int version) {
     }
 }
 
-bytes read_collection_value(bytes_view& in, int version) {
+bytes_view read_collection_value(bytes_view& in, int version) {
     auto size = version >= 3 ? read_simple<int32_t>(in) : read_simple<uint16_t>(in);
-    auto v = read_simple_bytes(in, size);
-    return bytes(v.begin(), v.end());
+    return read_simple_bytes(in, size);
 }
 
 void write_collection_value(std::ostream& out, int version, data_type type, const boost::any& value) {
@@ -778,9 +777,9 @@ map_type_impl::deserialize(bytes_view in, int protocol_version) {
     native_type m;
     auto size = read_collection_size(in, protocol_version);
     for (int i = 0; i < size; ++i) {
-        bytes kb = read_collection_value(in, protocol_version);
+        auto kb = read_collection_value(in, protocol_version);
         auto k = _keys->deserialize(kb);
-        bytes vb = read_collection_value(in, protocol_version);
+        auto vb = read_collection_value(in, protocol_version);
         auto v = _values->deserialize(vb);
         m.insert(m.end(), std::make_pair(std::move(k), std::move(v)));
     }
