@@ -156,7 +156,7 @@ tests = [
     'tests/fstream_test',
     'tests/map_reduce_test',
     'tests/rpc',
-    ] + urchin_tests
+    ]
 
 apps = [
     'apps/httpd/httpd',
@@ -164,6 +164,8 @@ apps = [
     'apps/seawreck/seawreck',
     'apps/memcached/memcached',
     ]
+
+tests += urchin_tests
 
 all_artifacts = apps + tests
 
