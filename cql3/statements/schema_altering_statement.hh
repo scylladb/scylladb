@@ -44,7 +44,7 @@ namespace messages = transport::messages;
 /**
  * Abstract class for statements that alter the schema.
  */
-class schema_altering_statement : public cf_statement, public cql_statement {
+class schema_altering_statement : public cf_statement, public virtual cql_statement, public ::enable_shared_from_this<schema_altering_statement> {
 private:
     const bool _is_column_family_level;
 
@@ -71,6 +71,10 @@ protected:
         if (_is_column_family_level) {
             cf_statement::prepare_keyspace(state);
         }
+    }
+
+    virtual std::unique_ptr<prepared> prepare(database& db) override {
+        return std::make_unique<parsed_statement::prepared>(this->shared_from_this());
     }
 
     virtual shared_ptr<transport::event::schema_change> change_event() = 0;
