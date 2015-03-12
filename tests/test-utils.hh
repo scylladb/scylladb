@@ -46,6 +46,7 @@ public:
             // HACK: please see https://github.com/cloudius-systems/seastar/issues/10
             boost::program_options::variables_map()["dummy"];
         }).run_sync([this] {
+            BOOST_REQUIRE(true);
             return run_test_case();
         });
     }
