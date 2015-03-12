@@ -499,7 +499,7 @@ public:
             _response->write_string(to_string(sc->target));
             _response->write_string(sc->keyspace);
             if (sc->target != transport::event::schema_change::target_type::KEYSPACE) {
-                _response->write_string(sc->table_or_type_or_function);
+                _response->write_string(sc->table_or_type_or_function.value());
             }
             break;
         }

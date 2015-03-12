@@ -72,6 +72,17 @@ static future<> require_column_has_value(distributed<database>& ddb, const sstri
     });
 }
 
+SEASTAR_TEST_CASE(test_create_keyspace_statement) {
+    auto db = make_shared<distributed<database>>();
+    auto state = make_shared<conversation_state>(*db, ks_name);
+
+    return db->start().then([state] {
+        return state->execute_cql("create keyspace ks with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").discard_result();
+    }).finally([db] {
+        return db->stop().finally([db] {});
+    });
+}
+
 SEASTAR_TEST_CASE(test_insert_statement) {
     auto db = make_shared<distributed<database>>();
     auto state = make_shared<conversation_state>(*db, ks_name);

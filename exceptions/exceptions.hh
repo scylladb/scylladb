@@ -27,6 +27,7 @@
 
 #include <stdexcept>
 #include "core/sstring.hh"
+#include "core/print.hh"
 
 namespace exceptions {
 
@@ -106,6 +107,37 @@ public:
     { }
 };
 
+class configuration_exception : public request_validation_exception {
+public:
+    configuration_exception(sstring msg)
+        : request_validation_exception{exception_code::CONFIG_ERROR, std::move(msg)}
+    { }
+
+    configuration_exception(exception_code code, sstring msg)
+        : request_validation_exception{code, std::move(msg)}
+    { }
+};
+
+class already_exists_exception : public configuration_exception {
+public:
+    const sstring ks_name;
+    const sstring cf_name;
+private:
+    already_exists_exception(sstring ks_name_, sstring cf_name_, sstring msg)
+        : configuration_exception{exception_code::ALREADY_EXISTS, msg}
+        , ks_name{ks_name_}
+        , cf_name{cf_name_}
+    { }
+public:
+    already_exists_exception(sstring ks_name_, sstring cf_name_)
+        : already_exists_exception{ks_name_, cf_name_, sprint("Cannot add already existing table \"%s\" to keyspace \"%s\"", cf_name_, ks_name_)}
+    { }
+
+    already_exists_exception(sstring ks_name_)
+        : already_exists_exception{ks_name_, "", sprint("Cannot add existing keyspace \"%s\"", ks_name_)}
+    { }
+};
+
 class recognition_exception : public std::runtime_error {
 public:
     recognition_exception(const std::string& msg) : std::runtime_error(msg) {};
@@ -117,5 +149,4 @@ public:
 };
 
 }
-
 #endif

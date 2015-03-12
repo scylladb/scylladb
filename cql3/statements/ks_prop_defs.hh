@@ -26,27 +26,23 @@
 #define CQL3_STATEMENTS_KS_PROP_DEFS_HH
 
 #include "cql3/statements/property_definitions.hh"
+#include "config/ks_meta_data.hh"
+#include "core/sstring.hh"
+
+#include <experimental/optional>
 
 namespace cql3 {
 
 namespace statements {
 
-#if 0
-package org.apache.cassandra.cql3.statements;
-
-import java.util.*;
-
-import org.apache.cassandra.config.KSMetaData;
-import org.apache.cassandra.exceptions.*;
-#endif
-
 class ks_prop_defs : public property_definitions {
+public:
+    static constexpr auto KW_DURABLE_WRITES = "durable_writes";
+    static constexpr auto KW_REPLICATION = "replication";
+
+    static constexpr auto REPLICATION_STRATEGY_CLASS_KEY = "class";
+
 #if 0
-    public static final String KW_DURABLE_WRITES = "durable_writes";
-    public static final String KW_REPLICATION = "replication";
-
-    public static final String REPLICATION_STRATEGY_CLASS_KEY = "class";
-
     public static final Set<String> keywords = new HashSet<>();
     public static final Set<String> obsoleteKeywords = new HashSet<>();
 
@@ -55,44 +51,44 @@ class ks_prop_defs : public property_definitions {
         keywords.add(KW_DURABLE_WRITES);
         keywords.add(KW_REPLICATION);
     }
-
-    private String strategyClass;
-
-    public void validate() throws SyntaxException
-    {
+#endif
+private:
+    std::experimental::optional<sstring> _strategy_class;
+public:
+    void validate() {
         // Skip validation if the strategy class is already set as it means we've alreayd
         // prepared (and redoing it would set strategyClass back to null, which we don't want)
-        if (strategyClass != null)
+        if (_strategy_class) {
             return;
-
+        }
+#if 0
         validate(keywords, obsoleteKeywords);
-
-        Map<String, String> replicationOptions = getReplicationOptions();
-        if (!replicationOptions.isEmpty())
-        {
-            strategyClass = replicationOptions.get(REPLICATION_STRATEGY_CLASS_KEY);
-            replicationOptions.remove(REPLICATION_STRATEGY_CLASS_KEY);
+#endif
+        auto replication_options = get_replication_options();
+        if (!replication_options.empty()) {
+            _strategy_class = replication_options[REPLICATION_STRATEGY_CLASS_KEY];
+            // FIXME
+            //replication_options.remove(REPLICATION_STRATEGY_CLASS_KEY);
         }
     }
 
-    public Map<String, String> getReplicationOptions() throws SyntaxException
-    {
-        Map<String, String> replicationOptions = getMap(KW_REPLICATION);
-        if (replicationOptions == null)
-            return Collections.emptyMap();
-        return replicationOptions;
+    std::unordered_map<sstring, sstring> get_replication_options() const {
+        auto replication_options = get_map(KW_REPLICATION);
+        if (replication_options) {
+            return replication_options.value();
+        }
+        return std::unordered_map<sstring, sstring>{};
     }
 
-    public String getReplicationStrategyClass()
-    {
-        return strategyClass;
+    std::experimental::optional<sstring> get_replication_strategy_class() const {
+        return _strategy_class;
     }
 
-    public KSMetaData asKSMetadata(String ksName) throws RequestValidationException
-    {
-        return KSMetaData.newKeyspace(ksName, getReplicationStrategyClass(), getReplicationOptions(), getBoolean(KW_DURABLE_WRITES, true));
+    lw_shared_ptr<config::ks_meta_data> as_ks_metadata(sstring ks_name) {
+        return config::ks_meta_data::new_keyspace(ks_name, get_replication_strategy_class().value(), get_replication_options(), get_boolean(KW_DURABLE_WRITES, true));
     }
 
+#if 0
     public KSMetaData asKSMetadataUpdate(KSMetaData old) throws RequestValidationException
     {
         String sClass = strategyClass;
