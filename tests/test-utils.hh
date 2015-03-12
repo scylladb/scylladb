@@ -35,6 +35,7 @@ class seastar_test {
 public:
     seastar_test();
     virtual ~seastar_test() {}
+    virtual const char* get_test_file() = 0;
     virtual const char* get_name() = 0;
     virtual future<> run_test_case() = 0;
 
@@ -59,7 +60,7 @@ seastar_test::seastar_test() {
 }
 
 test_suite* init_unit_test_suite(int argc, char* argv[]) {
-    test_suite* ts = BOOST_TEST_SUITE("seastar-tests");
+    test_suite* ts = BOOST_TEST_SUITE(tests.size() ? tests[0]->get_test_file() : "seastar-tests");
     for (seastar_test* test : tests) {
         ts->add(boost::unit_test::make_test_case([test] { test->run(); }, test->get_name()));
     }
@@ -68,6 +69,7 @@ test_suite* init_unit_test_suite(int argc, char* argv[]) {
 
 #define SEASTAR_TEST_CASE(name) \
     struct name : public seastar_test { \
+        const char* get_test_file() override { return __FILE__; } \
         const char* get_name() override { return #name; } \
         future<> run_test_case() override; \
     }; \
