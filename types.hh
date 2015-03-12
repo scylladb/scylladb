@@ -27,6 +27,25 @@ class column_specification;
 
 }
 
+// Like std::lexicographical_compare but injects values from shared sequence (types) to the comparator
+// Compare is an abstract_type-aware less comparator, which takes the type as first argument.
+template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Compare>
+bool lexicographical_compare(TypesIterator types, InputIt1 first1, InputIt1 last1,
+        InputIt2 first2, InputIt2 last2, Compare comp) {
+    while (first1 != last1 && first2 != last2) {
+        if (comp(*types, *first1, *first2)) {
+            return true;
+        }
+        if (comp(*types, *first2, *first1)) {
+            return false;
+        }
+        ++first1;
+        ++first2;
+        ++types;
+    }
+    return (first1 == last1) && (first2 != last2);
+}
+
 using object_opt = std::experimental::optional<boost::any>;
 
 class marshal_exception : public std::exception {
