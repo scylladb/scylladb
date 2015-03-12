@@ -56,7 +56,7 @@ namespace cql3 {
 namespace statements {
 
 /** A <code>CREATE KEYSPACE</code> statement parsed from a CQL query. */
-class create_keyspace_statement : public schema_altering_statement, public ::enable_shared_from_this<create_keyspace_statement>  {
+class create_keyspace_statement : public schema_altering_statement {
 private:
     sstring _name;
     shared_ptr<ks_prop_defs> _attrs;
@@ -78,10 +78,6 @@ public:
 
     virtual const sstring& keyspace() const override {
         return _name;
-    }
-
-    virtual std::unique_ptr<prepared> prepare(database& db) override {
-        return std::make_unique<parsed_statement::prepared>(this->shared_from_this());
     }
 
     virtual void check_access(const service::client_state& state) override {
