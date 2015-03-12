@@ -106,6 +106,7 @@ tests = [
     'tests/slab_test',
     'tests/fstream_test',
     'tests/map_reduce_test',
+    'tests/rpc',
     ]
 
 apps = [
@@ -232,6 +233,7 @@ deps = {
     'tests/slab_test': ['tests/slab_test.cc'] + core,
     'tests/fstream_test': ['tests/fstream_test.cc'] + core,
     'tests/map_reduce_test': ['tests/map_reduce_test.cc'] + core,
+    'tests/rpc': ['tests/rpc.cc'] + core + libnet,
 }
 
 warnings = [
