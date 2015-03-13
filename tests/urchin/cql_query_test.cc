@@ -93,6 +93,17 @@ SEASTAR_TEST_CASE(test_create_keyspace_statement) {
     });
 }
 
+SEASTAR_TEST_CASE(test_create_table_statement) {
+    auto db = make_shared<distributed<database>>();
+    auto state = make_shared<conversation_state>(*db, ks_name);
+
+    return db->start().then([state] {
+        return state->execute_cql("create table users (user_name varchar PRIMARY KEY, birth_year bigint);").discard_result();
+    }).finally([db] {
+        return db->stop().finally([db] {});
+    });
+}
+
 SEASTAR_TEST_CASE(test_insert_statement) {
     auto db = make_shared<distributed<database>>();
     auto state = make_shared<conversation_state>(*db, ks_name);
