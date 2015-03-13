@@ -303,6 +303,10 @@ future<> parse(file_input_stream& in, index_entry& ie) {
     return parse(in, ie.key, ie.position, ie.promoted_index);
 }
 
+future<> parse(file_input_stream& in, deletion_time& d) {
+    return parse(in, d.local_deletion_time, d.marked_for_delete_at);
+}
+
 template <typename Child>
 future<> parse(file_input_stream& in, std::unique_ptr<metadata>& p) {
     p.reset(new Child);

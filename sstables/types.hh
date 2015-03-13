@@ -164,5 +164,10 @@ struct statistics {
     std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
 };
 
+struct deletion_time {
+    uint32_t local_deletion_time;
+    uint64_t marked_for_delete_at;
+};
+
 }
 
