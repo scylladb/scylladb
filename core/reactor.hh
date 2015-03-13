@@ -433,17 +433,19 @@ class smp_message_queue {
         virtual future<> process() = 0;
         virtual void complete() = 0;
     };
-    template <typename Func, typename Future>
+    template <typename Func>
     struct async_work_item : work_item {
         Func _func;
-        using value_type = typename Future::value_type;
+        using futurator = futurize<std::result_of_t<Func()>>;
+        using future_type = typename futurator::type;
+        using value_type = typename future_type::value_type;
         std::experimental::optional<value_type> _result;
         std::exception_ptr _ex; // if !_result
-        typename Future::promise_type _promise; // used on local side
+        typename futurator::promise_type _promise; // used on local side
         async_work_item(Func&& func) : _func(std::move(func)) {}
         virtual future<> process() override {
             try {
-                return this->_func().then_wrapped([this] (auto&& f) {
+                return futurator::apply(this->_func).then_wrapped([this] (auto&& f) {
                     try {
                         _result = f.get();
                     } catch (...) {
@@ -463,7 +465,7 @@ class smp_message_queue {
                 _promise.set_exception(std::move(_ex));
             }
         }
-        Future get_future() { return _promise.get_future(); }
+        future_type get_future() { return _promise.get_future(); }
     };
     union tx_side {
         tx_side() {}
@@ -477,9 +479,8 @@ class smp_message_queue {
 public:
     smp_message_queue();
     template <typename Func>
-    std::result_of_t<Func()> submit(Func&& func) {
-        using future = std::result_of_t<Func()>;
-        auto wi = new async_work_item<Func, future>(std::forward<Func>(func));
+    futurize_t<std::result_of_t<Func()>> submit(Func&& func) {
+        auto wi = new async_work_item<Func>(std::forward<Func>(func));
         auto fut = wi->get_future();
         submit_item(wi);
         return fut;
@@ -881,28 +882,12 @@ public:
     static bool main_thread() { return std::this_thread::get_id() == _tmain; }
 
     template <typename Func>
-    static std::result_of_t<Func()> submit_to(unsigned t, Func&& func,
-            std::enable_if_t<returns_future<Func>::value, void*> = nullptr) {
+    static futurize_t<std::result_of_t<Func()>> submit_to(unsigned t, Func&& func) {
         if (t == engine().cpu_id()) {
-            return func();
+            return futurize<std::result_of_t<Func()>>::apply(std::forward<Func>(func));
         } else {
             return _qs[t][engine().cpu_id()].submit(std::forward<Func>(func));
         }
-    }
-    template <typename Func>
-    static future<std::result_of_t<Func()>> submit_to(unsigned t, Func&& func,
-            std::enable_if_t<!returns_future<Func>::value && !returns_void<Func>::value, void*> = nullptr) {
-        return submit_to(t, [func = std::forward<Func>(func)] () mutable {
-           return make_ready_future<std::result_of_t<Func()>>(func());
-        });
-    }
-    template <typename Func>
-    static future<> submit_to(unsigned t, Func&& func,
-            std::enable_if_t<!returns_future<Func>::value && returns_void<Func>::value, void*> = nullptr) {
-        return submit_to(t, [func = std::forward<Func>(func)] () mutable {
-            func();
-            return make_ready_future<>();
-        });
     }
     static bool poll_queues() {
         size_t got = 0;
