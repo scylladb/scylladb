@@ -105,16 +105,16 @@ SEASTAR_TEST_CASE(test_insert_statement) {
             db.keyspaces.emplace(ks_name, std::move(ks));
         });
     }).then([state, db] {
-            return state->execute_cql("insert into cf (p1, c1, r1) values ('key1', 1, 100);").discard_result();
-        }).then([state, db] {
-            return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {1}, "r1", 100);
-        }).then([state, db] {
-            return state->execute_cql("update cf set r1 = 66 where p1 = 'key1' and c1 = 1;").discard_result();
-        }).then([state, db] {
-            return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {1}, "r1", 66);
-        }).then([db] {
+        return state->execute_cql("insert into cf (p1, c1, r1) values ('key1', 1, 100);").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {1}, "r1", 100);
+    }).then([state, db] {
+        return state->execute_cql("update cf set r1 = 66 where p1 = 'key1' and c1 = 1;").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {1}, "r1", 66);
+    }).then([db] {
         return db->stop();
-        }).then_wrapped([db] (future<> f) mutable {
+    }).then_wrapped([db] (future<> f) mutable {
         return make_ready_future<>();
     });
 }
@@ -250,24 +250,24 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
             db.keyspaces.emplace(ks_name, std::move(ks));
         });
     }).then([state, db] {
-            return state->execute_cql("insert into cf (p1, map1) values ('key1', { 1001: 2001 });").discard_result();
-        }).then([state, db] {
-            return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
-                    "map1", map_type_impl::native_type({{1001, 2001}}));
-        }).then([state, db] {
-            return state->execute_cql("update cf set map1[1002] = 2002 where p1 = 'key1';").discard_result();
-        }).then([state, db] {
-            return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
-                    "map1", map_type_impl::native_type({{1001, 2001}, {1002, 2002}}));
-        }).then([state, db] {
-            // overwrite an element
-            return state->execute_cql("update cf set map1[1001] = 3001 where p1 = 'key1';").discard_result();
-        }).then([state, db] {
-            return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
-                    "map1", map_type_impl::native_type({{1001, 3001}, {1002, 2002}}));
-        }).then([db] {
-            return db->stop();
-        }).then_wrapped([db] (future<> f) mutable {
-            return make_ready_future<>();
+        return state->execute_cql("insert into cf (p1, map1) values ('key1', { 1001: 2001 });").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "map1", map_type_impl::native_type({{1001, 2001}}));
+    }).then([state, db] {
+        return state->execute_cql("update cf set map1[1002] = 2002 where p1 = 'key1';").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "map1", map_type_impl::native_type({{1001, 2001}, {1002, 2002}}));
+    }).then([state, db] {
+        // overwrite an element
+        return state->execute_cql("update cf set map1[1001] = 3001 where p1 = 'key1';").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "map1", map_type_impl::native_type({{1001, 3001}, {1002, 2002}}));
+    }).then([db] {
+        return db->stop();
+    }).then_wrapped([db] (future<> f) mutable {
+        return make_ready_future<>();
     });
 }
