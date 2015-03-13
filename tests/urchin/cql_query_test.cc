@@ -271,3 +271,40 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
         return make_ready_future<>();
     });
 }
+
+SEASTAR_TEST_CASE(test_set_insert_update) {
+    auto db = make_shared<distributed<database>>();
+    auto state = make_shared<conversation_state>(*db, ks_name);
+
+    // CQL: create table cf (p1 varchar primary key, set1 set<int>);
+    return db->start().then([db] {
+        return db->invoke_on_all([] (database& db) {
+            keyspace ks;
+            auto my_set_type = set_type_impl::get_instance(int32_type, true);
+            auto cf_schema = make_lw_shared(schema(ks_name, table_name,
+                {{"p1", utf8_type}}, {}, {{"set1", my_set_type}}, {}, utf8_type));
+            ks.column_families.emplace(table_name, column_family(cf_schema));
+            db.keyspaces.emplace(ks_name, std::move(ks));
+        });
+    }).then([state, db] {
+        return state->execute_cql("insert into cf (p1, set1) values ('key1', { 1001 });").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "set1", set_type_impl::native_type({1001}));
+    }).then([state, db] {
+        return state->execute_cql("update cf set set1 = set1 + { 1002 } where p1 = 'key1';").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "set1", set_type_impl::native_type({1001, 1002}));
+    }).then([state, db] {
+        // overwrite an element
+        return state->execute_cql("update cf set set1 = set1 + { 1001 } where p1 = 'key1';").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "set1", set_type_impl::native_type({1001, 1002}));
+    }).then([db] {
+        return db->stop();
+    }).then_wrapped([db] (future<> f) mutable {
+        return make_ready_future<>();
+    });
+}
