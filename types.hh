@@ -584,3 +584,20 @@ void write_collection_size(bytes::iterator& out, int size, int version);
 void write_collection_value(bytes::iterator& out, int version, bytes_view val_bytes);
 void write_collection_value(bytes::iterator& out, int version, data_type type, const boost::any& value);
 
+template <typename BytesViewIterator>
+bytes
+collection_type_impl::pack(BytesViewIterator start, BytesViewIterator finish, int elements, int protocol_version) {
+    size_t len = collection_size_len(protocol_version);
+    size_t psz = collection_value_len(protocol_version);
+    for (auto j = start; j != finish; j++) {
+        len += j->size() + psz;
+    }
+    bytes out(bytes::initialized_later(), len);
+    bytes::iterator i = out.begin();
+    write_collection_size(i, elements, protocol_version);
+    while (start != finish) {
+        write_collection_value(i, protocol_version, *start++);
+    }
+    return out;
+}
+
