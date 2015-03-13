@@ -54,7 +54,7 @@ protected:
         , _is_column_family_level{false}
     { }
 
-    schema_altering_statement(::shared_ptr<cf_name>&& name)
+    schema_altering_statement(::shared_ptr<cf_name> name)
         : cf_statement{std::move(name)}
         , _is_column_family_level{true}
     { }
