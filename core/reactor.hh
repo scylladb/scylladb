@@ -477,9 +477,9 @@ class smp_message_queue {
 public:
     smp_message_queue();
     template <typename Func>
-    std::result_of_t<Func()> submit(Func func) {
+    std::result_of_t<Func()> submit(Func&& func) {
         using future = std::result_of_t<Func()>;
-        auto wi = new async_work_item<Func, future>(std::move(func));
+        auto wi = new async_work_item<Func, future>(std::forward<Func>(func));
         auto fut = wi->get_future();
         submit_item(wi);
         return fut;
@@ -881,25 +881,25 @@ public:
     static bool main_thread() { return std::this_thread::get_id() == _tmain; }
 
     template <typename Func>
-    static std::result_of_t<Func()> submit_to(unsigned t, Func func,
+    static std::result_of_t<Func()> submit_to(unsigned t, Func&& func,
             std::enable_if_t<returns_future<Func>::value, void*> = nullptr) {
         if (t == engine().cpu_id()) {
             return func();
         } else {
-            return _qs[t][engine().cpu_id()].submit(std::move(func));
+            return _qs[t][engine().cpu_id()].submit(std::forward<Func>(func));
         }
     }
     template <typename Func>
-    static future<std::result_of_t<Func()>> submit_to(unsigned t, Func func,
+    static future<std::result_of_t<Func()>> submit_to(unsigned t, Func&& func,
             std::enable_if_t<!returns_future<Func>::value && !returns_void<Func>::value, void*> = nullptr) {
-        return submit_to(t, [func = std::move(func)] () mutable {
+        return submit_to(t, [func = std::forward<Func>(func)] () mutable {
            return make_ready_future<std::result_of_t<Func()>>(func());
         });
     }
     template <typename Func>
-    static future<> submit_to(unsigned t, Func func,
+    static future<> submit_to(unsigned t, Func&& func,
             std::enable_if_t<!returns_future<Func>::value && returns_void<Func>::value, void*> = nullptr) {
-        return submit_to(t, [func = std::move(func)] () mutable {
+        return submit_to(t, [func = std::forward<Func>(func)] () mutable {
             func();
             return make_ready_future<>();
         });

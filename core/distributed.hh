@@ -152,7 +152,7 @@ public:
     futurize_t<std::result_of_t<Func(Service&)>>
     invoke_on(unsigned id, Func&& func) {
         auto inst = _instances[id];
-        return smp::submit_to(id, [inst, func] {
+        return smp::submit_to(id, [inst, func = std::forward<Func>(func)] () mutable {
             return func(*inst);
         });
     }
