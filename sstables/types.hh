@@ -169,5 +169,21 @@ struct deletion_time {
     uint64_t marked_for_delete_at;
 };
 
+enum class column_mask : uint8_t {
+    none = 0x0,
+    deletion = 0x01,
+    expiration = 0x02,
+    counter = 0x04,
+    counter_update = 0x08,
+    range_tombstone = 0x10,
+};
+
+inline column_mask operator&(column_mask m1, column_mask m2) {
+    return column_mask(static_cast<uint8_t>(m1) & static_cast<uint8_t>(m2));
+}
+
+inline column_mask operator|(column_mask m1, column_mask m2) {
+    return column_mask(static_cast<uint8_t>(m1) | static_cast<uint8_t>(m2));
+}
 }
 
