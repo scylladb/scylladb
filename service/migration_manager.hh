@@ -294,9 +294,11 @@ public:
     {
         announceNewColumnFamily(cfm, false);
     }
+#endif
 
-    public static void announceNewColumnFamily(CFMetaData cfm, boolean announceLocally) throws ConfigurationException
-    {
+    static void announce_new_column_family(schema_ptr cfm, bool announce_locally) {
+        warn(unimplemented::cause::MIGRATIONS);
+#if 0
         cfm.validate();
 
         KSMetaData ksm = Schema.instance.getKSMetaData(cfm.ksName);
@@ -307,8 +309,10 @@ public:
 
         logger.info(String.format("Create new table: %s", cfm));
         announce(LegacySchemaTables.makeCreateTableMutation(ksm, cfm, FBUtilities.timestampMicros()), announceLocally);
+#endif
     }
 
+#if 0
     public static void announceNewType(UserType newType, boolean announceLocally)
     {
         KSMetaData ksm = Schema.instance.getKSMetaData(newType.keyspace);
