@@ -199,6 +199,29 @@ public:
 };
 
 using data_type = shared_ptr<abstract_type>;
+using bytes_view_opt = std::experimental::optional<bytes_view>;
+
+static inline
+bool optional_less_compare(data_type t, bytes_view_opt e1, bytes_view_opt e2) {
+    if (bool(e1) != bool(e2)) {
+        return bool(e2);
+    }
+    if (!e1) {
+        return false;
+    }
+    return t->less(*e1, *e2);
+}
+
+static inline
+bool optional_equal(data_type t, bytes_view_opt e1, bytes_view_opt e2) {
+    if (bool(e1) != bool(e2)) {
+        return false;
+    }
+    if (!e1) {
+        return true;
+    }
+    return t->equal(*e1, *e2);
+}
 
 class collection_type_impl : public abstract_type {
     static thread_local logging::logger _logger;
