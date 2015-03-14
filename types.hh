@@ -116,10 +116,10 @@ public:
         }
     }
     virtual object_opt deserialize(bytes_view v) = 0;
-    virtual void validate(const bytes& v) {
+    virtual void validate(bytes_view v) {
         // FIXME
     }
-    virtual void validate_collection_member(const bytes& v, const bytes& collection_name) {
+    virtual void validate_collection_member(bytes_view v, const bytes& collection_name) {
         validate(v);
     }
     virtual bool is_compatible_with(abstract_type& previous) {
