@@ -2128,7 +2128,7 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, db::consistency_lev
         }
 
         Set<InetAddress> allEndpoints = Gossiper.instance.getLiveTokenOwners();
-        
+
         int blockFor = allEndpoints.size();
         final TruncateResponseHandler responseHandler = new TruncateResponseHandler(blockFor);
 
@@ -2159,7 +2159,7 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, db::consistency_lev
     {
         return !Gossiper.instance.getUnreachableTokenOwners().isEmpty();
     }
-    
+
     public interface WritePerformer
     {
         public void apply(IMutation mutation,
@@ -2320,15 +2320,15 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, db::consistency_lev
     public void setTruncateRpcTimeout(Long timeoutInMillis) { DatabaseDescriptor.setTruncateRpcTimeout(timeoutInMillis); }
     public void reloadTriggerClasses() { TriggerExecutor.instance.reloadClasses(); }
 
-    
+
     public long getReadRepairAttempted() {
         return ReadRepairMetrics.attempted.count();
     }
-    
+
     public long getReadRepairRepairedBlocking() {
         return ReadRepairMetrics.repairedBlocking.count();
     }
-    
+
     public long getReadRepairRepairedBackground() {
         return ReadRepairMetrics.repairedBackground.count();
     }
