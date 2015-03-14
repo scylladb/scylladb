@@ -113,7 +113,6 @@ column_family::find_or_create_partition(const bytes& key) {
 row&
 column_family::find_or_create_row(const bytes& partition_key, const bytes& clustering_key) {
     mutation_partition& p = find_or_create_partition(partition_key);
-    // call lower_bound so we have a hint for the insert, just in case.
     return p.clustered_row(clustering_key);
 }
 
