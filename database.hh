@@ -19,7 +19,6 @@
 #include <unordered_map>
 #include <map>
 #include <set>
-#include <vector>
 #include <iostream>
 #include <boost/functional/hash.hpp>
 #include <experimental/optional>
@@ -36,40 +35,153 @@
 #include "atomic_cell.hh"
 #include "query.hh"
 #include "keys.hh"
+#include <boost/intrusive/set.hpp>
 
 using row = std::map<column_id, atomic_cell_or_collection>;
 
 struct deletable_row final {
     tombstone t;
     row cells;
+
+    void apply(tombstone t_) {
+        t.apply(t_);
+    }
 };
 
-using row_tombstone_set = std::map<clustering_key::prefix::one, tombstone, clustering_key::prefix::one::less_compare>;
+class row_tombstones_entry : public boost::intrusive::set_base_hook<> {
+    clustering_key::prefix::one _prefix;
+    tombstone _t;
+public:
+    row_tombstones_entry(clustering_key::prefix::one&& prefix, tombstone t)
+        : _prefix(std::move(prefix))
+        , _t(std::move(t))
+    { }
+    clustering_key::prefix::one& prefix() {
+        return _prefix;
+    }
+    const clustering_key::prefix::one& prefix() const {
+        return _prefix;
+    }
+    tombstone& t() {
+        return _t;
+    }
+    const tombstone& t() const {
+        return _t;
+    }
+    void apply(tombstone t) {
+        _t.apply(t);
+    }
+    struct compare {
+        clustering_key::prefix::one::less_compare _c;
+        compare(const schema& s) : _c(s) {}
+        bool operator()(const row_tombstones_entry& e1, const row_tombstones_entry& e2) const {
+            return _c(e1._prefix, e2._prefix);
+        }
+        bool operator()(const clustering_key::prefix::one& prefix, const row_tombstones_entry& e) const {
+            return _c(prefix, e._prefix);
+        }
+        bool operator()(const row_tombstones_entry& e, const clustering_key::prefix::one& prefix) const {
+            return _c(e._prefix, prefix);
+        }
+    };
+    template <typename Comparator>
+    struct delegating_compare {
+        Comparator _c;
+        delegating_compare(Comparator&& c) : _c(std::move(c)) {}
+        template <typename Comparable>
+        bool operator()(const Comparable& prefix, const row_tombstones_entry& e) const {
+            return _c(prefix, e._prefix);
+        }
+        template <typename Comparable>
+        bool operator()(const row_tombstones_entry& e, const Comparable& prefix) const {
+            return _c(e._prefix, prefix);
+        }
+    };
+    template <typename Comparator>
+    static auto key_comparator(Comparator&& c) {
+        return delegating_compare<Comparator>(std::move(c));
+    }
+};
+
+class rows_entry : public boost::intrusive::set_base_hook<> {
+    clustering_key::one _key;
+    deletable_row _row;
+public:
+    rows_entry(clustering_key::one&& key)
+        : _key(std::move(key))
+    { }
+    rows_entry(const clustering_key::one& key)
+        : _key(key)
+    { }
+    rows_entry(const rows_entry& e)
+        : _key(e._key)
+        , _row(e._row)
+    { }
+    clustering_key::one& key() {
+        return _key;
+    }
+    const clustering_key::one& key() const {
+        return _key;
+    }
+    deletable_row& row() {
+        return _row;
+    }
+    const deletable_row& row() const {
+        return _row;
+    }
+    void apply(tombstone t) {
+        _row.apply(t);
+    }
+    struct compare {
+        clustering_key::one::less_compare _c;
+        compare(const schema& s) : _c(s) {}
+        bool operator()(const rows_entry& e1, const rows_entry& e2) const {
+            return _c(e1._key, e2._key);
+        }
+        bool operator()(const clustering_key::one& key, const rows_entry& e) const {
+            return _c(key, e._key);
+        }
+        bool operator()(const rows_entry& e, const clustering_key::one& key) const {
+            return _c(e._key, key);
+        }
+    };
+    struct compare_prefix {
+        clustering_key::one::less_compare_with_prefix _c;
+        compare_prefix(const schema& s) : _c(s) {}
+        bool operator()(const clustering_key::prefix::one& prefix, const rows_entry& e) const {
+            return _c(prefix, e._key);
+        }
+        bool operator()(const rows_entry& e, const clustering_key::prefix::one& prefix) const {
+            return _c(e._key, prefix);
+        }
+    };
+};
 
 class mutation_partition final {
 private:
     tombstone _tombstone;
     row _static_row;
-    std::map<clustering_key::one, deletable_row, clustering_key::one::less_compare> _rows;
-    row_tombstone_set _row_tombstones;
+    boost::intrusive::set<rows_entry, boost::intrusive::compare<rows_entry::compare>> _rows;
+    boost::intrusive::set<row_tombstones_entry, boost::intrusive::compare<row_tombstones_entry::compare>> _row_tombstones;
 public:
     mutation_partition(schema_ptr s)
-        : _rows(clustering_key::one::less_compare(*s))
-        , _row_tombstones(clustering_key::prefix::one::less_compare(*s))
+        : _rows(rows_entry::compare(*s))
+        , _row_tombstones(row_tombstones_entry::compare(*s))
     { }
+    mutation_partition(mutation_partition&&) = default;
+    ~mutation_partition();
     void apply(tombstone t) { _tombstone.apply(t); }
     void apply_delete(schema_ptr schema, const clustering_prefix& prefix, tombstone t);
-    void apply_row_tombstone(schema_ptr schema, clustering_key::prefix::one prefix, tombstone t) {
-        apply_row_tombstone(schema, {std::move(prefix), std::move(t)});
-    }
-    void apply_row_tombstone(schema_ptr schema, std::pair<clustering_key::prefix::one, tombstone> row_tombstone);
+    void apply_delete(schema_ptr schema, clustering_key::one&& key, tombstone t);
+    void apply_row_tombstone(schema_ptr schema, clustering_key::prefix::one prefix, tombstone t);
     void apply(schema_ptr schema, const mutation_partition& p);
-    const row_tombstone_set& row_tombstones() const { return _row_tombstones; }
     row& static_row() { return _static_row; }
-    row& clustered_row(const clustering_key::one& key) { return _rows[key].cells; }
-    row& clustered_row(clustering_key::one&& key) { return _rows[std::move(key)].cells; }
+    row& clustered_row(const clustering_key::one& key);
     row* find_row(const clustering_key::one& key);
+    row* find_row(schema_ptr schema, const clustering_key::prefix::one& key);
+    rows_entry* find_entry(schema_ptr schema, const clustering_key::prefix::one& key);
     tombstone tombstone_for_row(schema_ptr schema, const clustering_key::one& key);
+    tombstone tombstone_for_row(schema_ptr schema, const clustering_key::prefix::one& key);
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
 };
 
@@ -126,6 +238,7 @@ private:
 
 struct column_family {
     column_family(schema_ptr schema);
+    column_family(column_family&&) = default;
     mutation_partition& find_or_create_partition(const partition_key::one& key);
     row& find_or_create_row(const partition_key::one& partition_key, const clustering_key::one& clustering_key);
     mutation_partition* find_partition(const partition_key::one& key);
