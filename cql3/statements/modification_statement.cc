@@ -69,7 +69,7 @@ modification_statement::get_mutations(const query_options& options, bool local, 
 
 future<std::unique_ptr<update_parameters>>
 modification_statement::make_update_parameters(
-        lw_shared_ptr<std::vector<partition_key>> keys,
+        lw_shared_ptr<std::vector<partition_key::one>> keys,
         lw_shared_ptr<clustering_prefix> prefix,
         const query_options& options,
         bool local,
@@ -86,7 +86,7 @@ modification_statement::make_update_parameters(
 
 future<update_parameters::prefetched_rows_type>
 modification_statement::read_required_rows(
-        lw_shared_ptr<std::vector<partition_key>> keys,
+        lw_shared_ptr<std::vector<partition_key::one>> keys,
         lw_shared_ptr<clustering_prefix> prefix,
         bool local,
         db::consistency_level cl) {
@@ -180,7 +180,7 @@ modification_statement::create_clustering_prefix_internal(const query_options& o
             components.push_back(val);
         }
     }
-    return components;
+    return clustering_prefix(std::move(components));
 }
 
 clustering_prefix
@@ -221,9 +221,9 @@ modification_statement::create_clustering_prefix(const query_options& options) {
     return create_clustering_prefix_internal(options);
 }
 
-std::vector<partition_key>
+std::vector<partition_key::one>
 modification_statement::build_partition_keys(const query_options& options) {
-    std::vector<partition_key> result;
+    std::vector<partition_key::one> result;
     std::vector<bytes_opt> components;
 
     auto remaining = s->partition_key_size();
@@ -243,9 +243,9 @@ modification_statement::build_partition_keys(const query_options& options) {
                     throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
                 }
                 components.push_back(val);
-                partition_key key = serialize_value(*s->partition_key_type, components);
+                auto key = partition_key::one::from_exploded(*s, components);
                 validation::validate_cql_key(s, key);
-                result.push_back(key);
+                result.emplace_back(std::move(key));
             } else {
                 for (auto&& val : values) {
                     if (!val) {
@@ -255,9 +255,9 @@ modification_statement::build_partition_keys(const query_options& options) {
                     full_components.reserve(components.size() + 1);
                     auto i = std::copy(components.begin(), components.end(), std::back_inserter(full_components));
                     *i = val;
-                    partition_key key = serialize_value(*s->partition_key_type, full_components);
+                    auto key = partition_key::one::from_exploded(*s, full_components);
                     validation::validate_cql_key(s, key);
-                    result.push_back(key);
+                    result.emplace_back(std::move(key));
                 }
             }
         } else {

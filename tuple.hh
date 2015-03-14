@@ -32,6 +32,10 @@ public:
 
     tuple_type(tuple_type&&) = default;
 
+    auto const& types() {
+        return _types;
+    }
+
     prefix_type as_prefix() {
         return prefix_type(_types);
     }

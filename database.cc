@@ -82,17 +82,17 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_k
 
 column_family::column_family(schema_ptr schema)
     : _schema(std::move(schema))
-    , partitions(key_compare(_schema->thrift.partition_key_type)) {
+    , partitions(partition_key::one::less_compare(*_schema)) {
 }
 
 mutation_partition*
-column_family::find_partition(const bytes& key) {
+column_family::find_partition(const partition_key::one& key) {
     auto i = partitions.find(key);
     return i == partitions.end() ? nullptr : &i->second;
 }
 
 row*
-column_family::find_row(const bytes& partition_key, const bytes& clustering_key) {
+column_family::find_row(const partition_key::one& partition_key, const clustering_key::one& clustering_key) {
     mutation_partition* p = find_partition(partition_key);
     if (!p) {
         return nullptr;
@@ -101,17 +101,17 @@ column_family::find_row(const bytes& partition_key, const bytes& clustering_key)
 }
 
 mutation_partition&
-column_family::find_or_create_partition(const bytes& key) {
+column_family::find_or_create_partition(const partition_key::one& key) {
     // call lower_bound so we have a hint for the insert, just in case.
     auto i = partitions.lower_bound(key);
-    if (i == partitions.end() || key != i->first) {
+    if (i == partitions.end() || !key.equal(*_schema, i->first)) {
         i = partitions.emplace_hint(i, std::make_pair(std::move(key), mutation_partition(_schema)));
     }
     return i->second;
 }
 
 row&
-column_family::find_or_create_row(const bytes& partition_key, const bytes& clustering_key) {
+column_family::find_or_create_row(const partition_key::one& partition_key, const clustering_key::one& clustering_key) {
     mutation_partition& p = find_or_create_partition(partition_key);
     return p.clustered_row(clustering_key);
 }
@@ -312,6 +312,15 @@ keyspace::find_schema(const sstring& cf_name) {
     return cf->_schema;
 }
 
+schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) {
+    auto ks = find_keyspace(ks_name);
+    if (!ks) {
+        return {};
+    }
+
+    return ks->find_schema(cf_name);
+}
+
 keyspace*
 database::find_keyspace(const sstring& name) {
     auto i = keyspaces.find(name);
@@ -403,12 +412,14 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
 }
 
 tombstone
-mutation_partition::tombstone_for_row(schema_ptr schema, const clustering_key& key) {
+mutation_partition::tombstone_for_row(schema_ptr schema, const clustering_key::one& key) {
     tombstone t = _tombstone;
 
-    auto i = _row_tombstones.lower_bound(key);
-    if (i != _row_tombstones.end() && schema->clustering_key_prefix_type->is_prefix_of(i->first, key)) {
-        t.apply(i->second);
+    // FIXME: Optimize this
+    for (auto&& e : _row_tombstones) {
+        if (key.is_prefixed_by(*schema, e.first)) {
+            t.apply(e.second);
+        }
     }
 
     auto j = _rows.find(key);
@@ -420,10 +431,10 @@ mutation_partition::tombstone_for_row(schema_ptr schema, const clustering_key& k
 }
 
 void
-mutation_partition::apply_row_tombstone(schema_ptr schema, std::pair<bytes, tombstone> row_tombstone) {
+mutation_partition::apply_row_tombstone(schema_ptr schema, std::pair<clustering_key::prefix::one, tombstone> row_tombstone) {
     auto& prefix = row_tombstone.first;
     auto i = _row_tombstones.lower_bound(prefix);
-    if (i == _row_tombstones.end() || !schema->clustering_key_prefix_type->equal(prefix, i->first)) {
+    if (i == _row_tombstones.end() || !prefix.equal(*schema, i->first)) {
         _row_tombstones.emplace_hint(i, std::move(row_tombstone));
     } else if (row_tombstone.second > i->second) {
         i->second = row_tombstone.second;
@@ -432,17 +443,17 @@ mutation_partition::apply_row_tombstone(schema_ptr schema, std::pair<bytes, tomb
 
 void
 mutation_partition::apply_delete(schema_ptr schema, const clustering_prefix& prefix, tombstone t) {
-    if (prefix.empty()) {
+    if (!prefix) {
         apply(t);
-    } else if (prefix.size() == schema->clustering_key_size()) {
-        _rows[schema->clustering_key_type->serialize_value(prefix)].t.apply(t);
+    } else if (prefix.is_full(*schema)) {
+        _rows[clustering_key::one::from_clustering_prefix(*schema, prefix)].t.apply(t);
     } else {
-        apply_row_tombstone(schema, {schema->clustering_key_prefix_type->serialize_value(prefix), t});
+        apply_row_tombstone(schema, {clustering_key::prefix::one::from_clustering_prefix(*schema, prefix), t});
     }
 }
 
 row*
-mutation_partition::find_row(const clustering_key& key) {
+mutation_partition::find_row(const clustering_key::one& key) {
     auto i = _rows.find(key);
     if (i == _rows.end()) {
         return nullptr;
@@ -456,7 +467,7 @@ bool column_definition::is_compact_value() const {
 }
 
 std::ostream& operator<<(std::ostream& os, const mutation& m) {
-    return fprint(os, "{mutation: schema %p key %s data %s}", m.schema.get(), m.key, m.p);
+    return fprint(os, "{mutation: schema %p key %s data %s}", m.schema.get(), static_cast<bytes_view>(m.key), m.p);
 }
 
 std::ostream& operator<<(std::ostream& os, const mutation_partition& mp) {
@@ -474,17 +485,19 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
         if (!range.is_singular()) {
             fail(unimplemented::cause::RANGE_QUERIES);
         }
-        auto& key = range.start();
-        if (!_schema->clustering_key_prefix_type->is_full(key)) {
+        auto& key = range.start_value();
+        if (!key.is_full(*_schema)) {
             fail(unimplemented::cause::RANGE_QUERIES);
         }
-        auto row = partition.find_row(key);
+        // FIXME: Support looking up by prefixes
+        auto full_key = key.to_full(*_schema);
+        auto row = partition.find_row(full_key);
         if (!row) {
             continue;
         }
 
         // FIXME: handle removed rows properly. In CQL rows are separate entities (can be live or dead).
-        auto row_tombstone = partition.tombstone_for_row(_schema, key);
+        auto row_tombstone = partition.tombstone_for_row(_schema, full_key);
 
         query::result::row result_row;
         result_row.cells.reserve(slice.regular_columns.size());
@@ -509,7 +522,7 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
                 }
             }
         }
-        result.rows.emplace_back(key, std::move(result_row));
+        result.rows.emplace_back(full_key, std::move(result_row));
         --limit;
     }
 
@@ -531,10 +544,7 @@ column_family::query(const query::read_command& cmd) {
     uint32_t limit = cmd.row_limit;
     for (auto&& range : cmd.partition_ranges) {
         if (range.is_singular()) {
-            auto& key = range.start();
-            if (!_schema->partition_key_prefix_type->is_full(key)) {
-                fail(unimplemented::cause::RANGE_QUERIES);
-            }
+            auto& key = range.start_value();
             auto partition = find_partition(key);
             if (!partition) {
                 return make_ready_future<lw_shared_ptr<query::result>>(result);

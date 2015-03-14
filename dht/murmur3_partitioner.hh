@@ -10,7 +10,7 @@ namespace dht {
 
 class murmur3_partitioner final : public i_partitioner {
 public:
-    virtual token get_token(const bytes& key) override;
+    virtual token get_token(const partition_key::one& key) override;
     virtual bool preserves_order() override { return false; }
     virtual std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens);
     virtual data_type get_token_validator();

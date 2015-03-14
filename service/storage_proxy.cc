@@ -1155,8 +1155,12 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
 storage_proxy::query(lw_shared_ptr<query::read_command> cmd, db::consistency_level cl) {
-    if (cmd->partition_ranges.empty()) {
+    static auto make_empty = [] {
         return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(make_foreign(make_lw_shared<query::result>()));
+    };
+
+    if (cmd->partition_ranges.empty()) {
+        return make_empty();
     }
 
     if (cmd->partition_ranges.size() != 1) {
@@ -1167,7 +1171,7 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, db::consistency_lev
     auto& range = cmd->partition_ranges[0];
 
     if (range.is_singular()) {
-        auto& key = range.start();
+        auto& key = range.start_value();
         auto dk = dht::global_partitioner().decorate_key(key);
         auto shard = _db.local().shard_of(dk._token);
         return _db.invoke_on(shard, [cmd] (database& db) {

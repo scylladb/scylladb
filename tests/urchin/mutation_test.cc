@@ -24,8 +24,8 @@ BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
     column_family cf(s);
 
     column_definition& r1_col = *s->get_column_definition("r1");
-    partition_key key = to_bytes("key1");
-    clustering_key c_key = s->clustering_key_type->decompose_value({int32_type->decompose(2)});
+    auto key = partition_key::one::from_exploded(*s, {to_bytes("key1")});
+    auto c_key = clustering_key::one::from_exploded(*s, {int32_type->decompose(2)});
 
     mutation m(key, s);
     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(3)));
@@ -41,30 +41,26 @@ BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
 
 BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
     auto s = make_lw_shared(schema(some_keyspace, some_column_family,
-        {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
+        {{"p1", utf8_type}}, {{"c1", int32_type}, {"c2", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
     column_family cf(s);
 
-    partition_key key = to_bytes("key1");
-
-    clustering_key c_key1 = s->clustering_key_type->decompose_value(
-        {int32_type->decompose(1)}
-    );
-
-    clustering_key c_key2 = s->clustering_key_type->decompose_value(
-        {int32_type->decompose(2)}
-    );
+    auto key = partition_key::one::from_exploded(*s, {to_bytes("key1")});
+    auto c_key1 = clustering_key::one::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(0)});
+    auto c_key1_prefix = clustering_key::prefix::one::from_exploded(*s, {int32_type->decompose(1)});
+    auto c_key2 = clustering_key::one::from_exploded(*s, {int32_type->decompose(2), int32_type->decompose(0)});
+    auto c_key2_prefix = clustering_key::prefix::one::from_exploded(*s, {int32_type->decompose(2)});
 
     auto ttl = gc_clock::now() + std::chrono::seconds(1);
 
     mutation m(key, s);
-    m.p.apply_row_tombstone(s, c_key1, tombstone(1, ttl));
-    m.p.apply_row_tombstone(s, c_key2, tombstone(0, ttl));
+    m.p.apply_row_tombstone(s, c_key1_prefix, tombstone(1, ttl));
+    m.p.apply_row_tombstone(s, c_key2_prefix, tombstone(0, ttl));
 
     BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, c_key1), tombstone(1, ttl));
     BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, c_key2), tombstone(0, ttl));
 
-    m.p.apply_row_tombstone(s, c_key2, tombstone(1, ttl));
+    m.p.apply_row_tombstone(s, c_key2_prefix, tombstone(1, ttl));
     BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, c_key2), tombstone(1, ttl));
 }
 
@@ -73,7 +69,7 @@ BOOST_AUTO_TEST_CASE(test_map_mutations) {
     auto s = make_lw_shared(schema(some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_map_type}}, utf8_type));
     column_family cf(s);
-    partition_key key = to_bytes("key1");
+    auto key = partition_key::one::from_exploded(*s, {to_bytes("key1")});
     auto& column = *s->get_column_definition("s1");
     map_type_impl::mutation mmut1{{int32_type->decompose(101), make_atomic_cell(utf8_type->decompose(sstring("101")))}};
     mutation m1(key, s);
@@ -106,7 +102,7 @@ BOOST_AUTO_TEST_CASE(test_set_mutations) {
     auto s = make_lw_shared(schema(some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_set_type}}, utf8_type));
     column_family cf(s);
-    partition_key key = to_bytes("key1");
+    auto key = partition_key::one::from_exploded(*s, {to_bytes("key1")});
     auto& column = *s->get_column_definition("s1");
     map_type_impl::mutation mmut1{{int32_type->decompose(101), make_atomic_cell({})}};
     mutation m1(key, s);
@@ -139,8 +135,7 @@ BOOST_AUTO_TEST_CASE(test_list_mutations) {
     auto s = make_lw_shared(schema(some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_list_type}}, utf8_type));
     column_family cf(s);
-    partition_key key = to_bytes("key1");
-    auto key_type = timeuuid_type;
+    auto key = partition_key::one::from_exploded(*s, {to_bytes("key1")});
     auto& column = *s->get_column_definition("s1");
     auto make_key = [] { return timeuuid_type->decompose(utils::UUID_gen::get_time_UUID()); };
     collection_type_impl::mutation mmut1{{make_key(), make_atomic_cell(int32_type->decompose(101))}};

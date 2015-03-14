@@ -34,15 +34,8 @@
 #include "timestamp.hh"
 #include "tombstone.hh"
 #include "atomic_cell.hh"
-#include "bytes.hh"
 #include "query.hh"
-
-using partition_key_type = tuple_type<>;
-using clustering_key_type = tuple_type<>;
-using clustering_prefix_type = tuple_prefix;
-using partition_key = bytes;
-using clustering_key = bytes;
-using clustering_prefix = clustering_prefix_type::value_type;
+#include "keys.hh"
 
 using row = std::map<column_id, atomic_cell_or_collection>;
 
@@ -51,42 +44,42 @@ struct deletable_row final {
     row cells;
 };
 
-using row_tombstone_set = std::map<bytes, tombstone, serialized_compare>;
+using row_tombstone_set = std::map<clustering_key::prefix::one, tombstone, clustering_key::prefix::one::less_compare>;
 
 class mutation_partition final {
 private:
     tombstone _tombstone;
     row _static_row;
-    std::map<clustering_key, deletable_row, key_compare> _rows;
+    std::map<clustering_key::one, deletable_row, clustering_key::one::less_compare> _rows;
     row_tombstone_set _row_tombstones;
 public:
     mutation_partition(schema_ptr s)
-        : _rows(key_compare(s->clustering_key_type))
-        , _row_tombstones(serialized_compare(s->clustering_key_prefix_type))
+        : _rows(clustering_key::one::less_compare(*s))
+        , _row_tombstones(clustering_key::prefix::one::less_compare(*s))
     { }
     void apply(tombstone t) { _tombstone.apply(t); }
     void apply_delete(schema_ptr schema, const clustering_prefix& prefix, tombstone t);
-    void apply_row_tombstone(schema_ptr schema, bytes prefix, tombstone t) {
+    void apply_row_tombstone(schema_ptr schema, clustering_key::prefix::one prefix, tombstone t) {
         apply_row_tombstone(schema, {std::move(prefix), std::move(t)});
     }
-    void apply_row_tombstone(schema_ptr schema, std::pair<bytes, tombstone> row_tombstone);
+    void apply_row_tombstone(schema_ptr schema, std::pair<clustering_key::prefix::one, tombstone> row_tombstone);
     void apply(schema_ptr schema, const mutation_partition& p);
     const row_tombstone_set& row_tombstones() const { return _row_tombstones; }
     row& static_row() { return _static_row; }
-    row& clustered_row(const clustering_key& key) { return _rows[key].cells; }
-    row& clustered_row(clustering_key&& key) { return _rows[std::move(key)].cells; }
-    row* find_row(const clustering_key& key);
-    tombstone tombstone_for_row(schema_ptr schema, const clustering_key& key);
+    row& clustered_row(const clustering_key::one& key) { return _rows[key].cells; }
+    row& clustered_row(clustering_key::one&& key) { return _rows[std::move(key)].cells; }
+    row* find_row(const clustering_key::one& key);
+    tombstone tombstone_for_row(schema_ptr schema, const clustering_key::one& key);
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
 };
 
 class mutation final {
 public:
     schema_ptr schema;
-    partition_key key;
+    partition_key::one key;
     mutation_partition p;
 public:
-    mutation(partition_key key_, schema_ptr schema_)
+    mutation(partition_key::one key_, schema_ptr schema_)
         : schema(std::move(schema_))
         , key(std::move(key_))
         , p(schema)
@@ -100,11 +93,11 @@ public:
     }
 
     void set_clustered_cell(const clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value) {
-        auto& row = p.clustered_row(serialize_value(*schema->clustering_key_type, prefix));
+        auto& row = p.clustered_row(clustering_key::one::from_clustering_prefix(*schema, prefix));
         update_column(row, def, std::move(value));
     }
 
-    void set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection value) {
+    void set_clustered_cell(const clustering_key::one& key, const column_definition& def, atomic_cell_or_collection value) {
         auto& row = p.clustered_row(key);
         update_column(row, def, std::move(value));
     }
@@ -133,13 +126,13 @@ private:
 
 struct column_family {
     column_family(schema_ptr schema);
-    mutation_partition& find_or_create_partition(const bytes& key);
-    row& find_or_create_row(const bytes& partition_key, const bytes& clustering_key);
-    mutation_partition* find_partition(const bytes& key);
-    row* find_row(const bytes& partition_key, const bytes& clustering_key);
+    mutation_partition& find_or_create_partition(const partition_key::one& key);
+    row& find_or_create_row(const partition_key::one& partition_key, const clustering_key::one& clustering_key);
+    mutation_partition* find_partition(const partition_key::one& key);
+    row* find_row(const partition_key::one& partition_key, const clustering_key::one& clustering_key);
     schema_ptr _schema;
     // partition key -> partition
-    std::map<bytes, mutation_partition, key_compare> partitions;
+    std::map<partition_key::one, mutation_partition, partition_key::one::less_compare> partitions;
     void apply(const mutation& m);
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
@@ -168,6 +161,7 @@ public:
     future<> init_from_data_directory(sstring datadir);
     future<> populate(sstring datadir);
     keyspace* find_keyspace(const sstring& name);
+    schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name);
     future<> stop() { return make_ready_future<>(); }
     void assign(database&& db) {
         *this = std::move(db);

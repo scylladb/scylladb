@@ -47,13 +47,14 @@ namespace restrictions {
  * What was in AbstractPrimaryKeyRestrictions was moved here (In pre 1.8 Java interfaces could not have default
  * implementations of methods).
  */
+template<typename ValueType>
 class primary_key_restrictions : public restrictions {
 public:
     virtual void merge_with(::shared_ptr<restriction> restriction) = 0;
 
-    virtual std::vector<bytes> values_as_serialized_tuples(const query_options& options) = 0;
+    virtual std::vector<ValueType> values(const query_options& options) = 0;
 
-    virtual std::vector<query::range> bounds(const query_options& options) = 0;
+    virtual std::vector<query::range<ValueType>> bounds(const query_options& options) = 0;
 
     virtual bool is_inclusive(statements::bound b) { return true; }
 

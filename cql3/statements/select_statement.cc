@@ -124,7 +124,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
 
     for (auto&& e : results->partitions) {
         // FIXME: deserialize into views
-        auto key = _schema->partition_key_type->deserialize_value(e.first);
+        auto key = e.first.explode(*_schema);
         auto& partition = e.second;
 
         if (!partition.static_row.empty() && partition.rows.empty()
@@ -143,7 +143,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
             }
         } else {
             for (auto&& e : partition.rows) {
-                auto c_key = _schema->clustering_key_type->deserialize_value(e.first);
+                auto c_key = e.first.explode(*_schema);
                 auto& cells = e.second.cells;
                 uint32_t static_id = 0;
                 uint32_t regular_id = 0;

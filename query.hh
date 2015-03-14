@@ -1,78 +1,82 @@
 #pragma once
 
+#include <experimental/optional>
 #include "schema.hh"
 #include "types.hh"
 #include "atomic_cell.hh"
+#include "keys.hh"
 
 namespace query {
 
 // A range which can have inclusive, exclusive or open-ended bounds on each end.
+template<typename T>
 class range {
-    bytes _start; // empty if range is open on this end
-    bytes _end; // empty if range is open on this end (_end_inclusive == true) or same as start (_end_inclusive == false)
-    bool _start_inclusive;
-    bool _end_inclusive;
+    template <typename U>
+    using optional = std::experimental::optional<U>;
 public:
-    range(bytes start, bytes end, bool start_inclusive, bool end_inclusive)
+    class bound {
+        T _value;
+        bool _inclusive;
+    public:
+        bound(T value, bool inclusive = true)
+            : _value(std::move(value))
+            , _inclusive(inclusive)
+        { }
+        const T& value() const { return _value; }
+        bool is_inclusive() const { return _inclusive; }
+    };
+private:
+    optional<bound> _start;
+    optional<bound> _end;
+    bool _singular;
+public:
+    range(optional<bound> start, optional<bound> end)
         : _start(std::move(start))
         , _end(std::move(end))
-        , _start_inclusive(start_inclusive)
-        , _end_inclusive(end_inclusive)
+        , _singular(false)
+    { }
+    range(T value)
+        : _start(bound(std::move(value), true))
+        , _end()
+        , _singular(true)
     { }
 public:
+    static range make(bound start, bound end) {
+        return range({std::move(start)}, {std::move(end)});
+    }
     static range make_open_ended_both_sides() {
-        return {{}, {}, true, true};
+        return {{}, {}};
     }
-    static range make_singular(bytes key) {
-        return {std::move(key), {}, true, false};
+    static range make_singular(T value) {
+        return {std::move(value)};
     }
-    static range make_starting_with(bytes key, bool inclusive = true) {
-        assert(!key.empty());
-        return {std::move(key), {}, inclusive, true};
+    static range make_starting_with(bound b) {
+        return {{std::move(b)}, {}};
     }
-    static range make_ending_with(bytes key, bool inclusive = true) {
-        assert(!key.empty());
-        return {{}, std::move(key), true, inclusive};
-    }
-    static range make_both_inclusive(bytes start, bytes end) {
-        assert(!start.empty());
-        assert(!end.empty());
-        return {std::move(start), std::move(end), true, true};
-    }
-    static range make_inclusive_exclusive(bytes start, bytes end) {
-        assert(!start.empty());
-        assert(!end.empty());
-        return {std::move(start), std::move(end), true, false};
-    }
-    static range make_exclusive_inclusive(bytes start, bytes end) {
-        assert(!start.empty());
-        assert(!end.empty());
-        return {std::move(start), std::move(end), false, true};
-    }
-    static range make_both_exclusive(bytes start, bytes end) {
-        assert(!start.empty());
-        assert(!end.empty());
-        return {std::move(start), std::move(end), false, false};
+    static range make_ending_with(bound b) {
+        return {{}, {std::move(b)}};
     }
     bool is_singular() const {
-        return _end.empty() && !_end_inclusive;
+        return _singular;
     }
     bool is_full() const {
-        return _start.empty() && _end.empty();
+        return !_start && !_end;
     }
     void reverse() {
-        if (!is_singular()) {
+        if (!_singular) {
             std::swap(_start, _end);
-            std::swap(_end_inclusive, _start_inclusive);
         }
     }
-    const bytes& start() const {
-        return _start;
+    const T& start_value() const {
+        return _start->value();
     }
-    const bytes& end() const {
-        return _end;
+    const T& end_value() const {
+        return _end->value();
     }
 };
+
+using partition_range = range<partition_key::one>;
+using clustering_range = range<clustering_key::prefix::one>;
 
 class result {
 public:
@@ -81,9 +85,7 @@ public:
 
     // TODO: Optimize for singular partition range. In such case the caller
     // knows the partition key, no need to send it back.
-
-    // std::pair::first is a serialized partition key.
-    std::vector<std::pair<bytes, partition>> partitions;
+    std::vector<std::pair<partition_key::one, partition>> partitions;
 };
 
 class result::row {
@@ -101,9 +103,7 @@ public:
 
     // TODO: for some queries we could avoid sending keys back, because the client knows
     // what the key is (single row query for instance).
-    //
-    // std::pair::first is a serialized clustering row key.
-    std::vector<std::pair<bytes, row>> rows;
+    std::vector<std::pair<clustering_key::one, row>> rows;
 public:
     // Returns row count in this result. If there is a static row and no clustering rows, that counts as one row.
     // Otherwise, if there are some clustering rows, the static row doesn't count.
@@ -114,11 +114,11 @@ public:
 
 class partition_slice {
 public:
-    std::vector<range> row_ranges;
+    std::vector<clustering_range> row_ranges;
     std::vector<column_id> static_columns; // TODO: consider using bitmap
     std::vector<column_id> regular_columns;  // TODO: consider using bitmap
 public:
-    partition_slice(std::vector<range> row_ranges, std::vector<column_id> static_columns,
+    partition_slice(std::vector<clustering_range> row_ranges, std::vector<column_id> static_columns,
             std::vector<column_id> regular_columns)
         : row_ranges(std::move(row_ranges))
         , static_columns(std::move(static_columns))
@@ -130,11 +130,11 @@ class read_command {
 public:
     sstring keyspace;
     sstring column_family;
-    std::vector<range> partition_ranges; // ranges must be non-overlapping
+    std::vector<partition_range> partition_ranges; // ranges must be non-overlapping
     partition_slice slice;
     uint32_t row_limit;
 public:
-    read_command(const sstring& keyspace, const sstring& column_family, std::vector<range> partition_ranges,
+    read_command(const sstring& keyspace, const sstring& column_family, std::vector<partition_range> partition_ranges,
             partition_slice slice, uint32_t row_limit)
         : keyspace(keyspace)
         , column_family(column_family)

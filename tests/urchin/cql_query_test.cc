@@ -41,7 +41,7 @@ static future<> require_column_has_value(distributed<database>& ddb, const sstri
     auto cf = ks->find_column_family(table_name);
     assert(cf != nullptr);
     auto schema = cf->_schema;
-    auto pkey = schema->partition_key_type->serialize_value_deep(pk);
+    auto pkey = partition_key::one::from_deeply_exploded(*schema, pk);
     auto dk = dht::global_partitioner().decorate_key(pkey);
     auto shard = db.shard_of(dk._token);
     return ddb.invoke_on(shard, [pkey = std::move(pkey),
@@ -57,7 +57,7 @@ static future<> require_column_has_value(distributed<database>& ddb, const sstri
         auto schema = cf->_schema;
         auto p = cf->find_partition(pkey);
         assert(p != nullptr);
-        auto row = p->find_row(schema->clustering_key_type->serialize_value_deep(ck));
+        auto row = p->find_row(clustering_key::one::from_deeply_exploded(*schema, ck));
         assert(row != nullptr);
         auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
         assert(col_def != nullptr);
