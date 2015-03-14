@@ -59,7 +59,6 @@ modification_statement::get_mutations(const query_options& options, bool local, 
                 std::vector<mutation> mutations;
                 mutations.reserve(keys->size());
                 for (auto key : *keys) {
-                    validation::validate_cql_key(s, key);
                     mutations.emplace_back(std::move(key), s);
                     auto& m = mutations.back();
                     this->add_update_for_key(m, *prefix, *params_ptr);
