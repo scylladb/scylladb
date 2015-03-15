@@ -1161,31 +1161,34 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
           if (!c) {
               add_raw_update(operations, key, ::make_shared<cql3::operation::set_value>(t));
           } else {
-              throw std::runtime_error("not implemented");
-#if 0
-              if (!key.equals(c)) {
+              if (*key != *c) {
                 add_recognition_error("Only expressions of the form X = <value> + X are supported.");
               }
               add_raw_update(operations, key, ::make_shared<cql3::operation::prepend>(t));
-#endif
           }
       }
-#if 0
     | c=cident sig=('+' | '-') t=term
       {
-          if (!key.equals(c))
-              addRecognitionError("Only expressions of the form X = X " + $sig.text + "<value> are supported.");
-          addRawUpdate(operations, key, $sig.text.equals("+") ? new Operation.Addition(t) : new Operation.Substraction(t));
+          if (*key != *c) {
+              add_recognition_error("Only expressions of the form X = X " + $sig.text + "<value> are supported.");
+          }
+          shared_ptr<cql3::operation::raw_update> op;
+          if ($sig.text == "+") {
+              op = make_shared<cql3::operation::addition>(t);
+          } else {
+              op = make_shared<cql3::operation::subtraction>(t);
+          }
+          add_raw_update(operations, key, std::move(op));
       }
     | c=cident i=INTEGER
       {
           // Note that this production *is* necessary because X = X - 3 will in fact be lexed as [ X, '=', X, INTEGER].
-          if (!key.equals(c))
+          if (*key != *c) {
               // We don't yet allow a '+' in front of an integer, but we could in the future really, so let's be future-proof in our error message
-              addRecognitionError("Only expressions of the form X = X " + ($i.text.charAt(0) == '-' ? '-' : '+') + " <value> are supported.");
-          addRawUpdate(operations, key, new Operation.Addition(Constants.Literal.integer($i.text)));
+              add_recognition_error("Only expressions of the form X = X " + sstring($i.text[0] == '-' ? "-" : "+") + " <value> are supported.");
+          }
+          add_raw_update(operations, key, make_shared<cql3::operation::addition>(cql3::constants::literal::integer($i.text)));
       }
-#endif
     ;
 
 specializedColumnOperation[std::vector<std::pair<shared_ptr<cql3::column_identifier::raw>,
