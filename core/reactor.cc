@@ -1563,6 +1563,7 @@ reactor_backend_osv::enable_timer(clock_type::time_point when) {
 void engine_exit(std::exception_ptr eptr) {
     if (!eptr) {
         engine().exit(0);
+        return;
     }
 #ifndef __GNUC__
     std::cerr << "Exiting on unhandled exception.\n";
