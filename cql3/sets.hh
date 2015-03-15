@@ -162,6 +162,7 @@ public:
     };
 
     class value : public terminal, collection_terminal {
+    public:
         std::set<bytes, serialized_compare> _elements;
     public:
         value(std::set<bytes, serialized_compare> elements)
