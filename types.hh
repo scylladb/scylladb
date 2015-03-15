@@ -58,7 +58,8 @@ class abstract_type : public enable_shared_from_this<abstract_type> {
 public:
     abstract_type(sstring name) : _name(name) {}
     virtual ~abstract_type() {}
-    virtual void serialize(const boost::any& value, std::ostream& out) = 0;
+    virtual void serialize(const boost::any& value, bytes::iterator& out) = 0;
+    virtual size_t serialized_size(const boost::any& value) = 0;
     virtual bool less(bytes_view v1, bytes_view v2) = 0;
     // returns a callable that can be called with two byte_views, and calls this->less() on them.
     serialized_compare as_less_comparator();
@@ -124,11 +125,10 @@ public:
         return deserialize(v);
     }
     bytes decompose(const boost::any& value) {
-        // FIXME: optimize
-        std::ostringstream oss;
-        serialize(value, oss);
-        auto s = oss.str();
-        return bytes(s.data(), s.size());
+        bytes b(bytes::initialized_later(), serialized_size(value));
+        auto i = b.begin();
+        serialize(value, i);
+        return b;
     }
     sstring name() const {
         return _name;
@@ -282,8 +282,9 @@ public:
     static int32_t compare_maps(data_type keys_comparator, data_type values_comparator,
                         bytes_view o1, bytes_view o2);
     virtual bool is_byte_order_comparable() const override { return false; }
-    virtual void serialize(const boost::any& value, std::ostream& out) override;
-    void serialize(const boost::any& value, std::ostream& out, int protocol_version);
+    virtual void serialize(const boost::any& value, bytes::iterator& out) override;
+    void serialize(const boost::any& value, bytes::iterator& out, int protocol_version);
+    virtual size_t serialized_size(const boost::any& value);
     virtual object_opt deserialize(bytes_view v) override;
     object_opt deserialize(bytes_view v, int protocol_version);
     virtual sstring to_string(const bytes& b) override;
@@ -317,8 +318,9 @@ public:
     virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) override;
     virtual bool less(bytes_view o1, bytes_view o2) override;
     virtual bool is_byte_order_comparable() const override { return _elements->is_byte_order_comparable(); }
-    virtual void serialize(const boost::any& value, std::ostream& out) override;
-    void serialize(const boost::any& value, std::ostream& out, int protocol_version);
+    virtual void serialize(const boost::any& value, bytes::iterator& out) override;
+    void serialize(const boost::any& value, bytes::iterator& out, int protocol_version);
+    virtual size_t serialized_size(const boost::any& value) override;
     virtual object_opt deserialize(bytes_view v) override;
     object_opt deserialize(bytes_view v, int protocol_version);
     virtual sstring to_string(const bytes& b) override;
@@ -350,8 +352,9 @@ public:
     virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) override;
     virtual bool less(bytes_view o1, bytes_view o2) override;
     // FIXME: origin doesn't override is_byte_order_comparable().  Why?
-    virtual void serialize(const boost::any& value, std::ostream& out) override;
-    void serialize(const boost::any& value, std::ostream& out, int protocol_version);
+    virtual void serialize(const boost::any& value, bytes::iterator& out) override;
+    void serialize(const boost::any& value, bytes::iterator& out, int protocol_version);
+    virtual size_t serialized_size(const boost::any& value) override;
     virtual object_opt deserialize(bytes_view v) override;
     object_opt deserialize(bytes_view v, int protocol_version);
     virtual sstring to_string(const bytes& b) override;
@@ -514,10 +517,10 @@ typename Type::value_type deserialize_value(Type& t, bytes_view v) {
 template<typename Type>
 static inline
 bytes serialize_value(Type& t, const typename Type::value_type& value) {
-    std::ostringstream oss;
-    t.serialize_value(value, oss);
-    auto s = oss.str();
-    return bytes(s.data(), s.size());
+    bytes b(bytes::initialized_later(), t.serialized_size(value));
+    auto i = b.begin();
+    t.serialize_value(value, i);
+    return b;
 }
 
 template<typename T>
@@ -575,7 +578,9 @@ inline sstring read_simple_short_string(bytes_view& v) {
     return ret;
 }
 
-void write_collection_size(std::ostream& out, int size, int version);
-void write_collection_value(std::ostream& out, int version, bytes_view val_bytes);
-void write_collection_value(std::ostream& out, int version, data_type type, const boost::any& value);
+size_t collection_size_len(int version);
+size_t collection_value_len(int version);
+void write_collection_size(bytes::iterator& out, int size, int version);
+void write_collection_value(bytes::iterator& out, int version, bytes_view val_bytes);
+void write_collection_value(bytes::iterator& out, int version, data_type type, const boost::any& value);
 

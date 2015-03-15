@@ -6,6 +6,8 @@
 
 #include "types.hh"
 #include <iostream>
+#include <algorithm>
+#include <vector>
 #include <boost/range/iterator_range.hpp>
 #include "util/serialization.hh"
 
@@ -40,7 +42,7 @@ public:
      *
      *   if value is missing then len(value) < 0
      */
-    void serialize_value(const value_type& values, std::ostream& out) {
+    void serialize_value(const value_type& values, bytes::iterator& out) {
         if (AllowPrefixes) {
             assert(values.size() <= _types.size());
         } else {
@@ -53,7 +55,7 @@ public:
             } else {
                 assert(val->size() <= std::numeric_limits<int32_t>::max());
                 write<uint32_t>(out, uint32_t(val->size()));
-                out.write(val->begin(), val->size());
+                out = std::copy(val->begin(), val->end(), out);
             }
         }
     }
@@ -145,8 +147,21 @@ public:
     object_opt deserialize(bytes_view v) override {
         return {boost::any(deserialize_value(v))};
     }
-    void serialize(const boost::any& obj, std::ostream& out) override {
+    void serialize(const boost::any& obj, bytes::iterator& out) override {
         serialize_value(boost::any_cast<const value_type&>(obj), out);
+    }
+    size_t serialized_size(const boost::any& obj) override {
+        auto& values = boost::any_cast<const value_type&>(obj);
+        size_t len = 0;
+        for (auto&& val : values) {
+            if (!val) {
+                len += sizeof(uint32_t);
+            } else {
+                assert(val->size() <= std::numeric_limits<int32_t>::max());
+                len += sizeof(uint32_t) + val->size();
+            }
+        }
+        return len;
     }
     virtual bool less(bytes_view b1, bytes_view b2) override {
         return compare(b1, b2) < 0;

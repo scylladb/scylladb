@@ -207,13 +207,20 @@ public:
         }
 
         virtual bytes get_with_protocol_version(int protocol_version) {
-            std::ostringstream out;
+            //FIXME: share code with serialize_partially_deserialized_form
+            size_t len = collection_value_len(protocol_version) * map.size() * 2 + collection_size_len(protocol_version);
+            for (auto&& e : map) {
+                len += e.first.size() + e.second.size();
+            }
+            bytes b(bytes::initialized_later(), len);
+            bytes::iterator out = b.begin();
+
             write_collection_size(out, protocol_version, map.size());
             for (auto&& e : map) {
                 write_collection_value(out, protocol_version, e.first);
                 write_collection_value(out, protocol_version, e.second);
             }
-            return out.str();
+            return b;
         }
 
         bool equals(map_type mt, const value& v) {

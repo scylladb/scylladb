@@ -25,6 +25,7 @@
 
 #include "core/sstring.hh"
 #include "net/byteorder.hh"
+#include "bytes.hh"
 #include <iostream>
 
 
@@ -247,7 +248,7 @@ sstring deserialize_string(std::istream& in) {
 
 template<typename T>
 static inline
-void write(std::ostream& out, const T& val) {
-    auto n_val = net::ntoh(val);
-    out.write(reinterpret_cast<char*>(&n_val), sizeof(n_val));
+void write(bytes::iterator& out, const T& val) {
+    auto v = net::ntoh(val);
+    out = std::copy_n(reinterpret_cast<char*>(&v), sizeof(v), out);
 }
