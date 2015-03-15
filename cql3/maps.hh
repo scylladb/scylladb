@@ -215,7 +215,7 @@ public:
             bytes b(bytes::initialized_later(), len);
             bytes::iterator out = b.begin();
 
-            write_collection_size(out, protocol_version, map.size());
+            write_collection_size(out, map.size(), protocol_version);
             for (auto&& e : map) {
                 write_collection_value(out, protocol_version, e.first);
                 write_collection_value(out, protocol_version, e.second);
