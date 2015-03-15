@@ -164,6 +164,10 @@ public:
             return _text == other._text;
         }
 
+        bool operator!=(const raw& other) const {
+            return !operator==(other);
+        }
+
         virtual sstring to_string() const {
             return _text;
         }
