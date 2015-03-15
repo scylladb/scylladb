@@ -204,6 +204,7 @@ memcache_base = [
 
 deps = {
     'libseastar.a' : core + libnet,
+    'seastar.pc': [],
     'apps/seastar/seastar': ['apps/seastar/main.cc'] + core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['http/common.cc', 'http/routes.cc', 'json/json_elements.cc', 'json/formatter.cc', 'http/matcher.cc', 'http/mime_types.cc', 'http/httpd.cc', 'http/reply.cc', 'http/request_parser.rl', 'apps/httpd/main.cc'] + libnet + core,
@@ -314,6 +315,9 @@ with open(buildfile, 'w') as f:
         rule ragel
             command = ragel -G2 -o $out $in
             description = RAGEL $out
+        rule gen
+            command = echo -e $text > $out
+            description = GEN $out
         ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
@@ -341,26 +345,23 @@ with open(buildfile, 'w') as f:
         compiles = {}
         ragels = {}
         for binary in build_artifacts:
+            srcs = deps[binary]
+            objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
+                    for src in srcs
+                    if src.endswith('.cc')]
             if binary.endswith('.pc'):
-                 # Create the pkg-config file now, no nead to wait until build
-                 os.makedirs('build/' + mode)
-                 with open('build/' + mode + '/' + binary, 'w') as pc:
-                     vars = modeval.copy()
-                     vars.update(globals())
-                     pc.write(textwrap.dedent('''\
+                vars = modeval.copy()
+                vars.update(globals())
+                pc = textwrap.dedent('''\
                         Name: Seastar
                         URL: http://seastar-project.org/
                         Description: Advanced C++ framework for high-performance server applications on modern hardware.
                         Version: 1.0
                         Libs: -L{srcdir}/{builddir} -Wl,--whole-archive -lseastar -Wl,--no-whole-archive {dbgflag} -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags} {libs} {sanitize_libs}
                         Cflags: -std=gnu++1y {dbgflag} {fpie} -Wall -Werror -fvisibility=hidden -pthread -I{srcdir} -I{srcdir}/{builddir}/gen {user_cflags} {warnings} {defines} {sanitize} {opt}
-                     ''').format(builddir = 'build/' + mode, srcdir = os.getcwd(), **vars))
-                 continue
-            srcs = deps[binary]
-            objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
-                    for src in srcs
-                    if src.endswith('.cc')]
-            if binary.endswith('.a'):
+                        ''').format(builddir = 'build/' + mode, srcdir = os.getcwd(), **vars)
+                f.write('build $builddir/{}/{}: gen\n  text = {}\n'.format(mode, binary, repr(pc)))
+            elif binary.endswith('.a'):
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             else:
                 f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
