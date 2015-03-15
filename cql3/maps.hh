@@ -369,23 +369,18 @@ public:
             }
         }
     };
-#if 0
-    public static class Putter extends Operation
-    {
-        public Putter(ColumnDefinition column, Term t)
-        {
-            super(column, t);
+
+    class putter : public operation {
+    public:
+        putter(column_definition& column, shared_ptr<term> t)
+            : operation(column, std::move(t)) {
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            assert column.type.isMultiCell() : "Attempted to add items to a frozen map";
-            doPut(t, cf, prefix, column, params);
+        virtual void execute(mutation& m, const clustering_prefix& prefix, const update_parameters& params) override {
+            assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen map";
+            do_put(m, prefix, params, _t, column);
         }
-
-    }
-
-#endif
+    };
 
     static void do_put(mutation& m, const clustering_prefix& prefix, const update_parameters& params,
             shared_ptr<term> t, const column_definition& column) {
