@@ -234,39 +234,25 @@ public:
         virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
     };
 
+    class prepend : public raw_update {
+        shared_ptr<term::raw> _value;
+    public:
+        prepend(shared_ptr<term::raw> value)
+                : _value(std::move(value)) {
+        }
+
+        virtual shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) override;
+
 #if 0
-    public static class Prepend implements RawUpdate
-    {
-        private final Term.Raw value;
-
-        public Prepend(Term.Raw value)
-        {
-            this.value = value;
-        }
-
-        public Operation prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException
-        {
-            Term v = value.prepare(keyspace, receiver);
-
-            if (!(receiver.type instanceof ListType))
-                throw new InvalidRequestException(String.format("Invalid operation (%s) for non list column %s", toString(receiver), receiver.name));
-            else if (!(receiver.type.isMultiCell()))
-                throw new InvalidRequestException(String.format("Invalid operation (%s) for frozen list column %s", toString(receiver), receiver.name));
-
-            return new Lists.Prepender(receiver, v);
-        }
-
         protected String toString(ColumnSpecification column)
         {
             return String.format("%s = %s - %s", column.name, value, column.name);
         }
+#endif
+        virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
+    };
 
-        public boolean isCompatibleWith(RawUpdate other)
-        {
-            return !(other instanceof SetValue);
-        }
-    }
-
+#if 0
     public static class ColumnDeletion implements RawDeletion
     {
         private final ColumnIdentifier.Raw id;

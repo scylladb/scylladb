@@ -137,4 +137,26 @@ operation::subtraction::is_compatible_with(shared_ptr<raw_update> other) {
     return !dynamic_pointer_cast<set_value>(other);
 }
 
+shared_ptr<operation>
+operation::prepend::prepare(const sstring& keyspace, column_definition& receiver) {
+    warn(unimplemented::cause::COLLECTIONS);
+    throw exceptions::invalid_request_exception("unimplemented, go away");
+    // FIXME:
+#if 0
+    auto v = _value->prepare(keyspace, receiver.column_specification);
+
+    if (!(receiver.type instanceof ListType))
+        throw new InvalidRequestException(String.format("Invalid operation (%s) for non list column %s", toString(receiver), receiver.name));
+    else if (!(receiver.type.isMultiCell()))
+        throw new InvalidRequestException(String.format("Invalid operation (%s) for frozen list column %s", toString(receiver), receiver.name));
+
+    return new Lists.Prepender(receiver, v);
+#endif
+}
+
+bool
+operation::prepend::is_compatible_with(shared_ptr<raw_update> other) {
+    return !dynamic_pointer_cast<set_value>(other);
+}
+
 }
