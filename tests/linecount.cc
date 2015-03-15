@@ -58,8 +58,18 @@ int main(int ac, char** av) {
             auto r = make_shared<reader>(std::move(f));
             r->is.consume(*r).then([r] {
                print("%d lines\n", r->count);
-               engine().exit(0);
             });
+        }).then_wrapped([] (future<> f) {
+            try {
+                f.get();
+                engine().exit(0);
+            } catch (std::exception& ex) {
+                std::cout << ex.what() << "\n";
+                engine().exit(1);
+            } catch (...) {
+                std::cout << "unknown exception\n";
+                engine().exit(0);
+            }
         });
     });
 }
