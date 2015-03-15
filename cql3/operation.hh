@@ -196,52 +196,26 @@ public:
         virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
     };
 
+    class addition : public raw_update {
+        const shared_ptr<term::raw> _value;
+    public:
+        addition(shared_ptr<term::raw> value)
+                : _value(value) {
+        }
+
+        virtual shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) override;
+
 #if 0
-    public static class Addition implements RawUpdate
-    {
-        private final Term.Raw value;
-
-        public Addition(Term.Raw value)
-        {
-            this.value = value;
-        }
-
-        public Operation prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException
-        {
-            Term v = value.prepare(keyspace, receiver);
-
-            if (!(receiver.type instanceof CollectionType))
-            {
-                if (!(receiver.type instanceof CounterColumnType))
-                    throw new InvalidRequestException(String.format("Invalid operation (%s) for non counter column %s", toString(receiver), receiver.name));
-                return new Constants.Adder(receiver, v);
-            }
-            else if (!(receiver.type.isMultiCell()))
-                throw new InvalidRequestException(String.format("Invalid operation (%s) for frozen collection column %s", toString(receiver), receiver.name));
-
-            switch (((CollectionType)receiver.type).kind)
-            {
-                case LIST:
-                    return new Lists.Appender(receiver, v);
-                case SET:
-                    return new Sets.Adder(receiver, v);
-                case MAP:
-                    return new Maps.Putter(receiver, v);
-            }
-            throw new AssertionError();
-        }
-
         protected String toString(ColumnSpecification column)
         {
             return String.format("%s = %s + %s", column.name, column.name, value);
         }
+#endif
 
-        public boolean isCompatibleWith(RawUpdate other)
-        {
-            return !(other instanceof SetValue);
-        }
-    }
+        virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
+    };
 
+#if 0
     public static class Substraction implements RawUpdate
     {
         private final Term.Raw value;
