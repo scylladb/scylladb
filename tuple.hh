@@ -7,13 +7,7 @@
 #include "types.hh"
 #include <iostream>
 #include <boost/range/iterator_range.hpp>
-
-template<typename T>
-static inline
-void write(std::ostream& out, T val) {
-    auto n_val = net::ntoh(val);
-    out.write(reinterpret_cast<char*>(&n_val), sizeof(n_val));
-}
+#include "util/serialization.hh"
 
 // TODO: Add AllowsMissing parameter which will allow to optimize serialized format.
 // Currently we default to AllowsMissing = true.

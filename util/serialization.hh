@@ -225,3 +225,10 @@ sstring deserialize_string(std::istream& in) {
     }
     return ret;
 }
+
+template<typename T>
+static inline
+void write(std::ostream& out, const T& val) {
+    auto n_val = net::ntoh(val);
+    out.write(reinterpret_cast<char*>(&n_val), sizeof(n_val));
+}
