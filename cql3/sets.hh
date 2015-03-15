@@ -305,48 +305,50 @@ public:
         }
     }
 
-    public static class Adder extends Operation
-    {
-        public Adder(ColumnDefinition column, Term t)
-        {
-            super(column, t);
+#endif
+    class adder : public operation {
+    public:
+        adder(column_definition& column, shared_ptr<term> t)
+            : operation(column, std::move(t)) {
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            assert column.type.isMultiCell() : "Attempted to add items to a frozen set";
-
-            doAdd(t, cf, prefix, column, params);
+        virtual void execute(mutation& m, const clustering_prefix& row_key, const update_parameters& params) override {
+            assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen set";
+            do_add(m, row_key, params, _t, column);
         }
 
-        static void doAdd(Term t, ColumnFamily cf, Composite prefix, ColumnDefinition column, UpdateParameters params) throws InvalidRequestException
-        {
-            Term.Terminal value = t.bind(params.options);
-            Sets.Value setValue = (Sets.Value)value;
-            if (column.type.isMultiCell())
-            {
-                if (value == null)
+        static void do_add(mutation& m, const clustering_prefix& row_key, const update_parameters& params,
+                shared_ptr<term> t, const column_definition& column) {
+            auto&& value = t->bind(params._options);
+            auto set_value = dynamic_pointer_cast<sets::value>(std::move(value));
+            auto set_type = dynamic_pointer_cast<set_type_impl>(column.type);
+            if (column.type->is_multi_cell()) {
+                if (!set_value || set_value->_elements.empty()) {
                     return;
+                }
 
-                Set<ByteBuffer> toAdd = setValue.elements;
-                for (ByteBuffer bb : toAdd)
-                {
-                    CellName cellName = cf.getComparator().create(prefix, column, bb);
-                    cf.addColumn(params.makeColumn(cellName, ByteBufferUtil.EMPTY_BYTE_BUFFER));
+                // FIXME: mutation_view? not compatible with params.make_cell().
+                collection_type_impl::mutation mut;
+                for (auto&& e : set_value->_elements) {
+                    mut.emplace_back(e, params.make_cell({}));
+                }
+                auto smut = set_type->serialize_mutation_form(mut);
+
+                m.set_cell(row_key, column, std::move(smut));
+            } else {
+                // for frozen sets, we're overwriting the whole cell
+                auto v = set_type->serialize_partially_deserialized_form(
+                        {set_value->_elements.begin(), set_value->_elements.end()}, 3);
+                if (set_value->_elements.empty()) {
+                    m.set_cell(row_key, column, params.make_dead_cell());
+                } else {
+                    m.set_cell(row_key, column, params.make_cell(std::move(v)));
                 }
             }
-            else
-            {
-                // for frozen sets, we're overwriting the whole cell
-                CellName cellName = cf.getComparator().create(prefix, column);
-                if (value == null)
-                    cf.addAtom(params.makeTombstone(cellName));
-                else
-                    cf.addColumn(params.makeColumn(cellName, ((Value) value).getWithProtocolVersion(Server.CURRENT_VERSION)));
-            }
         }
-    }
+    };
 
+#if 0
     // Note that this is reused for Map subtraction too (we subtract a set from a map)
     public static class Discarder extends Operation
     {
