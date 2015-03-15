@@ -343,6 +343,7 @@ with open(buildfile, 'w') as f:
         for binary in build_artifacts:
             if binary.endswith('.pc'):
                  # Create the pkg-config file now, no nead to wait until build
+                 os.makedirs('build/' + mode)
                  with open('build/' + mode + '/' + binary, 'w') as pc:
                      vars = modeval.copy()
                      vars.update(globals())
