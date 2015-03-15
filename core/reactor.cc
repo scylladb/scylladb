@@ -1198,6 +1198,16 @@ void schedule(std::unique_ptr<task> t) {
     engine().add_task(std::move(t));
 }
 
+void report_failed_future(std::exception_ptr exp) {
+    try {
+        std::rethrow_exception(std::move(exp));
+    } catch (std::exception& ex) {
+        std::cerr << "WARNING: exceptional future ignored: " << ex.what() << "\n";
+    } catch (...) {
+        std::cerr << "WARNING: exceptional future ignored\n";
+    }
+}
+
 bool operator==(const ::sockaddr_in a, const ::sockaddr_in b) {
     return (a.sin_addr.s_addr == b.sin_addr.s_addr) && (a.sin_port == b.sin_port);
 }
