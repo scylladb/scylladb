@@ -169,12 +169,12 @@ public:
                 : _elements(std::move(elements)) {
         }
 
-        static value from_serialized(bytes_view v, set_type type, int version) {
+        static value from_serialized(bytes_view v, set_type type, serialization_format sf) {
             try {
                 // Collections have this small hack that validate cannot be called on a serialized object,
                 // but compose does the validation (so we're fine).
                 // FIXME: deserializeForNativeProtocol?!
-                auto s = boost::any_cast<set_type_impl::native_type>(type->deserialize(v, version));
+                auto s = boost::any_cast<set_type_impl::native_type>(type->deserialize(v, sf));
                 std::set<bytes, serialized_compare> elements(type->as_less_comparator());
                 for (auto&& element : s) {
                     elements.insert(elements.end(), type->get_elements_type()->decompose(element));
@@ -186,12 +186,12 @@ public:
         }
 
         virtual bytes_opt get(const query_options& options) override {
-            return get_with_protocol_version(options.get_protocol_version());
+            return get_with_protocol_version(options.get_serialization_format());
         }
 
-        virtual bytes get_with_protocol_version(int protocol_version) override {
+        virtual bytes get_with_protocol_version(serialization_format sf) override {
             return collection_type_impl::pack(_elements.begin(), _elements.end(),
-                    _elements.size(), protocol_version);
+                    _elements.size(), sf);
         }
 
         bool equals(set_type st, const value& v) {
@@ -337,7 +337,8 @@ public:
             } else {
                 // for frozen sets, we're overwriting the whole cell
                 auto v = set_type->serialize_partially_deserialized_form(
-                        {set_value->_elements.begin(), set_value->_elements.end()}, 3);
+                        {set_value->_elements.begin(), set_value->_elements.end()},
+                        serialization_format::internal());
                 if (set_value->_elements.empty()) {
                     m.set_cell(row_key, column, params.make_dead_cell());
                 } else {

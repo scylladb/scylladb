@@ -185,12 +185,12 @@ public:
             : map(std::move(map)) {
         }
 
-        static value from_serialized(bytes value, map_type type, int version) {
+        static value from_serialized(bytes value, map_type type, serialization_format sf) {
             try {
                 // Collections have this small hack that validate cannot be called on a serialized object,
                 // but compose does the validation (so we're fine).
                 // FIXME: deserialize_for_native_protocol?!
-                auto m = boost::any_cast<map_type_impl::native_type>(type->deserialize(value, version));
+                auto m = boost::any_cast<map_type_impl::native_type>(type->deserialize(value, sf));
                 std::map<bytes, bytes, serialized_compare> map(type->get_keys_type()->as_less_comparator());
                 for (auto&& e : m) {
                     map.emplace(type->get_keys_type()->decompose(e.first),
@@ -203,22 +203,22 @@ public:
         }
 
         virtual bytes_opt get(const query_options& options) override {
-            return get_with_protocol_version(options.get_protocol_version());
+            return get_with_protocol_version(options.get_serialization_format());
         }
 
-        virtual bytes get_with_protocol_version(int protocol_version) {
+        virtual bytes get_with_protocol_version(serialization_format sf) {
             //FIXME: share code with serialize_partially_deserialized_form
-            size_t len = collection_value_len(protocol_version) * map.size() * 2 + collection_size_len(protocol_version);
+            size_t len = collection_value_len(sf) * map.size() * 2 + collection_size_len(sf);
             for (auto&& e : map) {
                 len += e.first.size() + e.second.size();
             }
             bytes b(bytes::initialized_later(), len);
             bytes::iterator out = b.begin();
 
-            write_collection_size(out, map.size(), protocol_version);
+            write_collection_size(out, map.size(), sf);
             for (auto&& e : map) {
-                write_collection_value(out, protocol_version, e.first);
-                write_collection_value(out, protocol_version, e.second);
+                write_collection_value(out, sf, e.first);
+                write_collection_value(out, sf, e.second);
             }
             return b;
         }
@@ -413,7 +413,8 @@ public:
                     m.set_clustered_cell(prefix, column, params.make_dead_cell());
                 }
             } else {
-                auto v = map_type_impl::serialize_partially_deserialized_form({map_value->map.begin(), map_value->map.end()}, 3);
+                auto v = map_type_impl::serialize_partially_deserialized_form({map_value->map.begin(), map_value->map.end()},
+                        serialization_format::internal());
                 if (column.is_static()) {
                     m.set_static_cell(column, params.make_cell(std::move(v)));
                 } else {

@@ -19,6 +19,7 @@ public:
     static serialization_format use_16_bit() { return serialization_format(false); }
     static serialization_format use_32_bit() { return serialization_format(true); }
     static serialization_format internal() { return use_32_bit(); }
+    bool using_32_bits_for_collections() const { return _use_32_bit; }
 };
 
 
