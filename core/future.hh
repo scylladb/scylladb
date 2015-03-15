@@ -256,15 +256,6 @@ struct future_state<> {
     void forward_to(promise<>& pr) noexcept;
 };
 
-template <typename Func, typename... T>
-struct future_task final : task, future_state<T...> {
-    Func _func;
-    future_task(Func&& func) : _func(std::move(func)) {}
-    virtual void run() noexcept {
-        func(*this);
-    }
-};
-
 template <typename... T>
 class promise {
     future<T...>* _future = nullptr;
