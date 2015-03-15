@@ -24,6 +24,7 @@
 #include <stdint.h>
 
 #include "core/sstring.hh"
+#include "net/byteorder.hh"
 #include <iostream>
 
 
@@ -86,6 +87,12 @@ void serialize_int16(std::ostream& out, int16_t val) {
 }
 
 inline
+void serialize_int16(bytes::iterator& out, uint16_t val) {
+    uint16_t nval = net::hton(val);
+    out = std::copy_n(reinterpret_cast<const char*>(&nval), sizeof(nval), out);
+}
+
+inline
 int16_t deserialize_int16(std::istream& in) {
     char a1, a2;
     in.get(a1);
@@ -109,6 +116,12 @@ void serialize_int32(std::ostream& out, uint32_t val) {
 inline
 void serialize_int32(std::ostream& out, int32_t val) {
     serialize_int32(out, (uint32_t) val);
+}
+
+inline
+void serialize_int32(bytes::iterator& out, uint32_t val) {
+    uint32_t nval = net::hton(val);
+    out = std::copy_n(reinterpret_cast<const char*>(&nval), sizeof(nval), out);
 }
 
 static constexpr size_t serialize_int32_size = 4;
@@ -141,6 +154,12 @@ void serialize_int64(std::ostream& out, uint64_t val) {
 inline
 void serialize_int64(std::ostream& out, int64_t val) {
     serialize_int64(out, (uint64_t) val);
+}
+
+inline
+void serialize_int64(bytes::iterator& out, uint64_t val) {
+    uint64_t nval = net::hton(val);
+    out = std::copy_n(reinterpret_cast<const char*>(&nval), sizeof(nval), out);
 }
 
 static constexpr size_t serialize_int64_size = 8;

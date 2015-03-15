@@ -8,9 +8,14 @@
 
 #include <stdint.h>
 #include <cassert>
+#include <array>
 
 #include "core/sstring.hh"
 #include "core/print.hh"
+#include "net/byteorder.hh"
+#include "bytes.hh"
+#include "util/serialization.hh"
+
 
 namespace utils {
 
@@ -60,6 +65,15 @@ public:
                 && least_sig_bits == v.least_sig_bits
                 ;
     }
+
+    bytes to_bytes() const {
+        bytes b(bytes::initialized_later(),16);
+        auto i = b.begin();
+        serialize_int64(i, most_sig_bits);
+        serialize_int64(i, least_sig_bits);
+        return b;
+    }
+
 };
 
 UUID make_random_uuid();
