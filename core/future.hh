@@ -527,9 +527,10 @@ public:
      * is ignored. I.e. the original return value (the future upon which you are making this call) will be preserved.
      */
     template <typename Func>
-    future<T...> finally(Func&& func, std::enable_if_t<is_future<std::result_of_t<Func()>>::value, void*> = nullptr) noexcept {
-        return then_wrapped([func = std::forward<Func>(func)](future<T...> result) {
-            return func().then_wrapped([result = std::move(result)](auto f_res) mutable {
+    future<T...> finally(Func&& func) noexcept {
+        return then_wrapped([func = std::forward<Func>(func)](future<T...> result) mutable {
+            using futurator = futurize<std::result_of_t<Func()>>;
+            return futurator::apply(std::forward<Func>(func)).then_wrapped([result = std::move(result)](auto f_res) mutable {
                 try {
                     f_res.get(); // force excepion if one
                     return std::move(result);
@@ -538,34 +539,6 @@ public:
                 }
             });
         });
-    }
-
-    template <typename Func>
-    future<T...> finally(Func&& func, std::enable_if_t<!is_future<std::result_of_t<Func()>>::value, void*> = nullptr) noexcept {
-        promise<T...> pr;
-        auto f = pr.get_future();
-        if (state()->available()) {
-            try {
-                func();
-            } catch (...) {
-                pr.set_exception(std::current_exception());
-                return f;
-            }
-            state()->forward_to(pr);
-            return f;
-        }
-        _promise->schedule([pr = std::move(pr), func = std::forward<Func>(func)] (auto&& state) mutable {
-            try {
-                func();
-            } catch (...) {
-                pr.set_exception(std::current_exception());
-                return;
-            }
-            state.forward_to(pr);
-        });
-        _promise->_future = nullptr;
-        _promise = nullptr;
-        return f;
     }
 
     future<> or_terminate() noexcept {
