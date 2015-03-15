@@ -189,7 +189,7 @@ public:
             return {};
         }
         throw_system_error_on(r == -1);
-        return { r };
+        return { ssize_t(r) };
     }
     boost::optional<size_t> recvmsg(msghdr* mh, int flags) {
         auto r = ::recvmsg(_fd, mh, flags);

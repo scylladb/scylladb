@@ -167,7 +167,7 @@ apps = [
 
 tests += urchin_tests
 
-all_artifacts = apps + tests
+all_artifacts = apps + tests + ['libseastar.a', 'seastar.pc']
 
 arg_parser = argparse.ArgumentParser('Configure seastar')
 arg_parser.add_argument('--static', dest = 'static', action = 'store_const', default = '',
@@ -307,6 +307,8 @@ urchin_core = (['database.cc',
                 + core + libnet)
 
 deps = {
+    'libseastar.a' : core + libnet,
+    'seastar.pc': [],
     'seastar': ['main.cc'] + urchin_core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['http/common.cc', 'http/routes.cc', 'json/json_elements.cc', 'json/formatter.cc', 'http/matcher.cc', 'http/mime_types.cc', 'http/httpd.cc', 'http/reply.cc', 'http/request_parser.rl', 'apps/httpd/main.cc'] + libnet + core,
@@ -420,6 +422,9 @@ with open(buildfile, 'w') as f:
         rule ragel
             command = ragel -G2 -o $out $in
             description = RAGEL $out
+        rule gen
+            command = echo -e $text > $out
+            description = GEN $out
         ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
@@ -438,6 +443,9 @@ with open(buildfile, 'w') as f:
               command = $cxx  $cxxflags_{mode} $ldflags -o $out $in $libs $libs_{mode}
               description = LINK $out
               pool = link_pool
+            rule ar.{mode}
+              command = rm -f $out; ar cr $out $in; ranlib $out
+              description = AR $out
             rule thrift.{mode}
                 command = thrift -gen cpp:cob_style -out $builddir/{mode}/gen $in
                 description = THRIFT $in
@@ -463,9 +471,24 @@ with open(buildfile, 'w') as f:
                     objs += dep.objects('$builddir/' + mode + '/gen')
                 if isinstance(dep, Antlr3Grammar):
                     objs += dep.objects('$builddir/' + mode + '/gen')
-            f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
-            if has_thrift:
-                f.write('   libs =  -lthrift -lboost_system $libs\n')
+            if binary.endswith('.pc'):
+                vars = modeval.copy()
+                vars.update(globals())
+                pc = textwrap.dedent('''\
+                        Name: Seastar
+                        URL: http://seastar-project.org/
+                        Description: Advanced C++ framework for high-performance server applications on modern hardware.
+                        Version: 1.0
+                        Libs: -L{srcdir}/{builddir} -Wl,--whole-archive -lseastar -Wl,--no-whole-archive {dbgflag} -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags} {libs} {sanitize_libs}
+                        Cflags: -std=gnu++1y {dbgflag} {fpie} -Wall -Werror -fvisibility=hidden -pthread -I{srcdir} -I{srcdir}/{builddir}/gen {user_cflags} {warnings} {defines} {sanitize} {opt}
+                        ''').format(builddir = 'build/' + mode, srcdir = os.getcwd(), **vars)
+                f.write('build $builddir/{}/{}: gen\n  text = {}\n'.format(mode, binary, repr(pc)))
+            elif binary.endswith('.a'):
+                f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
+            else:
+                f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
+                if has_thrift:
+                    f.write('   libs =  -lthrift -lboost_system $libs\n')
             for src in srcs:
                 if src.endswith('.cc'):
                     obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
