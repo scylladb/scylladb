@@ -521,7 +521,7 @@ public:
     then_wrapped(Func&& func) noexcept {
         using futurator = futurize<std::result_of_t<Func(future<T...>)>>;
         using P = typename futurator::promise_type;
-        if (state()->available()) {
+        if (state()->available() && (++future_avail_count % 256)) {
             try {
                 return futurator::apply(std::forward<Func>(func), std::move(*this));
             } catch (...) {
@@ -532,7 +532,7 @@ public:
         }
         P pr;
         auto next_fut = pr.get_future();
-        _promise->schedule([func = std::forward<Func>(func), pr = std::move(pr)] (auto& state) mutable {
+        schedule([func = std::forward<Func>(func), pr = std::move(pr)] (auto& state) mutable {
             try {
                 futurator::apply(std::forward<Func>(func), future(std::move(state)))
                     .forward_to(std::move(pr));
@@ -540,8 +540,6 @@ public:
                 pr.set_exception(std::current_exception());
             }
         });
-        _promise->_future = nullptr;
-        _promise = nullptr;
         return next_fut;
     }
 
