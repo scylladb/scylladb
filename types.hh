@@ -328,6 +328,9 @@ public:
     virtual bytes from_string(sstring_view text) override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
     virtual bytes to_value(mutation_view mut, int protocol_version) override;
+    bytes serialize_partially_deserialized_form(
+            const std::vector<bytes_view>& v, int protocol_version);
+
 };
 
 using set_type = shared_ptr<set_type_impl>;

@@ -1186,6 +1186,12 @@ set_type_impl::to_value(mutation_view mut, int protocol_version) {
     return pack(tmp.begin(), tmp.end(), tmp.size(), protocol_version);
 }
 
+bytes
+set_type_impl::serialize_partially_deserialized_form(
+        const std::vector<bytes_view>& v, int protocol_version) {
+    return pack(v.begin(), v.end(), v.size(), protocol_version);
+}
+
 list_type
 list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);
