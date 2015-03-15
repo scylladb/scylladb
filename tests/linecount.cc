@@ -54,7 +54,7 @@ int main(int ac, char** av) {
     });
     app.run(ac, av, [&app] {
         auto fname = app.configuration()["file"].as<std::string>();
-        engine().open_file_dma(fname, open_flags::ro | open_flags::create).then([] (file f) {
+        engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
             auto r = make_shared<reader>(std::move(f));
             r->is.consume(*r).then([r] {
                print("%d lines\n", r->count);
