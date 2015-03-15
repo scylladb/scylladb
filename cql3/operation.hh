@@ -215,55 +215,26 @@ public:
         virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
     };
 
+    class subtraction : public raw_update {
+        const shared_ptr<term::raw> _value;
+    public:
+        subtraction(shared_ptr<term::raw> value)
+                : _value(value) {
+        }
+
+        virtual shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) override;
+
 #if 0
-    public static class Substraction implements RawUpdate
-    {
-        private final Term.Raw value;
-
-        public Substraction(Term.Raw value)
-        {
-            this.value = value;
-        }
-
-        public Operation prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException
-        {
-            if (!(receiver.type instanceof CollectionType))
-            {
-                if (!(receiver.type instanceof CounterColumnType))
-                    throw new InvalidRequestException(String.format("Invalid operation (%s) for non counter column %s", toString(receiver), receiver.name));
-                return new Constants.Substracter(receiver, value.prepare(keyspace, receiver));
-            }
-            else if (!(receiver.type.isMultiCell()))
-                throw new InvalidRequestException(String.format("Invalid operation (%s) for frozen collection column %s", toString(receiver), receiver.name));
-
-            switch (((CollectionType)receiver.type).kind)
-            {
-                case LIST:
-                    return new Lists.Discarder(receiver, value.prepare(keyspace, receiver));
-                case SET:
-                    return new Sets.Discarder(receiver, value.prepare(keyspace, receiver));
-                case MAP:
-                    // The value for a map subtraction is actually a set
-                    ColumnSpecification vr = new ColumnSpecification(receiver.ksName,
-                                                                     receiver.cfName,
-                                                                     receiver.name,
-                                                                     SetType.getInstance(((MapType)receiver.type).getKeysType(), false));
-                    return new Sets.Discarder(receiver, value.prepare(keyspace, vr));
-            }
-            throw new AssertionError();
-        }
-
         protected String toString(ColumnSpecification column)
         {
             return String.format("%s = %s - %s", column.name, column.name, value);
         }
+#endif
 
-        public boolean isCompatibleWith(RawUpdate other)
-        {
-            return !(other instanceof SetValue);
-        }
-    }
+        virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
+    };
 
+#if 0
     public static class Prepend implements RawUpdate
     {
         private final Term.Raw value;
