@@ -285,27 +285,26 @@ public:
 #endif
     };
 
-#if 0
-    public static class Setter extends Operation
-    {
-        public Setter(ColumnDefinition column, Term t)
-        {
-            super(column, t);
+    class setter : public operation {
+    public:
+        setter(column_definition& column, shared_ptr<term> t)
+                : operation(column, std::move(t)) {
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            if (column.type.isMultiCell())
-            {
+        virtual void execute(mutation& m, const clustering_prefix& row_key, const update_parameters& params) override {
+            if (column.type->is_multi_cell()) {
+                unimplemented::warn(unimplemented::cause::COLLECTION_RANGE_TOMBSTONES);
+                // FIXME: implement
                 // delete + add
+#if 0
                 CellName name = cf.getComparator().create(prefix, column);
                 cf.addAtom(params.makeTombstoneForOverwrite(name.slice()));
-            }
-            Adder.doAdd(t, cf, prefix, column, params);
-        }
-    }
-
 #endif
+            }
+            adder::do_add(m, row_key, params, _t, column);
+        }
+    };
+
     class adder : public operation {
     public:
         adder(column_definition& column, shared_ptr<term> t)
