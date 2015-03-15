@@ -593,7 +593,7 @@ public:
         return f;
     }
 
-    future<> or_terminate() && noexcept {
+    future<> or_terminate() noexcept {
         return then_wrapped([] (auto&& f) {
             try {
                 f.get();
