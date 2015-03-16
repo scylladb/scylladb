@@ -108,6 +108,15 @@ public:
         auto& row = p.clustered_row(key);
         update_column(row, def, std::move(value));
     }
+    void set_cell(const clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value) {
+        if (def.is_static()) {
+            set_static_cell(def, std::move(value));
+        } else if (def.is_regular()) {
+            set_clustered_cell(prefix, def, std::move(value));
+        } else {
+            throw std::runtime_error("attemting to store into a key cell");
+        }
+    }
 private:
     static void update_column(row& row, const column_definition& def, atomic_cell_or_collection&& value) {
         // our mutations are not yet immutable

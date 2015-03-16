@@ -26,6 +26,11 @@
 #define CQL3_SETS_HH
 
 #include "cql3/abstract_marker.hh"
+#include "maps.hh"
+#include "column_specification.hh"
+#include "column_identifier.hh"
+#include "to_string.hh"
+#include <unordered_set>
 
 namespace cql3 {
 
@@ -56,195 +61,204 @@ import org.apache.cassandra.utils.FBUtilities;
  * Static helper methods and classes for sets.
  */
 class sets {
+    sets() = delete;
 public:
-#if 0
-    private Sets() {}
-
-    public static ColumnSpecification valueSpecOf(ColumnSpecification column)
-    {
-        return new ColumnSpecification(column.ksName, column.cfName, new ColumnIdentifier("value(" + column.name + ")", true), ((SetType)column.type).getElementsType());
+    static shared_ptr<column_specification> value_spec_of(shared_ptr<column_specification> column) {
+        return make_shared<column_specification>(column->ks_name, column->cf_name,
+                ::make_shared<column_identifier>(sprint("value(%s)", *column->name), true),
+                dynamic_pointer_cast<set_type_impl>(column->type)->get_elements_type());
     }
 
-    public static class Literal implements Term.Raw
-    {
-        private final List<Term.Raw> elements;
-
-        public Literal(List<Term.Raw> elements)
-        {
-            this.elements = elements;
+    class literal : public term::raw {
+        std::vector<shared_ptr<term::raw>> _elements;
+    public:
+        explicit literal(std::vector<shared_ptr<term::raw>> elements)
+                : _elements(std::move(elements)) {
         }
 
-        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
-            validateAssignableTo(keyspace, receiver);
+        shared_ptr<term> prepare(const sstring& keyspace, shared_ptr<column_specification> receiver) {
+            validate_assignable_to(keyspace, receiver);
 
             // We've parsed empty maps as a set literal to break the ambiguity so
             // handle that case now
-            if (receiver.type instanceof MapType && elements.isEmpty())
-                return new Maps.Value(Collections.<ByteBuffer, ByteBuffer>emptyMap());
-
-            ColumnSpecification valueSpec = Sets.valueSpecOf(receiver);
-            Set<Term> values = new HashSet<Term>(elements.size());
-            boolean allTerminal = true;
-            for (Term.Raw rt : elements)
-            {
-                Term t = rt.prepare(keyspace, valueSpec);
-
-                if (t.containsBindMarker())
-                    throw new InvalidRequestException(String.format("Invalid set literal for %s: bind variables are not supported inside collection literals", receiver.name));
-
-                if (t instanceof Term.NonTerminal)
-                    allTerminal = false;
-
-                values.add(t);
+            if (_elements.empty() && dynamic_pointer_cast<map_type_impl>(receiver->type)) {
+                // use empty_type for comparator, set is empty anyway.
+                std::map<bytes, bytes, serialized_compare> m(empty_type->as_less_comparator());
+                return ::make_shared<maps::value>(std::move(m));
             }
-            DelayedValue value = new DelayedValue(((SetType)receiver.type).getElementsType(), values);
-            return allTerminal ? value.bind(QueryOptions.DEFAULT) : value;
+
+            auto value_spec = value_spec_of(receiver);
+            std::vector<shared_ptr<term>> values;
+            values.reserve(_elements.size());
+            bool all_terminal = true;
+            for (shared_ptr<term::raw> rt : _elements)
+            {
+                auto t = rt->prepare(keyspace, value_spec);
+
+                if (t->contains_bind_marker()) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid set literal for %s: bind variables are not supported inside collection literals", *receiver->name));
+                }
+
+                if (dynamic_pointer_cast<non_terminal>(t)) {
+                    all_terminal = false;
+                }
+
+                values.push_back(std::move(t));
+            }
+            auto compare = dynamic_pointer_cast<set_type_impl>(receiver->type)->get_elements_type()->as_less_comparator();
+
+            auto value = ::make_shared<delayed_value>(compare, std::move(values));
+            if (all_terminal) {
+                return value->bind(query_options::DEFAULT);
+            } else {
+                return value;
+            }
         }
 
-        private void validateAssignableTo(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
-            if (!(receiver.type instanceof SetType))
-            {
+        void validate_assignable_to(const sstring& keyspace, shared_ptr<column_specification> receiver) {
+            if (!dynamic_pointer_cast<set_type_impl>(receiver->type)) {
                 // We've parsed empty maps as a set literal to break the ambiguity so
                 // handle that case now
-                if ((receiver.type instanceof MapType) && elements.isEmpty())
+                if (dynamic_pointer_cast<map_type_impl>(receiver->type) && _elements.empty()) {
                     return;
+                }
 
-                throw new InvalidRequestException(String.format("Invalid set literal for %s of type %s", receiver.name, receiver.type.asCQL3Type()));
+                throw exceptions::invalid_request_exception(sprint("Invalid set literal for %s of type %s", *receiver->name, *receiver->type->as_cql3_type()));
             }
 
-            ColumnSpecification valueSpec = Sets.valueSpecOf(receiver);
-            for (Term.Raw rt : elements)
-            {
-                if (!rt.testAssignment(keyspace, valueSpec).isAssignable())
-                    throw new InvalidRequestException(String.format("Invalid set literal for %s: value %s is not of type %s", receiver.name, rt, valueSpec.type.asCQL3Type()));
+            auto&& value_spec = value_spec_of(receiver);
+            for (shared_ptr<term::raw> rt : _elements) {
+                if (!is_assignable(rt->test_assignment(keyspace, value_spec))) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid set literal for %s: value %s is not of type %s", *receiver->name, *rt, *value_spec->type->as_cql3_type()));
+                }
             }
         }
 
-        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver)
-        {
-            if (!(receiver.type instanceof SetType))
-            {
+        assignment_testable::test_result
+        test_assignment(const sstring& keyspace, shared_ptr<column_specification> receiver) {
+            if (!dynamic_pointer_cast<set_type_impl>(receiver->type)) {
                 // We've parsed empty maps as a set literal to break the ambiguity so handle that case now
-                if (receiver.type instanceof MapType && elements.isEmpty())
-                    return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
+                if (dynamic_pointer_cast<map_type_impl>(receiver->type) && _elements.empty()) {
+                    return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+                }
 
-                return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
+                return assignment_testable::test_result::NOT_ASSIGNABLE;
             }
 
             // If there is no elements, we can't say it's an exact match (an empty set if fundamentally polymorphic).
-            if (elements.isEmpty())
-                return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
+            if (_elements.empty()) {
+                return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+            }
 
-            ColumnSpecification valueSpec = Sets.valueSpecOf(receiver);
-            return AssignmentTestable.TestResult.testAll(keyspace, valueSpec, elements);
+            auto&& value_spec = value_spec_of(receiver);
+            // FIXME: make assignment_testable::test_all() accept ranges
+            std::vector<shared_ptr<assignment_testable>> to_test(_elements.begin(), _elements.end());
+            return assignment_testable::test_all(keyspace, value_spec, to_test);
         }
 
-        @Override
-        public String toString()
-        {
-            return "{" + Joiner.on(", ").join(elements) + "}";
+        virtual sstring to_string() override {
+            return "{" + join(", ", _elements) + "}";
         }
-    }
+    };
 
-    public static class Value extends Term.Terminal implements Term.CollectionTerminal
-    {
-        public final SortedSet<ByteBuffer> elements;
-
-        public Value(SortedSet<ByteBuffer> elements)
-        {
-            this.elements = elements;
+    class value : public terminal, collection_terminal {
+    public:
+        std::set<bytes, serialized_compare> _elements;
+    public:
+        value(std::set<bytes, serialized_compare> elements)
+                : _elements(std::move(elements)) {
         }
 
-        public static Value fromSerialized(ByteBuffer value, SetType type, int version) throws InvalidRequestException
-        {
-            try
-            {
+        static value from_serialized(bytes_view v, set_type type, int version) {
+            try {
                 // Collections have this small hack that validate cannot be called on a serialized object,
                 // but compose does the validation (so we're fine).
-                Set<?> s = (Set<?>)type.getSerializer().deserializeForNativeProtocol(value, version);
-                SortedSet<ByteBuffer> elements = new TreeSet<ByteBuffer>(type.getElementsType());
-                for (Object element : s)
-                    elements.add(type.getElementsType().decompose(element));
-                return new Value(elements);
+                // FIXME: deserializeForNativeProtocol?!
+                auto s = boost::any_cast<set_type_impl::native_type>(type->deserialize(v, version));
+                std::set<bytes, serialized_compare> elements(type->as_less_comparator());
+                for (auto&& element : s) {
+                    elements.insert(elements.end(), type->get_elements_type()->decompose(element));
+                }
+                return value(std::move(elements));
+            } catch (marshal_exception& e) {
+                throw exceptions::invalid_request_exception(e.why());
             }
-            catch (MarshalException e)
-            {
-                throw new InvalidRequestException(e.getMessage());
-            }
         }
 
-        public ByteBuffer get(QueryOptions options)
-        {
-            return getWithProtocolVersion(options.getProtocolVersion());
+        virtual bytes_opt get(const query_options& options) override {
+            return get_with_protocol_version(options.get_protocol_version());
         }
 
-        public ByteBuffer getWithProtocolVersion(int protocolVersion)
-        {
-            return CollectionSerializer.pack(new ArrayList<>(elements), elements.size(), protocolVersion);
+        virtual bytes get_with_protocol_version(int protocol_version) override {
+            return collection_type_impl::pack(_elements.begin(), _elements.end(),
+                    _elements.size(), protocol_version);
         }
 
-        public boolean equals(SetType st, Value v)
-        {
-            if (elements.size() != v.elements.size())
+        bool equals(set_type st, const value& v) {
+            if (_elements.size() != v._elements.size()) {
                 return false;
-
-            Iterator<ByteBuffer> thisIter = elements.iterator();
-            Iterator<ByteBuffer> thatIter = v.elements.iterator();
-            AbstractType elementsType = st.getElementsType();
-            while (thisIter.hasNext())
-                if (elementsType.compare(thisIter.next(), thatIter.next()) != 0)
-                    return false;
-
-            return true;
+            }
+            auto&& elements_type = st->get_elements_type();
+            return std::equal(_elements.begin(), _elements.end(),
+                    v._elements.begin(),
+                    [elements_type] (bytes_view v1, bytes_view v2) {
+                        return elements_type->equal(v1, v2);
+                    });
         }
-    }
+
+        virtual sstring to_string() const override {
+            sstring result = "{";
+            bool first = true;
+            for (auto&& e : _elements) {
+                if (!first) {
+                    result += ", ";
+                }
+                first = true;
+                result += to_hex(e);
+            }
+            result += "}";
+            return result;
+        }
+    };
 
     // See Lists.DelayedValue
-    public static class DelayedValue extends Term.NonTerminal
-    {
-        private final Comparator<ByteBuffer> comparator;
-        private final Set<Term> elements;
-
-        public DelayedValue(Comparator<ByteBuffer> comparator, Set<Term> elements)
-        {
-            this.comparator = comparator;
-            this.elements = elements;
+    class delayed_value : public non_terminal {
+        serialized_compare _comparator;
+        std::vector<shared_ptr<term>> _elements;
+    public:
+        delayed_value(serialized_compare comparator, std::vector<shared_ptr<term>> elements)
+            : _comparator(std::move(comparator)), _elements(std::move(elements)) {
         }
 
-        public boolean containsBindMarker()
-        {
+        virtual bool contains_bind_marker() const override {
             // False since we don't support them in collection
             return false;
         }
 
-        public void collectMarkerSpecification(VariableSpecifications boundNames)
-        {
+        virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names) override {
         }
 
-        public Value bind(QueryOptions options) throws InvalidRequestException
-        {
-            SortedSet<ByteBuffer> buffers = new TreeSet<>(comparator);
-            for (Term t : elements)
-            {
-                ByteBuffer bytes = t.bindAndGet(options);
+        virtual shared_ptr<terminal> bind(const query_options& options) {
+            std::set<bytes, serialized_compare> buffers(_comparator);
+            for (auto&& t : _elements) {
+                bytes_opt b = t->bind_and_get(options);
 
-                if (bytes == null)
-                    throw new InvalidRequestException("null is not supported inside collections");
+                if (!b) {
+                    throw exceptions::invalid_request_exception("null is not supported inside collections");
+                }
 
                 // We don't support value > 64K because the serialization format encode the length as an unsigned short.
-                if (bytes.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
-                    throw new InvalidRequestException(String.format("Set value is too long. Set values are limited to %d bytes but %d bytes value provided",
-                                                                    FBUtilities.MAX_UNSIGNED_SHORT,
-                                                                    bytes.remaining()));
+                if (b->size() > std::numeric_limits<uint16_t>::max()) {
+                    throw exceptions::invalid_request_exception(sprint("Set value is too long. Set values are limited to %d bytes but %d bytes value provided",
+                            std::numeric_limits<uint16_t>::max(),
+                            b->size()));
+                }
 
-                buffers.add(bytes);
+                buffers.insert(buffers.end(), std::move(*b));
             }
-            return new Value(buffers);
+            return ::make_shared<value>(std::move(buffers));
         }
-    }
-#endif
+    };
 
     class marker : public abstract_marker {
     public:
@@ -271,68 +285,69 @@ public:
 #endif
     };
 
-#if 0
-    public static class Setter extends Operation
-    {
-        public Setter(ColumnDefinition column, Term t)
-        {
-            super(column, t);
+    class setter : public operation {
+    public:
+        setter(column_definition& column, shared_ptr<term> t)
+                : operation(column, std::move(t)) {
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            if (column.type.isMultiCell())
-            {
+        virtual void execute(mutation& m, const clustering_prefix& row_key, const update_parameters& params) override {
+            if (column.type->is_multi_cell()) {
+                unimplemented::warn(unimplemented::cause::COLLECTION_RANGE_TOMBSTONES);
+                // FIXME: implement
                 // delete + add
+#if 0
                 CellName name = cf.getComparator().create(prefix, column);
                 cf.addAtom(params.makeTombstoneForOverwrite(name.slice()));
+#endif
             }
-            Adder.doAdd(t, cf, prefix, column, params);
+            adder::do_add(m, row_key, params, _t, column);
         }
-    }
+    };
 
-    public static class Adder extends Operation
-    {
-        public Adder(ColumnDefinition column, Term t)
-        {
-            super(column, t);
-        }
-
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            assert column.type.isMultiCell() : "Attempted to add items to a frozen set";
-
-            doAdd(t, cf, prefix, column, params);
+    class adder : public operation {
+    public:
+        adder(column_definition& column, shared_ptr<term> t)
+            : operation(column, std::move(t)) {
         }
 
-        static void doAdd(Term t, ColumnFamily cf, Composite prefix, ColumnDefinition column, UpdateParameters params) throws InvalidRequestException
-        {
-            Term.Terminal value = t.bind(params.options);
-            Sets.Value setValue = (Sets.Value)value;
-            if (column.type.isMultiCell())
-            {
-                if (value == null)
+        virtual void execute(mutation& m, const clustering_prefix& row_key, const update_parameters& params) override {
+            assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen set";
+            do_add(m, row_key, params, _t, column);
+        }
+
+        static void do_add(mutation& m, const clustering_prefix& row_key, const update_parameters& params,
+                shared_ptr<term> t, const column_definition& column) {
+            auto&& value = t->bind(params._options);
+            auto set_value = dynamic_pointer_cast<sets::value>(std::move(value));
+            auto set_type = dynamic_pointer_cast<set_type_impl>(column.type);
+            if (column.type->is_multi_cell()) {
+                if (!set_value || set_value->_elements.empty()) {
                     return;
+                }
 
-                Set<ByteBuffer> toAdd = setValue.elements;
-                for (ByteBuffer bb : toAdd)
-                {
-                    CellName cellName = cf.getComparator().create(prefix, column, bb);
-                    cf.addColumn(params.makeColumn(cellName, ByteBufferUtil.EMPTY_BYTE_BUFFER));
+                // FIXME: mutation_view? not compatible with params.make_cell().
+                collection_type_impl::mutation mut;
+                for (auto&& e : set_value->_elements) {
+                    mut.emplace_back(e, params.make_cell({}));
+                }
+                auto smut = set_type->serialize_mutation_form(mut);
+
+                m.set_cell(row_key, column, std::move(smut));
+            } else {
+                // for frozen sets, we're overwriting the whole cell
+                auto v = set_type->serialize_partially_deserialized_form(
+                        {set_value->_elements.begin(), set_value->_elements.end()}, 3);
+                if (set_value->_elements.empty()) {
+                    m.set_cell(row_key, column, params.make_dead_cell());
+                } else {
+                    m.set_cell(row_key, column, params.make_cell(std::move(v)));
                 }
             }
-            else
-            {
-                // for frozen sets, we're overwriting the whole cell
-                CellName cellName = cf.getComparator().create(prefix, column);
-                if (value == null)
-                    cf.addAtom(params.makeTombstone(cellName));
-                else
-                    cf.addColumn(params.makeColumn(cellName, ((Value) value).getWithProtocolVersion(Server.CURRENT_VERSION)));
-            }
         }
-    }
+    };
 
+#if 0
     // Note that this is reused for Map subtraction too (we subtract a set from a map)
     public static class Discarder extends Operation
     {

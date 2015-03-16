@@ -731,23 +731,6 @@ void write_collection_value(bytes::iterator& out, int version, data_type type, c
     type->serialize(value, out);
 }
 
-template <typename BytesViewIterator>
-bytes
-collection_type_impl::pack(BytesViewIterator start, BytesViewIterator finish, int elements, int protocol_version) {
-    size_t len = collection_size_len(protocol_version);
-    size_t psz = collection_value_len(protocol_version);
-    for (auto j = start; j != finish; j++) {
-        len += j->size() + psz;
-    }
-    bytes out(bytes::initialized_later(), len);
-    bytes::iterator i = out.begin();
-    write_collection_size(i, elements, protocol_version);
-    while (start != finish) {
-        write_collection_value(i, protocol_version, *start++);
-    }
-    return out;
-}
-
 shared_ptr<map_type_impl>
 map_type_impl::get_instance(data_type keys, data_type values, bool is_multi_cell) {
     return intern::get_instance(std::move(keys), std::move(values), is_multi_cell);
@@ -1015,7 +998,7 @@ class listlike_partial_deserializing_iterator
     int _protocol_version;
 private:
     struct end_tag {};
-    listlike_partial_deserializing_iterator(bytes_view in, int protocol_version)
+    listlike_partial_deserializing_iterator(bytes_view& in, int protocol_version)
             : _in(&in), _protocol_version(protocol_version) {
         _remain = read_collection_size(*_in, _protocol_version);
         parse();
@@ -1040,7 +1023,7 @@ public:
     bool operator!=(const listlike_partial_deserializing_iterator& x) const {
         return _remain != x._remain;
     }
-    static listlike_partial_deserializing_iterator begin(bytes_view in, int protocol_version) {
+    static listlike_partial_deserializing_iterator begin(bytes_view& in, int protocol_version) {
         return { in, protocol_version };
     }
     static listlike_partial_deserializing_iterator end(bytes_view in, int protocol_version) {
@@ -1161,7 +1144,8 @@ set_type_impl::to_string(const bytes& b) {
     using llpdi = listlike_partial_deserializing_iterator;
     std::ostringstream out;
     bool first = true;
-    std::for_each(llpdi::begin(b, 3), llpdi::end(b, 3), [&first, &out, this] (bytes_view e) {
+    auto v = bytes_view(b);
+    std::for_each(llpdi::begin(v, 3), llpdi::end(v, 3), [&first, &out, this] (bytes_view e) {
         if (first) {
             first = false;
         } else {
@@ -1200,6 +1184,12 @@ set_type_impl::to_value(mutation_view mut, int protocol_version) {
         }
     }
     return pack(tmp.begin(), tmp.end(), tmp.size(), protocol_version);
+}
+
+bytes
+set_type_impl::serialize_partially_deserialized_form(
+        const std::vector<bytes_view>& v, int protocol_version) {
+    return pack(v.begin(), v.end(), v.size(), protocol_version);
 }
 
 list_type
@@ -1311,7 +1301,8 @@ list_type_impl::to_string(const bytes& b) {
     using llpdi = listlike_partial_deserializing_iterator;
     std::ostringstream out;
     bool first = true;
-    std::for_each(llpdi::begin(b, 3), llpdi::end(b, 3), [&first, &out, this] (bytes_view e) {
+    auto v = bytes_view(b);
+    std::for_each(llpdi::begin(v, 3), llpdi::end(v, 3), [&first, &out, this] (bytes_view e) {
         if (first) {
             first = false;
         } else {

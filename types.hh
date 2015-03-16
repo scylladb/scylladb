@@ -328,6 +328,9 @@ public:
     virtual bytes from_string(sstring_view text) override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
     virtual bytes to_value(mutation_view mut, int protocol_version) override;
+    bytes serialize_partially_deserialized_form(
+            const std::vector<bytes_view>& v, int protocol_version);
+
 };
 
 using set_type = shared_ptr<set_type_impl>;
@@ -583,4 +586,21 @@ size_t collection_value_len(int version);
 void write_collection_size(bytes::iterator& out, int size, int version);
 void write_collection_value(bytes::iterator& out, int version, bytes_view val_bytes);
 void write_collection_value(bytes::iterator& out, int version, data_type type, const boost::any& value);
+
+template <typename BytesViewIterator>
+bytes
+collection_type_impl::pack(BytesViewIterator start, BytesViewIterator finish, int elements, int protocol_version) {
+    size_t len = collection_size_len(protocol_version);
+    size_t psz = collection_value_len(protocol_version);
+    for (auto j = start; j != finish; j++) {
+        len += j->size() + psz;
+    }
+    bytes out(bytes::initialized_later(), len);
+    bytes::iterator i = out.begin();
+    write_collection_size(i, elements, protocol_version);
+    while (start != finish) {
+        write_collection_value(i, protocol_version, *start++);
+    }
+    return out;
+}
 

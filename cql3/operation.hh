@@ -196,132 +196,63 @@ public:
         virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
     };
 
+    class addition : public raw_update {
+        const shared_ptr<term::raw> _value;
+    public:
+        addition(shared_ptr<term::raw> value)
+                : _value(value) {
+        }
+
+        virtual shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) override;
+
 #if 0
-    public static class Addition implements RawUpdate
-    {
-        private final Term.Raw value;
-
-        public Addition(Term.Raw value)
-        {
-            this.value = value;
-        }
-
-        public Operation prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException
-        {
-            Term v = value.prepare(keyspace, receiver);
-
-            if (!(receiver.type instanceof CollectionType))
-            {
-                if (!(receiver.type instanceof CounterColumnType))
-                    throw new InvalidRequestException(String.format("Invalid operation (%s) for non counter column %s", toString(receiver), receiver.name));
-                return new Constants.Adder(receiver, v);
-            }
-            else if (!(receiver.type.isMultiCell()))
-                throw new InvalidRequestException(String.format("Invalid operation (%s) for frozen collection column %s", toString(receiver), receiver.name));
-
-            switch (((CollectionType)receiver.type).kind)
-            {
-                case LIST:
-                    return new Lists.Appender(receiver, v);
-                case SET:
-                    return new Sets.Adder(receiver, v);
-                case MAP:
-                    return new Maps.Putter(receiver, v);
-            }
-            throw new AssertionError();
-        }
-
         protected String toString(ColumnSpecification column)
         {
             return String.format("%s = %s + %s", column.name, column.name, value);
         }
+#endif
 
-        public boolean isCompatibleWith(RawUpdate other)
-        {
-            return !(other instanceof SetValue);
-        }
-    }
+        virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
+    };
 
-    public static class Substraction implements RawUpdate
-    {
-        private final Term.Raw value;
-
-        public Substraction(Term.Raw value)
-        {
-            this.value = value;
+    class subtraction : public raw_update {
+        const shared_ptr<term::raw> _value;
+    public:
+        subtraction(shared_ptr<term::raw> value)
+                : _value(value) {
         }
 
-        public Operation prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException
-        {
-            if (!(receiver.type instanceof CollectionType))
-            {
-                if (!(receiver.type instanceof CounterColumnType))
-                    throw new InvalidRequestException(String.format("Invalid operation (%s) for non counter column %s", toString(receiver), receiver.name));
-                return new Constants.Substracter(receiver, value.prepare(keyspace, receiver));
-            }
-            else if (!(receiver.type.isMultiCell()))
-                throw new InvalidRequestException(String.format("Invalid operation (%s) for frozen collection column %s", toString(receiver), receiver.name));
+        virtual shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) override;
 
-            switch (((CollectionType)receiver.type).kind)
-            {
-                case LIST:
-                    return new Lists.Discarder(receiver, value.prepare(keyspace, receiver));
-                case SET:
-                    return new Sets.Discarder(receiver, value.prepare(keyspace, receiver));
-                case MAP:
-                    // The value for a map subtraction is actually a set
-                    ColumnSpecification vr = new ColumnSpecification(receiver.ksName,
-                                                                     receiver.cfName,
-                                                                     receiver.name,
-                                                                     SetType.getInstance(((MapType)receiver.type).getKeysType(), false));
-                    return new Sets.Discarder(receiver, value.prepare(keyspace, vr));
-            }
-            throw new AssertionError();
-        }
-
+#if 0
         protected String toString(ColumnSpecification column)
         {
             return String.format("%s = %s - %s", column.name, column.name, value);
         }
+#endif
 
-        public boolean isCompatibleWith(RawUpdate other)
-        {
-            return !(other instanceof SetValue);
-        }
-    }
+        virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
+    };
 
-    public static class Prepend implements RawUpdate
-    {
-        private final Term.Raw value;
-
-        public Prepend(Term.Raw value)
-        {
-            this.value = value;
+    class prepend : public raw_update {
+        shared_ptr<term::raw> _value;
+    public:
+        prepend(shared_ptr<term::raw> value)
+                : _value(std::move(value)) {
         }
 
-        public Operation prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException
-        {
-            Term v = value.prepare(keyspace, receiver);
+        virtual shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) override;
 
-            if (!(receiver.type instanceof ListType))
-                throw new InvalidRequestException(String.format("Invalid operation (%s) for non list column %s", toString(receiver), receiver.name));
-            else if (!(receiver.type.isMultiCell()))
-                throw new InvalidRequestException(String.format("Invalid operation (%s) for frozen list column %s", toString(receiver), receiver.name));
-
-            return new Lists.Prepender(receiver, v);
-        }
-
+#if 0
         protected String toString(ColumnSpecification column)
         {
             return String.format("%s = %s - %s", column.name, value, column.name);
         }
+#endif
+        virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
+    };
 
-        public boolean isCompatibleWith(RawUpdate other)
-        {
-            return !(other instanceof SetValue);
-        }
-    }
-
+#if 0
     public static class ColumnDeletion implements RawDeletion
     {
         private final ColumnIdentifier.Raw id;

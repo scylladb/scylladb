@@ -27,6 +27,7 @@
 #include "operation.hh"
 #include "constants.hh"
 #include "maps.hh"
+#include "sets.hh"
 
 namespace cql3 {
 
@@ -52,8 +53,7 @@ public:
             throw std::runtime_error("not implemented"); // FIXME
             // return new Lists.Setter(receiver, v);
         } else if (&k == &collection_type_impl::kind::set) {
-            throw std::runtime_error("not implemented"); // FIXME
-            // return new Sets.Setter(receiver, v);
+            return make_shared<sets::setter>(receiver, v);
         } else if (&k == &collection_type_impl::kind::map) {
             return make_shared<maps::setter>(receiver, v);
         } else {

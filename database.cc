@@ -157,7 +157,7 @@ bytes from_hex(sstring_view s) {
     return out;
 }
 
-sstring to_hex(const bytes& b) {
+sstring to_hex(bytes_view b) {
     static char digits[] = "0123456789abcdef";
     sstring out(sstring::initialized_later(), b.size() * 2);
     unsigned end = b.size();
@@ -167,6 +167,10 @@ sstring to_hex(const bytes& b) {
         out[2*i+1] = digits[x & 0xf];
     }
     return out;
+}
+
+sstring to_hex(const bytes& b) {
+    return to_hex(bytes_view(b));
 }
 
 sstring to_hex(const bytes_opt& b) {
