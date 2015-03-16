@@ -73,7 +73,8 @@ static future<> require_column_has_value(distributed<database>& ddb, const sstri
         } else {
             auto cell = i->second.as_collection_mutation();
             auto type = dynamic_pointer_cast<collection_type_impl>(col_def->type);
-            actual = type->to_value(type->deserialize_mutation_form(cell.data), 3);
+            actual = type->to_value(type->deserialize_mutation_form(cell.data),
+                    serialization_format::internal());
         }
         assert(col_def->type->equal(actual, col_def->type->decompose(expected)));
         row->find(col_def->id);

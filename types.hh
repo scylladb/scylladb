@@ -18,6 +18,7 @@
 #include "bytes.hh"
 #include "log.hh"
 #include "atomic_cell.hh"
+#include "serialization_format.hh"
 
 namespace cql3 {
 
@@ -202,9 +203,9 @@ public:
     virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) = 0;
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() override;
     template <typename BytesViewIterator>
-    static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, int version);
+    static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, serialization_format sf);
     mutation_view deserialize_mutation_form(bytes_view in);
-    virtual bytes to_value(mutation_view mut, int protocol_version) = 0;
+    virtual bytes to_value(mutation_view mut, serialization_format sf) = 0;
     // FIXME: use iterators?
     collection_mutation::one serialize_mutation_form(const mutation& mut);
     collection_mutation::one serialize_mutation_form(mutation_view mut);
@@ -283,17 +284,17 @@ public:
                         bytes_view o1, bytes_view o2);
     virtual bool is_byte_order_comparable() const override { return false; }
     virtual void serialize(const boost::any& value, bytes::iterator& out) override;
-    void serialize(const boost::any& value, bytes::iterator& out, int protocol_version);
+    void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf);
     virtual size_t serialized_size(const boost::any& value);
     virtual object_opt deserialize(bytes_view v) override;
-    object_opt deserialize(bytes_view v, int protocol_version);
+    object_opt deserialize(bytes_view v, serialization_format sf);
     virtual sstring to_string(const bytes& b) override;
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
     static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,
-            int protocol_version);
-    virtual bytes to_value(mutation_view mut, int protocol_version) override;
+            serialization_format sf);
+    virtual bytes to_value(mutation_view mut, serialization_format sf) override;
 };
 
 using map_type = shared_ptr<map_type_impl>;
@@ -319,17 +320,17 @@ public:
     virtual bool less(bytes_view o1, bytes_view o2) override;
     virtual bool is_byte_order_comparable() const override { return _elements->is_byte_order_comparable(); }
     virtual void serialize(const boost::any& value, bytes::iterator& out) override;
-    void serialize(const boost::any& value, bytes::iterator& out, int protocol_version);
+    void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf);
     virtual size_t serialized_size(const boost::any& value) override;
     virtual object_opt deserialize(bytes_view v) override;
-    object_opt deserialize(bytes_view v, int protocol_version);
+    object_opt deserialize(bytes_view v, serialization_format sf);
     virtual sstring to_string(const bytes& b) override;
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
-    virtual bytes to_value(mutation_view mut, int protocol_version) override;
+    virtual bytes to_value(mutation_view mut, serialization_format sf) override;
     bytes serialize_partially_deserialized_form(
-            const std::vector<bytes_view>& v, int protocol_version);
+            const std::vector<bytes_view>& v, serialization_format sf);
 
 };
 
@@ -356,15 +357,15 @@ public:
     virtual bool less(bytes_view o1, bytes_view o2) override;
     // FIXME: origin doesn't override is_byte_order_comparable().  Why?
     virtual void serialize(const boost::any& value, bytes::iterator& out) override;
-    void serialize(const boost::any& value, bytes::iterator& out, int protocol_version);
+    void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf);
     virtual size_t serialized_size(const boost::any& value) override;
     virtual object_opt deserialize(bytes_view v) override;
-    object_opt deserialize(bytes_view v, int protocol_version);
+    object_opt deserialize(bytes_view v, serialization_format sf);
     virtual sstring to_string(const bytes& b) override;
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
     virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
-    virtual bytes to_value(mutation_view mut, int protocol_version) override;
+    virtual bytes to_value(mutation_view mut, serialization_format sf) override;
 };
 
 using list_type = shared_ptr<list_type_impl>;
@@ -581,25 +582,25 @@ inline sstring read_simple_short_string(bytes_view& v) {
     return ret;
 }
 
-size_t collection_size_len(int version);
-size_t collection_value_len(int version);
-void write_collection_size(bytes::iterator& out, int size, int version);
-void write_collection_value(bytes::iterator& out, int version, bytes_view val_bytes);
-void write_collection_value(bytes::iterator& out, int version, data_type type, const boost::any& value);
+size_t collection_size_len(serialization_format sf);
+size_t collection_value_len(serialization_format sf);
+void write_collection_size(bytes::iterator& out, int size, serialization_format sf);
+void write_collection_value(bytes::iterator& out, serialization_format sf, bytes_view val_bytes);
+void write_collection_value(bytes::iterator& out, serialization_format sf, data_type type, const boost::any& value);
 
 template <typename BytesViewIterator>
 bytes
-collection_type_impl::pack(BytesViewIterator start, BytesViewIterator finish, int elements, int protocol_version) {
-    size_t len = collection_size_len(protocol_version);
-    size_t psz = collection_value_len(protocol_version);
+collection_type_impl::pack(BytesViewIterator start, BytesViewIterator finish, int elements, serialization_format sf) {
+    size_t len = collection_size_len(sf);
+    size_t psz = collection_value_len(sf);
     for (auto j = start; j != finish; j++) {
         len += j->size() + psz;
     }
     bytes out(bytes::initialized_later(), len);
     bytes::iterator i = out.begin();
-    write_collection_size(i, elements, protocol_version);
+    write_collection_size(i, elements, sf);
     while (start != finish) {
-        write_collection_value(i, protocol_version, *start++);
+        write_collection_value(i, sf, *start++);
     }
     return out;
 }

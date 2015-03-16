@@ -31,6 +31,7 @@
 #include "service/pager/paging_state.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/column_identifier.hh"
+#include "serialization_format.hh"
 
 namespace cql3 {
 
@@ -40,7 +41,9 @@ class default_query_options;
  * Options for a query.
  */
 class query_options {
+    serialization_format _serialization_format;
 public:
+    explicit query_options(serialization_format sf) : _serialization_format(sf) {}
     // Options that are likely to not be present in most queries
     struct specific_options final {
         static const specific_options DEFAULT;
@@ -117,6 +120,7 @@ public:
      * a native protocol request (i.e. it's been allocated locally or by CQL-over-thrift).
      */
     virtual int get_protocol_version() const = 0;
+    serialization_format get_serialization_format() const { return _serialization_format; }
 
     // Mainly for the sake of BatchQueryOptions
     virtual const specific_options& get_specific_options() const = 0;
@@ -206,8 +210,9 @@ private:
     const int32_t _protocol_version; // transient
 public:
     default_query_options(db::consistency_level consistency, std::vector<bytes_opt> values, bool skip_metadata, specific_options options,
-        int32_t protocol_version)
-        : _consistency(consistency)
+        int32_t protocol_version, serialization_format sf)
+        : query_options(sf)
+        , _consistency(consistency)
         , _values(std::move(values))
         , _skip_metadata(skip_metadata)
         , _options(std::move(options))
@@ -234,7 +239,10 @@ class query_options_wrapper : public query_options {
 protected:
     std::unique_ptr<query_options> _wrapped;
 public:
-    query_options_wrapper(std::unique_ptr<query_options> wrapped) : _wrapped(std::move(wrapped)) {}
+    query_options_wrapper(std::unique_ptr<query_options> wrapped)
+            : query_options(wrapped->get_serialization_format())
+            , _wrapped(std::move(wrapped)) {
+    }
 
     virtual db::consistency_level get_consistency() const override {
         return _wrapped->get_consistency();

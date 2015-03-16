@@ -180,7 +180,7 @@ public:
     public:
         virtual ~collection_terminal() {}
         /** Gets the value of the collection when serialized with the given protocol version format */
-        virtual bytes get_with_protocol_version(int protocol_version) = 0;
+        virtual bytes get_with_protocol_version(serialization_format sf) = 0;
     };
 
     /**

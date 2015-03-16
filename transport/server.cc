@@ -151,6 +151,7 @@ class cql_server::connection {
     output_stream<char> _write_buf;
     future<> _ready_to_respond = make_ready_future<>();
     uint8_t _version = 0;
+    serialization_format _serialization_format = serialization_format::use_16_bit();
     service::client_state _client_state;
     std::unordered_map<uint16_t, cql_query_state> _query_states;
 public:
@@ -205,6 +206,7 @@ private:
     std::unique_ptr<cql3::query_options> read_options(temporary_buffer<char>& buf);
 
     cql_query_state& get_query_state(uint16_t stream);
+    void init_serialization_format();
 };
 
 class cql_server::response {
@@ -326,6 +328,7 @@ cql_server::connection::read_frame() {
                 return make_ready_future<ret_type>();
             }
             _version = buf[0];
+            init_serialization_format();
             if (_version < 1 || _version > 4) {
                 throw bad_cql_protocol_version();
             }
@@ -407,6 +410,15 @@ cql_query_state& cql_server::connection::get_query_state(uint16_t stream)
         i = _query_states.emplace(stream, _client_state).first;
     }
     return i->second;
+}
+
+void
+cql_server::connection::init_serialization_format() {
+    if (_version < 3) {
+        _serialization_format = serialization_format::use_16_bit();
+    } else {
+        _serialization_format = serialization_format::use_32_bit();
+    }
 }
 
 future<> cql_server::connection::process_query(uint16_t stream, temporary_buffer<char> buf)
@@ -671,7 +683,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(tempor
     auto consistency = read_consistency(buf);
     if (_version == 1) {
         return std::make_unique<cql3::default_query_options>(consistency, std::vector<bytes_opt>{},
-            false, cql3::query_options::specific_options::DEFAULT, 1);
+            false, cql3::query_options::specific_options::DEFAULT, 1, _serialization_format);
     }
 
     assert(_version >= 2);
@@ -718,10 +730,11 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(tempor
         }
 
         options = std::make_unique<cql3::default_query_options>(consistency, std::move(values), skip_metadata,
-            cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts}, _version);
+            cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts}, _version,
+            _serialization_format);
     } else {
         options = std::make_unique<cql3::default_query_options>(consistency, std::move(values), skip_metadata,
-            cql3::query_options::specific_options::DEFAULT, _version);
+            cql3::query_options::specific_options::DEFAULT, _version, _serialization_format);
     }
 
     if (names.empty()) {
