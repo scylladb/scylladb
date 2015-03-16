@@ -71,7 +71,7 @@ public:
      * TODO replace this with operations that don't expose private state
      */
     // @Deprecated
-    std::map<application_state, versioned_value> get_application_state_map() {
+    std::map<application_state, versioned_value>& get_application_state_map() {
         return _application_state;
     }
 
