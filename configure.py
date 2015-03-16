@@ -138,6 +138,8 @@ arg_parser.add_argument('--with-osv', action = 'store', dest = 'with_osv', defau
                         help = 'Shortcut for compile for OSv')
 arg_parser.add_argument('--dpdk-target', action = 'store', dest = 'dpdk_target', default = '',
                         help = 'Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
+arg_parser.add_argument('--debuginfo', action = 'store', dest = 'debuginfo', type = int, default = 1,
+                        help = 'Enable(1)/disable(0)compiler debug information generation')
 add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
 add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 args = arg_parser.parse_args()
@@ -264,7 +266,7 @@ warnings = [w
 
 warnings = ' '.join(warnings)
 
-dbgflag = debug_flag(args.cxx)
+dbgflag = debug_flag(args.cxx) if args.debuginfo else ''
 
 def have_hwloc():
     return try_compile(compiler = args.cxx, source = '#include <hwloc.h>\n#include <numa.h>')
