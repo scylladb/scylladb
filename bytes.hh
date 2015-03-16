@@ -15,6 +15,7 @@ using bytes_opt = std::experimental::optional<bytes>;
 using sstring_view = std::experimental::string_view;
 
 bytes from_hex(sstring_view s);
+sstring to_hex(bytes_view b);
 sstring to_hex(const bytes& b);
 sstring to_hex(const bytes_opt& b);
 
