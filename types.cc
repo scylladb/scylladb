@@ -1015,7 +1015,7 @@ class listlike_partial_deserializing_iterator
     int _protocol_version;
 private:
     struct end_tag {};
-    listlike_partial_deserializing_iterator(bytes_view in, int protocol_version)
+    listlike_partial_deserializing_iterator(bytes_view& in, int protocol_version)
             : _in(&in), _protocol_version(protocol_version) {
         _remain = read_collection_size(*_in, _protocol_version);
         parse();
@@ -1040,7 +1040,7 @@ public:
     bool operator!=(const listlike_partial_deserializing_iterator& x) const {
         return _remain != x._remain;
     }
-    static listlike_partial_deserializing_iterator begin(bytes_view in, int protocol_version) {
+    static listlike_partial_deserializing_iterator begin(bytes_view& in, int protocol_version) {
         return { in, protocol_version };
     }
     static listlike_partial_deserializing_iterator end(bytes_view in, int protocol_version) {
@@ -1161,7 +1161,8 @@ set_type_impl::to_string(const bytes& b) {
     using llpdi = listlike_partial_deserializing_iterator;
     std::ostringstream out;
     bool first = true;
-    std::for_each(llpdi::begin(b, 3), llpdi::end(b, 3), [&first, &out, this] (bytes_view e) {
+    auto v = bytes_view(b);
+    std::for_each(llpdi::begin(v, 3), llpdi::end(v, 3), [&first, &out, this] (bytes_view e) {
         if (first) {
             first = false;
         } else {
@@ -1311,7 +1312,8 @@ list_type_impl::to_string(const bytes& b) {
     using llpdi = listlike_partial_deserializing_iterator;
     std::ostringstream out;
     bool first = true;
-    std::for_each(llpdi::begin(b, 3), llpdi::end(b, 3), [&first, &out, this] (bytes_view e) {
+    auto v = bytes_view(b);
+    std::for_each(llpdi::begin(v, 3), llpdi::end(v, 3), [&first, &out, this] (bytes_view e) {
         if (first) {
             first = false;
         } else {
