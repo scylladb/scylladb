@@ -46,7 +46,7 @@ public:
     }
 
     // The following replaces GossipDigestAck2Serializer from the Java code
-    void serialize(std::ostream& out) const {
+    void serialize(bytes::iterator& out) const {
         // 1) Map size
         serialize_int32(out, int32_t(_map.size()));
         // 2) Map contents

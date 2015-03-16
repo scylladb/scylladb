@@ -108,7 +108,7 @@ public:
     }
 
     // The following replaces EndpointStateSerializer from the Java code
-    void serialize(std::ostream& out) const {
+    void serialize(bytes::iterator& out) const {
         /* serialize the HeartBeatState */
         _heart_beat_state.serialize(out);
 

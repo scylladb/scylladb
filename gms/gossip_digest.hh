@@ -69,7 +69,7 @@ public:
     }
 
     // The following replaces GossipDigestSerializer from the Java code
-    void serialize(std::ostream& out) const {
+    void serialize(bytes::iterator& out) const {
         _endpoint.serialize(out);
         serialize_int32(out, _generation);
         serialize_int32(out, _max_version);
@@ -90,7 +90,7 @@ public:
 // serialization helper for std::vector<gossip_digest>
 class gossip_digest_serialization_helper {
 public:
-    static void serialize(std::ostream& out, const std::vector<gossip_digest>& digests) {
+    static void serialize(bytes::iterator& out, const std::vector<gossip_digest>& digests) {
         serialize_int32(out, int32_t(digests.size()));
         for (auto& digest : digests) {
            digest.serialize(out);

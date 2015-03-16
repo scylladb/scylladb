@@ -66,7 +66,7 @@ public:
     }
 
     // The following replaces HeartBeatStateSerializer from the Java code
-    void serialize(std::ostream& out) const {
+    void serialize(bytes::iterator& out) const {
         serialize_int32(out, _generation);
         serialize_int32(out, _version);
     }

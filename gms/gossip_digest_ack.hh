@@ -53,7 +53,7 @@ public:
     }
 
     // The following replaces GossipDigestAckSerializer from the Java code
-    void serialize(std::ostream& out) const {
+    void serialize(bytes::iterator& out) const {
         // 1) Digest
         gossip_digest_serialization_helper::serialize(out, _digests);
         // 2) Map size

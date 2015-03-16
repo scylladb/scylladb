@@ -49,7 +49,7 @@ public:
     }
 
     // The following replaces GossipDigestSynSerializer from the Java code
-    void serialize(std::ostream& out) const {
+    void serialize(bytes::iterator& out) const {
         serialize_string(out, _cluster_id);
         serialize_string(out, _partioner);
         gossip_digest_serialization_helper::serialize(out, _digests);

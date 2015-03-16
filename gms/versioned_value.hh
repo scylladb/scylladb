@@ -251,7 +251,7 @@ public:
 
     // The following replaces VersionedValueSerializer from the Java code
 public:
-    void serialize(std::ostream& out) const {
+    void serialize(bytes::iterator& out) const {
         serialize_string(out, value);
         serialize_int32(out, version);
     }

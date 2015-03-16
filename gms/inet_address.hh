@@ -26,7 +26,7 @@ public:
     bool is_broadcast_address() {
         return _addr == net::ipv4::broadcast_address();
     }
-    void serialize(std::ostream& out) const {
+    void serialize(bytes::iterator& out) const {
         int8_t inet_address_size = sizeof(inet_address);
         serialize_int8(out, inet_address_size);
         serialize_int32(out, _addr.ip);
