@@ -21,4 +21,5 @@
 
 namespace gms {
     gossiper _the_gossiper;
+    failure_detector _the_failure_detector;
 }

@@ -353,4 +353,9 @@ public:
     }
 };
 
+extern failure_detector _the_failure_detector;
+inline failure_detector& the_failure_detector() {
+    return _the_failure_detector;
+}
+
 } // namespace gms
