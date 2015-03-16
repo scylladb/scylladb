@@ -27,6 +27,7 @@
 #include "gms/application_state.hh"
 #include "gms/versioned_value.hh"
 #include "db_clock.hh"
+#include <experimental/optional>
 
 namespace gms {
 
@@ -57,8 +58,13 @@ public:
         _heart_beat_state = hbs;
     }
 
-    versioned_value getapplication_state(application_state key) {
-        return _application_state.at(key);
+    std::experimental::optional<versioned_value> get_application_state(application_state key) {
+        auto it = _application_state.find(key);
+        if (it == _application_state.end()) {
+            return {};
+        } else {
+            return _application_state.at(key);
+        }
     }
 
     /**
