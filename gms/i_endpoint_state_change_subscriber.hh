@@ -48,7 +48,7 @@ public:
      */
     virtual void on_join(inet_address endpoint, endpoint_state ep_state) = 0;
 
-    virtual void beforechange(inet_address endpoint, endpoint_state current_state, application_state new_statekey, versioned_value newvalue) = 0;
+    virtual void before_change(inet_address endpoint, endpoint_state current_state, application_state new_statekey, versioned_value newvalue) = 0;
 
     virtual void on_change(inet_address endpoint, application_state state, versioned_value value) = 0;
 
