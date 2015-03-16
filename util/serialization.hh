@@ -59,6 +59,12 @@ void serialize_int8(std::ostream& out, int8_t val) {
     out.put(val);
 }
 
+inline
+void serialize_int8(bytes::iterator& out, uint8_t val) {
+    uint8_t nval = net::hton(val);
+    out = std::copy_n(reinterpret_cast<const char*>(&nval), sizeof(nval), out);
+}
+
 static constexpr size_t serialize_int8_size = 1;
 
 inline
