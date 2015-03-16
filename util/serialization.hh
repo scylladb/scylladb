@@ -220,6 +220,20 @@ void serialize_string(std::ostream& out, const sstring& s) {
 }
 
 inline
+void serialize_string(bytes::iterator& out, const sstring& s) {
+    for (char c : s) {
+        if (c == '\0') {
+            throw UTFDataFormatException();
+        }
+    }
+    if (s.size() > std::numeric_limits<uint16_t>::max()) {
+        throw UTFDataFormatException();
+    }
+    serialize_int16(out, (uint16_t) s.size());
+    out = std::copy(s.begin(), s.end(), out);
+}
+
+inline
 size_t serialize_string_size(const sstring& s) {;
     // As above, this code is missing the case of modified utf-8
     return serialize_int16_size + s.size();
