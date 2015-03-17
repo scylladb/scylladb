@@ -11,6 +11,7 @@
 #include "core/sstring.hh"
 #include "core/fstream.hh"
 #include "core/shared_ptr.hh"
+#include "db/compress.hh"
 #include <boost/algorithm/string.hpp>
 #include <iterator>
 
@@ -34,21 +35,39 @@ public:
     virtual ~random_access_reader() { }
 };
 
-class file_input_stream : public random_access_reader {
+class file_random_access_reader : public random_access_reader {
     lw_shared_ptr<file> _file;
     size_t _buffer_size;
 public:
     virtual input_stream<char> open_at(uint64_t pos) override {
         return make_file_input_stream(_file, pos, _buffer_size);
     }
-    explicit file_input_stream(file&& f, size_t buffer_size = 8192)
-        : file_input_stream(make_lw_shared<file>(std::move(f)), buffer_size) {}
+    explicit file_random_access_reader(file&& f, size_t buffer_size = 8192)
+        : file_random_access_reader(make_lw_shared<file>(std::move(f)), buffer_size) {}
 
-    explicit file_input_stream(lw_shared_ptr<file> f, size_t buffer_size = 8192)
+    explicit file_random_access_reader(lw_shared_ptr<file> f, size_t buffer_size = 8192)
         : _file(f), _buffer_size(buffer_size)
     {
         seek(0);
     }
+};
+
+class compressed_file_random_access_reader : public random_access_reader {
+    lw_shared_ptr<file> _file;
+    lw_shared_ptr<compression_metadata> _cm;
+public:
+    explicit compressed_file_random_access_reader(
+                lw_shared_ptr<file> f, lw_shared_ptr<compression_metadata> cm)
+        : _file(std::move(f))
+        , _cm(std::move(cm))
+    {
+        seek(0);
+    }
+    compressed_file_random_access_reader(compressed_file_random_access_reader&&) = default;
+    virtual input_stream<char> open_at(uint64_t pos) override {
+        return make_compressed_file_input_stream(_file, _cm, pos);
+    }
+
 };
 
 thread_local logging::logger sstlog("sstable");
@@ -102,7 +121,7 @@ read_integer(temporary_buffer<char>& buf, T& i) {
 
 template <typename T>
 typename std::enable_if_t<std::is_integral<T>::value, future<>>
-parse(file_input_stream& in, T& i) {
+parse(random_access_reader& in, T& i) {
     return in.read_exactly(sizeof(T)).then([&i] (auto buf) {
         check_buf_size(buf, sizeof(T));
 
@@ -113,11 +132,11 @@ parse(file_input_stream& in, T& i) {
 
 template <typename T>
 typename std::enable_if_t<std::is_enum<T>::value, future<>>
-parse(file_input_stream& in, T& i) {
+parse(random_access_reader& in, T& i) {
     return parse(in, reinterpret_cast<typename std::underlying_type<T>::type&>(i));
 }
 
-future<> parse(file_input_stream& in, bool& i) {
+future<> parse(random_access_reader& in, bool& i) {
     return parse(in, reinterpret_cast<uint8_t&>(i));
 }
 
@@ -133,7 +152,7 @@ static inline To convert(From f) {
     return conv.to;
 }
 
-future<> parse(file_input_stream& in, double& d) {
+future<> parse(random_access_reader& in, double& d) {
     return in.read_exactly(sizeof(double)).then([&d] (auto buf) {
         check_buf_size(buf, sizeof(double));
 
@@ -144,7 +163,7 @@ future<> parse(file_input_stream& in, double& d) {
 }
 
 template <typename T>
-future<> parse(file_input_stream& in, T& len, sstring& s) {
+future<> parse(random_access_reader& in, T& len, sstring& s) {
     return in.read_exactly(len).then([&s, len] (auto buf) {
         check_buf_size(buf, len);
         s = sstring(buf.get(), len);
@@ -153,7 +172,7 @@ future<> parse(file_input_stream& in, T& len, sstring& s) {
 
 // All composite parsers must come after this
 template<typename First, typename... Rest>
-future<> parse(file_input_stream& in, First& first, Rest&&... rest) {
+future<> parse(random_access_reader& in, First& first, Rest&&... rest) {
     return parse(in, first).then([&in, &rest...] {
         return parse(in, std::forward<Rest>(rest)...);
     });
@@ -165,7 +184,7 @@ future<> parse(file_input_stream& in, First& first, Rest&&... rest) {
 // are contiguous, it is not always the case. So we want to have the
 // flexibility of parsing them separately.
 template <typename Size>
-future<> parse(file_input_stream& in, disk_string<Size>& s) {
+future<> parse(random_access_reader& in, disk_string<Size>& s) {
     auto len = std::make_unique<Size>();
     auto f = parse(in, *len);
     return f.then([&in, &s, len = std::move(len)] {
@@ -183,7 +202,7 @@ future<> parse(file_input_stream& in, disk_string<Size>& s) {
 // We'll offer a specialization for that case below.
 template <typename Size, typename Members>
 typename std::enable_if_t<!std::is_integral<Members>::value, future<>>
-parse(file_input_stream& in, Size& len, std::vector<Members>& arr) {
+parse(random_access_reader& in, Size& len, std::vector<Members>& arr) {
 
     auto count = make_lw_shared<size_t>(0);
     auto eoarr = [count, len] { return *count == len; };
@@ -195,7 +214,7 @@ parse(file_input_stream& in, Size& len, std::vector<Members>& arr) {
 
 template <typename Size, typename Members>
 typename std::enable_if_t<std::is_integral<Members>::value, future<>>
-parse(file_input_stream& in, Size& len, std::vector<Members>& arr) {
+parse(random_access_reader& in, Size& len, std::vector<Members>& arr) {
     return in.read_exactly(len * sizeof(Members)).then([&arr, len] (auto buf) {
         check_buf_size(buf, len * sizeof(Members));
 
@@ -210,7 +229,7 @@ parse(file_input_stream& in, Size& len, std::vector<Members>& arr) {
 // We resize the array here, before we pass it to the integer / non-integer
 // specializations
 template <typename Size, typename Members>
-future<> parse(file_input_stream& in, disk_array<Size, Members>& arr) {
+future<> parse(random_access_reader& in, disk_array<Size, Members>& arr) {
     auto len = std::make_unique<Size>();
     auto f = parse(in, *len);
     return f.then([&in, &arr, len = std::move(len)] {
@@ -220,7 +239,7 @@ future<> parse(file_input_stream& in, disk_array<Size, Members>& arr) {
 }
 
 template <typename Size, typename Key, typename Value>
-future<> parse(file_input_stream& in, Size& len, std::unordered_map<Key, Value>& map) {
+future<> parse(random_access_reader& in, Size& len, std::unordered_map<Key, Value>& map) {
     auto count = make_lw_shared<Size>();
     auto eos = [len, count] { return len == *count; };
     return do_until(eos, [len, count, &in, &map] {
@@ -239,7 +258,7 @@ future<> parse(file_input_stream& in, Size& len, std::unordered_map<Key, Value>&
 }
 
 template <typename Size, typename Key, typename Value>
-future<> parse(file_input_stream& in, disk_hash<Size, Key, Value>& h) {
+future<> parse(random_access_reader& in, disk_hash<Size, Key, Value>& h) {
     auto w = std::make_unique<Size>();
     auto f = parse(in, *w);
     return f.then([&in, &h, w = std::move(w)] {
@@ -247,19 +266,19 @@ future<> parse(file_input_stream& in, disk_hash<Size, Key, Value>& h) {
     });
 }
 
-future<> parse(file_input_stream& in, option& op) {
+future<> parse(random_access_reader& in, option& op) {
     return parse(in, op.key, op.value);
 }
 
-future<> parse(file_input_stream& in, compression& c) {
+future<> parse(random_access_reader& in, compression& c) {
     return parse(in, c.name, c.options, c.chunk_len, c.data_len, c.offsets);
 }
 
-future<> parse(file_input_stream& in, filter& f) {
+future<> parse(random_access_reader& in, filter& f) {
     return parse(in, f.hashes, f.buckets);
 }
 
-future<> parse(file_input_stream& in, summary& s) {
+future<> parse(random_access_reader& in, summary& s) {
     using pos_type = typename decltype(summary::positions)::value_type;
 
     return parse(in, s.header.min_index_interval,
@@ -327,45 +346,45 @@ future<summary_entry&> sstable::read_summary_entry(size_t i) {
     return make_ready_future<summary_entry&>(_summary.entries[i]);
 }
 
-future<> parse(file_input_stream& in, struct replay_position& rp) {
+future<> parse(random_access_reader& in, struct replay_position& rp) {
     return parse(in, rp.segment, rp.position);
 }
 
-future<> parse(file_input_stream& in, estimated_histogram::eh_elem &e) {
+future<> parse(random_access_reader& in, estimated_histogram::eh_elem &e) {
     return parse(in, e.offset, e.bucket);
 }
 
-future<> parse(file_input_stream& in, estimated_histogram &e) {
+future<> parse(random_access_reader& in, estimated_histogram &e) {
     return parse(in, e.elements);
 }
 
-future<> parse(file_input_stream& in, streaming_histogram &h) {
+future<> parse(random_access_reader& in, streaming_histogram &h) {
     return parse(in, h.max_bin_size, h.hash);
 }
 
-future<> parse(file_input_stream& in, validation_metadata& m) {
+future<> parse(random_access_reader& in, validation_metadata& m) {
     return parse(in, m.partitioner, m.filter_chance);
 }
 
-future<> parse(file_input_stream& in, compaction_metadata& m) {
+future<> parse(random_access_reader& in, compaction_metadata& m) {
     return parse(in, m.ancestors, m.cardinality);
 }
 
-future<> parse(file_input_stream& in, index_entry& ie) {
+future<> parse(random_access_reader& in, index_entry& ie) {
     return parse(in, ie.key, ie.position, ie.promoted_index);
 }
 
-future<> parse(file_input_stream& in, deletion_time& d) {
+future<> parse(random_access_reader& in, deletion_time& d) {
     return parse(in, d.local_deletion_time, d.marked_for_delete_at);
 }
 
 template <typename Child>
-future<> parse(file_input_stream& in, std::unique_ptr<metadata>& p) {
+future<> parse(random_access_reader& in, std::unique_ptr<metadata>& p) {
     p.reset(new Child);
     return parse(in, *static_cast<Child *>(p.get()));
 }
 
-future<> parse(file_input_stream& in, stats_metadata& m) {
+future<> parse(random_access_reader& in, stats_metadata& m) {
     return parse(in,
         m.estimated_row_size,
         m.estimated_column_count,
@@ -383,7 +402,7 @@ future<> parse(file_input_stream& in, stats_metadata& m) {
     );
 }
 
-future<> parse(file_input_stream& in, statistics& s) {
+future<> parse(random_access_reader& in, statistics& s) {
     return parse(in, s.hash).then([&in, &s] {
         return do_for_each(s.hash.map.begin(), s.hash.map.end(), [&in, &s] (auto val) mutable {
             in.seek(val.second);
@@ -470,7 +489,7 @@ future<index_list> sstable::read_indexes(uint64_t position, uint64_t quantity) {
     struct reader {
         uint64_t count = 0;
         std::vector<index_entry> indexes;
-        file_input_stream stream;
+        file_random_access_reader stream;
         reader(lw_shared_ptr<file> f, uint64_t quantity) : stream(f) { indexes.reserve(quantity); }
     };
 
@@ -527,7 +546,7 @@ future<> sstable::read_simple() {
     sstlog.debug(("Reading " + _component_map[Type] + " file {} ").c_str(), file_path);
     return engine().open_file_dma(file_path, open_flags::ro).then([this] (file f) {
 
-        auto r = std::make_unique<file_input_stream>(std::move(f), 4096);
+        auto r = std::make_unique<file_random_access_reader>(std::move(f), 4096);
         auto fut = parse(*r, *this.*Comptr);
         return fut.then([r = std::move(r)] {});
     }).then_wrapped([this, file_path] (future<> f) {
