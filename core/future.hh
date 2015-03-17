@@ -70,6 +70,8 @@ make_task(Func&& func) {
     return std::unique_ptr<task>(new lambda_task<Func>(std::move(func)));
 }
 
+void report_failed_future(std::exception_ptr ex);
+
 //
 // A future/promise pair maintain one logical value (a future_state).
 // To minimize allocations, the value is stored in exactly one of three
@@ -169,10 +171,17 @@ struct future_state {
         _state = state::exception;
         new (&_u.ex) std::exception_ptr(ex);
     }
+    std::exception_ptr get_exception() noexcept {
+        assert(_state == state::exception);
+        // Move ex out so future::~future() knows we've handled it
+        return std::move(_u.ex);
+    }
     std::tuple<T...> get() {
         assert(_state != state::future);
         if (_state == state::exception) {
-            std::rethrow_exception(_u.ex);
+            _state = state::invalid;
+            // Move ex out so future::~future() knows we've handled it
+            std::rethrow_exception(std::move(_u.ex));
         }
         return std::move(_u.value);
     }
@@ -212,6 +221,8 @@ struct future_state<> {
         if (x._u.st < state::exception_min) {
             _u.st = x._u.st;
         } else {
+            // Move ex out so future::~future() knows we've handled it
+            // Moving it will reset us to invalid state
             new (&_u.ex) std::exception_ptr(std::move(x._u.ex));
         }
     }
@@ -249,9 +260,17 @@ struct future_state<> {
     std::tuple<> get() {
         assert(_u.st != state::future);
         if (_u.st >= state::exception_min) {
-            std::rethrow_exception(_u.ex);
+            // Move ex out so future::~future() knows we've handled it
+            // Moving it will reset us to invalid state
+            std::rethrow_exception(std::move(_u.ex));
         }
         return {};
+    }
+    std::exception_ptr get_exception() noexcept {
+        assert(_u.st >= state::exception_min);
+        // Move ex out so future::~future() knows we've handled it
+        // Moving it will reset us to invalid state
+        return std::move(_u.ex);
     }
     void forward_to(promise<>& pr) noexcept;
 };
@@ -485,6 +504,9 @@ public:
     ~future() {
         if (_promise) {
             _promise->_future = nullptr;
+        }
+        if (failed()) {
+            report_failed_future(state()->get_exception());
         }
     }
     std::tuple<T...> get() {
