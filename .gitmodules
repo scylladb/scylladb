@@ -1,6 +1,6 @@
-[submodule "dpdk"]
-	path = dpdk
-	url = ../dpdk
+[submodule "seastar"]
+	path = seastar
+	url = ../seastar
 [submodule "swagger-ui"]
 	path = swagger-ui
 	url = ../urchin-swagger-ui

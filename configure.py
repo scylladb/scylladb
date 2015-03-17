@@ -1,21 +1,4 @@
 #!/usr/bin/python3
-#
-# This file is open source software, licensed to you under the terms
-# of the Apache License, Version 2.0 (the "License").  See the NOTICE file
-# distributed with this work for additional information regarding copyright
-# ownership.  You may not use this file except in compliance with the License.
-#
-# You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
-#
 import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile, re
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
@@ -195,58 +178,18 @@ urchin_tests = [
     'tests/urchin/network_topology_strategy_test',
     'tests/urchin/query_processor_test',
     'tests/urchin/batchlog_manager_test',
-]
-
-tests = [
-    'tests/fileiotest',
-    'tests/directory_test',
-    'tests/linecount',
-    'tests/echotest',
-    'tests/l3_test',
-    'tests/ip_test',
-    'tests/timertest',
-    'tests/tcp_test',
-    'tests/futures_test',
-    'tests/foreign_ptr_test',
-    'tests/smp_test',
-    'tests/thread_test',
-    'tests/thread_context_switch',
-    'tests/udp_server',
-    'tests/udp_client',
-    'tests/blkdiscard_test',
-    'tests/sstring_test',
-    'tests/httpd',
-    'tests/memcached/test_ascii_parser',
-    'tests/tcp_server',
-    'tests/tcp_client',
-    'tests/allocator_test',
-    'tests/output_stream_test',
-    'tests/udp_zero_copy',
-    'tests/shared_ptr_test',
-    'tests/slab_test',
-    'tests/fstream_test',
-    'tests/distributed_test',
-    'tests/rpc',
-    'tests/semaphore_test',
-    ]
-
-# urchin
-tests += [
     'tests/urchin/bytes_ostream_test',
     'tests/urchin/UUID_test',
     'tests/urchin/murmur_hash_test',
 ]
 
 apps = [
-    'apps/httpd/httpd',
-    'seastar',
-    'apps/seawreck/seawreck',
-    'apps/memcached/memcached',
+    'scylla',
     ]
 
-tests += urchin_tests
+tests = urchin_tests
 
-all_artifacts = apps + tests + ['libseastar.a', 'seastar.pc']
+all_artifacts = apps + tests
 
 arg_parser = argparse.ArgumentParser('Configure seastar')
 arg_parser.add_argument('--static', dest = 'static', action = 'store_const', default = '',
@@ -276,121 +219,8 @@ add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
 add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 args = arg_parser.parse_args()
 
-libnet = [
-    'net/proxy.cc',
-    'net/virtio.cc',
-    'net/dpdk.cc',
-    'net/ip.cc',
-    'net/ethernet.cc',
-    'net/arp.cc',
-    'net/native-stack.cc',
-    'net/ip_checksum.cc',
-    'net/udp.cc',
-    'net/tcp.cc',
-    'net/dhcp.cc',
-    ]
-
-core = [
-    'core/reactor.cc',
-    'core/fstream.cc',
-    'core/posix.cc',
-    'core/memory.cc',
-    'core/resource.cc',
-    'core/scollectd.cc',
-    'core/app-template.cc',
-    'core/thread.cc',
-    'core/dpdk_rte.cc',
-    'util/conversions.cc',
-    'net/packet.cc',
-    'net/posix-stack.cc',
-    'net/net.cc',
-    'rpc/rpc.cc',
-    ]
-
-http = ['http/transformers.cc',
-        'http/json_path.cc',
-        'http/file_handler.cc',
-        'http/common.cc',
-        'http/routes.cc',
-        'json/json_elements.cc',
-        'json/formatter.cc',
-        'http/matcher.cc',
-        'http/mime_types.cc',
-        'http/httpd.cc',
-        'http/reply.cc',
-        'http/request_parser.rl',
-        'http/api_docs.cc',
-        ]
-
-api = ['api/api.cc',
-       'api/api-doc/storage_service.json',
-       'api/storage_service.cc',
-       'api/api-doc/commitlog.json',
-       'api/commitlog.cc',
-       'api/api-doc/gossiper.json',
-       'api/gossiper.cc',
-       'api/api-doc/failure_detector.json',
-       'api/failure_detector.cc',
-       'api/api-doc/column_family.json',
-       'api/column_family.cc',
-       'api/messaging_service.cc',
-       'api/api-doc/messaging_service.json',
-       'api/api-doc/storage_proxy.json',
-       'api/storage_proxy.cc',
-       'api/api-doc/cache_service.json',
-       'api/cache_service.cc',
-       'api/api-doc/collectd.json',
-       'api/collectd.cc',
-       'api/api-doc/endpoint_snitch_info.json',
-       'api/endpoint_snitch.cc',
-       'api/api-doc/compaction_manager.json',
-       'api/compaction_manager.cc',
-       'api/api-doc/hinted_handoff.json',
-       'api/hinted_handoff.cc',
-       ]
-
-boost_test_lib = [
-   'tests/test-utils.cc',
-   'tests/test_runner.cc',
-]
-
 defines = []
-libs = '-laio -lboost_program_options -lboost_system -lboost_filesystem -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt -lyaml-cpp -lboost_date_time'
-hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
-urchin_libs = '-llz4 -lsnappy -lz'
-
-libs = urchin_libs + ' ' + libs
-
-xen_used = False
-def have_xen():
-    source  = '#include <stdint.h>\n'
-    source += '#include <xen/xen.h>\n'
-    source += '#include <xen/sys/evtchn.h>\n'
-    source += '#include <xen/sys/gntdev.h>\n'
-    source += '#include <xen/sys/gntalloc.h>\n'
-
-    return try_compile(compiler = args.cxx, source = source)
-
-if apply_tristate(args.xen, test = have_xen,
-                  note = 'Note: xen-devel not installed.  No Xen support.',
-                  missing = 'Error: required package xen-devel not installed.'):
-    libs += ' -lxenstore'
-    defines.append("HAVE_XEN")
-    libnet += [ 'net/xenfront.cc' ]
-    core += [
-                'core/xen/xenstore.cc',
-                'core/xen/gntalloc.cc',
-                'core/xen/evtchn.cc',
-            ]
-    xen_used=True
-
-if xen_used and args.dpdk_target:
-    print("Error: only xen or dpdk can be used, not both.")
-    sys.exit(1)
-
-memcache_base = [
-    'apps/memcached/ascii.rl'
-] + libnet + core
+urchin_libs = '-llz4 -lsnappy -lz -lboost_thread -lcryptopp -lrt -lyaml-cpp -lboost_date_time'
 
 cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'Cassandra')
 
@@ -532,74 +362,56 @@ urchin_core = (['database.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
-                + core + libnet)
+                )
 
-urchin_tests_dependencies = urchin_core + http + api + [
+api = ['api/api.cc',
+       'api/api-doc/storage_service.json',
+       'api/storage_service.cc',
+       'api/api-doc/commitlog.json',
+       'api/commitlog.cc',
+       'api/api-doc/gossiper.json',
+       'api/gossiper.cc',
+       'api/api-doc/failure_detector.json',
+       'api/failure_detector.cc',
+       'api/api-doc/column_family.json',
+       'api/column_family.cc',
+       'api/messaging_service.cc',
+       'api/api-doc/messaging_service.json',
+       'api/api-doc/storage_proxy.json',
+       'api/storage_proxy.cc',
+       'api/api-doc/cache_service.json',
+       'api/cache_service.cc',
+       'api/api-doc/collectd.json',
+       'api/collectd.cc',
+       'api/api-doc/endpoint_snitch_info.json',
+       'api/endpoint_snitch.cc',
+       'api/api-doc/compaction_manager.json',
+       'api/compaction_manager.cc',
+       'api/api-doc/hinted_handoff.json',
+       'api/hinted_handoff.cc',
+       ]
+
+urchin_tests_dependencies = urchin_core + [
     'tests/urchin/cql_test_env.cc',
     'tests/urchin/cql_assertions.cc',
     'tests/urchin/result_set_assertions.cc',
 ]
 
+urchin_tests_seastar_deps = [
+    'seastar/tests/test-utils.cc',
+    'seastar/tests/test_runner.cc',
+]
+
 deps = {
-    'libseastar.a' : core + libnet,
-    'seastar.pc': [],
-    'seastar': ['main.cc'] + http + api + urchin_core,
-    'apps/httpd/httpd': ['apps/httpd/demo.json', 'apps/httpd/main.cc'] + http + libnet + core,
-    'apps/memcached/memcached': ['apps/memcached/memcache.cc'] + memcache_base,
-    'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base + boost_test_lib,
-    'tests/fileiotest': ['tests/fileiotest.cc'] + core + boost_test_lib,
-    'tests/directory_test': ['tests/directory_test.cc'] + core,
-    'tests/linecount': ['tests/linecount.cc'] + core,
-    'tests/echotest': ['tests/echotest.cc'] + core + libnet,
-    'tests/l3_test': ['tests/l3_test.cc'] + core + libnet,
-    'tests/ip_test': ['tests/ip_test.cc'] + core + libnet,
-    'tests/tcp_test': ['tests/tcp_test.cc'] + core + libnet,
-    'tests/timertest': ['tests/timertest.cc'] + core,
-    'tests/futures_test': ['tests/futures_test.cc'] + core + boost_test_lib,
-    'tests/foreign_ptr_test': ['tests/foreign_ptr_test.cc'] + core + boost_test_lib,
-    'tests/semaphore_test': ['tests/semaphore_test.cc'] + core + boost_test_lib,
-    'tests/smp_test': ['tests/smp_test.cc'] + core,
-    'tests/thread_test': ['tests/thread_test.cc'] + core + boost_test_lib,
-    'tests/thread_context_switch': ['tests/thread_context_switch.cc'] + core,
-    'tests/udp_server': ['tests/udp_server.cc'] + core + libnet,
-    'tests/udp_client': ['tests/udp_client.cc'] + core + libnet,
-    'tests/tcp_server': ['tests/tcp_server.cc'] + core + libnet,
-    'tests/tcp_client': ['tests/tcp_client.cc'] + core + libnet,
-    'apps/seawreck/seawreck': ['apps/seawreck/seawreck.cc', 'apps/seawreck/http_response_parser.rl'] + core + libnet,
-    'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
-    'tests/sstring_test': ['tests/sstring_test.cc'] + core,
-    'tests/httpd': ['tests/httpd.cc'] + http + core + boost_test_lib,
-    'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc', 'core/posix.cc'],
-    'tests/output_stream_test': ['tests/output_stream_test.cc'] + core + libnet + boost_test_lib,
-    'tests/udp_zero_copy': ['tests/udp_zero_copy.cc'] + core + libnet,
-    'tests/shared_ptr_test': ['tests/shared_ptr_test.cc'] + core,
-    'tests/slab_test': ['tests/slab_test.cc'] + core,
-    'tests/fstream_test': ['tests/fstream_test.cc'] + core + boost_test_lib,
-    'tests/distributed_test': ['tests/distributed_test.cc'] + core,
-    'tests/rpc': ['tests/rpc.cc'] + core + libnet,
-    'tests/urchin/gossiping_property_file_snitch_test': ['tests/urchin/gossiping_property_file_snitch_test.cc'] + urchin_core,
-    'tests/urchin/network_topology_strategy_test': ['tests/urchin/network_topology_strategy_test.cc'] + urchin_core,
+    'scylla': ['main.cc'] + urchin_core + api,
 }
 
 for t in urchin_tests:
     deps[t] = urchin_tests_dependencies + [t + '.cc']
+    if 'types_test' not in t and 'keys_test' not in t and 'partitioner_test' not in t and 'map_difference_test' not in t and 'frozen_mutation_test' not in t and 'perf_mutation' not in t and 'cartesian_product_test' not in t and 'perf_hash' not in t and 'perf_cql_parser' not in t and 'message' not in t and 'perf_simple_query' not in t and 'serialization' not in t and t != 'tests/urchin/gossip' and 'compound_test' not in t:
+        deps[t] += urchin_tests_seastar_deps
 
-deps['tests/urchin/mutation_test'] += boost_test_lib
-deps['tests/urchin/cql_query_test'] += boost_test_lib
-deps['tests/urchin/mutation_reader_test'] += boost_test_lib
-deps['tests/urchin/mutation_query_test'] += boost_test_lib
-deps['tests/urchin/commitlog_test'] += boost_test_lib
-deps['tests/urchin/config_test'] += boost_test_lib
-deps['tests/urchin/sstable_test'] += boost_test_lib + ['tests/urchin/sstable_datafile_test.cc']
-deps['tests/urchin/sstable_mutation_test'] += boost_test_lib
-deps['tests/urchin/hash_test'] += boost_test_lib
-deps['tests/urchin/serializer_test'] += boost_test_lib
-deps['tests/urchin/gossip_test'] += boost_test_lib
-deps['tests/urchin/gossiping_property_file_snitch_test'] += boost_test_lib
-deps['tests/urchin/network_topology_strategy_test'] += boost_test_lib
-deps['tests/urchin/row_cache_test'] += boost_test_lib
-deps['tests/urchin/query_processor_test'] += boost_test_lib
-deps['tests/urchin/batchlog_manager_test'] += boost_test_lib
+deps['tests/urchin/sstable_test'] += ['tests/urchin/sstable_datafile_test.cc']
 
 deps['tests/urchin/bytes_ostream_test'] = ['tests/urchin/bytes_ostream_test.cc']
 deps['tests/urchin/UUID_test'] = ['utils/UUID_gen.cc', 'tests/urchin/UUID_test.cc']
@@ -610,55 +422,6 @@ warnings = [
     '-Wno-maybe-uninitialized', # false positives on gcc 5
     ]
 
-# The "--with-osv=<path>" parameter is a shortcut for a bunch of other
-# settings:
-if args.with_osv:
-    args.so = True
-    args.hwloc = False
-    args.user_cflags = (args.user_cflags +
-        ' -DDEFAULT_ALLOCATOR -fvisibility=default -DHAVE_OSV -I' +
-        args.with_osv + ' -I' + args.with_osv + '/include -I' +
-        args.with_osv + '/arch/x64')
-
-if args.dpdk:
-    subprocess.check_call('make -C dpdk RTE_OUTPUT=$PWD/build/dpdk/ config T=x86_64-native-linuxapp-gcc',
-                          shell = True)
-    # adjust configutation to taste
-    dotconfig = 'build/dpdk/.config'
-    lines = open(dotconfig).readlines()
-    def update(lines, vars):
-        ret = []
-        for line in lines:
-            for var, val in vars.items():
-                if line.startswith(var + '='):
-                    line = var + '=' + val + '\n'
-            ret.append(line)
-        return ret
-    lines = update(lines, {'CONFIG_RTE_LIBRTE_PMD_BOND': 'n',
-                           'CONFIG_RTE_MBUF_SCATTER_GATHER': 'n',
-                           'CONFIG_RTE_LIBRTE_IP_FRAG': 'n',
-                           'CONFIG_RTE_APP_TEST': 'n',
-                           'CONFIG_RTE_TEST_PMD': 'n',
-                           'CONFIG_RTE_MBUF_REFCNT_ATOMIC': 'n',
-                           'CONFIG_RTE_MAX_MEMSEG': '8192',
-                           })
-    open(dotconfig, 'w').writelines(lines)
-    args.dpdk_target = 'build/dpdk'
-    
-if args.dpdk_target:
-    args.user_cflags = (args.user_cflags +
-        ' -DHAVE_DPDK -I' + args.dpdk_target + '/include ' +
-        dpdk_cflags(args.dpdk_target) +
-        ' -Wno-error=literal-suffix -Wno-literal-suffix -Wno-invalid-offsetof')
-    libs += (' -L' + args.dpdk_target + '/lib ')
-    if args.with_osv:
-        libs += '-lintel_dpdk -lrt -lm -ldl'
-    else:
-        libs += '-Wl,--whole-archive -lrte_pmd_vmxnet3_uio -lrte_pmd_i40e -lrte_pmd_ixgbe -lrte_pmd_e1000 -lrte_pmd_ring -Wl,--no-whole-archive -lrte_distributor -lrte_pipeline -lrte_table -lrte_port -lrte_timer -lrte_hash -lrte_lpm -lrte_power -lrte_acl -lrte_meter -lrte_sched -lrte_kvargs -lrte_mbuf -lethdev -lrte_eal -lrte_malloc -lrte_mempool -lrte_ring -lrte_cmdline -lrte_cfgfile -lrt -lm -ldl'
-
-args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
-libs += " " + pkg_config("--libs", "jsoncpp")
-
 warnings = [w
             for w in warnings
             if warning_supported(warning = w, compiler = args.cxx)]
@@ -666,16 +429,6 @@ warnings = [w
 warnings = ' '.join(warnings)
 
 dbgflag = debug_flag(args.cxx) if args.debuginfo else ''
-
-def have_hwloc():
-    return try_compile(compiler = args.cxx, source = '#include <hwloc.h>\n#include <numa.h>')
-
-if apply_tristate(args.hwloc, test = have_hwloc,
-                  note = 'Note: hwloc-devel/numactl-devel not installed.  No NUMA support.',
-                  missing = 'Error: required packages hwloc-devel/numactl-devel not installed.'):
-    libs += ' ' + hwloc_libs
-    defines.append('HAVE_HWLOC')
-    defines.append('HAVE_NUMA')
 
 if args.so:
     args.pie = '-shared'
@@ -697,13 +450,43 @@ link_pool_depth = max(int(total_memory / 7e9), 1)
 build_modes = modes if args.mode == 'all' else [args.mode]
 build_artifacts = all_artifacts if not args.artifacts else args.artifacts
 
-dpdk_sources = []
-if args.dpdk:
-    for root, dirs, files in os.walk('dpdk'):
-        dpdk_sources += [os.path.join(root, file)
-                         for file in files
-                         if file.endswith('.h') or file.endswith('.c')]
-dpdk_sources = ' '.join(dpdk_sources)
+status = subprocess.call('./configure.py', cwd = 'seastar')
+
+if status != 0:
+    print('Seastar configuration failed')
+    sys.exit(1)
+
+
+pc = { mode : 'build/{}/seastar.pc'.format(mode) for mode in build_modes }
+for ninja in ['ninja', 'ninja-build', 'true']:
+    try:
+        status = subprocess.call([ninja] + list(pc.values()), cwd = 'seastar')
+        if status == 0:
+            break
+    except OSError as e:
+        pass
+if ninja == 'true':
+    print('Unable to create {}'.format(pc))
+    sys.exit(1)
+
+for mode in build_modes:
+    cfg =  dict([line.strip().split(': ', 1)
+                 for line in open('seastar/' + pc[mode])
+                 if ': ' in line])
+    modes[mode]['seastar_cflags'] = cfg['Cflags']
+    modes[mode]['seastar_libs'] = cfg['Libs']
+
+def gen_seastar_deps():
+    for root, dir, files in os.walk('seastar'):
+        for f in files:
+            if f.endswith('.cc') or f.endswith('.hh'):
+                yield root + '/' + f
+
+seastar_deps = ' '.join(gen_seastar_deps())
+
+args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
+libs = "-lyaml-cpp -llz4 -lz -lsnappy " + pkg_config("--libs", "jsoncpp") + ' -lboost_filesystem'
+user_cflags = args.user_cflags
 
 outdir = 'build'
 buildfile = 'build.ninja'
@@ -720,9 +503,8 @@ with open(buildfile, 'w') as f:
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        # we disable _FORTIFY_SOURCE because it generates false positives with longjmp() (core/thread.cc)
-        cxxflags = -std=gnu++1y {dbgflag} {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. -U_FORTIFY_SOURCE {user_cflags} {warnings} {defines}
-        ldflags = {dbgflag} -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags}
+        cxxflags = {user_cflags} {warnings} {defines}
+        ldflags = {user_ldflags}
         libs = {libs}
         pool link_pool
             depth = {link_pool_depth}
@@ -733,8 +515,11 @@ with open(buildfile, 'w') as f:
             command = echo -e $text > $out
             description = GEN $out
         rule swagger
-            command = json/json2code.py -f $in -o $out
+            command = seastar/json/json2code.py -f $in -o $out
             description = SWAGGER $out
+        rule ninja
+            command = {ninja} -C $subdir $target
+            description = NINJA $out
         ''').format(**globals()))
     if args.dpdk:
         f.write(textwrap.dedent('''\
@@ -744,19 +529,14 @@ with open(buildfile, 'w') as f:
             ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
-        if modeval['sanitize'] and not do_sanitize:
-            print('Note: --static disables debug mode sanitizers')
-            modeval['sanitize'] = ''
-            modeval['sanitize_libs'] = ''
         f.write(textwrap.dedent('''\
-            cxxflags_{mode} = {sanitize} {opt} -I $builddir/{mode}/gen
-            libs_{mode} = {libs} {sanitize_libs}
+            cxxflags_{mode} = -I. -I $builddir/{mode}/gen -I seastar
             rule cxx.{mode}
-              command = $cxx -MMD -MT $out -MF $out.d $cxxflags $cxxflags_{mode} -c -o $out $in
+              command = $cxx -MMD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} -c -o $out $in
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
-              command = $cxx  $cxxflags_{mode} $ldflags -o $out $in $libs $libs_{mode}
+              command = $cxx  $cxxflags_{mode} $ldflags {seastar_libs} -o $out $in $libs $libs_{mode}
               description = LINK $out
               pool = link_pool
             rule link_stripped.{mode}
@@ -807,18 +587,8 @@ with open(buildfile, 'w') as f:
             elif binary.endswith('.a'):
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             else:
-                if binary.startswith('tests/'):
-                    # Our code's debugging information is huge, and multiplied
-                    # by many tests yields ridiculous amounts of disk space.
-                    # So we strip the tests by default; The user can very
-                    # quickly re-link the test unstripped by adding a "_g"
-                    # to the test name, e.g., "ninja build/release/testname_g"
-                    f.write('build $builddir/{}/{}: link_stripped.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
-                    if has_thrift:
-                        f.write('   libs =  -lthrift -lboost_system $libs\n')
-                    f.write('build $builddir/{}/{}_g: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
-                else:
-                    f.write('build $builddir/{}/{}: link.{} {} | {}\n'.format(mode, binary, mode, str.join(' ', objs), dpdk_deps))
+                f.write('build $builddir/{}/{}: link.{} {} {}\n'.format(mode, binary, mode, str.join(' ', objs),
+                                                    'seastar/build/{}/libseastar.a'.format(mode)))
                 if has_thrift:
                     f.write('   libs =  -lthrift -lboost_system $libs\n')
             for src in srcs:
@@ -865,6 +635,9 @@ with open(buildfile, 'w') as f:
             for cc in grammar.sources('$builddir/{}/gen'.format(mode)):
                 obj = cc.replace('.cpp', '.o')
                 f.write('build {}: cxx.{} {}\n'.format(obj, mode, cc))
+        f.write('build seastar/build/{}/libseastar.a: ninja {}\n'.format(mode, seastar_deps))
+        f.write('  subdir = seastar\n')
+        f.write('  target = build/{}/libseastar.a\n'.format(mode))
     f.write(textwrap.dedent('''\
         rule configure
           command = python3 configure.py $configure_args
