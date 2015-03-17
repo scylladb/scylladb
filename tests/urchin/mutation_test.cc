@@ -39,6 +39,40 @@ BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
     BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(3)));
 }
 
+BOOST_AUTO_TEST_CASE(test_multi_level_row_tombstones) {
+    auto s = make_lw_shared(schema(some_keyspace, some_column_family,
+        {{"p1", utf8_type}},
+        {{"c1", int32_type}, {"c2", int32_type}, {"c3", int32_type}},
+        {{"r1", int32_type}}, {}, utf8_type));
+
+    auto ttl = gc_clock::now() + std::chrono::seconds(1);
+
+    mutation m(partition_key::one::from_exploded(*s, {to_bytes("key1")}), s);
+
+    auto make_prefix = [s] (const std::vector<boost::any>& v) {
+        return clustering_key::prefix::one::from_deeply_exploded(*s, v);
+    };
+    auto make_key = [s] (const std::vector<boost::any>& v) {
+        return clustering_key::one::from_deeply_exploded(*s, v);
+    };
+
+    m.p.apply_row_tombstone(s, make_prefix({1, 2}), tombstone(9, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 2, 3})), tombstone(9, ttl));
+
+    m.p.apply_row_tombstone(s, make_prefix({1, 3}), tombstone(8, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 2, 0})), tombstone(9, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 3, 0})), tombstone(8, ttl));
+
+    m.p.apply_row_tombstone(s, make_prefix({1}), tombstone(11, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 2, 0})), tombstone(11, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 3, 0})), tombstone(11, ttl));
+
+    m.p.apply_row_tombstone(s, make_prefix({1, 4}), tombstone(6, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 2, 0})), tombstone(11, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 3, 0})), tombstone(11, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 4, 0})), tombstone(11, ttl));
+}
+
 BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
     auto s = make_lw_shared(schema(some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}, {"c2", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
