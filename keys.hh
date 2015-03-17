@@ -104,11 +104,58 @@ public:
 };
 
 template <typename TopLevel, typename PrefixTopLevel>
+class prefix_view_on_full_tuple {
+public:
+    using iterator = typename tuple_type<false>::iterator;
+private:
+    bytes_view _b;
+    unsigned _prefix_len;
+    iterator _begin;
+    iterator _end;
+public:
+    prefix_view_on_full_tuple(const schema& s, bytes_view b, unsigned prefix_len)
+        : _b(b)
+        , _prefix_len(prefix_len)
+        , _begin(TopLevel::tuple_type(s)->begin(_b))
+        , _end(_begin)
+    {
+        std::advance(_end, prefix_len);
+    }
+
+    iterator begin() const { return _begin; }
+    iterator end() const { return _end; }
+
+    struct less_compare_with_prefix {
+        shared_ptr<tuple_type<true>> prefix_type;
+
+        less_compare_with_prefix(const schema& s)
+            : prefix_type(PrefixTopLevel::tuple_type(s))
+        { }
+
+        bool operator()(const prefix_view_on_full_tuple& k1, const PrefixTopLevel& k2) const {
+            return lexicographical_compare(prefix_type->types().begin(),
+                k1.begin(), k1.end(),
+                prefix_type->begin(k2), prefix_type->end(k2),
+                optional_less_compare);
+        }
+
+        bool operator()(const PrefixTopLevel& k1, const prefix_view_on_full_tuple& k2) const {
+            return lexicographical_compare(prefix_type->types().begin(),
+                prefix_type->begin(k1), prefix_type->end(k1),
+                k2.begin(), k2.end(),
+                optional_less_compare);
+        }
+    };
+};
+
+template <typename TopLevel, typename PrefixTopLevel>
 class prefixable_full_tuple : public tuple_wrapper<TopLevel> {
     using base = tuple_wrapper<TopLevel>;
 protected:
     prefixable_full_tuple(bytes&& b) : base(std::move(b)) {}
 public:
+    using prefix_view_type = prefix_view_on_full_tuple<TopLevel, PrefixTopLevel>;
+
     bool is_prefixed_by(const schema& s, const PrefixTopLevel& prefix) const {
         auto t = base::type(s);
         auto prefix_type = PrefixTopLevel::tuple_type(s);
@@ -141,6 +188,10 @@ public:
                 optional_less_compare);
         }
     };
+
+    auto prefix_view(const schema& s, unsigned prefix_len) const {
+        return prefix_view_type(s, *this, prefix_len);
+    }
 };
 
 template <typename TopLevel, typename FullTopLevel>

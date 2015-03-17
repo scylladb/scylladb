@@ -162,6 +162,8 @@ private:
     tombstone _tombstone;
     row _static_row;
     boost::intrusive::set<rows_entry, boost::intrusive::compare<rows_entry::compare>> _rows;
+    // Contains only strict prefixes so that we don't have to lookup full keys
+    // in both _row_tombstones and _rows.
     boost::intrusive::set<row_tombstones_entry, boost::intrusive::compare<row_tombstones_entry::compare>> _row_tombstones;
 public:
     mutation_partition(schema_ptr s)
@@ -173,6 +175,7 @@ public:
     void apply(tombstone t) { _tombstone.apply(t); }
     void apply_delete(schema_ptr schema, const clustering_prefix& prefix, tombstone t);
     void apply_delete(schema_ptr schema, clustering_key::one&& key, tombstone t);
+    // prefix must not be full
     void apply_row_tombstone(schema_ptr schema, clustering_key::prefix::one prefix, tombstone t);
     void apply(schema_ptr schema, const mutation_partition& p);
     row& static_row() { return _static_row; }

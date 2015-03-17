@@ -421,34 +421,18 @@ tombstone
 mutation_partition::tombstone_for_row(schema_ptr schema, const clustering_key::one& key) {
     tombstone t = _tombstone;
 
-    // FIXME: Optimize this
-    for (auto&& e : _row_tombstones) {
-        if (key.is_prefixed_by(*schema, e.prefix())) {
-            t.apply(e.t());
+    auto c = row_tombstones_entry::key_comparator(
+        clustering_key::one::prefix_view_type::less_compare_with_prefix(*schema));
+
+    // _row_tombstones contains only strict prefixes
+    for (unsigned prefix_len = 1; prefix_len < schema->clustering_key_size(); ++prefix_len) {
+        auto i = _row_tombstones.find(key.prefix_view(*schema, prefix_len), c);
+        if (i != _row_tombstones.end()) {
+            t.apply(i->t());
         }
     }
 
-    auto j = _rows.find(key, rows_entry::compare_key(*schema));
-    if (j != _rows.end()) {
-        t.apply(j->row().t);
-    }
-
-    return t;
-}
-
-tombstone
-mutation_partition::tombstone_for_row(schema_ptr schema, const clustering_key::prefix::one& key) {
-    assert(key.is_full(*schema));
-    tombstone t = _tombstone;
-
-    // FIXME: Optimize this
-    for (auto&& e : _row_tombstones) {
-        if (key.is_prefixed_by(*schema, e.prefix())) {
-            t.apply(e.t());
-        }
-    }
-
-    auto j = _rows.find(key, rows_entry::compare_prefix(*schema));
+    auto j = _rows.find(key, rows_entry::compare(*schema));
     if (j != _rows.end()) {
         t.apply(j->row().t);
     }
@@ -458,6 +442,7 @@ mutation_partition::tombstone_for_row(schema_ptr schema, const clustering_key::p
 
 void
 mutation_partition::apply_row_tombstone(schema_ptr schema, clustering_key::prefix::one prefix, tombstone t) {
+    assert(!prefix.is_full(*schema));
     auto i = _row_tombstones.lower_bound(prefix, row_tombstones_entry::compare(*schema));
     if (i == _row_tombstones.end() || !prefix.equal(*schema, i->prefix())) {
         auto e = new row_tombstones_entry(std::move(prefix), t);
