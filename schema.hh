@@ -96,7 +96,6 @@ public:
     shared_ptr<tuple_type<>> partition_key_type;
     shared_ptr<tuple_type<>> clustering_key_type;
     shared_ptr<tuple_prefix> clustering_key_prefix_type;
-    shared_ptr<tuple_prefix> partition_key_prefix_type;
     data_type regular_column_name_type;
     thrift_schema thrift;
 public:

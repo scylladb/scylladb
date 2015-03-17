@@ -57,7 +57,6 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_k
         , partition_key_type(::make_shared<tuple_type<>>(get_column_types(partition_key)))
         , clustering_key_type(::make_shared<tuple_type<>>(get_column_types(clustering_key)))
         , clustering_key_prefix_type(::make_shared(clustering_key_type->as_prefix()))
-        , partition_key_prefix_type(::make_shared(partition_key_type->as_prefix()))
         , regular_column_name_type(regular_column_name_type)
 {
     if (partition_key.size() == 1) {
