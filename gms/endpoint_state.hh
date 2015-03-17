@@ -43,6 +43,12 @@ private:
     db_clock::time_point _update_timestamp;
     bool _is_alive;
 public:
+    endpoint_state()
+        : _heart_beat_state(0)
+        , _update_timestamp(db_clock::now())
+        , _is_alive(true) {
+    }
+
     endpoint_state(heart_beat_state initial_hb_state)
         : _heart_beat_state(initial_hb_state)
         , _update_timestamp(db_clock::now())
