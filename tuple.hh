@@ -79,7 +79,7 @@ public:
     bytes decompose_value(const value_type& values) {
         return ::serialize_value(*this, values);
     }
-    class component_iterator : public std::iterator<std::forward_iterator_tag, std::experimental::optional<bytes_view>> {
+    class iterator : public std::iterator<std::forward_iterator_tag, std::experimental::optional<bytes_view>> {
     private:
         ssize_t _types_left;
         bytes_view _v;
@@ -115,27 +115,27 @@ public:
         }
     public:
         struct end_iterator_tag {};
-        component_iterator(const tuple_type& t, const bytes_view& v) : _types_left(t._types.size()), _v(v) {
+        iterator(const tuple_type& t, const bytes_view& v) : _types_left(t._types.size()), _v(v) {
             read_current();
         }
-        component_iterator(end_iterator_tag, const bytes_view& v) : _v(nullptr, 0) {}
-        component_iterator& operator++() {
+        iterator(end_iterator_tag, const bytes_view& v) : _v(nullptr, 0) {}
+        iterator& operator++() {
             --_types_left;
             read_current();
             return *this;
         }
         const value_type& operator*() const { return _current; }
-        bool operator!=(const component_iterator& i) const { return _v.begin() != i._v.begin(); }
-        bool operator==(const component_iterator& i) const { return _v.begin() == i._v.begin(); }
+        bool operator!=(const iterator& i) const { return _v.begin() != i._v.begin(); }
+        bool operator==(const iterator& i) const { return _v.begin() == i._v.begin(); }
     };
-    component_iterator begin(const bytes_view& v) const {
-        return component_iterator(*this, v);
+    iterator begin(const bytes_view& v) const {
+        return iterator(*this, v);
     }
-    component_iterator end(const bytes_view& v) const {
-        return component_iterator(typename component_iterator::end_iterator_tag(), v);
+    iterator end(const bytes_view& v) const {
+        return iterator(typename iterator::end_iterator_tag(), v);
     }
     auto iter_items(const bytes_view& v) {
-        return boost::iterator_range<component_iterator>(begin(v), end(v));
+        return boost::iterator_range<iterator>(begin(v), end(v));
     }
     value_type deserialize_value(bytes_view v) {
         std::vector<bytes_opt> result;
