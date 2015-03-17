@@ -25,6 +25,7 @@
 #pragma once
 
 #include <experimental/string_view>
+#include <unordered_map>
 
 #include "core/shared_ptr.hh"
 #include "exceptions/exceptions.hh"
@@ -48,7 +49,9 @@ public:
     public static final SemanticVersion CQL_VERSION = new SemanticVersion("3.2.0");
 
     public static final QueryProcessor instance = new QueryProcessor();
-
+#endif
+private:
+#if 0
     private static final Logger logger = LoggerFactory.getLogger(QueryProcessor.class);
     private static final MemoryMeter meter = new MemoryMeter().withGuessing(MemoryMeter.Guess.FALLBACK_BEST).ignoreKnownSingletons();
     private static final long MAX_CACHE_PREPARED_MEMORY = Runtime.getRuntime().maxMemory() / 256;
@@ -70,8 +73,10 @@ public:
             return Ints.checkedCast(measure(key) + measure(value.statement) + measure(value.boundNames));
         }
     };
+#endif
 
-    private static final ConcurrentLinkedHashMap<MD5Digest, ParsedStatement.Prepared> preparedStatements;
+    std::unordered_map<bytes, ::shared_ptr<statements::parsed_statement::prepared>> _prepared_statements;
+#if 0
     private static final ConcurrentLinkedHashMap<Integer, ParsedStatement.Prepared> thriftPreparedStatements;
 
     // A map for prepared statements used internally (which we don't want to mix with user statement, in particular we don't
@@ -160,12 +165,17 @@ public:
     {
         MigrationManager.instance.register(new MigrationSubscriber());
     }
-
-    public ParsedStatement.Prepared getPrepared(MD5Digest id)
-    {
-        return preparedStatements.get(id);
+#endif
+public:
+    ::shared_ptr<statements::parsed_statement::prepared> get_prepared(bytes id) {
+        auto it = _prepared_statements.find(id);
+        if (it == _prepared_statements.end()) {
+            return ::shared_ptr<statements::parsed_statement::prepared>{};
+        }
+        return it->second;
     }
 
+#if 0
     public ParsedStatement.Prepared getPreparedForThrift(Integer id)
     {
         return thriftPreparedStatements.get(id);
@@ -356,84 +366,31 @@ public:
             throw new AssertionError(e);
         }
     }
+#endif
 
-    public ResultMessage.Prepared prepare(String queryString, QueryState queryState)
-    throws RequestValidationException
-    {
-        ClientState cState = queryState.getClientState();
-        return prepare(queryString, cState, cState instanceof ThriftClientState);
-    }
+    future<::shared_ptr<transport::messages::result_message::prepared>>
+    prepare(const std::experimental::string_view& query_string, service::query_state& query_state);
 
-    public static ResultMessage.Prepared prepare(String queryString, ClientState clientState, boolean forThrift)
-    throws RequestValidationException
-    {
-        ResultMessage.Prepared existing = getStoredPreparedStatement(queryString, clientState.getRawKeyspace(), forThrift);
-        if (existing != null)
-            return existing;
+    future<::shared_ptr<transport::messages::result_message::prepared>>
+    prepare(const std::experimental::string_view& query_string, service::client_state& client_state, bool for_thrift);
 
-        ParsedStatement.Prepared prepared = getStatement(queryString, clientState);
-        int boundTerms = prepared.statement.getBoundTerms();
-        if (boundTerms > FBUtilities.MAX_UNSIGNED_SHORT)
-            throw new InvalidRequestException(String.format("Too many markers(?). %d markers exceed the allowed maximum of %d", boundTerms, FBUtilities.MAX_UNSIGNED_SHORT));
-        assert boundTerms == prepared.boundNames.size();
+    static bytes compute_id(const std::experimental::string_view& query_string, const sstring& keyspace);
 
-        return storePreparedStatement(queryString, clientState.getRawKeyspace(), prepared, forThrift);
-    }
-
-    private static MD5Digest computeId(String queryString, String keyspace)
-    {
-        String toHash = keyspace == null ? queryString : keyspace + queryString;
-        return MD5Digest.compute(toHash);
-    }
-
+#if 0
     private static Integer computeThriftId(String queryString, String keyspace)
     {
         String toHash = keyspace == null ? queryString : keyspace + queryString;
         return toHash.hashCode();
     }
+#endif
+private:
+    ::shared_ptr<transport::messages::result_message::prepared>
+    get_stored_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, bool for_thrift);
 
-    private static ResultMessage.Prepared getStoredPreparedStatement(String queryString, String keyspace, boolean forThrift)
-    throws InvalidRequestException
-    {
-        if (forThrift)
-        {
-            Integer thriftStatementId = computeThriftId(queryString, keyspace);
-            ParsedStatement.Prepared existing = thriftPreparedStatements.get(thriftStatementId);
-            return existing == null ? null : ResultMessage.Prepared.forThrift(thriftStatementId, existing.boundNames);
-        }
-        else
-        {
-            MD5Digest statementId = computeId(queryString, keyspace);
-            ParsedStatement.Prepared existing = preparedStatements.get(statementId);
-            return existing == null ? null : new ResultMessage.Prepared(statementId, existing);
-        }
-    }
+    future<::shared_ptr<transport::messages::result_message::prepared>>
+    store_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, ::shared_ptr<statements::parsed_statement::prepared> prepared, bool for_thrift);
 
-    private static ResultMessage.Prepared storePreparedStatement(String queryString, String keyspace, ParsedStatement.Prepared prepared, boolean forThrift)
-    throws InvalidRequestException
-    {
-        // Concatenate the current keyspace so we don't mix prepared statements between keyspace (#5352).
-        // (if the keyspace is null, queryString has to have a fully-qualified keyspace so it's fine.
-        long statementSize = measure(prepared.statement);
-        // don't execute the statement if it's bigger than the allowed threshold
-        if (statementSize > MAX_CACHE_PREPARED_MEMORY)
-            throw new InvalidRequestException(String.format("Prepared statement of size %d bytes is larger than allowed maximum of %d bytes.",
-                                                            statementSize,
-                                                            MAX_CACHE_PREPARED_MEMORY));
-        if (forThrift)
-        {
-            Integer statementId = computeThriftId(queryString, keyspace);
-            thriftPreparedStatements.put(statementId, prepared);
-            return ResultMessage.Prepared.forThrift(statementId, prepared.boundNames);
-        }
-        else
-        {
-            MD5Digest statementId = computeId(queryString, keyspace);
-            preparedStatements.put(statementId, prepared);
-            return new ResultMessage.Prepared(statementId, prepared);
-        }
-    }
-
+#if 0
     public ResultMessage processPrepared(CQLStatement statement, QueryState queryState, QueryOptions options)
     throws RequestExecutionException, RequestValidationException
     {

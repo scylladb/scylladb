@@ -24,6 +24,7 @@ public:
     //
     class void_message;
     class set_keyspace;
+    class prepared;
     class schema_change;
     class rows;
 };
@@ -32,6 +33,7 @@ class result_message::visitor {
 public:
     virtual void visit(const result_message::void_message&) = 0;
     virtual void visit(const result_message::set_keyspace&) = 0;
+    virtual void visit(const result_message::prepared&) = 0;
     virtual void visit(const result_message::schema_change&) = 0;
     virtual void visit(const result_message::rows&) = 0;
 };
@@ -53,6 +55,29 @@ public:
 
     const sstring& get_keyspace() const {
         return _keyspace;
+    }
+
+    virtual void accept(result_message::visitor& v) override {
+        v.visit(*this);
+    }
+};
+
+class result_message::prepared : public result_message {
+private:
+    bytes _id;
+   ::shared_ptr<cql3::statements::parsed_statement::prepared> _prepared;
+public:
+    prepared(const bytes& id, ::shared_ptr<cql3::statements::parsed_statement::prepared> prepared)
+        : _id{id}
+        , _prepared{prepared}
+    { }
+
+    const bytes& get_id() const {
+        return _id;
+    }
+
+    const ::shared_ptr<cql3::statements::parsed_statement::prepared>& get_prepared() const {
+        return _prepared;
     }
 
     virtual void accept(result_message::visitor& v) override {

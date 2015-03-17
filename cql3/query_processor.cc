@@ -26,6 +26,11 @@
 #include "cql3/CqlParser.hpp"
 #include "cql3/error_collector.hh"
 
+#include "transport/messages/result_message.hh"
+
+#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
+#include <cryptopp/md5.h>
+
 namespace cql3 {
 
 using namespace statements;
@@ -70,6 +75,97 @@ query_processor::process_statement(::shared_ptr<cql_statement> statement, servic
             return make_ready_future<::shared_ptr<result_message>>(
                 ::make_shared<result_message::void_message>());
         });
+}
+
+future<::shared_ptr<transport::messages::result_message::prepared>>
+query_processor::prepare(const std::experimental::string_view& query_string, service::query_state& query_state)
+{
+    auto& client_state = query_state.get_client_state();
+    return prepare(query_string, client_state, client_state.is_thrift());
+}
+
+future<::shared_ptr<transport::messages::result_message::prepared>>
+query_processor::prepare(const std::experimental::string_view& query_string, service::client_state& client_state, bool for_thrift)
+{
+    auto existing = get_stored_prepared_statement(query_string, client_state.get_raw_keyspace(), for_thrift);
+    if (existing) {
+        return make_ready_future<::shared_ptr<transport::messages::result_message::prepared>>(existing);
+    }
+    auto prepared = get_statement(query_string, client_state);
+    auto bound_terms = prepared->statement->get_bound_terms();
+    if (bound_terms > std::numeric_limits<uint16_t>::max()) {
+        throw exceptions::invalid_request_exception(sprint("Too many markers(?). %d markers exceed the allowed maximum of %d", bound_terms, std::numeric_limits<uint16_t>::max()));
+    }
+    assert(bound_terms == prepared->bound_names.size());
+    return store_prepared_statement(query_string, client_state.get_raw_keyspace(), std::move(prepared), for_thrift);
+}
+
+::shared_ptr<transport::messages::result_message::prepared>
+query_processor::get_stored_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, bool for_thrift)
+{
+    if (for_thrift) {
+        throw std::runtime_error("not implemented");
+#if 0
+        Integer thriftStatementId = computeThriftId(queryString, keyspace);
+        ParsedStatement.Prepared existing = thriftPreparedStatements.get(thriftStatementId);
+        return existing == null ? null : ResultMessage.Prepared.forThrift(thriftStatementId, existing.boundNames);
+#endif
+    } else {
+        auto statement_id = compute_id(query_string, keyspace);
+        auto it = _prepared_statements.find(statement_id);
+        if (it == _prepared_statements.end()) {
+            return ::shared_ptr<result_message::prepared>();
+        }
+        return ::make_shared<result_message::prepared>(statement_id, it->second);
+    }
+}
+
+future<::shared_ptr<transport::messages::result_message::prepared>>
+query_processor::store_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace,
+        ::shared_ptr<statements::parsed_statement::prepared> prepared, bool for_thrift)
+{
+#if 0
+    // Concatenate the current keyspace so we don't mix prepared statements between keyspace (#5352).
+    // (if the keyspace is null, queryString has to have a fully-qualified keyspace so it's fine.
+    long statementSize = measure(prepared.statement);
+    // don't execute the statement if it's bigger than the allowed threshold
+    if (statementSize > MAX_CACHE_PREPARED_MEMORY)
+        throw new InvalidRequestException(String.format("Prepared statement of size %d bytes is larger than allowed maximum of %d bytes.",
+                                                        statementSize,
+                                                        MAX_CACHE_PREPARED_MEMORY));
+#endif
+    if (for_thrift) {
+        throw std::runtime_error("not implemented");
+#if 0
+        Integer statementId = computeThriftId(queryString, keyspace);
+        thriftPreparedStatements.put(statementId, prepared);
+        return ResultMessage.Prepared.forThrift(statementId, prepared.boundNames);
+#endif
+    } else {
+        auto statement_id = compute_id(query_string, keyspace);
+        _prepared_statements.emplace(statement_id, prepared);
+        auto msg = ::make_shared<result_message::prepared>(statement_id, prepared);
+        return make_ready_future<::shared_ptr<result_message::prepared>>(std::move(msg));
+    }
+}
+
+static bytes md5_calculate(const std::experimental::string_view& s)
+{
+    constexpr size_t size = CryptoPP::Weak1::MD5::DIGESTSIZE;
+    CryptoPP::Weak::MD5 hash;
+    unsigned char digest[size];
+    hash.CalculateDigest(digest, reinterpret_cast<const unsigned char*>(s.data()), s.size());
+    return std::move(bytes{reinterpret_cast<const char*>(digest), size});
+}
+
+bytes query_processor::compute_id(const std::experimental::string_view& query_string, const sstring& keyspace)
+{
+    sstring to_hash;
+    if (!keyspace.empty()) {
+        to_hash += keyspace;
+    }
+    to_hash += query_string.to_string();
+    return md5_calculate(to_hash);
 }
 
 ::shared_ptr<parsed_statement::prepared>

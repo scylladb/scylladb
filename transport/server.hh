@@ -14,10 +14,10 @@ class database;
 
 class cql_server {
     std::vector<server_socket> _listeners;
-    service::storage_proxy _proxy;
-    cql3::query_processor _query_processor;
+    service::storage_proxy& _proxy;
+    distributed<cql3::query_processor>& _query_processor;
 public:
-    cql_server(distributed<database>& db);
+    cql_server(service::storage_proxy& proxy, distributed<cql3::query_processor>& qp);
     future<> listen(ipv4_addr addr);
     void do_accepts(int which);
 private:

@@ -103,6 +103,10 @@ public:
 
     client_state(internal_tag) : _is_internal(true) {}
 
+    virtual bool is_thrift() const {
+        return false;
+    }
+
     /**
      * @return a ClientState object for internal C* calls (not limited by any kind of auth).
      */
@@ -155,12 +159,11 @@ public:
     {
         return remoteAddress;
     }
-
-    public String getRawKeyspace()
-    {
-        return keyspace;
-    }
 #endif
+
+    const sstring& get_raw_keyspace() const {
+        return _keyspace;
+    }
 
 public:
     void set_keyspace(sstring keyspace) {

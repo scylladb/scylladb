@@ -5,6 +5,7 @@
 #include "server.hh"
 
 #include <boost/bimap/unordered_set_of.hpp>
+#include <boost/range/irange.hpp>
 #include <boost/bimap.hpp>
 #include <boost/assign.hpp>
 
@@ -197,6 +198,7 @@ private:
     int16_t read_short(temporary_buffer<char>& buf);
     uint16_t read_unsigned_short(temporary_buffer<char>& buf);
     sstring read_string(temporary_buffer<char>& buf);
+    bytes read_short_bytes(temporary_buffer<char>& buf);
     bytes_opt read_value(temporary_buffer<char>& buf);
     sstring_view read_long_string_view(temporary_buffer<char>& buf);
     void read_name_and_value_list(temporary_buffer<char>& buf, std::vector<sstring>& names, std::vector<bytes_opt>& values);
@@ -240,9 +242,9 @@ private:
     sstring make_frame(uint8_t version, size_t length);
 };
 
-cql_server::cql_server(distributed<database>& db)
-    : _proxy(db)
-    , _query_processor(_proxy, db)
+cql_server::cql_server(service::storage_proxy& proxy, distributed<cql3::query_processor>& qp)
+    : _proxy(proxy)
+    , _query_processor(qp)
 {
 }
 
@@ -426,21 +428,53 @@ future<> cql_server::connection::process_query(uint16_t stream, temporary_buffer
     auto query = read_long_string_view(buf);
     auto& q_state = get_query_state(stream);
     q_state.options = read_options(buf);
-    return _server._query_processor.process(query, q_state.query_state, *q_state.options).then([this, stream] (auto msg) {
+    return _server._query_processor.local().process(query, q_state.query_state, *q_state.options).then([this, stream] (auto msg) {
          return this->write_result(stream, msg);
     });
 }
 
 future<> cql_server::connection::process_prepare(uint16_t stream, temporary_buffer<char> buf)
 {
-    assert(0);
-    return make_ready_future<>();
+    auto query = read_long_string_view(buf).to_string();
+    auto cpu_id = engine().cpu_id();
+    auto cpus = boost::irange(0u, smp::count);
+    return parallel_for_each(cpus.begin(), cpus.end(), [this, query, cpu_id, stream] (unsigned int c) mutable {
+        if (c != cpu_id) {
+            return smp::submit_to(c, [this, query, stream] () mutable {
+                auto& q_state = get_query_state(stream); // FIXME: is this safe?
+                _server._query_processor.local().prepare(query, q_state.query_state);
+                // FIXME: error handling
+            });
+        } else {
+            return make_ready_future<>();
+        }
+    }).then([this, query, stream] {
+        auto& q_state = get_query_state(stream);
+        return _server._query_processor.local().prepare(query, q_state.query_state).then([this, stream] (auto msg) {
+             return this->write_result(stream, msg);
+        });
+    });
 }
 
 future<> cql_server::connection::process_execute(uint16_t stream, temporary_buffer<char> buf)
 {
-    assert(0);
-    return make_ready_future<>();
+    auto id = read_short_bytes(buf);
+    auto prepared = _server._query_processor.local().get_prepared(id);
+    if (!prepared) {
+        throw exceptions::prepared_query_not_found_exception(id);
+    }
+    auto& q_state = get_query_state(stream);
+    auto& query_state = q_state.query_state;
+    q_state.options = read_options(buf);
+    auto& options = *q_state.options;
+    options.prepare(prepared->bound_names);
+    auto stmt = prepared->statement;
+    if (stmt->get_bound_terms() != options.get_values().size()) {
+        throw exceptions::invalid_request_exception("Invalid amount of bind variables");
+    }
+    return _server._query_processor.local().process_statement(stmt, query_state, options).then([this, stream] (auto msg) {
+         return this->write_result(stream, msg);
+    });
 }
 
 future<> cql_server::connection::process_batch(uint16_t stream, temporary_buffer<char> buf)
@@ -482,10 +516,12 @@ future<> cql_server::connection::write_supported(int16_t stream)
 
 class cql_server::fmt_visitor : public transport::messages::result_message::visitor {
 private:
+    uint8_t _version;
     shared_ptr<cql_server::response> _response;
 public:
-    fmt_visitor(shared_ptr<cql_server::response> response)
-        : _response{response}
+    fmt_visitor(uint8_t version, shared_ptr<cql_server::response> response)
+        : _version{version}
+        , _response{response}
     { }
 
     virtual void visit(const transport::messages::result_message::void_message&) override {
@@ -495,6 +531,21 @@ public:
     virtual void visit(const transport::messages::result_message::set_keyspace& m) override {
         _response->write_int(0x0003);
         _response->write_string(m.get_keyspace());
+    }
+
+    virtual void visit(const transport::messages::result_message::prepared& m) override {
+        auto prepared = m.get_prepared();
+        _response->write_int(0x0004);
+        _response->write_short_bytes(m.get_id());
+        // FIXME: not compatible with v4
+        assert(_version < 4);
+        cql3::metadata metadata{prepared->bound_names};
+        _response->write(metadata);
+        if (_version > 1) {
+            cql3::metadata result_metadata{std::vector<::shared_ptr<cql3::column_specification>>{}};
+            result_metadata.set_skip_metadata();
+            _response->write(result_metadata);
+        }
     }
 
     virtual void visit(const transport::messages::result_message::schema_change& m) override {
@@ -549,7 +600,7 @@ private:
 future<> cql_server::connection::write_result(int16_t stream, shared_ptr<transport::messages::result_message> msg)
 {
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::RESULT);
-    fmt_visitor fmt{response};
+    fmt_visitor fmt{_version, response};
     msg->accept(fmt);
     return write_response(response);
 }
@@ -614,6 +665,16 @@ uint16_t cql_server::connection::read_unsigned_short(temporary_buffer<char>& buf
                | (static_cast<uint16_t>(p[1]));
     buf.trim_front(2);
     return n;
+}
+
+bytes cql_server::connection::read_short_bytes(temporary_buffer<char>& buf)
+{
+    auto n = read_short(buf);
+    check_room(buf, n);
+    bytes s{buf.begin(), static_cast<size_t>(n)};
+    assert(n >= 0);
+    buf.trim_front(n);
+    return s;
 }
 
 sstring cql_server::connection::read_string(temporary_buffer<char>& buf)
