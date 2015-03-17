@@ -195,11 +195,20 @@ public:
     };
 };
 
+namespace db {
+template<typename T>
+class serializer;
+}
+
 // A variant type that can hold either an atomic_cell, or a serialized collection.
 // Which type is stored is determinied by the schema.
 class atomic_cell_or_collection final {
     bytes _data;
+
+    template<typename T>
+    friend class db::serializer;
 private:
+    atomic_cell_or_collection() = default;
     atomic_cell_or_collection(bytes&& data) : _data(std::move(data)) {}
 public:
     atomic_cell_or_collection(atomic_cell ac) : _data(std::move(ac._data)) {}

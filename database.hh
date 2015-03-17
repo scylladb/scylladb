@@ -168,6 +168,11 @@ public:
     }
 };
 
+namespace db {
+template<typename T>
+class serializer;
+}
+
 class mutation_partition final {
     using rows_type = boost::intrusive::set<rows_entry, boost::intrusive::compare<rows_entry::compare>>;
 private:
@@ -177,6 +182,9 @@ private:
     // Contains only strict prefixes so that we don't have to lookup full keys
     // in both _row_tombstones and _rows.
     boost::intrusive::set<row_tombstones_entry, boost::intrusive::compare<row_tombstones_entry::compare>> _row_tombstones;
+
+    template<typename T>
+    friend class db::serializer;
 public:
     mutation_partition(schema_ptr s)
         : _rows(rows_entry::compare(*s))
