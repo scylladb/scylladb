@@ -229,6 +229,9 @@ core = [
 defines = []
 libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
+urchin_libs = '-llz4 -lsnappy'
+
+libs = urchin_libs + ' ' + libs
 
 def have_xen():
     source  = '#include <stdint.h>\n'
@@ -297,6 +300,7 @@ urchin_core = (['database.cc',
                  'db/system_keyspace.cc',
                  'db/legacy_schema_tables.cc',
                  'db/commitlog/commitlog.cc',
+                 'db/compress.cc',
                  'io/io.cc',
                  'utils/utils.cc',
                  'utils/UUID_gen.cc',
