@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "core/distributed.hh"
 #include "core/shared_ptr.hh"
 #include "core/print.hh"
 #include "unimplemented.hh"
@@ -1386,9 +1387,10 @@ public:
     }
 };
 
-extern gossiper _the_gossiper;
-inline gossiper& the_gossiper() {
-    return _the_gossiper;
+extern distributed<gossiper> _the_gossiper;
+inline gossiper& get_local_gossiper() {
+    assert(engine().cpu_id() == 0);
+    return _the_gossiper.local();
 }
 
 } // namespace gms

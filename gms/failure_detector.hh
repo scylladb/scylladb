@@ -27,6 +27,7 @@
 #include "gms/i_failure_detector.hh"
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
+#include "core/distributed.hh"
 #include "gms/gossiper.hh"
 #include "utils/bounded_stats_deque.hh"
 #include <cmath>
@@ -160,7 +161,7 @@ public:
 
     sstring get_all_endpoint_states() {
         std::stringstream ss;
-        for (auto& entry : the_gossiper().endpoint_state_map) {
+        for (auto& entry : get_local_gossiper().endpoint_state_map) {
             auto& ep = entry.first;
             auto& state = entry.second;
             ss << ep << "\n";
@@ -171,7 +172,7 @@ public:
 
     std::map<sstring, sstring> get_simple_states() {
         std::map<sstring, sstring> nodes_status;
-        for (auto& entry : the_gossiper().endpoint_state_map) {
+        for (auto& entry : get_local_gossiper().endpoint_state_map) {
             auto& ep = entry.first;
             auto& state = entry.second;
             std::stringstream ss;
@@ -186,7 +187,7 @@ public:
 
     int get_down_endpoint_count() {
         int count = 0;
-        for (auto& entry : the_gossiper().endpoint_state_map) {
+        for (auto& entry : get_local_gossiper().endpoint_state_map) {
             auto& state = entry.second;
             if (!state.is_alive()) {
                 count++;
@@ -197,7 +198,7 @@ public:
 
     int get_up_endpoint_count() {
         int count = 0;
-        for (auto& entry : the_gossiper().endpoint_state_map) {
+        for (auto& entry : get_local_gossiper().endpoint_state_map) {
             auto& state = entry.second;
             if (state.is_alive()) {
                 count++;
@@ -208,7 +209,7 @@ public:
 
     sstring get_endpoint_state(sstring address) {
         std::stringstream ss;
-        auto eps = the_gossiper().get_endpoint_state_for_endpoint(inet_address(address));
+        auto eps = get_local_gossiper().get_endpoint_state_for_endpoint(inet_address(address));
         if (eps) {
             append_endpoint_state(ss, *eps);
             return sstring(ss.str());
@@ -275,7 +276,7 @@ public:
             return true;
         }
 
-        auto eps = the_gossiper().get_endpoint_state_for_endpoint(ep);
+        auto eps = get_local_gossiper().get_endpoint_state_for_endpoint(ep);
         // we could assert not-null, but having isAlive fail screws a node over so badly that
         // it's worth being defensive here so minor bugs don't cause disproportionate
         // badness.  (See CASSANDRA-1463 for an example).
@@ -353,9 +354,10 @@ public:
     }
 };
 
-extern failure_detector _the_failure_detector;
-inline failure_detector& the_failure_detector() {
-    return _the_failure_detector;
+extern distributed<failure_detector> _the_failure_detector;
+inline failure_detector& get_local_failure_detector() {
+    assert(engine().cpu_id() == 0);
+    return _the_failure_detector.local();
 }
 
 } // namespace gms
