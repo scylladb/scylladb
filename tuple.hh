@@ -10,11 +10,12 @@
 #include <vector>
 #include <boost/range/iterator_range.hpp>
 #include "util/serialization.hh"
+#include "unimplemented.hh"
 
 // TODO: Add AllowsMissing parameter which will allow to optimize serialized format.
 // Currently we default to AllowsMissing = true.
 template<bool AllowPrefixes = false>
-class tuple_type final : public abstract_type {
+class tuple_type final {
 private:
     const std::vector<shared_ptr<abstract_type>> _types;
     const bool _byte_order_equal;
@@ -23,8 +24,7 @@ public:
     using value_type = std::vector<bytes_opt>;
 
     tuple_type(std::vector<shared_ptr<abstract_type>> types)
-        : abstract_type("tuple") // FIXME: append names of member types
-        , _types(std::move(types))
+        : _types(std::move(types))
         , _byte_order_equal(std::all_of(_types.begin(), _types.end(), [] (auto t) {
                 return t->is_byte_order_equal();
             }))
@@ -148,13 +148,13 @@ public:
         });
         return result;
     }
-    object_opt deserialize(bytes_view v) override {
+    object_opt deserialize(bytes_view v) {
         return {boost::any(deserialize_value(v))};
     }
-    void serialize(const boost::any& obj, bytes::iterator& out) override {
+    void serialize(const boost::any& obj, bytes::iterator& out) {
         serialize_value(boost::any_cast<const value_type&>(obj), out);
     }
-    size_t serialized_size(const boost::any& obj) override {
+    size_t serialized_size(const boost::any& obj) {
         auto& values = boost::any_cast<const value_type&>(obj);
         size_t len = 0;
         for (auto&& val : values) {
@@ -167,10 +167,10 @@ public:
         }
         return len;
     }
-    virtual bool less(bytes_view b1, bytes_view b2) override {
+    bool less(bytes_view b1, bytes_view b2) {
         return compare(b1, b2) < 0;
     }
-    virtual size_t hash(bytes_view v) override {
+    size_t hash(bytes_view v) {
         if (_byte_order_equal) {
             return std::hash<bytes_view>()(v);
         }
@@ -184,7 +184,7 @@ public:
         }
         return h;
     }
-    virtual int32_t compare(bytes_view b1, bytes_view b2) override {
+    int32_t compare(bytes_view b1, bytes_view b2) {
         if (is_byte_order_comparable()) {
             return compare_unsigned(b1, b2);
         }
@@ -217,19 +217,19 @@ public:
         }
         return 0;
     }
-    virtual bool is_byte_order_equal() const override {
+    bool is_byte_order_equal() const {
         return _byte_order_equal;
     }
-    virtual bool is_byte_order_comparable() const override {
+    bool is_byte_order_comparable() const {
         // We're not byte order comparable because we encode component length as signed integer,
         // which is not byte order comparable.
         // TODO: make the length byte-order comparable by adding numeric_limits<int32_t>::min() when serializing
         return false;
     }
-    virtual bytes from_string(sstring_view s) override {
+    bytes from_string(sstring_view s) {
         throw std::runtime_error("not implemented");
     }
-    virtual sstring to_string(const bytes& b) override {
+    sstring to_string(const bytes& b) {
         throw std::runtime_error("not implemented");
     }
     /**
@@ -278,8 +278,16 @@ public:
         assert(AllowPrefixes);
         return std::distance(begin(v), end(v)) == (ssize_t)_types.size();
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
-        assert(0);
+    void validate(bytes_view v) {
+        // FIXME: implement
+        warn(unimplemented::cause::VALIDATION);
+    }
+    bool equal(bytes_view v1, bytes_view v2) {
+        if (_byte_order_equal) {
+            return compare_unsigned(v1, v2) == 0;
+        }
+        // FIXME: call equal() on each component
+        return compare(v1, v2) == 0;
     }
 };
 
