@@ -178,7 +178,7 @@ public:
 
     size_t find(char_type t, size_t pos = 0) const noexcept {
         const char_type* it = str() + pos;
-        const char_type* end = it + size();
+        const char_type* end = str() + size();
         while (it < end) {
             if (*it == t) {
                 return it - str();
@@ -190,7 +190,7 @@ public:
 
     size_t find(const basic_sstring& s, size_t pos = 0) const noexcept {
         const char_type* it = str() + pos;
-        const char_type* end = it + size();
+        const char_type* end = str() + size();
         const char_type* c_str = s.str();
         const char_type* c_str_end = s.str() + s.size();
 
