@@ -27,7 +27,8 @@ enum class cause {
     TOKEN_RESTRICTION,
     LEGACY_COMPOSITE_KEYS,
     COLLECTION_RANGE_TOMBSTONES,
-    RANGE_QUERIES
+    RANGE_QUERIES,
+    THRIFT
 };
 
 void fail(cause what) __attribute__((noreturn));

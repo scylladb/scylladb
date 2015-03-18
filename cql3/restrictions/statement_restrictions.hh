@@ -50,12 +50,12 @@ private:
     /**
      * Restrictions on partitioning columns
      */
-    ::shared_ptr<primary_key_restrictions> _partition_key_restrictions;
+    ::shared_ptr<primary_key_restrictions<partition_key::one>> _partition_key_restrictions;
 
     /**
      * Restrictions on clustering columns
      */
-    ::shared_ptr<primary_key_restrictions> _clustering_columns_restrictions;
+    ::shared_ptr<primary_key_restrictions<clustering_key::prefix::one>> _clustering_columns_restrictions;
 
     /**
      * Restriction on non-primary key columns (i.e. secondary index restrictions)
@@ -212,14 +212,12 @@ private:
         auto& def = restriction->get_column_def();
         if (def.is_partition_key()) {
             if (!_partition_key_restrictions) {
-                _partition_key_restrictions = ::make_shared<single_column_primary_key_restrictions>(_schema,
-                    _schema->partition_key_prefix_type);
+                _partition_key_restrictions = ::make_shared<single_column_primary_key_restrictions<partition_key::one>>(_schema);
             }
             _partition_key_restrictions->merge_with(restriction);
         } else if (def.is_clustering_key()) {
             if (!_clustering_columns_restrictions) {
-                _clustering_columns_restrictions = ::make_shared<single_column_primary_key_restrictions>(_schema,
-                    _schema->clustering_key_prefix_type);
+                _clustering_columns_restrictions = ::make_shared<single_column_primary_key_restrictions<clustering_key::prefix::one>>(_schema);
             }
             _clustering_columns_restrictions->merge_with(restriction);
         } else {
@@ -383,9 +381,9 @@ public:
      * @return the specified bound of the partition key
      * @throws InvalidRequestException if the boundary cannot be retrieved
      */
-    std::vector<query::range> get_partition_key_ranges(const query_options& options) const {
+    std::vector<query::partition_range> get_partition_key_ranges(const query_options& options) const {
         if (!_partition_key_restrictions) {
-            return {query::range::make_open_ended_both_sides()};
+            return {query::partition_range::make_open_ended_both_sides()};
         }
         return _partition_key_restrictions->bounds(options);
     }
@@ -510,9 +508,9 @@ public:
 #endif
 
 public:
-    std::vector<query::range> get_clustering_bounds(const query_options& options) const {
+    std::vector<query::clustering_range> get_clustering_bounds(const query_options& options) const {
         if (!_clustering_columns_restrictions) {
-            return {query::range::make_open_ended_both_sides()};
+            return {query::clustering_range::make_open_ended_both_sides()};
         }
         return _clustering_columns_restrictions->bounds(options);
     }
@@ -559,7 +557,8 @@ public:
 
     void reverse() {
         if (_clustering_columns_restrictions) {
-            _clustering_columns_restrictions = ::make_shared<reversed_primary_key_restrictions>(_clustering_columns_restrictions);
+            _clustering_columns_restrictions = ::make_shared<reversed_primary_key_restrictions<clustering_key::prefix::one>>(
+                _clustering_columns_restrictions);
         }
     }
 };

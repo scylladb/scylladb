@@ -39,12 +39,9 @@ namespace utils {
 
 namespace murmur_hash
 {
-    uint32_t hash32(const bytes &data, uint32_t offset, uint32_t length,
-                    int32_t seed);
-    uint64_t hash2_64(const bytes &key, uint32_t offset, uint32_t length,
-                    uint64_t seed);
-    void hash3_x64_128(const bytes &key, uint32_t offset, uint32_t length,
-                    uint64_t seed, std::array<uint64_t,2> &result);
+    uint32_t hash32(bytes_view data, int32_t seed);
+    uint64_t hash2_64(bytes_view key, uint64_t seed);
+    void hash3_x64_128(bytes_view key, uint64_t seed, std::array<uint64_t,2> &result);
 };
 
 } // namespace utils

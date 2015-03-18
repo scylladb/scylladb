@@ -13,8 +13,8 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Timing mutation of single column within one row...\n";
 
-    partition_key key = to_bytes("key1");
-    clustering_key c_key = s->clustering_key_type->decompose_value({int32_type->decompose(2)});
+    auto key = partition_key::one::from_exploded(*s, {to_bytes("key1")});
+    auto c_key = clustering_key::one::from_exploded(*s, {int32_type->decompose(2)});
     bytes value = int32_type->decompose(3);
 
     time_it([&] {

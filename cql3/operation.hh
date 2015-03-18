@@ -109,7 +109,7 @@ public:
     /**
      * Execute the operation.
      */
-    virtual void execute(mutation& m, const clustering_prefix& row_key, const update_parameters& params) = 0;
+    virtual void execute(mutation& m, const clustering_prefix& prefix, const update_parameters& params) = 0;
 
     /**
      * A parsed raw UPDATE operation.

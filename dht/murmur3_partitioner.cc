@@ -16,12 +16,13 @@ murmur3_partitioner::normalize(int64_t in) {
 }
 
 token
-murmur3_partitioner::get_token(const bytes& key) {
+murmur3_partitioner::get_token(const partition_key::one& key_) {
+    bytes_view key(key_);
     if (key.empty()) {
         return minimum_token();
     }
     std::array<uint64_t, 2> hash;
-    utils::murmur_hash::hash3_x64_128(key, 0, key.size(), 0, hash);
+    utils::murmur_hash::hash3_x64_128(key, 0, hash);
     // We don't normalize() the value, since token includes an is-before-everything
     // indicator.
     // FIXME: will this require a repair when importing a database?

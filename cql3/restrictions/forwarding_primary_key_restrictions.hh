@@ -31,16 +31,17 @@ namespace cql3 {
 namespace restrictions {
 
 /**
- * A <code>primary_key_restrictions</code> which forwards all its method calls to another 
- * <code>primary_key_restrictions</code>. Subclasses should override one or more methods to modify the behavior 
- * of the backing <code>primary_key_restrictions</code> as desired per the decorator pattern. 
+ * A <code>primary_key_restrictions</code> which forwards all its method calls to another
+ * <code>primary_key_restrictions</code>. Subclasses should override one or more methods to modify the behavior
+ * of the backing <code>primary_key_restrictions</code> as desired per the decorator pattern.
  */
-class forwarding_primary_key_restrictions : public primary_key_restrictions {
+template <typename ValueType>
+class forwarding_primary_key_restrictions : public primary_key_restrictions<ValueType> {
 protected:
     /**
      * Returns the backing delegate instance that methods are forwarded to.
      */
-    virtual ::shared_ptr<primary_key_restrictions> get_delegate() = 0;
+    virtual ::shared_ptr<primary_key_restrictions<ValueType>> get_delegate() = 0;
 
 public:
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
@@ -61,11 +62,11 @@ public:
     }
 #endif
 
-    virtual std::vector<bytes> values_as_serialized_tuples(const query_options& options) override {
-        return get_delegate()->values_as_serialized_tuples(options);
+    virtual std::vector<ValueType> values(const query_options& options) override {
+        return get_delegate()->values(options);
     }
 
-    virtual std::vector<query::range> bounds(const query_options& options) override {
+    virtual std::vector<query::range<ValueType>> bounds(const query_options& options) override {
         return get_delegate()->bounds(options);
     }
 
@@ -101,7 +102,7 @@ public:
     virtual void addIndexExpressionTo(List<IndexExpression> expressions, QueryOptions options) {
         get_delegate()->addIndexExpressionTo(expressions, options);
     }
-#endif    
+#endif
 };
 
 }

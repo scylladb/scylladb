@@ -37,19 +37,20 @@ namespace restrictions {
 /**
  * A set of single column restrictions on a primary key part (partition key or clustering key).
  */
-class single_column_primary_key_restrictions : public primary_key_restrictions {
+template<typename ValueType>
+class single_column_primary_key_restrictions : public primary_key_restrictions<ValueType> {
+    using range_type = query::range<ValueType>;
+    using range_bound = typename range_type::bound;
 private:
     schema_ptr _schema;
     ::shared_ptr<single_column_restrictions> _restrictions;
-    ::shared_ptr<tuple_type<true>> _tuple;
     bool _slice;
     bool _contains;
     bool _in;
 public:
-    single_column_primary_key_restrictions(schema_ptr schema, ::shared_ptr<tuple_type<true>> tuple)
+    single_column_primary_key_restrictions(schema_ptr schema)
         : _schema(schema)
         , _restrictions(::make_shared<single_column_restrictions>(schema))
-        , _tuple(std::move(tuple))
         , _slice(false)
         , _contains(false)
         , _in(false)
@@ -121,7 +122,7 @@ public:
         do_merge_with(::static_pointer_cast<single_column_restriction>(restriction));
     }
 
-    virtual std::vector<bytes> values_as_serialized_tuples(const query_options& options) override {
+    virtual std::vector<ValueType> values(const query_options& options) override {
         std::vector<std::vector<bytes_opt>> value_vector;
         value_vector.reserve(_restrictions->size());
         for (auto def : _restrictions->get_column_defs()) {
@@ -140,16 +141,16 @@ public:
             value_vector.emplace_back(std::move(values));
         }
 
-        std::vector<bytes> result;
+        std::vector<ValueType> result;
         result.reserve(cartesian_product_size(value_vector));
         for (auto&& v : make_cartesian_product(value_vector)) {
-            result.emplace_back(_tuple->serialize_value(v));
+            result.emplace_back(ValueType::from_exploded(*_schema, v));
         }
         return result;
     }
 
-    virtual std::vector<query::range> bounds(const query_options& options) override {
-        std::vector<query::range> ranges;
+    virtual std::vector<range_type> bounds(const query_options& options) override {
+        std::vector<range_type> ranges;
         std::vector<std::vector<bytes_opt>> vec_of_values;
 
         // TODO: optimize for all EQ case
@@ -164,26 +165,20 @@ public:
             }
 
             if (r->is_slice()) {
-                // TODO: make restriction::bounds() return query::range to simplify all this
                 if (cartesian_product_is_empty(vec_of_values)) {
-                    auto read_value = [r, &options] (statements::bound b) {
+                    auto read_bound = [r, &options, this] (statements::bound b) -> std::experimental::optional<range_bound> {
+                        if (!r->has_bound(b)) {
+                            return {};
+                        }
                         auto value = r->bounds(b, options)[0];
                         if (!value) {
                             throw exceptions::invalid_request_exception(sprint("Invalid null clustering key part %s", r->to_string()));
                         }
-                        return *value;
+                        return {range_bound(ValueType::from_exploded(*_schema, {*value}), r->is_inclusive(b))};
                     };
-                    if (r->has_bound(statements::bound::START) && r->has_bound(statements::bound::END)) {
-                        ranges.emplace_back(query::range(read_value(statements::bound::START), read_value(statements::bound::END),
-                            r->is_inclusive(statements::bound::START), r->is_inclusive(statements::bound::END)));
-                    } else if (r->has_bound(statements::bound::START)) {
-                        ranges.emplace_back(query::range::make_starting_with(read_value(statements::bound::START),
-                            r->is_inclusive(statements::bound::START)));
-                    } else {
-                        assert(r->has_bound(statements::bound::END));
-                        ranges.emplace_back(query::range::make_ending_with(read_value(statements::bound::END),
-                            r->is_inclusive(statements::bound::END)));
-                    }
+                    ranges.emplace_back(range_type(
+                        read_bound(statements::bound::START),
+                        read_bound(statements::bound::END)));
                     if (def->type->is_reversed()) {
                         ranges.back().reverse();
                     }
@@ -192,31 +187,25 @@ public:
 
                 ranges.reserve(cartesian_product_size(vec_of_values));
                 for (auto&& prefix : make_cartesian_product(vec_of_values)) {
-                    auto read_bounds = [r, &prefix, &options, this](bytes& value_holder, bool& inclusive_holder, statements::bound bound) {
+                    auto read_bound = [r, &prefix, &options, this](statements::bound bound) -> range_bound {
                         if (r->has_bound(bound)) {
                             auto value = std::move(r->bounds(bound, options)[0]);
                             if (!value) {
                                 throw exceptions::invalid_request_exception(sprint("Invalid null clustering key part %s", r->to_string()));
                             }
                             prefix.emplace_back(std::move(value));
-                            value_holder = _tuple->serialize_value(prefix);
+                            auto val = ValueType::from_exploded(*_schema, prefix);
                             prefix.pop_back();
-                            inclusive_holder = r->is_inclusive(bound);
+                            return range_bound(std::move(val), r->is_inclusive(bound));
                         } else {
-                            value_holder = _tuple->serialize_value(prefix);
-                            inclusive_holder = true;
+                            return range_bound(ValueType::from_exploded(*_schema, prefix));
                         }
                     };
 
-                    bytes start_tuple;
-                    bytes end_tuple;
-                    bool start_inclusive;
-                    bool end_inclusive;
+                    ranges.emplace_back(range_type(
+                        read_bound(statements::bound::START),
+                        read_bound(statements::bound::END)));
 
-                    read_bounds(start_tuple, start_inclusive, statements::bound::START);
-                    read_bounds(end_tuple, end_inclusive, statements::bound::END);
-                    ranges.emplace_back(query::range(std::move(start_tuple), std::move(end_tuple),
-                        start_inclusive, end_inclusive));
                     if (def->type->is_reversed()) {
                         ranges.back().reverse();
                     }
@@ -239,7 +228,7 @@ public:
 
         ranges.reserve(cartesian_product_size(vec_of_values));
         for (auto&& prefix : make_cartesian_product(vec_of_values)) {
-            ranges.emplace_back(query::range::make_singular(_tuple->serialize_value(prefix)));
+            ranges.emplace_back(range_type::make_singular(ValueType::from_exploded(*_schema, prefix)));
         }
 
         return std::move(ranges);

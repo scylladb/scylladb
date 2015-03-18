@@ -107,13 +107,20 @@ public:
     }
 
     void get_slice(tcxx::function<void(std::vector<ColumnOrSuperColumn>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
-        auto keyb = to_bytes(key);
+        auto& ks = lookup_keyspace(_db.local(), _ks_name);
+        auto schema = ks.find_schema(column_parent.column_family);
+        if (!_ks) {
+            return complete_with_exception<InvalidRequestException>(std::move(exn_cob), "column family %s not found", column_parent.column_family);
+        }
+        auto pk = key_from_thrift(schema, to_bytes(key));
+        auto dk = dht::global_partitioner().decorate_key(pk);
+        auto shard = _db.local().shard_of(dk._token);
+
         auto do_get = [this,
-                       key = std::move(key),
+                       pk = std::move(pk),
                        column_parent = std::move(column_parent),
                        predicate = std::move(predicate)] (database& db) {
             std::vector<ColumnOrSuperColumn> ret;
-            auto keyb = to_bytes(key);
             if (!column_parent.super_column.empty()) {
                 throw unimplemented_exception();
             }
@@ -123,7 +130,7 @@ public:
                 throw unimplemented_exception();
             } else if (predicate.__isset.slice_range) {
                 auto&& range = predicate.slice_range;
-                row* rw = cf.find_row(keyb, bytes());
+                row* rw = cf.find_row(pk, clustering_key::one::make_empty(*cf._schema));
                 if (rw) {
                     auto beg = cf._schema->regular_begin();
                     if (!range.start.empty()) {
@@ -157,8 +164,6 @@ public:
                 throw make_exception<InvalidRequestException>("empty SlicePredicate");
             }
         };
-        auto dk = dht::global_partitioner().decorate_key(keyb);
-        auto shard = _db.local().shard_of(dk._token);
         _db.invoke_on(shard, [do_get = std::move(do_get)] (database& db) {
             return do_get(db);
         }).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)]
@@ -233,20 +238,20 @@ public:
         if (!_ks) {
             return complete_with_exception<InvalidRequestException>(std::move(exn_cob), "keyspace not set");
         }
-        static bytes null_clustering_key = to_bytes("");
         // Would like to use move_iterator below, but Mutation is filled with some const stuff.
         parallel_for_each(mutation_map.begin(), mutation_map.end(),
                 [this] (std::pair<std::string, std::map<std::string, std::vector<Mutation>>> key_cf) {
-            bytes key = to_bytes(key_cf.first);
+            bytes thrift_key = to_bytes(key_cf.first);
             std::map<std::string, std::vector<Mutation>>& cf_mutations_map = key_cf.second;
             return parallel_for_each(
                     boost::make_move_iterator(cf_mutations_map.begin()),
                     boost::make_move_iterator(cf_mutations_map.end()),
-                    [this, key] (std::pair<std::string, std::vector<Mutation>> cf_mutations) {
+                    [this, thrift_key] (std::pair<std::string, std::vector<Mutation>> cf_mutations) {
                 sstring cf_name = cf_mutations.first;
                 const std::vector<Mutation>& mutations = cf_mutations.second;
                 auto& cf = lookup_column_family(*_ks, cf_name);
-                mutation m_to_apply(key, cf._schema);
+                mutation m_to_apply(key_from_thrift(cf._schema, thrift_key), cf._schema);
+                auto empty_clustering_key = clustering_key::one::make_empty(*cf._schema);
                 for (const Mutation& m : mutations) {
                     if (m.__isset.column_or_supercolumn) {
                         auto&& cosc = m.column_or_supercolumn;
@@ -268,7 +273,7 @@ public:
                                 ttl = cf._schema->default_time_to_live;
                             }
                             auto ttl_option = ttl.count() > 0 ? ttl_opt(gc_clock::now() + ttl) : ttl_opt();
-                            m_to_apply.set_clustered_cell(null_clustering_key, *def,
+                            m_to_apply.set_clustered_cell(empty_clustering_key, *def,
                                 atomic_cell::one::make_live(col.timestamp, ttl_option, to_bytes(col.value)));
                         } else if (cosc.__isset.super_column) {
                             // FIXME: implement
@@ -291,7 +296,7 @@ public:
                 return _db.invoke_on(shard, [this, cf_name, m_to_apply = std::move(m_to_apply)] (database& db) {
                     auto& ks = db.keyspaces.at(_ks_name);
                     auto& cf = ks.column_families.at(cf_name);
-                    cf.apply(std::move(m_to_apply));
+                    cf.apply(m_to_apply);
                 });
             });
         }).then_wrapped([this, cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<> ret) {
@@ -513,12 +518,18 @@ private:
             throw make_exception<InvalidRequestException>("column family %s not found", cf_name);
         }
     }
-    keyspace& lookup_keyspace(database& db, const sstring ks_name) {
+    static keyspace& lookup_keyspace(database& db, const sstring& ks_name) {
         try {
             return db.keyspaces.at(ks_name);
         } catch (std::out_of_range&) {
             throw make_exception<InvalidRequestException>("Keyspace %s not found", ks_name);
         }
+    }
+    static partition_key::one key_from_thrift(schema_ptr s, bytes k) {
+        if (s->partition_key_size() != 1) {
+            fail(unimplemented::cause::THRIFT);
+        }
+        return partition_key::one::from_single_value(*s, std::move(k));
     }
 };
 

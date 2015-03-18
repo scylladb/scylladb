@@ -31,18 +31,19 @@ namespace validation {
  * Based on org.apache.cassandra.thrift.ThriftValidation#validate_key()
  */
 void
-validate_cql_key(schema_ptr schema, const partition_key& key) {
-    if (key.empty()) {
+validate_cql_key(schema_ptr schema, const partition_key::one& key) {
+    bytes_view b(key);
+    if (b.empty()) {
         throw exceptions::invalid_request_exception("Key may not be empty");
     }
 
     // check that key can be handled by FBUtilities.writeShortByteArray
-    if (key.size() > max_key_size) {
-        throw exceptions::invalid_request_exception(sprint("Key length of %d is longer than maximum of %d", key.size(), max_key_size));
+    if (b.size() > max_key_size) {
+        throw exceptions::invalid_request_exception(sprint("Key length of %d is longer than maximum of %d", b.size(), max_key_size));
     }
 
     try {
-        schema->partition_key_type->validate(key);
+        schema->partition_key_type->validate(b);
     } catch (const marshal_exception& e) {
         throw exceptions::invalid_request_exception(e.why());
     }

@@ -255,7 +255,7 @@ private:
 public:
     void add_key_value(column_definition& def, ::shared_ptr<term> value);
     void process_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
-    std::vector<partition_key> build_partition_keys(const query_options& options);
+    std::vector<partition_key::one> build_partition_keys(const query_options& options);
 
 private:
     clustering_prefix create_clustering_prefix(const query_options& options);
@@ -273,7 +273,7 @@ public:
 
 protected:
     future<update_parameters::prefetched_rows_type> read_required_rows(
-                lw_shared_ptr<std::vector<partition_key>> keys,
+                lw_shared_ptr<std::vector<partition_key::one>> keys,
                 lw_shared_ptr<clustering_prefix> prefix,
                 bool local,
                 db::consistency_level cl);
@@ -427,7 +427,7 @@ private:
 
 public:
     future<std::unique_ptr<update_parameters>> make_update_parameters(
-                lw_shared_ptr<std::vector<partition_key>> keys,
+                lw_shared_ptr<std::vector<partition_key::one>> keys,
                 lw_shared_ptr<clustering_prefix> prefix,
                 const query_options& options,
                 bool local,

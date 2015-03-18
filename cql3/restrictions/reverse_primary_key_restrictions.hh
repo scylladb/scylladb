@@ -33,19 +33,20 @@ namespace restrictions {
 /**
  * <code>PrimaryKeyRestrictions</code> decorator that reverse the slices.
  */
-class reversed_primary_key_restrictions : public forwarding_primary_key_restrictions {
+template <typename ValueType>
+class reversed_primary_key_restrictions : public forwarding_primary_key_restrictions<ValueType> {
 private:
-    ::shared_ptr<primary_key_restrictions> _restrictions;
+    ::shared_ptr<primary_key_restrictions<ValueType>> _restrictions;
 protected:
-    virtual ::shared_ptr<primary_key_restrictions> get_delegate() override {
+    virtual ::shared_ptr<primary_key_restrictions<ValueType>> get_delegate() override {
         return _restrictions;
     }
 public:
-    reversed_primary_key_restrictions(shared_ptr<primary_key_restrictions> restrictions)
+    reversed_primary_key_restrictions(shared_ptr<primary_key_restrictions<ValueType>> restrictions)
         : _restrictions(std::move(restrictions))
     { }
 
-    virtual std::vector<query::range> bounds(const query_options& options) override {
+    virtual std::vector<query::range<ValueType>> bounds(const query_options& options) override {
         auto ranges = _restrictions->bounds(options);
         for (auto&& range : ranges) {
             range.reverse();
