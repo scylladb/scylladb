@@ -424,10 +424,6 @@ cql_server::connection::init_serialization_format() {
 future<> cql_server::connection::process_query(uint16_t stream, temporary_buffer<char> buf)
 {
     auto query = read_long_string_view(buf);
-#if 0
-    auto consistency = read_consistency(buf);
-    auto flags = read_byte(buf);
-#endif
     auto& q_state = get_query_state(stream);
     q_state.options = read_options(buf);
     return _server._query_processor.process(query, q_state.query_state, *q_state.options).then([this, stream] (auto msg) {
