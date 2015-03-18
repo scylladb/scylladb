@@ -33,6 +33,7 @@
 #include "service/query_state.hh"
 #include "log.hh"
 #include "core/distributed.hh"
+#include "transport/messages/result_message.hh"
 
 namespace cql3 {
 

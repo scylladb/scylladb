@@ -23,6 +23,8 @@
  */
 
 #include "cql3/statements/select_statement.hh"
+
+#include "transport/messages/result_message.hh"
 #include "cql3/selection/selection.hh"
 #include "core/shared_ptr.hh"
 #include "query.hh"

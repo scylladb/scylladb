@@ -22,10 +22,18 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_STATEMENTS_SCHEMA_ALTERING_STATEMENT_HH
-#define CQL3_STATEMENTS_SCHEMA_ALTERING_STATEMENT_HH
+#pragma once
 
-#include "transport/messages/result_message.hh"
+namespace transport {
+
+namespace messages {
+
+class result_message;
+
+}
+
+}
+
 #include "transport/event.hh"
 
 #include "cql3/statements/cf_statement.hh"
@@ -88,47 +96,12 @@ protected:
     virtual bool announce_migration(bool is_local_only) = 0;
 
     virtual future<::shared_ptr<messages::result_message>>
-    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override {
-        // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
-        // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
-        bool did_change_schema = announce_migration(false);
-        if (!did_change_schema) {
-            auto result = ::make_shared<messages::result_message::void_message>();
-            return make_ready_future<::shared_ptr<messages::result_message>>(result);
-        }
-        auto ce = change_event();
-        ::shared_ptr<messages::result_message> result;
-        if (!ce) {
-            result = ::make_shared<messages::result_message::void_message>();
-        } else {
-            result = ::make_shared<messages::result_message::schema_change>(ce);
-        }
-        return make_ready_future<::shared_ptr<messages::result_message>>(result);
-    }
+    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override;
 
     virtual future<::shared_ptr<messages::result_message>>
-    execute_internal(database& db, service::query_state& state, const query_options& options) override {
-        throw std::runtime_error("unsupported operation");
-#if 0
-        try
-        {
-            boolean didChangeSchema = announceMigration(true);
-            if (!didChangeSchema)
-                return new ResultMessage.Void();
-
-            Event.SchemaChange ce = changeEvent();
-            return ce == null ? new ResultMessage.Void() : new ResultMessage.SchemaChange(ce);
-        }
-        catch (RequestValidationException e)
-        {
-            throw new RuntimeException(e);
-        }
-#endif
-    }
+    execute_internal(database& db, service::query_state& state, const query_options& options) override;
 };
 
 }
 
 }
-
-#endif

@@ -25,12 +25,21 @@
 #ifndef CQL3_CQL_STATEMENT_HH
 #define CQL3_CQL_STATEMENT_HH
 
-#include "transport/messages/result_message.hh"
 #include "service/client_state.hh"
 #include "service/query_state.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/query_options.hh"
 #include "database.hh"
+
+namespace transport {
+
+namespace messages {
+
+class result_message;
+
+}
+
+}
 
 namespace cql3 {
 
