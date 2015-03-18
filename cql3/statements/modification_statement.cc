@@ -385,11 +385,11 @@ modification_statement::process_where_clause(std::vector<relation_ptr> where_cla
     }
 }
 
-std::unique_ptr<parsed_statement::prepared>
+::shared_ptr<parsed_statement::prepared>
 modification_statement::parsed::prepare(database& db) {
     auto bound_names = get_bound_variables();
     auto statement = prepare(db, bound_names);
-    return std::make_unique<parsed_statement::prepared>(std::move(statement), *bound_names);
+    return ::make_shared<parsed_statement::prepared>(std::move(statement), *bound_names);
 }
 
 ::shared_ptr<modification_statement>

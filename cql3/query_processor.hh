@@ -468,7 +468,7 @@ public:
 #endif
 
 public:
-    std::unique_ptr<statements::parsed_statement::prepared> get_statement(const std::experimental::string_view& query,
+    ::shared_ptr<statements::parsed_statement::prepared> get_statement(const std::experimental::string_view& query,
             service::client_state& client_state);
     static ::shared_ptr<statements::parsed_statement> parse_statement(const std::experimental::string_view& query);
 

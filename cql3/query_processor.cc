@@ -36,7 +36,7 @@ thread_local logging::logger log("query_processor");
 future<::shared_ptr<result_message>>
 query_processor::process(const sstring_view& query_string, service::query_state& query_state, query_options& options)
 {
-    std::unique_ptr<parsed_statement::prepared> p = get_statement(query_string, query_state.get_client_state());
+    auto p = get_statement(query_string, query_state.get_client_state());
     options.prepare(p->bound_names);
     auto cql_statement = p->statement;
     if (cql_statement->get_bound_terms() != options.get_values().size()) {
@@ -72,7 +72,7 @@ query_processor::process_statement(::shared_ptr<cql_statement> statement, servic
         });
 }
 
-std::unique_ptr<parsed_statement::prepared>
+::shared_ptr<parsed_statement::prepared>
 query_processor::get_statement(const sstring_view& query, service::client_state& client_state)
 {
 #if 0

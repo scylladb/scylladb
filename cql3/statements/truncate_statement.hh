@@ -44,8 +44,8 @@ public:
         return 0;
     }
 
-    virtual std::unique_ptr<prepared> prepare(database& db) override {
-        return std::make_unique<parsed_statement::prepared>(this->shared_from_this());
+    virtual ::shared_ptr<prepared> prepare(database& db) override {
+        return ::make_shared<parsed_statement::prepared>(this->shared_from_this());
     }
 
     virtual void check_access(const service::client_state& state) override {

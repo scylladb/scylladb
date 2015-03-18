@@ -45,8 +45,8 @@ public:
         return 0;
     }
 
-    virtual std::unique_ptr<prepared> prepare(database& db) override {
-        return std::make_unique<parsed_statement::prepared>(this->shared_from_this());
+    virtual ::shared_ptr<prepared> prepare(database& db) override {
+        return ::make_shared<parsed_statement::prepared>(this->shared_from_this());
     }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {

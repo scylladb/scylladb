@@ -536,7 +536,7 @@ public:
         , _limit(std::move(limit))
     { }
 
-    virtual std::unique_ptr<prepared> prepare(database& db) override {
+    virtual ::shared_ptr<prepared> prepare(database& db) override {
         schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
         auto bound_names = get_bound_variables();
 
@@ -574,7 +574,7 @@ public:
             std::move(ordering_comparator),
             prepare_limit(bound_names));
 
-        return std::make_unique<parsed_statement::prepared>(std::move(stmt), std::move(*bound_names));
+        return ::make_shared<parsed_statement::prepared>(std::move(stmt), std::move(*bound_names));
     }
 
 private:
