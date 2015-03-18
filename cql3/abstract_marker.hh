@@ -74,7 +74,7 @@ public:
             return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
         }
 
-        sstring to_string() const {
+        virtual sstring to_string() const override {
             return "?";
         }
     };

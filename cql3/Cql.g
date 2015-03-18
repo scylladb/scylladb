@@ -108,14 +108,16 @@ using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifi
         add("macaddr");
         add("bitstring");
     }};
+#endif
 
-    public AbstractMarker.Raw newBindVariables(ColumnIdentifier name)
+    shared_ptr<cql3::abstract_marker::raw> new_bind_variables(shared_ptr<cql3::column_identifier> name)
     {
-        AbstractMarker.Raw marker = new AbstractMarker.Raw(bindVariables.size());
-        bindVariables.add(name);
+        auto marker = make_shared<cql3::abstract_marker::raw>(_bind_variables.size());
+        _bind_variables.push_back(name);
         return marker;
     }
 
+#if 0
     public AbstractMarker.INRaw newINBindVariables(ColumnIdentifier name)
     {
         AbstractMarker.INRaw marker = new AbstractMarker.INRaw(bindVariables.size());
@@ -1102,19 +1104,15 @@ value returns [::shared_ptr<cql3::term::raw> value]
     | t=tupleLiteral       { $value = t; }
 #endif
     | K_NULL               { $value = cql3::constants::NULL_LITERAL; }
-#if 0
-    | ':' id=ident         { $value = newBindVariables(id); }
-    | QMARK                { $value = newBindVariables(null); }
-#endif
+    | ':' id=ident         { $value = new_bind_variables(id); }
+    | QMARK                { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
     ;
 
 intValue returns [::shared_ptr<cql3::term::raw> value]
     :
     | t=INTEGER     { $value = cql3::constants::literal::integer(sstring{$t.text}); }
-#if 0
-    | ':' id=ident  { $value = newBindVariables(id); }
-    | QMARK         { $value = newBindVariables(null); }
-#endif
+    | ':' id=ident  { $value = new_bind_variables(id); }
+    | QMARK         { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
     ;
 
 #if 0

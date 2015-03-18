@@ -156,7 +156,7 @@ public:
             return assignment_testable::test_all(keyspace, value_spec, to_test);
         }
 
-        virtual sstring to_string() override {
+        virtual sstring to_string() const override {
             return "{" + join(", ", _elements) + "}";
         }
     };
