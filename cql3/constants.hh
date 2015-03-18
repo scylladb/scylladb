@@ -104,7 +104,7 @@ public:
                     : assignment_testable::test_result::WEAKLY_ASSIGNABLE;
         }
 
-        virtual sstring to_string() override {
+        virtual sstring to_string() const override {
             return "null";
         }
     };
@@ -155,7 +155,7 @@ public:
 
         virtual assignment_testable::test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver);
 
-        virtual sstring to_string() override {
+        virtual sstring to_string() const override {
             return _type == type::STRING ? sstring(sprint("'%s'", _text)) : _text;
         }
     };

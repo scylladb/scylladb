@@ -136,7 +136,7 @@ public:
 #endif
         }
 
-        virtual sstring to_string() override {
+        virtual sstring to_string() const override {
             sstring result = "{";
             for (size_t i = 0; i < entries.size(); i++) {
                 if (i > 0) {

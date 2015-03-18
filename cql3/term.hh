@@ -113,7 +113,7 @@ public:
          */
         virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) = 0;
 
-        virtual sstring to_string() = 0;
+        virtual sstring to_string() const = 0;
 
         friend std::ostream& operator<<(std::ostream& os, const raw& r) {
             // FIXME: kill const_cast
