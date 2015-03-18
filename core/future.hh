@@ -123,6 +123,7 @@ struct future_state {
         default:
             abort();
         }
+        x._state = state::invalid;
     }
     ~future_state() noexcept {
         switch (_state) {
@@ -174,6 +175,7 @@ struct future_state {
     std::exception_ptr get_exception() noexcept {
         assert(_state == state::exception);
         // Move ex out so future::~future() knows we've handled it
+        _state = state::invalid;
         return std::move(_u.ex);
     }
     std::tuple<T...> get() {
@@ -192,6 +194,7 @@ struct future_state {
         } else {
             pr.set_value(std::move(get()));
         }
+        _state = state::invalid;
     }
 };
 
@@ -225,6 +228,7 @@ struct future_state<> {
             // Moving it will reset us to invalid state
             new (&_u.ex) std::exception_ptr(std::move(x._u.ex));
         }
+        x._u.st = state::invalid;
     }
     ~future_state() noexcept {
         if (_u.st >= state::exception_min) {
@@ -591,10 +595,11 @@ inline
 void future_state<>::forward_to(promise<>& pr) noexcept {
     assert(_u.st != state::future && _u.st != state::invalid);
     if (_u.st >= state::exception_min) {
-        pr.set_exception(_u.ex);
+        pr.set_exception(std::move(_u.ex));
     } else {
         pr.set_value(std::tuple<>());
     }
+    _u.st = state::invalid;
 }
 
 template <typename... T>
