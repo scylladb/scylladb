@@ -863,14 +863,14 @@ void cql_server::response::write_bytes(bytes b)
 {
     assert(b.size() < std::numeric_limits<int32_t>::max());
     write_int(b.size());
-    _body << b;
+    _body.write(b.begin(), b.size());
 }
 
 void cql_server::response::write_short_bytes(bytes b)
 {
     assert(b.size() < std::numeric_limits<int16_t>::max());
     write_short(b.size());
-    _body << b;
+    _body.write(b.begin(), b.size());
 }
 
 void cql_server::response::write_option(std::pair<int16_t, boost::any> opt)
