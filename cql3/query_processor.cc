@@ -38,6 +38,8 @@ using namespace transport::messages;
 
 thread_local logging::logger log("query_processor");
 
+const sstring query_processor::CQL_VERSION = "3.2.0";
+
 future<::shared_ptr<result_message>>
 query_processor::process(const sstring_view& query_string, service::query_state& query_state, query_options& options)
 {

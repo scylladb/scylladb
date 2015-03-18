@@ -506,8 +506,7 @@ future<> cql_server::connection::write_ready(int16_t stream)
 future<> cql_server::connection::write_supported(int16_t stream)
 {
     std::multimap<sstring, sstring> opts;
-    opts.insert({"CQL_VERSION", "3.0.0"});
-    opts.insert({"CQL_VERSION", "3.2.0"});
+    opts.insert({"CQL_VERSION", cql3::query_processor::CQL_VERSION});
     opts.insert({"COMPRESSION", "snappy"});
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::SUPPORTED);
     response->write_string_multimap(opts);
