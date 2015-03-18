@@ -105,6 +105,8 @@ if __name__ == "__main__":
            path = path + " --output_format=XML --log_level=all --report_level=no"
         proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,preexec_fn=os.setsid)
         signal.alarm(args.timeout)
+        out = None
+        err = None
         try:
             out, err = proc.communicate()
             signal.alarm(0)
@@ -112,21 +114,22 @@ if __name__ == "__main__":
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             proc.kill()
             proc.returncode = -1
-        if proc.returncode:
-            print_status('FAILED: %s\n' % (path))
-            if proc.returncode == -1:
-                print_status('TIMED OUT\n')
-            if out:
-                print('=== stdout START ===')
-                print(out.decode())
-                print('=== stdout END ===')
-            if err:
-                print('=== stderr START ===')
-                print(err.decode())
-                print('=== stderr END ===')
-            all_ok = False
-        else:
-            print_status('%s PASSED %s' % (prefix, path))
+        finally:
+            if proc.returncode:
+                print_status('FAILED: %s\n' % (path))
+                if proc.returncode == -1:
+                    print_status('TIMED OUT\n')
+                if out:
+                    print('=== stdout START ===')
+                    print(out.decode())
+                    print('=== stdout END ===')
+                if err:
+                    print('=== stderr START ===')
+                    print(err.decode())
+                    print('=== stderr END ===')
+                all_ok = False
+            else:
+                print_status('%s PASSED %s' % (prefix, path))
         if args.jenkins and test[1] == 'boost':
            # remove the <TestLog> and </TestLog>
            jenkins_boost_log.write(out[9:-10])
