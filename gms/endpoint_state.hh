@@ -27,6 +27,7 @@
 #include "gms/application_state.hh"
 #include "gms/versioned_value.hh"
 #include "db_clock.hh"
+#include <experimental/optional>
 
 namespace gms {
 
@@ -42,6 +43,12 @@ private:
     db_clock::time_point _update_timestamp;
     bool _is_alive;
 public:
+    endpoint_state()
+        : _heart_beat_state(0)
+        , _update_timestamp(db_clock::now())
+        , _is_alive(true) {
+    }
+
     endpoint_state(heart_beat_state initial_hb_state)
         : _heart_beat_state(initial_hb_state)
         , _update_timestamp(db_clock::now())
@@ -57,15 +64,20 @@ public:
         _heart_beat_state = hbs;
     }
 
-    versioned_value getapplication_state(application_state key) {
-        return _application_state.at(key);
+    std::experimental::optional<versioned_value> get_application_state(application_state key) {
+        auto it = _application_state.find(key);
+        if (it == _application_state.end()) {
+            return {};
+        } else {
+            return _application_state.at(key);
+        }
     }
 
     /**
      * TODO replace this with operations that don't expose private state
      */
     // @Deprecated
-    std::map<application_state, versioned_value> get_application_state_map() {
+    std::map<application_state, versioned_value>& get_application_state_map() {
         return _application_state;
     }
 

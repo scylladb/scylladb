@@ -19,6 +19,8 @@
 #include "gms/i_failure_detection_event_listener.hh"
 #include "gms/failure_detector.hh"
 
+#include "core/distributed.hh"
 namespace gms {
-    gossiper _the_gossiper;
+    distributed<gossiper> _the_gossiper;
+    distributed<failure_detector> _the_failure_detector;
 }

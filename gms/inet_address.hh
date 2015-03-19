@@ -39,6 +39,9 @@ public:
     size_t serialized_size() const {
         return serialize_int8_size + serialize_int32_size;
     }
+    friend inline bool operator==(const inet_address& x, const inet_address& y) {
+        return x._addr == y._addr;
+    }
     friend inline bool operator<(const inet_address& x, const inet_address& y) {
         return x._addr.ip < y._addr.ip;
     }
