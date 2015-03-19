@@ -82,24 +82,6 @@ enum class cql_binary_opcode : uint8_t {
     AUTH_SUCCESS   = 16,
 };
 
-enum class cql_binary_error {
-    SERVER_ERROR     = 0x0000,
-    PROTOCOL_ERROR   = 0x000A,
-    BAD_CREDENTIALS  = 0x0100,
-    UNAVAILABLE      = 0x1000,
-    OVERLOADED       = 0x1001,
-    IS_BOOTSTRAPPING = 0x1002,
-    TRUNCATE_ERROR   = 0x1003,
-    WRITE_TIMEOUT    = 0x1100,
-    READ_TIMEOUT     = 0x1200,
-    SYNTAX_ERROR     = 0x2000,
-    UNAUTHORIZED     = 0x2100,
-    INVALID          = 0x2200,
-    CONFIG_ERROR     = 0x2300,
-    ALREADY_EXISTS   = 0x2400,
-    UNPREPARED       = 0x2500,
-};
-
 inline db::consistency_level wire_to_consistency(int16_t v)
 {
      switch (v) {
@@ -180,7 +162,7 @@ private:
     future<> process_batch(uint16_t stream, temporary_buffer<char> buf);
     future<> process_register(uint16_t stream, temporary_buffer<char> buf);
 
-    future<> write_error(int16_t stream, cql_binary_error err, sstring msg);
+    future<> write_error(int16_t stream, exceptions::exception_code err, sstring msg);
     future<> write_ready(int16_t stream);
     future<> write_supported(int16_t stream);
     future<> write_result(int16_t stream, shared_ptr<transport::messages::result_message> msg);
@@ -377,9 +359,9 @@ future<> cql_server::connection::process_request() {
             try {
                 f.get();
             } catch (std::exception& ex) {
-                write_error(stream, cql_binary_error::SERVER_ERROR, ex.what());
+                write_error(stream, exceptions::exception_code::SERVER_ERROR, ex.what());
             } catch (...) {
-                write_error(stream, cql_binary_error::SERVER_ERROR, "unknown error");
+                write_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error");
             }
         });
     });
@@ -489,7 +471,7 @@ future<> cql_server::connection::process_register(uint16_t stream, temporary_buf
     return write_ready(stream);
 }
 
-future<> cql_server::connection::write_error(int16_t stream, cql_binary_error err, sstring msg)
+future<> cql_server::connection::write_error(int16_t stream, exceptions::exception_code err, sstring msg)
 {
     auto response = make_shared<cql_server::response>(stream, cql_binary_opcode::ERROR);
     response->write_int(static_cast<int32_t>(err));
