@@ -193,7 +193,7 @@ public:
     public:
         using operation::operation;
 
-        virtual void execute(mutation& m, const clustering_prefix& prefix, const update_parameters& params) override {
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
             bytes_opt value = _t->bind_and_get(params._options);
             auto cell = value ? params.make_cell(*value) : params.make_dead_cell();
             if (column.is_static()) {

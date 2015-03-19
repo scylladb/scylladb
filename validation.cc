@@ -31,7 +31,7 @@ namespace validation {
  * Based on org.apache.cassandra.thrift.ThriftValidation#validate_key()
  */
 void
-validate_cql_key(schema_ptr schema, const partition_key::one& key) {
+validate_cql_key(schema_ptr schema, const partition_key& key) {
     bytes_view b(key);
     if (b.empty()) {
         throw exceptions::invalid_request_exception("Key may not be empty");

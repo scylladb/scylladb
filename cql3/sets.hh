@@ -291,7 +291,7 @@ public:
                 : operation(column, std::move(t)) {
         }
 
-        virtual void execute(mutation& m, const clustering_prefix& row_key, const update_parameters& params) override {
+        virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override {
             if (column.type->is_multi_cell()) {
                 unimplemented::warn(unimplemented::cause::COLLECTION_RANGE_TOMBSTONES);
                 // FIXME: implement
@@ -311,12 +311,12 @@ public:
             : operation(column, std::move(t)) {
         }
 
-        virtual void execute(mutation& m, const clustering_prefix& row_key, const update_parameters& params) override {
+        virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override {
             assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen set";
             do_add(m, row_key, params, _t, column);
         }
 
-        static void do_add(mutation& m, const clustering_prefix& row_key, const update_parameters& params,
+        static void do_add(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params,
                 shared_ptr<term> t, const column_definition& column) {
             auto&& value = t->bind(params._options);
             auto set_value = dynamic_pointer_cast<sets::value>(std::move(value));

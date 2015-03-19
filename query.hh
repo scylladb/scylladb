@@ -75,8 +75,8 @@ public:
     }
 };
 
-using partition_range = range<partition_key::one>;
-using clustering_range = range<clustering_key::prefix::one>;
+using partition_range = range<partition_key>;
+using clustering_range = range<clustering_key_prefix>;
 
 class result {
 public:
@@ -85,7 +85,7 @@ public:
 
     // TODO: Optimize for singular partition range. In such case the caller
     // knows the partition key, no need to send it back.
-    std::vector<std::pair<partition_key::one, partition>> partitions;
+    std::vector<std::pair<partition_key, partition>> partitions;
 };
 
 class result::row {
@@ -103,7 +103,7 @@ public:
 
     // TODO: for some queries we could avoid sending keys back, because the client knows
     // what the key is (single row query for instance).
-    std::vector<std::pair<clustering_key::one, row>> rows;
+    std::vector<std::pair<clustering_key, row>> rows;
 public:
     // Returns row count in this result. If there is a static row and no clustering rows, that counts as one row.
     // Otherwise, if there are some clustering rows, the static row doesn't count.

@@ -16,7 +16,7 @@ murmur3_partitioner::normalize(int64_t in) {
 }
 
 token
-murmur3_partitioner::get_token(const partition_key::one& key_) {
+murmur3_partitioner::get_token(const partition_key& key_) {
     bytes_view key(key_);
     if (key.empty()) {
         return minimum_token();

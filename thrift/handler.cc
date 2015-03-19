@@ -130,7 +130,7 @@ public:
                 throw unimplemented_exception();
             } else if (predicate.__isset.slice_range) {
                 auto&& range = predicate.slice_range;
-                row* rw = cf.find_row(pk, clustering_key::one::make_empty(*cf._schema));
+                row* rw = cf.find_row(pk, clustering_key::make_empty(*cf._schema));
                 if (rw) {
                     auto beg = cf._schema->regular_begin();
                     if (!range.start.empty()) {
@@ -251,7 +251,7 @@ public:
                 const std::vector<Mutation>& mutations = cf_mutations.second;
                 auto& cf = lookup_column_family(*_ks, cf_name);
                 mutation m_to_apply(key_from_thrift(cf._schema, thrift_key), cf._schema);
-                auto empty_clustering_key = clustering_key::one::make_empty(*cf._schema);
+                auto empty_clustering_key = clustering_key::make_empty(*cf._schema);
                 for (const Mutation& m : mutations) {
                     if (m.__isset.column_or_supercolumn) {
                         auto&& cosc = m.column_or_supercolumn;
@@ -525,11 +525,11 @@ private:
             throw make_exception<InvalidRequestException>("Keyspace %s not found", ks_name);
         }
     }
-    static partition_key::one key_from_thrift(schema_ptr s, bytes k) {
+    static partition_key key_from_thrift(schema_ptr s, bytes k) {
         if (s->partition_key_size() != 1) {
             fail(unimplemented::cause::THRIFT);
         }
-        return partition_key::one::from_single_value(*s, std::move(k));
+        return partition_key::from_single_value(*s, std::move(k));
     }
 };
 
