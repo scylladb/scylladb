@@ -23,6 +23,7 @@
 #include "http/handlers.hh"
 #include "http/function_handlers.hh"
 #include "http/file_handler.hh"
+#include "apps/httpd/demo.json.hh"
 
 namespace bpo = boost::program_options;
 
@@ -45,6 +46,16 @@ void set_routes(routes& r) {
     r.add(operation_type::GET, url("/"), h1);
     r.add(operation_type::GET, url("/file").remainder("path"),
             new directory_handler("/"));
+    demo_json::hello_world.set(r,
+            [](const_req req) {
+                demo_json::my_object obj;
+                obj.var1 = req.param.at("var1");
+                obj.var2 = req.param.at("var2");
+                demo_json::ns_hello_world::query_enum v = demo_json::ns_hello_world::str2query_enum(req.query_parameters.at("query_enum"));
+                // This demonstrate enum conversion
+                obj.enum_var = v;
+                return obj;
+            });
 }
 
 int main(int ac, char** av) {
