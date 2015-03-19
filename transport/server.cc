@@ -963,7 +963,7 @@ private:
         boost::bimaps::unordered_set_of<type_id>,
         boost::bimaps::unordered_set_of<data_type>>;
 
-    static const type_id_to_type_type type_id_to_type;
+    static thread_local const type_id_to_type_type type_id_to_type;
 public:
     static void encode(cql_server::response& r, data_type type) {
         type = type->underlying_type();
@@ -984,7 +984,7 @@ public:
     }
 };
 
-const type_codec::type_id_to_type_type type_codec::type_id_to_type = boost::assign::list_of<type_id_to_type_type::relation>
+thread_local const type_codec::type_id_to_type_type type_codec::type_id_to_type = boost::assign::list_of<type_id_to_type_type::relation>
     (type_id::ASCII     , ascii_type)
     (type_id::BIGINT    , long_type)
     (type_id::BLOB      , bytes_type)
