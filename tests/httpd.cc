@@ -7,6 +7,7 @@
 
 #include <boost/test/included/unit_test.hpp>
 
+#include "http/httpd.hh"
 #include "http/handlers.hh"
 #include "http/matcher.hh"
 #include "http/matchrules.hh"
@@ -75,6 +76,14 @@ BOOST_AUTO_TEST_CASE(test_formatter)
     sstring str = "abc";
     BOOST_REQUIRE_EQUAL(json::formatter::to_json(str), "\"abc\"");
 
+}
+
+BOOST_AUTO_TEST_CASE(test_decode_url) {
+    request req;
+    req._url = "/a?q=%23%24%23";
+    sstring url = http_server::connection::set_query_param(req);
+    BOOST_REQUIRE_EQUAL(url, "/a");
+    BOOST_REQUIRE_EQUAL(req.get_query_param("q"), "#$#");
 }
 
 BOOST_AUTO_TEST_CASE(test_routes) {
