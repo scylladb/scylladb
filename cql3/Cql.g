@@ -45,6 +45,7 @@ options {
 #include "cql3/cf_name.hh"
 #include "cql3/maps.hh"
 #include "cql3/sets.hh"
+#include "cql3/lists.hh"
 #include "core/sstring.hh"
 #include "CqlLexer.hpp"
 
@@ -1069,12 +1070,11 @@ setOrMapLiteral[shared_ptr<cql3::term::raw> t] returns [shared_ptr<cql3::term::r
     ;
 
 collectionLiteral returns [shared_ptr<cql3::term::raw> value]
-#if 0
-    : '[' { List<Term.Raw> l = new ArrayList<Term.Raw>(); }
-          ( t1=term { l.add(t1); } ( ',' tn=term { l.add(tn); } )* )?
-      ']' { $value = new Lists.Literal(l); }
-#endif  // turn ':' below to '|': 
-    : '{' t=term v=setOrMapLiteral[t] { $value = v; } '}'
+	@init{ std::vector<shared_ptr<cql3::term::raw>> l; }
+    : '['
+          ( t1=term { l.push_back(t1); } ( ',' tn=term { l.push_back(tn); } )* )?
+      ']' { $value = ::make_shared<cql3::lists::literal>(std::move(l)); }
+    | '{' t=term v=setOrMapLiteral[t] { $value = v; } '}'
     // Note that we have an ambiguity between maps and set for "{}". So we force it to a set literal,
     // and deal with it later based on the type of the column (SetLiteral.java).
     | '{' '}' { $value = make_shared(cql3::sets::literal({})); }
