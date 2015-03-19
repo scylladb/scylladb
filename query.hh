@@ -73,7 +73,49 @@ public:
     const T& end_value() const {
         return _end->value();
     }
+
+    const optional<bound>& start() const {
+        return _start;
+    }
+
+    const optional<bound>& end() const {
+        return _end;
+    }
+
+    template<typename U>
+    friend std::ostream& operator<<(std::ostream& out, const range<U>& r);
 };
+
+template<typename U>
+std::ostream& operator<<(std::ostream& out, const range<U>& r) {
+    if (r.is_singular()) {
+        return out << "==" << r.start_value();
+    }
+
+    if (!r.start()) {
+        out << "(-inf, ";
+    } else {
+        if (r.start()->is_inclusive()) {
+            out << "[";
+        } else {
+            out << "(";
+        }
+        out << r.start()->value() << ", ";
+    }
+
+    if (!r.end()) {
+        out << "+inf)";
+    } else {
+        out << r.end()->value();
+        if (r.end()->is_inclusive()) {
+            out << "]";
+        } else {
+            out << ")";
+        }
+    }
+
+    return out;
+}
 
 using partition_range = range<partition_key>;
 using clustering_range = range<clustering_key_prefix>;
@@ -142,6 +184,7 @@ public:
         , slice(std::move(slice))
         , row_limit(row_limit)
     { }
+    friend std::ostream& operator<<(std::ostream& out, const read_command& r);
 };
 
 }

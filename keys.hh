@@ -281,3 +281,18 @@ public:
         return from_exploded(s, prefix.components());
     }
 };
+
+static inline
+std::ostream& operator<<(std::ostream& out, const partition_key& pk) {
+    return out << "pk{" << to_hex(pk) << "}";
+}
+
+static inline
+std::ostream& operator<<(std::ostream& out, const clustering_key& ck) {
+    return out << "ck{" << to_hex(ck) << "}";
+}
+
+static inline
+std::ostream& operator<<(std::ostream& out, const clustering_key_prefix& ckp) {
+    return out << "ckp{" << to_hex(ckp) << "}";
+}
