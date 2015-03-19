@@ -222,7 +222,7 @@ public:
             auto objects = max_object_size / _size;
             desc = new slab_page_desc(slab_page, objects, _size, _slab_class_id, slab_page_index);
         } catch (const std::bad_alloc& e) {
-            // FIXME: Is there really a need to re-throw std::bad_alloc?
+            ::free(slab_page);
             throw std::bad_alloc{};
         }
 
