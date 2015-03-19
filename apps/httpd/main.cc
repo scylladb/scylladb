@@ -22,6 +22,7 @@
 #include "http/httpd.hh"
 #include "http/handlers.hh"
 #include "http/function_handlers.hh"
+#include "http/file_handler.hh"
 
 namespace bpo = boost::program_options;
 
@@ -42,6 +43,8 @@ void set_routes(routes& r) {
         return "hello";
     });
     r.add(operation_type::GET, url("/"), h1);
+    r.add(operation_type::GET, url("/file").remainder("path"),
+            new directory_handler("/"));
 }
 
 int main(int ac, char** av) {
