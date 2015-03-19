@@ -93,7 +93,7 @@ struct request {
      * Get the request protocol name. Can be either "http" or "https".
      */
     sstring get_protocol_name() const {
-        return protocol_name;
+        return "http";
     }
 
     /**
