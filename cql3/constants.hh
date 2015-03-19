@@ -185,7 +185,7 @@ public:
             if (!bytes) {
                 return ::shared_ptr<terminal>{};
             }
-            return ::make_shared<constants::value>(bytes);
+            return ::make_shared<constants::value>(std::move(bytes));
         }
     };
 
