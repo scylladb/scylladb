@@ -328,7 +328,7 @@ private:
         auto objects = _max_object_size / object_size;
         for (auto i = 0u; i < objects; i++, object += object_size) {
             if (!desc.empty()) {
-                // if binary_search returns false, it means that object at the current
+                // if binary_search returns true, it means that object at the current
                 // offset isn't an item.
                 if (std::binary_search(free_objects.begin(), free_objects.end(), object)) {
                     continue;
