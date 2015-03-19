@@ -640,8 +640,8 @@ collection_type_impl::make_collection_receiver(shared_ptr<cql3::column_specifica
     return _kind.make_collection_receiver(std::move(collection), is_key);
 }
 
-std::vector<atomic_cell::one>
-collection_type_impl::enforce_limit(std::vector<atomic_cell::one> cells, int version) {
+std::vector<atomic_cell>
+collection_type_impl::enforce_limit(std::vector<atomic_cell> cells, int version) {
     assert(is_multi_cell());
     if (version >= 3 || cells.size() <= max_elements) {
         return cells;
@@ -653,7 +653,7 @@ collection_type_impl::enforce_limit(std::vector<atomic_cell::one> cells, int ver
 }
 
 bytes
-collection_type_impl::serialize_for_native_protocol(std::vector<atomic_cell::one> cells, int version) {
+collection_type_impl::serialize_for_native_protocol(std::vector<atomic_cell> cells, int version) {
     assert(is_multi_cell());
     cells = enforce_limit(std::move(cells), version);
     std::vector<bytes> values = serialized_values(std::move(cells));
@@ -876,7 +876,7 @@ map_type_impl::from_string(sstring_view text) {
 }
 
 std::vector<bytes>
-map_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
+map_type_impl::serialized_values(std::vector<atomic_cell> cells) {
     // FIXME:
     abort();
 }
@@ -923,7 +923,7 @@ auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation_
         auto ksize = read_simple<uint32_t>(in);
         auto key = read_simple_bytes(in, ksize);
         auto vsize = read_simple<uint32_t>(in);
-        auto value = atomic_cell::view::from_bytes(read_simple_bytes(in, vsize));
+        auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
         ret.emplace_back(key, value);
     }
     assert(in.empty());
@@ -971,7 +971,7 @@ collection_type_impl::merge(collection_mutation::view a, collection_mutation::vi
     auto bb = deserialize_mutation_form(b.data);
     mutation_view merged;
     merged.reserve(aa.size() + bb.size());
-    using element_type = std::pair<bytes_view, atomic_cell::view>;
+    using element_type = std::pair<bytes_view, atomic_cell_view>;
     auto key_type = name_comparator();
     auto compare = [key_type] (const element_type& e1, const element_type& e2) {
         return key_type->less(e1.first, e2.first);
@@ -1171,7 +1171,7 @@ set_type_impl::from_string(sstring_view text) {
 }
 
 std::vector<bytes>
-set_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
+set_type_impl::serialized_values(std::vector<atomic_cell> cells) {
     // FIXME:
     abort();
 }
@@ -1330,7 +1330,7 @@ list_type_impl::from_string(sstring_view text) {
 }
 
 std::vector<bytes>
-list_type_impl::serialized_values(std::vector<atomic_cell::one> cells) {
+list_type_impl::serialized_values(std::vector<atomic_cell> cells) {
     // FIXME:
     abort();
 }

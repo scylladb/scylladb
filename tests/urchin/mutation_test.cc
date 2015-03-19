@@ -13,8 +13,8 @@
 static sstring some_keyspace("ks");
 static sstring some_column_family("cf");
 
-static atomic_cell::one make_atomic_cell(bytes value) {
-    return atomic_cell::one::make_live(0, ttl_opt{}, std::move(value));
+static atomic_cell make_atomic_cell(bytes value) {
+    return atomic_cell::make_live(0, ttl_opt{}, std::move(value));
 };
 
 BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {

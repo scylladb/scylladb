@@ -337,7 +337,7 @@ column_family::apply(const mutation& m) {
 
 // Based on org.apache.cassandra.db.AbstractCell#reconcile()
 int
-compare_atomic_cell_for_merge(atomic_cell::view left, atomic_cell::view right) {
+compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
     if (left.timestamp() != right.timestamp()) {
         return left.timestamp() > right.timestamp() ? 1 : -1;
     }
@@ -556,7 +556,7 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
                     if (c.timestamp() < row_tombstone.timestamp) {
                         result_row.cells.emplace_back(std::experimental::make_optional(
                             atomic_cell_or_collection::from_atomic_cell(
-                                atomic_cell::one::make_dead(row_tombstone.timestamp, row_tombstone.ttl))));
+                                atomic_cell::make_dead(row_tombstone.timestamp, row_tombstone.ttl))));
                     } else {
                         result_row.cells.emplace_back(std::experimental::make_optional(i->second));
                     }

@@ -63,18 +63,18 @@ public:
         }
     }
 
-    atomic_cell::one make_dead_cell() const {
-        return atomic_cell::one::make_dead(_timestamp, _local_deletion_time);
+    atomic_cell make_dead_cell() const {
+        return atomic_cell::make_dead(_timestamp, _local_deletion_time);
     }
 
-    atomic_cell::one make_cell(bytes_view value) const {
+    atomic_cell make_cell(bytes_view value) const {
         auto ttl = _ttl;
 
         if (ttl.count() <= 0) {
             ttl = _schema->default_time_to_live;
         }
 
-        return atomic_cell::one::make_live(_timestamp,
+        return atomic_cell::make_live(_timestamp,
             ttl.count() > 0 ? ttl_opt{_local_deletion_time + ttl} : ttl_opt{}, value);
     };
 
