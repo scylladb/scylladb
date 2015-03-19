@@ -613,9 +613,9 @@ typename Type::value_type deserialize_value(Type& t, bytes_view v) {
     return t.deserialize_value(v);
 }
 
-template<typename Type>
+template<typename Type, typename Value>
 static inline
-bytes serialize_value(Type& t, const typename Type::value_type& value) {
+bytes serialize_value(Type& t, const Value& value) {
     bytes b(bytes::initialized_later(), t.serialized_size(value));
     auto i = b.begin();
     t.serialize_value(value, i);

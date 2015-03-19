@@ -12,21 +12,43 @@
 #include "util/serialization.hh"
 #include "unimplemented.hh"
 
-// TODO: Add AllowsMissing parameter which will allow to optimize serialized format.
-// Currently we default to AllowsMissing = true.
+// value_traits is meant to abstract away whether we are working on 'bytes'
+// elements or 'bytes_opt' elements. We don't support optional values, but
+// there are some generic layers which use this code which provide us with
+// data in that format. In order to avoid allocation and rewriting that data
+// into a new vector just to throw it away soon after that, we accept that
+// format too.
+
+template <typename T>
+struct value_traits {
+    static const T& unwrap(const T& t) { return t; }
+};
+
+template<>
+struct value_traits<bytes_opt> {
+    static const bytes& unwrap(const bytes_opt& t) {
+        assert(t);
+        return *t;
+    }
+};
+
 template<bool AllowPrefixes = false>
 class tuple_type final {
 private:
     const std::vector<shared_ptr<abstract_type>> _types;
     const bool _byte_order_equal;
+    const bool _byte_order_comparable;
 public:
     using prefix_type = tuple_type<true>;
-    using value_type = std::vector<bytes_opt>;
+    using value_type = std::vector<bytes>;
 
     tuple_type(std::vector<shared_ptr<abstract_type>> types)
         : _types(std::move(types))
         , _byte_order_equal(std::all_of(_types.begin(), _types.end(), [] (auto t) {
                 return t->is_byte_order_equal();
+            }))
+        , _byte_order_comparable(std::all_of(_types.begin(), _types.end(), [] (auto t) {
+                return t->is_byte_order_comparable();
             }))
     { }
 
@@ -43,43 +65,53 @@ public:
     /*
      * Format:
      *   <len(value1)><value1><len(value2)><value2>...
-     *
-     *   if value is missing then len(value) < 0
      */
-    void serialize_value(const value_type& values, bytes::iterator& out) {
+    template<typename Wrapped>
+    void serialize_value(const std::vector<Wrapped>& values, bytes::iterator& out) {
         if (AllowPrefixes) {
             assert(values.size() <= _types.size());
         } else {
             assert(values.size() == _types.size());
         }
 
-        for (auto&& val : values) {
-            if (!val) {
-                write<uint32_t>(out, uint32_t(-1));
-            } else {
-                assert(val->size() <= std::numeric_limits<int32_t>::max());
-                write<uint32_t>(out, uint32_t(val->size()));
-                out = std::copy(val->begin(), val->end(), out);
-            }
+        for (auto&& wrapped : values) {
+            auto&& val = value_traits<Wrapped>::unwrap(wrapped);
+            assert(val.size() <= std::numeric_limits<int32_t>::max());
+            write<uint32_t>(out, uint32_t(val.size()));
+            out = std::copy(val.begin(), val.end(), out);
         }
     }
-    bytes serialize_value(const value_type& values) {
+    template <typename Wrapped>
+    size_t serialized_size(const std::vector<Wrapped>& values) {
+        size_t len = 0;
+        for (auto&& wrapped : values) {
+            auto&& val = value_traits<Wrapped>::unwrap(wrapped);
+            assert(val.size() <= std::numeric_limits<int32_t>::max());
+            len += sizeof(uint32_t) + val.size();
+        }
+        return len;
+    }
+    bytes serialize_value(const std::vector<bytes>& values) {
+        return ::serialize_value(*this, values);
+    }
+    bytes serialize_optionals(const std::vector<bytes_opt>& values) {
         return ::serialize_value(*this, values);
     }
     bytes serialize_value_deep(const std::vector<boost::any>& values) {
         // TODO: Optimize
-        std::vector<bytes_opt> partial;
+        std::vector<bytes> partial;
+        partial.reserve(values.size());
         auto i = _types.begin();
         for (auto&& component : values) {
             assert(i != _types.end());
-            partial.push_back({(*i++)->decompose(component)});
+            partial.push_back((*i++)->decompose(component));
         }
         return serialize_value(partial);
     }
     bytes decompose_value(const value_type& values) {
         return ::serialize_value(*this, values);
     }
-    class iterator : public std::iterator<std::forward_iterator_tag, std::experimental::optional<bytes_view>> {
+    class iterator : public std::iterator<std::forward_iterator_tag, bytes_view> {
     private:
         ssize_t _types_left;
         bytes_view _v;
@@ -101,17 +133,12 @@ public:
                     throw marshal_exception();
                 }
             }
-            auto len = read_simple<int32_t>(_v);
-            if (len < 0) {
-                _current = std::experimental::optional<bytes_view>();
-            } else {
-                auto u_len = static_cast<uint32_t>(len);
-                if (_v.size() < u_len) {
-                    throw marshal_exception();
-                }
-                _current = std::experimental::make_optional(bytes_view(_v.begin(), u_len));
-                _v.remove_prefix(u_len);
+            auto len = read_simple<uint32_t>(_v);
+            if (_v.size() < len) {
+                throw marshal_exception();
             }
+            _current = bytes_view(_v.begin(), len);
+            _v.remove_prefix(len);
         }
     public:
         struct end_iterator_tag {};
@@ -138,34 +165,12 @@ public:
         return boost::iterator_range<iterator>(begin(v), end(v));
     }
     value_type deserialize_value(bytes_view v) {
-        std::vector<bytes_opt> result;
+        std::vector<bytes> result;
         result.reserve(_types.size());
-        std::transform(begin(v), end(v), std::back_inserter(result), [] (auto&& value_opt) {
-            if (!value_opt) {
-                return bytes_opt();
-            }
-            return bytes_opt(bytes(value_opt->begin(), value_opt->end()));
+        std::transform(begin(v), end(v), std::back_inserter(result), [] (auto&& v) {
+            return bytes(v.begin(), v.end());
         });
         return result;
-    }
-    object_opt deserialize(bytes_view v) {
-        return {boost::any(deserialize_value(v))};
-    }
-    void serialize(const boost::any& obj, bytes::iterator& out) {
-        serialize_value(boost::any_cast<const value_type&>(obj), out);
-    }
-    size_t serialized_size(const boost::any& obj) {
-        auto& values = boost::any_cast<const value_type&>(obj);
-        size_t len = 0;
-        for (auto&& val : values) {
-            if (!val) {
-                len += sizeof(uint32_t);
-            } else {
-                assert(val->size() <= std::numeric_limits<int32_t>::max());
-                len += sizeof(uint32_t) + val->size();
-            }
-        }
-        return len;
     }
     bool less(bytes_view b1, bytes_view b2) {
         return compare(b1, b2) < 0;
@@ -176,55 +181,20 @@ public:
         }
         auto t = _types.begin();
         size_t h = 0;
-        for (auto&& value_opt : iter_items(v)) {
-            if (value_opt) {
-                h ^= (*t)->hash(*value_opt);
-            }
+        for (auto&& value : iter_items(v)) {
+            h ^= (*t)->hash(value);
             ++t;
         }
         return h;
     }
-    int32_t compare(bytes_view b1, bytes_view b2) {
-        if (is_byte_order_comparable()) {
+    int compare(bytes_view b1, bytes_view b2) {
+        if (_byte_order_comparable) {
             return compare_unsigned(b1, b2);
         }
-
-        auto i1 = begin(b1);
-        auto e1 = end(b1);
-        auto i2 = begin(b2);
-        auto e2 = end(b2);
-
-        for (auto&& type : _types) {
-            if (i1 == e1) {
-                return i2 == e2 ? 0 : -1;
-            }
-            if (i2 == e2) {
-                return 1;
-            }
-            auto v1 = *i1;
-            auto v2 = *i2;
-            if (bool(v1) != bool(v2)) {
-                return v2 ? -1 : 1;
-            }
-            if (v1) {
-                auto c = type->compare(*v1, *v2);
-                if (c != 0) {
-                    return c;
-                }
-            }
-            ++i1;
-            ++i2;
-        }
-        return 0;
-    }
-    bool is_byte_order_equal() const {
-        return _byte_order_equal;
-    }
-    bool is_byte_order_comparable() const {
-        // We're not byte order comparable because we encode component length as signed integer,
-        // which is not byte order comparable.
-        // TODO: make the length byte-order comparable by adding numeric_limits<int32_t>::min() when serializing
-        return false;
+        return lexicographical_tri_compare(_types.begin(),
+            begin(b1), end(b1), begin(b2), end(b2), [] (auto&& type, auto&& v1, auto&& v2) {
+                return type->compare(v1, v2);
+            });
     }
     bytes from_string(sstring_view s) {
         throw std::runtime_error("not implemented");
@@ -246,25 +216,16 @@ public:
                 return true;
             }
             assert(!value.empty());
-            auto len1 = read_simple<int32_t>(prefix);
-            auto len2 = read_simple<int32_t>(value);
-            if ((len1 < 0) != (len2 < 0)) {
-                // one is empty and another one is not
+            auto len1 = read_simple<uint32_t>(prefix);
+            auto len2 = read_simple<uint32_t>(value);
+            if (prefix.size() < len1 || value.size() < len2) {
+                throw marshal_exception();
+            }
+            if (!type->equal(bytes_view(prefix.begin(), len1), bytes_view(value.begin(), len2))) {
                 return false;
             }
-            if (len1 >= 0) {
-                // both are not empty
-                auto u_len1 = static_cast<uint32_t>(len1);
-                auto u_len2 = static_cast<uint32_t>(len2);
-                if (prefix.size() < u_len1 || value.size() < u_len2) {
-                    throw marshal_exception();
-                }
-                if (!type->equal(bytes_view(prefix.begin(), u_len1), bytes_view(value.begin(), u_len2))) {
-                    return false;
-                }
-                prefix.remove_prefix(u_len1);
-                value.remove_prefix(u_len2);
-            }
+            prefix.remove_prefix(len1);
+            value.remove_prefix(len2);
         }
 
         if (!prefix.empty() || !value.empty()) {

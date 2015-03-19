@@ -144,7 +144,7 @@ public:
         std::vector<ValueType> result;
         result.reserve(cartesian_product_size(value_vector));
         for (auto&& v : make_cartesian_product(value_vector)) {
-            result.emplace_back(ValueType::from_exploded(*_schema, v));
+            result.emplace_back(ValueType::from_optional_exploded(*_schema, v));
         }
         return result;
     }
@@ -174,7 +174,7 @@ public:
                         if (!value) {
                             throw exceptions::invalid_request_exception(sprint("Invalid null clustering key part %s", r->to_string()));
                         }
-                        return {range_bound(ValueType::from_exploded(*_schema, {*value}), r->is_inclusive(b))};
+                        return {range_bound(ValueType::from_single_value(*_schema, *value), r->is_inclusive(b))};
                     };
                     ranges.emplace_back(range_type(
                         read_bound(statements::bound::START),
@@ -194,11 +194,11 @@ public:
                                 throw exceptions::invalid_request_exception(sprint("Invalid null clustering key part %s", r->to_string()));
                             }
                             prefix.emplace_back(std::move(value));
-                            auto val = ValueType::from_exploded(*_schema, prefix);
+                            auto val = ValueType::from_optional_exploded(*_schema, prefix);
                             prefix.pop_back();
                             return range_bound(std::move(val), r->is_inclusive(bound));
                         } else {
-                            return range_bound(ValueType::from_exploded(*_schema, prefix));
+                            return range_bound(ValueType::from_optional_exploded(*_schema, prefix));
                         }
                     };
 
@@ -228,7 +228,7 @@ public:
 
         ranges.reserve(cartesian_product_size(vec_of_values));
         for (auto&& prefix : make_cartesian_product(vec_of_values)) {
-            ranges.emplace_back(range_type::make_singular(ValueType::from_exploded(*_schema, prefix)));
+            ranges.emplace_back(range_type::make_singular(ValueType::from_optional_exploded(*_schema, prefix)));
         }
 
         return std::move(ranges);

@@ -149,7 +149,7 @@ modification_statement::get_first_empty_key() {
 
 clustering_prefix
 modification_statement::create_clustering_prefix_internal(const query_options& options) {
-    std::vector<bytes_opt> components;
+    std::vector<bytes> components;
     const column_definition* first_empty_key = nullptr;
 
     for (auto& def : s->clustering_key_columns()) {
@@ -177,7 +177,7 @@ modification_statement::create_clustering_prefix_internal(const query_options& o
             if (!val) {
                 throw exceptions::invalid_request_exception(sprint("Invalid null value for clustering key part %s", def.name_as_text()));
             }
-            components.push_back(val);
+            components.push_back(*val);
         }
     }
     return clustering_prefix(std::move(components));
@@ -224,7 +224,7 @@ modification_statement::create_clustering_prefix(const query_options& options) {
 std::vector<partition_key::one>
 modification_statement::build_partition_keys(const query_options& options) {
     std::vector<partition_key::one> result;
-    std::vector<bytes_opt> components;
+    std::vector<bytes> components;
 
     auto remaining = s->partition_key_size();
 
@@ -242,7 +242,7 @@ modification_statement::build_partition_keys(const query_options& options) {
                 if (!val) {
                     throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
                 }
-                components.push_back(val);
+                components.push_back(*val);
                 auto key = partition_key::one::from_exploded(*s, components);
                 validation::validate_cql_key(s, key);
                 result.emplace_back(std::move(key));
@@ -251,10 +251,10 @@ modification_statement::build_partition_keys(const query_options& options) {
                     if (!val) {
                         throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
                     }
-                    std::vector<bytes_opt> full_components;
+                    std::vector<bytes> full_components;
                     full_components.reserve(components.size() + 1);
                     auto i = std::copy(components.begin(), components.end(), std::back_inserter(full_components));
-                    *i = val;
+                    *i = *val;
                     auto key = partition_key::one::from_exploded(*s, full_components);
                     validation::validate_cql_key(s, key);
                     result.emplace_back(std::move(key));
@@ -268,7 +268,7 @@ modification_statement::build_partition_keys(const query_options& options) {
             if (!val) {
                 throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
             }
-            components.push_back(val);
+            components.push_back(*val);
         }
 
         remaining--;

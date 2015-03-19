@@ -30,7 +30,6 @@
 // is not stored. Therefore accessors need to be provided with a pointer to
 // schema, from which information about structure is extracted.
 
-// FIXME: Keys can't contain nulls, so we could get rid of optionals
 
 // Abstracts serialized tuple, managed by tuple_type.
 template <typename TopLevel>
@@ -45,13 +44,18 @@ protected:
     }
 public:
     static TopLevel make_empty(const schema& s) {
-        std::vector<bytes_opt> v;
+        std::vector<bytes> v;
         v.resize(get_tuple_type(s)->types().size());
         return from_exploded(s, v);
     }
 
-    static TopLevel from_exploded(const schema& s, const std::vector<bytes_opt>& v) {
+    static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {
         return TopLevel::from_bytes(get_tuple_type(s)->serialize_value(v));
+    }
+
+    // We don't allow optional values, but provide this method as an efficient adaptor
+    static TopLevel from_optional_exploded(const schema& s, const std::vector<bytes_opt>& v) {
+        return TopLevel::from_bytes(get_tuple_type(s)->serialize_optionals(v));
     }
 
     static TopLevel from_deeply_exploded(const schema& s, const std::vector<boost::any>& v) {
@@ -60,13 +64,13 @@ public:
 
     static TopLevel from_single_value(const schema& s, bytes v) {
         // FIXME: optimize
-        std::vector<bytes_opt> values;
-        values.emplace_back(bytes_opt(std::move(v)));
+        std::vector<bytes> values;
+        values.emplace_back(std::move(v));
         return from_exploded(s, values);
     }
 
-    // FIXME: get rid of optional<> and return views
-    std::vector<bytes_opt> explode(const schema& s) const {
+    // FIXME: return views
+    std::vector<bytes> explode(const schema& s) const {
         return get_tuple_type(s)->deserialize_value(_bytes);
     }
 
@@ -136,14 +140,14 @@ public:
             return lexicographical_compare(prefix_type->types().begin(),
                 k1.begin(), k1.end(),
                 prefix_type->begin(k2), prefix_type->end(k2),
-                optional_less_compare);
+                less_compare);
         }
 
         bool operator()(const PrefixTopLevel& k1, const prefix_view_on_full_tuple& k2) const {
             return lexicographical_compare(prefix_type->types().begin(),
                 prefix_type->begin(k1), prefix_type->end(k1),
                 k2.begin(), k2.end(),
-                optional_less_compare);
+                less_compare);
         }
     };
 };
@@ -162,7 +166,7 @@ public:
         return ::is_prefixed_by(t->types().begin(),
             t->begin(*this), t->end(*this),
             prefix_type->begin(prefix), prefix_type->end(prefix),
-            optional_equal);
+            less_compare);
     }
 
     struct less_compare_with_prefix {
@@ -178,14 +182,14 @@ public:
             return lexicographical_compare(prefix_type->types().begin(),
                 full_type->begin(k1), full_type->end(k1),
                 prefix_type->begin(k2), prefix_type->end(k2),
-                optional_less_compare);
+                less_compare);
         }
 
         bool operator()(const PrefixTopLevel& k1, const TopLevel& k2) const {
             return lexicographical_compare(prefix_type->types().begin(),
                 prefix_type->begin(k1), prefix_type->end(k1),
                 full_type->begin(k2), full_type->end(k2),
-                optional_less_compare);
+                less_compare);
         }
     };
 
@@ -214,7 +218,7 @@ public:
         return ::is_prefixed_by(t->types().begin(),
             t->begin(*this), t->end(*this),
             t->begin(prefix), t->end(prefix),
-            optional_equal);
+            equal);
     }
 };
 
@@ -235,9 +239,9 @@ public:
 };
 
 class clustering_prefix {
-    std::vector<bytes_opt> _v;
+    std::vector<bytes> _v;
 public:
-    clustering_prefix(std::vector<bytes_opt>&& v) : _v(std::move(v)) {}
+    clustering_prefix(std::vector<bytes>&& v) : _v(std::move(v)) {}
     clustering_prefix() {}
     size_t size() const {
         return _v.size();
