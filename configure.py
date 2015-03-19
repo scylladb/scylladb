@@ -321,6 +321,9 @@ with open(buildfile, 'w') as f:
         rule gen
             command = echo -e $text > $out
             description = GEN $out
+        rule swagger
+            command = json/json2code.py -f $in -o $out
+            description = SWAGGER $out
         ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
@@ -347,6 +350,7 @@ with open(buildfile, 'w') as f:
             artifacts = str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))))
         compiles = {}
         ragels = {}
+        swaggers = {}
         for binary in build_artifacts:
             srcs = deps[binary]
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
@@ -375,15 +379,21 @@ with open(buildfile, 'w') as f:
                 elif src.endswith('.rl'):
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.rl', '.hh')
                     ragels[hh] = src
+                elif src.endswith('.json'):
+                    hh = '$builddir/' + mode + '/gen/' + src + '.hh'
+                    swaggers[hh] = src
                 else:
                     raise Exception('No rule for ' + src)
         for obj in compiles:
             src = compiles[obj]
-            gen_headers = ragels.keys()
+            gen_headers = list(ragels.keys()) + list(swaggers.keys())
             f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
         for hh in ragels:
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))
+        for hh in swaggers:
+            src = swaggers[hh]
+            f.write('build {}: swagger {}\n'.format(hh,src))
     f.write(textwrap.dedent('''\
         rule configure
           command = python3 configure.py $configure_args
