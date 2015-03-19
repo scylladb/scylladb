@@ -250,6 +250,16 @@ bool optional_equal(data_type t, bytes_view_opt e1, bytes_view_opt e2) {
     return t->equal(*e1, *e2);
 }
 
+static inline
+bool less_compare(data_type t, bytes_view e1, bytes_view e2) {
+    return t->less(e1, e2);
+}
+
+static inline
+bool equal(data_type t, bytes_view e1, bytes_view e2) {
+    return t->equal(e1, e2);
+}
+
 class collection_type_impl : public abstract_type {
     static thread_local logging::logger _logger;
 public:
