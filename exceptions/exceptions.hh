@@ -28,6 +28,7 @@
 #include <stdexcept>
 #include "core/sstring.hh"
 #include "core/print.hh"
+#include "bytes.hh"
 
 namespace exceptions {
 
@@ -98,6 +99,19 @@ public:
 class request_validation_exception : public cassandra_exception {
 public:
     using cassandra_exception::cassandra_exception;
+};
+
+class prepared_query_not_found_exception : public request_validation_exception {
+public:
+    prepared_query_not_found_exception(bytes id)
+        : request_validation_exception{exception_code::UNPREPARED, std::move(make_message(id))}
+    { }
+private:
+    static sstring make_message(bytes id) {
+        std::stringstream msg;
+        msg << "No prepared statement with ID " << id << " found.";
+        return msg.str();
+    }
 };
 
 class syntax_exception : public request_validation_exception {

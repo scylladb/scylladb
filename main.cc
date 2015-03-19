@@ -18,8 +18,10 @@ int main(int ac, char** av) {
         ("thrift-port", bpo::value<uint16_t>()->default_value(9160), "Thrift port")
         ("datadir", bpo::value<std::string>()->default_value("/var/lib/cassandra/data"), "data directory");
 
-    auto server = std::make_unique<distributed<thrift_server>>();;
+    auto server = std::make_unique<distributed<thrift_server>>();
     distributed<database> db;
+    distributed<cql3::query_processor> qp;
+    service::storage_proxy proxy{db};
 
     return app.run(ac, av, [&] {
         auto&& config = app.configuration();
@@ -30,9 +32,11 @@ int main(int ac, char** av) {
         return db.start().then([datadir, &db] {
             engine().at_exit([&db] { return db.stop(); });
             return db.invoke_on_all(&database::init_from_data_directory, datadir);
-        }).then([&db, cql_port, thrift_port] {
+        }).then([&db, &proxy, &qp] {
+            return qp.start(std::ref(proxy), std::ref(db));
+        }).then([&db, &proxy, &qp, cql_port, thrift_port] {
             auto cserver = new distributed<cql_server>;
-            cserver->start(std::ref(db)).then([server = std::move(cserver), cql_port] () mutable {
+            cserver->start(std::ref(proxy), std::ref(qp)).then([server = std::move(cserver), cql_port] () mutable {
                     server->invoke_on_all(&cql_server::listen, ipv4_addr{cql_port});
             }).then([cql_port] {
                 std::cout << "CQL server listening on port " << cql_port << " ...\n";

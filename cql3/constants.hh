@@ -164,43 +164,29 @@ public:
     public:
         marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
             : abstract_marker{bind_index, std::move(receiver)}
-        { }
-#if 0
-        protected Marker(int bindIndex, ColumnSpecification receiver)
         {
-            super(bindIndex, receiver);
-            assert !receiver.type.isCollection();
+            assert(!_receiver->type->is_collection());
         }
-#endif
 
-#if 0
-        @Override
-        public ByteBuffer bindAndGet(QueryOptions options) throws InvalidRequestException
-        {
-            try
-            {
-                ByteBuffer value = options.getValues().get(bindIndex);
-                if (value != null)
-                    receiver.type.validate(value);
+        virtual bytes_opt bind_and_get(const query_options& options) override {
+            try {
+                auto value = options.get_values().at(_bind_index);
+                if (value) {
+                    _receiver->type->validate(value.value());
+                }
                 return value;
-            }
-            catch (MarshalException e)
-            {
-                throw new InvalidRequestException(e.getMessage());
+            } catch (const exceptions::marshal_exception& e) {
+                throw exceptions::invalid_request_exception(e.what());
             }
         }
-#endif
 
         virtual ::shared_ptr<terminal> bind(const query_options& options) override {
-            throw std::runtime_error("");
+            auto bytes = bind_and_get(options);
+            if (!bytes) {
+                return ::shared_ptr<terminal>{};
+            }
+            return ::make_shared<constants::value>(bytes);
         }
-#if 0
-        public Value bind(QueryOptions options) throws InvalidRequestException
-        {
-            ByteBuffer bytes = bindAndGet(options);
-            return bytes == null ? null : new Constants.Value(bytes);
-        }
-#endif
     };
 
     class setter : public operation {
