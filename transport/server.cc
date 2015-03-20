@@ -196,7 +196,7 @@ private:
 class cql_server::response {
     int16_t           _stream;
     cql_binary_opcode _opcode;
-    std::stringstream _body;
+    std::vector<char> _body;
 public:
     response(int16_t stream, cql_binary_opcode opcode)
         : _stream{stream}
@@ -813,7 +813,7 @@ bytes_opt cql_server::connection::read_value(temporary_buffer<char>& buf) {
 
 scattered_message<char> cql_server::response::make_message(uint8_t version) {
     scattered_message<char> msg;
-    sstring body = _body.str();
+    sstring body{_body.data(), _body.size()};
     sstring frame = make_frame(version, body.size());
     msg.append(std::move(frame));
     msg.append(std::move(body));
@@ -853,33 +853,36 @@ sstring cql_server::response::make_frame(uint8_t version, size_t length)
 void cql_server::response::write_int(int32_t n)
 {
     auto u = htonl(n);
-    _body.write(reinterpret_cast<const char*>(&u), sizeof(u));
+    auto *s = reinterpret_cast<const char*>(&u);
+    _body.insert(_body.end(), s, s+sizeof(u));
 }
 
 void cql_server::response::write_long(int64_t n)
 {
     auto u = htonq(n);
-    _body.write(reinterpret_cast<const char*>(&u), sizeof(u));
+    auto *s = reinterpret_cast<const char*>(&u);
+    _body.insert(_body.end(), s, s+sizeof(u));
 }
 
 void cql_server::response::write_short(int16_t n)
 {
     auto u = htons(n);
-    _body.write(reinterpret_cast<const char*>(&u), sizeof(u));
+    auto *s = reinterpret_cast<const char*>(&u);
+    _body.insert(_body.end(), s, s+sizeof(u));
 }
 
 void cql_server::response::write_string(const sstring& s)
 {
     assert(s.size() < std::numeric_limits<int16_t>::max());
     write_short(s.size());
-    _body << s;
+    _body.insert(_body.end(), s.begin(), s.end());
 }
 
 void cql_server::response::write_long_string(const sstring& s)
 {
     assert(s.size() < std::numeric_limits<int32_t>::max());
     write_int(s.size());
-    _body << s;
+    _body.insert(_body.end(), s.begin(), s.end());
 }
 
 void cql_server::response::write_uuid(utils::UUID uuid)
@@ -901,14 +904,14 @@ void cql_server::response::write_bytes(bytes b)
 {
     assert(b.size() < std::numeric_limits<int32_t>::max());
     write_int(b.size());
-    _body.write(b.begin(), b.size());
+    _body.insert(_body.end(), b.begin(), b.end());
 }
 
 void cql_server::response::write_short_bytes(bytes b)
 {
     assert(b.size() < std::numeric_limits<int16_t>::max());
     write_short(b.size());
-    _body.write(b.begin(), b.size());
+    _body.insert(_body.end(), b.begin(), b.end());
 }
 
 void cql_server::response::write_option(std::pair<int16_t, boost::any> opt)
@@ -971,7 +974,7 @@ void cql_server::response::write_value(bytes_opt value)
     }
 
     write_int(value->size());
-    _body << *value;
+    _body.insert(_body.end(), *value->begin(), *value->end());
 }
 
 class type_codec {
