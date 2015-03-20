@@ -30,7 +30,6 @@
 // is not stored. Therefore accessors need to be provided with a pointer to
 // schema, from which information about structure is extracted.
 
-// FIXME: Keys can't contain nulls, so we could get rid of optionals
 
 // Abstracts serialized tuple, managed by tuple_type.
 template <typename TopLevel>
@@ -40,62 +39,67 @@ protected:
 protected:
     tuple_wrapper(bytes&& b) : _bytes(std::move(b)) {}
 
-    static inline auto type(const schema& s) {
-        return TopLevel::tuple_type(s);
+    static inline auto get_tuple_type(const schema& s) {
+        return TopLevel::get_tuple_type(s);
     }
 public:
     static TopLevel make_empty(const schema& s) {
-        std::vector<bytes_opt> v;
-        v.resize(type(s)->types().size());
+        std::vector<bytes> v;
+        v.resize(get_tuple_type(s)->types().size());
         return from_exploded(s, v);
     }
 
-    static TopLevel from_exploded(const schema& s, const std::vector<bytes_opt>& v) {
-        return TopLevel::from_bytes(type(s)->serialize_value(v));
+    static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {
+        return TopLevel::from_bytes(get_tuple_type(s)->serialize_value(v));
+    }
+
+    // We don't allow optional values, but provide this method as an efficient adaptor
+    static TopLevel from_optional_exploded(const schema& s, const std::vector<bytes_opt>& v) {
+        return TopLevel::from_bytes(get_tuple_type(s)->serialize_optionals(v));
     }
 
     static TopLevel from_deeply_exploded(const schema& s, const std::vector<boost::any>& v) {
-        return TopLevel::from_bytes(type(s)->serialize_value_deep(v));
+        return TopLevel::from_bytes(get_tuple_type(s)->serialize_value_deep(v));
     }
 
     static TopLevel from_single_value(const schema& s, bytes v) {
         // FIXME: optimize
-        std::vector<bytes_opt> values;
-        values.emplace_back(bytes_opt(std::move(v)));
+        std::vector<bytes> values;
+        values.emplace_back(std::move(v));
         return from_exploded(s, values);
     }
 
-    // FIXME: get rid of optional<> and return views
-    std::vector<bytes_opt> explode(const schema& s) const {
-        return type(s)->deserialize_value(_bytes);
+    // FIXME: return views
+    std::vector<bytes> explode(const schema& s) const {
+        return get_tuple_type(s)->deserialize_value(_bytes);
     }
 
     struct less_compare {
-        data_type _t;
-        less_compare(const schema& s) : _t(type(s)) {}
+        typename TopLevel::tuple _t;
+        less_compare(const schema& s) : _t(get_tuple_type(s)) {}
         bool operator()(const TopLevel& k1, const TopLevel& k2) const {
             return _t->less(k1, k2);
         }
     };
 
     struct hashing {
-        data_type _t;
-        hashing(const schema& s) : _t(type(s)) {}
+        typename TopLevel::tuple _t;
+        hashing(const schema& s) : _t(get_tuple_type(s)) {}
         size_t operator()(const TopLevel& o) const {
             return _t->hash(o);
         }
     };
 
     struct equality {
-        data_type _t;
-        equality(const schema& s) : _t(type(s)) {}
+        typename TopLevel::tuple _t;
+        equality(const schema& s) : _t(get_tuple_type(s)) {}
         bool operator()(const TopLevel& o1, const TopLevel& o2) const {
             return _t->equal(o1, o2);
         }
     };
 
     bool equal(const schema& s, const TopLevel& other) const {
-        return type(s)->equal(*this, other);
+        return get_tuple_type(s)->equal(*this, other);
     }
 
     operator bytes_view() const {
@@ -116,7 +120,7 @@ public:
     prefix_view_on_full_tuple(const schema& s, bytes_view b, unsigned prefix_len)
         : _b(b)
         , _prefix_len(prefix_len)
-        , _begin(TopLevel::tuple_type(s)->begin(_b))
+        , _begin(TopLevel::get_tuple_type(s)->begin(_b))
         , _end(_begin)
     {
         std::advance(_end, prefix_len);
@@ -126,24 +130,24 @@ public:
     iterator end() const { return _end; }
 
     struct less_compare_with_prefix {
-        shared_ptr<tuple_type<true>> prefix_type;
+        typename PrefixTopLevel::tuple prefix_type;
 
         less_compare_with_prefix(const schema& s)
-            : prefix_type(PrefixTopLevel::tuple_type(s))
+            : prefix_type(PrefixTopLevel::get_tuple_type(s))
         { }
 
         bool operator()(const prefix_view_on_full_tuple& k1, const PrefixTopLevel& k2) const {
             return lexicographical_compare(prefix_type->types().begin(),
                 k1.begin(), k1.end(),
                 prefix_type->begin(k2), prefix_type->end(k2),
-                optional_less_compare);
+                less_compare);
         }
 
         bool operator()(const PrefixTopLevel& k1, const prefix_view_on_full_tuple& k2) const {
             return lexicographical_compare(prefix_type->types().begin(),
                 prefix_type->begin(k1), prefix_type->end(k1),
                 k2.begin(), k2.end(),
-                optional_less_compare);
+                less_compare);
         }
     };
 };
@@ -157,35 +161,35 @@ public:
     using prefix_view_type = prefix_view_on_full_tuple<TopLevel, PrefixTopLevel>;
 
     bool is_prefixed_by(const schema& s, const PrefixTopLevel& prefix) const {
-        auto t = base::type(s);
-        auto prefix_type = PrefixTopLevel::tuple_type(s);
+        auto t = base::get_tuple_type(s);
+        auto prefix_type = PrefixTopLevel::get_tuple_type(s);
         return ::is_prefixed_by(t->types().begin(),
             t->begin(*this), t->end(*this),
             prefix_type->begin(prefix), prefix_type->end(prefix),
-            optional_equal);
+            less_compare);
     }
 
     struct less_compare_with_prefix {
-        shared_ptr<tuple_type<true>> prefix_type;
-        shared_ptr<tuple_type<false>> full_type;
+        typename PrefixTopLevel::tuple prefix_type;
+        typename TopLevel::tuple full_type;
 
         less_compare_with_prefix(const schema& s)
-            : prefix_type(PrefixTopLevel::tuple_type(s))
-            , full_type(TopLevel::tuple_type(s))
+            : prefix_type(PrefixTopLevel::get_tuple_type(s))
+            , full_type(TopLevel::get_tuple_type(s))
         { }
 
         bool operator()(const TopLevel& k1, const PrefixTopLevel& k2) const {
             return lexicographical_compare(prefix_type->types().begin(),
                 full_type->begin(k1), full_type->end(k1),
                 prefix_type->begin(k2), prefix_type->end(k2),
-                optional_less_compare);
+                less_compare);
         }
 
         bool operator()(const PrefixTopLevel& k1, const TopLevel& k2) const {
             return lexicographical_compare(prefix_type->types().begin(),
                 prefix_type->begin(k1), prefix_type->end(k1),
                 full_type->begin(k2), full_type->end(k2),
-                optional_less_compare);
+                less_compare);
         }
     };
 
@@ -201,7 +205,7 @@ protected:
     prefix_tuple_wrapper(bytes&& b) : base(std::move(b)) {}
 public:
     bool is_full(const schema& s) const {
-        return TopLevel::tuple_type(s)->is_full(base::_bytes);
+        return TopLevel::get_tuple_type(s)->is_full(base::_bytes);
     }
 
     // Can be called only if is_full()
@@ -210,11 +214,11 @@ public:
     }
 
     bool is_prefixed_by(const schema& s, const TopLevel& prefix) const {
-        auto t = base::type(s);
+        auto t = base::get_tuple_type(s);
         return ::is_prefixed_by(t->types().begin(),
             t->begin(*this), t->end(*this),
             t->begin(prefix), t->end(prefix),
-            optional_equal);
+            equal);
     }
 };
 
@@ -227,15 +231,17 @@ public:
     class one : public full_base {
         one(bytes&& b) : full_base(std::move(b)) {}
     public:
+        using tuple = lw_shared_ptr<tuple_type<false>>;
+
         static one from_bytes(bytes b) { return one(std::move(b)); }
-        static auto tuple_type(const schema& s) { return s.partition_key_type; }
+        static auto get_tuple_type(const schema& s) { return s.partition_key_type; }
     };
 };
 
 class clustering_prefix {
-    std::vector<bytes_opt> _v;
+    std::vector<bytes> _v;
 public:
-    clustering_prefix(std::vector<bytes_opt>&& v) : _v(std::move(v)) {}
+    clustering_prefix(std::vector<bytes>&& v) : _v(std::move(v)) {}
     clustering_prefix() {}
     size_t size() const {
         return _v.size();
@@ -265,8 +271,10 @@ public:
     class prefix::one : public prefix_base {
         one(bytes&& b) : prefix_base(std::move(b)) {}
     public:
+        using tuple = lw_shared_ptr<tuple_type<true>>;
+
         static one from_bytes(bytes b) { return one(std::move(b)); }
-        static auto tuple_type(const schema& s) { return s.clustering_key_prefix_type; }
+        static auto get_tuple_type(const schema& s) { return s.clustering_key_prefix_type; }
 
         static one from_clustering_prefix(const schema& s, const clustering_prefix& prefix) {
             return from_exploded(s, prefix.components());
@@ -276,8 +284,10 @@ public:
     class one : public full_base {
         one(bytes&& b) : full_base(std::move(b)) {}
     public:
+        using tuple = lw_shared_ptr<tuple_type<false>>;
+
         static one from_bytes(bytes b) { return one(std::move(b)); }
-        static auto tuple_type(const schema& s) { return s.clustering_key_type; }
+        static auto get_tuple_type(const schema& s) { return s.clustering_key_type; }
 
         static one from_clustering_prefix(const schema& s, const clustering_prefix& prefix) {
             assert(prefix.is_full(s));

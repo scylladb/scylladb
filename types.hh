@@ -46,6 +46,33 @@ bool lexicographical_compare(TypesIterator types, InputIt1 first1, InputIt1 last
     return (first1 == last1) && (first2 != last2);
 }
 
+// Like std::lexicographical_compare but injects values from shared sequence
+// (types) to the comparator. Compare is an abstract_type-aware trichotomic
+// comparator, which takes the type as first argument.
+//
+// A trichotomic comparator returns an integer which is less, equal or greater
+// than zero when the first value is respectively smaller, equal or greater
+// than the second value.
+template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Compare>
+int lexicographical_tri_compare(TypesIterator types, InputIt1 first1, InputIt1 last1,
+        InputIt2 first2, InputIt2 last2, Compare comp) {
+    while (first1 != last1 && first2 != last2) {
+        auto c = comp(*types, *first1, *first2);
+        if (c) {
+            return c;
+        }
+        ++first1;
+        ++first2;
+        ++types;
+    }
+    bool e1 = first1 == last1;
+    bool e2 = first2 == last2;
+    if (e1 != e2) {
+        return e2 ? 1 : -1;
+    }
+    return 0;
+}
+
 // Returns true iff the second sequence is a prefix of the first sequence
 // Equality is an abstract_type-aware equality checker which takes the type as first argument.
 template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Equality>
@@ -221,6 +248,16 @@ bool optional_equal(data_type t, bytes_view_opt e1, bytes_view_opt e2) {
         return true;
     }
     return t->equal(*e1, *e2);
+}
+
+static inline
+bool less_compare(data_type t, bytes_view e1, bytes_view e2) {
+    return t->less(e1, e2);
+}
+
+static inline
+bool equal(data_type t, bytes_view e1, bytes_view e2) {
+    return t->equal(e1, e2);
 }
 
 class collection_type_impl : public abstract_type {
@@ -576,9 +613,9 @@ typename Type::value_type deserialize_value(Type& t, bytes_view v) {
     return t.deserialize_value(v);
 }
 
-template<typename Type>
+template<typename Type, typename Value>
 static inline
-bytes serialize_value(Type& t, const typename Type::value_type& value) {
+bytes serialize_value(Type& t, const Value& value) {
     bytes b(bytes::initialized_later(), t.serialized_size(value));
     auto i = b.begin();
     t.serialize_value(value, i);

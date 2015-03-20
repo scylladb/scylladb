@@ -28,7 +28,8 @@ enum class cause {
     LEGACY_COMPOSITE_KEYS,
     COLLECTION_RANGE_TOMBSTONES,
     RANGE_QUERIES,
-    THRIFT
+    THRIFT,
+    VALIDATION
 };
 
 void fail(cause what) __attribute__((noreturn));

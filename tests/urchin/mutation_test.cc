@@ -80,10 +80,10 @@ BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
     column_family cf(s);
 
     auto key = partition_key::one::from_exploded(*s, {to_bytes("key1")});
-    auto c_key1 = clustering_key::one::from_exploded(*s, {int32_type->decompose(1), int32_type->decompose(0)});
-    auto c_key1_prefix = clustering_key::prefix::one::from_exploded(*s, {int32_type->decompose(1)});
-    auto c_key2 = clustering_key::one::from_exploded(*s, {int32_type->decompose(2), int32_type->decompose(0)});
-    auto c_key2_prefix = clustering_key::prefix::one::from_exploded(*s, {int32_type->decompose(2)});
+    auto c_key1 = clustering_key::one::from_deeply_exploded(*s, {1, 0});
+    auto c_key1_prefix = clustering_key::prefix::one::from_deeply_exploded(*s, {1});
+    auto c_key2 = clustering_key::one::from_deeply_exploded(*s, {2, 0});
+    auto c_key2_prefix = clustering_key::prefix::one::from_deeply_exploded(*s, {2});
 
     auto ttl = gc_clock::now() + std::chrono::seconds(1);
 

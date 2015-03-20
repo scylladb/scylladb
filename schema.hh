@@ -93,10 +93,9 @@ public:
     gc_clock::duration default_time_to_live = gc_clock::duration::zero();
     const sstring ks_name;
     const sstring cf_name;
-    shared_ptr<tuple_type<>> partition_key_type;
-    shared_ptr<tuple_type<>> clustering_key_type;
-    shared_ptr<tuple_prefix> clustering_key_prefix_type;
-    shared_ptr<tuple_prefix> partition_key_prefix_type;
+    lw_shared_ptr<tuple_type<>> partition_key_type;
+    lw_shared_ptr<tuple_type<>> clustering_key_type;
+    lw_shared_ptr<tuple_prefix> clustering_key_prefix_type;
     data_type regular_column_name_type;
     thrift_schema thrift;
 public:
