@@ -36,6 +36,7 @@
 #include "query.hh"
 #include "keys.hh"
 #include <boost/intrusive/set.hpp>
+#include <boost/range/iterator_range.hpp>
 
 using row = std::map<column_id, atomic_cell_or_collection>;
 
@@ -145,23 +146,31 @@ public:
             return _c(e._key, key);
         }
     };
-    struct compare_prefix {
-        clustering_key::less_compare_with_prefix _c;
-        compare_prefix(const schema& s) : _c(s) {}
-        bool operator()(const clustering_key_prefix& prefix, const rows_entry& e) const {
-            return _c(prefix, e._key);
+    template <typename Comparator>
+    struct delegating_compare {
+        Comparator _c;
+        delegating_compare(Comparator&& c) : _c(std::move(c)) {}
+        template <typename Comparable>
+        bool operator()(const Comparable& v, const rows_entry& e) const {
+            return _c(v, e._key);
         }
-        bool operator()(const rows_entry& e, const clustering_key_prefix& prefix) const {
-            return _c(e._key, prefix);
+        template <typename Comparable>
+        bool operator()(const rows_entry& e, const Comparable& v) const {
+            return _c(e._key, v);
         }
     };
+    template <typename Comparator>
+    static auto key_comparator(Comparator&& c) {
+        return delegating_compare<Comparator>(std::move(c));
+    }
 };
 
 class mutation_partition final {
+    using rows_type = boost::intrusive::set<rows_entry, boost::intrusive::compare<rows_entry::compare>>;
 private:
     tombstone _tombstone;
     row _static_row;
-    boost::intrusive::set<rows_entry, boost::intrusive::compare<rows_entry::compare>> _rows;
+    rows_type _rows;
     // Contains only strict prefixes so that we don't have to lookup full keys
     // in both _row_tombstones and _rows.
     boost::intrusive::set<row_tombstones_entry, boost::intrusive::compare<row_tombstones_entry::compare>> _row_tombstones;
@@ -186,6 +195,7 @@ public:
     tombstone tombstone_for_row(schema_ptr schema, const clustering_key& key);
     tombstone tombstone_for_row(schema_ptr schema, const clustering_key_prefix& key);
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
+    boost::iterator_range<rows_type::iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r);
 };
 
 class mutation final {

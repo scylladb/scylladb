@@ -196,6 +196,34 @@ public:
         }
     };
 
+    // In prefix equality two sequences are equal if any of them is a prefix
+    // of the other. Otherwise lexicographical ordering is applied.
+    // Note: full tuples sorted according to lexicographical ordering are also
+    // sorted according to prefix equality ordering.
+    struct prefix_equality_less_compare {
+        typename PrefixTopLevel::tuple prefix_type;
+        typename TopLevel::tuple full_type;
+
+        prefix_equality_less_compare(const schema& s)
+            : prefix_type(PrefixTopLevel::get_tuple_type(s))
+            , full_type(TopLevel::get_tuple_type(s))
+        { }
+
+        bool operator()(const TopLevel& k1, const PrefixTopLevel& k2) const {
+            return prefix_equality_tri_compare(prefix_type->types().begin(),
+                full_type->begin(k1), full_type->end(k1),
+                prefix_type->begin(k2), prefix_type->end(k2),
+                tri_compare) < 0;
+        }
+
+        bool operator()(const PrefixTopLevel& k1, const TopLevel& k2) const {
+            return prefix_equality_tri_compare(prefix_type->types().begin(),
+                prefix_type->begin(k1), prefix_type->end(k1),
+                full_type->begin(k2), full_type->end(k2),
+                tri_compare) < 0;
+        }
+    };
+
     auto prefix_view(const schema& s, unsigned prefix_len) const {
         return prefix_view_type(s, *this, prefix_len);
     }

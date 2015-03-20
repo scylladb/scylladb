@@ -476,7 +476,7 @@ mutation_partition::apply_delete(schema_ptr schema, clustering_key&& key, tombst
 
 rows_entry*
 mutation_partition::find_entry(schema_ptr schema, const clustering_key_prefix& key) {
-    auto i = _rows.find(key, rows_entry::compare_prefix(*schema));
+    auto i = _rows.find(key, rows_entry::key_comparator(clustering_key::less_compare_with_prefix(*schema)));
     if (i == _rows.end()) {
         return nullptr;
     }
@@ -516,57 +516,71 @@ std::ostream& operator<<(std::ostream& os, const mutation_partition& mp) {
     return fprint(os, "{mutation_partition: ...}");
 }
 
+boost::iterator_range<mutation_partition::rows_type::iterator>
+mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) {
+    if (r.is_full()) {
+        return boost::make_iterator_range(_rows.begin(), _rows.end());
+    }
+    auto cmp = rows_entry::key_comparator(clustering_key::prefix_equality_less_compare(schema));
+    if (r.is_singular()) {
+        auto&& prefix = r.start()->value();
+        return boost::make_iterator_range(_rows.lower_bound(prefix, cmp), _rows.upper_bound(prefix, cmp));
+    }
+    auto i1 = r.start() ? (r.start()->is_inclusive()
+            ? _rows.lower_bound(r.start()->value(), cmp)
+            : _rows.upper_bound(r.start()->value(), cmp)) : _rows.begin();
+    auto i2 = r.end() ? (r.end()->is_inclusive()
+            ? _rows.upper_bound(r.end()->value(), cmp)
+            : _rows.lower_bound(r.end()->value(), cmp)) : _rows.end();
+    return boost::make_iterator_range(i1, i2);
+}
+
 query::result::partition
 column_family::get_partition_slice(mutation_partition& partition, const query::partition_slice& slice, uint32_t limit) {
     query::result::partition result;
 
+    if (limit == 0) {
+        return result;
+    }
+
     for (auto&& range : slice.row_ranges) {
-        if (limit == 0) {
-            break;
-        }
-        if (!range.is_singular()) {
-            fail(unimplemented::cause::RANGE_QUERIES);
-        }
-        auto& key = range.start_value();
-        if (!key.is_full(*_schema)) {
-            fail(unimplemented::cause::RANGE_QUERIES);
-        }
+        // FIXME: Optimize for a full-tuple singular range. mutation_partition::range()
+        // does two lookups to form a range, even for singular range. We need
+        // only one lookup for a full-tuple singular range though.
+        for (auto&& row : partition.range(*_schema, range)) {
+            auto&& cells = &row.row().cells;
 
-        rows_entry* row = partition.find_entry(_schema, key);
-        if (!row) {
-            continue;
-        }
+            // FIXME: handle removed rows properly. In CQL rows are separate entities (can be live or dead).
+            auto row_tombstone = partition.tombstone_for_row(_schema, row.key());
 
-        auto&& cells = &row->row().cells;
+            query::result::row result_row;
+            result_row.cells.reserve(slice.regular_columns.size());
 
-        // FIXME: handle removed rows properly. In CQL rows are separate entities (can be live or dead).
-        auto row_tombstone = partition.tombstone_for_row(_schema, row->key());
-
-        query::result::row result_row;
-        result_row.cells.reserve(slice.regular_columns.size());
-
-        for (auto id : slice.regular_columns) {
-            auto i = cells->find(id);
-            if (i == cells->end()) {
-                result_row.cells.emplace_back();
-            } else {
-                auto def = _schema->regular_column_at(id);
-                if (def.is_atomic()) {
-                    auto c = i->second.as_atomic_cell();
-                    if (c.timestamp() < row_tombstone.timestamp) {
-                        result_row.cells.emplace_back(std::experimental::make_optional(
-                            atomic_cell_or_collection::from_atomic_cell(
-                                atomic_cell::make_dead(row_tombstone.timestamp, row_tombstone.ttl))));
-                    } else {
-                        result_row.cells.emplace_back(std::experimental::make_optional(i->second));
-                    }
+            for (auto id : slice.regular_columns) {
+                auto i = cells->find(id);
+                if (i == cells->end()) {
+                    result_row.cells.emplace_back();
                 } else {
-                    fail(unimplemented::cause::COLLECTIONS);
+                    auto def = _schema->regular_column_at(id);
+                    if (def.is_atomic()) {
+                        auto c = i->second.as_atomic_cell();
+                        if (c.timestamp() < row_tombstone.timestamp) {
+                            result_row.cells.emplace_back(std::experimental::make_optional(
+                                atomic_cell_or_collection::from_atomic_cell(
+                                    atomic_cell::make_dead(row_tombstone.timestamp, row_tombstone.ttl))));
+                        } else {
+                            result_row.cells.emplace_back(std::experimental::make_optional(i->second));
+                        }
+                    } else {
+                        fail(unimplemented::cause::COLLECTIONS);
+                    }
                 }
             }
+            result.rows.emplace_back(row.key(), std::move(result_row));
+            if (--limit == 0) {
+                break;
+            }
         }
-        result.rows.emplace_back(row->key(), std::move(result_row));
-        --limit;
     }
 
     if (!slice.static_columns.empty()) {

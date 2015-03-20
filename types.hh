@@ -73,6 +73,28 @@ int lexicographical_tri_compare(TypesIterator types, InputIt1 first1, InputIt1 l
     return 0;
 }
 
+// A trichotomic comparator for prefix equality total ordering.
+// In this ordering, two sequences are equal iff any of them is a prefix
+// of the another. Otherwise, lexicographical ordering determines the order.
+//
+// 'comp' is an abstract_type-aware trichotomic comparator, which takes the
+// type as first argument.
+//
+template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Compare>
+int prefix_equality_tri_compare(TypesIterator types, InputIt1 first1, InputIt1 last1,
+        InputIt2 first2, InputIt2 last2, Compare comp) {
+    while (first1 != last1 && first2 != last2) {
+        auto c = comp(*types, *first1, *first2);
+        if (c) {
+            return c;
+        }
+        ++first1;
+        ++first2;
+        ++types;
+    }
+    return 0;
+}
+
 // Returns true iff the second sequence is a prefix of the first sequence
 // Equality is an abstract_type-aware equality checker which takes the type as first argument.
 template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Equality>
