@@ -256,6 +256,11 @@ bool less_compare(data_type t, bytes_view e1, bytes_view e2) {
 }
 
 static inline
+int tri_compare(data_type t, bytes_view e1, bytes_view e2) {
+    return t->compare(e1, e2);
+}
+
+static inline
 bool equal(data_type t, bytes_view e1, bytes_view e2) {
     return t->equal(e1, e2);
 }
