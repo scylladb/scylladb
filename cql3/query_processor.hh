@@ -536,6 +536,10 @@ public:
         }
     }
 #endif
+public:
+    future<> stop() {
+        return make_ready_future<>();
+    }
 };
 
 }

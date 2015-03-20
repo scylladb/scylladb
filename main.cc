@@ -33,7 +33,9 @@ int main(int ac, char** av) {
             engine().at_exit([&db] { return db.stop(); });
             return db.invoke_on_all(&database::init_from_data_directory, datadir);
         }).then([&db, &proxy, &qp] {
-            return qp.start(std::ref(proxy), std::ref(db));
+            return qp.start(std::ref(proxy), std::ref(db)).then([&qp] {
+                engine().at_exit([&qp] { return qp.stop(); });
+            });
         }).then([&db, &proxy, &qp, cql_port, thrift_port] {
             auto cserver = new distributed<cql_server>;
             cserver->start(std::ref(proxy), std::ref(qp)).then([server = std::move(cserver), cql_port] () mutable {
