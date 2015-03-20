@@ -169,7 +169,7 @@ public:
         return ::is_prefixed_by(t->types().begin(),
             t->begin(*this), t->end(*this),
             prefix_type->begin(prefix), prefix_type->end(prefix),
-            less_compare);
+            ::equal);
     }
 
     struct less_compare_with_prefix {
