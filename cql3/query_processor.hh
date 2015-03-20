@@ -45,9 +45,9 @@ private:
 public:
     query_processor(service::storage_proxy& proxy, distributed<database>& db) : _proxy(proxy), _db(db) {}
 
-#if 0
-    public static final SemanticVersion CQL_VERSION = new SemanticVersion("3.2.0");
+    static const sstring CQL_VERSION;
 
+#if 0
     public static final QueryProcessor instance = new QueryProcessor();
 #endif
 private:
