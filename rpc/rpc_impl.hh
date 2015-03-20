@@ -154,6 +154,31 @@ struct build_msg_type<Ft, At&&> {
     typedef Ft type;
 };
 
+template<typename Ret, typename Serializer, typename MsgType>
+inline auto wait_for_reply(typename protocol<Serializer, MsgType>::client& dst, id_type msg_id, std::enable_if_t<!std::is_same<Ret, no_wait_type>::value, void*> = nullptr) {
+    using reply_type = rcv_reply<Serializer, MsgType, Ret>;
+    auto lambda = [] (reply_type& r, typename protocol<Serializer, MsgType>::client& dst, id_type msg_id) mutable {
+        if (msg_id >= 0) {
+            return r.get_reply(dst);
+        } else {
+            return unmarshall(dst.serializer(), dst.in(), std::tie(r.ex)).then([&r] {
+                r.done = true;
+                r.p.set_exception(std::runtime_error(r.ex.c_str()));
+            });
+        }
+    };
+    using handler_type = typename protocol<Serializer, MsgType>::client::template reply_handler<reply_type, decltype(lambda)>;
+    auto r = std::make_unique<handler_type>(std::move(lambda));
+    auto fut = r->reply.p.get_future();
+    dst.wait_for_reply(msg_id, std::move(r));
+    return fut;
+}
+
+template<typename Ret, typename Serializer, typename MsgType>
+inline auto wait_for_reply(typename protocol<Serializer, MsgType>::client& dst, id_type msg_id, std::enable_if_t<std::is_same<Ret, no_wait_type>::value, void*> = nullptr) {
+    return make_ready_future<>();
+}
+
 // Returns lambda that can be used to send rpc messages.
 // The lambda gets client connection and rpc parameters as arguments, marshalls them sends
 // to a server and waits for a reply. After receiving reply it unmarshalls it and signal completion
@@ -178,23 +203,8 @@ auto send_helper(MsgType t, std::index_sequence<I...>) {
             return marshall(dst.serializer(), dst.out(), std::move(xargs)).then([m = std::move(m)] {});
         });
 
-        // prepare reply handler
-        using reply_type = rcv_reply<Serializer, MsgType, typename F::return_type>;
-        auto lambda = [] (reply_type& r, typename protocol<Serializer, MsgType>::client& dst, id_type msg_id) mutable {
-            if (msg_id >= 0) {
-                return r.get_reply(dst);
-            } else {
-               return unmarshall(dst.serializer(), dst.in(), std::tie(r.ex)).then([&r] {
-                   r.done = true;
-                   r.p.set_exception(std::runtime_error(r.ex.c_str()));
-               });
-            }
-        };
-        using handler_type = typename protocol<Serializer, MsgType>::client::template reply_handler<reply_type, decltype(lambda)>;
-        auto r = std::make_unique<handler_type>(std::move(lambda));
-        auto fut = r->reply.p.get_future();
-        dst.wait_for_reply(msg_id, std::move(r));
-        return fut;
+        // prepare reply handler, if return type is now_wait_type this does nothing, since no reply will be sent
+        return wait_for_reply<typename F::return_type, Serializer, MsgType>(dst, msg_id);
     };
 }
 
@@ -239,6 +249,21 @@ struct snd_reply<Serializer, MsgType, void> : snd_reply_base<Serializer, MsgType
         return marshall(client.serializer(), client.out(), std::tie(this->id));
     }
 };
+
+// specialization for no_wait_type which does not send a reply
+template<typename Serializer, typename MsgType>
+struct snd_reply<Serializer, MsgType, no_wait_type> : snd_reply_base<Serializer, MsgType, no_wait_type, no_wait_type> {
+    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, no_wait_type, no_wait_type>(xid) {}
+    inline void set_val(std::tuple<no_wait_type>&& val) {
+    }
+    inline future<> reply(typename protocol<Serializer, MsgType>::server::connection& client) {
+        return make_ready_future<>();
+    }
+    inline future<> send_ex(typename protocol<Serializer, MsgType>::server::connection& client) {
+        return make_ready_future<>();
+    }
+};
+
 
 template<typename Serializer, typename MsgType, typename Ret>
 inline future<> reply(std::unique_ptr<snd_reply<Serializer, MsgType, Ret>>& r, typename protocol<Serializer, MsgType>::server::connection& client) {

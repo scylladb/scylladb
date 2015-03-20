@@ -24,7 +24,8 @@
 #include <unordered_map>
 #include "core/future.hh"
 #include "net/api.hh"
-#include "core/enum.hh"
+#include "core/reactor.hh"
+#include "core/iostream.hh"
 
 namespace rpc {
 
@@ -143,6 +144,10 @@ public:
     closed_error() : error("connection is closed") {}
 };
 
+struct no_wait_type {};
+
+// return this from a callback if client does not want to waiting for a reply
+extern no_wait_type no_wait;
 }
 
 #include "rpc_impl.hh"
