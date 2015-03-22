@@ -24,6 +24,7 @@
 #include "operation_impl.hh"
 #include "maps.hh"
 #include "sets.hh"
+#include "lists.hh"
 
 namespace cql3 {
 
@@ -39,13 +40,9 @@ operation::set_element::prepare(const sstring& keyspace, column_definition& rece
     }
 
     if (&rtype->_kind == &collection_type_impl::kind::list) {
-        abort();
-        // FIXME:
-#if 0
-            Term idx = selector.prepare(keyspace, Lists.indexSpecOf(receiver));
-            Term lval = value.prepare(keyspace, Lists.valueSpecOf(receiver));
-            return new Lists.SetterByIndex(receiver, idx, lval);
-#endif
+        auto&& idx = _selector->prepare(keyspace, lists::index_spec_of(receiver.column_specification));
+        auto&& lval = _value->prepare(keyspace, lists::value_spec_of(receiver.column_specification));
+        return make_shared<lists::setter_by_index>(receiver, idx, lval);
     } else if (&rtype->_kind == &collection_type_impl::kind::set) {
         throw invalid_request_exception(sprint("Invalid operation (%s) for set column %s", receiver, receiver.name()));
     } else if (&rtype->_kind == &collection_type_impl::kind::map) {
