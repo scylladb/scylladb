@@ -21,6 +21,7 @@
 
 #include "http/httpd.hh"
 #include "http/handlers.hh"
+#include "http/function_handlers.hh"
 
 namespace bpo = boost::program_options;
 
@@ -37,7 +38,9 @@ public:
 };
 
 void set_routes(routes& r) {
-    handl* h1 = new handl();
+    function_handler* h1 = new function_handler([](const_req req) {
+        return "hello";
+    });
     r.add(operation_type::GET, url("/"), h1);
 }
 
