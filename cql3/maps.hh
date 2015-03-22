@@ -292,7 +292,7 @@ public:
                 : operation(column, std::move(t)) {
         }
 
-        virtual void execute(mutation& m, const clustering_prefix& row_key, const update_parameters& params) override {
+        virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override {
             if (column.type->is_multi_cell()) {
                 // delete + put
                 // FIXME: we don't have tombstones for entire collections yet
@@ -317,7 +317,7 @@ public:
             _k->collect_marker_specification(bound_names);
         }
 
-        virtual void execute(mutation& m, const clustering_prefix& prefix, const update_parameters& params) override {
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
             using exceptions::invalid_request_exception;
             assert(column.type->is_multi_cell()); // "Attempted to set a value for a single key on a frozen map"m
             bytes_opt key = _k->bind_and_get(params._options);
@@ -350,13 +350,13 @@ public:
             : operation(column, std::move(t)) {
         }
 
-        virtual void execute(mutation& m, const clustering_prefix& prefix, const update_parameters& params) override {
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
             assert(column.type->is_multi_cell()); // "Attempted to add items to a frozen map";
             do_put(m, prefix, params, _t, column);
         }
     };
 
-    static void do_put(mutation& m, const clustering_prefix& prefix, const update_parameters& params,
+    static void do_put(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params,
             shared_ptr<term> t, const column_definition& column) {
     {
         auto value = t->bind(params._options);

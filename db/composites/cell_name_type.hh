@@ -83,7 +83,7 @@ public:
     /**
      * The number of clustering columns for the table this is the type of.
      */
-    virtual int32_t clustering_prefix_size() = 0;
+    virtual int32_t exploded_clustering_prefix_size() = 0;
 
     /**
      * A builder for the clustering prefix.

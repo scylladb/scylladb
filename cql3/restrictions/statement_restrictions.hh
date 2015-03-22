@@ -50,12 +50,12 @@ private:
     /**
      * Restrictions on partitioning columns
      */
-    ::shared_ptr<primary_key_restrictions<partition_key::one>> _partition_key_restrictions;
+    ::shared_ptr<primary_key_restrictions<partition_key>> _partition_key_restrictions;
 
     /**
      * Restrictions on clustering columns
      */
-    ::shared_ptr<primary_key_restrictions<clustering_key::prefix::one>> _clustering_columns_restrictions;
+    ::shared_ptr<primary_key_restrictions<clustering_key_prefix>> _clustering_columns_restrictions;
 
     /**
      * Restriction on non-primary key columns (i.e. secondary index restrictions)
@@ -212,12 +212,12 @@ private:
         auto& def = restriction->get_column_def();
         if (def.is_partition_key()) {
             if (!_partition_key_restrictions) {
-                _partition_key_restrictions = ::make_shared<single_column_primary_key_restrictions<partition_key::one>>(_schema);
+                _partition_key_restrictions = ::make_shared<single_column_primary_key_restrictions<partition_key>>(_schema);
             }
             _partition_key_restrictions->merge_with(restriction);
         } else if (def.is_clustering_key()) {
             if (!_clustering_columns_restrictions) {
-                _clustering_columns_restrictions = ::make_shared<single_column_primary_key_restrictions<clustering_key::prefix::one>>(_schema);
+                _clustering_columns_restrictions = ::make_shared<single_column_primary_key_restrictions<clustering_key_prefix>>(_schema);
             }
             _clustering_columns_restrictions->merge_with(restriction);
         } else {
@@ -557,7 +557,7 @@ public:
 
     void reverse() {
         if (_clustering_columns_restrictions) {
-            _clustering_columns_restrictions = ::make_shared<reversed_primary_key_restrictions<clustering_key::prefix::one>>(
+            _clustering_columns_restrictions = ::make_shared<reversed_primary_key_restrictions<clustering_key_prefix>>(
                 _clustering_columns_restrictions);
         }
     }

@@ -67,7 +67,7 @@ token minimum_token();
 class decorated_key {
 public:
     token _token;
-    partition_key::one _key;
+    partition_key _key;
 };
 
 class i_partitioner {
@@ -79,7 +79,7 @@ public:
      * @param key the raw, client-facing key
      * @return decorated version of key
      */
-    decorated_key decorate_key(const partition_key::one& key) {
+    decorated_key decorate_key(const partition_key& key) {
         return { get_token(key), key };
     }
 
@@ -89,7 +89,7 @@ public:
      * @param key the raw, client-facing key
      * @return decorated version of key
      */
-    decorated_key decorate_key(partition_key::one&& key) {
+    decorated_key decorate_key(partition_key&& key) {
         auto token = get_token(key);
         return { std::move(token), std::move(key) };
     }
@@ -117,7 +117,7 @@ public:
      * (This is NOT a method to create a token from its string representation;
      * for that, use tokenFactory.fromString.)
      */
-    virtual token get_token(const partition_key::one& key) = 0;
+    virtual token get_token(const partition_key& key) = 0;
 
     /**
      * @return a randomly generated token

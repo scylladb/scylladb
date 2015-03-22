@@ -53,7 +53,7 @@ operator<<(std::ostream& out, modification_statement::statement_type t) {
 future<std::vector<mutation>>
 modification_statement::get_mutations(const query_options& options, bool local, int64_t now) {
     auto keys = make_lw_shared(build_partition_keys(options));
-    auto prefix = make_lw_shared(create_clustering_prefix(options));
+    auto prefix = make_lw_shared(create_exploded_clustering_prefix(options));
     return make_update_parameters(keys, prefix, options, local, now).then(
             [this, keys = std::move(keys), prefix = std::move(prefix), now] (auto params_ptr) {
                 std::vector<mutation> mutations;
@@ -69,8 +69,8 @@ modification_statement::get_mutations(const query_options& options, bool local, 
 
 future<std::unique_ptr<update_parameters>>
 modification_statement::make_update_parameters(
-        lw_shared_ptr<std::vector<partition_key::one>> keys,
-        lw_shared_ptr<clustering_prefix> prefix,
+        lw_shared_ptr<std::vector<partition_key>> keys,
+        lw_shared_ptr<exploded_clustering_prefix> prefix,
         const query_options& options,
         bool local,
         int64_t now) {
@@ -86,8 +86,8 @@ modification_statement::make_update_parameters(
 
 future<update_parameters::prefetched_rows_type>
 modification_statement::read_required_rows(
-        lw_shared_ptr<std::vector<partition_key::one>> keys,
-        lw_shared_ptr<clustering_prefix> prefix,
+        lw_shared_ptr<std::vector<partition_key>> keys,
+        lw_shared_ptr<exploded_clustering_prefix> prefix,
         bool local,
         db::consistency_level cl) {
     if (!requires_read()) {
@@ -147,8 +147,8 @@ modification_statement::get_first_empty_key() {
     return {};
 }
 
-clustering_prefix
-modification_statement::create_clustering_prefix_internal(const query_options& options) {
+exploded_clustering_prefix
+modification_statement::create_exploded_clustering_prefix_internal(const query_options& options) {
     std::vector<bytes> components;
     const column_definition* first_empty_key = nullptr;
 
@@ -180,11 +180,11 @@ modification_statement::create_clustering_prefix_internal(const query_options& o
             components.push_back(*val);
         }
     }
-    return clustering_prefix(std::move(components));
+    return exploded_clustering_prefix(std::move(components));
 }
 
-clustering_prefix
-modification_statement::create_clustering_prefix(const query_options& options) {
+exploded_clustering_prefix
+modification_statement::create_exploded_clustering_prefix(const query_options& options) {
     // If the only updated/deleted columns are static, then we don't need clustering columns.
     // And in fact, unless it is an INSERT, we reject if clustering columns are provided as that
     // suggest something unintended. For instance, given:
@@ -218,12 +218,12 @@ modification_statement::create_clustering_prefix(const query_options& options) {
         }
     }
 
-    return create_clustering_prefix_internal(options);
+    return create_exploded_clustering_prefix_internal(options);
 }
 
-std::vector<partition_key::one>
+std::vector<partition_key>
 modification_statement::build_partition_keys(const query_options& options) {
-    std::vector<partition_key::one> result;
+    std::vector<partition_key> result;
     std::vector<bytes> components;
 
     auto remaining = s->partition_key_size();
@@ -243,7 +243,7 @@ modification_statement::build_partition_keys(const query_options& options) {
                     throw exceptions::invalid_request_exception(sprint("Invalid null value for partition key part %s", def.name_as_text()));
                 }
                 components.push_back(*val);
-                auto key = partition_key::one::from_exploded(*s, components);
+                auto key = partition_key::from_exploded(*s, components);
                 validation::validate_cql_key(s, key);
                 result.emplace_back(std::move(key));
             } else {
@@ -255,7 +255,7 @@ modification_statement::build_partition_keys(const query_options& options) {
                     full_components.reserve(components.size() + 1);
                     auto i = std::copy(components.begin(), components.end(), std::back_inserter(full_components));
                     *i = *val;
-                    auto key = partition_key::one::from_exploded(*s, full_components);
+                    auto key = partition_key::from_exploded(*s, full_components);
                     validation::validate_cql_key(s, key);
                     result.emplace_back(std::move(key));
                 }

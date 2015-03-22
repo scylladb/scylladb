@@ -31,7 +31,7 @@ class atomic_cell_or_collection;
  *  <live>  := <int8_t:flags><int64_t:timestamp><int32_t:ttl>?<value>
  *  <dead>  := <int8_t:    0><int64_t:timestamp><int32_t:ttl>
  */
-class atomic_cell final {
+class atomic_cell_type final {
 private:
     static constexpr int8_t DEAD_FLAGS = 0;
     static constexpr int8_t LIVE_FLAG = 0x01;
@@ -41,9 +41,6 @@ private:
     static constexpr unsigned timestamp_size = 8;
     static constexpr unsigned ttl_offset = timestamp_offset + timestamp_size;
     static constexpr unsigned ttl_size = 4;
-public:
-    class view;
-    class one;
 private:
     static bool is_live(const bytes_view& cell) {
         return cell[0] != DEAD_FLAGS;
@@ -92,88 +89,88 @@ private:
         std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
         return b;
     }
-    friend class one;
-    friend class view;
+    friend class atomic_cell_view;
+    friend class atomic_cell;
 };
 
-class atomic_cell::view final {
+class atomic_cell_view final {
     bytes_view _data;
 private:
-    view(bytes_view data) : _data(data) {}
+    atomic_cell_view(bytes_view data) : _data(data) {}
 public:
-    static view from_bytes(bytes_view data) { return view(data); }
+    static atomic_cell_view from_bytes(bytes_view data) { return atomic_cell_view(data); }
     bool is_live() const {
-        return atomic_cell::is_live(_data);
+        return atomic_cell_type::is_live(_data);
     }
     bool is_live_and_has_ttl() const {
-        return atomic_cell::is_live_and_has_ttl(_data);
+        return atomic_cell_type::is_live_and_has_ttl(_data);
     }
     bool is_dead() const {
-        return atomic_cell::is_dead(_data);
+        return atomic_cell_type::is_dead(_data);
     }
     // Can be called on live and dead cells
     api::timestamp_type timestamp() const {
-        return atomic_cell::timestamp(_data);
+        return atomic_cell_type::timestamp(_data);
     }
     // Can be called on live cells only
     bytes_view value() const {
-        return atomic_cell::value(_data);
+        return atomic_cell_type::value(_data);
     }
     // Can be called on live and dead cells. For dead cells, the result is never empty.
     ttl_opt ttl() const {
-        return atomic_cell::ttl(_data);
+        return atomic_cell_type::ttl(_data);
     }
     bytes_view serialize() const {
         return _data;
     }
-    friend class atomic_cell::one;
+    friend class atomic_cell;
 };
 
-class atomic_cell::one final {
+class atomic_cell final {
     bytes _data;
 private:
-    one(bytes b) : _data(std::move(b)) {}
+    atomic_cell(bytes b) : _data(std::move(b)) {}
 public:
-    one(const one&) = default;
-    one(one&&) = default;
-    one& operator=(const one&) = default;
-    one& operator=(one&&) = default;
-    static one from_bytes(bytes b) {
-        return one(std::move(b));
+    atomic_cell(const atomic_cell&) = default;
+    atomic_cell(atomic_cell&&) = default;
+    atomic_cell& operator=(const atomic_cell&) = default;
+    atomic_cell& operator=(atomic_cell&&) = default;
+    static atomic_cell from_bytes(bytes b) {
+        return atomic_cell(std::move(b));
     }
-    one(atomic_cell::view other) : _data(other._data.begin(), other._data.end()) {}
+    atomic_cell(atomic_cell_view other) : _data(other._data.begin(), other._data.end()) {}
     bool is_live() const {
-        return atomic_cell::is_live(_data);
+        return atomic_cell_type::is_live(_data);
     }
     bool is_live_and_has_ttl() const {
-        return atomic_cell::is_live_and_has_ttl(_data);
+        return atomic_cell_type::is_live_and_has_ttl(_data);
     }
     bool is_dead(const bytes_view& cell) const {
-        return atomic_cell::is_dead(_data);
+        return atomic_cell_type::is_dead(_data);
     }
     // Can be called on live and dead cells
     api::timestamp_type timestamp() const {
-        return atomic_cell::timestamp(_data);
+        return atomic_cell_type::timestamp(_data);
     }
     // Can be called on live cells only
     bytes_view value() const {
-        return atomic_cell::value(_data);
+        return atomic_cell_type::value(_data);
     }
     // Can be called on live and dead cells. For dead cells, the result is never empty.
     ttl_opt ttl() const {
-        return atomic_cell::ttl(_data);
+        return atomic_cell_type::ttl(_data);
     }
     bytes_view serialize() const {
         return _data;
     }
-    operator atomic_cell::view() const {
-        return atomic_cell::view(_data);
+    operator atomic_cell_view() const {
+        return atomic_cell_view(_data);
     }
-    static one make_dead(api::timestamp_type timestamp, gc_clock::time_point ttl) {
-        return atomic_cell::make_dead(timestamp, ttl);
+    static atomic_cell make_dead(api::timestamp_type timestamp, gc_clock::time_point ttl) {
+        return atomic_cell_type::make_dead(timestamp, ttl);
     }
-    static one make_live(api::timestamp_type timestamp, ttl_opt ttl, bytes_view value) {
-        return atomic_cell::make_live(timestamp, ttl, value);
+    static atomic_cell make_live(api::timestamp_type timestamp, ttl_opt ttl, bytes_view value) {
+        return atomic_cell_type::make_live(timestamp, ttl, value);
     }
     friend class atomic_cell_or_collection;
 };
@@ -201,9 +198,9 @@ class atomic_cell_or_collection final {
 private:
     atomic_cell_or_collection(bytes&& data) : _data(std::move(data)) {}
 public:
-    atomic_cell_or_collection(atomic_cell::one ac) : _data(std::move(ac._data)) {}
-    static atomic_cell_or_collection from_atomic_cell(atomic_cell::one data) { return { std::move(data._data) }; }
-    atomic_cell::view as_atomic_cell() const { return atomic_cell::view::from_bytes(_data); }
+    atomic_cell_or_collection(atomic_cell ac) : _data(std::move(ac._data)) {}
+    static atomic_cell_or_collection from_atomic_cell(atomic_cell data) { return { std::move(data._data) }; }
+    atomic_cell_view as_atomic_cell() const { return atomic_cell_view::from_bytes(_data); }
     atomic_cell_or_collection(collection_mutation::one cm) : _data(std::move(cm.data)) {}
     static atomic_cell_or_collection from_collection_mutation(collection_mutation::one data) {
         return std::move(data.data);
@@ -215,7 +212,7 @@ public:
 
 class column_definition;
 
-int compare_atomic_cell_for_merge(atomic_cell::view left, atomic_cell::view right);
+int compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right);
 void merge_column(const column_definition& def,
         atomic_cell_or_collection& old,
         const atomic_cell_or_collection& neww);

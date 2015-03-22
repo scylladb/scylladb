@@ -239,7 +239,7 @@ public:
         current.emplace_back(std::move(value));
     }
 
-    void add(const column_definition& def, atomic_cell::view c) {
+    void add(const column_definition& def, atomic_cell_view c) {
         current.emplace_back(get_value(def.type, c));
         if (!_timestamps.empty()) {
             _timestamps[current.size() - 1] = c.is_dead() ? api::min_timestamp : c.timestamp();
@@ -285,7 +285,7 @@ public:
     }
 
 private:
-    bytes_opt get_value(data_type t, atomic_cell::view c) {
+    bytes_opt get_value(data_type t, atomic_cell_view c) {
         if (c.is_dead()) {
             return {};
         }

@@ -1,8 +1,8 @@
 #include "database.hh"
 #include "perf.hh"
 
-static atomic_cell::one make_atomic_cell(bytes value) {
-    return atomic_cell::one::make_live(0, ttl_opt{}, value);
+static atomic_cell make_atomic_cell(bytes value) {
+    return atomic_cell::make_live(0, ttl_opt{}, value);
 };
 
 int main(int argc, char* argv[]) {
@@ -13,8 +13,8 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Timing mutation of single column within one row...\n";
 
-    auto key = partition_key::one::from_exploded(*s, {to_bytes("key1")});
-    auto c_key = clustering_key::one::from_exploded(*s, {int32_type->decompose(2)});
+    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+    auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
     bytes value = int32_type->decompose(3);
 
     time_it([&] {

@@ -25,6 +25,7 @@
 #pragma once
 
 #include "cql3/restrictions/abstract_restriction.hh"
+#include "cql3/restrictions/term_slice.hh"
 #include "cql3/term.hh"
 #include "core/shared_ptr.hh"
 #include "database.hh"
@@ -169,111 +170,9 @@ public:
             return "IN ?";
         }
     }
-
-    public static class Slice extends SingleColumnRestriction
-    {
-        private final TermSlice slice;
-
-        public Slice(ColumnDefinition columnDef, Bound bound, boolean inclusive, Term term)
-        {
-            super(columnDef);
-            slice = TermSlice.newInstance(bound, inclusive, term);
-        }
-
-        @Override
-        public boolean usesFunction(String ksName, String functionName)
-        {
-            return (slice.hasBound(Bound.START) && usesFunction(slice.bound(Bound.START), ksName, functionName))
-                    || (slice.hasBound(Bound.END) && usesFunction(slice.bound(Bound.END), ksName, functionName));
-        }
-
-        public boolean isSlice()
-        {
-            return true;
-        }
-
-        @Override
-        public List<ByteBuffer> values(QueryOptions options) throws InvalidRequestException
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public boolean hasBound(Bound b)
-        {
-            return slice.hasBound(b);
-        }
-
-        @Override
-        public List<ByteBuffer> bounds(Bound b, QueryOptions options) throws InvalidRequestException
-        {
-            return Collections.singletonList(slice.bound(b).bindAndGet(options));
-        }
-
-        @Override
-        public boolean isInclusive(Bound b)
-        {
-            return slice.isInclusive(b);
-        }
-
-        @Override
-        public Restriction mergeWith(Restriction otherRestriction)
-        throws InvalidRequestException
-        {
-            checkTrue(otherRestriction.isSlice(),
-                      "Column \"%s\" cannot be restricted by both an equality and an inequality relation",
-                      columnDef.name);
-
-            SingleColumnRestriction.Slice otherSlice = (SingleColumnRestriction.Slice) otherRestriction;
-
-            checkFalse(hasBound(Bound.START) && otherSlice.hasBound(Bound.START),
-                       "More than one restriction was found for the start bound on %s", columnDef.name);
-
-            checkFalse(hasBound(Bound.END) && otherSlice.hasBound(Bound.END),
-                       "More than one restriction was found for the end bound on %s", columnDef.name);
-
-            return new Slice(columnDef,  slice.merge(otherSlice.slice));
-        }
-
-        @Override
-        public void addIndexExpressionTo(List<IndexExpression> expressions,
-                                         QueryOptions options) throws InvalidRequestException
-        {
-            for (Bound b : Bound.values())
-            {
-                if (hasBound(b))
-                {
-                    ByteBuffer value = validateIndexedValue(columnDef, slice.bound(b).bindAndGet(options));
-                    Operator op = slice.getIndexOperator(b);
-                    // If the underlying comparator for name is reversed, we need to reverse the IndexOperator: user operation
-                    // always refer to the "forward" sorting even if the clustering order is reversed, but the 2ndary code does
-                    // use the underlying comparator as is.
-                    op = columnDef.isReversedType() ? op.reverse() : op;
-                    expressions.add(new IndexExpression(columnDef.name.bytes, op, value));
-                }
-            }
-        }
-
-        @Override
-        protected boolean isSupportedBy(SecondaryIndex index)
-        {
-            return slice.isSupportedBy(index);
-        }
-
-        @Override
-        public String toString()
-        {
-            return String.format("SLICE%s", slice);
-        }
-
-        private Slice(ColumnDefinition columnDef, TermSlice slice)
-        {
-            super(columnDef);
-            this.slice = slice;
-        }
-    }
 #endif
 
+    class slice;
     class contains;
 };
 
@@ -316,6 +215,91 @@ public:
             return index.supportsOperator(Operator.EQ);
         }
 #endif
+};
+
+class single_column_restriction::slice : public single_column_restriction {
+private:
+    term_slice _slice;
+public:
+    slice(const column_definition& column_def, statements::bound bound, bool inclusive, ::shared_ptr<term> term)
+        : single_column_restriction(column_def)
+        , _slice(term_slice::new_instance(bound, inclusive, std::move(term)))
+    { }
+
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+        return (_slice.has_bound(statements::bound::START) && abstract_restriction::uses_function(_slice.bound(statements::bound::START), ks_name, function_name))
+                || (_slice.has_bound(statements::bound::END) && abstract_restriction::uses_function(_slice.bound(statements::bound::END), ks_name, function_name));
+    }
+
+    virtual bool is_slice() override {
+        return true;
+    }
+
+    virtual std::vector<bytes_opt> values(const query_options& options) override {
+        throw exceptions::unsupported_operation_exception();
+    }
+
+    virtual bool has_bound(statements::bound b) override {
+        return _slice.has_bound(b);
+    }
+
+    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) override {
+        return {_slice.bound(b)->bind_and_get(options)};
+    }
+
+    virtual bool is_inclusive(statements::bound b) override {
+        return _slice.is_inclusive(b);
+    }
+
+    virtual void merge_with(::shared_ptr<restriction> r) override {
+        if (!r->is_slice()) {
+            throw exceptions::invalid_request_exception(sprint(
+                "Column \"%s\" cannot be restricted by both an equality and an inequality relation", _column_def.name_as_text()));
+        }
+
+        auto other_slice = static_pointer_cast<slice>(r);
+
+        if (has_bound(statements::bound::START) && other_slice->has_bound(statements::bound::START)) {
+            throw exceptions::invalid_request_exception(sprint(
+                   "More than one restriction was found for the start bound on %s", _column_def.name_as_text()));
+        }
+
+        if (has_bound(statements::bound::END) && other_slice->has_bound(statements::bound::END)) {
+            throw exceptions::invalid_request_exception(sprint(
+                "More than one restriction was found for the end bound on %s", _column_def.name_as_text()));
+        }
+
+        _slice.merge(other_slice->_slice);
+    }
+
+#if 0
+    virtual void addIndexExpressionTo(List<IndexExpression> expressions, override
+                                     QueryOptions options) throws InvalidRequestException
+    {
+        for (statements::bound b : {statements::bound::START, statements::bound::END})
+        {
+            if (has_bound(b))
+            {
+                ByteBuffer value = validateIndexedValue(columnDef, _slice.bound(b).bindAndGet(options));
+                Operator op = _slice.getIndexOperator(b);
+                // If the underlying comparator for name is reversed, we need to reverse the IndexOperator: user operation
+                // always refer to the "forward" sorting even if the clustering order is reversed, but the 2ndary code does
+                // use the underlying comparator as is.
+                op = columnDef.isReversedType() ? op.reverse() : op;
+                expressions.add(new IndexExpression(columnDef.name.bytes, op, value));
+            }
+        }
+    }
+
+    virtual bool isSupportedBy(SecondaryIndex index) override
+    {
+        return _slice.isSupportedBy(index);
+    }
+#endif
+
+    virtual sstring to_string() override {
+        return sprint("SLICE%s", _slice);
+    }
 };
 
 // This holds CONTAINS, CONTAINS_KEY, and map[key] = value restrictions because we might want to have any combination of them.

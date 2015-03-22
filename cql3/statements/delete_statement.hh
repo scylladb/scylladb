@@ -62,7 +62,7 @@ public:
         return false;
     }
 
-    virtual void add_update_for_key(mutation& m, const clustering_prefix& prefix, const update_parameters& params) override;
+    virtual void add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
 
 #if 0
     protected void validateWhereClauseForConditions() throws InvalidRequestException

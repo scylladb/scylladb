@@ -13,8 +13,8 @@
 static sstring some_keyspace("ks");
 static sstring some_column_family("cf");
 
-static atomic_cell::one make_atomic_cell(bytes value) {
-    return atomic_cell::one::make_live(0, ttl_opt{}, std::move(value));
+static atomic_cell make_atomic_cell(bytes value) {
+    return atomic_cell::make_live(0, ttl_opt{}, std::move(value));
 };
 
 BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
@@ -24,8 +24,8 @@ BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
     column_family cf(s);
 
     column_definition& r1_col = *s->get_column_definition("r1");
-    auto key = partition_key::one::from_exploded(*s, {to_bytes("key1")});
-    auto c_key = clustering_key::one::from_exploded(*s, {int32_type->decompose(2)});
+    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+    auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
 
     mutation m(key, s);
     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(3)));
@@ -47,13 +47,13 @@ BOOST_AUTO_TEST_CASE(test_multi_level_row_tombstones) {
 
     auto ttl = gc_clock::now() + std::chrono::seconds(1);
 
-    mutation m(partition_key::one::from_exploded(*s, {to_bytes("key1")}), s);
+    mutation m(partition_key::from_exploded(*s, {to_bytes("key1")}), s);
 
     auto make_prefix = [s] (const std::vector<boost::any>& v) {
-        return clustering_key::prefix::one::from_deeply_exploded(*s, v);
+        return clustering_key_prefix::from_deeply_exploded(*s, v);
     };
     auto make_key = [s] (const std::vector<boost::any>& v) {
-        return clustering_key::one::from_deeply_exploded(*s, v);
+        return clustering_key::from_deeply_exploded(*s, v);
     };
 
     m.p.apply_row_tombstone(s, make_prefix({1, 2}), tombstone(9, ttl));
@@ -79,11 +79,11 @@ BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
 
     column_family cf(s);
 
-    auto key = partition_key::one::from_exploded(*s, {to_bytes("key1")});
-    auto c_key1 = clustering_key::one::from_deeply_exploded(*s, {1, 0});
-    auto c_key1_prefix = clustering_key::prefix::one::from_deeply_exploded(*s, {1});
-    auto c_key2 = clustering_key::one::from_deeply_exploded(*s, {2, 0});
-    auto c_key2_prefix = clustering_key::prefix::one::from_deeply_exploded(*s, {2});
+    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+    auto c_key1 = clustering_key::from_deeply_exploded(*s, {1, 0});
+    auto c_key1_prefix = clustering_key_prefix::from_deeply_exploded(*s, {1});
+    auto c_key2 = clustering_key::from_deeply_exploded(*s, {2, 0});
+    auto c_key2_prefix = clustering_key_prefix::from_deeply_exploded(*s, {2});
 
     auto ttl = gc_clock::now() + std::chrono::seconds(1);
 
@@ -103,7 +103,7 @@ BOOST_AUTO_TEST_CASE(test_map_mutations) {
     auto s = make_lw_shared(schema(some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_map_type}}, utf8_type));
     column_family cf(s);
-    auto key = partition_key::one::from_exploded(*s, {to_bytes("key1")});
+    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
     auto& column = *s->get_column_definition("s1");
     map_type_impl::mutation mmut1{{int32_type->decompose(101), make_atomic_cell(utf8_type->decompose(sstring("101")))}};
     mutation m1(key, s);
@@ -136,7 +136,7 @@ BOOST_AUTO_TEST_CASE(test_set_mutations) {
     auto s = make_lw_shared(schema(some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_set_type}}, utf8_type));
     column_family cf(s);
-    auto key = partition_key::one::from_exploded(*s, {to_bytes("key1")});
+    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
     auto& column = *s->get_column_definition("s1");
     map_type_impl::mutation mmut1{{int32_type->decompose(101), make_atomic_cell({})}};
     mutation m1(key, s);
@@ -169,7 +169,7 @@ BOOST_AUTO_TEST_CASE(test_list_mutations) {
     auto s = make_lw_shared(schema(some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_list_type}}, utf8_type));
     column_family cf(s);
-    auto key = partition_key::one::from_exploded(*s, {to_bytes("key1")});
+    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
     auto& column = *s->get_column_definition("s1");
     auto make_key = [] { return timeuuid_type->decompose(utils::UUID_gen::get_time_UUID()); };
     collection_type_impl::mutation mmut1{{make_key(), make_atomic_cell(int32_type->decompose(101))}};

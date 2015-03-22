@@ -73,6 +73,28 @@ int lexicographical_tri_compare(TypesIterator types, InputIt1 first1, InputIt1 l
     return 0;
 }
 
+// A trichotomic comparator for prefix equality total ordering.
+// In this ordering, two sequences are equal iff any of them is a prefix
+// of the another. Otherwise, lexicographical ordering determines the order.
+//
+// 'comp' is an abstract_type-aware trichotomic comparator, which takes the
+// type as first argument.
+//
+template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Compare>
+int prefix_equality_tri_compare(TypesIterator types, InputIt1 first1, InputIt1 last1,
+        InputIt2 first2, InputIt2 last2, Compare comp) {
+    while (first1 != last1 && first2 != last2) {
+        auto c = comp(*types, *first1, *first2);
+        if (c) {
+            return c;
+        }
+        ++first1;
+        ++first2;
+        ++types;
+    }
+    return 0;
+}
+
 // Returns true iff the second sequence is a prefix of the first sequence
 // Equality is an abstract_type-aware equality checker which takes the type as first argument.
 template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Equality>
@@ -256,6 +278,11 @@ bool less_compare(data_type t, bytes_view e1, bytes_view e2) {
 }
 
 static inline
+int tri_compare(data_type t, bytes_view e1, bytes_view e2) {
+    return t->compare(e1, e2);
+}
+
+static inline
 bool equal(data_type t, bytes_view e1, bytes_view e2) {
     return t->equal(e1, e2);
 }
@@ -283,16 +310,16 @@ protected:
             : abstract_type(std::move(name)), _kind(k) {}
 public:
     // representation of a collection mutation, key/value pairs, value is a mutation itself
-    using mutation = std::vector<std::pair<bytes, atomic_cell::one>>;
-    using mutation_view = std::vector<std::pair<bytes_view, atomic_cell::view>>;
+    using mutation = std::vector<std::pair<bytes, atomic_cell>>;
+    using mutation_view = std::vector<std::pair<bytes_view, atomic_cell_view>>;
     virtual data_type name_comparator() = 0;
     virtual data_type value_comparator() = 0;
     shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key);
     virtual bool is_collection() override { return true; }
     bool is_map() const { return &_kind == &kind::map; }
-    std::vector<atomic_cell::one> enforce_limit(std::vector<atomic_cell::one>, int version);
-    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) = 0;
-    bytes serialize_for_native_protocol(std::vector<atomic_cell::one> cells, int version);
+    std::vector<atomic_cell> enforce_limit(std::vector<atomic_cell>, int version);
+    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) = 0;
+    bytes serialize_for_native_protocol(std::vector<atomic_cell> cells, int version);
     virtual bool is_compatible_with(abstract_type& previous) override;
     virtual bool is_compatible_with_frozen(collection_type_impl& previous) = 0;
     virtual bool is_value_compatible_with_frozen(collection_type_impl& previous) = 0;
@@ -386,7 +413,7 @@ public:
     virtual sstring to_string(const bytes& b) override;
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
-    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
+    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) override;
     static bytes serialize_partially_deserialized_form(const std::vector<std::pair<bytes_view, bytes_view>>& v,
             serialization_format sf);
     virtual bytes to_value(mutation_view mut, serialization_format sf) override;
@@ -422,7 +449,7 @@ public:
     virtual sstring to_string(const bytes& b) override;
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
-    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
+    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) override;
     virtual bytes to_value(mutation_view mut, serialization_format sf) override;
     bytes serialize_partially_deserialized_form(
             const std::vector<bytes_view>& v, serialization_format sf);
@@ -459,7 +486,7 @@ public:
     virtual sstring to_string(const bytes& b) override;
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
-    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell::one> cells) override;
+    virtual std::vector<bytes> serialized_values(std::vector<atomic_cell> cells) override;
     virtual bytes to_value(mutation_view mut, serialization_format sf) override;
 };
 

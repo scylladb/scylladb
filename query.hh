@@ -73,10 +73,52 @@ public:
     const T& end_value() const {
         return _end->value();
     }
+
+    const optional<bound>& start() const {
+        return _start;
+    }
+
+    const optional<bound>& end() const {
+        return _end;
+    }
+
+    template<typename U>
+    friend std::ostream& operator<<(std::ostream& out, const range<U>& r);
 };
 
-using partition_range = range<partition_key::one>;
-using clustering_range = range<clustering_key::prefix::one>;
+template<typename U>
+std::ostream& operator<<(std::ostream& out, const range<U>& r) {
+    if (r.is_singular()) {
+        return out << "==" << r.start_value();
+    }
+
+    if (!r.start()) {
+        out << "(-inf, ";
+    } else {
+        if (r.start()->is_inclusive()) {
+            out << "[";
+        } else {
+            out << "(";
+        }
+        out << r.start()->value() << ", ";
+    }
+
+    if (!r.end()) {
+        out << "+inf)";
+    } else {
+        out << r.end()->value();
+        if (r.end()->is_inclusive()) {
+            out << "]";
+        } else {
+            out << ")";
+        }
+    }
+
+    return out;
+}
+
+using partition_range = range<partition_key>;
+using clustering_range = range<clustering_key_prefix>;
 
 class result {
 public:
@@ -85,7 +127,7 @@ public:
 
     // TODO: Optimize for singular partition range. In such case the caller
     // knows the partition key, no need to send it back.
-    std::vector<std::pair<partition_key::one, partition>> partitions;
+    std::vector<std::pair<partition_key, partition>> partitions;
 };
 
 class result::row {
@@ -103,7 +145,7 @@ public:
 
     // TODO: for some queries we could avoid sending keys back, because the client knows
     // what the key is (single row query for instance).
-    std::vector<std::pair<clustering_key::one, row>> rows;
+    std::vector<std::pair<clustering_key, row>> rows;
 public:
     // Returns row count in this result. If there is a static row and no clustering rows, that counts as one row.
     // Otherwise, if there are some clustering rows, the static row doesn't count.
@@ -142,6 +184,7 @@ public:
         , slice(std::move(slice))
         , row_limit(row_limit)
     { }
+    friend std::ostream& operator<<(std::ostream& out, const read_command& r);
 };
 
 }

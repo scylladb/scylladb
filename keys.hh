@@ -21,15 +21,18 @@
 //
 // The main classes are:
 //
-//   partition_key::one           - full partition key
-//   clustering_key::one          - full clustering key
-//   clustering_key::prefix::one  - clustering key prefix
+//   partition_key           - full partition key
+//   clustering_key          - full clustering key
+//   clustering_key_prefix   - clustering key prefix
 //
 // These classes wrap only the minimum information required to store the key
 // (the key value itself). Any information which can be inferred from schema
 // is not stored. Therefore accessors need to be provided with a pointer to
 // schema, from which information about structure is extracted.
 
+class partition_key;
+class clustering_key;
+class clustering_key_prefix;
 
 // Abstracts serialized tuple, managed by tuple_type.
 template <typename TopLevel>
@@ -137,17 +140,17 @@ public:
         { }
 
         bool operator()(const prefix_view_on_full_tuple& k1, const PrefixTopLevel& k2) const {
-            return lexicographical_compare(prefix_type->types().begin(),
+            return lexicographical_tri_compare(prefix_type->types().begin(),
                 k1.begin(), k1.end(),
                 prefix_type->begin(k2), prefix_type->end(k2),
-                less_compare);
+                tri_compare) < 0;
         }
 
         bool operator()(const PrefixTopLevel& k1, const prefix_view_on_full_tuple& k2) const {
-            return lexicographical_compare(prefix_type->types().begin(),
+            return lexicographical_tri_compare(prefix_type->types().begin(),
                 prefix_type->begin(k1), prefix_type->end(k1),
                 k2.begin(), k2.end(),
-                less_compare);
+                tri_compare) < 0;
         }
     };
 };
@@ -166,7 +169,7 @@ public:
         return ::is_prefixed_by(t->types().begin(),
             t->begin(*this), t->end(*this),
             prefix_type->begin(prefix), prefix_type->end(prefix),
-            less_compare);
+            ::equal);
     }
 
     struct less_compare_with_prefix {
@@ -179,17 +182,45 @@ public:
         { }
 
         bool operator()(const TopLevel& k1, const PrefixTopLevel& k2) const {
-            return lexicographical_compare(prefix_type->types().begin(),
+            return lexicographical_tri_compare(prefix_type->types().begin(),
                 full_type->begin(k1), full_type->end(k1),
                 prefix_type->begin(k2), prefix_type->end(k2),
-                less_compare);
+                tri_compare) < 0;
         }
 
         bool operator()(const PrefixTopLevel& k1, const TopLevel& k2) const {
-            return lexicographical_compare(prefix_type->types().begin(),
+            return lexicographical_tri_compare(prefix_type->types().begin(),
                 prefix_type->begin(k1), prefix_type->end(k1),
                 full_type->begin(k2), full_type->end(k2),
-                less_compare);
+                tri_compare) < 0;
+        }
+    };
+
+    // In prefix equality two sequences are equal if any of them is a prefix
+    // of the other. Otherwise lexicographical ordering is applied.
+    // Note: full tuples sorted according to lexicographical ordering are also
+    // sorted according to prefix equality ordering.
+    struct prefix_equality_less_compare {
+        typename PrefixTopLevel::tuple prefix_type;
+        typename TopLevel::tuple full_type;
+
+        prefix_equality_less_compare(const schema& s)
+            : prefix_type(PrefixTopLevel::get_tuple_type(s))
+            , full_type(TopLevel::get_tuple_type(s))
+        { }
+
+        bool operator()(const TopLevel& k1, const PrefixTopLevel& k2) const {
+            return prefix_equality_tri_compare(prefix_type->types().begin(),
+                full_type->begin(k1), full_type->end(k1),
+                prefix_type->begin(k2), prefix_type->end(k2),
+                tri_compare) < 0;
+        }
+
+        bool operator()(const PrefixTopLevel& k1, const TopLevel& k2) const {
+            return prefix_equality_tri_compare(prefix_type->types().begin(),
+                prefix_type->begin(k1), prefix_type->end(k1),
+                full_type->begin(k2), full_type->end(k2),
+                tri_compare) < 0;
         }
     };
 
@@ -222,27 +253,21 @@ public:
     }
 };
 
-class partition_key {
+class partition_key : public tuple_wrapper<partition_key> {
 public:
-    class one;
+    partition_key(bytes&& b) : tuple_wrapper<partition_key>(std::move(b)) {}
+public:
+    using tuple = lw_shared_ptr<tuple_type<false>>;
 
-    using full_base = tuple_wrapper<partition_key::one>;
-
-    class one : public full_base {
-        one(bytes&& b) : full_base(std::move(b)) {}
-    public:
-        using tuple = lw_shared_ptr<tuple_type<false>>;
-
-        static one from_bytes(bytes b) { return one(std::move(b)); }
-        static auto get_tuple_type(const schema& s) { return s.partition_key_type; }
-    };
+    static partition_key from_bytes(bytes b) { return partition_key(std::move(b)); }
+    static auto get_tuple_type(const schema& s) { return s.partition_key_type; }
 };
 
-class clustering_prefix {
+class exploded_clustering_prefix {
     std::vector<bytes> _v;
 public:
-    clustering_prefix(std::vector<bytes>&& v) : _v(std::move(v)) {}
-    clustering_prefix() {}
+    exploded_clustering_prefix(std::vector<bytes>&& v) : _v(std::move(v)) {}
+    exploded_clustering_prefix() {}
     size_t size() const {
         return _v.size();
     }
@@ -257,41 +282,45 @@ public:
     }
 };
 
-class clustering_key {
+class clustering_key : public prefixable_full_tuple<clustering_key, clustering_key_prefix> {
 public:
-    class one;
+    clustering_key(bytes&& b) : prefixable_full_tuple<clustering_key, clustering_key_prefix>(std::move(b)) {}
+public:
+    using tuple = lw_shared_ptr<tuple_type<false>>;
 
-    struct prefix {
-        class one;
-    };
+    static clustering_key from_bytes(bytes b) { return clustering_key(std::move(b)); }
+    static auto get_tuple_type(const schema& s) { return s.clustering_key_type; }
 
-    using full_base = prefixable_full_tuple<clustering_key::one, clustering_key::prefix::one>;
-    using prefix_base = prefix_tuple_wrapper<clustering_key::prefix::one, clustering_key::one>;
-
-    class prefix::one : public prefix_base {
-        one(bytes&& b) : prefix_base(std::move(b)) {}
-    public:
-        using tuple = lw_shared_ptr<tuple_type<true>>;
-
-        static one from_bytes(bytes b) { return one(std::move(b)); }
-        static auto get_tuple_type(const schema& s) { return s.clustering_key_prefix_type; }
-
-        static one from_clustering_prefix(const schema& s, const clustering_prefix& prefix) {
-            return from_exploded(s, prefix.components());
-        }
-    };
-
-    class one : public full_base {
-        one(bytes&& b) : full_base(std::move(b)) {}
-    public:
-        using tuple = lw_shared_ptr<tuple_type<false>>;
-
-        static one from_bytes(bytes b) { return one(std::move(b)); }
-        static auto get_tuple_type(const schema& s) { return s.clustering_key_type; }
-
-        static one from_clustering_prefix(const schema& s, const clustering_prefix& prefix) {
-            assert(prefix.is_full(s));
-            return from_exploded(s, prefix.components());
-        }
-    };
+    static clustering_key from_clustering_prefix(const schema& s, const exploded_clustering_prefix& prefix) {
+        assert(prefix.is_full(s));
+        return from_exploded(s, prefix.components());
+    }
 };
+
+class clustering_key_prefix : public prefix_tuple_wrapper<clustering_key_prefix, clustering_key> {
+    clustering_key_prefix(bytes&& b) : prefix_tuple_wrapper<clustering_key_prefix, clustering_key>(std::move(b)) {}
+public:
+    using tuple = lw_shared_ptr<tuple_type<true>>;
+
+    static clustering_key_prefix from_bytes(bytes b) { return clustering_key_prefix(std::move(b)); }
+    static auto get_tuple_type(const schema& s) { return s.clustering_key_prefix_type; }
+
+    static clustering_key_prefix from_clustering_prefix(const schema& s, const exploded_clustering_prefix& prefix) {
+        return from_exploded(s, prefix.components());
+    }
+};
+
+static inline
+std::ostream& operator<<(std::ostream& out, const partition_key& pk) {
+    return out << "pk{" << to_hex(pk) << "}";
+}
+
+static inline
+std::ostream& operator<<(std::ostream& out, const clustering_key& ck) {
+    return out << "ck{" << to_hex(ck) << "}";
+}
+
+static inline
+std::ostream& operator<<(std::ostream& out, const clustering_key_prefix& ckp) {
+    return out << "ckp{" << to_hex(ckp) << "}";
+}

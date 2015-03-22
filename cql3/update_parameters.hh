@@ -36,7 +36,7 @@ namespace cql3 {
 class update_parameters final {
 public:
     using prefetched_rows_type = std::experimental::optional<
-            std::unordered_map<partition_key::one, row, partition_key::one::hashing, partition_key::one::equality>>;
+            std::unordered_map<partition_key, row, partition_key::hashing, partition_key::equality>>;
 private:
     const gc_clock::duration _ttl;
     const prefetched_rows_type _prefetched; // For operation that require a read-before-write
@@ -63,18 +63,18 @@ public:
         }
     }
 
-    atomic_cell::one make_dead_cell() const {
-        return atomic_cell::one::make_dead(_timestamp, _local_deletion_time);
+    atomic_cell make_dead_cell() const {
+        return atomic_cell::make_dead(_timestamp, _local_deletion_time);
     }
 
-    atomic_cell::one make_cell(bytes_view value) const {
+    atomic_cell make_cell(bytes_view value) const {
         auto ttl = _ttl;
 
         if (ttl.count() <= 0) {
             ttl = _schema->default_time_to_live;
         }
 
-        return atomic_cell::one::make_live(_timestamp,
+        return atomic_cell::make_live(_timestamp,
             ttl.count() > 0 ? ttl_opt{_local_deletion_time + ttl} : ttl_opt{}, value);
     };
 

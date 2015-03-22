@@ -25,6 +25,7 @@
 #pragma once
 
 #include <vector>
+#include <cql3/restrictions/single_column_restriction.hh>
 
 #include "core/shared_ptr.hh"
 #include "to_string.hh"
@@ -149,12 +150,9 @@ protected:
             ::shared_ptr<variable_specifications> bound_names,
             statements::bound bound,
             bool inclusive) override {
-        throw std::runtime_error("not implemented");
-#if 0
-        ColumnDefinition columnDef = toColumnDefinition(schema, entity);
-        Term term = toTerm(toReceivers(schema, columnDef), value, schema.ksName, bound_names);
-        return new SingleColumnRestriction.Slice(columnDef, bound, inclusive, term);
-#endif
+        auto&& column_def = to_column_definition(schema, _entity);
+        auto term = to_term(to_receivers(schema, column_def), _value, schema->ks_name, std::move(bound_names));
+        return ::make_shared<restrictions::single_column_restriction::slice>(column_def, bound, inclusive, std::move(term));
     }
 
     virtual shared_ptr<restrictions::restriction> new_contains_restriction(schema_ptr schema,

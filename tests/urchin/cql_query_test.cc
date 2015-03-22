@@ -2,6 +2,7 @@
  * Copyright 2015 Cloudius Systems
  */
 
+#include <boost/range/irange.hpp>
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
 #include "core/distributed.hh"
@@ -41,7 +42,7 @@ static future<> require_column_has_value(distributed<database>& ddb, const sstri
     auto cf = ks->find_column_family(table_name);
     assert(cf != nullptr);
     auto schema = cf->_schema;
-    auto pkey = partition_key::one::from_deeply_exploded(*schema, pk);
+    auto pkey = partition_key::from_deeply_exploded(*schema, pk);
     auto dk = dht::global_partitioner().decorate_key(pkey);
     auto shard = db.shard_of(dk._token);
     return ddb.invoke_on(shard, [pkey = std::move(pkey),
@@ -57,7 +58,7 @@ static future<> require_column_has_value(distributed<database>& ddb, const sstri
         auto schema = cf->_schema;
         auto p = cf->find_partition(pkey);
         assert(p != nullptr);
-        auto row = p->find_row(clustering_key::one::from_deeply_exploded(*schema, ck));
+        auto row = p->find_row(clustering_key::from_deeply_exploded(*schema, ck));
         assert(row != nullptr);
         auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
         assert(col_def != nullptr);
@@ -143,6 +144,14 @@ public:
             }
         }
         BOOST_FAIL("Expected row not found");
+        return {*this};
+    }
+
+    rows_assertions with_rows(std::initializer_list<std::initializer_list<bytes_opt>> rows) {
+        with_size(rows.size());
+        for (auto&& row : rows) {
+            with_row(row);
+        }
         return {*this};
     }
 };
@@ -231,6 +240,166 @@ SEASTAR_TEST_CASE(test_select_statement) {
                      {int32_type->decompose(23)}
                  });
         });
+    }).finally([db] {
+        return db->stop().finally([db] {});
+    });
+}
+
+SEASTAR_TEST_CASE(test_cassandra_stress_like_write_and_read) {
+    auto db = make_shared<distributed<database>>();
+    auto state = make_shared<conversation_state>(*db, ks_name);
+
+    auto execute_update_for_key = [state] (sstring key) {
+        return state->execute_cql(sprint("UPDATE cf SET "
+            "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
+            "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
+            "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
+            "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
+            "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27 "
+            "WHERE \"KEY\"=%s;", key)).discard_result();
+    };
+
+    auto verify_row_for_key = [state] (sstring key) {
+        return state->execute_cql(sprint("select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" from cf where \"KEY\" = %s", key)).then([] (auto msg) {
+            assert_that(msg).is_rows()
+                .with_size(1)
+                .with_row({
+                    {from_hex("8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a")},
+                    {from_hex("a8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51")},
+                    {from_hex("583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64")},
+                    {from_hex("62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7")},
+                    {from_hex("222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27")}
+                 });
+        });
+    };
+
+    return db->start().then([db] {
+        return db->invoke_on_all([] (database& db) {
+            keyspace ks;
+            auto cf_schema = make_lw_shared(schema(ks_name, table_name,
+                {{"KEY", bytes_type}},
+                {},
+                {{"C0", bytes_type}, {"C1", bytes_type}, {"C2", bytes_type}, {"C3", bytes_type}, {"C4", bytes_type}},
+                {},
+                utf8_type));
+            ks.column_families.emplace(table_name, column_family(cf_schema));
+            db.keyspaces.emplace(ks_name, std::move(ks));
+        });
+    }).then([execute_update_for_key, verify_row_for_key] {
+        static auto make_key = [] (int suffix) { return sprint("0xdeadbeefcafebabe%02d", suffix); };
+        auto suffixes = boost::irange(0, 10);
+        return parallel_for_each(suffixes.begin(), suffixes.end(), [execute_update_for_key] (int suffix) {
+            return execute_update_for_key(make_key(suffix));
+        }).then([suffixes, verify_row_for_key] {
+            return parallel_for_each(suffixes.begin(), suffixes.end(), [verify_row_for_key] (int suffix) {
+                return verify_row_for_key(make_key(suffix));
+            });
+        });
+    }).finally([db] {
+        return db->stop().finally([db] {});
+    });
+}
+
+SEASTAR_TEST_CASE(test_range_queries) {
+    auto db = make_shared<distributed<database>>();
+    auto state = make_shared<conversation_state>(*db, ks_name);
+
+    return db->start().then([db] {
+        return db->invoke_on_all([] (database& db) {
+            keyspace ks;
+            auto cf_schema = make_lw_shared(schema(ks_name, table_name,
+                {{"k", bytes_type}},
+                {{"c0", bytes_type}, {"c1", bytes_type}},
+                {{"v", bytes_type}},
+                {},
+                utf8_type));
+            ks.column_families.emplace(table_name, column_family(cf_schema));
+            db.keyspaces.emplace(ks_name, std::move(ks));
+        });
+    }).then([state] {
+        return state->execute_cql("update cf set v = 0x01 where k = 0x00 and c0 = 0x01 and c1 = 0x01;").discard_result();
+    }).then([state] {
+        return state->execute_cql("update cf set v = 0x02 where k = 0x00 and c0 = 0x01 and c1 = 0x02;").discard_result();
+    }).then([state] {
+        return state->execute_cql("update cf set v = 0x03 where k = 0x00 and c0 = 0x01 and c1 = 0x03;").discard_result();
+    }).then([state] {
+        return state->execute_cql("update cf set v = 0x04 where k = 0x00 and c0 = 0x02 and c1 = 0x02;").discard_result();
+    }).then([state] {
+        return state->execute_cql("update cf set v = 0x05 where k = 0x00 and c0 = 0x02 and c1 = 0x03;").discard_result();
+    }).then([state] {
+        return state->execute_cql("update cf set v = 0x06 where k = 0x00 and c0 = 0x02 and c1 = 0x04;").discard_result();
+    }).then([state] {
+        return state->execute_cql("update cf set v = 0x07 where k = 0x00 and c0 = 0x03 and c1 = 0x04;").discard_result();
+    }).then([state] {
+        return state->execute_cql("update cf set v = 0x08 where k = 0x00 and c0 = 0x03 and c1 = 0x05;").discard_result();
+    }).then([state] {
+       return state->execute_cql("select v from cf where k = 0x00").then([] (auto msg) {
+           assert_that(msg).is_rows()
+               .with_rows({
+                   {from_hex("01")},
+                   {from_hex("02")},
+                   {from_hex("03")},
+                   {from_hex("04")},
+                   {from_hex("05")},
+                   {from_hex("06")},
+                   {from_hex("07")},
+                   {from_hex("08")}
+               });
+       });
+    }).then([state] {
+        return state->execute_cql("select v from cf where k = 0x00 and c0 = 0x02 allow filtering;").then([] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {from_hex("04")}, {from_hex("05")}, {from_hex("06")}
+            });
+        });
+    }).then([state] {
+        return state->execute_cql("select v from cf where k = 0x00 and c0 > 0x02 allow filtering;").then([] (auto msg) {
+            assert_that(msg).is_rows().with_rows({
+                {from_hex("07")}, {from_hex("08")}
+            });
+        });
+    }).then([state] {
+       return state->execute_cql("select v from cf where k = 0x00 and c0 >= 0x02 allow filtering;").then([] (auto msg) {
+           assert_that(msg).is_rows().with_rows({
+               {from_hex("04")}, {from_hex("05")}, {from_hex("06")}, {from_hex("07")}, {from_hex("08")}
+           });
+       });
+    }).then([state] {
+       return state->execute_cql("select v from cf where k = 0x00 and c0 >= 0x02 and c0 < 0x03 allow filtering;").then([] (auto msg) {
+           assert_that(msg).is_rows().with_rows({
+               {from_hex("04")}, {from_hex("05")}, {from_hex("06")}
+           });
+       });
+    }).then([state] {
+       return state->execute_cql("select v from cf where k = 0x00 and c0 > 0x02 and c0 <= 0x03 allow filtering;").then([] (auto msg) {
+           assert_that(msg).is_rows().with_rows({
+               {from_hex("07")}, {from_hex("08")}
+           });
+       });
+    }).then([state] {
+       return state->execute_cql("select v from cf where k = 0x00 and c0 >= 0x02 and c0 <= 0x02 allow filtering;").then([] (auto msg) {
+           assert_that(msg).is_rows().with_rows({
+               {from_hex("04")}, {from_hex("05")}, {from_hex("06")}
+           });
+       });
+    }).then([state] {
+       return state->execute_cql("select v from cf where k = 0x00 and c0 < 0x02 allow filtering;").then([] (auto msg) {
+           assert_that(msg).is_rows().with_rows({
+               {from_hex("01")}, {from_hex("02")}, {from_hex("03")}
+           });
+       });
+    }).then([state] {
+       return state->execute_cql("select v from cf where k = 0x00 and c0 = 0x02 and c1 > 0x02 allow filtering;").then([] (auto msg) {
+           assert_that(msg).is_rows().with_rows({
+               {from_hex("05")}, {from_hex("06")}
+           });
+       });
+    }).then([state] {
+       return state->execute_cql("select v from cf where k = 0x00 and c0 = 0x02 and c1 >= 0x02 and c1 <= 0x02 allow filtering;").then([] (auto msg) {
+           assert_that(msg).is_rows().with_rows({
+               {from_hex("04")}
+           });
+       });
     }).finally([db] {
         return db->stop().finally([db] {});
     });
