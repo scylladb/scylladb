@@ -27,6 +27,7 @@
 
 #include "cql3/abstract_marker.hh"
 #include "to_string.hh"
+#include "utils/UUID_gen.hh"
 
 namespace cql3 {
 
@@ -203,6 +204,7 @@ public:
             os << "]";
             return os.str();
         }
+        friend class lists;
     };
     /**
      * Basically similar to a Value, but with some non-pure function (that need
@@ -317,26 +319,27 @@ public:
             }
         }
     }
+#endif
 
-    public static class Setter extends Operation
-    {
-        public Setter(ColumnDefinition column, Term t)
-        {
-            super(column, t);
+    class setter : public operation {
+    public:
+        setter(column_definition& column, shared_ptr<term> t)
+                : operation(column, std::move(t)) {
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            if (column.type.isMultiCell())
-            {
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
+            if (column.type->is_multi_cell()) {
                 // delete + append
+                // FIXME:
+                warn(unimplemented::cause::COLLECTIONS);
+#if 0
                 CellName name = cf.getComparator().create(prefix, column);
                 cf.addAtom(params.makeTombstoneForOverwrite(name.slice()));
-            }
-            Appender.doAppend(t, cf, prefix, column, params);
-        }
-    }
 #endif
+            }
+            do_append(_t, m, prefix, column, params);
+        }
+    };
 
     class setter_by_index : public operation {
         shared_ptr<term> _idx;
@@ -408,37 +411,47 @@ public:
             assert column.type.isMultiCell() : "Attempted to append to a frozen list";
             doAppend(t, cf, prefix, column, params);
         }
+    }
+#endif
 
-        static void doAppend(Term t, ColumnFamily cf, Composite prefix, ColumnDefinition column, UpdateParameters params) throws InvalidRequestException
-        {
-            Term.Terminal value = t.bind(params.options);
-            Lists.Value listValue = (Lists.Value)value;
-            if (column.type.isMultiCell())
-            {
-                // If we append null, do nothing. Note that for Setter, we've
-                // already removed the previous value so we're good here too
-                if (value == null)
-                    return;
-
-                List<ByteBuffer> toAdd = listValue.elements;
-                for (int i = 0; i < toAdd.size(); i++)
-                {
-                    ByteBuffer uuid = ByteBuffer.wrap(UUIDGen.getTimeUUIDBytes());
-                    cf.addColumn(params.makeColumn(cf.getComparator().create(prefix, column, uuid), toAdd.get(i)));
-                }
+    static void do_append(shared_ptr<term> t,
+            mutation& m,
+            const exploded_clustering_prefix& prefix,
+            const column_definition& column,
+            const update_parameters& params) {
+        auto&& value = t->bind(params._options);
+        auto&& list_value = dynamic_pointer_cast<lists::value>(value);
+        auto&& ltype = dynamic_pointer_cast<list_type_impl>(column.type);
+        if (column.type->is_multi_cell()) {
+            // If we append null, do nothing. Note that for Setter, we've
+            // already removed the previous value so we're good here too
+            if (!value) {
+                return;
             }
-            else
-            {
-                // for frozen lists, we're overwriting the whole cell value
-                CellName name = cf.getComparator().create(prefix, column);
-                if (value == null)
-                    cf.addAtom(params.makeTombstone(name));
-                else
-                    cf.addColumn(params.makeColumn(name, listValue.getWithProtocolVersion(Server.CURRENT_VERSION)));
+
+            auto&& to_add = list_value->_elements;
+            collection_type_impl::mutation appended;
+            appended.reserve(to_add.size());
+            for (auto&& e : to_add) {
+                auto uuid1 = utils::UUID_gen::get_time_UUID_bytes();
+                auto uuid = bytes(reinterpret_cast<const char*>(uuid1.data()), uuid1.size());
+                appended.emplace_back(std::move(uuid), params.make_cell(e));
+            }
+            m.set_cell(prefix, column, ltype->serialize_mutation_form(appended));
+        } else {
+            // for frozen lists, we're overwriting the whole cell value
+            if (!value) {
+                m.set_cell(prefix, column, params.make_dead_cell());
+            } else {
+                auto&& to_add = list_value->_elements;
+                auto&& newv = collection_mutation::one{list_type_impl::pack(to_add.begin(), to_add.end(), to_add.size(),
+                                                                            serialization_format::internal())};
+                m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(newv)));
             }
         }
     }
 
+#if 0
     public static class Prepender extends Operation
     {
         public Prepender(ColumnDefinition column, Term t)
