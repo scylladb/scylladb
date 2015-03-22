@@ -70,6 +70,7 @@ class protocol {
         auto& out_ready() { return _output_ready; }
         bool error() { return _error; }
         auto& serializer() { return _proto._serializer; }
+        auto& get_protocol() { return _proto; }
     };
     friend connection;
 
@@ -123,6 +124,7 @@ private:
     using rpc_handler = std::function<future<>(typename server::connection&)>;
     std::unordered_map<MsgType, rpc_handler> _handlers;
     Serializer _serializer;
+    std::function<void(const sstring&)> _logger;
 public:
     protocol(Serializer&& serializer) : _serializer(std::forward<Serializer>(serializer)) {}
     template<typename Func>
@@ -134,6 +136,20 @@ public:
     template<typename Func>
     auto register_handler(MsgType t, Func&& func);
 
+    void set_logger(std::function<void(const sstring&)> logger) {
+        _logger = logger;
+    }
+
+    void log(const sstring& str) {
+        if (_logger) {
+            _logger(str);
+            _logger("\n");
+        }
+    }
+
+    void log(const client_info& info, id_type msg_id, const sstring& str) {
+        log(to_sstring("client ") + inet_ntoa(info.addr.as_posix_sockaddr_in().sin_addr) + " msg_id " + to_sstring(msg_id) + ": " + str);
+    }
 private:
     void register_receiver(MsgType t, rpc_handler&& handler) {
         _handlers.emplace(t, std::move(handler));

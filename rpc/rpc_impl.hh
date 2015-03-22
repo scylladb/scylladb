@@ -260,6 +260,7 @@ struct snd_reply<Serializer, MsgType, no_wait_type> : snd_reply_base<Serializer,
         return make_ready_future<>();
     }
     inline future<> send_ex(typename protocol<Serializer, MsgType>::server::connection& client) {
+        client.get_protocol().log(client.info(), -this->id, to_sstring("exception \"") + this->ex + "\" in no_wait handler ignored");
         return make_ready_future<>();
     }
 };
