@@ -43,6 +43,8 @@ public:
     } u;
     ::sockaddr& as_posix_sockaddr() { return u.sa; }
     ::sockaddr_in& as_posix_sockaddr_in() { return u.in; }
+    const ::sockaddr& as_posix_sockaddr() const { return u.sa; }
+    const ::sockaddr_in& as_posix_sockaddr_in() const { return u.in; }
 };
 
 struct listen_options {
