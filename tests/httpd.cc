@@ -18,10 +18,10 @@ using namespace httpd;
 
 class handl : public httpd::handler_base {
 public:
-    virtual void handle(const sstring& path, parameters* params,
-            httpd::const_req& req, httpd::reply& rep)
-    {
-
+    virtual future<std::unique_ptr<reply> > handle(const sstring& path,
+            std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+        rep->done("html");
+        return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
     }
 };
 
@@ -77,24 +77,45 @@ BOOST_AUTO_TEST_CASE(test_formatter)
 
 }
 
-
-BOOST_AUTO_TEST_CASE(test_routes)
-{
+BOOST_AUTO_TEST_CASE(test_routes) {
     handl* h1 = new handl();
     handl* h2 = new handl();
     routes route;
     route.add(operation_type::GET, url("/api").remainder("path"), h1);
     route.add(operation_type::GET, url("/"), h2);
-    request req;
-    reply rep;
-    BOOST_CHECK_NO_THROW(route.handle("/api", req, rep));
-    BOOST_REQUIRE_EQUAL((int)rep._status, (int)reply::status_type::ok);
-    BOOST_REQUIRE_EQUAL(req.param["path"], "");
-    BOOST_CHECK_NO_THROW(route.handle("/", req, rep));
-    BOOST_REQUIRE_EQUAL((int)rep._status, (int)reply::status_type::ok);
-    BOOST_CHECK_NO_THROW(route.handle("/api/abc", req, rep));
-    BOOST_REQUIRE_EQUAL(req.param["path"], "/abc");
-    BOOST_CHECK_NO_THROW(route.handle("/ap", req, rep));
-    BOOST_REQUIRE_EQUAL((int)rep._status, (int)reply::status_type::not_found);
+    std::unique_ptr<request> req = std::make_unique<request>();
+    std::unique_ptr<reply> rep = std::make_unique<reply>();
+
+    BOOST_CHECK_NO_THROW(
+            route.handle("/api", std::move(req), std::move(rep)).then(
+                    [&rep](std::unique_ptr<reply> _rep) {
+                        rep = std::move(_rep);
+                    }));
+    BOOST_REQUIRE_EQUAL((int )rep->_status, (int )reply::status_type::ok);
+    req.reset(new request);
+    rep.reset(new reply);
+
+    BOOST_CHECK_NO_THROW(
+            route.handle("/", std::move(req), std::move(rep)).then(
+                    [&rep](std::unique_ptr<reply> _rep) {
+                        rep = std::move(_rep);
+                    }));
+    BOOST_REQUIRE_EQUAL((int )rep->_status, (int )reply::status_type::ok);
+    req.reset(new request);
+    rep.reset(new reply);
+    BOOST_CHECK_NO_THROW(
+            route.handle("/api/abc", std::move(req), std::move(rep)).then(
+                    [&rep](std::unique_ptr<reply> _rep) {
+                        rep = std::move(_rep);
+                    }));
+    req.reset(new request);
+    rep.reset(new reply);
+    BOOST_CHECK_NO_THROW(
+            route.handle("/ap", std::move(req), std::move(rep)).then(
+                    [&rep](std::unique_ptr<reply> _rep) {
+                        rep = std::move(_rep);
+                    }));
+    BOOST_REQUIRE_EQUAL((int )rep->_status,
+            (int )reply::status_type::not_found);
 
 }

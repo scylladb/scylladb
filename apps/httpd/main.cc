@@ -28,12 +28,18 @@ using namespace httpd;
 
 class handl : public httpd::handler_base {
 public:
-    virtual void handle(const sstring& path, parameters* params,
-            httpd::const_req& req, httpd::reply& rep) {
-        rep._content = "hello";
-        rep.done("html");
+    virtual future<std::unique_ptr<reply> > handle(const sstring& path,
+            std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+        rep->_content = "hello";
+        rep->done("html");
+        return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
     }
 };
+
+void set_routes(routes& r) {
+    handl* h1 = new handl();
+    r.add(operation_type::GET, url("/"), h1);
+}
 
 int main(int ac, char** av) {
     app_template app;
@@ -46,8 +52,7 @@ int main(int ac, char** av) {
                 auto server = new distributed<http_server>;
                 server->start().then([server = std::move(server), port] () mutable {
                             server->invoke_on_all([](http_server& server) {
-                                handl* h1 = new handl();
-                                server._routes.add(operation_type::GET, url("/"), h1);
+                                set_routes(server._routes);
                             });
                             server->invoke_on_all(&http_server::listen, ipv4_addr {port});
                         }).then([port] {

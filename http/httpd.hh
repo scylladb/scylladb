@@ -140,16 +140,19 @@ public:
         }
         future<> read_one() {
             _parser.init();
-            return _read_buf.consume(_parser).then([this] {
+            return _read_buf.consume(_parser).then([this] () mutable {
                 if (_parser.eof()) {
                     _done = true;
                     return make_ready_future<>();
                 }
                 ++_server._requests_served;
-                _req = _parser.get_parsed_request();
-                return _replies.not_full().then([this] {
-                            _done = generate_reply(std::move(_req));
-                        });
+                std::unique_ptr<httpd::request> req = _parser.get_parsed_request();
+
+                return _replies.not_full().then([req = std::move(req), this] () mutable {
+                    return generate_reply(std::move(req));
+                }).then([this](bool done) {
+                    _done = done;
+                });
             });
         }
         future<> respond() {
@@ -199,7 +202,7 @@ public:
                 return write_reply_headers(++hi);
             });
         }
-        bool generate_reply(std::unique_ptr<request> req) {
+        future<bool> generate_reply(std::unique_ptr<request> req) {
             auto resp = std::make_unique<reply>();
             bool conn_keep_alive = false;
             bool conn_close = false;
@@ -226,10 +229,13 @@ public:
                 // HTTP/0.9 goes here
                 should_close = true;
             }
-            _server._routes.handle(req->_url, *(req.get()), *(resp.get()));
+            sstring url = req->_url;
+            return _server._routes.handle(url, std::move(req), std::move(resp)).
             // Caller guarantees enough room
-            _replies.push(std::move(resp));
-            return should_close;
+            then([this, should_close](std::unique_ptr<reply> rep) {
+                this->_replies.push(std::move(rep));
+                return make_ready_future<bool>(should_close);
+            });
         }
         future<> write_body() {
             return _write_buf.write(_resp->_content.begin(),

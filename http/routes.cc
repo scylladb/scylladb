@@ -47,35 +47,41 @@ routes::~routes() {
 
 }
 
-void routes::handle(const sstring& path, request& req, reply& rep) {
-    handler_base* handler = get_handler(str2type(req._method),
-            normalize_url(path), req.param);
+future<std::unique_ptr<reply> > routes::handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+    handler_base* handler = get_handler(str2type(req->_method),
+            normalize_url(path), req->param);
     if (handler != nullptr) {
         try {
             for (auto& i : handler->_mandatory_param) {
-                verify_param(req, i);
+                verify_param(*req.get(), i);
             }
-            handler->handle(path, &req.param, req, rep);
+            auto r =  handler->handle(path, std::move(req), std::move(rep));
+            return r;
         } catch (const redirect_exception& _e) {
-            rep.add_header("Location", _e.url).set_status(_e.status()).done(
+            rep.reset(new reply());
+            rep->add_header("Location", _e.url).set_status(_e.status()).done(
                     "json");
-            return;
+
         } catch (const base_exception& _e) {
+            rep.reset(new reply());
             json_exception e(_e);
-            rep.set_status(_e.status(), e.to_json()).done("json");
+            rep->set_status(_e.status(), e.to_json()).done("json");
         } catch (exception& _e) {
+            rep.reset(new reply());
             json_exception e(_e);
             cerr << "exception was caught for " << path << ": " << _e.what()
                     << endl;
-            rep.set_status(reply::status_type::internal_server_error,
+            rep->set_status(reply::status_type::internal_server_error,
                     e.to_json()).done("json");
-            return;
         }
     } else {
+        rep.reset(new reply());
         json_exception ex(not_found_exception("Not found"));
-        rep.set_status(reply::status_type::not_found, ex.to_json()).done(
+        rep->set_status(reply::status_type::not_found, ex.to_json()).done(
                 "json");
     }
+    cerr << "Failed with " << path << " " << rep->_content << endl;
+    return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
 }
 
 sstring routes::normalize_url(const sstring& url) {
@@ -107,7 +113,9 @@ routes& routes::add(operation_type type, const url& url,
         handler_base* handler) {
     match_rule* rule = new match_rule(handler);
     rule->add_str(url._path);
-    rule->add_param(url._param, true);
+    if (url._param != "") {
+        rule->add_param(url._param, true);
+    }
     return add(rule, type);
 }
 
