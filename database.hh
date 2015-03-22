@@ -235,6 +235,25 @@ public:
             throw std::runtime_error("attemting to store into a key cell");
         }
     }
+    auto get_cell(const clustering_key& rkey, const column_definition& def)
+            -> std::experimental::optional<atomic_cell_or_collection> {
+        auto find_cell = [&def] (row& r) {
+            auto i = r.find(def.id);
+            if (i == r.end()) {
+                return std::experimental::optional<atomic_cell_or_collection>{};
+            }
+            return std::experimental::optional<atomic_cell_or_collection>{i->second};
+        };
+        if (def.is_static()) {
+            return find_cell(p.static_row());
+        } else {
+            auto r = p.find_row(rkey);
+            if (!r) {
+                return {};
+            }
+            return find_cell(*r);
+        }
+    }
 private:
     static void update_column(row& row, const column_definition& def, atomic_cell_or_collection&& value) {
         // our mutations are not yet immutable
