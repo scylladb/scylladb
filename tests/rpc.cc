@@ -94,9 +94,11 @@ int main(int ac, char** av) {
         auto test2 = myrpc.register_handler(2, [](int a, int b){ print("test2 got %d %d\n", a, b); return make_ready_future<int>(a+b); });
         auto test3 = myrpc.register_handler(3, [](double x){ print("test3 got %f\n", x); return sin(x); });
         auto test4 = myrpc.register_handler(4, [](){ print("test4 throw!\n"); throw std::runtime_error("exception!"); });
+        auto test5 = myrpc.register_handler(5, [](){ print("test5 no wait\n"); return rpc::no_wait; });
+        auto test6 = myrpc.register_handler(6, [](const rpc::client_info& info, int x){ print("test6 client %s, %d\n", inet_ntoa(info.addr.as_posix_sockaddr_in().sin_addr), x); });
         if (config.count("server")) {
             std::cout << "client" << std::endl;
-            auto test5 = myrpc.make_client<long (long a, long b)>(5);
+            auto test7 = myrpc.make_client<long (long a, long b)>(7);
 
             client = std::make_unique<rpc::protocol<serializer>::client>(myrpc, ipv4_addr{config["server"].as<std::string>()});
 
@@ -114,19 +116,21 @@ int main(int ac, char** av) {
                         print("test4 %s\n", x.what());
                     }
                 });
-                f = test5(*client, 5, 6).then([] (long r) { print("test4 got %ld\n", r); });
+                test5(*client).then([] { print("test5 no wait ended\n"); });
+                test6(*client, 1).then([] { print("test6 ended\n"); });
+                f = test7(*client, 5, 6).then([] (long r) { print("test7 got %ld\n", r); });
             }
             f.finally([] {
                     engine().exit(0);
             });
         } else {
             std::cout << "server on port " << port << std::endl;
-            myrpc.register_handler(5, [](long a, long b) mutable {
+            myrpc.register_handler(7, [](long a, long b) mutable {
                 auto p = make_lw_shared<promise<>>();
                 auto t = make_lw_shared<timer<>>();
-                print("test5 got %ld %ld\n", a, b);
+                print("test7 got %ld %ld\n", a, b);
                 auto f = p->get_future().then([a, b, t] {
-                    print("test5 calc res\n");
+                    print("test7 calc res\n");
                     return a - b;
                 });
                 t->set_callback([p = std::move(p)] () mutable { p->set_value(); });
