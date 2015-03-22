@@ -274,12 +274,23 @@ inline future<> reply(std::unique_ptr<snd_reply<Serializer, MsgType, Ret>>& r, t
     }
 }
 
-template<typename Ret, typename Serializer, typename MsgType, typename Func, typename... M>
-inline future<std::unique_ptr<snd_reply<Serializer, MsgType, Ret>>> apply(Func& func, std::unique_ptr<message<MsgType, M...>>&& m) {
+// build callback arguments tuple depending on whether it gets client_info as a first parameter
+template<bool Info, typename MsgType, typename... M>
+inline auto make_apply_args(client_info& info, std::unique_ptr<message<MsgType, M...>>& m, std::enable_if_t<!Info, void*> = nullptr) {
+    return std::move(m->args);
+}
+
+template<bool Info, typename MsgType, typename... M>
+inline auto make_apply_args(client_info& info, std::unique_ptr<message<MsgType, M...>>& m, std::enable_if_t<Info, void*> = nullptr) {
+    return std::tuple_cat(std::make_tuple(std::cref(info)), std::move(m->args));
+}
+
+template<typename Ret, bool Info, typename Serializer, typename MsgType, typename Func, typename... M>
+inline future<std::unique_ptr<snd_reply<Serializer, MsgType, Ret>>> apply(Func& func, client_info& info, std::unique_ptr<message<MsgType, M...>>&& m) {
     using futurator = futurize<Ret>;
     auto r = std::make_unique<snd_reply<Serializer, MsgType, Ret>>(m->id);
     try {
-        auto f = futurator::apply(func, std::move(m->args));
+        auto f = futurator::apply(func, make_apply_args<Info>(info, m));
         return f.then_wrapped([r = std::move(r)] (typename futurator::type ret) mutable {
             try {
                 r->set_val(std::move(ret.get()));
@@ -309,7 +320,7 @@ auto lref_to_cref(T& x) {
 
 // Creates lambda to handle RPC message on a server.
 // The lambda unmarshalls all parameters, calls a handler, marshall return values and sends them back to a client
-template<typename F, typename Serializer, typename MsgType, typename Func, std::size_t... I>
+template<typename F, typename Serializer, typename MsgType, bool Info, typename Func, std::size_t... I>
 auto recv_helper(std::index_sequence<I...>, Func&& func) {
     return [func = lref_to_cref(std::forward<Func>(func))](typename protocol<Serializer, MsgType>::server::connection& client) mutable {
         // create message to hold all received values
@@ -317,7 +328,7 @@ auto recv_helper(std::index_sequence<I...>, Func&& func) {
         auto xargs = std::tie(m->id, std::get<I>(m->args)...); // holds reference to all message elements
         return unmarshall(client.serializer(), client.in(), std::move(xargs)).then([&client, m = std::move(m), &func] () mutable {
             // note: apply is executed asynchronously with regards to networking so we cannot chain futures here by doing "return apply()"
-            apply<typename F::return_type, Serializer>(func, std::move(m)).then([&client] (std::unique_ptr<snd_reply<Serializer, MsgType, typename F::return_type>>&& r) {
+            apply<typename F::return_type, Info, Serializer>(func, client.info(), std::move(m)).then([&client] (std::unique_ptr<snd_reply<Serializer, MsgType, typename F::return_type>>&& r) {
                 client.out_ready() = client.out_ready().then([&client, r = std::move(r)] () mutable {
                     auto f = reply(r, client);
                     // hold on r while reply is sent
@@ -340,18 +351,65 @@ auto make_copyable_function(Func&& func, std::enable_if_t<std::is_copy_construct
     return std::forward<Func>(func);
 }
 
+template<typename Ret, typename... Args>
+struct client_type_helper {
+    using type = Ret(Args...);
+    static constexpr bool info = false;
+};
+
+template<typename Ret, typename First, typename... Args>
+struct client_type_helper<Ret, First, Args...> {
+    using type = Ret(First, Args...);
+    static constexpr bool info = false;
+    static_assert(!std::is_same<client_info&, First>::value, "reference to client_info has to be const");
+};
+
+template<typename Ret, typename... Args>
+struct client_type_helper<Ret, const client_info&, Args...> {
+    using type = Ret(Args...);
+    static constexpr bool info = true;
+};
+
+template<typename Ret, typename... Args>
+struct client_type_helper<Ret, client_info, Args...> {
+    using type = Ret(Args...);
+    static constexpr bool info = true;
+};
+
+template<typename F, typename I>
+struct client_type_impl;
+
+template<typename F, std::size_t... I>
+struct client_type_impl<F, std::integer_sequence<std::size_t, I...>> {
+    using type = client_type_helper<typename F::return_type, typename F::template arg<I>::type...>;
+};
+
+// this class is used to calculate client side rpc function signature
+// if rpc callback receives client_info as a first parameter it is dropped
+// from an argument list, otherwise signature is identical to what was passed to
+// make_client()
+template<typename Func>
+class client_type {
+    using trait = function_traits<Func>;
+    using ctype = typename client_type_impl<trait, std::make_index_sequence<trait::arity>>::type;
+public:
+    using type = typename ctype::type; // client function signature
+    static constexpr bool info = ctype::info; // true if client_info is a first parameter of rpc handler
+};
+
 template<typename Serializer, typename MsgType>
 template<typename Func>
 auto protocol<Serializer, MsgType>::make_client(MsgType t) {
-    using trait = function_traits<Func>;
+    using trait = function_traits<typename client_type<Func>::type>;
     return send_helper<trait, Serializer>(t, std::make_index_sequence<trait::arity>());
 }
 
 template<typename Serializer, typename MsgType>
 template<typename Func>
 auto protocol<Serializer, MsgType>::register_handler(MsgType t, Func&& func) {
-    using trait = function_traits<Func>;
-    auto recv = recv_helper<trait, Serializer, MsgType>(std::make_index_sequence<trait::arity>(), std::forward<Func>(func));
+    constexpr auto info = client_type<Func>::info;
+    using trait = function_traits<typename client_type<Func>::type>;
+    auto recv = recv_helper<trait, Serializer, MsgType, info>(std::make_index_sequence<trait::arity>(), std::forward<Func>(func));
     register_receiver(t, make_copyable_function(std::move(recv)));
     return make_client<Func>(t);
 }
@@ -367,15 +425,17 @@ template<typename Serializer, typename MsgType>
 void protocol<Serializer, MsgType>::server::accept(server_socket&& ss) {
     keep_doing([this, ss = std::move(ss)] () mutable {
         return ss.accept().then([this] (connected_socket fd, socket_address addr) mutable {
-            auto conn = new connection(*this, std::move(fd), _proto);
+            auto conn = new connection(*this, std::move(fd), std::move(addr), _proto);
             conn->process();
         });
     });
 }
 
 template<typename Serializer, typename MsgType>
-protocol<Serializer, MsgType>::server::connection::connection(protocol<Serializer, MsgType>::server& s, connected_socket&& fd, protocol<Serializer, MsgType>& proto)
-                                     : protocol<Serializer, MsgType>::connection(std::move(fd), proto), _server(s) {}
+protocol<Serializer, MsgType>::server::connection::connection(protocol<Serializer, MsgType>::server& s, connected_socket&& fd, socket_address&& addr, protocol<Serializer, MsgType>& proto)
+                                     : protocol<Serializer, MsgType>::connection(std::move(fd), proto), _server(s) {
+    _info.addr = std::move(addr);
+}
 
 template<typename Serializer, typename MsgType>
 future<> protocol<Serializer, MsgType>::server::connection::process() {

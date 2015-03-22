@@ -43,6 +43,10 @@ struct SerializerConcept {
     future<> operator()(input_stream<char>& in, sstring& v);
 };
 
+struct client_info {
+    socket_address addr;
+};
+
 // MsgType is a type that holds type of a message. The type should be hashable
 // and serializable. It is preferable to use enum for message types, but
 // do not forget to provide hash function for it
@@ -77,9 +81,11 @@ public:
         class connection : public protocol::connection {
             server& _server;
             MsgType _type = 0;
+            client_info _info;
         public:
-            connection(server& s, connected_socket&& fd, protocol& proto);
+            connection(server& s, connected_socket&& fd, socket_address&& addr, protocol& proto);
             future<> process();
+            auto& info() { return _info; }
         };
         server(protocol& proto, ipv4_addr addr);
         void accept(server_socket&& ss);
