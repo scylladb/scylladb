@@ -35,8 +35,12 @@ namespace cql3 {
  */
 class update_parameters final {
 public:
-    using prefetched_rows_type = std::experimental::optional<
-            std::unordered_map<partition_key, row, partition_key::hashing, partition_key::equality>>;
+    struct prefetch_data {
+        query::partition_slice slice;
+        query::result result;
+    };
+    // Note: value (mutation) only required to contain the rows we are interested in
+    using prefetched_rows_type = std::experimental::optional<prefetch_data>;
 private:
     const gc_clock::duration _ttl;
     const prefetched_rows_type _prefetched; // For operation that require a read-before-write
