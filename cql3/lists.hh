@@ -336,64 +336,66 @@ public:
             Appender.doAppend(t, cf, prefix, column, params);
         }
     }
+#endif
 
-    public static class SetterByIndex extends Operation
-    {
-        private final Term idx;
-
-        public SetterByIndex(ColumnDefinition column, Term idx, Term t)
-        {
-            super(column, t);
-            this.idx = idx;
+    class setter_by_index : public operation {
+        shared_ptr<term> _idx;
+    public:
+        setter_by_index(column_definition& column, shared_ptr<term> idx, shared_ptr<term> t)
+            : operation(column, std::move(t)), _idx(std::move(idx)) {
         }
 
-        @Override
-        public boolean requiresRead()
-        {
+        virtual bool requires_read() override {
             return true;
         }
 
-        @Override
-        public void collectMarkerSpecification(VariableSpecifications boundNames)
-        {
-            super.collectMarkerSpecification(boundNames);
-            idx.collectMarkerSpecification(boundNames);
+        virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names) override {
+            operation::collect_marker_specification(bound_names);
+            _idx->collect_marker_specification(std::move(bound_names));
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
             // we should not get here for frozen lists
-            assert column.type.isMultiCell() : "Attempted to set an individual element on a frozen list";
+            assert(column.type->is_multi_cell()); // "Attempted to set an individual element on a frozen list";
 
-            ByteBuffer index = idx.bindAndGet(params.options);
-            ByteBuffer value = t.bindAndGet(params.options);
+            auto row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
 
-            if (index == null)
-                throw new InvalidRequestException("Invalid null value for list index");
+            bytes_opt index = _idx->bind_and_get(params._options);
+            bytes_opt value = _t->bind_and_get(params._options);
 
-            List<Cell> existingList = params.getPrefetchedList(rowKey, column.name);
-            int idx = ByteBufferUtil.toInt(index);
-            if (idx < 0 || idx >= existingList.size())
-                throw new InvalidRequestException(String.format("List index %d out of bound, list has size %d", idx, existingList.size()));
-
-            CellName elementName = existingList.get(idx).name();
-            if (value == null)
-            {
-                cf.addColumn(params.makeTombstone(elementName));
+            if (!index) {
+                throw exceptions::invalid_request_exception("Invalid null value for list index");
             }
-            else
-            {
-                // We don't support value > 64K because the serialization format encode the length as an unsigned short.
-                if (value.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
-                    throw new InvalidRequestException(String.format("List value is too long. List values are limited to %d bytes but %d bytes value provided",
-                                                                    FBUtilities.MAX_UNSIGNED_SHORT,
-                                                                    value.remaining()));
 
-                cf.addColumn(params.makeColumn(elementName, value));
+            collection_mutation::view existing_list_ser = params.get_prefetched_list(m.key, row_key, column);
+            auto ltype = dynamic_pointer_cast<list_type_impl>(column.type);
+            collection_type_impl::mutation_view existing_list = ltype->deserialize_mutation_form(existing_list_ser.data);
+            // we verified that index is an int32_type
+            auto idx = net::ntoh(int32_t(*unaligned_cast<int32_t>(index->begin())));
+            if (idx < 0 || size_t(idx) >= existing_list.size()) {
+                throw exceptions::invalid_request_exception(sprint("List index %d out of bound, list has size %d",
+                        idx, existing_list.size()));
             }
+
+            bytes_view eidx = existing_list[idx].first;
+            list_type_impl::mutation mut;
+            mut.reserve(1);
+            if (!value) {
+                mut.emplace_back(to_bytes(eidx), params.make_dead_cell());
+            } else {
+                if (value->size() > std::numeric_limits<uint16_t>::max()) {
+                    throw exceptions::invalid_request_exception(
+                            sprint("List value is too long. List values are limited to %d bytes but %d bytes value provided",
+                                    std::numeric_limits<uint16_t>::max(), value->size()));
+                }
+                mut.emplace_back(to_bytes(eidx), params.make_cell(*value));
+            }
+            auto smut = ltype->serialize_mutation_form(mut);
+            m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(smut)));
         }
-    }
+    };
 
+#if 0
     public static class Appender extends Operation
     {
         public Appender(ColumnDefinition column, Term t)
