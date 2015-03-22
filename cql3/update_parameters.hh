@@ -108,16 +108,47 @@ public:
         QueryProcessor.validateComposite(slice.finish, metadata.comparator);
         return new RangeTombstone(slice.start, slice.finish, timestamp - 1, localDeletionTime);
     }
-
-    public List<Cell> getPrefetchedList(ByteBuffer rowKey, ColumnIdentifier cql3ColumnName)
-    {
-        if (prefetchedLists == null)
-            return Collections.emptyList();
-
-        CQL3Row row = prefetchedLists.get(rowKey);
-        return row == null ? Collections.<Cell>emptyList() : row.getMultiCellColumn(cql3ColumnName);
-    }
 #endif
+
+    collection_mutation::view get_prefetched_list(const partition_key& pkey,
+            const clustering_key& row_key, const column_definition& column) const {
+        if (!_prefetched) {
+            return {};
+        }
+        auto&& parts = _prefetched->result.partitions;
+        auto&& pkcmp = partition_key::equality(*_schema);
+        auto i = std::find_if(parts.begin(), parts.end(), [&] (auto&& key_and_part) {
+            return pkcmp(pkey, key_and_part.first);
+        });
+        if (i == parts.end()) {
+            return {};
+        }
+        auto&& part = i->second;
+        auto which = &query::partition_slice::regular_columns;
+        if (column.is_static()) {
+            which = &query::partition_slice::static_columns;
+        }
+        auto&& idxvec = _prefetched->slice.*which;
+        auto&& j = std::find(idxvec.begin(), idxvec.end(), column.id);
+        assert(j != idxvec.end());
+        auto colidx = j - idxvec.begin();
+        auto* row = &part.static_row;
+        auto&& keycmp = clustering_key::equality(*_schema);
+        if (!column.is_static()) {
+            auto k = std::find_if(part.rows.begin(), part.rows.end(), [&] (auto&& key_and_row) {
+                return keycmp(row_key, key_and_row.first);
+            });
+            if (k == part.rows.end()) {
+                return {};
+            }
+            row = &k->second;
+        }
+        auto&& cell = row->cells[colidx];
+        if (!cell) {
+            return {};
+        }
+        return cell->as_collection_mutation();
+    }
 };
 
 }
