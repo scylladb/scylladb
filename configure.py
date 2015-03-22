@@ -172,6 +172,7 @@ core = [
     'net/posix-stack.cc',
     'tests/test_runner.cc',
     'net/net.cc',
+    'rpc/rpc.cc',
     ]
 
 defines = []
