@@ -28,6 +28,7 @@
 #include "constants.hh"
 #include "maps.hh"
 #include "sets.hh"
+#include "lists.hh"
 
 namespace cql3 {
 
@@ -50,8 +51,7 @@ public:
 
         auto& k = static_pointer_cast<collection_type_impl>(receiver.type)->_kind;
         if (&k == &collection_type_impl::kind::list) {
-            throw std::runtime_error("not implemented"); // FIXME
-            // return new Lists.Setter(receiver, v);
+            return make_shared<lists::setter>(receiver, v);
         } else if (&k == &collection_type_impl::kind::set) {
             return make_shared<sets::setter>(receiver, v);
         } else if (&k == &collection_type_impl::kind::map) {

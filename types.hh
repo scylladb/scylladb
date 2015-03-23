@@ -19,6 +19,7 @@
 #include "log.hh"
 #include "atomic_cell.hh"
 #include "serialization_format.hh"
+#include "tombstone.hh"
 
 namespace cql3 {
 
@@ -310,8 +311,14 @@ protected:
             : abstract_type(std::move(name)), _kind(k) {}
 public:
     // representation of a collection mutation, key/value pairs, value is a mutation itself
-    using mutation = std::vector<std::pair<bytes, atomic_cell>>;
-    using mutation_view = std::vector<std::pair<bytes_view, atomic_cell_view>>;
+    struct mutation {
+        tombstone tomb;
+        std::vector<std::pair<bytes, atomic_cell>> cells;
+    };
+    struct mutation_view {
+        tombstone tomb;
+        std::vector<std::pair<bytes_view, atomic_cell_view>> cells;
+    };
     virtual data_type name_comparator() = 0;
     virtual data_type value_comparator() = 0;
     shared_ptr<cql3::column_specification> make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key);

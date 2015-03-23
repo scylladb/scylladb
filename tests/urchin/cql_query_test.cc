@@ -478,3 +478,35 @@ SEASTAR_TEST_CASE(test_set_insert_update) {
         return make_ready_future<>();
     });
 }
+
+SEASTAR_TEST_CASE(test_list_insert_update) {
+    auto db = make_shared<distributed<database>>();
+    auto state = make_shared<conversation_state>(*db, ks_name);
+
+    // CQL: create table cf (p1 varchar primary key, list1 list<int>);
+    return db->start().then([db] {
+        return db->invoke_on_all([] (database& db) {
+            keyspace ks;
+            auto my_list_type = list_type_impl::get_instance(int32_type, true);
+            auto cf_schema = make_lw_shared(schema(ks_name, table_name,
+                {{"p1", utf8_type}}, {}, {{"list1", my_list_type}}, {}, utf8_type));
+            ks.column_families.emplace(table_name, column_family(cf_schema));
+            db.keyspaces.emplace(ks_name, std::move(ks));
+        });
+    }).then([state, db] {
+        return state->execute_cql("insert into cf (p1, list1) values ('key1', [ 1001 ]);").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "list1", list_type_impl::native_type({boost::any(1001)}));
+    }).then([state, db] {
+        return state->execute_cql("update cf set list1 = [ 1002, 1003 ] where p1 = 'key1';").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "list1", list_type_impl::native_type({boost::any(1002), boost::any(1003)}));
+    }).then([db] {
+        return db->stop();
+    }).then_wrapped([db] (future<> f) mutable {
+        return make_ready_future<>();
+    });
+}
+

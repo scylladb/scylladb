@@ -332,7 +332,7 @@ public:
                                value->size()));
             }
             auto avalue = value ? params.make_cell(*value) : params.make_dead_cell();
-            map_type_impl::mutation update = { { std::move(*key), std::move(avalue) } };
+            map_type_impl::mutation update = { {}, { { std::move(*key), std::move(avalue) } } };
             // should have been verified as map earlier?
             auto ctype = static_pointer_cast<map_type_impl>(column.type);
             auto col_mut = ctype->serialize_mutation_form(std::move(update));
@@ -368,7 +368,7 @@ public:
 
             collection_type_impl::mutation mut;
             for (auto&& e : map_value->map) {
-                mut.emplace_back(e.first, params.make_cell(e.second));
+                mut.cells.emplace_back(e.first, params.make_cell(e.second));
             }
             auto ctype = static_pointer_cast<map_type_impl>(column.type);
             auto col_mut = ctype->serialize_mutation_form(std::move(mut));

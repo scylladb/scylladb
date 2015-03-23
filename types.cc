@@ -13,6 +13,7 @@
 #include "combine.hh"
 #include <cmath>
 #include <sstream>
+#include <boost/iterator/transform_iterator.hpp>
 
 template<typename T>
 struct simple_type_traits {
@@ -884,8 +885,8 @@ map_type_impl::serialized_values(std::vector<atomic_cell> cells) {
 bytes
 map_type_impl::to_value(mutation_view mut, serialization_format sf) {
     std::vector<bytes_view> tmp;
-    tmp.reserve(mut.size() * 2);
-    for (auto&& e : mut) {
+    tmp.reserve(mut.cells.size() * 2);
+    for (auto&& e : mut.cells) {
         if (e.second.is_live()) {
             tmp.emplace_back(e.first);
             tmp.emplace_back(e.second.value());
@@ -915,16 +916,22 @@ map_type_impl::serialize_partially_deserialized_form(
 }
 
 auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation_view {
-    auto nr = read_simple<uint32_t>(in);
     mutation_view ret;
-    ret.reserve(nr);
+    auto has_tomb = read_simple<bool>(in);
+    if (has_tomb) {
+        auto ts = read_simple<api::timestamp_type>(in);
+        auto ttl = read_simple<gc_clock::duration::rep>(in);
+        ret.tomb = tombstone{ts, gc_clock::time_point(gc_clock::duration(ttl))};
+    }
+    auto nr = read_simple<uint32_t>(in);
+    ret.cells.reserve(nr);
     for (uint32_t i = 0; i != nr; ++i) {
         // FIXME: we could probably avoid the need for size
         auto ksize = read_simple<uint32_t>(in);
         auto key = read_simple_bytes(in, ksize);
         auto vsize = read_simple<uint32_t>(in);
         auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
-        ret.emplace_back(key, value);
+        ret.cells.emplace_back(key, value);
     }
     assert(in.empty());
     return ret;
@@ -932,18 +939,33 @@ auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation_
 
 template <typename Iterator>
 collection_mutation::one
-do_serialize_mutation_form(Iterator begin, Iterator end) {
-    std::ostringstream out;
-    auto write32 = [&out] (uint32_t v) {
-        v = net::hton(v);
-        out.write(reinterpret_cast<char*>(&v), sizeof(v));
+do_serialize_mutation_form(
+        std::experimental::optional<tombstone> tomb,
+        Iterator begin, Iterator end) {
+    auto element_size = [] (auto&& e) -> size_t {
+        return 8 + e.first.size() + e.second.serialize().size();
     };
-    auto writeb = [&out, write32] (bytes_view v) {
-        write32(v.size());
-        out.write(v.begin(), v.size());
+    auto size = std::accumulate(
+            boost::make_transform_iterator(begin, element_size),
+            boost::make_transform_iterator(end, element_size),
+            4);
+    size += 1;
+    if (tomb) {
+        size += sizeof(tomb->timestamp) + sizeof(tomb->ttl);
+    }
+    bytes ret(bytes::initialized_later(), size);
+    bytes::iterator out = ret.begin();
+    *out++ = bool(tomb);
+    if (tomb) {
+        write(out, tomb->timestamp);
+        write(out, tomb->ttl.time_since_epoch().count());
+    }
+    auto writeb = [&out] (bytes_view v) {
+        serialize_int32(out, v.size());
+        out = std::copy_n(v.begin(), v.size(), out);
     };
     // FIXME: overflow?
-    write32(std::distance(begin, end));
+    serialize_int32(out, std::distance(begin, end));
     while (begin != end) {
         auto&& kv = *begin++;
         auto&& k = kv.first;
@@ -951,18 +973,17 @@ do_serialize_mutation_form(Iterator begin, Iterator end) {
         writeb(k);
         writeb(v.serialize());
     }
-    auto s = out.str();
-    return collection_mutation::one{bytes(s.data(), s.size())};
+    return collection_mutation::one{std::move(ret)};
 }
 
 collection_mutation::one
 collection_type_impl::serialize_mutation_form(const mutation& mut) {
-    return do_serialize_mutation_form(mut.begin(), mut.end());
+    return do_serialize_mutation_form(mut.tomb, mut.cells.begin(), mut.cells.end());
 }
 
 collection_mutation::one
 collection_type_impl::serialize_mutation_form(mutation_view mut) {
-    return do_serialize_mutation_form(mut.begin(), mut.end());
+    return do_serialize_mutation_form(mut.tomb, mut.cells.begin(), mut.cells.end());
 }
 
 collection_mutation::one
@@ -970,7 +991,7 @@ collection_type_impl::merge(collection_mutation::view a, collection_mutation::vi
     auto aa = deserialize_mutation_form(a.data);
     auto bb = deserialize_mutation_form(b.data);
     mutation_view merged;
-    merged.reserve(aa.size() + bb.size());
+    merged.cells.reserve(aa.cells.size() + bb.cells.size());
     using element_type = std::pair<bytes_view, atomic_cell_view>;
     auto key_type = name_comparator();
     auto compare = [key_type] (const element_type& e1, const element_type& e2) {
@@ -980,11 +1001,27 @@ collection_type_impl::merge(collection_mutation::view a, collection_mutation::vi
         // FIXME: use std::max()?
         return std::make_pair(e1.first, compare_atomic_cell_for_merge(e1.second, e2.second) > 0 ? e1.second : e2.second);
     };
-    combine(aa.begin(), aa.end(),
-            bb.begin(), bb.end(),
-            std::back_inserter(merged),
+    // applied to a tombstone, returns a predicate checking whether a cell is killed by
+    // the tombstone
+    auto cell_killed = [] (const std::experimental::optional<tombstone>& t) {
+        return [&t] (const element_type& e) {
+            if (!t) {
+                return false;
+            }
+            // tombstone wins if timestamps equal here, unlike row tombstones
+            if (t->timestamp < e.second.timestamp()) {
+                return false;
+            }
+            return true;
+            // FIXME: should we consider TTLs too?
+        };
+    };
+    combine(aa.cells.begin(), std::remove_if(aa.cells.begin(), aa.cells.end(), cell_killed(bb.tomb)),
+            bb.cells.begin(), std::remove_if(bb.cells.begin(), bb.cells.end(), cell_killed(aa.tomb)),
+            std::back_inserter(merged.cells),
             compare,
             merge);
+    merged.tomb = std::max(aa.tomb, bb.tomb);
     return serialize_mutation_form(merged);
 }
 
@@ -1179,8 +1216,8 @@ set_type_impl::serialized_values(std::vector<atomic_cell> cells) {
 bytes
 set_type_impl::to_value(mutation_view mut, serialization_format sf) {
     std::vector<bytes_view> tmp;
-    tmp.reserve(mut.size());
-    for (auto&& e : mut) {
+    tmp.reserve(mut.cells.size());
+    for (auto&& e : mut.cells) {
         if (e.second.is_live()) {
             tmp.emplace_back(e.first);
         }
@@ -1338,8 +1375,8 @@ list_type_impl::serialized_values(std::vector<atomic_cell> cells) {
 bytes
 list_type_impl::to_value(mutation_view mut, serialization_format sf) {
     std::vector<bytes_view> tmp;
-    tmp.reserve(mut.size());
-    for (auto&& e : mut) {
+    tmp.reserve(mut.cells.size());
+    for (auto&& e : mut.cells) {
         if (e.second.is_live()) {
             tmp.emplace_back(e.second.value());
         }
