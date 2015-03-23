@@ -86,6 +86,8 @@ struct summary_la {
     std::vector<uint32_t> positions;
     // size given by the "size" parameter. Have to parse slightly different
     disk_array<uint32_t, summary_entry> entries;
+    disk_string<uint32_t> first_key;
+    disk_string<uint32_t> last_key;
 };
 using summary = summary_la;
 

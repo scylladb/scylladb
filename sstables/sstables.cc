@@ -275,8 +275,8 @@ future<> parse(file_input_stream& in, summary& s) {
             auto *nr = reinterpret_cast<const pos_type *>(buf.get());
             s.positions = std::vector<pos_type>(nr, nr + s.header.size);
         }).then([&in, &s] {
-            // FIXME: Read the actual indexes
-            return make_ready_future<>();
+            in.seek(sizeof(summary::header) + s.header.memory_size);
+            return parse(in, s.first_key, s.last_key);
         });
     });
 }
