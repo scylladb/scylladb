@@ -375,23 +375,23 @@ public:
             collection_type_impl::mutation_view existing_list = ltype->deserialize_mutation_form(existing_list_ser.data);
             // we verified that index is an int32_type
             auto idx = net::ntoh(int32_t(*unaligned_cast<int32_t>(index->begin())));
-            if (idx < 0 || size_t(idx) >= existing_list.size()) {
+            if (idx < 0 || size_t(idx) >= existing_list.cells.size()) {
                 throw exceptions::invalid_request_exception(sprint("List index %d out of bound, list has size %d",
-                        idx, existing_list.size()));
+                        idx, existing_list.cells.size()));
             }
 
-            bytes_view eidx = existing_list[idx].first;
+            bytes_view eidx = existing_list.cells[idx].first;
             list_type_impl::mutation mut;
-            mut.reserve(1);
+            mut.cells.reserve(1);
             if (!value) {
-                mut.emplace_back(to_bytes(eidx), params.make_dead_cell());
+                mut.cells.emplace_back(to_bytes(eidx), params.make_dead_cell());
             } else {
                 if (value->size() > std::numeric_limits<uint16_t>::max()) {
                     throw exceptions::invalid_request_exception(
                             sprint("List value is too long. List values are limited to %d bytes but %d bytes value provided",
                                     std::numeric_limits<uint16_t>::max(), value->size()));
                 }
-                mut.emplace_back(to_bytes(eidx), params.make_cell(*value));
+                mut.cells.emplace_back(to_bytes(eidx), params.make_cell(*value));
             }
             auto smut = ltype->serialize_mutation_form(mut);
             m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(smut)));
@@ -431,11 +431,11 @@ public:
 
             auto&& to_add = list_value->_elements;
             collection_type_impl::mutation appended;
-            appended.reserve(to_add.size());
+            appended.cells.reserve(to_add.size());
             for (auto&& e : to_add) {
                 auto uuid1 = utils::UUID_gen::get_time_UUID_bytes();
                 auto uuid = bytes(reinterpret_cast<const char*>(uuid1.data()), uuid1.size());
-                appended.emplace_back(std::move(uuid), params.make_cell(e));
+                appended.cells.emplace_back(std::move(uuid), params.make_cell(e));
             }
             m.set_cell(prefix, column, ltype->serialize_mutation_form(appended));
         } else {

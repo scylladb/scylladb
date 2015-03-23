@@ -885,8 +885,8 @@ map_type_impl::serialized_values(std::vector<atomic_cell> cells) {
 bytes
 map_type_impl::to_value(mutation_view mut, serialization_format sf) {
     std::vector<bytes_view> tmp;
-    tmp.reserve(mut.size() * 2);
-    for (auto&& e : mut) {
+    tmp.reserve(mut.cells.size() * 2);
+    for (auto&& e : mut.cells) {
         if (e.second.is_live()) {
             tmp.emplace_back(e.first);
             tmp.emplace_back(e.second.value());
@@ -918,14 +918,14 @@ map_type_impl::serialize_partially_deserialized_form(
 auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation_view {
     auto nr = read_simple<uint32_t>(in);
     mutation_view ret;
-    ret.reserve(nr);
+    ret.cells.reserve(nr);
     for (uint32_t i = 0; i != nr; ++i) {
         // FIXME: we could probably avoid the need for size
         auto ksize = read_simple<uint32_t>(in);
         auto key = read_simple_bytes(in, ksize);
         auto vsize = read_simple<uint32_t>(in);
         auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
-        ret.emplace_back(key, value);
+        ret.cells.emplace_back(key, value);
     }
     assert(in.empty());
     return ret;
@@ -961,12 +961,12 @@ do_serialize_mutation_form(Iterator begin, Iterator end) {
 
 collection_mutation::one
 collection_type_impl::serialize_mutation_form(const mutation& mut) {
-    return do_serialize_mutation_form(mut.begin(), mut.end());
+    return do_serialize_mutation_form(mut.cells.begin(), mut.cells.end());
 }
 
 collection_mutation::one
 collection_type_impl::serialize_mutation_form(mutation_view mut) {
-    return do_serialize_mutation_form(mut.begin(), mut.end());
+    return do_serialize_mutation_form(mut.cells.begin(), mut.cells.end());
 }
 
 collection_mutation::one
@@ -974,7 +974,7 @@ collection_type_impl::merge(collection_mutation::view a, collection_mutation::vi
     auto aa = deserialize_mutation_form(a.data);
     auto bb = deserialize_mutation_form(b.data);
     mutation_view merged;
-    merged.reserve(aa.size() + bb.size());
+    merged.cells.reserve(aa.cells.size() + bb.cells.size());
     using element_type = std::pair<bytes_view, atomic_cell_view>;
     auto key_type = name_comparator();
     auto compare = [key_type] (const element_type& e1, const element_type& e2) {
@@ -984,9 +984,9 @@ collection_type_impl::merge(collection_mutation::view a, collection_mutation::vi
         // FIXME: use std::max()?
         return std::make_pair(e1.first, compare_atomic_cell_for_merge(e1.second, e2.second) > 0 ? e1.second : e2.second);
     };
-    combine(aa.begin(), aa.end(),
-            bb.begin(), bb.end(),
-            std::back_inserter(merged),
+    combine(aa.cells.begin(), aa.cells.end(),
+            bb.cells.begin(), bb.cells.end(),
+            std::back_inserter(merged.cells),
             compare,
             merge);
     return serialize_mutation_form(merged);
@@ -1183,8 +1183,8 @@ set_type_impl::serialized_values(std::vector<atomic_cell> cells) {
 bytes
 set_type_impl::to_value(mutation_view mut, serialization_format sf) {
     std::vector<bytes_view> tmp;
-    tmp.reserve(mut.size());
-    for (auto&& e : mut) {
+    tmp.reserve(mut.cells.size());
+    for (auto&& e : mut.cells) {
         if (e.second.is_live()) {
             tmp.emplace_back(e.first);
         }
@@ -1342,8 +1342,8 @@ list_type_impl::serialized_values(std::vector<atomic_cell> cells) {
 bytes
 list_type_impl::to_value(mutation_view mut, serialization_format sf) {
     std::vector<bytes_view> tmp;
-    tmp.reserve(mut.size());
-    for (auto&& e : mut) {
+    tmp.reserve(mut.cells.size());
+    for (auto&& e : mut.cells) {
         if (e.second.is_live()) {
             tmp.emplace_back(e.second.value());
         }

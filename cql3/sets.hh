@@ -329,7 +329,7 @@ public:
                 // FIXME: mutation_view? not compatible with params.make_cell().
                 collection_type_impl::mutation mut;
                 for (auto&& e : set_value->_elements) {
-                    mut.emplace_back(e, params.make_cell({}));
+                    mut.cells.emplace_back(e, params.make_cell({}));
                 }
                 auto smut = set_type->serialize_mutation_form(mut);
 
