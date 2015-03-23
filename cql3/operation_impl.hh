@@ -38,28 +38,7 @@ private:
 public:
     set_value(::shared_ptr<term::raw> value) : _value(std::move(value)) {}
 
-    virtual ::shared_ptr <operation> prepare(const sstring& keyspace, column_definition& receiver) override {
-        auto v = _value->prepare(keyspace, receiver.column_specification);
-
-        if (receiver.type->is_counter()) {
-            throw exceptions::invalid_request_exception(sprint("Cannot set the value of counter column %s (counters can only be incremented/decremented, not set)", receiver.name_as_text()));
-        }
-
-        if (!receiver.type->is_collection()) {
-            return ::make_shared<constants::setter>(receiver, v);
-        }
-
-        auto& k = static_pointer_cast<collection_type_impl>(receiver.type)->_kind;
-        if (&k == &collection_type_impl::kind::list) {
-            return make_shared<lists::setter>(receiver, v);
-        } else if (&k == &collection_type_impl::kind::set) {
-            return make_shared<sets::setter>(receiver, v);
-        } else if (&k == &collection_type_impl::kind::map) {
-            return make_shared<maps::setter>(receiver, v);
-        } else {
-            abort();
-        }
-    }
+    virtual ::shared_ptr <operation> prepare(const sstring& keyspace, column_definition& receiver) override;
 
 #if 0
         protected String toString(ColumnSpecification column)
@@ -68,11 +47,7 @@ public:
         }
 #endif
 
-    virtual bool is_compatible_with(::shared_ptr <raw_update> other) override {
-        // We don't allow setting multiple time the same column, because 1)
-        // it's stupid and 2) the result would seem random to the user.
-        return false;
-    }
+    virtual bool is_compatible_with(::shared_ptr <raw_update> other) override;
 };
 
 }
