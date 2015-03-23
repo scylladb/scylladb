@@ -362,7 +362,8 @@ future<> sstable::read_toc() {
         auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
         auto buf = bufptr.get();
 
-        return f.dma_read(0, buf, 4096).then([this, bufptr = std::move(bufptr)] (size_t size) {
+        auto fut = f.dma_read(0, buf, 4096);
+        return std::move(fut).then([this, f = std::move(f), bufptr = std::move(bufptr)] (size_t size) {
             // This file is supposed to be very small. Theoretically we should check its size,
             // but if we so much as read a whole page from it, there is definitely something fishy
             // going on - and this simplifies the code.
