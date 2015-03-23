@@ -145,6 +145,10 @@ public:
 
     virtual sstring to_string() const = 0;
 
+    friend std::ostream& operator<<(std::ostream& out, const relation& r) {
+        return out << r.to_string();
+    }
+
     /**
      * Creates a new EQ restriction instance.
      *

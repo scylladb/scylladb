@@ -90,6 +90,10 @@ public:
         return sprint("term@%p", this);
     }
 
+    friend std::ostream& operator<<(std::ostream& out, const term& t) {
+        return out << t.to_string();
+    }
+
     /**
      * A parsed, non prepared (thus untyped) term.
      *
