@@ -141,3 +141,46 @@ SEASTAR_TEST_CASE(composite_index_read_0_20_20) {
 SEASTAR_TEST_CASE(composite_index_read_0_21_20) {
     return composite_index_read<0, 21, 20>();
 }
+
+template<uint64_t Position, uint64_t EntryPosition, uint64_t EntryKeySize>
+future<> summary_query(sstring path, int generation) {
+    return reusable_sst(path, generation).then([] (sstable_ptr ptr) {
+        return ptr->read_summary_entry(Position).then([ptr] (auto entry) {
+            BOOST_REQUIRE(entry.position == EntryPosition);
+            BOOST_REQUIRE(entry.key.size() == EntryKeySize);
+            return make_ready_future<>();
+        });
+    });
+}
+
+template<uint64_t Position, uint64_t EntryPosition, uint64_t EntryKeySize>
+future<> summary_query_fail(sstring path, int generation) {
+    return summary_query<Position, EntryPosition, EntryKeySize>(path, generation).then_wrapped([] (auto fut) {
+        try {
+            fut.get();
+        } catch (std::out_of_range& ok) {
+            return make_ready_future<>();
+        }
+        return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(small_summary_query_ok) {
+    return summary_query<0, 0, 5>("tests/urchin/sstables/uncompressed", 1);
+}
+
+SEASTAR_TEST_CASE(small_summary_query_fail) {
+    return summary_query_fail<2, 0, 5>("tests/urchin/sstables/uncompressed", 1);
+}
+
+SEASTAR_TEST_CASE(small_summary_query_negative_fail) {
+    return summary_query_fail<-2, 0, 5>("tests/urchin/sstables/uncompressed", 1);
+}
+
+SEASTAR_TEST_CASE(big_summary_query_0) {
+    return summary_query<0, 0, 182>("tests/urchin/sstables/bigsummary", 76);
+}
+
+SEASTAR_TEST_CASE(big_summary_query_32) {
+    return summary_query<32, 0x400c0000000000, 182>("tests/urchin/sstables/bigsummary", 76);
+}
