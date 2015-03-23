@@ -25,6 +25,7 @@
 #include <utility>
 #include <type_traits>
 #include <functional>
+#include <iostream>
 
 // This header defines two shared pointer facilities, lw_shared_ptr<> and
 // shared_ptr<>, both modeled after std::shared_ptr<>.
@@ -250,6 +251,15 @@ inline
 lw_shared_ptr<T>
 enable_lw_shared_from_this<T>::shared_from_this() {
     return lw_shared_ptr<T>(this);
+}
+
+template <typename T>
+static inline
+std::ostream& operator<<(std::ostream& out, const lw_shared_ptr<T>& p) {
+    if (!p) {
+        return out << "null";
+    }
+    return out << *p;
 }
 
 // Polymorphic shared pointer class
@@ -595,6 +605,15 @@ inline
 bool
 operator>=(std::nullptr_t, const shared_ptr<T>& y) {
     return nullptr >= y.get();
+}
+
+template <typename T>
+static inline
+std::ostream& operator<<(std::ostream& out, const shared_ptr<T>& p) {
+    if (!p) {
+        return out << "null";
+    }
+    return out << *p;
 }
 
 template<typename T>
