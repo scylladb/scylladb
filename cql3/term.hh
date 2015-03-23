@@ -86,7 +86,7 @@ public:
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
 
-    virtual sstring to_string() {
+    virtual sstring to_string() const {
         return sprint("term@%p", this);
     }
 
