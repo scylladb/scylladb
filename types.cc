@@ -73,7 +73,7 @@ struct integer_type_impl : simple_type_impl<T> {
         auto v = boost::any_cast<const T&>(value);
         return sizeof(v);
     }
-    virtual object_opt deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) override {
         return read_simple_opt<T>(v);
     }
     T compose_value(const bytes& b) {
@@ -137,7 +137,7 @@ struct string_type_impl : public abstract_type {
         auto& v = boost::any_cast<const sstring&>(value);
         return v.size();
     }
-    virtual object_opt deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) override {
         // FIXME: validation?
         return boost::any(sstring(v.begin(), v.end()));
     }
@@ -175,7 +175,7 @@ struct bytes_type_impl final : public abstract_type {
         auto& v = boost::any_cast<const bytes&>(value);
         return v.size();
     }
-    virtual object_opt deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) override {
         return boost::any(bytes(v.begin(), v.end()));
     }
     virtual bool less(bytes_view v1, bytes_view v2) override {
@@ -213,7 +213,7 @@ struct boolean_type_impl : public simple_type_impl<bool> {
     virtual size_t serialized_size(const boost::any& value) override {
         return 1;
     }
-    virtual object_opt deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) override {
         if (v.empty()) {
             return {};
         }
@@ -244,7 +244,7 @@ struct date_type_impl : public abstract_type {
     virtual size_t serialized_size(const boost::any& value) override {
          return 8;
     }
-    virtual object_opt deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) override {
         if (v.empty()) {
             return {};
         }
@@ -283,7 +283,7 @@ struct timeuuid_type_impl : public abstract_type {
     virtual size_t serialized_size(const boost::any& value) override {
         return 16;
     }
-    virtual object_opt deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) override {
         uint64_t msb, lsb;
         if (v.empty()) {
             return {};
@@ -352,7 +352,7 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
     virtual size_t serialized_size(const boost::any& value) override {
         return 8;
     }
-    virtual object_opt deserialize(bytes_view in) override {
+    virtual boost::any deserialize(bytes_view in) override {
         if (in.empty()) {
             return {};
         }
@@ -383,7 +383,7 @@ struct uuid_type_impl : abstract_type {
     virtual size_t serialized_size(const boost::any& value) override {
         return 16;
     }
-    virtual object_opt deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) override {
         if (v.empty()) {
             return {};
         }
@@ -454,7 +454,7 @@ struct inet_addr_type_impl : abstract_type {
     virtual size_t serialized_size(const boost::any& value) override {
         return 4;
     }
-    virtual object_opt deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) override {
         if (v.empty()) {
             return {};
         }
@@ -541,7 +541,7 @@ struct floating_type_impl : public simple_type_impl<T> {
         return sizeof(T);
     }
 
-    virtual object_opt deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) override {
         if (v.empty()) {
             return {};
         }
@@ -591,7 +591,7 @@ struct empty_type_impl : abstract_type {
     virtual size_t hash(bytes_view v) override {
         return 0;
     }
-    virtual object_opt deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) override {
         return {};
     }
     virtual sstring to_string(const bytes& b) override {
@@ -836,12 +836,12 @@ map_type_impl::serialize(const boost::any& value, bytes::iterator& out, serializ
     }
 }
 
-object_opt
+boost::any
 map_type_impl::deserialize(bytes_view v) {
     return deserialize(v, serialization_format::internal());
 }
 
-object_opt
+boost::any
 map_type_impl::deserialize(bytes_view in, serialization_format sf) {
     if (in.empty()) {
         return {};
@@ -1154,12 +1154,12 @@ set_type_impl::serialize(const boost::any& value, bytes::iterator& out, serializ
     }
 }
 
-object_opt
+boost::any
 set_type_impl::deserialize(bytes_view in) {
     return deserialize(in, serialization_format::internal());
 }
 
-object_opt
+boost::any
 set_type_impl::deserialize(bytes_view in, serialization_format sf) {
     if (in.empty()) {
         return {};
@@ -1169,10 +1169,10 @@ set_type_impl::deserialize(bytes_view in, serialization_format sf) {
     s.reserve(nr);
     for (int i = 0; i != nr; ++i) {
         auto e = _elements->deserialize(read_collection_value(in, sf));
-        if (!e) {
+        if (e.empty()) {
             throw marshal_exception();
         }
-        s.push_back(std::move(*e));
+        s.push_back(std::move(e));
     }
     return { s };
 }
@@ -1313,12 +1313,12 @@ list_type_impl::serialized_size(const boost::any& value) {
     return len;
 }
 
-object_opt
+boost::any
 list_type_impl::deserialize(bytes_view in) {
     return deserialize(in, serialization_format::internal());
 }
 
-object_opt
+boost::any
 list_type_impl::deserialize(bytes_view in, serialization_format sf) {
     if (in.empty()) {
         return {};
@@ -1328,10 +1328,10 @@ list_type_impl::deserialize(bytes_view in, serialization_format sf) {
     s.reserve(nr);
     for (int i = 0; i != nr; ++i) {
         auto e = _elements->deserialize(read_collection_value(in, sf));
-        if (!e) {
+        if (e.empty()) {
             throw marshal_exception();
         }
-        s.push_back(std::move(*e));
+        s.push_back(std::move(e));
     }
     return { s };
 }

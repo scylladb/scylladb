@@ -55,11 +55,11 @@ make_min_timeuuid_fct() {
             // FIXME: better null representation?
             return bytes();
         }
-        auto ts_opt = timestamp_type->compose(bb);
-        if (!ts_opt) {
+        auto ts_obj = timestamp_type->compose(bb);
+        if (ts_obj.empty()) {
             return bytes();
         }
-        auto ts = boost::any_cast<db_clock::time_point>(*ts_opt);
+        auto ts = boost::any_cast<db_clock::time_point>(ts_obj);
         auto uuid = utils::UUID_gen::min_time_UUID(ts.time_since_epoch().count());
         return timeuuid_type->decompose(uuid);
     });
@@ -76,11 +76,11 @@ make_max_timeuuid_fct() {
             // FIXME: better null representation?
             return bytes();
         }
-        auto ts_opt = timestamp_type->compose(bb);
-        if (!ts_opt) {
+        auto ts_obj = timestamp_type->compose(bb);
+        if (ts_obj.empty()) {
             return bytes();
         }
-        auto ts = boost::any_cast<db_clock::time_point>(*ts_opt);
+        auto ts = boost::any_cast<db_clock::time_point>(ts_obj);
         auto uuid = utils::UUID_gen::max_time_UUID(ts.time_since_epoch().count());
         return timeuuid_type->decompose(uuid);
     });

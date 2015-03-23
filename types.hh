@@ -112,8 +112,6 @@ bool is_prefixed_by(TypesIterator types, InputIt1 first1, InputIt1 last1,
     return first2 == last2;
 }
 
-using object_opt = std::experimental::optional<boost::any>;
-
 class marshal_exception : public std::exception {
     sstring _why;
 public:
@@ -165,7 +163,7 @@ public:
             return 0;
         }
     }
-    virtual object_opt deserialize(bytes_view v) = 0;
+    virtual boost::any deserialize(bytes_view v) = 0;
     virtual void validate(bytes_view v) {
         // FIXME
     }
@@ -207,7 +205,7 @@ protected:
         return is_compatible_with(other);
     }
 public:
-    virtual object_opt compose(const bytes& v) {
+    virtual boost::any compose(const bytes& v) {
         return deserialize(v);
     }
     bytes decompose(const boost::any& value) {
@@ -415,8 +413,8 @@ public:
     virtual void serialize(const boost::any& value, bytes::iterator& out) override;
     void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf);
     virtual size_t serialized_size(const boost::any& value);
-    virtual object_opt deserialize(bytes_view v) override;
-    object_opt deserialize(bytes_view v, serialization_format sf);
+    virtual boost::any deserialize(bytes_view v) override;
+    boost::any deserialize(bytes_view v, serialization_format sf);
     virtual sstring to_string(const bytes& b) override;
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
@@ -451,8 +449,8 @@ public:
     virtual void serialize(const boost::any& value, bytes::iterator& out) override;
     void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf);
     virtual size_t serialized_size(const boost::any& value) override;
-    virtual object_opt deserialize(bytes_view v) override;
-    object_opt deserialize(bytes_view v, serialization_format sf);
+    virtual boost::any deserialize(bytes_view v) override;
+    boost::any deserialize(bytes_view v, serialization_format sf);
     virtual sstring to_string(const bytes& b) override;
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
@@ -488,8 +486,8 @@ public:
     virtual void serialize(const boost::any& value, bytes::iterator& out) override;
     void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf);
     virtual size_t serialized_size(const boost::any& value) override;
-    virtual object_opt deserialize(bytes_view v) override;
-    object_opt deserialize(bytes_view v, serialization_format sf);
+    virtual boost::any deserialize(bytes_view v) override;
+    boost::any deserialize(bytes_view v, serialization_format sf);
     virtual sstring to_string(const bytes& b) override;
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
@@ -688,7 +686,7 @@ read_simple_bytes(bytes_view& v, size_t n) {
 }
 
 template<typename T>
-object_opt read_simple_opt(bytes_view& v) {
+boost::any read_simple_opt(bytes_view& v) {
     if (v.empty()) {
         return {};
     }
