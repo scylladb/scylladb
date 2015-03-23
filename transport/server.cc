@@ -974,7 +974,7 @@ void cql_server::response::write_value(bytes_opt value)
     }
 
     write_int(value->size());
-    _body.insert(_body.end(), *value->begin(), *value->end());
+    _body.insert(_body.end(), value->begin(), value->end());
 }
 
 class type_codec {
