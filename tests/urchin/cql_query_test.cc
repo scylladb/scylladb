@@ -501,11 +501,8 @@ SEASTAR_TEST_CASE(test_list_insert_update) {
     }).then([state, db] {
         return state->execute_cql("update cf set list1 = [ 1002, 1003 ] where p1 = 'key1';").discard_result();
     }).then([state, db] {
-#if 0
-        // test fails due to lack of collection tombstones (append instead of replace)
         return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
                 "list1", list_type_impl::native_type({boost::any(1002), boost::any(1003)}));
-#endif
     }).then([db] {
         return db->stop();
     }).then_wrapped([db] (future<> f) mutable {

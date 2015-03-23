@@ -328,16 +328,12 @@ public:
         }
 
         virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
+            tombstone ts;
             if (column.type->is_multi_cell()) {
                 // delete + append
-                // FIXME:
-                warn(unimplemented::cause::COLLECTIONS);
-#if 0
-                CellName name = cf.getComparator().create(prefix, column);
-                cf.addAtom(params.makeTombstoneForOverwrite(name.slice()));
-#endif
+                ts = params.make_tombstone_just_before();
             }
-            do_append(_t, m, prefix, column, params);
+            do_append(_t, m, prefix, column, params, ts);
         }
     };
 
@@ -418,7 +414,8 @@ public:
             mutation& m,
             const exploded_clustering_prefix& prefix,
             const column_definition& column,
-            const update_parameters& params) {
+            const update_parameters& params,
+            tombstone ts = {}) {
         auto&& value = t->bind(params._options);
         auto&& list_value = dynamic_pointer_cast<lists::value>(value);
         auto&& ltype = dynamic_pointer_cast<list_type_impl>(column.type);
@@ -431,6 +428,7 @@ public:
 
             auto&& to_add = list_value->_elements;
             collection_type_impl::mutation appended;
+            appended.tomb = ts;
             appended.cells.reserve(to_add.size());
             for (auto&& e : to_add) {
                 auto uuid1 = utils::UUID_gen::get_time_UUID_bytes();
