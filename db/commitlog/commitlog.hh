@@ -26,6 +26,7 @@
 
 #include <memory>
 
+#include "utils/data_output.hh"
 #include "core/future.hh"
 #include "core/shared_ptr.hh"
 #include "utils/UUID.hh"
@@ -120,7 +121,8 @@ public:
      * of data to be written. (See add).
      * Don't write less, absolutely don't write more...
      */
-    typedef std::function<void(char*)> serializer_func;
+    typedef data_output output;
+    typedef std::function<void(output&)> serializer_func;
 
     /**
      * Add a "Mutation" to the commit log.
@@ -135,8 +137,8 @@ public:
      */
     template<typename _MutationOp>
     future<replay_position> add_mutation(const cf_id_type& id, size_t size, _MutationOp&& mu) {
-        return add(id, size, [mu = std::forward<_MutationOp>(mu)](char * p) {
-            mu(p);
+        return add(id, size, [mu = std::forward<_MutationOp>(mu)](output& out) {
+            mu(out);
         });
     }
 

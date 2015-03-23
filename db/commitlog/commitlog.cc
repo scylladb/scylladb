@@ -168,7 +168,8 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
     public:
         template<typename T>
         void process(T t) {
-            this->process_bytes(&t, sizeof(T));
+            auto v = net::hton(t);
+            this->process_bytes(&v, sizeof(T));
         }
     };
 
@@ -275,32 +276,32 @@ public:
             return make_ready_future<sseg_ptr>(std::move(me));
         }
 
-        auto * p = reinterpret_cast<uint32_t *>(buf.get_write());
-        assert(p[0] == 0);
-        assert(p[1] == 0);
+        auto * p = buf.get_write();
+        assert(std::count(p, p + 2 * sizeof(uint32_t), 0) == 2 * sizeof(uint32_t));
+
+        data_output out(p, p + buf.size());
 
         auto id = net::hton(_desc.id);
 
         if (off == 0) {
             // first block. write file header.
-            p[0] = net::hton(_desc.ver);
-            p[1] = uint32_t(id >> 32);
-            p[2] = uint32_t(id & 0xffffffff);
+            out.write(_desc.ver);
+            out.write(_desc.id);
             crc32 crc;
-            crc.process(p[0]);
-            crc.process(p[2]);
-            crc.process(p[1]);
-            p[3] = net::hton(crc.checksum());
-            p += descriptor_header_size / sizeof(uint32_t);
+            crc.process(_desc.ver);
+            crc.process<int32_t>(_desc.id);
+            crc.process<int32_t>(_desc.id >> 32);
+            out.write(crc.checksum());
         }
 
         // write chunk header
         crc32 crc;
-        crc.process(uint32_t(id >> 32));
-        crc.process(uint32_t(id & 0xffffffff));
-        p[0] = net::hton(uint32_t(_file_pos));
+        crc.process<int32_t>(id >> 32);
+        crc.process<int32_t>(id & 0xffffffff);
         crc.process(uint32_t(off));
-        p[1] = net::hton(crc.checksum());
+
+        out.write(uint32_t(_file_pos));
+        out.write(crc.checksum());
 
         // acquire read lock
         return _dwrite.read_lock().then(
@@ -347,21 +348,23 @@ public:
         _buf_pos += s;
         _cf_dirty[id] = rp.pos;
 
-        boost::crc_32_type crc;
+        auto * p = _buffer.get_write() + pos;
+        auto * e = _buffer.get_write() + pos + s - sizeof(uint32_t);
 
-        auto * p = reinterpret_cast<net::packed<uint32_t> *>(_buffer.get_write() + pos);
-        auto * e = reinterpret_cast<net::packed<uint32_t> *>(_buffer.get_write() + pos + s
-                - sizeof(uint32_t));
+        data_output out(p, e);
+        crc32 crc;
 
-        p[0] = net::hton(uint32_t(s));
-        crc.process_bytes(p, sizeof(uint32_t));
-        p[1] = net::hton(crc.checksum());
+        out.write(uint32_t(s));
+        crc.process(uint32_t(s));
+        out.write(crc.checksum());
 
         // actual data
-        func(reinterpret_cast<char *>(&p[2]));
+        func(out);
 
-        crc.process_bytes(&p[2], size);
-        e[0] = net::hton(crc.checksum());
+        crc.process_bytes(p + 2 * sizeof(uint32_t), size);
+
+        out = data_output(e, sizeof(uint32_t));
+        out.write(crc.checksum());
 
         // finally, check if we're required to sync.
         if (must_sync()) {
