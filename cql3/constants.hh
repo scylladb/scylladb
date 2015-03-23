@@ -196,11 +196,7 @@ public:
         virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
             bytes_opt value = _t->bind_and_get(params._options);
             auto cell = value ? params.make_cell(*value) : params.make_dead_cell();
-            if (column.is_static()) {
-                m.set_static_cell(column, std::move(cell));
-            } else {
-                m.set_clustered_cell(prefix, column, std::move(cell));
-            }
+            m.set_cell(prefix, column, std::move(cell));
         }
     };
 

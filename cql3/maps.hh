@@ -336,11 +336,7 @@ public:
             // should have been verified as map earlier?
             auto ctype = static_pointer_cast<map_type_impl>(column.type);
             auto col_mut = ctype->serialize_mutation_form(std::move(update));
-            if (column.is_static()) {
-                m.set_static_cell(column, std::move(col_mut));
-            } else {
-                m.set_clustered_cell(prefix, column, std::move(col_mut));
-            }
+            m.set_cell(prefix, column, std::move(col_mut));
         }
     };
 
@@ -372,28 +368,15 @@ public:
             }
             auto ctype = static_pointer_cast<map_type_impl>(column.type);
             auto col_mut = ctype->serialize_mutation_form(std::move(mut));
-            if (column.is_static()) {
-                m.set_static_cell(column, std::move(col_mut));
-            } else {
-                m.set_clustered_cell(prefix, column, std::move(col_mut));
-            }
+            m.set_cell(prefix, column, std::move(col_mut));
         } else {
             // for frozen maps, we're overwriting the whole cell
             if (!value) {
-                // FIXME: encapsulate this if
-                if (column.is_static()) {
-                    m.set_static_cell(column, params.make_dead_cell());
-                } else {
-                    m.set_clustered_cell(prefix, column, params.make_dead_cell());
-                }
+                m.set_cell(prefix, column, params.make_dead_cell());
             } else {
                 auto v = map_type_impl::serialize_partially_deserialized_form({map_value->map.begin(), map_value->map.end()},
                         serialization_format::internal());
-                if (column.is_static()) {
-                    m.set_static_cell(column, params.make_cell(std::move(v)));
-                } else {
-                    m.set_clustered_cell(prefix, column, params.make_cell(std::move(v)));
-                }
+                m.set_cell(prefix, column, params.make_cell(std::move(v)));
             }
         }
     }
