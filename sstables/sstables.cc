@@ -93,13 +93,19 @@ static void check_buf_size(temporary_buffer<char>& buf, size_t expected) {
 
 // Base parser, parses an integer type
 template <typename T>
+typename std::enable_if_t<std::is_integral<T>::value, void>
+read_integer(temporary_buffer<char>& buf, T& i) {
+    auto *nr = reinterpret_cast<const net::packed<T> *>(buf.get());
+    i = net::ntoh(*nr);
+}
+
+template <typename T>
 typename std::enable_if_t<std::is_integral<T>::value, future<>>
 parse(file_input_stream& in, T& i) {
     return in.read_exactly(sizeof(T)).then([&i] (auto buf) {
         check_buf_size(buf, sizeof(T));
 
-        auto *nr = reinterpret_cast<const net::packed<T> *>(buf.get());
-        i = net::ntoh(*nr);
+        read_integer(buf, i);
         return make_ready_future<>();
     });
 }
