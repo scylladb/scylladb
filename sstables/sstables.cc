@@ -12,6 +12,7 @@
 #include "core/fstream.hh"
 #include "core/shared_ptr.hh"
 #include <boost/algorithm/string.hpp>
+#include <iterator>
 
 #include "types.hh"
 #include "sstables.hh"
@@ -270,13 +271,60 @@ future<> parse(file_input_stream& in, summary& s) {
             auto len = s.header.size * sizeof(pos_type);
             check_buf_size(buf, len);
 
+            s.entries.resize(s.header.size);
+
             auto *nr = reinterpret_cast<const pos_type *>(buf.get());
             s.positions = std::vector<pos_type>(nr, nr + s.header.size);
+
+            // Since the keys in the index are not sized, we need to calculate
+            // the start position of the index i+1 to determine the boundaries
+            // of index i. The "memory_size" field in the header determines the
+            // total memory used by the map, so if we push it to the vector, we
+            // can guarantee that no conditionals are used, and we can always
+            // query the position of the "next" index.
+            s.positions.push_back(s.header.memory_size);
         }).then([&in, &s] {
             in.seek(sizeof(summary::header) + s.header.memory_size);
             return parse(in, s.first_key, s.last_key);
+        }).then([&in, &s] {
+
+            in.seek(s.positions[0] + sizeof(summary::header));
+
+            assert(s.positions.size() == (s.entries.size() + 1));
+
+            auto idx = make_lw_shared<size_t>(0);
+            return do_for_each(s.entries.begin(), s.entries.end(), [idx, &in, &s] (auto& entry) {
+                auto pos = s.positions[(*idx)++];
+                auto next = s.positions[*idx];
+
+                auto entrysize = next - pos;
+
+                return in.read_exactly(entrysize).then([&entry, entrysize] (auto buf) {
+                    check_buf_size(buf, entrysize);
+
+                    auto keysize = entrysize - 8;
+                    entry.key = bytes(buf.get(), keysize);
+                    buf.trim_front(keysize);
+                    read_integer(buf, entry.position);
+
+                    return make_ready_future<>();
+                });
+            }).then([&s] {
+                // Since we've made the decision of reading the whole entries array upfront, we can
+                // actually get rid of the positions. We won't need it anymore.
+                std::vector<typename decltype(s.positions)::value_type>().swap(s.positions);
+            });
         });
     });
+}
+
+future<summary_entry&> sstable::read_summary_entry(size_t i) {
+    // The last one is the boundary marker
+    if (i >= (_summary.entries.size())) {
+        throw std::out_of_range(sprint("Invalid Summary index: %ld", i));
+    }
+
+    return make_ready_future<summary_entry&>(_summary.entries[i]);
 }
 
 future<> parse(file_input_stream& in, struct replay_position& rp) {

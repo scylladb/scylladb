@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/enum.hh"
+#include "bytes.hh"
 
 namespace sstables {
 
@@ -53,9 +54,9 @@ struct index_entry {
     disk_string<uint32_t> promoted_index;
 };
 
-// FIXME: Not yet, can't know what an index entry is without a schema.
 struct summary_entry {
-    int notyet;
+    bytes key;
+    uint64_t position;
 };
 
 // Note: Sampling level is present in versions ka and higher. We ATM only support la,
@@ -68,7 +69,6 @@ struct summary_la {
         // The number of entries in the Summary File
         uint32_t size;
         // The memory to be consumed to map the whole Summary into memory.
-        // We will ignore this.
         uint64_t memory_size;
         // The actual sampling level.
         uint32_t sampling_level;
@@ -84,8 +84,8 @@ struct summary_la {
     // not the file. The memory stream effectively begins after the header,
     // so every position here has to be added of sizeof(header).
     std::vector<uint32_t> positions;
-    // size given by the "size" parameter. Have to parse slightly different
-    disk_array<uint32_t, summary_entry> entries;
+    std::vector<summary_entry> entries;
+
     disk_string<uint32_t> first_key;
     disk_string<uint32_t> last_key;
 };

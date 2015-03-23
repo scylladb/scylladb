@@ -98,5 +98,7 @@ public:
         return read_indexes(position, quantity);
     }
     future<> load();
+
+    future<summary_entry&> read_summary_entry(size_t i);
 };
 }
