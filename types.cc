@@ -916,8 +916,14 @@ map_type_impl::serialize_partially_deserialized_form(
 }
 
 auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation_view {
-    auto nr = read_simple<uint32_t>(in);
     mutation_view ret;
+    auto has_tomb = read_simple<bool>(in);
+    if (has_tomb) {
+        auto ts = read_simple<api::timestamp_type>(in);
+        auto ttl = read_simple<gc_clock::duration::rep>(in);
+        ret.tomb = tombstone{ts, gc_clock::time_point(gc_clock::duration(ttl))};
+    }
+    auto nr = read_simple<uint32_t>(in);
     ret.cells.reserve(nr);
     for (uint32_t i = 0; i != nr; ++i) {
         // FIXME: we could probably avoid the need for size
@@ -933,7 +939,9 @@ auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation_
 
 template <typename Iterator>
 collection_mutation::one
-do_serialize_mutation_form(Iterator begin, Iterator end) {
+do_serialize_mutation_form(
+        std::experimental::optional<tombstone> tomb,
+        Iterator begin, Iterator end) {
     auto element_size = [] (auto&& e) -> size_t {
         return 8 + e.first.size() + e.second.serialize().size();
     };
@@ -941,8 +949,17 @@ do_serialize_mutation_form(Iterator begin, Iterator end) {
             boost::make_transform_iterator(begin, element_size),
             boost::make_transform_iterator(end, element_size),
             4);
+    size += 1;
+    if (tomb) {
+        size += sizeof(tomb->timestamp) + sizeof(tomb->ttl);
+    }
     bytes ret(bytes::initialized_later(), size);
     bytes::iterator out = ret.begin();
+    *out++ = bool(tomb);
+    if (tomb) {
+        write(out, tomb->timestamp);
+        write(out, tomb->ttl.time_since_epoch().count());
+    }
     auto writeb = [&out] (bytes_view v) {
         serialize_int32(out, v.size());
         out = std::copy_n(v.begin(), v.size(), out);
@@ -961,12 +978,12 @@ do_serialize_mutation_form(Iterator begin, Iterator end) {
 
 collection_mutation::one
 collection_type_impl::serialize_mutation_form(const mutation& mut) {
-    return do_serialize_mutation_form(mut.cells.begin(), mut.cells.end());
+    return do_serialize_mutation_form(mut.tomb, mut.cells.begin(), mut.cells.end());
 }
 
 collection_mutation::one
 collection_type_impl::serialize_mutation_form(mutation_view mut) {
-    return do_serialize_mutation_form(mut.cells.begin(), mut.cells.end());
+    return do_serialize_mutation_form(mut.tomb, mut.cells.begin(), mut.cells.end());
 }
 
 collection_mutation::one
@@ -984,11 +1001,27 @@ collection_type_impl::merge(collection_mutation::view a, collection_mutation::vi
         // FIXME: use std::max()?
         return std::make_pair(e1.first, compare_atomic_cell_for_merge(e1.second, e2.second) > 0 ? e1.second : e2.second);
     };
-    combine(aa.cells.begin(), aa.cells.end(),
-            bb.cells.begin(), bb.cells.end(),
+    // applied to a tombstone, returns a predicate checking whether a cell is killed by
+    // the tombstone
+    auto cell_killed = [] (const std::experimental::optional<tombstone>& t) {
+        return [&t] (const element_type& e) {
+            if (!t) {
+                return false;
+            }
+            // tombstone wins if timestamps equal here, unlike row tombstones
+            if (t->timestamp < e.second.timestamp()) {
+                return false;
+            }
+            return true;
+            // FIXME: should we consider TTLs too?
+        };
+    };
+    combine(aa.cells.begin(), std::remove_if(aa.cells.begin(), aa.cells.end(), cell_killed(bb.tomb)),
+            bb.cells.begin(), std::remove_if(bb.cells.begin(), bb.cells.end(), cell_killed(aa.tomb)),
             std::back_inserter(merged.cells),
             compare,
             merge);
+    merged.tomb = std::max(aa.tomb, bb.tomb);
     return serialize_mutation_form(merged);
 }
 
