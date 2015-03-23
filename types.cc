@@ -13,6 +13,7 @@
 #include "combine.hh"
 #include <cmath>
 #include <sstream>
+#include <boost/iterator/transform_iterator.hpp>
 
 template<typename T>
 struct simple_type_traits {
@@ -933,17 +934,21 @@ auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation_
 template <typename Iterator>
 collection_mutation::one
 do_serialize_mutation_form(Iterator begin, Iterator end) {
-    std::ostringstream out;
-    auto write32 = [&out] (uint32_t v) {
-        v = net::hton(v);
-        out.write(reinterpret_cast<char*>(&v), sizeof(v));
+    auto element_size = [] (auto&& e) -> size_t {
+        return 8 + e.first.size() + e.second.serialize().size();
     };
-    auto writeb = [&out, write32] (bytes_view v) {
-        write32(v.size());
-        out.write(v.begin(), v.size());
+    auto size = std::accumulate(
+            boost::make_transform_iterator(begin, element_size),
+            boost::make_transform_iterator(end, element_size),
+            4);
+    bytes ret(bytes::initialized_later(), size);
+    bytes::iterator out = ret.begin();
+    auto writeb = [&out] (bytes_view v) {
+        serialize_int32(out, v.size());
+        out = std::copy_n(v.begin(), v.size(), out);
     };
     // FIXME: overflow?
-    write32(std::distance(begin, end));
+    serialize_int32(out, std::distance(begin, end));
     while (begin != end) {
         auto&& kv = *begin++;
         auto&& k = kv.first;
@@ -951,8 +956,7 @@ do_serialize_mutation_form(Iterator begin, Iterator end) {
         writeb(k);
         writeb(v.serialize());
     }
-    auto s = out.str();
-    return collection_mutation::one{bytes(s.data(), s.size())};
+    return collection_mutation::one{std::move(ret)};
 }
 
 collection_mutation::one
