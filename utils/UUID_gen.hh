@@ -212,7 +212,7 @@ private:
             uuid_bytes[i] = (int8_t) (msb >> 8 * (7 - i));
 
         for (int i = 8; i < 16; i++)
-            uuid_bytes[i] = (int8_t) (lsb >> 8 * (7 - i));
+            uuid_bytes[i] = (int8_t) (lsb >> 8 * (7 - (i - 8)));
 
         return uuid_bytes;
     }
