@@ -270,8 +270,6 @@ future<> parse(file_input_stream& in, summary& s) {
             auto len = s.header.size * sizeof(pos_type);
             check_buf_size(buf, len);
 
-            s.positions.resize(s.header.size);
-
             auto *nr = reinterpret_cast<const pos_type *>(buf.get());
             s.positions = std::vector<pos_type>(nr, nr + s.header.size);
         }).then([&in, &s] {
