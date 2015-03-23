@@ -94,6 +94,10 @@ public:
         return {_timestamp, _local_deletion_time};
     }
 
+    tombstone make_tombstone_just_before() const {
+        return {_timestamp, _local_deletion_time - gc_clock::duration(1) };
+    }
+
 #if 0
     public RangeTombstone makeRangeTombstone(ColumnSlice slice) throws InvalidRequestException
     {
