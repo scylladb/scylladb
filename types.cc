@@ -127,7 +127,7 @@ struct long_type_impl : integer_type_impl<int64_t> {
 };
 
 struct string_type_impl : public abstract_type {
-    string_type_impl(sstring name, shared_ptr<cql3::cql3_type> cql3_type)
+    string_type_impl(sstring name, std::function<shared_ptr<cql3::cql3_type>()> cql3_type)
         : abstract_type(name), _cql3_type(cql3_type) {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) override {
         auto& v = boost::any_cast<const sstring&>(value);
@@ -160,9 +160,9 @@ struct string_type_impl : public abstract_type {
         return sstring(b);
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
-        return _cql3_type;
+        return _cql3_type();
     }
-    shared_ptr<cql3::cql3_type> _cql3_type;
+    std::function<shared_ptr<cql3::cql3_type>()> _cql3_type;
 };
 
 struct bytes_type_impl final : public abstract_type {
@@ -1386,9 +1386,9 @@ list_type_impl::to_value(mutation_view mut, serialization_format sf) {
 
 thread_local const shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local const shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
-thread_local const shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii", cql3::native_cql3_type::ascii));
+thread_local const shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii", [] { return cql3::native_cql3_type::ascii; }));
 thread_local const shared_ptr<abstract_type> bytes_type(make_shared<bytes_type_impl>());
-thread_local const shared_ptr<abstract_type> utf8_type(make_shared<string_type_impl>("utf8", cql3::native_cql3_type::text));
+thread_local const shared_ptr<abstract_type> utf8_type(make_shared<string_type_impl>("utf8", [] { return cql3::native_cql3_type::text; }));
 thread_local const shared_ptr<abstract_type> boolean_type(make_shared<boolean_type_impl>());
 thread_local const shared_ptr<abstract_type> date_type(make_shared<date_type_impl>());
 thread_local const shared_ptr<abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
