@@ -75,7 +75,7 @@ protected:
     const ::shared_ptr<term> _t;
 
 public:
-    operation(column_definition& column_, ::shared_ptr<term> t)
+    operation(const column_definition& column_, ::shared_ptr<term> t)
         : column{column_}
         , _t{t}
     { }
@@ -136,7 +136,7 @@ public:
          * be a true column.
          * @return the prepared update operation.
          */
-        virtual ::shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) = 0;
+        virtual ::shared_ptr<operation> prepare(const sstring& keyspace, const column_definition& receiver) = 0;
 
         /**
          * @return whether this operation can be applied alongside the {@code
@@ -172,7 +172,7 @@ public:
          * @param receiver the "column" this operation applies to.
          * @return the prepared delete operation.
          */
-        virtual ::shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) = 0;
+        virtual ::shared_ptr<operation> prepare(const sstring& keyspace, const column_definition& receiver) = 0;
     };
 
     class set_value;
@@ -185,7 +185,7 @@ public:
             : _selector(std::move(selector)), _value(std::move(value)) {
         }
 
-        virtual shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver);
+        virtual shared_ptr<operation> prepare(const sstring& keyspace, const column_definition& receiver);
 #if 0
         protected String toString(ColumnSpecification column)
         {
@@ -203,7 +203,7 @@ public:
                 : _value(value) {
         }
 
-        virtual shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) override;
+        virtual shared_ptr<operation> prepare(const sstring& keyspace, const column_definition& receiver) override;
 
 #if 0
         protected String toString(ColumnSpecification column)
@@ -222,7 +222,7 @@ public:
                 : _value(value) {
         }
 
-        virtual shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) override;
+        virtual shared_ptr<operation> prepare(const sstring& keyspace, const column_definition& receiver) override;
 
 #if 0
         protected String toString(ColumnSpecification column)
@@ -241,7 +241,7 @@ public:
                 : _value(std::move(value)) {
         }
 
-        virtual shared_ptr<operation> prepare(const sstring& keyspace, column_definition& receiver) override;
+        virtual shared_ptr<operation> prepare(const sstring& keyspace, const column_definition& receiver) override;
 
 #if 0
         protected String toString(ColumnSpecification column)

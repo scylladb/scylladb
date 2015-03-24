@@ -27,7 +27,7 @@
 
 namespace cql3 {
 
-column_definition&
+const column_definition&
 relation::to_column_definition(schema_ptr schema, ::shared_ptr<column_identifier::raw> entity) {
     auto id = entity->prepare_column_identifier(schema);
     auto def = get_column_definition(schema, *id);

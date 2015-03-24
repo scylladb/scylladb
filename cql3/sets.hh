@@ -287,7 +287,7 @@ public:
 
     class setter : public operation {
     public:
-        setter(column_definition& column, shared_ptr<term> t)
+        setter(const column_definition& column, shared_ptr<term> t)
                 : operation(column, std::move(t)) {
         }
 
@@ -307,7 +307,7 @@ public:
 
     class adder : public operation {
     public:
-        adder(column_definition& column, shared_ptr<term> t)
+        adder(const column_definition& column, shared_ptr<term> t)
             : operation(column, std::move(t)) {
         }
 

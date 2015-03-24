@@ -323,7 +323,7 @@ public:
 
     class setter : public operation {
     public:
-        setter(column_definition& column, shared_ptr<term> t)
+        setter(const column_definition& column, shared_ptr<term> t)
                 : operation(column, std::move(t)) {
         }
 
@@ -340,7 +340,7 @@ public:
     class setter_by_index : public operation {
         shared_ptr<term> _idx;
     public:
-        setter_by_index(column_definition& column, shared_ptr<term> idx, shared_ptr<term> t)
+        setter_by_index(const column_definition& column, shared_ptr<term> idx, shared_ptr<term> t)
             : operation(column, std::move(t)), _idx(std::move(idx)) {
         }
 

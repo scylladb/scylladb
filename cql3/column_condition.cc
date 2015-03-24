@@ -58,7 +58,7 @@ void column_condition::collect_marker_specificaton(::shared_ptr<variable_specifi
 }
 
 ::shared_ptr<column_condition>
-column_condition::raw::prepare(const sstring& keyspace, column_definition& receiver) {
+column_condition::raw::prepare(const sstring& keyspace, const column_definition& receiver) {
     if (receiver.type->is_counter()) {
         throw exceptions::invalid_request_exception("Conditions on counters are not supported");
     }

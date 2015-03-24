@@ -116,8 +116,8 @@ private:
     bool _sets_static_columns = false;
     bool _sets_regular_columns = false;
 
-    const std::function<column_definition&(::shared_ptr<column_condition>)> get_column_for_condition =
-        [](::shared_ptr<column_condition> cond) -> column_definition& {
+    const std::function<const column_definition&(::shared_ptr<column_condition>)> get_column_for_condition =
+        [](::shared_ptr<column_condition> cond) -> const column_definition& {
             return cond->column;
         };
 
@@ -250,10 +250,10 @@ public:
     }
 
 private:
-    void add_key_values(column_definition& def, ::shared_ptr<restrictions::restriction> values);
+    void add_key_values(const column_definition& def, ::shared_ptr<restrictions::restriction> values);
 
 public:
-    void add_key_value(column_definition& def, ::shared_ptr<term> value);
+    void add_key_value(const column_definition& def, ::shared_ptr<term> value);
     void process_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
     std::vector<partition_key> build_partition_keys(const query_options& options);
 

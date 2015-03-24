@@ -56,7 +56,7 @@ namespace cql3 {
  */
 class column_condition final {
 public:
-    column_definition& column;
+    const column_definition& column;
 private:
     // For collection, when testing the equality of a specific element, nullptr otherwise.
     ::shared_ptr<term> _collection_element;
@@ -64,7 +64,7 @@ private:
     std::vector<::shared_ptr<term>> _in_values;
     const operator_type& _op;
 public:
-    column_condition(column_definition& column, ::shared_ptr<term> collection_element,
+    column_condition(const column_definition& column, ::shared_ptr<term> collection_element,
         ::shared_ptr<term> value, std::vector<::shared_ptr<term>> in_values, const operator_type& op)
             : column(column)
             , _collection_element(std::move(collection_element))
@@ -77,33 +77,33 @@ public:
         }
     }
 
-    static ::shared_ptr<column_condition> condition(column_definition& def, ::shared_ptr<term> value, const operator_type& op) {
+    static ::shared_ptr<column_condition> condition(const column_definition& def, ::shared_ptr<term> value, const operator_type& op) {
         return ::make_shared<column_condition>(def, ::shared_ptr<term>{}, std::move(value), std::vector<::shared_ptr<term>>{}, op);
     }
 
-    static ::shared_ptr<column_condition> condition(column_definition& def, ::shared_ptr<term> collection_element,
+    static ::shared_ptr<column_condition> condition(const column_definition& def, ::shared_ptr<term> collection_element,
             ::shared_ptr<term> value, const operator_type& op) {
         return ::make_shared<column_condition>(def, std::move(collection_element), std::move(value),
             std::vector<::shared_ptr<term>>{}, op);
     }
 
-    static ::shared_ptr<column_condition> in_condition(column_definition& def, std::vector<::shared_ptr<term>> in_values) {
+    static ::shared_ptr<column_condition> in_condition(const column_definition& def, std::vector<::shared_ptr<term>> in_values) {
         return ::make_shared<column_condition>(def, ::shared_ptr<term>{}, ::shared_ptr<term>{},
             std::move(in_values), operator_type::IN);
     }
 
-    static ::shared_ptr<column_condition> in_condition(column_definition& def, ::shared_ptr<term> collection_element,
+    static ::shared_ptr<column_condition> in_condition(const column_definition& def, ::shared_ptr<term> collection_element,
             std::vector<::shared_ptr<term>> in_values) {
         return ::make_shared<column_condition>(def, std::move(collection_element), ::shared_ptr<term>{},
             std::move(in_values), operator_type::IN);
     }
 
-    static ::shared_ptr<column_condition> in_condition(column_definition& def, ::shared_ptr<term> in_marker) {
+    static ::shared_ptr<column_condition> in_condition(const column_definition& def, ::shared_ptr<term> in_marker) {
         return ::make_shared<column_condition>(def, ::shared_ptr<term>{}, std::move(in_marker),
             std::vector<::shared_ptr<term>>{}, operator_type::IN);
     }
 
-    static ::shared_ptr<column_condition> in_condition(column_definition& def, ::shared_ptr<term> collection_element,
+    static ::shared_ptr<column_condition> in_condition(const column_definition& def, ::shared_ptr<term> collection_element,
         ::shared_ptr<term> in_marker) {
         return ::make_shared<column_condition>(def, std::move(collection_element), std::move(in_marker),
             std::vector<::shared_ptr<term>>{}, operator_type::IN);
@@ -758,7 +758,7 @@ public:
                 std::move(collection_element), operator_type::IN);
         }
 
-        ::shared_ptr<column_condition> prepare(const sstring& keyspace, column_definition& receiver);
+        ::shared_ptr<column_condition> prepare(const sstring& keyspace, const column_definition& receiver);
     };
 };
 

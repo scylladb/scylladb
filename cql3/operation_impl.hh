@@ -38,7 +38,7 @@ private:
 public:
     set_value(::shared_ptr<term::raw> value) : _value(std::move(value)) {}
 
-    virtual ::shared_ptr <operation> prepare(const sstring& keyspace, column_definition& receiver) override;
+    virtual ::shared_ptr <operation> prepare(const sstring& keyspace, const column_definition& receiver) override;
 
 #if 0
         protected String toString(ColumnSpecification column)

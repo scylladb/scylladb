@@ -23,7 +23,7 @@ BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
 
     column_family cf(s);
 
-    column_definition& r1_col = *s->get_column_definition("r1");
+    const column_definition& r1_col = *s->get_column_definition("r1");
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
     auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
 
