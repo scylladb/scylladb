@@ -611,4 +611,12 @@ const sstring sstable::filename(component_type f) {
 
     return _dir + "/" + version + "-" + generation + "-" + format + "-" + component;
 }
+
+sstable::version_types sstable::version_from_sstring(sstring &s) {
+    return reverse_map(s, _version_string);
+}
+
+sstable::format_types sstable::format_from_sstring(sstring &s) {
+    return reverse_map(s, _format_string);
+}
 }

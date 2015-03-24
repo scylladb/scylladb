@@ -90,6 +90,9 @@ public:
     sstable(const sstable&) = delete;
     sstable(sstable&&) = default;
 
+    static version_types version_from_sstring(sstring& s);
+    static format_types format_from_sstring(sstring& s);
+
     future<index_list> read_indexes(uint64_t position) {
         return read_indexes(position, _summary.header.sampling_level);
     }
