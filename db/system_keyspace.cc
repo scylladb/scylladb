@@ -1001,12 +1001,12 @@ std::vector<schema_ptr> all_tables() {
     return r;
 }
 
-keyspace make() {
+void make(database& db) {
     keyspace ks;
+    db.add_keyspace("system", std::move(ks));
     for (auto&& table : all_tables()) {
-        ks.column_families.emplace(table->cf_name, column_family(table));
+        db.add_column_family(column_family(table));
     }
-    return ks;
 }
 
 } // namespace system_keyspace

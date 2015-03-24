@@ -474,13 +474,12 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations) {
         auto shard = _db.local().shard_of(dk._token);
         return _db.invoke_on(shard, [&m, pmut] (database& db) -> void {
             // FIXME: lookup column_family by UUID
-            keyspace* ks = db.find_keyspace(m.schema->ks_name);
-            assert(ks); // FIXME: load keyspace meta-data from storage
-            column_family* cf = ks->find_column_family(m.schema->cf_name);
-            if (cf) {
-                cf->apply(m);
-            } else {
+            try {
+                auto& cf = db.find_column_family(m.schema);
+                cf.apply(m);
+            } catch (no_such_column_family&) {
                 // TODO: log a warning
+                // FIXME: load keyspace meta-data from storage
             }
         });
     });

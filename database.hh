@@ -10,6 +10,7 @@
 #include "core/shared_ptr.hh"
 #include "net/byteorder.hh"
 #include "utils/UUID.hh"
+#include "utils/hash.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
 #include <functional>
@@ -251,10 +252,17 @@ private:
 
 class keyspace {
 public:
-    std::unordered_map<sstring, column_family> column_families;
-    future<> populate(sstring datadir);
-    schema_ptr find_schema(const sstring& cf_name);
-    column_family* find_column_family(const sstring& cf_name);
+    // empty right now. placeholder for metadata(?)
+};
+
+class no_such_keyspace : public std::runtime_error {
+public:
+    using runtime_error::runtime_error;
+};
+
+class no_such_column_family : public std::runtime_error {
+public:
+    using runtime_error::runtime_error;
 };
 
 // Policy for distributed<database>:
@@ -263,14 +271,37 @@ public:
 //   use shard_of() for data
 
 class database {
+    std::unordered_map<sstring, keyspace> _keyspaces;
+    std::unordered_map<utils::UUID, column_family> _column_families;
+    std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
 public:
     database();
-    std::unordered_map<sstring, keyspace> keyspaces;
+
     future<> init_from_data_directory(sstring datadir);
     future<> populate(sstring datadir);
-    keyspace* find_keyspace(const sstring& name);
+
+    void add_keyspace(sstring name, keyspace k);
+    /** Adds cf with auto-generated UUID. */
+    void add_column_family(column_family);
+    void add_column_family(const utils::UUID&, column_family);
+
+    /* throws std::out_of_range if missing */
+    const utils::UUID& find_uuid(sstring ks, sstring cf) const throw (std::out_of_range);
+    const utils::UUID& find_uuid(schema_ptr) const throw (std::out_of_range);
+
+    /* below, find* throws no_such_<type> on fail */
     keyspace& find_or_create_keyspace(const sstring& name);
-    schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name);
+    keyspace& find_keyspace(const sstring& name) throw (no_such_keyspace);
+    const keyspace& find_keyspace(const sstring& name) const throw (no_such_keyspace);
+    bool has_keyspace(const sstring& name) const;
+    column_family& find_column_family(const sstring& ks, const sstring& name) throw (no_such_column_family);
+    const column_family& find_column_family(const sstring& ks, const sstring& name) const throw (no_such_column_family);
+    column_family& find_column_family(const utils::UUID&) throw (no_such_column_family);
+    const column_family& find_column_family(const utils::UUID&) const throw (no_such_column_family);
+    column_family& find_column_family(schema_ptr) throw (no_such_column_family);
+    const column_family& find_column_family(schema_ptr) const throw (no_such_column_family);
+    schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family);
+    schema_ptr find_schema(const utils::UUID&) const throw (no_such_column_family);
     future<> stop() { return make_ready_future<>(); }
     void assign(database&& db) {
         *this = std::move(db);
