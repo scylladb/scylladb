@@ -113,7 +113,7 @@ protected:
     }
 #endif
 
-    virtual sstring to_string() override {
+    virtual sstring to_string() const override {
         auto entity_as_string = _entity->to_string();
         if (_map_key) {
             entity_as_string = sprint("%s[%s]", std::move(entity_as_string), _map_key->to_string());

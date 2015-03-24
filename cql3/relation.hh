@@ -51,7 +51,7 @@ public:
      *
      * @return <code>true</code> if this relation apply to multiple columns, <code>false</code> otherwise.
      */
-    virtual bool is_multi_column() {
+    virtual bool is_multi_column() const {
         return false;
     }
 
@@ -60,7 +60,7 @@ public:
      *
      * @return <code>true</code> if this relation is a token relation, <code>false</code> otherwise.
      */
-    virtual bool on_token() {
+    virtual bool on_token() const {
         return false;
     }
 
@@ -69,7 +69,7 @@ public:
      * @return <code>true</code>  if the operator of this relation is a <code>CONTAINS</code>, <code>false</code>
      * otherwise.
      */
-    virtual bool is_contains() final {
+    virtual bool is_contains() const final {
         return _relation_type == operator_type::CONTAINS;
     }
 
@@ -78,7 +78,7 @@ public:
      * @return <code>true</code>  if the operator of this relation is a <code>CONTAINS_KEY</code>, <code>false</code>
      * otherwise.
      */
-    virtual bool is_contains_key() final {
+    virtual bool is_contains_key() const final {
         return _relation_type == operator_type::CONTAINS_KEY;
     }
 
@@ -87,7 +87,7 @@ public:
      * @return <code>true</code>  if the operator of this relation is a <code>IN</code>, <code>false</code>
      * otherwise.
      */
-    virtual bool is_IN() final {
+    virtual bool is_IN() const final {
         return _relation_type == operator_type::IN;
     }
 
@@ -96,7 +96,7 @@ public:
      * @return <code>true</code>  if the operator of this relation is a <code>EQ</code>, <code>false</code>
      * otherwise.
      */
-    virtual bool is_EQ() final {
+    virtual bool is_EQ() const final {
         return _relation_type == operator_type::EQ;
     }
 
@@ -105,7 +105,7 @@ public:
      *
      * @return <code>true</code> if the operator of this relation is a <code>Slice</code>, <code>false</code> otherwise.
      */
-    virtual bool is_slice() final {
+    virtual bool is_slice() const final {
         return _relation_type == operator_type::GT
                 || _relation_type == operator_type::GTE
                 || _relation_type == operator_type::LTE
@@ -143,7 +143,11 @@ public:
         }
     }
 
-    virtual sstring to_string() = 0;
+    virtual sstring to_string() const = 0;
+
+    friend std::ostream& operator<<(std::ostream& out, const relation& r) {
+        return out << r.to_string();
+    }
 
     /**
      * Creates a new EQ restriction instance.
