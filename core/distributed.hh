@@ -174,7 +174,7 @@ distributed<Service>::start(Args&&... args) {
     unsigned c = 0;
     return parallel_for_each(_instances.begin(), _instances.end(),
         [this, &c, args = std::make_tuple(std::forward<Args>(args)...)] (Service*& inst) mutable {
-            return smp::submit_to(c++, [&inst, args = std::move(args)] () mutable {
+            return smp::submit_to(c++, [&inst, args] () mutable {
                 inst = apply([] (Args&&... args) {
                     return new Service(std::forward<Args>(args)...);
                 }, std::move(args));
