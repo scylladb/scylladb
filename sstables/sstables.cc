@@ -604,8 +604,8 @@ const sstring sstable::filename(component_type f) {
     auto& version = _version_string.at(_version);
     auto& format = _format_string.at(_format);
     auto& component = _component_map.at(f);
-    auto epoch =  to_sstring(_epoch);
+    auto generation =  to_sstring(_generation);
 
-    return _dir + "/" + version + "-" + epoch + "-" + format + "-" + component;
+    return _dir + "/" + version + "-" + generation + "-" + format + "-" + component;
 }
 }

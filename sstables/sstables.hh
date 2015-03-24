@@ -60,7 +60,7 @@ private:
     lw_shared_ptr<file> _data_file;
 
     sstring _dir;
-    unsigned long _epoch = 0;
+    unsigned long _generation = 0;
     version_types _version;
     format_types _format;
 
@@ -85,7 +85,7 @@ private:
     future<index_list> read_indexes(uint64_t position, uint64_t quantity);
 
 public:
-    sstable(sstring dir, unsigned long epoch, version_types v, format_types f) : _dir(dir), _epoch(epoch), _version(v), _format(f) {}
+    sstable(sstring dir, unsigned long generation, version_types v, format_types f) : _dir(dir), _generation(generation), _version(v), _format(f) {}
     sstable& operator=(const sstable&) = delete;
     sstable(const sstable&) = delete;
     sstable(sstable&&) = default;
