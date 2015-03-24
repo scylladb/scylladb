@@ -127,6 +127,15 @@ static void check_buf_size(temporary_buffer<char>& buf, size_t expected) {
     }
 }
 
+template <typename T, typename U>
+static void check_truncate_and_assign(T& to, const U from) {
+    static_assert(std::is_integral<T>::value && std::is_integral<U>::value, "T and U must be integral");
+    if (from >= std::numeric_limits<T>::max()) {
+        throw std::overflow_error("assigning U to T would cause an overflow");
+    }
+    to = from;
+}
+
 // Base parser, parses an integer type
 template <typename T>
 typename std::enable_if_t<std::is_integral<T>::value, void>
@@ -147,13 +156,35 @@ parse(random_access_reader& in, T& i) {
 }
 
 template <typename T>
+typename std::enable_if_t<std::is_integral<T>::value, future<>>
+write(output_stream<char>& out, T i) {
+    auto *nr = reinterpret_cast<const net::packed<T> *>(&i);
+    i = net::hton(*nr);
+    auto p = reinterpret_cast<const char*>(&i);
+    return out.write(p, sizeof(T)).then([&out] (...) -> future<> {
+        // TODO: handle result
+        return make_ready_future<>();
+    });
+}
+
+template <typename T>
 typename std::enable_if_t<std::is_enum<T>::value, future<>>
 parse(random_access_reader& in, T& i) {
     return parse(in, reinterpret_cast<typename std::underlying_type<T>::type&>(i));
 }
 
+template <typename T>
+typename std::enable_if_t<std::is_enum<T>::value, future<>>
+write(output_stream<char>& out, T i) {
+    return write(out, reinterpret_cast<typename std::underlying_type<T>::type>(i));
+}
+
 future<> parse(random_access_reader& in, bool& i) {
     return parse(in, reinterpret_cast<uint8_t&>(i));
+}
+
+future<> write(output_stream<char>& out, bool i) {
+    return write(out, static_cast<uint8_t>(i));
 }
 
 template <typename To, typename From>
@@ -178,6 +209,16 @@ future<> parse(random_access_reader& in, double& d) {
     });
 }
 
+future<> write(output_stream<char>& out, double d) {
+    auto *nr = reinterpret_cast<const net::packed<unsigned long> *>(&d);
+    auto tmp = net::hton(*nr);
+    auto p = reinterpret_cast<const char*>(&tmp);
+    return out.write(p, sizeof(unsigned long)).then([&out] (...) -> future<> {
+        // TODO: handle result
+        return make_ready_future<>();
+    });
+}
+
 template <typename T>
 future<> parse(random_access_reader& in, T& len, sstring& s) {
     return in.read_exactly(len).then([&s, len] (auto buf) {
@@ -186,11 +227,42 @@ future<> parse(random_access_reader& in, T& len, sstring& s) {
     });
 }
 
+future<> write(output_stream<char>& out, sstring& s) {
+    return out.write(s).then([&out, &s] (...) -> future<> {
+        // TODO: handle result
+        return make_ready_future<>();
+    });
+}
+
 // All composite parsers must come after this
 template<typename First, typename... Rest>
 future<> parse(random_access_reader& in, First& first, Rest&&... rest) {
     return parse(in, first).then([&in, &rest...] {
         return parse(in, std::forward<Rest>(rest)...);
+    });
+}
+
+template<typename First, typename... Rest>
+future<> write(output_stream<char>& out, First& first, Rest&&... rest) {
+    return write(out, first).then([&out, &rest...] {
+        return write(out, rest...);
+    });
+}
+
+// Intended to be used for a type that describes itself through describe_type().
+template <class T>
+typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, future<>>
+parse(random_access_reader& in, T& t) {
+    return t.describe_type([&in] (auto&&... what) -> future<> {
+        return parse(in, what...);
+    });
+}
+
+template <class T>
+typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, future<>>
+write(output_stream<char>& out, T& t) {
+    return t.describe_type([&out] (auto&&... what) -> future<> {
+        return write(out, what...);
     });
 }
 
@@ -205,6 +277,15 @@ future<> parse(random_access_reader& in, disk_string<Size>& s) {
     auto f = parse(in, *len);
     return f.then([&in, &s, len = std::move(len)] {
         return parse(in, *len, s.value);
+    });
+}
+
+template <typename Size>
+future<> write(output_stream<char>& out, disk_string<Size>& s) {
+    Size len = 0;
+    check_truncate_and_assign(len, s.value.size());
+    return write(out, len).then([&out, &s] {
+        return write(out, s.value);
     });
 }
 
@@ -254,6 +335,45 @@ future<> parse(random_access_reader& in, disk_array<Size, Members>& arr) {
     });
 }
 
+
+template <typename Members>
+typename std::enable_if_t<!std::is_integral<Members>::value, future<>>
+write(output_stream<char>& out, std::vector<Members>& arr) {
+
+    auto count = make_lw_shared<size_t>(0);
+    auto eoarr = [count, &arr] { return *count == arr.size(); };
+
+    return do_until(eoarr, [count, &out, &arr] {
+        return write(out, arr[(*count)++]);
+    });
+}
+
+template <typename Members>
+typename std::enable_if_t<std::is_integral<Members>::value, future<>>
+write(output_stream<char>& out, std::vector<Members>& arr) {
+    std::vector<Members> tmp;
+    tmp.resize(arr.size());
+    // copy arr into tmp converting each entry into big-endian representation.
+    auto *nr = reinterpret_cast<const net::packed<Members> *>(arr.data());
+    for (size_t i = 0; i < arr.size(); i++) {
+        tmp[i] = net::hton(nr[i]);
+    }
+    auto p = reinterpret_cast<const char*>(tmp.data());
+    auto bytes = tmp.size() * sizeof(Members);
+    return out.write(p, bytes).then([&out] (...) -> future<> {
+        return make_ready_future<>();
+    });
+}
+
+template <typename Size, typename Members>
+future<> write(output_stream<char>& out, disk_array<Size, Members>& arr) {
+    Size len = 0;
+    check_truncate_and_assign(len, arr.elements.size());
+    return write(out, len).then([&out, &arr] {
+        return write(out, arr.elements);
+    });
+}
+
 template <typename Size, typename Key, typename Value>
 future<> parse(random_access_reader& in, Size& len, std::unordered_map<Key, Value>& map) {
     auto count = make_lw_shared<Size>();
@@ -280,14 +400,6 @@ future<> parse(random_access_reader& in, disk_hash<Size, Key, Value>& h) {
     return f.then([&in, &h, w = std::move(w)] {
         return parse(in, *w, h.map);
     });
-}
-
-future<> parse(random_access_reader& in, option& op) {
-    return parse(in, op.key, op.value);
-}
-
-future<> parse(random_access_reader& in, compression& c) {
-    return parse(in, c.name, c.options, c.chunk_len, c.data_len, c.offsets);
 }
 
 future<> parse(random_access_reader& in, filter& f) {
@@ -566,6 +678,30 @@ future<> sstable::read_simple() {
     });
 }
 
+template <typename T, sstable::component_type Type, T sstable::* Comptr>
+future<> sstable::write_simple() {
+
+    auto file_path = filename(Type);
+    sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
+    return engine().open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).then([this] (file f) {
+
+        auto out = make_file_output_stream(make_lw_shared<file>(std::move(f)), 4096);
+        auto w = make_shared<output_stream<char>>(std::move(out));
+        auto fut = write(*w, *this.*Comptr);
+        return fut.then([w] {
+            return w->flush().then([w] {
+                return w->close().then([w] {}); // the underlying file is synced here.
+            });
+        });
+    }).then_wrapped([this, file_path] (future<> f) {
+        try {
+            f.get();
+        } catch (std::system_error& e) {
+            // TODO: handle exception.
+        }
+    });
+}
+
 future<> sstable::read_compression() {
      // FIXME: If there is no compression, we should expect a CRC file to be present.
     if (!has_component(sstable::component_type::CompressionInfo)) {
@@ -573,6 +709,14 @@ future<> sstable::read_compression() {
     }
 
     return read_simple<compression, component_type::CompressionInfo, &sstable::_compression>();
+}
+
+future<> sstable::write_compression() {
+    if (!has_component(sstable::component_type::CompressionInfo)) {
+        return make_ready_future<>();
+    }
+
+    return write_simple<compression, component_type::CompressionInfo, &sstable::_compression>();
 }
 
 future<> sstable::read_statistics() {
@@ -609,6 +753,11 @@ future<> sstable::load() {
                     std::move(_compression), _data_file_size);
         }
     });
+}
+
+future<> sstable::store() {
+    // TODO: write other components as well.
+    return write_compression();
 }
 
 const bool sstable::has_component(component_type f) {

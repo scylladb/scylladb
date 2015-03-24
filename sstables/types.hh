@@ -33,6 +33,9 @@ struct disk_hash {
 struct option {
     disk_string<uint16_t> key;
     disk_string<uint16_t> value;
+
+    template <typename Describer>
+    future<> describe_type(Describer f) { return f(key, value); }
 };
 
 struct compression {
@@ -41,6 +44,9 @@ struct compression {
     uint32_t chunk_len;
     uint64_t data_len;
     disk_array<uint32_t, uint64_t> offsets;
+
+    template <typename Describer>
+    future<> describe_type(Describer f) { return f(name, options, chunk_len, data_len, offsets); }
 };
 
 struct filter {

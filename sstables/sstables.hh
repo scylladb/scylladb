@@ -75,7 +75,11 @@ private:
     template <typename T, sstable::component_type Type, T sstable::* Comptr>
     future<> read_simple();
 
+    template <typename T, sstable::component_type Type, T sstable::* Comptr>
+    future<> write_simple();
+
     future<> read_compression();
+    future<> write_compression();
     future<> read_filter() {
         return read_simple<filter, component_type::Filter, &sstable::_filter>();
     }
@@ -113,6 +117,7 @@ public:
         return read_indexes(position, quantity);
     }
     future<> load();
+    future<> store();
 
     future<summary_entry&> read_summary_entry(size_t i);
 
