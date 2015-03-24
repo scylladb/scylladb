@@ -537,6 +537,13 @@ mutation_partition::tombstone_for_row(const schema& schema, const clustering_key
     return t;
 }
 
+tombstone
+mutation_partition::tombstone_for_row(const schema& schema, const rows_entry& e) {
+    tombstone t = range_tombstone_for_row(schema, e.key());
+    t.apply(e.row().t);
+    return t;
+}
+
 void
 mutation_partition::apply_row_tombstone(schema_ptr schema, clustering_key_prefix prefix, tombstone t) {
     assert(!prefix.is_full(*schema));
@@ -649,7 +656,7 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
             auto&& cells = &row.row().cells;
 
             // FIXME: handle removed rows properly. In CQL rows are separate entities (can be live or dead).
-            auto row_tombstone = partition.tombstone_for_row(*_schema, row.key());
+            auto row_tombstone = partition.tombstone_for_row(*_schema, row);
 
             query::result::row result_row;
             result_row.cells.reserve(slice.regular_columns.size());
