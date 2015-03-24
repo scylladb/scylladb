@@ -11,12 +11,12 @@
 #include "core/sstring.hh"
 #include "core/fstream.hh"
 #include "core/shared_ptr.hh"
-#include "db/compress.hh"
 #include <boost/algorithm/string.hpp>
 #include <iterator>
 
 #include "types.hh"
 #include "sstables.hh"
+#include "compress.hh"
 
 namespace sstables {
 
