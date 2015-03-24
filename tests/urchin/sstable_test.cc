@@ -5,6 +5,7 @@
 #include <boost/test/included/unit_test.hpp>
 #include "core/sstring.hh"
 #include "core/future-util.hh"
+#include "core/align.hh"
 #include "sstables/sstables.hh"
 #include "tests/test-utils.hh"
 #include <memory>
@@ -183,6 +184,60 @@ SEASTAR_TEST_CASE(big_summary_query_0) {
 
 SEASTAR_TEST_CASE(big_summary_query_32) {
     return summary_query<32, 0x400c0000000000, 182>("tests/urchin/sstables/bigsummary", 76);
+}
+
+const sstring filename(sstring dir, sstring version, unsigned long generation, sstring format, sstring component) {
+    return dir + "/" + version + "-" + to_sstring(generation) + "-" + format + "-" + component;
+}
+
+static future<> write_sst_info(sstring dir, unsigned long generation) {
+    auto sst = make_lw_shared<sstable>(dir, generation, la, big);
+    return sst->load().then([sst, generation] {
+        sst->set_generation(generation + 1);
+        return sst->store().then([sst] {
+            return make_ready_future<>();
+        });
+    });
+}
+
+static future<std::pair<char*, size_t>> read_file(sstring file_path)
+{
+    return engine().open_file_dma(file_path, open_flags::rw).then([] (file f) {
+        auto fp = make_shared<file>(std::move(f));
+        return fp->size().then([fp] (auto size) {
+            auto aligned_size = align_up(size, 512UL);
+            auto rbuf = reinterpret_cast<char*>(::memalign(4096, aligned_size));
+            ::memset(rbuf, 0, aligned_size);
+            return fp->dma_read(0, rbuf, aligned_size).then([size, rbuf, fp] (auto ret) {
+                BOOST_REQUIRE(ret == size);
+                std::pair<char*, size_t> p = { rbuf, size };
+                return make_ready_future<std::pair<char*, size_t>>(p);
+            });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(check_compressed_info_func) {
+    auto sem = make_lw_shared<semaphore>(0);
+
+    return write_sst_info("tests/urchin/sstables/compressed", 1).then([sem] {
+        auto file_path = filename("tests/urchin/sstables/compressed", "la", 1, "big", "CompressionInfo.db");
+        return read_file(file_path).then([sem] (auto ret) {
+            auto file_path = filename("tests/urchin/sstables/compressed", "la", 2, "big", "CompressionInfo.db");
+            return read_file(file_path).then([ret, sem] (auto ret2) {
+                // assert that both files have the same size.
+                BOOST_REQUIRE(ret.second == ret2.second);
+                // assert that both files have the same content.
+                BOOST_REQUIRE(::memcmp(ret.first, ret2.first, ret.second) == 0);
+                // free buf from both files.
+                ::free(ret.first);
+                ::free(ret2.first);
+                sem->signal();
+            });
+        });
+    });
+
+    return sem->wait();
 }
 
 // Data file reading tests.
