@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <cctype>
 #include <string>
+#include <set>
 
 #include <boost/any.hpp>
 

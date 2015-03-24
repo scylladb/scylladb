@@ -15,6 +15,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#pragma once
+
+#include "cql3/statements/property_definitions.hh"
+
+#include "schema.hh"
+
+#if 0
 package org.apache.cassandra.cql3.statements;
 
 import java.util.Collections;
@@ -30,28 +44,34 @@ import org.apache.cassandra.db.compaction.AbstractCompactionStrategy;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.exceptions.SyntaxException;
 import org.apache.cassandra.io.compress.CompressionParameters;
+#endif
 
-public class CFPropDefs extends PropertyDefinitions
-{
-    public static final String KW_COMMENT = "comment";
-    public static final String KW_READREPAIRCHANCE = "read_repair_chance";
-    public static final String KW_DCLOCALREADREPAIRCHANCE = "dclocal_read_repair_chance";
-    public static final String KW_GCGRACESECONDS = "gc_grace_seconds";
-    public static final String KW_MINCOMPACTIONTHRESHOLD = "min_threshold";
-    public static final String KW_MAXCOMPACTIONTHRESHOLD = "max_threshold";
-    public static final String KW_CACHING = "caching";
-    public static final String KW_DEFAULT_TIME_TO_LIVE = "default_time_to_live";
-    public static final String KW_MIN_INDEX_INTERVAL = "min_index_interval";
-    public static final String KW_MAX_INDEX_INTERVAL = "max_index_interval";
-    public static final String KW_SPECULATIVE_RETRY = "speculative_retry";
-    public static final String KW_BF_FP_CHANCE = "bloom_filter_fp_chance";
-    public static final String KW_MEMTABLE_FLUSH_PERIOD = "memtable_flush_period_in_ms";
+namespace cql3 {
 
-    public static final String KW_COMPACTION = "compaction";
-    public static final String KW_COMPRESSION = "compression";
+namespace statements {
 
-    public static final String COMPACTION_STRATEGY_CLASS_KEY = "class";
+class cf_prop_defs : public property_definitions {
+public:
+    static const sstring KW_COMMENT;
+    static const sstring KW_READREPAIRCHANCE;
+    static const sstring KW_DCLOCALREADREPAIRCHANCE;
+    static const sstring KW_GCGRACESECONDS;
+    static const sstring KW_MINCOMPACTIONTHRESHOLD;
+    static const sstring KW_MAXCOMPACTIONTHRESHOLD;
+    static const sstring KW_CACHING;
+    static const sstring KW_DEFAULT_TIME_TO_LIVE;
+    static const sstring KW_MIN_INDEX_INTERVAL;
+    static const sstring KW_MAX_INDEX_INTERVAL;
+    static const sstring KW_SPECULATIVE_RETRY;
+    static const sstring KW_BF_FP_CHANCE;
+    static const sstring KW_MEMTABLE_FLUSH_PERIOD;
 
+    static const sstring KW_COMPACTION;
+    static const sstring KW_COMPRESSION;
+
+    static const sstring COMPACTION_STRATEGY_CLASS_KEY;
+
+#if 0
     public static final Set<String> keywords = new HashSet<>();
     public static final Set<String> obsoleteKeywords = new HashSet<>();
 
@@ -77,9 +97,11 @@ public class CFPropDefs extends PropertyDefinitions
     }
 
     private Class<? extends AbstractCompactionStrategy> compactionStrategyClass = null;
-
-    public void validate() throws ConfigurationException, SyntaxException
-    {
+#endif
+public:
+    void validate() const {
+        // FIXME
+#if 0
         // Skip validation if the comapction strategy class is already set as it means we've alreayd
         // prepared (and redoing it would set strategyClass back to null, which we don't want)
         if (compactionStrategyClass != null)
@@ -128,8 +150,10 @@ public class CFPropDefs extends PropertyDefinitions
             throw new ConfigurationException(KW_MAX_INDEX_INTERVAL + " must be greater than " + KW_MIN_INDEX_INTERVAL);
 
         SpeculativeRetry.fromString(getString(KW_SPECULATIVE_RETRY, SpeculativeRetry.RetryType.NONE.name()));
+#endif
     }
 
+#if 0
     public Class<? extends AbstractCompactionStrategy> getCompactionStrategy()
     {
         return compactionStrategyClass;
@@ -165,12 +189,14 @@ public class CFPropDefs extends PropertyDefinitions
         }
         return options;
     }
+#endif
 
-    public void applyToCFMetadata(CFMetaData cfm) throws ConfigurationException, SyntaxException
-    {
-        if (hasProperty(KW_COMMENT))
-            cfm.comment(getString(KW_COMMENT, ""));
+    void apply_to_schema(schema_ptr s) {
+        if (has_property(KW_COMMENT)) {
+            s->set_comment(get_string(KW_COMMENT, ""));
+        }
 
+#if 0
         cfm.readRepairChance(getDouble(KW_READREPAIRCHANCE, cfm.getReadRepairChance()));
         cfm.dcLocalReadRepairChance(getDouble(KW_DCLOCALREADREPAIRCHANCE, cfm.getDcLocalReadRepairChance()));
         cfm.gcGraceSeconds(getInt(KW_GCGRACESECONDS, cfm.getGcGraceSeconds()));
@@ -199,8 +225,10 @@ public class CFPropDefs extends PropertyDefinitions
         CachingOptions cachingOptions = getCachingOptions();
         if (cachingOptions != null)
             cfm.caching(cachingOptions);
+#endif
     }
 
+#if 0
     @Override
     public String toString()
     {
@@ -215,4 +243,9 @@ public class CFPropDefs extends PropertyDefinitions
                                                             field, minimumValue, defaultValue));
 
     }
+#endif
+};
+
+}
+
 }

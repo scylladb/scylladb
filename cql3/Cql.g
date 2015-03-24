@@ -31,6 +31,7 @@ options {
 
 @parser::includes {
 #include "cql3/statements/create_keyspace_statement.hh"
+#include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/update_statement.hh"
@@ -280,8 +281,8 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st7= truncateStatement           { $stmt = st7; }
 #endif
     | st8= createKeyspaceStatement     { $stmt = st8; }
-#if 0
     | st9= createTableStatement        { $stmt = st9; }
+#if 0
     | st10=createIndexStatement        { $stmt = st10; }
     | st11=dropKeyspaceStatement       { $stmt = st11; }
     | st12=dropTableStatement          { $stmt = st12; }
@@ -667,7 +668,6 @@ createKeyspaceStatement returns [shared_ptr<cql3::statements::create_keyspace_st
       K_WITH properties[attrs] { $expr = make_shared<cql3::statements::create_keyspace_statement>(ks, attrs, if_not_exists); }
     ;
 
-#if 0
 /**
  * CREATE COLUMNFAMILY [IF NOT EXISTS] <CF> (
  *     <name1> <type>,
@@ -675,41 +675,44 @@ createKeyspaceStatement returns [shared_ptr<cql3::statements::create_keyspace_st
  *     <name3> <type>
  * ) WITH <property> = <value> AND ...;
  */
-createTableStatement returns [CreateTableStatement.RawStatement expr]
-    @init { boolean ifNotExists = false; }
-    : K_CREATE K_COLUMNFAMILY (K_IF K_NOT K_EXISTS { ifNotExists = true; } )?
-      cf=columnFamilyName { $expr = new CreateTableStatement.RawStatement(cf, ifNotExists); }
+createTableStatement returns [shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
+    @init { bool if_not_exists = false; }
+    : K_CREATE K_COLUMNFAMILY (K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
+      cf=columnFamilyName { $expr = make_shared<cql3::statements::create_table_statement::raw_statement>(cf, if_not_exists); }
       cfamDefinition[expr]
     ;
 
-cfamDefinition[CreateTableStatement.RawStatement expr]
+cfamDefinition[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
     : '(' cfamColumns[expr] ( ',' cfamColumns[expr]? )* ')'
       ( K_WITH cfamProperty[expr] ( K_AND cfamProperty[expr] )*)?
     ;
 
-cfamColumns[CreateTableStatement.RawStatement expr]
-    : k=ident v=comparatorType { boolean isStatic=false; } (K_STATIC {isStatic = true;})? { $expr.addDefinition(k, v, isStatic); }
-        (K_PRIMARY K_KEY { $expr.addKeyAliases(Collections.singletonList(k)); })?
-    | K_PRIMARY K_KEY '(' pkDef[expr] (',' c=ident { $expr.addColumnAlias(c); } )* ')'
+cfamColumns[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
+    @init { bool is_static=false; }
+    : k=ident v=comparatorType (K_STATIC {is_static = true;})? { $expr->add_definition(k, v, is_static); }
+        (K_PRIMARY K_KEY { $expr->add_key_aliases(std::vector<shared_ptr<cql3::column_identifier>>{k}); })?
+    | K_PRIMARY K_KEY '(' pkDef[expr] (',' c=ident { $expr->add_column_alias(c); } )* ')'
     ;
 
-pkDef[CreateTableStatement.RawStatement expr]
-    : k=ident { $expr.addKeyAliases(Collections.singletonList(k)); }
-    | '(' { List<ColumnIdentifier> l = new ArrayList<ColumnIdentifier>(); } k1=ident { l.add(k1); } ( ',' kn=ident { l.add(kn); } )* ')' { $expr.addKeyAliases(l); }
+pkDef[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
+    @init { std::vector<shared_ptr<cql3::column_identifier>> l; }
+    : k=ident { $expr->add_key_aliases(std::vector<shared_ptr<cql3::column_identifier>>{k}); }
+    | '(' k1=ident { l.push_back(k1); } ( ',' kn=ident { l.push_back(kn); } )* ')' { $expr->add_key_aliases(l); }
     ;
 
-cfamProperty[CreateTableStatement.RawStatement expr]
-    : property[expr.properties]
-    | K_COMPACT K_STORAGE { $expr.setCompactStorage(); }
+cfamProperty[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
+    : property[expr->properties]
+    | K_COMPACT K_STORAGE { $expr->set_compact_storage(); }
     | K_CLUSTERING K_ORDER K_BY '(' cfamOrdering[expr] (',' cfamOrdering[expr])* ')'
     ;
 
-cfamOrdering[CreateTableStatement.RawStatement expr]
-    @init{ boolean reversed=false; }
-    : k=ident (K_ASC | K_DESC { reversed=true;} ) { $expr.setOrdering(k, reversed); }
+cfamOrdering[shared_ptr<cql3::statements::create_table_statement::raw_statement> expr]
+    @init{ bool reversed=false; }
+    : k=ident (K_ASC | K_DESC { reversed=true;} ) { $expr->set_ordering(k, reversed); }
     ;
 
 
+#if 0
 /**
  * CREATE TYPE foo (
  *    <name1> <type1>,

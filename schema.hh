@@ -114,6 +114,9 @@ public:
         shared_ptr<abstract_type> regular_column_name_type,
         sstring comment = {});
     schema(const schema&);
+    void set_comment(const sstring& comment) {
+        _comment = comment;
+    }
     bool is_dense() const {
         return false;
     }
