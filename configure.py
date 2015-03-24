@@ -229,7 +229,7 @@ core = [
 defines = []
 libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
-urchin_libs = '-llz4 -lsnappy'
+urchin_libs = '-llz4 -lsnappy -lz'
 
 libs = urchin_libs + ' ' + libs
 
