@@ -192,7 +192,8 @@ public:
     row& clustered_row(const clustering_key& key);
     row* find_row(const clustering_key& key);
     rows_entry* find_entry(schema_ptr schema, const clustering_key_prefix& key);
-    tombstone tombstone_for_row(schema_ptr schema, const clustering_key& key);
+    tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key);
+    tombstone tombstone_for_row(const schema& schema, const clustering_key& key);
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
     boost::iterator_range<rows_type::iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r);
 };

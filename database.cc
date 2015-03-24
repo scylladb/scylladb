@@ -504,21 +504,32 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
 }
 
 tombstone
-mutation_partition::tombstone_for_row(schema_ptr schema, const clustering_key& key) {
+mutation_partition::range_tombstone_for_row(const schema& schema, const clustering_key& key) {
     tombstone t = _tombstone;
 
+    if (_row_tombstones.empty()) {
+        return t;
+    }
+
     auto c = row_tombstones_entry::key_comparator(
-        clustering_key::prefix_view_type::less_compare_with_prefix(*schema));
+        clustering_key::prefix_view_type::less_compare_with_prefix(schema));
 
     // _row_tombstones contains only strict prefixes
-    for (unsigned prefix_len = 1; prefix_len < schema->clustering_key_size(); ++prefix_len) {
-        auto i = _row_tombstones.find(key.prefix_view(*schema, prefix_len), c);
+    for (unsigned prefix_len = 1; prefix_len < schema.clustering_key_size(); ++prefix_len) {
+        auto i = _row_tombstones.find(key.prefix_view(schema, prefix_len), c);
         if (i != _row_tombstones.end()) {
             t.apply(i->t());
         }
     }
 
-    auto j = _rows.find(key, rows_entry::compare(*schema));
+    return t;
+}
+
+tombstone
+mutation_partition::tombstone_for_row(const schema& schema, const clustering_key& key) {
+    tombstone t = range_tombstone_for_row(schema, key);
+
+    auto j = _rows.find(key, rows_entry::compare(schema));
     if (j != _rows.end()) {
         t.apply(j->row().t);
     }
@@ -638,7 +649,7 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
             auto&& cells = &row.row().cells;
 
             // FIXME: handle removed rows properly. In CQL rows are separate entities (can be live or dead).
-            auto row_tombstone = partition.tombstone_for_row(_schema, row.key());
+            auto row_tombstone = partition.tombstone_for_row(*_schema, row.key());
 
             query::result::row result_row;
             result_row.cells.reserve(slice.regular_columns.size());
