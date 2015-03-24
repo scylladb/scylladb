@@ -92,6 +92,19 @@ std::unordered_map<sstable::component_type, sstring, enum_hash<sstable::componen
     { component_type::Statistics, "Statistics.db" },
 };
 
+// This assumes that the mappings are small enough, and called unfrequent
+// enough.  If that changes, it would be adviseable to create a full static
+// reverse mapping, even if it is done at runtime.
+template <typename Map>
+static typename Map::key_type reverse_map(const typename Map::mapped_type& value, Map& map) {
+    for (auto& pair: map) {
+        if (pair.second == value) {
+            return pair.first;
+        }
+    }
+    throw std::out_of_range("unable to reverse map");
+}
+
 struct bufsize_mismatch_exception : malformed_sstable_exception {
     bufsize_mismatch_exception(size_t size, size_t expected) :
         malformed_sstable_exception(sprint("Buffer improperly sized to hold requested data. Got: %ld. Expected: %ld", size, expected))
@@ -452,19 +465,9 @@ future<> sstable::read_toc() {
                 if (c == "") {
                     continue;
                 }
-                auto found = false;
-                for (auto& cmap: _component_map) {
-                    // Remember that this map is a { index => string } one.
-                    // Note that we match the string...
-                    if (c == cmap.second) {
-                        // but add the index to the components list.
-                        sstlog.debug("\tFound at TOC file: {} ", c);
-                        _components.insert(cmap.first);
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
+                try {
+                   _components.insert(reverse_map(c, _component_map));
+                } catch (std::out_of_range& oor) {
                     throw malformed_sstable_exception("Unrecognized TOC component: " + c);
                 }
             }
