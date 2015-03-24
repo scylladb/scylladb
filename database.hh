@@ -37,6 +37,7 @@
 #include "keys.hh"
 #include <boost/intrusive/set.hpp>
 #include <boost/range/iterator_range.hpp>
+#include "sstables/sstables.hh"
 
 using row = std::map<column_id, atomic_cell_or_collection>;
 
@@ -281,7 +282,12 @@ struct column_family {
     void apply(const mutation& m);
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
+
+    future<> populate(sstring datadir);
 private:
+    // generation -> sstable. Ordered by key so we can easily get the most recent.
+    std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
+    future<> probe_file(sstring sstdir, sstring fname);
     // Returns at most "limit" rows
     query::result::partition get_partition_slice(mutation_partition& partition,
         const query::partition_slice& slice, uint32_t limit);

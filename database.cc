@@ -11,6 +11,7 @@
 #include "cql3/column_identifier.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
+#include "sstables/sstables.hh"
 
 thread_local logging::logger dblog("database");
 
@@ -241,6 +242,67 @@ static std::vector<sstring> parse_fname(sstring filename) {
     return comps;
 }
 
+future<> column_family::probe_file(sstring sstdir, sstring fname) {
+
+    using namespace sstables;
+
+    auto comps = parse_fname(fname);
+    if (comps.size() != 5) {
+        dblog.error("Ignoring malformed file {}", fname);
+        return make_ready_future<>();
+    }
+
+    // Every table will have a TOC. Using a specific file as a criteria, as
+    // opposed to, say verifying _sstables.count() to be zero is more robust
+    // against parallel loading of the directory contents.
+    if (comps[3] != "TOC") {
+        return make_ready_future<>();
+    }
+
+    sstable::version_types version;
+    sstable::format_types  format;
+
+    try {
+        version = sstable::version_from_sstring(comps[0]);
+    } catch (std::out_of_range) {
+        dblog.error("Uknown version found: {}", comps[0]);
+        return make_ready_future<>();
+    }
+
+    auto generation = boost::lexical_cast<unsigned long>(comps[1]);
+
+    try {
+        format = sstable::format_from_sstring(comps[2]);
+    } catch (std::out_of_range) {
+        dblog.error("Uknown format found: {}", comps[2]);
+        return make_ready_future<>();
+    }
+
+    assert(_sstables.count(generation) == 0);
+
+    try {
+        auto sst = std::make_unique<sstables::sstable>(sstdir, generation, version, format);
+        auto fut = sst->load();
+        return std::move(fut).then([this, generation, sst = std::move(sst)] () mutable {
+            _sstables.emplace(generation, std::move(sst));
+            return make_ready_future<>();
+        });
+    } catch (malformed_sstable_exception& e) {
+        dblog.error("Skipping malformed sstable: {}", e.what());
+        return make_ready_future<>();
+    }
+
+    return make_ready_future<>();
+}
+
+future<> column_family::populate(sstring sstdir) {
+
+    return lister::scan_dir(sstdir, directory_entry_type::regular, [this, sstdir] (directory_entry de) {
+        // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
+        return probe_file(sstdir, de.name);
+    });
+}
+
 future<> keyspace::populate(sstring ksdir) {
     return lister::scan_dir(ksdir, directory_entry_type::directory, [this, ksdir] (directory_entry de) {
         auto comps = parse_fname(de.name);
@@ -251,8 +313,15 @@ future<> keyspace::populate(sstring ksdir) {
         sstring cfname = comps[0];
 
         auto sstdir = ksdir + "/" + de.name;
-        dblog.warn("Keyspace {}: Reading CF {} ", ksdir, comps[0]);
-        return make_ready_future<>();
+        if (column_families.count(cfname) != 0) {
+            dblog.info("Keyspace {}: Reading CF {} ", ksdir, comps[0]);
+
+            // FIXME: Increase parallelism.
+            return column_families.at(cfname).populate(sstdir);
+        } else {
+            dblog.warn("{}, CF {}: schema not loaded!", ksdir, comps[0]);
+            return make_ready_future<>();
+        }
     });
 }
 
