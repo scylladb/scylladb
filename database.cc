@@ -416,6 +416,15 @@ database::find_keyspace(const sstring& name) {
     return nullptr;
 }
 
+keyspace&
+database::find_or_create_keyspace(const sstring& name) {
+    auto i = keyspaces.find(name);
+    if (i != keyspaces.end()) {
+        return i->second;
+    }
+    return keyspaces.emplace(name, keyspace()).first->second;
+}
+
 void
 column_family::apply(const mutation& m) {
     mutation_partition& p = find_or_create_partition(m.key);

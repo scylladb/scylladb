@@ -312,6 +312,7 @@ public:
     future<> init_from_data_directory(sstring datadir);
     future<> populate(sstring datadir);
     keyspace* find_keyspace(const sstring& name);
+    keyspace& find_or_create_keyspace(const sstring& name);
     schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name);
     future<> stop() { return make_ready_future<>(); }
     void assign(database&& db) {
