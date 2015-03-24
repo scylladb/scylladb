@@ -30,7 +30,7 @@ namespace cql3 {
 
 
 shared_ptr<operation>
-operation::set_element::prepare(const sstring& keyspace, column_definition& receiver) {
+operation::set_element::prepare(const sstring& keyspace, const column_definition& receiver) {
     using exceptions::invalid_request_exception;
     auto rtype = dynamic_pointer_cast<collection_type_impl>(receiver.type);
     if (!rtype) {
@@ -61,7 +61,7 @@ operation::set_element::is_compatible_with(shared_ptr<raw_update> other) {
 }
 
 shared_ptr<operation>
-operation::addition::prepare(const sstring& keyspace, column_definition& receiver) {
+operation::addition::prepare(const sstring& keyspace, const column_definition& receiver) {
     auto v = _value->prepare(keyspace, receiver.column_specification);
 
     auto ctype = dynamic_pointer_cast<collection_type_impl>(receiver.type);
@@ -97,7 +97,7 @@ operation::addition::is_compatible_with(shared_ptr<raw_update> other) {
 }
 
 shared_ptr<operation>
-operation::subtraction::prepare(const sstring& keyspace, column_definition& receiver) {
+operation::subtraction::prepare(const sstring& keyspace, const column_definition& receiver) {
     warn(unimplemented::cause::COLLECTIONS);
     throw exceptions::invalid_request_exception("unimplemented, go away");
     // FIXME:
@@ -135,7 +135,7 @@ operation::subtraction::is_compatible_with(shared_ptr<raw_update> other) {
 }
 
 shared_ptr<operation>
-operation::prepend::prepare(const sstring& keyspace, column_definition& receiver) {
+operation::prepend::prepare(const sstring& keyspace, const column_definition& receiver) {
     warn(unimplemented::cause::COLLECTIONS);
     throw exceptions::invalid_request_exception("unimplemented, go away");
     // FIXME:
@@ -158,7 +158,7 @@ operation::prepend::is_compatible_with(shared_ptr<raw_update> other) {
 
 
 ::shared_ptr <operation>
-operation::set_value::prepare(const sstring& keyspace, column_definition& receiver) {
+operation::set_value::prepare(const sstring& keyspace, const column_definition& receiver) {
     auto v = _value->prepare(keyspace, receiver.column_specification);
 
     if (receiver.type->is_counter()) {

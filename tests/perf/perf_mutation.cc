@@ -19,7 +19,7 @@ int main(int argc, char* argv[]) {
 
     time_it([&] {
         mutation m(key, s);
-        column_definition& col = *s->get_column_definition("r1");
+        const column_definition& col = *s->get_column_definition("r1");
         m.set_clustered_cell(c_key, col, make_atomic_cell(value));
         cf.apply(std::move(m));
     });

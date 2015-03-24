@@ -178,7 +178,7 @@ public:
 };
 
 static inline
-column_definition* get_column_definition(schema_ptr schema, column_identifier& id) {
+const column_definition* get_column_definition(schema_ptr schema, const column_identifier& id) {
     return schema->get_column_definition(id.bytes_);
 }
 

@@ -338,7 +338,7 @@ modification_statement::execute_with_condition(service::storage_proxy& proxy, se
 }
 
 void
-modification_statement::add_key_values(column_definition& def, ::shared_ptr<restrictions::restriction> values) {
+modification_statement::add_key_values(const column_definition& def, ::shared_ptr<restrictions::restriction> values) {
     if (def.is_clustering_key()) {
         _has_no_clustering_columns = false;
     }
@@ -350,7 +350,7 @@ modification_statement::add_key_values(column_definition& def, ::shared_ptr<rest
 }
 
 void
-modification_statement::add_key_value(column_definition& def, ::shared_ptr<term> value) {
+modification_statement::add_key_value(const column_definition& def, ::shared_ptr<term> value) {
     add_key_values(def, ::make_shared<restrictions::single_column_restriction::EQ>(def, value));
 }
 
@@ -421,7 +421,7 @@ modification_statement::parsed::prepare(database& db, ::shared_ptr<variable_spec
         } else {
             for (auto&& entry : _conditions) {
                 auto id = entry.first->prepare_column_identifier(schema);
-                column_definition* def = get_column_definition(schema, *id);
+                const column_definition* def = get_column_definition(schema, *id);
                 if (!def) {
                     throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *id));
                 }

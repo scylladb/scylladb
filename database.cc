@@ -25,7 +25,7 @@ get_column_types(const Sequence& column_definitions) {
 }
 
 ::shared_ptr<cql3::column_specification>
-schema::make_column_specification(column_definition& def) {
+schema::make_column_specification(const column_definition& def) {
     auto id = ::make_shared<cql3::column_identifier>(def.name(), column_name_type(def));
     return ::make_shared<cql3::column_specification>(ks_name, cf_name, std::move(id), def.type);
 }
@@ -39,8 +39,20 @@ schema::build_columns(const std::vector<column>& columns, column_definition::col
         auto& col = columns[i];
         dst.emplace_back(std::move(col.name), std::move(col.type), i, kind);
         column_definition& def = dst.back();
-        _columns_by_name[def.name()] = &def;
         def.column_specification = make_column_specification(def);
+    }
+}
+
+void schema::rehash_columns() {
+    _columns_by_name.clear();
+    _regular_columns_by_name.clear();
+
+    for (const column_definition& def : all_columns_in_select_order()) {
+        _columns_by_name[def.name()] = &def;
+    }
+
+    for (const column_definition& def : _regular_columns) {
+        _regular_columns_by_name[def.name()] = &def;
     }
 }
 
@@ -51,14 +63,15 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_k
     data_type regular_column_name_type,
     sstring comment)
         : _regular_columns_by_name(serialized_compare(regular_column_name_type))
-        , _comment(comment)
-        , ks_name(std::move(ks_name))
-        , cf_name(std::move(cf_name))
-        , partition_key_type(::make_lw_shared<tuple_type<>>(get_column_types(partition_key)))
-        , clustering_key_type(::make_lw_shared<tuple_type<>>(get_column_types(clustering_key)))
-        , clustering_key_prefix_type(::make_lw_shared(clustering_key_type->as_prefix()))
-        , regular_column_name_type(regular_column_name_type)
 {
+    this->_comment = std::move(comment);
+    this->ks_name = std::move(ks_name);
+    this->cf_name = std::move(cf_name);
+    this->partition_key_type = ::make_lw_shared<tuple_type<>>(get_column_types(partition_key));
+    this->clustering_key_type = ::make_lw_shared<tuple_type<>>(get_column_types(clustering_key));
+    this->clustering_key_prefix_type = ::make_lw_shared(clustering_key_type->as_prefix());
+    this->regular_column_name_type = regular_column_name_type;
+
     if (partition_key.size() == 1) {
         thrift.partition_key_type = partition_key[0].type;
     } else {
@@ -71,12 +84,17 @@ schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_k
 
     std::sort(regular_columns.begin(), regular_columns.end(), column::name_compare(regular_column_name_type));
     build_columns(regular_columns, column_definition::column_kind::REGULAR, _regular_columns);
-    for (column_definition& def : _regular_columns) {
-        _regular_columns_by_name[def.name()] = &def;
-    }
 
     std::sort(static_columns.begin(), static_columns.end(), column::name_compare(utf8_type));
     build_columns(static_columns, column_definition::column_kind::STATIC, _static_columns);
+
+    rehash_columns();
+}
+
+schema::schema(const schema& o)
+        : raw_schema(o)
+        , _regular_columns_by_name(serialized_compare(regular_column_name_type)) {
+    rehash_columns();
 }
 
 column_family::column_family(schema_ptr schema)
@@ -275,7 +293,7 @@ column_definition::column_definition(bytes name, data_type type, column_id id, c
     , kind(kind)
 { }
 
-column_definition* schema::get_column_definition(const bytes& name) {
+const column_definition* schema::get_column_definition(const bytes& name) {
     auto i = _columns_by_name.find(name);
     if (i == _columns_by_name.end()) {
         return nullptr;
