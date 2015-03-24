@@ -288,7 +288,7 @@ public:
 
     class setter : public operation {
     public:
-        setter(column_definition& column, shared_ptr<term> t)
+        setter(const column_definition& column, shared_ptr<term> t)
                 : operation(column, std::move(t)) {
         }
 
@@ -308,7 +308,7 @@ public:
     class setter_by_key : public operation {
         const shared_ptr<term> _k;
     public:
-        setter_by_key(column_definition& column, shared_ptr<term> k, shared_ptr<term> t)
+        setter_by_key(const column_definition& column, shared_ptr<term> k, shared_ptr<term> t)
             : operation(column, std::move(t)), _k(std::move(k)) {
         }
 
@@ -342,7 +342,7 @@ public:
 
     class putter : public operation {
     public:
-        putter(column_definition& column, shared_ptr<term> t)
+        putter(const column_definition& column, shared_ptr<term> t)
             : operation(column, std::move(t)) {
         }
 

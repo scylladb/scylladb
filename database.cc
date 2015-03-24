@@ -25,7 +25,7 @@ get_column_types(const Sequence& column_definitions) {
 }
 
 ::shared_ptr<cql3::column_specification>
-schema::make_column_specification(column_definition& def) {
+schema::make_column_specification(const column_definition& def) {
     auto id = ::make_shared<cql3::column_identifier>(def.name(), column_name_type(def));
     return ::make_shared<cql3::column_specification>(ks_name, cf_name, std::move(id), def.type);
 }
@@ -275,7 +275,7 @@ column_definition::column_definition(bytes name, data_type type, column_id id, c
     , kind(kind)
 { }
 
-column_definition* schema::get_column_definition(const bytes& name) {
+const column_definition* schema::get_column_definition(const bytes& name) {
     auto i = _columns_by_name.find(name);
     if (i == _columns_by_name.end()) {
         return nullptr;

@@ -180,7 +180,7 @@ class single_column_restriction::EQ final : public single_column_restriction {
 private:
     ::shared_ptr<term> _value;
 public:
-    EQ(column_definition& column_def, ::shared_ptr<term> value)
+    EQ(const column_definition& column_def, ::shared_ptr<term> value)
         : single_column_restriction(column_def)
         , _value(std::move(value))
     { }
@@ -310,7 +310,7 @@ private:
     std::vector<::shared_ptr<term>> _entry_keys;
     std::vector<::shared_ptr<term>> _entry_values;
 public:
-    contains(column_definition& column_def, ::shared_ptr<term> t, bool is_key)
+    contains(const column_definition& column_def, ::shared_ptr<term> t, bool is_key)
             : single_column_restriction(column_def) {
         if (is_key) {
             _keys.emplace_back(std::move(t));
@@ -319,7 +319,7 @@ public:
         }
     }
 
-    contains(column_definition& column_def, ::shared_ptr<term> map_key, ::shared_ptr<term> map_value)
+    contains(const column_definition& column_def, ::shared_ptr<term> map_key, ::shared_ptr<term> map_value)
             : single_column_restriction(column_def) {
         _entry_keys.emplace_back(std::move(map_key));
         _entry_values.emplace_back(std::move(map_value));

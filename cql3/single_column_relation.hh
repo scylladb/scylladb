@@ -175,7 +175,7 @@ private:
      * @return the receivers for the specified relation.
      * @throws exceptions::invalid_request_exception if the relation is invalid
      */
-    std::vector<::shared_ptr<column_specification>> to_receivers(schema_ptr schema, column_definition& column_def);
+    std::vector<::shared_ptr<column_specification>> to_receivers(schema_ptr schema, const column_definition& column_def);
 
 #if 0
     private ColumnSpecification makeCollectionReceiver(ColumnSpecification receiver, bool forKey)

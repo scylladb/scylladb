@@ -112,7 +112,7 @@ public:
     bool is_counter() const {
         return false;
     }
-    column_definition* get_column_definition(const bytes& name);
+    const column_definition* get_column_definition(const bytes& name);
     auto regular_begin() {
         return _regular_columns.begin();
     }
@@ -137,7 +137,7 @@ public:
             return _regular_columns.begin() + i->second->id;
         }
     }
-    data_type column_name_type(column_definition& def) {
+    data_type column_name_type(const column_definition& def) {
         return def.kind == column_definition::column_kind::REGULAR ? regular_column_name_type : utf8_type;
     }
     column_definition& regular_column_at(column_id id) {
@@ -146,7 +146,7 @@ public:
     column_definition& static_column_at(column_id id) {
         return _static_columns[id];
     }
-    bool is_last_partition_key(column_definition& def) {
+    bool is_last_partition_key(const column_definition& def) {
         return &_partition_key[_partition_key.size() - 1] == &def;
     }
     bool has_collections() {
