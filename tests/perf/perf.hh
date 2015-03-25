@@ -9,7 +9,8 @@
 #include <chrono>
 #include <iostream>
 
-template<typename Func>
+template <typename Func>
+static
 void time_it(Func func, int iterations = 5) {
     using clk = std::chrono::high_resolution_clock;
 
