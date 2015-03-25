@@ -191,10 +191,10 @@ public:
     row& static_row() { return _static_row; }
     row& clustered_row(const clustering_key& key);
     row* find_row(const clustering_key& key);
-    row* find_row(schema_ptr schema, const clustering_key_prefix& key);
     rows_entry* find_entry(schema_ptr schema, const clustering_key_prefix& key);
-    tombstone tombstone_for_row(schema_ptr schema, const clustering_key& key);
-    tombstone tombstone_for_row(schema_ptr schema, const clustering_key_prefix& key);
+    tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key);
+    tombstone tombstone_for_row(const schema& schema, const clustering_key& key);
+    tombstone tombstone_for_row(const schema& schema, const rows_entry& e);
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
     boost::iterator_range<rows_type::iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r);
 };
@@ -312,6 +312,7 @@ public:
     future<> init_from_data_directory(sstring datadir);
     future<> populate(sstring datadir);
     keyspace* find_keyspace(const sstring& name);
+    keyspace& find_or_create_keyspace(const sstring& name);
     schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name);
     future<> stop() { return make_ready_future<>(); }
     void assign(database&& db) {

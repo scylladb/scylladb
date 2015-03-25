@@ -57,20 +57,20 @@ BOOST_AUTO_TEST_CASE(test_multi_level_row_tombstones) {
     };
 
     m.p.apply_row_tombstone(s, make_prefix({1, 2}), tombstone(9, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 2, 3})), tombstone(9, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 2, 3})), tombstone(9, ttl));
 
     m.p.apply_row_tombstone(s, make_prefix({1, 3}), tombstone(8, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 2, 0})), tombstone(9, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 3, 0})), tombstone(8, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 2, 0})), tombstone(9, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 3, 0})), tombstone(8, ttl));
 
     m.p.apply_row_tombstone(s, make_prefix({1}), tombstone(11, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 2, 0})), tombstone(11, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 3, 0})), tombstone(11, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 2, 0})), tombstone(11, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 3, 0})), tombstone(11, ttl));
 
     m.p.apply_row_tombstone(s, make_prefix({1, 4}), tombstone(6, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 2, 0})), tombstone(11, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 3, 0})), tombstone(11, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, make_key({1, 4, 0})), tombstone(11, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 2, 0})), tombstone(11, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 3, 0})), tombstone(11, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 4, 0})), tombstone(11, ttl));
 }
 
 BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
@@ -91,11 +91,11 @@ BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
     m.p.apply_row_tombstone(s, c_key1_prefix, tombstone(1, ttl));
     m.p.apply_row_tombstone(s, c_key2_prefix, tombstone(0, ttl));
 
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, c_key1), tombstone(1, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, c_key2), tombstone(0, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, c_key1), tombstone(1, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, c_key2), tombstone(0, ttl));
 
     m.p.apply_row_tombstone(s, c_key2_prefix, tombstone(1, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(s, c_key2), tombstone(1, ttl));
+    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, c_key2), tombstone(1, ttl));
 }
 
 BOOST_AUTO_TEST_CASE(test_map_mutations) {
