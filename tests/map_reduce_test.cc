@@ -25,47 +25,47 @@
 #include "core/future-util.hh"
 
 struct X {
-	sstring echo(sstring arg) {
-		return arg;
-	}
-	future<> stop() { return make_ready_future<>(); }
+    sstring echo(sstring arg) {
+        return arg;
+    }
+    future<> stop() { return make_ready_future<>(); }
 };
 
 template <typename T, typename Func>
 future<> do_with_distributed(Func&& func) {
-	auto x = make_shared<distributed<T>>();
-	return func(*x).finally([x] {
-		return x->stop();
-	}).finally([x]{});
+    auto x = make_shared<distributed<T>>();
+    return func(*x).finally([x] {
+        return x->stop();
+    }).finally([x]{});
 }
 
 future<> test_that_each_core_gets_the_arguments() {
-	return do_with_distributed<X>([] (auto& x) {
-		return x.map_reduce([] (sstring msg){
-			if (msg != "hello") {
-				throw std::runtime_error("wrong message");
-			}
-		}, &X::echo, sstring("hello"));
-	});
+    return do_with_distributed<X>([] (auto& x) {
+        return x.map_reduce([] (sstring msg){
+            if (msg != "hello") {
+                throw std::runtime_error("wrong message");
+            }
+        }, &X::echo, sstring("hello"));
+    });
 }
 
 future<> test_functor_version() {
-	return do_with_distributed<X>([] (auto& x) {
-		return x.map_reduce([] (sstring msg){
-			if (msg != "hello") {
-				throw std::runtime_error("wrong message");
-			}
-		}, [] (X& x) { return x.echo("hello"); });
-	});
+    return do_with_distributed<X>([] (auto& x) {
+        return x.map_reduce([] (sstring msg){
+            if (msg != "hello") {
+                throw std::runtime_error("wrong message");
+            }
+        }, [] (X& x) { return x.echo("hello"); });
+    });
 }
 
 int main(int argc, char** argv) {
-	app_template app;
-	return app.run(argc, argv, [] {
-		test_that_each_core_gets_the_arguments().then([] {
-			return test_functor_version();
-		}).then([] {
-			return engine().exit(0);
-		}).or_terminate();
-	});
+    app_template app;
+    return app.run(argc, argv, [] {
+        test_that_each_core_gets_the_arguments().then([] {
+            return test_functor_version();
+        }).then([] {
+            return engine().exit(0);
+        }).or_terminate();
+    });
 }
