@@ -186,6 +186,10 @@ public:
         return i->second;
     }
 
+    auto const& restrictions() const {
+        return _restrictions;
+    }
+
     /**
      * Checks if the _restrictions contains multiple contains, contains key, or map[key] = value.
      *

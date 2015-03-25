@@ -125,8 +125,9 @@ public:
     virtual std::vector<ValueType> values(const query_options& options) override {
         std::vector<std::vector<bytes_opt>> value_vector;
         value_vector.reserve(_restrictions->size());
-        for (auto def : _restrictions->get_column_defs()) {
-            auto r = _restrictions->get_restriction(*def);
+        for (auto&& e : _restrictions->restrictions()) {
+            const column_definition* def = e.first;
+            auto&& r = e.second;
             assert(!r->is_slice());
 
             std::vector<bytes_opt> values = r->values(options);
@@ -155,8 +156,9 @@ public:
 
         // TODO: optimize for all EQ case
 
-        for (auto def : _restrictions->get_column_defs()) {
-            auto r = _restrictions->get_restriction(*def);
+        for (auto&& e : _restrictions->restrictions()) {
+            const column_definition* def = e.first;
+            auto&& r = e.second;
 
             if (vec_of_values.size() != _schema->position(*def) || r->is_contains()) {
                 // The prefixes built so far are the longest we can build,
