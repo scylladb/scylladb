@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include "types.hh"
 #include "core/enum.hh"
+#include "compress.hh"
 
 namespace sstables {
 
@@ -53,11 +54,13 @@ private:
     std::unordered_set<component_type, enum_hash<component_type>> _components;
 
     compression _compression;
+    lw_shared_ptr<compression_metadata> _compression_metadata;
     filter _filter;
     summary _summary;
     statistics _statistics;
     lw_shared_ptr<file> _index_file;
     lw_shared_ptr<file> _data_file;
+    size_t _data_file_size;
 
     sstring _dir;
     unsigned long _generation = 0;
@@ -84,6 +87,15 @@ private:
 
     future<index_list> read_indexes(uint64_t position, uint64_t quantity);
 
+    input_stream<char> data_stream_at(uint64_t pos);
+    // Read exactly the specific byte range from the data file (after
+    // uncompression, if the file is compressed). This can be used to read
+    // a specific row from the data file (its position and length can be
+    // determined using the index file).
+    // This function is intended (and optimized for) random access, not
+    // for iteration through all the rows.
+    future<temporary_buffer<char>> data_read(uint64_t pos, size_t len);
+
 public:
     sstable(sstring dir, unsigned long generation, version_types v, format_types f) : _dir(dir), _generation(generation), _version(v), _format(f) {}
     sstable& operator=(const sstable&) = delete;
@@ -103,5 +115,9 @@ public:
     future<> load();
 
     future<summary_entry&> read_summary_entry(size_t i);
+
+    // Allow the test cases from sstable_test.cc to test private methods
+    friend class uncompressed_random_access_read;
+    friend class compressed_random_access_read;
 };
 }

@@ -52,6 +52,9 @@ public:
     }
 };
 
+// FIXME: We don't use this API, and it can be removed. The compressed reader
+// is only needed for the data file, and for that we have the nicer
+// data_stream_at() API below.
 class compressed_file_random_access_reader : public random_access_reader {
     lw_shared_ptr<file> _file;
     lw_shared_ptr<compression_metadata> _cm;
@@ -581,6 +584,9 @@ future<> sstable::open_data() {
                     engine().open_file_dma(filename(component_type::Data), open_flags::ro)).then([this] (auto files) {
         _index_file = make_lw_shared<file>(std::move(std::get<file>(std::get<0>(files).get())));
         _data_file  = make_lw_shared<file>(std::move(std::get<file>(std::get<1>(files).get())));
+        return _data_file->size().then([this] (auto size) {
+          _data_file_size = size;
+        });
     });
 }
 
@@ -595,6 +601,13 @@ future<> sstable::load() {
         return read_summary();
     }).then([this] {
         return open_data();
+    }).then([this] {
+        // After we have _compression and _data_file_size, we can build
+        // _compression_metatadata (and invalidate _compression).
+        if (has_component(sstable::component_type::CompressionInfo)) {
+            _compression_metadata = make_lw_shared<compression_metadata>(
+                    std::move(_compression), _data_file_size);
+        }
     });
 }
 
@@ -619,4 +632,18 @@ sstable::version_types sstable::version_from_sstring(sstring &s) {
 sstable::format_types sstable::format_from_sstring(sstring &s) {
     return reverse_map(s, _format_string);
 }
+
+input_stream<char> sstable::data_stream_at(uint64_t pos) {
+    if (_compression_metadata) {
+        return make_compressed_file_input_stream(
+                _data_file, _compression_metadata, pos);
+    } else {
+        return make_file_input_stream(_data_file, pos);
+    }
+}
+
+future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len) {
+    return data_stream_at(pos).read_exactly(len);
+}
+
 }
