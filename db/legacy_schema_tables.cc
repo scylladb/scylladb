@@ -23,6 +23,7 @@
 
 #include "legacy_schema_tables.hh"
 #include "system_keyspace.hh"
+#include "database.hh"
 
 using namespace db::system_keyspace;
 
@@ -437,6 +438,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
     {
         return getSchemaKSKey(SystemKeyspace.NAME).equals(partition.key.getKey());
     }
+#endif
 
     /**
      * Merge remote schema in form of mutations with local and mutate ks/cf metadata objects
@@ -447,14 +449,20 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      * @throws ConfigurationException If one of metadata attributes has invalid value
      * @throws IOException If data was corrupted during transportation or failed to apply fs operations
      */
-    public static synchronized void mergeSchema(Collection<Mutation> mutations) throws ConfigurationException, IOException
+    future<> merge_schema(std::vector<mutation> mutations)
     {
-        mergeSchema(mutations, true);
-        Schema.instance.updateVersionAndAnnounce();
+        return merge_schema(std::move(mutations), true).then([] {
+#if 0
+            Schema.instance.updateVersionAndAnnounce();
+#endif
+            return make_ready_future<>();
+        });
     }
 
-    public static synchronized void mergeSchema(Collection<Mutation> mutations, boolean doFlush) throws IOException
+    future<> merge_schema(std::vector<mutation> mutations, bool do_flush)
     {
+        return make_ready_future<>();
+#if 0
         // compare before/after schemas of the affected keyspaces only
         Set<String> keyspaces = new HashSet<>(mutations.size());
         for (Mutation mutation : mutations)
@@ -489,8 +497,10 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
         for (String keyspaceToDrop : keyspacesToDrop)
             Schema.instance.dropKeyspace(keyspaceToDrop);
+#endif
     }
 
+#if 0
     private static Set<String> mergeKeyspaces(Map<DecoratedKey, ColumnFamily> before, Map<DecoratedKey, ColumnFamily> after)
     {
         List<Row> created = new ArrayList<>();
@@ -749,38 +759,38 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         for (UDAggregate udf : dropped)
             Schema.instance.dropAggregate(udf);
     }
+#endif
 
     /*
      * Keyspace metadata serialization/deserialization.
      */
 
-    public static Mutation makeCreateKeyspaceMutation(KSMetaData keyspace, long timestamp)
+    mutation make_create_keyspace_mutation(lw_shared_ptr<config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions)
     {
-        return makeCreateKeyspaceMutation(keyspace, timestamp, true);
-    }
-
-    private static Mutation makeCreateKeyspaceMutation(KSMetaData keyspace, long timestamp, boolean withTablesAndTypesAndFunctions)
-    {
-        Mutation mutation = new Mutation(SystemKeyspace.NAME, getSchemaKSKey(keyspace.name));
-        ColumnFamily cells = mutation.addOrGet(Keyspaces);
-        CFRowAdder adder = new CFRowAdder(cells, Keyspaces.comparator.builder().build(), timestamp);
-
-        adder.add("durable_writes", keyspace.durableWrites);
-        adder.add("strategy_class", keyspace.strategyClass.getName());
+        schema_ptr s = keyspaces();
+        auto pkey = partition_key::from_exploded(*s, {utf8_type->decompose(keyspace->name)});
+        mutation m(pkey, s);
+        exploded_clustering_prefix ckey;
+        m.set_cell(ckey, "durable_writes", keyspace->durable_writes, timestamp);
+        m.set_cell(ckey, "strategy_class", keyspace->strategy_name, timestamp);
+#if 0
         adder.add("strategy_options", json(keyspace.strategyOptions));
+#endif
 
-        if (withTablesAndTypesAndFunctions)
-        {
+        if (with_tables_and_types_and_functions) {
+#if 0
             for (UserType type : keyspace.userTypes.getAllTypes().values())
                 addTypeToSchemaMutation(type, timestamp, mutation);
-
-            for (CFMetaData table : keyspace.cfMetaData().values())
-                addTableToSchemaMutation(table, timestamp, true, mutation);
+#endif
+            for (auto&& kv : keyspace->cf_meta_data()) {
+                add_table_to_schema_mutation(kv.second, timestamp, true, m);
+            }
         }
 
-        return mutation;
+        return m;
     }
 
+#if 0
     public static Mutation makeDropKeyspaceMutation(KSMetaData keyspace, long timestamp)
     {
         Mutation mutation = new Mutation(SystemKeyspace.NAME, getSchemaKSKey(keyspace.name));
@@ -913,9 +923,12 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         addTableToSchemaMutation(table, timestamp, true, mutation);
         return mutation;
     }
+#endif
 
-    private static void addTableToSchemaMutation(CFMetaData table, long timestamp, boolean withColumnsAndTriggers, Mutation mutation)
+    void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, mutation& m)
     {
+        throw std::runtime_error("not implemented");
+#if 0
         // For property that can be null (and can be changed), we insert tombstones, to make sure
         // we don't keep a property the user has removed
         ColumnFamily cells = mutation.addOrGet(Columnfamilies);
@@ -970,8 +983,10 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
             for (TriggerDefinition trigger : table.getTriggers().values())
                 addTriggerToSchemaMutation(table, trigger, timestamp, mutation);
         }
+#endif
     }
 
+#if 0
     public static Mutation makeUpdateTableMutation(KSMetaData keyspace,
                                                    CFMetaData oldTable,
                                                    CFMetaData newTable,
