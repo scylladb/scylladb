@@ -323,17 +323,17 @@ auto lref_to_cref(T& x) {
 // The lambda unmarshalls all parameters, calls a handler, marshall return values and sends them back to a client
 template<typename F, typename Serializer, typename MsgType, bool Info, typename Func, std::size_t... I>
 auto recv_helper(std::index_sequence<I...>, Func&& func) {
-    return [func = lref_to_cref(std::forward<Func>(func))](typename protocol<Serializer, MsgType>::server::connection& client) mutable {
+    return [func = lref_to_cref(std::forward<Func>(func))](lw_shared_ptr<typename protocol<Serializer, MsgType>::server::connection> client) mutable {
         // create message to hold all received values
         auto m = std::make_unique<message<MsgType, typename F::template arg<I>::type...>>();
         auto xargs = std::tie(m->id, std::get<I>(m->args)...); // holds reference to all message elements
-        return unmarshall(client.serializer(), client.in(), std::move(xargs)).then([&client, m = std::move(m), &func] () mutable {
+        return unmarshall(client->serializer(), client->in(), std::move(xargs)).then([client, m = std::move(m), &func] () mutable {
             // note: apply is executed asynchronously with regards to networking so we cannot chain futures here by doing "return apply()"
-            apply<typename F::return_type, Info, Serializer>(func, client.info(), std::move(m)).then([&client] (std::unique_ptr<snd_reply<Serializer, MsgType, typename F::return_type>>&& r) {
-                client.out_ready() = client.out_ready().then([&client, r = std::move(r)] () mutable {
-                    auto f = reply(r, client);
-                    // hold on r while reply is sent
-                    return f.then([&client, r = std::move(r)] {});
+            apply<typename F::return_type, Info, Serializer>(func, client->info(), std::move(m)).then([client] (std::unique_ptr<snd_reply<Serializer, MsgType, typename F::return_type>>&& r) {
+                client->out_ready() = client->out_ready().then([client, r = std::move(r)] () mutable {
+                    auto f = reply(r, *client);
+                    // hold on r and client while reply is sent
+                    return f.then([client, r = std::move(r)] {});
                 });
             });
         });
@@ -426,7 +426,7 @@ template<typename Serializer, typename MsgType>
 void protocol<Serializer, MsgType>::server::accept(server_socket&& ss) {
     keep_doing([this, ss = std::move(ss)] () mutable {
         return ss.accept().then([this] (connected_socket fd, socket_address addr) mutable {
-            auto conn = new connection(*this, std::move(fd), std::move(addr), _proto);
+            auto conn = make_lw_shared<connection>(*this, std::move(fd), std::move(addr), _proto);
             conn->process();
         });
     });
@@ -444,14 +444,14 @@ future<> protocol<Serializer, MsgType>::server::connection::process() {
         return unmarshall(this->serializer(), this->_read_buf, std::tie(_type)).then([this] {
             auto it = _server._proto._handlers.find(_type);
             if (it != _server._proto._handlers.end()) {
-                return it->second(*this);
+                return it->second(this->shared_from_this());
             } else {
                 this->_error = true;
                 return make_ready_future<>();
             }
         });
-    }).finally([this] () {
-        delete this;
+    }).finally([conn_ptr = this->shared_from_this()] () {
+        // hold onto connection pointer until do_until() exists
     });
 }
 
