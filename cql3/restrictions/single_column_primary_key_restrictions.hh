@@ -144,7 +144,7 @@ public:
         std::vector<ValueType> result;
         result.reserve(cartesian_product_size(value_vector));
         for (auto&& v : make_cartesian_product(value_vector)) {
-            result.emplace_back(ValueType::from_optional_exploded(*_schema, v));
+            result.emplace_back(ValueType::from_optional_exploded(*_schema, std::move(v)));
         }
         return result;
     }
@@ -228,7 +228,7 @@ public:
 
         ranges.reserve(cartesian_product_size(vec_of_values));
         for (auto&& prefix : make_cartesian_product(vec_of_values)) {
-            ranges.emplace_back(range_type::make_singular(ValueType::from_optional_exploded(*_schema, prefix)));
+            ranges.emplace_back(range_type::make_singular(ValueType::from_optional_exploded(*_schema, std::move(prefix))));
         }
 
         return std::move(ranges);

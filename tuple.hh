@@ -64,7 +64,13 @@ public:
 
     /*
      * Format:
-     *   <len(value1)><value1><len(value2)><value2>...
+     *   <len(value1)><value1><len(value2)><value2>...<len(value_n-1)><value_n-1>(len(value_n))?<value_n>
+     *
+     * The value corresponding to the last component of types doesn't have its length encoded,
+     * its length is deduced from the input range.
+     *
+     * serialize_value() and serialize_optionals() for single element rely on the fact that for a single-element
+     * tuples their serialized form is equal to the serialized form of the component.
      */
     template<typename Wrapped>
     void serialize_value(const std::vector<Wrapped>& values, bytes::iterator& out) {
@@ -74,27 +80,60 @@ public:
             assert(values.size() == _types.size());
         }
 
+        size_t n_left = _types.size();
         for (auto&& wrapped : values) {
             auto&& val = value_traits<Wrapped>::unwrap(wrapped);
             assert(val.size() <= std::numeric_limits<int32_t>::max());
-            write<uint32_t>(out, uint32_t(val.size()));
+            if (--n_left) {
+                write<uint32_t>(out, uint32_t(val.size()));
+            }
             out = std::copy(val.begin(), val.end(), out);
         }
     }
     template <typename Wrapped>
     size_t serialized_size(const std::vector<Wrapped>& values) {
         size_t len = 0;
+        size_t n_left = _types.size();
         for (auto&& wrapped : values) {
             auto&& val = value_traits<Wrapped>::unwrap(wrapped);
             assert(val.size() <= std::numeric_limits<int32_t>::max());
-            len += sizeof(uint32_t) + val.size();
+            if (--n_left) {
+                len += sizeof(uint32_t);
+            }
+            len += val.size();
         }
         return len;
+    }
+    bytes serialize_single(bytes&& v) {
+        if (!AllowPrefixes) {
+            assert(_types.size() == 1);
+        } else {
+            if (_types.size() > 1) {
+                std::vector<bytes> vec;
+                vec.reserve(1);
+                vec.emplace_back(std::move(v));
+                return ::serialize_value(*this, vec);
+            }
+        }
+        return std::move(v);
     }
     bytes serialize_value(const std::vector<bytes>& values) {
         return ::serialize_value(*this, values);
     }
+    bytes serialize_value(std::vector<bytes>&& values) {
+        if (_types.size() == 1 && values.size() == 1) {
+            return std::move(values[0]);
+        }
+        return ::serialize_value(*this, values);
+    }
     bytes serialize_optionals(const std::vector<bytes_opt>& values) {
+        return ::serialize_value(*this, values);
+    }
+    bytes serialize_optionals(std::vector<bytes_opt>&& values) {
+        if (_types.size() == 1 && values.size() == 1) {
+            assert(values[0]);
+            return std::move(*values[0]);
+        }
         return ::serialize_value(*this, values);
     }
     bytes serialize_value_deep(const std::vector<boost::any>& values) {
@@ -133,9 +172,14 @@ public:
                     throw marshal_exception();
                 }
             }
-            auto len = read_simple<uint32_t>(_v);
-            if (_v.size() < len) {
-                throw marshal_exception();
+            uint32_t len;
+            if (_types_left == 1) {
+                len = _v.size();
+            } else {
+                len = read_simple<uint32_t>(_v);
+                if (_v.size() < len) {
+                    throw marshal_exception();
+                }
             }
             _current = bytes_view(_v.begin(), len);
             _v.remove_prefix(len);
@@ -211,15 +255,23 @@ public:
     bool is_prefix_of(bytes_view prefix, bytes_view value) const {
         assert(AllowPrefixes);
 
+        size_t n_left = _types.size();
         for (auto&& type : _types) {
             if (prefix.empty()) {
                 return true;
             }
             assert(!value.empty());
-            auto len1 = read_simple<uint32_t>(prefix);
-            auto len2 = read_simple<uint32_t>(value);
-            if (prefix.size() < len1 || value.size() < len2) {
-                throw marshal_exception();
+            uint32_t len1;
+            uint32_t len2;
+            if (--n_left) {
+                len1 = read_simple<uint32_t>(prefix);
+                len2 = read_simple<uint32_t>(value);
+                if (prefix.size() < len1 || value.size() < len2) {
+                    throw marshal_exception();
+                }
+            } else {
+                len1 = prefix.size();
+                len2 = value.size();
             }
             if (!type->equal(bytes_view(prefix.begin(), len1), bytes_view(value.begin(), len2))) {
                 return false;
