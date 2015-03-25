@@ -41,21 +41,24 @@ future<> do_with_distributed(Func&& func) {
 
 future<> test_that_each_core_gets_the_arguments() {
     return do_with_distributed<X>([] (auto& x) {
-        return x.map_reduce([] (sstring msg){
-            if (msg != "hello") {
-                throw std::runtime_error("wrong message");
-            }
-        }, &X::echo, sstring("hello"));
+        return x.start().then([&x] {
+            return x.map_reduce([] (sstring msg){
+                if (msg != "hello") {
+                    throw std::runtime_error("wrong message");
+                }
+            }, &X::echo, sstring("hello"));
+        });
     });
 }
 
 future<> test_functor_version() {
     return do_with_distributed<X>([] (auto& x) {
-        return x.map_reduce([] (sstring msg){
-            if (msg != "hello") {
-                throw std::runtime_error("wrong message");
-            }
-        }, [] (X& x) { return x.echo("hello"); });
+        return x.start().then([&x] {
+            return x.map_reduce([] (sstring msg){
+                if (msg != "hello") {
+                    throw std::runtime_error("wrong message");
+                }
+            }, [] (X& x) { return x.echo("hello"); });
     });
 }
 
