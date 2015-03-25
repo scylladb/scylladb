@@ -167,7 +167,7 @@ private:
     }
 #endif
 public:
-    ::shared_ptr<statements::parsed_statement::prepared> get_prepared(bytes id) {
+    ::shared_ptr<statements::parsed_statement::prepared> get_prepared(const bytes& id) {
         auto it = _prepared_statements.find(id);
         if (it == _prepared_statements.end()) {
             return ::shared_ptr<statements::parsed_statement::prepared>{};
