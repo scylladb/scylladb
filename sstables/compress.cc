@@ -55,6 +55,16 @@ size_t uncompress_lz4(const char* input, size_t input_len,
     // (and accidental corruption is avoided by the compressed-data checksum),
     // but let's not take that chance for now, until we've actually measured
     // the performance benefit that LZ4_decompress_fast() would bring.
+
+    // Cassandra's LZ4Compressor prepends to the chunk its uncompressed length
+    // in 4 bytes little-endian (!) order. We don't need this information -
+    // we already know the uncompressed data is at most the given chunk size
+    // (and usually is exactly that, except in the last chunk). The advance
+    // knowledge of the uncompressed size could be useful if we used
+    // LZ4_decompress_fast(), but we prefer LZ4_decompress_safe() anyway...
+    input += 4;
+    input_len -= 4;
+
     auto ret = LZ4_decompress_safe(input, output, input_len, output_len);
     if (ret < 0) {
         throw std::runtime_error("LZ4 uncompression failure");
