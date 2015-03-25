@@ -129,6 +129,7 @@ urchin_tests = [
     'tests/urchin/commitlog_test',
     'tests/cartesian_product_test',
     'tests/urchin/hash_test',
+    'tests/urchin/serializer_test',
 ]
 
 tests = [
