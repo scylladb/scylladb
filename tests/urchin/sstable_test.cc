@@ -184,3 +184,30 @@ SEASTAR_TEST_CASE(big_summary_query_0) {
 SEASTAR_TEST_CASE(big_summary_query_32) {
     return summary_query<32, 0x400c0000000000, 182>("tests/urchin/sstables/bigsummary", 76);
 }
+
+// Data file reading tests.
+// We need these to be in the sstables namespace - and be friends of sstable -
+// so we can test private functions too.
+namespace sstables {
+
+SEASTAR_TEST_CASE(uncompressed_random_access_read) {
+    return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([] (auto sstp) {
+        // note: it's important to pass on a shared copy of sstp to prevent its
+        // destruction until the continuation finishes reading!
+        return sstp->data_read(97, 6).then([sstp] (temporary_buffer<char> buf) {
+            BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
+            return make_ready_future<>();
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(compressed_random_access_read) {
+    return reusable_sst("tests/urchin/sstables/compressed", 1).then([] (auto sstp) {
+        return sstp->data_read(97, 6).then([sstp] (temporary_buffer<char> buf) {
+            BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
+            return make_ready_future<>();
+        });
+    });
+}
+
+}
