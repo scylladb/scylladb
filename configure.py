@@ -154,7 +154,7 @@ tests = [
     'tests/shared_ptr_test',
     'tests/slab_test',
     'tests/fstream_test',
-    'tests/map_reduce_test',
+    'tests/distributed_test',
     'tests/rpc',
     ]
 
@@ -351,7 +351,7 @@ deps = {
     'tests/shared_ptr_test': ['tests/shared_ptr_test.cc'] + core,
     'tests/slab_test': ['tests/slab_test.cc'] + core,
     'tests/fstream_test': ['tests/fstream_test.cc'] + core,
-    'tests/map_reduce_test': ['tests/map_reduce_test.cc'] + core,
+    'tests/distributed_test': ['tests/distributed_test.cc'] + core,
     'tests/rpc': ['tests/rpc.cc'] + core + libnet,
 }
 

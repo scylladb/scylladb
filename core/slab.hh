@@ -222,7 +222,7 @@ public:
             auto objects = max_object_size / _size;
             desc = new slab_page_desc(slab_page, objects, _size, _slab_class_id, slab_page_index);
         } catch (const std::bad_alloc& e) {
-            // FIXME: Is there really a need to re-throw std::bad_alloc?
+            ::free(slab_page);
             throw std::bad_alloc{};
         }
 
@@ -328,7 +328,7 @@ private:
         auto objects = _max_object_size / object_size;
         for (auto i = 0u; i < objects; i++, object += object_size) {
             if (!desc.empty()) {
-                // if binary_search returns false, it means that object at the current
+                // if binary_search returns true, it means that object at the current
                 // offset isn't an item.
                 if (std::binary_search(free_objects.begin(), free_objects.end(), object)) {
                     continue;
