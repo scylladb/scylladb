@@ -29,19 +29,23 @@
 
 #include "core/shared_ptr.hh"
 
+#include <unordered_map>
+
 namespace config {
 
 class ks_meta_data final {
 public:
+    const sstring name;
+    const sstring strategy_name;
+    const std::unordered_map<sstring, sstring> strategy_options;
+private:
+    std::unordered_map<sstring, schema_ptr> _cf_meta_data;
+public:
+    const bool durable_writes;
+
+    const ::shared_ptr<ut_meta_data> user_types;
+
 #if 0
-    public final String name;
-    public final Class<? extends AbstractReplicationStrategy> strategyClass;
-    public final Map<String, String> strategyOptions;
-    private final Map<String, CFMetaData> cfMetaData;
-    public final boolean durableWrites;
-
-    public final UTMetaData userTypes;
-
     public KSMetaData(String name,
                       Class<? extends AbstractReplicationStrategy> strategyClass,
                       Map<String, String> strategyOptions,
@@ -59,24 +63,21 @@ public:
         this(name, strategyClass, strategyOptions, durableWrites, cfDefs, new UTMetaData());
     }
 #endif
-    ks_meta_data(sstring name,
-                       sstring strategy_name,
-                       std::unordered_map<sstring, sstring> strategy_options,
-                       bool durable_writes,
+    ks_meta_data(sstring name_,
+                       sstring strategy_name_,
+                       std::unordered_map<sstring, sstring> strategy_options_,
+                       bool durable_writes_,
                        std::vector<schema_ptr> cf_defs,
-                       shared_ptr<ut_meta_data> user_types)
+                       shared_ptr<ut_meta_data> user_types_)
+        : name{name_}
+        , strategy_name{strategy_name_.empty() ? "NetworkTopologyStrategy" : strategy_name_}
+        , strategy_options{std::move(strategy_options_)}
+        , durable_writes{durable_writes_}
+        , user_types{user_types_}
     {
-#if 0
-        this.name = name;
-        this.strategyClass = strategyClass == null ? NetworkTopologyStrategy.class : strategyClass;
-        this.strategyOptions = strategyOptions;
-        Map<String, CFMetaData> cfmap = new HashMap<>();
-        for (CFMetaData cfm : cfDefs)
-            cfmap.put(cfm.cfName, cfm);
-        this.cfMetaData = Collections.unmodifiableMap(cfmap);
-        this.durableWrites = durableWrites;
-        this.userTypes = userTypes;
-#endif
+        for (auto&& s : cf_defs) {
+            _cf_meta_data.emplace(s->cf_name, s);
+        }
     }
 
     // For new user created keyspaces (through CQL)
@@ -152,12 +153,13 @@ public:
             && Objects.equal(durableWrites, other.durableWrites)
             && Objects.equal(userTypes, other.userTypes);
     }
+#endif
 
-    public Map<String, CFMetaData> cfMetaData()
-    {
-        return cfMetaData;
+    const std::unordered_map<sstring, schema_ptr>& cf_meta_data() const {
+        return _cf_meta_data;
     }
 
+#if 0
     @Override
     public String toString()
     {
