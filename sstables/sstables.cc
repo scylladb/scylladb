@@ -791,6 +791,10 @@ input_stream<char> sstable::data_stream_at(uint64_t pos) {
     }
 }
 
+// FIXME: to read a specific byte range, we shouldn't use the input stream
+// interface - it may cause too much read when we intend to read a small
+// range, and too small reads, and repeated waits, when reading a large range
+// which we should have started at once.
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len) {
     return data_stream_at(pos).read_exactly(len);
 }
