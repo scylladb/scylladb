@@ -59,6 +59,25 @@ future<> test_functor_version() {
                     throw std::runtime_error("wrong message");
                 }
             }, [] (X& x) { return x.echo("hello"); });
+        });
+    });
+}
+
+struct Y {
+    sstring s;
+    Y(sstring s) : s(std::move(s)) {}
+    future<> stop() { return make_ready_future<>(); }
+};
+
+future<> test_constructor_argument_is_passed_to_each_core() {
+    return do_with_distributed<Y>([] (auto& y) {
+        return y.start(sstring("hello")).then([&y] {
+            return y.invoke_on_all([] (Y& y) {
+                if (y.s != "hello") {
+                    throw std::runtime_error(sprint("expected message mismatch, is \"%s\"", y.s));
+                }
+            });
+        });
     });
 }
 
@@ -67,6 +86,8 @@ int main(int argc, char** argv) {
     return app.run(argc, argv, [] {
         test_that_each_core_gets_the_arguments().then([] {
             return test_functor_version();
+        }).then([] {
+            return test_constructor_argument_is_passed_to_each_core();
         }).then([] {
             return engine().exit(0);
         }).or_terminate();
