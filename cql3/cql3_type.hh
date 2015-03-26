@@ -31,14 +31,15 @@
 
 namespace cql3 {
 
-class cql3_type {
+class cql3_type final {
     sstring _name;
     data_type _type;
+    bool _native;
 public:
-    cql3_type(sstring name, data_type type) : _name(std::move(name)), _type(std::move(type)) {}
-    virtual ~cql3_type() {}
-    virtual bool is_collection() const = 0;
-    virtual bool is_native() const { return false; }
+    cql3_type(sstring name, data_type type, bool native = true)
+            : _name(std::move(name)), _type(std::move(type)), _native(native) {}
+    bool is_collection() const { return _type->is_collection(); }
+    bool is_native() const { return _native; }
     data_type get_type() const { return _type; }
     sstring to_string() const { return _name; }
 
@@ -340,9 +341,6 @@ private:
         return os << t.to_string();
     }
 
-};
-
-class native_cql3_type : public cql3_type {
 public:
     enum class kind : int8_t {
         ASCII, BIGINT, BLOB, BOOLEAN, COUNTER, DECIMAL, DOUBLE, FLOAT, INT, INET, TEXT, TIMESTAMP, UUID, VARCHAR, VARINT, TIMEUUID
@@ -366,9 +364,9 @@ public:
         kind::TIMEUUID>;
     using kind_enum_set = enum_set<kind_enum>;
 private:
-    kind_enum_set::prepared _kind;
+    std::experimental::optional<kind_enum_set::prepared> _kind;
     static shared_ptr<cql3_type> make(sstring name, data_type type, kind kind_) {
-        return make_shared<native_cql3_type>(std::move(name), std::move(type), kind_);
+        return make_shared<cql3_type>(std::move(name), std::move(type), kind_);
     }
 public:
     static thread_local shared_ptr<cql3_type> ascii;
@@ -392,16 +390,13 @@ public:
 #endif
     static const std::vector<shared_ptr<cql3_type>>& values();
 public:
-    native_cql3_type(sstring name, data_type type, kind kind_)
-        : cql3_type(std::move(name), std::move(type)), _kind(kind_enum_set::prepare(kind_))
-    { }
-    virtual bool is_collection() const override {
-        return false;
+    cql3_type(sstring name, data_type type, kind kind_)
+        : _name(std::move(name)), _type(std::move(type)), _native(true), _kind(kind_enum_set::prepare(kind_)) {
     }
-    virtual bool is_native() const override {
-        return true;
+    kind_enum_set::prepared get_kind() const {
+        assert(_kind);
+        return *_kind;
     }
-    kind_enum_set::prepared get_kind() const { return _kind; }
 };
 
 #if 0

@@ -60,10 +60,10 @@ private:
         declare(time_uuid_fcts::make_unix_timestamp_of_fcf());
         declare(make_uuid_fct());
 
-        for (auto&& type : native_cql3_type::values()) {
+        for (auto&& type : cql3_type::values()) {
             // Note: because text and varchar ends up being synonimous, our automatic makeToBlobFunction doesn't work
             // for varchar, so we special case it below. We also skip blob for obvious reasons.
-            if (type == native_cql3_type::varchar || type == native_cql3_type::blob) {
+            if (type == cql3_type::varchar || type == cql3_type::blob) {
                 continue;
             }
 

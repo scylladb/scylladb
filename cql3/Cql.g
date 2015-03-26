@@ -57,7 +57,6 @@ options {
 using namespace cql3::statements;
 using namespace cql3::selection;
 using cql3::cql3_type;
-using cql3::native_cql3_type;
 using conditions_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::column_condition::raw>>>;
 using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>;
 }
@@ -1350,10 +1349,10 @@ comparatorType returns [shared_ptr<cql3_type::raw> t]
     ;
 
 native_type returns [shared_ptr<cql3_type> t]
-    : K_ASCII     { $t = native_cql3_type::ascii; }
-    | K_BIGINT    { $t = native_cql3_type::bigint; }
-    | K_BLOB      { $t = native_cql3_type::blob; }
-    | K_BOOLEAN   { $t = native_cql3_type::boolean; }
+    : K_ASCII     { $t = cql3_type::ascii; }
+    | K_BIGINT    { $t = cql3_type::bigint; }
+    | K_BLOB      { $t = cql3_type::blob; }
+    | K_BOOLEAN   { $t = cql3_type::boolean; }
 #if 0
     | K_COUNTER   { $t = CQL3Type.Native.COUNTER; }
     | K_DECIMAL   { $t = CQL3Type.Native.DECIMAL; }
@@ -1361,15 +1360,15 @@ native_type returns [shared_ptr<cql3_type> t]
     | K_FLOAT     { $t = CQL3Type.Native.FLOAT; }
     | K_INET      { $t = CQL3Type.Native.INET;}
 #endif
-    | K_INT       { $t = native_cql3_type::int_; }
-    | K_TEXT      { $t = native_cql3_type::text; }
-    | K_TIMESTAMP { $t = native_cql3_type::timestamp; }
-    | K_UUID      { $t = native_cql3_type::uuid; }
-    | K_VARCHAR   { $t = native_cql3_type::varchar; }
+    | K_INT       { $t = cql3_type::int_; }
+    | K_TEXT      { $t = cql3_type::text; }
+    | K_TIMESTAMP { $t = cql3_type::timestamp; }
+    | K_UUID      { $t = cql3_type::uuid; }
+    | K_VARCHAR   { $t = cql3_type::varchar; }
 #if 0
     | K_VARINT    { $t = CQL3Type.Native.VARINT; }
 #endif
-    | K_TIMEUUID  { $t = native_cql3_type::timeuuid; }
+    | K_TIMEUUID  { $t = cql3_type::timeuuid; }
     ;
 
 #if 0

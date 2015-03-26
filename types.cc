@@ -110,7 +110,7 @@ struct int32_type_impl : integer_type_impl<int32_t> {
     { }
 
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
-        return cql3::native_cql3_type::int_;
+        return cql3::cql3_type::int_;
     }
 };
 
@@ -119,7 +119,7 @@ struct long_type_impl : integer_type_impl<int64_t> {
     { }
 
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
-        return cql3::native_cql3_type::bigint;
+        return cql3::cql3_type::bigint;
     }
     virtual bool is_value_compatible_with_internal(abstract_type& other) override {
         return &other == this || &other == date_type.get() || &other == timestamp_type.get();
@@ -197,7 +197,7 @@ struct bytes_type_impl final : public abstract_type {
         return to_hex(b);
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
-        return cql3::native_cql3_type::blob;
+        return cql3::cql3_type::blob;
     }
     virtual bool is_value_compatible_with_internal(abstract_type& other) override {
         return true;
@@ -229,7 +229,7 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         throw std::runtime_error("not implemented");
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
-        return cql3::native_cql3_type::boolean;
+        return cql3::cql3_type::boolean;
     }
 };
 
@@ -267,7 +267,7 @@ struct date_type_impl : public abstract_type {
         throw std::runtime_error("not implemented");
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
-        return cql3::native_cql3_type::timestamp;
+        return cql3::cql3_type::timestamp;
     }
     virtual bool is_value_compatible_with_internal(abstract_type& other) override {
         return &other == this || &other == timestamp_type.get() || &other == long_type.get();
@@ -322,7 +322,7 @@ struct timeuuid_type_impl : public abstract_type {
         throw std::runtime_error("not implemented");
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
-        return cql3::native_cql3_type::timeuuid;
+        return cql3::cql3_type::timeuuid;
     }
 private:
     static int compare_bytes(bytes_view o1, bytes_view o2) {
@@ -367,7 +367,7 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
         throw std::runtime_error("not implemented");
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
-        return cql3::native_cql3_type::timestamp;
+        return cql3::cql3_type::timestamp;
     }
     virtual bool is_value_compatible_with_internal(abstract_type& other) override {
         return &other == this || &other == date_type.get() || &other == long_type.get();
@@ -432,7 +432,7 @@ struct uuid_type_impl : abstract_type {
         throw std::runtime_error("not implemented");
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
-        return cql3::native_cql3_type::uuid;
+        return cql3::cql3_type::uuid;
     }
     virtual bool is_value_compatible_with_internal(abstract_type& other) override {
         return &other == this || &other == timeuuid_type.get();
@@ -486,7 +486,7 @@ struct inet_addr_type_impl : abstract_type {
         throw std::runtime_error("not implemented");
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
-        return cql3::native_cql3_type::inet;
+        return cql3::cql3_type::inet;
     }
 };
 
@@ -566,14 +566,14 @@ struct floating_type_impl : public simple_type_impl<T> {
 struct double_type_impl : floating_type_impl<double> {
     double_type_impl() : floating_type_impl{"double"} { }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
-        return cql3::native_cql3_type::double_;
+        return cql3::cql3_type::double_;
     }
 };
 
 struct float_type_impl : floating_type_impl<float> {
     float_type_impl() : floating_type_impl{"float"} { }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
-        return cql3::native_cql3_type::float_;
+        return cql3::cql3_type::float_;
     }
 };
 
@@ -1399,9 +1399,9 @@ list_type_impl::to_value(mutation_view mut, serialization_format sf) {
 
 thread_local const shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local const shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
-thread_local const shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii", [] { return cql3::native_cql3_type::ascii; }));
+thread_local const shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii", [] { return cql3::cql3_type::ascii; }));
 thread_local const shared_ptr<abstract_type> bytes_type(make_shared<bytes_type_impl>());
-thread_local const shared_ptr<abstract_type> utf8_type(make_shared<string_type_impl>("utf8", [] { return cql3::native_cql3_type::text; }));
+thread_local const shared_ptr<abstract_type> utf8_type(make_shared<string_type_impl>("utf8", [] { return cql3::cql3_type::text; }));
 thread_local const shared_ptr<abstract_type> boolean_type(make_shared<boolean_type_impl>());
 thread_local const shared_ptr<abstract_type> date_type(make_shared<date_type_impl>());
 thread_local const shared_ptr<abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());

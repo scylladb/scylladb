@@ -72,53 +72,53 @@ constants::literal::test_assignment(const sstring& keyspace, ::shared_ptr<column
     if (!receiver_type->is_native()) {
         return test_result::WEAKLY_ASSIGNABLE;
     }
-    auto kind = static_cast<native_cql3_type*>(receiver_type.get())->get_kind();
+    auto kind = receiver_type.get()->get_kind();
     switch (_type) {
         case type::STRING:
-            if (native_cql3_type::kind_enum_set::frozen<
-                    native_cql3_type::kind::ASCII,
-                    native_cql3_type::kind::TEXT,
-                    native_cql3_type::kind::INET,
-                    native_cql3_type::kind::VARCHAR,
-                    native_cql3_type::kind::TIMESTAMP>::contains(kind)) {
+            if (cql3_type::kind_enum_set::frozen<
+                    cql3_type::kind::ASCII,
+                    cql3_type::kind::TEXT,
+                    cql3_type::kind::INET,
+                    cql3_type::kind::VARCHAR,
+                    cql3_type::kind::TIMESTAMP>::contains(kind)) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             }
             break;
         case type::INTEGER:
-            if (native_cql3_type::kind_enum_set::frozen<
-                    native_cql3_type::kind::BIGINT,
-                    native_cql3_type::kind::COUNTER,
-                    native_cql3_type::kind::DECIMAL,
-                    native_cql3_type::kind::DOUBLE,
-                    native_cql3_type::kind::FLOAT,
-                    native_cql3_type::kind::INT,
-                    native_cql3_type::kind::TIMESTAMP,
-                    native_cql3_type::kind::VARINT>::contains(kind)) {
+            if (cql3_type::kind_enum_set::frozen<
+                    cql3_type::kind::BIGINT,
+                    cql3_type::kind::COUNTER,
+                    cql3_type::kind::DECIMAL,
+                    cql3_type::kind::DOUBLE,
+                    cql3_type::kind::FLOAT,
+                    cql3_type::kind::INT,
+                    cql3_type::kind::TIMESTAMP,
+                    cql3_type::kind::VARINT>::contains(kind)) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             }
             break;
         case type::UUID:
-            if (native_cql3_type::kind_enum_set::frozen<
-                    native_cql3_type::kind::UUID,
-                    native_cql3_type::kind::TIMEUUID>::contains(kind)) {
+            if (cql3_type::kind_enum_set::frozen<
+                    cql3_type::kind::UUID,
+                    cql3_type::kind::TIMEUUID>::contains(kind)) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             }
             break;
         case type::FLOAT:
-            if (native_cql3_type::kind_enum_set::frozen<
-                    native_cql3_type::kind::DECIMAL,
-                    native_cql3_type::kind::DOUBLE,
-                    native_cql3_type::kind::FLOAT>::contains(kind)) {
+            if (cql3_type::kind_enum_set::frozen<
+                    cql3_type::kind::DECIMAL,
+                    cql3_type::kind::DOUBLE,
+                    cql3_type::kind::FLOAT>::contains(kind)) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             }
             break;
         case type::BOOLEAN:
-            if (kind == native_cql3_type::kind_enum_set::prepare<native_cql3_type::kind::BOOLEAN>()) {
+            if (kind == cql3_type::kind_enum_set::prepare<cql3_type::kind::BOOLEAN>()) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             }
             break;
         case type::HEX:
-            if (kind == native_cql3_type::kind_enum_set::prepare<native_cql3_type::kind::BLOB>()) {
+            if (kind == cql3_type::kind_enum_set::prepare<cql3_type::kind::BLOB>()) {
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             }
             break;
