@@ -273,6 +273,7 @@ public:
 
 protected:
     future<update_parameters::prefetched_rows_type> read_required_rows(
+                service::storage_proxy& proxy,
                 lw_shared_ptr<std::vector<partition_key>> keys,
                 lw_shared_ptr<exploded_clustering_prefix> prefix,
                 bool local,
@@ -423,10 +424,11 @@ private:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<mutation>> get_mutations(const query_options& options, bool local, int64_t now);
+    future<std::vector<mutation>> get_mutations(service::storage_proxy& proxy, const query_options& options, bool local, int64_t now);
 
 public:
     future<std::unique_ptr<update_parameters>> make_update_parameters(
+                service::storage_proxy& proxy,
                 lw_shared_ptr<std::vector<partition_key>> keys,
                 lw_shared_ptr<exploded_clustering_prefix> prefix,
                 const query_options& options,

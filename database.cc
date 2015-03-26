@@ -7,6 +7,7 @@
 #include "unimplemented.hh"
 #include "core/future-util.hh"
 #include "db/system_keyspace.hh"
+#include "db/consistency_level.hh"
 
 #include "cql3/column_identifier.hh"
 #include <boost/algorithm/string/classification.hpp>
@@ -686,7 +687,20 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
                             result_row.cells.emplace_back(std::experimental::make_optional(i->second));
                         }
                     } else {
-                        fail(unimplemented::cause::COLLECTIONS);
+                        auto&& cell = i->second.as_collection_mutation();
+                        auto&& ctype = static_pointer_cast<collection_type_impl>(def.type);
+                        // cannot use mutation_view, since we'll modify some of the values
+                        // FIXME: work around this somehow
+                        collection_type_impl::mutation m = ctype->deserialize_mutation_form(cell.data).materialize();
+                        for (auto&& e : m.cells) {
+                            auto& value = e.second;
+                            if (value.timestamp() < row_tombstone.timestamp) {
+                                value = atomic_cell::make_dead(row_tombstone.timestamp, row_tombstone.ttl);
+                            }
+                        }
+                        auto m_ser = ctype->serialize_mutation_form(m);
+                        result_row.cells.emplace_back(std::experimental::make_optional(
+                                atomic_cell_or_collection::from_collection_mutation(std::move(m_ser))));
                     }
                 }
             }
@@ -762,4 +776,25 @@ database::query(const query::read_command& cmd) {
     }
 
     return cf->query(cmd);
+}
+
+namespace db {
+
+std::ostream& operator<<(std::ostream& os, db::consistency_level cl) {
+    switch (cl) {
+    case db::consistency_level::ANY: return os << "ANY";
+    case db::consistency_level::ONE: return os << "ONE";
+    case db::consistency_level::TWO: return os << "TWO";
+    case db::consistency_level::THREE: return os << "THREE";
+    case db::consistency_level::QUORUM: return os << "QUORUM";
+    case db::consistency_level::ALL: return os << "ALL";
+    case db::consistency_level::LOCAL_QUORUM: return os << "LOCAL_QUORUM";
+    case db::consistency_level::EACH_QUORUM: return os << "EACH_QUORUM";
+    case db::consistency_level::SERIAL: return os << "SERIAL";
+    case db::consistency_level::LOCAL_SERIAL: return os << "LOCAL_SERIAL";
+    case db::consistency_level::LOCAL_ONE: return os << "LOCAL";
+    default: abort();
+    }
+}
+
 }

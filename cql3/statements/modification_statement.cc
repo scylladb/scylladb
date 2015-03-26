@@ -27,6 +27,8 @@
 #include "cql3/single_column_relation.hh"
 #include "validation.hh"
 #include "core/shared_ptr.hh"
+#include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/algorithm_ext/push_back.hpp>
 
 namespace cql3 {
 
@@ -51,11 +53,11 @@ operator<<(std::ostream& out, modification_statement::statement_type t) {
 }
 
 future<std::vector<mutation>>
-modification_statement::get_mutations(const query_options& options, bool local, int64_t now) {
+modification_statement::get_mutations(service::storage_proxy& proxy, const query_options& options, bool local, int64_t now) {
     auto keys = make_lw_shared(build_partition_keys(options));
     auto prefix = make_lw_shared(create_exploded_clustering_prefix(options));
-    return make_update_parameters(keys, prefix, options, local, now).then(
-            [this, keys = std::move(keys), prefix = std::move(prefix), now] (auto params_ptr) {
+    return make_update_parameters(proxy, keys, prefix, options, local, now).then(
+            [this, keys, prefix, now] (auto params_ptr) {
                 std::vector<mutation> mutations;
                 mutations.reserve(keys->size());
                 for (auto key : *keys) {
@@ -69,12 +71,13 @@ modification_statement::get_mutations(const query_options& options, bool local, 
 
 future<std::unique_ptr<update_parameters>>
 modification_statement::make_update_parameters(
+        service::storage_proxy& proxy,
         lw_shared_ptr<std::vector<partition_key>> keys,
         lw_shared_ptr<exploded_clustering_prefix> prefix,
         const query_options& options,
         bool local,
         int64_t now) {
-    return read_required_rows(std::move(keys), std::move(prefix), local, options.get_consistency()).then(
+    return read_required_rows(proxy, std::move(keys), std::move(prefix), local, options.get_consistency()).then(
             [this, &options, now] (auto rows) {
                 return make_ready_future<std::unique_ptr<update_parameters>>(
                         std::make_unique<update_parameters>(s, options,
@@ -86,6 +89,7 @@ modification_statement::make_update_parameters(
 
 future<update_parameters::prefetched_rows_type>
 modification_statement::read_required_rows(
+        service::storage_proxy& proxy,
         lw_shared_ptr<std::vector<partition_key>> keys,
         lw_shared_ptr<exploded_clustering_prefix> prefix,
         bool local,
@@ -94,47 +98,32 @@ modification_statement::read_required_rows(
         return make_ready_future<update_parameters::prefetched_rows_type>(
                 update_parameters::prefetched_rows_type{});
     }
-    throw std::runtime_error("NOT IMPLEMENTED");
-#if 0
-        try
-        {
-            cl.validateForRead(keyspace());
-        }
-        catch (InvalidRequestException e)
-        {
-            throw new InvalidRequestException(String.format("Write operation require a read but consistency %s is not supported on reads", cl));
-        }
+    try {
+        validate_for_read(keyspace(), cl);
+    } catch (exceptions::invalid_request_exception& e) {
+        throw exceptions::invalid_request_exception(sprint("Write operation require a read but consistency %s is not supported on reads", cl));
+    }
 
-        ColumnSlice[] slices = new ColumnSlice[]{ clusteringPrefix.slice() };
-        List<ReadCommand> commands = new ArrayList<ReadCommand>(partitionKeys.size());
-        long now = System.currentTimeMillis();
-        for (ByteBuffer key : partitionKeys)
-            commands.add(new SliceFromReadCommand(keyspace(),
-                                                  key,
-                                                  columnFamily(),
-                                                  now,
-                                                  new SliceQueryFilter(slices, false, Integer.MAX_VALUE)));
-
-        List<Row> rows = local
-                       ? SelectStatement.readLocally(keyspace(), commands)
-                       : StorageProxy.read(commands, cl);
-
-        Map<ByteBuffer, CQL3Row> map = new HashMap<ByteBuffer, CQL3Row>();
-        for (Row row : rows)
-        {
-            if (row.cf == null || row.cf.isEmpty())
-                continue;
-
-            Iterator<CQL3Row> iter = cfm.comparator.CQL3RowBuilder(cfm, now).group(row.cf.getSortedColumns().iterator());
-            if (iter.hasNext())
-            {
-                map.put(row.key.getKey(), iter.next());
-                // We can only update one CQ3Row per partition key at a time (we don't allow IN for clustering key)
-                assert !iter.hasNext();
-            }
-        }
-        return map;
-#endif
+    // FIXME: we read all columns, but could be enhanced just to read the list(s) being RMWed
+    std::vector<column_id> static_cols;
+    boost::range::push_back(static_cols, s->static_columns() | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
+    std::vector<column_id> regular_cols;
+    boost::range::push_back(regular_cols, s->regular_columns() | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
+    query::partition_slice ps(
+            {query::clustering_range(clustering_key_prefix::from_clustering_prefix(*s, *prefix))},
+            std::move(static_cols), std::move(regular_cols));
+    // FIXME: our read_command doesn't take a time parameter, origin's does?
+    // auto now = db_clock::now();
+    std::vector<query::partition_range> pr;
+    for (auto&& pk : *keys) {
+        pr.emplace_back(pk);
+    }
+    query::read_command cmd(keyspace(), s->cf_name, std::move(pr), ps, std::numeric_limits<uint32_t>::max());
+    // FIXME: ignoring "local"
+    return proxy.query(make_lw_shared(std::move(cmd)), cl).then([this, ps] (auto result) {
+        // FIXME: copying
+        return update_parameters::prefetched_rows_type({std::move(ps), *result});
+    });
 }
 
 const column_definition*
@@ -301,7 +290,7 @@ modification_statement::execute_without_condition(service::storage_proxy& proxy,
         db::validate_for_write(s->ks_name, cl);
     }
 
-    return get_mutations(options, false, options.get_timestamp(qs)).then([cl, &proxy] (auto mutations) {
+    return get_mutations(proxy, options, false, options.get_timestamp(qs)).then([cl, &proxy] (auto mutations) {
         if (mutations.empty()) {
             return now();
         }
