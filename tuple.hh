@@ -244,46 +244,6 @@ public:
     sstring to_string(const bytes& b) {
         throw std::runtime_error("not implemented");
     }
-    /**
-     * Returns true iff all components of 'prefix' are equal to corresponding
-     * leading components of 'value'.
-     *
-     * The 'value' is assumed to be serialized using tuple_type<AllowPrefixes=false>
-     */
-    bool is_prefix_of(bytes_view prefix, bytes_view value) const {
-        assert(AllowPrefixes);
-
-        size_t n_left = _types.size();
-        for (auto&& type : _types) {
-            if (prefix.empty()) {
-                return true;
-            }
-            assert(!value.empty());
-            uint32_t len1;
-            uint32_t len2;
-            if (--n_left) {
-                len1 = read_simple<uint32_t>(prefix);
-                len2 = read_simple<uint32_t>(value);
-                if (prefix.size() < len1 || value.size() < len2) {
-                    throw marshal_exception();
-                }
-            } else {
-                len1 = prefix.size();
-                len2 = value.size();
-            }
-            if (!type->equal(bytes_view(prefix.begin(), len1), bytes_view(value.begin(), len2))) {
-                return false;
-            }
-            prefix.remove_prefix(len1);
-            value.remove_prefix(len2);
-        }
-
-        if (!prefix.empty() || !value.empty()) {
-            throw marshal_exception();
-        }
-
-        return true;
-    }
     // Retruns true iff given prefix has no missing components
     bool is_full(bytes_view v) const {
         assert(AllowPrefixes);
