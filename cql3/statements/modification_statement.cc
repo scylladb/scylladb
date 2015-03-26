@@ -57,7 +57,7 @@ modification_statement::get_mutations(service::storage_proxy& proxy, const query
     auto keys = make_lw_shared(build_partition_keys(options));
     auto prefix = make_lw_shared(create_exploded_clustering_prefix(options));
     return make_update_parameters(proxy, keys, prefix, options, local, now).then(
-            [this, keys = std::move(keys), prefix = std::move(prefix), now] (auto params_ptr) {
+            [this, keys, prefix, now] (auto params_ptr) {
                 std::vector<mutation> mutations;
                 mutations.reserve(keys->size());
                 for (auto key : *keys) {
