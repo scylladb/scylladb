@@ -288,6 +288,7 @@ bool equal(data_type t, bytes_view e1, bytes_view e2) {
 
 class collection_type_impl : public abstract_type {
     static thread_local logging::logger _logger;
+    shared_ptr<cql3::cql3_type> _cql3_type;
 public:
     static constexpr const size_t max_elements = 65535;
 
@@ -307,6 +308,7 @@ public:
 protected:
     explicit collection_type_impl(sstring name, const kind& k)
             : abstract_type(std::move(name)), _kind(k) {}
+    virtual sstring cql3_type_name() const = 0;
 public:
     // representation of a collection mutation, key/value pairs, value is a mutation itself
     struct mutation {
@@ -393,6 +395,8 @@ class map_type_impl final : public collection_type_impl {
     data_type _values;
     data_type _key_value_pair_type;
     bool _is_multi_cell;
+protected:
+    virtual sstring cql3_type_name() const override;
 public:
     // type returned by deserialize() and expected by serialize
     // does not support mutations/ttl/tombstone - purely for I/O.
@@ -432,6 +436,8 @@ class set_type_impl final : public collection_type_impl {
     using intern = type_interning_helper<set_type_impl, data_type, bool>;
     data_type _elements;
     bool _is_multi_cell;
+protected:
+    virtual sstring cql3_type_name() const override;
 public:
     // type returned by deserialize() and expected by serialize
     // does not support mutations/ttl/tombstone - purely for I/O.
@@ -469,6 +475,8 @@ class list_type_impl final : public collection_type_impl {
     using intern = type_interning_helper<list_type_impl, data_type, bool>;
     data_type _elements;
     bool _is_multi_cell;
+protected:
+    virtual sstring cql3_type_name() const override;
 public:
     // type returned by deserialize() and expected by serialize
     // does not support mutations/ttl/tombstone - purely for I/O.

@@ -671,8 +671,14 @@ collection_type_impl::is_compatible_with(abstract_type& previous) {
 
 shared_ptr<cql3::cql3_type>
 collection_type_impl::as_cql3_type() {
-    // FIXME: implement
-    abort();
+    if (!_cql3_type) {
+        auto name = cql3_type_name();
+        if (!is_multi_cell()) {
+            name = "frozen<" + name + ">";
+        }
+        _cql3_type = make_shared<cql3::cql3_type>(name, shared_from_this(), false);
+    }
+    return _cql3_type;
 }
 
 collection_type_impl::mutation
@@ -925,6 +931,10 @@ map_type_impl::serialize_partially_deserialized_form(
     return b;
 
 
+}
+sstring
+map_type_impl::cql3_type_name() const {
+    return sprint("map<%s, %s>", _keys->as_cql3_type(), _values->as_cql3_type());
 }
 
 auto collection_type_impl::deserialize_mutation_form(collection_mutation::view cm) -> mutation_view {
@@ -1244,6 +1254,11 @@ set_type_impl::serialize_partially_deserialized_form(
     return pack(v.begin(), v.end(), v.size(), sf);
 }
 
+sstring
+set_type_impl::cql3_type_name() const {
+    return sprint("set<%s>", _elements->as_cql3_type());
+}
+
 list_type
 list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);
@@ -1395,6 +1410,11 @@ list_type_impl::to_value(mutation_view mut, serialization_format sf) {
         }
     }
     return pack(tmp.begin(), tmp.end(), tmp.size(), sf);
+}
+
+sstring
+list_type_impl::cql3_type_name() const {
+    return sprint("list<%s>", _elements->as_cql3_type());
 }
 
 thread_local const shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
