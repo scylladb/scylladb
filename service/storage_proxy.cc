@@ -466,18 +466,8 @@ namespace service {
 #endif
 
 
-/**
- * Use this method to have these Mutations applied
- * across all replicas. This method will take care
- * of the possibility of a replica being down and hint
- * the data across to some other replica.
- *
- * @param mutations the mutations to be applied across the replicas
- * @param consistency_level the consistency level for the operation
- */
 future<>
-storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl) {
-    // FIXME: send it to replicas instead of applying locally
+storage_proxy::mutate_locally(std::vector<mutation> mutations) {
     auto pmut = make_lw_shared(std::move(mutations));
     return parallel_for_each(pmut->begin(), pmut->end(), [this, pmut] (const mutation& m) {
         auto dk = dht::global_partitioner().decorate_key(m.key);
@@ -494,6 +484,21 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
             }
         });
     });
+}
+
+/**
+ * Use this method to have these Mutations applied
+ * across all replicas. This method will take care
+ * of the possibility of a replica being down and hint
+ * the data across to some other replica.
+ *
+ * @param mutations the mutations to be applied across the replicas
+ * @param consistency_level the consistency level for the operation
+ */
+future<>
+storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl) {
+    // FIXME: send it to replicas instead of applying locally
+    return mutate_locally(std::move(mutations));
 #if 0
         Tracing.trace("Determining replicas for mutation");
         final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());

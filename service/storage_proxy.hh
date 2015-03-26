@@ -37,6 +37,8 @@ private:
 public:
     storage_proxy(distributed<database>& db) : _db(db) {}
 
+    future<> mutate_locally(std::vector<mutation> mutations);
+
     /**
     * Use this method to have these Mutations applied
     * across all replicas. This method will take care

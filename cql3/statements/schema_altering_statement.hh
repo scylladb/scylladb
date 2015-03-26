@@ -93,7 +93,7 @@ protected:
      * is used, for example)
      * @throws RequestValidationException
      */
-    virtual bool announce_migration(bool is_local_only) = 0;
+    virtual future<bool> announce_migration(service::storage_proxy& proxy, bool is_local_only) = 0;
 
     virtual future<::shared_ptr<messages::result_message>>
     execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override;

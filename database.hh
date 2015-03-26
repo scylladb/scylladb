@@ -227,6 +227,13 @@ public:
         auto& row = p.clustered_row(key);
         update_column(row, def, std::move(value));
     }
+    void set_cell(const exploded_clustering_prefix& prefix, const bytes& name, const boost::any& value, api::timestamp_type timestamp, ttl_opt ttl = {}) {
+        auto column_def = schema->get_column_definition(name);
+        if (!column_def) {
+            throw std::runtime_error(sprint("no column definition found for '%s'", name));
+        }
+        return set_cell(prefix, *column_def, atomic_cell::make_live(timestamp, ttl, column_def->type->decompose(value)));
+    }
     void set_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value) {
         if (def.is_static()) {
             set_static_cell(def, std::move(value));
@@ -308,6 +315,7 @@ public:
 
 class database {
 public:
+    database();
     std::unordered_map<sstring, keyspace> keyspaces;
     future<> init_from_data_directory(sstring datadir);
     future<> populate(sstring datadir);
