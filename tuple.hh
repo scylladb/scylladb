@@ -47,9 +47,7 @@ public:
         , _byte_order_equal(std::all_of(_types.begin(), _types.end(), [] (auto t) {
                 return t->is_byte_order_equal();
             }))
-        , _byte_order_comparable(std::all_of(_types.begin(), _types.end(), [] (auto t) {
-                return t->is_byte_order_comparable();
-            }))
+        , _byte_order_comparable(_types.size() == 1 && _types[0]->is_byte_order_comparable())
     { }
 
     tuple_type(tuple_type&&) = default;
