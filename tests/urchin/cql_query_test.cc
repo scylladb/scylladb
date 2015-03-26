@@ -525,6 +525,18 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
     }).then([state, db] {
         return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
                 "map1", map_type_impl::native_type({{1001, 3001}, {1002, 2002}}));
+    }).then([state, db] {
+        // overwrite whole map
+        return state->execute_cql("update cf set map1 = {1003: 4003} where p1 = 'key1';").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "map1", map_type_impl::native_type({{1003, 4003}}));
+    }).then([state, db] {
+        // overwrite whole map, but bad syntax
+        return state->execute_cql("update cf set map1 = {1003, 4003} where p1 = 'key1';");
+    }).then_wrapped([state, db] (auto f) {
+        BOOST_REQUIRE(f.failed());
+        std::move(f).discard_result();
     }).then([db] {
         return db->stop();
     }).then_wrapped([db] (future<> f) mutable {
