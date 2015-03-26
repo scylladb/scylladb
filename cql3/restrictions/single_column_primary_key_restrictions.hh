@@ -152,10 +152,28 @@ public:
 
     virtual std::vector<range_type> bounds(const query_options& options) override {
         std::vector<range_type> ranges;
+
+        if (_restrictions->is_all_eq()) {
+            ranges.reserve(1);
+            std::vector<bytes> components;
+            components.reserve(_restrictions->size());
+            for (auto&& e : _restrictions->restrictions()) {
+                const column_definition* def = e.first;
+                auto&& r = e.second;
+                assert(components.size() == _schema->position(*def));
+                auto values = r->values(options);
+                assert(values.size() == 1);
+                auto&& val = values[0];
+                if (!val) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid null clustering key part %s", def->name_as_text()));
+                }
+                components.emplace_back(std::move(*val));
+            }
+            ranges.emplace_back(range_type::make_singular(ValueType::from_exploded(*_schema, std::move(components))));
+            return ranges;
+        }
+
         std::vector<std::vector<bytes_opt>> vec_of_values;
-
-        // TODO: optimize for all EQ case
-
         for (auto&& e : _restrictions->restrictions()) {
             const column_definition* def = e.first;
             auto&& r = e.second;
