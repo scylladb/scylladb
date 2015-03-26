@@ -7,6 +7,7 @@
 #include "unimplemented.hh"
 #include "core/future-util.hh"
 #include "db/system_keyspace.hh"
+#include "db/consistency_level.hh"
 
 #include "cql3/column_identifier.hh"
 #include <boost/algorithm/string/classification.hpp>
@@ -762,4 +763,25 @@ database::query(const query::read_command& cmd) {
     }
 
     return cf->query(cmd);
+}
+
+namespace db {
+
+std::ostream& operator<<(std::ostream& os, db::consistency_level cl) {
+    switch (cl) {
+    case db::consistency_level::ANY: return os << "ANY";
+    case db::consistency_level::ONE: return os << "ONE";
+    case db::consistency_level::TWO: return os << "TWO";
+    case db::consistency_level::THREE: return os << "THREE";
+    case db::consistency_level::QUORUM: return os << "QUORUM";
+    case db::consistency_level::ALL: return os << "ALL";
+    case db::consistency_level::LOCAL_QUORUM: return os << "LOCAL_QUORUM";
+    case db::consistency_level::EACH_QUORUM: return os << "EACH_QUORUM";
+    case db::consistency_level::SERIAL: return os << "SERIAL";
+    case db::consistency_level::LOCAL_SERIAL: return os << "LOCAL_SERIAL";
+    case db::consistency_level::LOCAL_ONE: return os << "LOCAL";
+    default: abort();
+    }
+}
+
 }

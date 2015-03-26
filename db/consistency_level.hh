@@ -67,6 +67,8 @@ enum class consistency_level {
     LOCAL_ONE
 };
 
+std::ostream& operator<<(std::ostream& os, consistency_level cl);
+
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(ConsistencyLevel.class);
 
