@@ -445,6 +445,13 @@ std::ostream& operator<<(std::ostream& os, const bytes& b) {
     return os << to_hex(b);
 }
 
+std::ostream& operator<<(std::ostream& os, const bytes_opt& b) {
+    if (b) {
+        return os << *b;
+    }
+    return os << "null";
+}
+
 struct inet_addr_type_impl : abstract_type {
     inet_addr_type_impl() : abstract_type("inet_addr") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) override {
