@@ -59,7 +59,7 @@ private:
      */
     using restrictions_map = std::map<const column_definition*, ::shared_ptr<restriction>, column_definition_comparator>;
     restrictions_map _restrictions;
-
+    bool _is_all_eq = true;
 public:
     single_column_restrictions(schema_ptr schema)
         : _restrictions(column_definition_comparator{std::move(schema)})
@@ -121,6 +121,8 @@ public:
      * @throws InvalidRequestException if the new restriction cannot be added
      */
     void add_restriction(::shared_ptr<single_column_restriction> restriction) {
+        _is_all_eq &= restriction->is_EQ();
+
         auto i = _restrictions.find(&restriction->get_column_def());
         if (i == _restrictions.end()) {
             _restrictions.emplace_hint(i, &restriction->get_column_def(), std::move(restriction));
@@ -186,6 +188,10 @@ public:
         return i->second;
     }
 
+    auto const& restrictions() const {
+        return _restrictions;
+    }
+
     /**
      * Checks if the _restrictions contains multiple contains, contains key, or map[key] = value.
      *
@@ -203,6 +209,10 @@ public:
             }
         }
         return number_of_contains > 1;
+    }
+
+    bool is_all_eq() const {
+        return _is_all_eq;
     }
 };
 

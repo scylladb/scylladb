@@ -125,8 +125,9 @@ public:
     virtual std::vector<ValueType> values(const query_options& options) override {
         std::vector<std::vector<bytes_opt>> value_vector;
         value_vector.reserve(_restrictions->size());
-        for (auto def : _restrictions->get_column_defs()) {
-            auto r = _restrictions->get_restriction(*def);
+        for (auto&& e : _restrictions->restrictions()) {
+            const column_definition* def = e.first;
+            auto&& r = e.second;
             assert(!r->is_slice());
 
             std::vector<bytes_opt> values = r->values(options);
@@ -144,19 +145,38 @@ public:
         std::vector<ValueType> result;
         result.reserve(cartesian_product_size(value_vector));
         for (auto&& v : make_cartesian_product(value_vector)) {
-            result.emplace_back(ValueType::from_optional_exploded(*_schema, v));
+            result.emplace_back(ValueType::from_optional_exploded(*_schema, std::move(v)));
         }
         return result;
     }
 
     virtual std::vector<range_type> bounds(const query_options& options) override {
         std::vector<range_type> ranges;
+
+        if (_restrictions->is_all_eq()) {
+            ranges.reserve(1);
+            std::vector<bytes> components;
+            components.reserve(_restrictions->size());
+            for (auto&& e : _restrictions->restrictions()) {
+                const column_definition* def = e.first;
+                auto&& r = e.second;
+                assert(components.size() == _schema->position(*def));
+                auto values = r->values(options);
+                assert(values.size() == 1);
+                auto&& val = values[0];
+                if (!val) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", def->name_as_text()));
+                }
+                components.emplace_back(std::move(*val));
+            }
+            ranges.emplace_back(range_type::make_singular(ValueType::from_exploded(*_schema, std::move(components))));
+            return ranges;
+        }
+
         std::vector<std::vector<bytes_opt>> vec_of_values;
-
-        // TODO: optimize for all EQ case
-
-        for (auto def : _restrictions->get_column_defs()) {
-            auto r = _restrictions->get_restriction(*def);
+        for (auto&& e : _restrictions->restrictions()) {
+            const column_definition* def = e.first;
+            auto&& r = e.second;
 
             if (vec_of_values.size() != _schema->position(*def) || r->is_contains()) {
                 // The prefixes built so far are the longest we can build,
@@ -172,7 +192,7 @@ public:
                         }
                         auto value = r->bounds(b, options)[0];
                         if (!value) {
-                            throw exceptions::invalid_request_exception(sprint("Invalid null clustering key part %s", r->to_string()));
+                            throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", r->to_string()));
                         }
                         return {range_bound(ValueType::from_single_value(*_schema, *value), r->is_inclusive(b))};
                     };
@@ -191,7 +211,7 @@ public:
                         if (r->has_bound(bound)) {
                             auto value = std::move(r->bounds(bound, options)[0]);
                             if (!value) {
-                                throw exceptions::invalid_request_exception(sprint("Invalid null clustering key part %s", r->to_string()));
+                                throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", r->to_string()));
                             }
                             prefix.emplace_back(std::move(value));
                             auto val = ValueType::from_optional_exploded(*_schema, prefix);
@@ -217,7 +237,7 @@ public:
             auto values = r->values(options);
             for (auto&& val : values) {
                 if (!val) {
-                    throw exceptions::invalid_request_exception(sprint("Invalid null clustering key part %s", def->name_as_text()));
+                    throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", def->name_as_text()));
                 }
             }
             if (values.empty()) {
@@ -228,7 +248,7 @@ public:
 
         ranges.reserve(cartesian_product_size(vec_of_values));
         for (auto&& prefix : make_cartesian_product(vec_of_values)) {
-            ranges.emplace_back(range_type::make_singular(ValueType::from_optional_exploded(*_schema, prefix)));
+            ranges.emplace_back(range_type::make_singular(ValueType::from_optional_exploded(*_schema, std::move(prefix))));
         }
 
         return std::move(ranges);

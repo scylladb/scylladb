@@ -111,3 +111,13 @@ future<::shared_ptr<cql_test_env>> make_env_for_test() {
         });
     });
 }
+
+template <typename Func>
+static inline
+future<> do_with_cql_env(Func&& func) {
+    return make_env_for_test().then([func = std::forward<Func>(func)] (auto e) {
+        return func(*e).finally([e] {
+            return e->stop().finally([e] {});
+        });
+    });
+}

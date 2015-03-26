@@ -56,6 +56,10 @@ public:
         return TopLevel::from_bytes(get_tuple_type(s)->serialize_value(v));
     }
 
+    static TopLevel from_exploded(const schema& s, std::vector<bytes>&& v) {
+        return TopLevel::from_bytes(get_tuple_type(s)->serialize_value(std::move(v)));
+    }
+
     // We don't allow optional values, but provide this method as an efficient adaptor
     static TopLevel from_optional_exploded(const schema& s, const std::vector<bytes_opt>& v) {
         return TopLevel::from_bytes(get_tuple_type(s)->serialize_optionals(v));
@@ -66,10 +70,7 @@ public:
     }
 
     static TopLevel from_single_value(const schema& s, bytes v) {
-        // FIXME: optimize
-        std::vector<bytes> values;
-        values.emplace_back(std::move(v));
-        return from_exploded(s, values);
+        return TopLevel::from_bytes(get_tuple_type(s)->serialize_single(std::move(v)));
     }
 
     // FIXME: return views
