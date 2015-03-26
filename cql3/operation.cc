@@ -98,35 +98,38 @@ operation::addition::is_compatible_with(shared_ptr<raw_update> other) {
 
 shared_ptr<operation>
 operation::subtraction::prepare(const sstring& keyspace, const column_definition& receiver) {
-    warn(unimplemented::cause::COLLECTIONS);
-    throw exceptions::invalid_request_exception("unimplemented, go away");
-    // FIXME:
+    auto ctype = dynamic_pointer_cast<collection_type_impl>(receiver.type);
+    if (!ctype) {
+        fail(unimplemented::cause::COUNTERS);
 #if 0
-    if (!(receiver.type instanceof CollectionType))
-    {
         if (!(receiver.type instanceof CounterColumnType))
             throw new InvalidRequestException(String.format("Invalid operation (%s) for non counter column %s", toString(receiver), receiver.name));
         return new Constants.Substracter(receiver, value.prepare(keyspace, receiver));
-    }
-    else if (!(receiver.type.isMultiCell()))
-        throw new InvalidRequestException(String.format("Invalid operation (%s) for frozen collection column %s", toString(receiver), receiver.name));
-
-    switch (((CollectionType)receiver.type).kind)
-    {
-        case LIST:
-            return new Lists.Discarder(receiver, value.prepare(keyspace, receiver));
-        case SET:
-            return new Sets.Discarder(receiver, value.prepare(keyspace, receiver));
-        case MAP:
-            // The value for a map subtraction is actually a set
-            ColumnSpecification vr = new ColumnSpecification(receiver.ksName,
-                                                             receiver.cfName,
-                                                             receiver.name,
-                                                             SetType.getInstance(((MapType)receiver.type).getKeysType(), false));
-            return new Sets.Discarder(receiver, value.prepare(keyspace, vr));
-    }
-    throw new AssertionError();
 #endif
+    }
+    if (!ctype->is_multi_cell()) {
+        throw exceptions::invalid_request_exception(
+                sprint("Invalid operation (%s) for frozen collection column %s", receiver, receiver.name()));
+    }
+
+    if (&ctype->_kind == &collection_type_impl::kind::list) {
+        fail(unimplemented::cause::COLLECTIONS);
+#if 0
+        return new Lists.Discarder(receiver, value.prepare(keyspace, receiver));
+#endif
+    } else if (&ctype->_kind == &collection_type_impl::kind::set) {
+        return make_shared<sets::discarder>(receiver, _value->prepare(keyspace, receiver.column_specification));
+    } else if (&ctype->_kind == &collection_type_impl::kind::map) {
+        auto&& mtype = dynamic_pointer_cast<map_type_impl>(ctype);
+        // The value for a map subtraction is actually a set
+        auto&& vr = make_shared<column_specification>(
+                receiver.column_specification->ks_name,
+                receiver.column_specification->cf_name,
+                receiver.column_specification->name,
+                set_type_impl::get_instance(mtype->get_keys_type(), false));
+        return make_shared<sets::discarder>(receiver, _value->prepare(keyspace, std::move(vr)));
+    }
+    abort();
 }
 
 bool
