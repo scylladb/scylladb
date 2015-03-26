@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include "db/legacy_schema_tables.hh"
 #include "config/ks_meta_data.hh"
 
 #if 0
@@ -264,40 +265,41 @@ public:
         for (IMigrationListener listener : listeners)
             listener.onDropAggregate(udf.name().keyspace, udf.name().name);
     }
-
-    public static void announceNewKeyspace(KSMetaData ksm) throws ConfigurationException
-    {
-        announceNewKeyspace(ksm, false);
-    }
 #endif
 
-    static void announce_new_keyspace(lw_shared_ptr<config::ks_meta_data> ksm, bool announce_locally) {
-        warn(unimplemented::cause::MIGRATIONS);
-#if 0
-        announceNewKeyspace(ksm, FBUtilities.timestampMicros(), announceLocally);
-#endif
+    static future<> announce_new_keyspace(lw_shared_ptr<config::ks_meta_data> ksm)
+    {
+        return announce_new_keyspace(ksm, false);
     }
 
-#if 0
-    public static void announceNewKeyspace(KSMetaData ksm, long timestamp, boolean announceLocally) throws ConfigurationException
+    static future<> announce_new_keyspace(lw_shared_ptr<config::ks_meta_data> ksm, bool announce_locally)
     {
+        return announce_new_keyspace(ksm, db_clock::now_in_usecs(), announce_locally);
+    }
+
+    static future<> announce_new_keyspace(lw_shared_ptr<config::ks_meta_data> ksm, api::timestamp_type timestamp, bool announce_locally)
+    {
+#if 0
         ksm.validate();
 
         if (Schema.instance.getKSMetaData(ksm.name) != null)
             throw new AlreadyExistsException(ksm.name);
 
         logger.info(String.format("Create new Keyspace: %s", ksm));
-        announce(LegacySchemaTables.makeCreateKeyspaceMutation(ksm, timestamp), announceLocally);
+#endif
+        return announce(db::legacy_schema_tables::make_create_keyspace_mutation(ksm, timestamp), announce_locally);
     }
 
+#if 0
     public static void announceNewColumnFamily(CFMetaData cfm) throws ConfigurationException
     {
         announceNewColumnFamily(cfm, false);
     }
 #endif
 
-    static void announce_new_column_family(schema_ptr cfm, bool announce_locally) {
+    static future<> announce_new_column_family(schema_ptr cfm, bool announce_locally) {
         warn(unimplemented::cause::MIGRATIONS);
+        return make_ready_future<>();
 #if 0
         cfm.validate();
 
@@ -430,30 +432,24 @@ public:
         KSMetaData ksm = Schema.instance.getKSMetaData(udf.name().keyspace);
         announce(LegacySchemaTables.makeDropAggregateMutation(ksm, udf, FBUtilities.timestampMicros()), announceLocally);
     }
+#endif
 
     /**
      * actively announce a new version to active hosts via rpc
      * @param schema The schema mutation to be applied
      */
-    private static void announce(Mutation schema, boolean announceLocally)
+    static future<> announce(mutation schema, bool announce_locally)
     {
-        if (announceLocally)
-        {
-            try
-            {
-                LegacySchemaTables.mergeSchema(Collections.singletonList(schema), false);
-            }
-            catch (IOException e)
-            {
-                throw new RuntimeException(e);
-            }
-        }
-        else
-        {
-            FBUtilities.waitOnFuture(announce(Collections.singletonList(schema)));
+        std::vector<mutation> mutations;
+        mutations.emplace_back(std::move(schema));
+        if (announce_locally) {
+            return db::legacy_schema_tables::merge_schema(std::move(mutations), false);
+        } else {
+            return announce(std::move(mutations));
         }
     }
 
+#if 0
     private static void pushSchemaMutation(InetAddress endpoint, Collection<Mutation> schema)
     {
         MessageOut<Collection<Mutation>> msg = new MessageOut<>(MessagingService.Verb.DEFINITIONS_UPDATE,
@@ -461,18 +457,13 @@ public:
                                                                 MigrationsSerializer.instance);
         MessagingService.instance().sendOneWay(msg, endpoint);
     }
+#endif
 
     // Returns a future on the local application of the schema
-    private static Future<?> announce(final Collection<Mutation> schema)
+    static future<> announce(std::vector<mutation> schema)
     {
-        Future<?> f = StageManager.getStage(Stage.MIGRATION).submit(new WrappedRunnable()
-        {
-            protected void runMayThrow() throws IOException, ConfigurationException
-            {
-                LegacySchemaTables.mergeSchema(schema);
-            }
-        });
-
+        auto f = db::legacy_schema_tables::merge_schema(std::move(schema));
+#if 0
         for (InetAddress endpoint : Gossiper.instance.getLiveMembers())
         {
             // only push schema to nodes with known and equal versions
@@ -481,10 +472,11 @@ public:
                     MessagingService.instance().getRawVersion(endpoint) == MessagingService.current_version)
                 pushSchemaMutation(endpoint, schema);
         }
-
+#endif
         return f;
     }
 
+#if 0
     /**
      * Announce my version passively over gossip.
      * Used to notify nodes as they arrive in the cluster.
