@@ -8,6 +8,7 @@
 #include "core/distributed.hh"
 #include "tests/test-utils.hh"
 #include "tests/urchin/cql_test_env.hh"
+#include "to_string.hh"
 
 struct conversation_state {
     service::storage_proxy proxy;
@@ -161,13 +162,26 @@ public:
 
     // Verifies that the result has the following rows and only that rows, in that order.
     rows_assertions with_rows(std::initializer_list<std::initializer_list<bytes_opt>> rows) {
-        with_size(rows.size());
-        BOOST_REQUIRE(std::equal(rows.begin(), rows.end(),
-            _rows->rs().rows().begin(), [] (auto&& lhs, auto&& rhs) {
-                return std::equal(
-                    std::begin(lhs), std::end(lhs),
-                    std::begin(rhs), std::end(rhs));
-        }));
+        auto actual_i = _rows->rs().rows().begin();
+        auto actual_end = _rows->rs().rows().end();
+        int row_nr = 0;
+        for (auto&& row : rows) {
+            if (actual_i == actual_end) {
+                BOOST_FAIL(sprint("Expected more rows (%d), got %d", rows.size(), _rows->rs().size()));
+            }
+            auto& actual = *actual_i;
+            if (!std::equal(
+                    std::begin(row), std::end(row),
+                    std::begin(actual), std::end(actual))) {
+                BOOST_FAIL(sprint("row %d differs, expected %s got %s", row_nr, to_string(row), to_string(actual)));
+            }
+            ++actual_i;
+            ++row_nr;
+        }
+        if (actual_i != actual_end) {
+            BOOST_FAIL(sprint("Expected less rows (%d), got %d. Next row is: %s", rows.size(), _rows->rs().size(),
+                to_string(*actual_i)));
+        }
         return {*this};
     }
 };
