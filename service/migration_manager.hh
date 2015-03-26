@@ -267,17 +267,17 @@ public:
     }
 #endif
 
-    static future<> announce_new_keyspace(lw_shared_ptr<config::ks_meta_data> ksm)
+    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<config::ks_meta_data> ksm)
     {
-        return announce_new_keyspace(ksm, false);
+        return announce_new_keyspace(proxy, ksm, false);
     }
 
-    static future<> announce_new_keyspace(lw_shared_ptr<config::ks_meta_data> ksm, bool announce_locally)
+    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<config::ks_meta_data> ksm, bool announce_locally)
     {
-        return announce_new_keyspace(ksm, db_clock::now_in_usecs(), announce_locally);
+        return announce_new_keyspace(proxy, ksm, db_clock::now_in_usecs(), announce_locally);
     }
 
-    static future<> announce_new_keyspace(lw_shared_ptr<config::ks_meta_data> ksm, api::timestamp_type timestamp, bool announce_locally)
+    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<config::ks_meta_data> ksm, api::timestamp_type timestamp, bool announce_locally)
     {
 #if 0
         ksm.validate();
@@ -287,7 +287,7 @@ public:
 
         logger.info(String.format("Create new Keyspace: %s", ksm));
 #endif
-        return announce(db::legacy_schema_tables::make_create_keyspace_mutation(ksm, timestamp), announce_locally);
+        return announce(proxy, db::legacy_schema_tables::make_create_keyspace_mutation(ksm, timestamp), announce_locally);
     }
 
 #if 0
@@ -297,7 +297,7 @@ public:
     }
 #endif
 
-    static future<> announce_new_column_family(schema_ptr cfm, bool announce_locally) {
+    static future<> announce_new_column_family(service::storage_proxy& proxy, schema_ptr cfm, bool announce_locally) {
         warn(unimplemented::cause::MIGRATIONS);
         return make_ready_future<>();
 #if 0
@@ -438,14 +438,14 @@ public:
      * actively announce a new version to active hosts via rpc
      * @param schema The schema mutation to be applied
      */
-    static future<> announce(mutation schema, bool announce_locally)
+    static future<> announce(service::storage_proxy& proxy, mutation schema, bool announce_locally)
     {
         std::vector<mutation> mutations;
         mutations.emplace_back(std::move(schema));
         if (announce_locally) {
-            return db::legacy_schema_tables::merge_schema(std::move(mutations), false);
+            return db::legacy_schema_tables::merge_schema(proxy, std::move(mutations), false);
         } else {
-            return announce(std::move(mutations));
+            return announce(proxy, std::move(mutations));
         }
     }
 
@@ -460,9 +460,9 @@ public:
 #endif
 
     // Returns a future on the local application of the schema
-    static future<> announce(std::vector<mutation> schema)
+    static future<> announce(service::storage_proxy& proxy, std::vector<mutation> schema)
     {
-        auto f = db::legacy_schema_tables::merge_schema(std::move(schema));
+        auto f = db::legacy_schema_tables::merge_schema(proxy, std::move(schema));
 #if 0
         for (InetAddress endpoint : Gossiper.instance.getLiveMembers())
         {

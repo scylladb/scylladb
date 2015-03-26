@@ -23,8 +23,8 @@
 
 #pragma once
 
+#include "service/storage_proxy.hh"
 #include "config/ks_meta_data.hh"
-
 #include "database.hh"
 #include "schema.hh"
 
@@ -46,9 +46,9 @@ extern std::vector<const char*> ALL;
 
 std::vector<schema_ptr> all_tables();
 
-future<> merge_schema(std::vector<mutation> mutations);
+future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations);
 
-future<> merge_schema(std::vector<mutation> mutations, bool do_flush);
+future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush);
 
 mutation make_create_keyspace_mutation(lw_shared_ptr<config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 

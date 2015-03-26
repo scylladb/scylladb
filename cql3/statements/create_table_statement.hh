@@ -144,8 +144,8 @@ public:
     }
 #endif
 
-    virtual future<bool> announce_migration(bool is_local_only) override {
-        return service::migration_manager::announce_new_column_family(get_cf_meta_data(), is_local_only).then_wrapped([this] (auto&& f) {
+    virtual future<bool> announce_migration(service::storage_proxy& proxy, bool is_local_only) override {
+        return service::migration_manager::announce_new_column_family(proxy, get_cf_meta_data(), is_local_only).then_wrapped([this] (auto&& f) {
             try {
                 f.get();
                 return true;

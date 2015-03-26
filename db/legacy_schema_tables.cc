@@ -449,9 +449,9 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      * @throws ConfigurationException If one of metadata attributes has invalid value
      * @throws IOException If data was corrupted during transportation or failed to apply fs operations
      */
-    future<> merge_schema(std::vector<mutation> mutations)
+    future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations)
     {
-        return merge_schema(std::move(mutations), true).then([] {
+        return merge_schema(proxy, std::move(mutations), true).then([] {
 #if 0
             Schema.instance.updateVersionAndAnnounce();
 #endif
@@ -459,9 +459,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         });
     }
 
-    future<> merge_schema(std::vector<mutation> mutations, bool do_flush)
+    future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush)
     {
-        return make_ready_future<>();
 #if 0
         // compare before/after schemas of the affected keyspaces only
         Set<String> keyspaces = new HashSet<>(mutations.size());
@@ -474,10 +473,9 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         Map<DecoratedKey, ColumnFamily> oldTypes = readSchemaForKeyspaces(USERTYPES, keyspaces);
         Map<DecoratedKey, ColumnFamily> oldFunctions = readSchemaForKeyspaces(FUNCTIONS, keyspaces);
         Map<DecoratedKey, ColumnFamily> oldAggregates = readSchemaForKeyspaces(AGGREGATES, keyspaces);
-
-        for (Mutation mutation : mutations)
-            mutation.apply();
-
+#endif
+        return proxy.mutate_locally(std::move(mutations)).then([] {
+#if 0
         if (doFlush)
             flushSchemaTables();
 
@@ -498,6 +496,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         for (String keyspaceToDrop : keyspacesToDrop)
             Schema.instance.dropKeyspace(keyspaceToDrop);
 #endif
+            return make_ready_future<>();
+        });
     }
 
 #if 0
