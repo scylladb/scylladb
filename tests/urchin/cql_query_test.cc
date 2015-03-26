@@ -158,11 +158,15 @@ public:
         return {*this};
     }
 
+    // Verifies that the result has the following rows and only that rows, in that order.
     rows_assertions with_rows(std::initializer_list<std::initializer_list<bytes_opt>> rows) {
         with_size(rows.size());
-        for (auto&& row : rows) {
-            with_row(row);
-        }
+        BOOST_REQUIRE(std::equal(rows.begin(), rows.end(),
+            _rows->rs().rows().begin(), [] (auto&& lhs, auto&& rhs) {
+                return std::equal(
+                    std::begin(lhs), std::end(lhs),
+                    std::begin(rhs), std::end(rhs));
+        }));
         return {*this};
     }
 };
