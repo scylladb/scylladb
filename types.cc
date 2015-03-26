@@ -675,6 +675,18 @@ collection_type_impl::as_cql3_type() {
     abort();
 }
 
+collection_type_impl::mutation
+collection_type_impl::mutation_view::materialize() const {
+    collection_type_impl::mutation m;
+    m.tomb = tomb;
+    m.cells.reserve(cells.size());
+    for (auto&& e : cells) {
+        m.cells.emplace_back(bytes(e.first.begin(), e.first.end()), e.second);
+    }
+    return m;
+}
+
+
 size_t collection_size_len(serialization_format sf) {
     if (sf.using_32_bits_for_collections()) {
         return sizeof(int32_t);

@@ -316,6 +316,7 @@ public:
     struct mutation_view {
         tombstone tomb;
         std::vector<std::pair<bytes_view, atomic_cell_view>> cells;
+        mutation materialize() const;
     };
     virtual data_type name_comparator() = 0;
     virtual data_type value_comparator() = 0;
