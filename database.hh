@@ -182,6 +182,7 @@ public:
     { }
     mutation_partition(mutation_partition&&) = default;
     ~mutation_partition();
+    tombstone tombstone_for_static_row() const { return _tombstone; }
     void apply(tombstone t) { _tombstone.apply(t); }
     void apply_delete(schema_ptr schema, const exploded_clustering_prefix& prefix, tombstone t);
     void apply_delete(schema_ptr schema, clustering_key&& key, tombstone t);

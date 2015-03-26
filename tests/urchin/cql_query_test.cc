@@ -449,6 +449,52 @@ SEASTAR_TEST_CASE(test_ordering_of_composites_with_variable_length_components) {
     });
 }
 
+SEASTAR_TEST_CASE(test_query_with_static_columns) {
+    return do_with_cql_env([] (auto& e) {
+        return e.create_table([](auto ks) {
+            // CQL: create table cf (k bytes, c bytes, v bytes, s1 bytes static, primary key (k, c));
+            return schema(ks, "cf",
+                {{"k", bytes_type}},
+                {{"c", bytes_type}},
+                {{"v", bytes_type}},
+                {{"s1", bytes_type}, {"s2", bytes_type}},
+                utf8_type);
+        }).then([&e] {
+            return e.execute_cql("update cf set s1 = 0x01 where k = 0x00;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("update cf set v = 0x02 where k = 0x00 and c = 0x01;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("update cf set v = 0x03 where k = 0x00 and c = 0x02;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select s1, v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01"), from_hex("02")},
+                    {from_hex("01"), from_hex("03")},
+                });
+            });
+        }).then([&e] {
+            return e.execute_cql("select s1 from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01")},
+                    {from_hex("01")},
+                });
+            });
+        }).then([&e] {
+            return e.execute_cql("select s1 from cf limit 1;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01")},
+                });
+            });
+        }).then([&e] {
+            return e.execute_cql("select s1, v from cf limit 1;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01"), from_hex("02")},
+                });
+            });
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_map_insert_update) {
     auto db = make_shared<distributed<database>>();
     auto state = make_shared<conversation_state>(*db, ks_name);

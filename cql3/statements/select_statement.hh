@@ -277,7 +277,7 @@ private:
 
         try {
             int32_type->validate(*val);
-            auto l = *boost::any_cast<std::experimental::optional<int32_t>>(int32_type->deserialize(*val));
+            auto l = boost::any_cast<int32_t>(int32_type->deserialize(*val));
             if (l <= 0) {
                 throw exceptions::invalid_request_exception("LIMIT must be strictly positive");
             }
