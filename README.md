@@ -16,7 +16,7 @@ Building Seastar
 
 Installing required packages:
 ```
-yum install gcc-c++ libaio-devel ninja-build ragel hwloc-devel numactl-devel libpciaccess-devel cryptopp-devel
+yum install gcc-c++ libaio-devel ninja-build ragel hwloc-devel numactl-devel libpciaccess-devel cryptopp-devel xen-devel boost-devel
 ```
 
 You then need to run the following to create the "build.ninja" file:
