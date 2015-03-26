@@ -687,7 +687,20 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
                             result_row.cells.emplace_back(std::experimental::make_optional(i->second));
                         }
                     } else {
-                        fail(unimplemented::cause::COLLECTIONS);
+                        auto&& cell = i->second.as_collection_mutation();
+                        auto&& ctype = static_pointer_cast<collection_type_impl>(def.type);
+                        // cannot use mutation_view, since we'll modify some of the values
+                        // FIXME: work around this somehow
+                        collection_type_impl::mutation m = ctype->deserialize_mutation_form(cell.data).materialize();
+                        for (auto&& e : m.cells) {
+                            auto& value = e.second;
+                            if (value.timestamp() < row_tombstone.timestamp) {
+                                value = atomic_cell::make_dead(row_tombstone.timestamp, row_tombstone.ttl);
+                            }
+                        }
+                        auto m_ser = ctype->serialize_mutation_form(m);
+                        result_row.cells.emplace_back(std::experimental::make_optional(
+                                atomic_cell_or_collection::from_collection_mutation(std::move(m_ser))));
                     }
                 }
             }
