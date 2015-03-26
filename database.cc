@@ -691,7 +691,7 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
                         auto&& ctype = static_pointer_cast<collection_type_impl>(def.type);
                         // cannot use mutation_view, since we'll modify some of the values
                         // FIXME: work around this somehow
-                        collection_type_impl::mutation m = ctype->deserialize_mutation_form(cell.data).materialize();
+                        collection_type_impl::mutation m = ctype->deserialize_mutation_form(cell).materialize();
                         for (auto&& e : m.cells) {
                             auto& value = e.second;
                             if (value.timestamp() < row_tombstone.timestamp) {

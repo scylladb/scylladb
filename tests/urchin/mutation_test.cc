@@ -126,7 +126,7 @@ BOOST_AUTO_TEST_CASE(test_map_mutations) {
     auto i = r.find(column.id);
     BOOST_REQUIRE(i != r.end());
     auto cell = i->second.as_collection_mutation();
-    auto muts = my_map_type->deserialize_mutation_form(cell.data);
+    auto muts = my_map_type->deserialize_mutation_form(cell);
     BOOST_REQUIRE(muts.cells.size() == 3);
     // FIXME: more strict tests
 }
@@ -159,7 +159,7 @@ BOOST_AUTO_TEST_CASE(test_set_mutations) {
     auto i = r.find(column.id);
     BOOST_REQUIRE(i != r.end());
     auto cell = i->second.as_collection_mutation();
-    auto muts = my_set_type->deserialize_mutation_form(cell.data);
+    auto muts = my_set_type->deserialize_mutation_form(cell);
     BOOST_REQUIRE(muts.cells.size() == 3);
     // FIXME: more strict tests
 }
@@ -193,7 +193,7 @@ BOOST_AUTO_TEST_CASE(test_list_mutations) {
     auto i = r.find(column.id);
     BOOST_REQUIRE(i != r.end());
     auto cell = i->second.as_collection_mutation();
-    auto muts = my_list_type->deserialize_mutation_form(cell.data);
+    auto muts = my_list_type->deserialize_mutation_form(cell);
     BOOST_REQUIRE(muts.cells.size() == 4);
     // FIXME: more strict tests
 }

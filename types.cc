@@ -927,7 +927,8 @@ map_type_impl::serialize_partially_deserialized_form(
 
 }
 
-auto collection_type_impl::deserialize_mutation_form(bytes_view in) -> mutation_view {
+auto collection_type_impl::deserialize_mutation_form(collection_mutation::view cm) -> mutation_view {
+    auto&& in = cm.data;
     mutation_view ret;
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
@@ -1000,8 +1001,8 @@ collection_type_impl::serialize_mutation_form(mutation_view mut) {
 
 collection_mutation::one
 collection_type_impl::merge(collection_mutation::view a, collection_mutation::view b) {
-    auto aa = deserialize_mutation_form(a.data);
-    auto bb = deserialize_mutation_form(b.data);
+    auto aa = deserialize_mutation_form(a);
+    auto bb = deserialize_mutation_form(b);
     mutation_view merged;
     merged.cells.reserve(aa.cells.size() + bb.cells.size());
     using element_type = std::pair<bytes_view, atomic_cell_view>;

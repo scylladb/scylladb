@@ -332,7 +332,7 @@ public:
     virtual shared_ptr<cql3::cql3_type> as_cql3_type() override;
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, serialization_format sf);
-    mutation_view deserialize_mutation_form(bytes_view in);
+    mutation_view deserialize_mutation_form(collection_mutation::view in);
     virtual bytes to_value(mutation_view mut, serialization_format sf) = 0;
     // FIXME: use iterators?
     collection_mutation::one serialize_mutation_form(const mutation& mut);
