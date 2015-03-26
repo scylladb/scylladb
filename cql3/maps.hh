@@ -293,15 +293,13 @@ public:
         }
 
         virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override {
+            tombstone ts;
             if (column.type->is_multi_cell()) {
                 // delete + put
-                // FIXME: we don't have tombstones for entire collections yet
-#if 0
-                CellName name = cf.getComparator().create(prefix, column);
-                cf.addAtom(params.makeTombstoneForOverwrite(name.slice()));
-#endif
+                // delete + append
+                ts = params.make_tombstone_just_before();
             }
-            do_put(m, row_key, params, _t, column);
+            do_put(m, row_key, params, _t, column, ts);
         }
     };
 
@@ -353,16 +351,18 @@ public:
     };
 
     static void do_put(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params,
-            shared_ptr<term> t, const column_definition& column) {
+            shared_ptr<term> t, const column_definition& column, tombstone ts = {}) {
     {
         auto value = t->bind(params._options);
         auto map_value = dynamic_pointer_cast<maps::value>(value);
         if (column.type->is_multi_cell()) {
+            collection_type_impl::mutation mut;
+            mut.tomb = ts;
+
             if (!value) {
                 return;
             }
 
-            collection_type_impl::mutation mut;
             for (auto&& e : map_value->map) {
                 mut.cells.emplace_back(e.first, params.make_cell(e.second));
             }
