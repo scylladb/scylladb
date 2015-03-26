@@ -3,6 +3,7 @@
  */
 
 #include "sets.hh"
+#include "constants.hh"
 
 namespace cql3 {
 
@@ -249,6 +250,36 @@ sets::adder::do_add(mutation& m, const exploded_clustering_prefix& row_key, cons
             m.set_cell(row_key, column, params.make_cell(std::move(v)));
         }
     }
+}
+
+void
+sets::discarder::execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) {
+    assert(column.type->is_multi_cell()); // "Attempted to remove items from a frozen set";
+
+    auto&& value = _t->bind(params._options);
+    if (!value) {
+        return;
+    }
+
+    collection_type_impl::mutation mut;
+    auto kill = [&] (bytes idx) {
+        mut.cells.push_back({std::move(idx), params.make_dead_cell()});
+    };
+    // This can be either a set or a single element
+    auto cvalue = dynamic_pointer_cast<constants::value>(value);
+    if (cvalue) {
+        kill(cvalue->_bytes ? *cvalue->_bytes : bytes());
+    } else {
+        auto svalue = static_pointer_cast<sets::value>(value);
+        mut.cells.reserve(svalue->_elements.size());
+        for (auto&& e : svalue->_elements) {
+            kill(e);
+        }
+    }
+    auto ctype = static_pointer_cast<collection_type_impl>(column.type);
+    m.set_cell(row_key, column,
+            atomic_cell_or_collection::from_collection_mutation(
+                    ctype->serialize_mutation_form(mut)));
 }
 
 }

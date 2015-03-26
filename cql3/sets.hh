@@ -146,35 +146,14 @@ public:
                 shared_ptr<term> t, const column_definition& column, tombstone ts = {});
     };
 
-#if 0
     // Note that this is reused for Map subtraction too (we subtract a set from a map)
-    public static class Discarder extends Operation
-    {
-        public Discarder(ColumnDefinition column, Term t)
-        {
-            super(column, t);
+    class discarder : public operation {
+    public:
+        discarder(const column_definition& column, shared_ptr<term> t)
+            : operation(column, std::move(t)) {
         }
-
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            assert column.type.isMultiCell() : "Attempted to remove items from a frozen set";
-
-            Term.Terminal value = t.bind(params.options);
-            if (value == null)
-                return;
-
-            // This can be either a set or a single element
-            Set<ByteBuffer> toDiscard = value instanceof Constants.Value
-                                      ? Collections.singleton(((Constants.Value)value).bytes)
-                                      : ((Sets.Value)value).elements;
-
-            for (ByteBuffer bb : toDiscard)
-            {
-                cf.addColumn(params.makeTombstone(cf.getComparator().create(prefix, column, bb)));
-            }
-        }
-    }
-#endif
+        virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override;
+    };
 };
 
 }
