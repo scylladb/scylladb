@@ -7,6 +7,7 @@
 #include "cql3/query_options.hh"
 #include "core/distributed.hh"
 #include "tests/test-utils.hh"
+#include "tests/urchin/cql_test_env.hh"
 
 struct conversation_state {
     service::storage_proxy proxy;
@@ -417,6 +418,34 @@ SEASTAR_TEST_CASE(test_range_queries) {
        });
     }).finally([db] {
         return db->stop().finally([db] {});
+    });
+}
+
+SEASTAR_TEST_CASE(test_ordering_of_composites_with_variable_length_components) {
+    return do_with_cql_env([] (auto& e) {
+        return e.create_table([](auto ks) {
+            return schema(ks, "cf",
+                {{"k", bytes_type}},
+                // We need more than one clustering column so that the single-element tuple format optimisation doesn't kick in
+                {{"c0", bytes_type}, {"c1", bytes_type}},
+                {{"v", bytes_type}},
+                {},
+                utf8_type);
+        }).then([&e] {
+            return e.execute_cql("update cf set v = 0x01 where k = 0x00 and c0 = 0x0001 and c1 = 0x00;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("update cf set v = 0x02 where k = 0x00 and c0 = 0x03 and c1 = 0x00;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("update cf set v = 0x03 where k = 0x00 and c0 = 0x035555 and c1 = 0x00;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("update cf set v = 0x04 where k = 0x00 and c0 = 0x05 and c1 = 0x00;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf where k = 0x00 allow filtering;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01")}, {from_hex("02")}, {from_hex("03")}, {from_hex("04")}
+                });
+            });
+        });
     });
 }
 
