@@ -574,6 +574,12 @@ SEASTAR_TEST_CASE(test_set_insert_update) {
     }).then([state, db] {
         return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
                 "set1", set_type_impl::native_type({1001, 1002}));
+    }).then([state, db] {
+        // overwrite entire set
+        return state->execute_cql("update cf set set1 = { 1007, 1019 } where p1 = 'key1';").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "set1", set_type_impl::native_type({1007, 1019}));
     }).then([db] {
         return db->stop();
     }).then_wrapped([db] (future<> f) mutable {
