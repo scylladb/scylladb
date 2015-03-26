@@ -34,19 +34,20 @@ future<::shared_ptr<messages::result_message>>
 schema_altering_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) {
     // If an IF [NOT] EXISTS clause was used, this may not result in an actual schema change.  To avoid doing
     // extra work in the drivers to handle schema changes, we return an empty message in this case. (CASSANDRA-7600)
-    bool did_change_schema = announce_migration(false);
-    if (!did_change_schema) {
-        auto result = ::make_shared<messages::result_message::void_message>();
+    return announce_migration(false).then([this] (bool did_change_schema) {
+        if (!did_change_schema) {
+            auto result = ::make_shared<messages::result_message::void_message>();
+            return make_ready_future<::shared_ptr<messages::result_message>>(result);
+        }
+        auto ce = this->change_event();
+        ::shared_ptr<messages::result_message> result;
+        if (!ce) {
+            result = ::make_shared<messages::result_message::void_message>();
+        } else {
+            result = ::make_shared<messages::result_message::schema_change>(ce);
+        }
         return make_ready_future<::shared_ptr<messages::result_message>>(result);
-    }
-    auto ce = change_event();
-    ::shared_ptr<messages::result_message> result;
-    if (!ce) {
-        result = ::make_shared<messages::result_message::void_message>();
-    } else {
-        result = ::make_shared<messages::result_message::schema_change>(ce);
-    }
-    return make_ready_future<::shared_ptr<messages::result_message>>(result);
+    });
 }
 
 future<::shared_ptr<messages::result_message>>

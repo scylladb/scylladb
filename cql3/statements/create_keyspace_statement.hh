@@ -122,16 +122,18 @@ public:
 #endif
     }
 
-    virtual bool announce_migration(bool is_local_only) override {
-        try {
-            service::migration_manager::announce_new_keyspace(_attrs->as_ks_metadata(_name), is_local_only);
-            return true;
-        } catch (const exceptions::already_exists_exception& e) {
-            if (_if_not_exists) {
-                return false;
+    virtual future<bool> announce_migration(bool is_local_only) override {
+        return service::migration_manager::announce_new_keyspace(_attrs->as_ks_metadata(_name), is_local_only).then_wrapped([this] (auto&& f) {
+            try {
+                f.get();
+                return true;
+            } catch (const exceptions::already_exists_exception& e) {
+                if (_if_not_exists) {
+                    return false;
+                }
+                throw e;
             }
-            throw e;
-        }
+        });
     }
 
     virtual shared_ptr<transport::event::schema_change> change_event() override {
