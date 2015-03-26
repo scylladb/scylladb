@@ -35,3 +35,9 @@ to_string(const std::vector<Printable>& items) {
     return "[" + join(", ", items) + "]";
 }
 
+template<typename Printable>
+static inline
+sstring
+to_string(std::initializer_list<Printable> items) {
+    return "[" + join(", ", std::begin(items), std::end(items)) + "]";
+}
