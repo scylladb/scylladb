@@ -52,23 +52,6 @@ BOOST_AUTO_TEST_CASE(test_int32_type_string_conversions) {
     BOOST_REQUIRE_EQUAL(int32_type->to_string(bytes()), "");
 }
 
-BOOST_AUTO_TEST_CASE(test_tuple_is_prefix_of) {
-    tuple_type<> type({utf8_type, utf8_type, utf8_type});
-    auto prefix_type = type.as_prefix();
-
-    auto val = type.serialize_value({bytes("a"), bytes("b"), bytes("c")});
-
-    BOOST_REQUIRE(prefix_type.is_prefix_of(prefix_type.serialize_value({bytes("a")}), val));
-    BOOST_REQUIRE(prefix_type.is_prefix_of(prefix_type.serialize_value({bytes("a"), bytes("b")}), val));
-    BOOST_REQUIRE(prefix_type.is_prefix_of(prefix_type.serialize_value({bytes("a"), bytes("b"), bytes("c")}), val));
-
-    BOOST_REQUIRE(!prefix_type.is_prefix_of(prefix_type.serialize_value({bytes()}), val));
-    BOOST_REQUIRE(!prefix_type.is_prefix_of(prefix_type.serialize_value({bytes("b"), bytes("c")}), val));
-    BOOST_REQUIRE(!prefix_type.is_prefix_of(prefix_type.serialize_value({bytes("a"), bytes("c"), bytes("b")}), val));
-    BOOST_REQUIRE(!prefix_type.is_prefix_of(prefix_type.serialize_value({bytes("abc")}), val));
-    BOOST_REQUIRE(!prefix_type.is_prefix_of(prefix_type.serialize_value({bytes("ab")}), val));
-}
-
 BOOST_AUTO_TEST_CASE(test_tuple_type_compare) {
     tuple_type<> type({utf8_type, utf8_type, utf8_type});
 
