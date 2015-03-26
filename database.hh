@@ -315,6 +315,7 @@ public:
 
 class database {
 public:
+    database();
     std::unordered_map<sstring, keyspace> keyspaces;
     future<> init_from_data_directory(sstring datadir);
     future<> populate(sstring datadir);

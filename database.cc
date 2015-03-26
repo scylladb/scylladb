@@ -325,6 +325,10 @@ future<> keyspace::populate(sstring ksdir) {
     });
 }
 
+database::database() {
+    keyspaces.emplace("system", db::system_keyspace::make());
+}
+
 future<> database::populate(sstring datadir) {
     return lister::scan_dir(datadir, directory_entry_type::directory, [this, datadir] (directory_entry de) {
         auto& ks_name = de.name;
@@ -343,7 +347,6 @@ future<> database::populate(sstring datadir) {
 
 future<>
 database::init_from_data_directory(sstring datadir) {
-    keyspaces.emplace("system", db::system_keyspace::make());
     return populate(datadir);
 }
 
