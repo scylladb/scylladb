@@ -143,7 +143,7 @@ public:
         }
         virtual void execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) override;
         static void do_add(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params,
-                shared_ptr<term> t, const column_definition& column);
+                shared_ptr<term> t, const column_definition& column, tombstone ts = {});
     };
 
 #if 0
