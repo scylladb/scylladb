@@ -537,6 +537,18 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
     }).then_wrapped([state, db] (auto f) {
         BOOST_REQUIRE(f.failed());
         std::move(f).discard_result();
+    }).then([state, db] {
+        // overwrite whole map
+        return state->execute_cql("update cf set map1 = {1001: 5001, 1002: 5002, 1003: 5003} where p1 = 'key1';").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "map1", map_type_impl::native_type({{1001, 5001}, {1002, 5002}, {1003, 5003}}));
+    }).then([state, db] {
+        // discard some keys
+        return state->execute_cql("update cf set map1 = map1 - {1001, 1003, 1005} where p1 = 'key1';").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "map1", map_type_impl::native_type({{{1002, 5002}}}));
     }).then([db] {
         return db->stop();
     }).then_wrapped([db] (future<> f) mutable {
@@ -580,6 +592,12 @@ SEASTAR_TEST_CASE(test_set_insert_update) {
     }).then([state, db] {
         return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
                 "set1", set_type_impl::native_type({1007, 1019}));
+    }).then([state, db] {
+        // discard keys
+        return state->execute_cql("update cf set set1 = set1 - { 1007, 1008 } where p1 = 'key1';").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "set1", set_type_impl::native_type({1019}));
     }).then([db] {
         return db->stop();
     }).then_wrapped([db] (future<> f) mutable {
