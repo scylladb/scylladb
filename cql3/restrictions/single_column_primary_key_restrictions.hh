@@ -165,7 +165,7 @@ public:
                 assert(values.size() == 1);
                 auto&& val = values[0];
                 if (!val) {
-                    throw exceptions::invalid_request_exception(sprint("Invalid null clustering key part %s", def->name_as_text()));
+                    throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", def->name_as_text()));
                 }
                 components.emplace_back(std::move(*val));
             }
@@ -192,7 +192,7 @@ public:
                         }
                         auto value = r->bounds(b, options)[0];
                         if (!value) {
-                            throw exceptions::invalid_request_exception(sprint("Invalid null clustering key part %s", r->to_string()));
+                            throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", r->to_string()));
                         }
                         return {range_bound(ValueType::from_single_value(*_schema, *value), r->is_inclusive(b))};
                     };
@@ -211,7 +211,7 @@ public:
                         if (r->has_bound(bound)) {
                             auto value = std::move(r->bounds(bound, options)[0]);
                             if (!value) {
-                                throw exceptions::invalid_request_exception(sprint("Invalid null clustering key part %s", r->to_string()));
+                                throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", r->to_string()));
                             }
                             prefix.emplace_back(std::move(value));
                             auto val = ValueType::from_optional_exploded(*_schema, prefix);
@@ -237,7 +237,7 @@ public:
             auto values = r->values(options);
             for (auto&& val : values) {
                 if (!val) {
-                    throw exceptions::invalid_request_exception(sprint("Invalid null clustering key part %s", def->name_as_text()));
+                    throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", def->name_as_text()));
                 }
             }
             if (values.empty()) {
