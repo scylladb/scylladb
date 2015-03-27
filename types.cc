@@ -14,6 +14,8 @@
 #include <cmath>
 #include <sstream>
 #include <boost/iterator/transform_iterator.hpp>
+#include <boost/range/adaptor/filtered.hpp>
+#include <boost/range/numeric.hpp>
 
 template<typename T>
 struct simple_type_traits {
@@ -964,14 +966,11 @@ template <typename Iterator>
 collection_mutation::one
 do_serialize_mutation_form(
         std::experimental::optional<tombstone> tomb,
-        Iterator begin, Iterator end) {
-    auto element_size = [] (auto&& e) -> size_t {
-        return 8 + e.first.size() + e.second.serialize().size();
+        boost::iterator_range<Iterator> cells) {
+    auto element_size = [] (size_t c, auto&& e) -> size_t {
+        return c + 8 + e.first.size() + e.second.serialize().size();
     };
-    auto size = std::accumulate(
-            boost::make_transform_iterator(begin, element_size),
-            boost::make_transform_iterator(end, element_size),
-            4);
+    auto size = accumulate(cells, (size_t)4, element_size);
     size += 1;
     if (tomb) {
         size += sizeof(tomb->timestamp) + sizeof(tomb->ttl);
@@ -988,9 +987,8 @@ do_serialize_mutation_form(
         out = std::copy_n(v.begin(), v.size(), out);
     };
     // FIXME: overflow?
-    serialize_int32(out, std::distance(begin, end));
-    while (begin != end) {
-        auto&& kv = *begin++;
+    serialize_int32(out, boost::distance(cells));
+    for (auto&& kv : cells) {
         auto&& k = kv.first;
         auto&& v = kv.second;
         writeb(k);
@@ -1001,12 +999,19 @@ do_serialize_mutation_form(
 
 collection_mutation::one
 collection_type_impl::serialize_mutation_form(const mutation& mut) {
-    return do_serialize_mutation_form(mut.tomb, mut.cells.begin(), mut.cells.end());
+    return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
 }
 
 collection_mutation::one
 collection_type_impl::serialize_mutation_form(mutation_view mut) {
-    return do_serialize_mutation_form(mut.tomb, mut.cells.begin(), mut.cells.end());
+    return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
+}
+
+collection_mutation::one
+collection_type_impl::serialize_mutation_form_only_live(mutation_view mut) {
+    return do_serialize_mutation_form(mut.tomb, mut.cells | boost::adaptors::filtered([t = mut.tomb] (auto&& e) {
+        return e.second.is_live(t);
+    }));
 }
 
 collection_mutation::one
