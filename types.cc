@@ -962,6 +962,15 @@ auto collection_type_impl::deserialize_mutation_form(collection_mutation::view c
     return ret;
 }
 
+bool collection_type_impl::is_empty(collection_mutation::view cm) {
+    auto&& in = cm.data;
+    auto has_tomb = read_simple<bool>(in);
+    if (has_tomb) {
+        in.remove_prefix(sizeof(api::timestamp_type) + sizeof(gc_clock::duration::rep));
+    }
+    return read_simple<uint32_t>(in) == 0;
+}
+
 template <typename Iterator>
 collection_mutation::one
 do_serialize_mutation_form(
