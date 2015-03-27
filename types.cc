@@ -1003,14 +1003,14 @@ do_serialize_mutation_form(
     auto size = accumulate(cells, (size_t)4, element_size);
     size += 1;
     if (tomb) {
-        size += sizeof(tomb->timestamp) + sizeof(tomb->ttl);
+        size += sizeof(tomb->timestamp) + sizeof(tomb->deletion_time);
     }
     bytes ret(bytes::initialized_later(), size);
     bytes::iterator out = ret.begin();
     *out++ = bool(tomb);
     if (tomb) {
         write(out, tomb->timestamp);
-        write(out, tomb->ttl.time_since_epoch().count());
+        write(out, tomb->deletion_time.time_since_epoch().count());
     }
     auto writeb = [&out] (bytes_view v) {
         serialize_int32(out, v.size());
