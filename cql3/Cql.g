@@ -35,6 +35,7 @@ options {
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/update_statement.hh"
+#include "cql3/statements/delete_statement.hh"
 #include "cql3/statements/use_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
@@ -273,8 +274,8 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st3= updateStatement             { $stmt = st3; }
 #if 0
     | st4= batchStatement              { $stmt = st4; }
-    | st5= deleteStatement             { $stmt = st5; }
 #endif
+    | st5= deleteStatement             { $stmt = st5; }
     | st6= useStatement                { $stmt = st6; }
 #if 0
     | st7= truncateStatement           { $stmt = st7; }
@@ -467,8 +468,6 @@ updateConditions returns [conditions_type conditions]
     : columnCondition[conditions] ( K_AND columnCondition[conditions] )*
     ;
 
-#if 0
-
 /**
  * DELETE name1, name2
  * FROM <CF>
@@ -476,42 +475,47 @@ updateConditions returns [conditions_type conditions]
  * WHERE KEY = keyname
    [IF (EXISTS | name = value, ...)];
  */
-deleteStatement returns [DeleteStatement.Parsed expr]
+deleteStatement returns [::shared_ptr<delete_statement::parsed> expr]
     @init {
-        Attributes.Raw attrs = new Attributes.Raw();
-        List<Operation.RawDeletion> columnDeletions = Collections.emptyList();
-        boolean ifExists = false;
+        auto attrs = ::make_shared<cql3::attributes::raw>();
+        std::vector<::shared_ptr<cql3::operation::raw_deletion>> column_deletions;
+        bool if_exists = false;
+        delete_statement::parsed::conditions_vector conditions;
     }
-    : K_DELETE ( dels=deleteSelection { columnDeletions = dels; } )?
+    : K_DELETE ( dels=deleteSelection { column_deletions = std::move(dels); } )?
       K_FROM cf=columnFamilyName
       ( usingClauseDelete[attrs] )?
       K_WHERE wclause=whereClause
-      ( K_IF ( K_EXISTS { ifExists = true; } | conditions=updateConditions ))?
+#if 0
+      ( K_IF ( K_EXISTS { if_exists = true; } | conditions=updateConditions ))?
+#endif
       {
-          return new DeleteStatement.Parsed(cf,
-                                            attrs,
-                                            columnDeletions,
-                                            wclause,
-                                            conditions == null ? Collections.<Pair<ColumnIdentifier.Raw, ColumnCondition.Raw>>emptyList() : conditions,
-                                            ifExists);
+          return ::make_shared<delete_statement::parsed>(cf,
+                                            std::move(attrs),
+                                            std::move(column_deletions),
+                                            std::move(wclause),
+                                            std::move(conditions),
+                                            if_exists);
       }
     ;
 
-deleteSelection returns [List<Operation.RawDeletion> operations]
-    : { $operations = new ArrayList<Operation.RawDeletion>(); }
-          t1=deleteOp { $operations.add(t1); }
-          (',' tN=deleteOp { $operations.add(tN); })*
+deleteSelection returns [std::vector<::shared_ptr<cql3::operation::raw_deletion>> operations]
+    : t1=deleteOp { $operations.emplace_back(std::move(t1)); }
+      (',' tN=deleteOp { $operations.emplace_back(std::move(tN)); })*
     ;
 
-deleteOp returns [Operation.RawDeletion op]
-    : c=cident                { $op = new Operation.ColumnDeletion(c); }
-    | c=cident '[' t=term ']' { $op = new Operation.ElementDeletion(c, t); }
+deleteOp returns [::shared_ptr<cql3::operation::raw_deletion> op]
+    : c=cident                { $op = ::make_shared<cql3::operation::column_deletion>(std::move(c)); }
+#if 0
+    | c=cident '[' t=term ']' { $op = ::make_shared<cql3::operation::element_deletion(std::move(c), std::move(t)); }
+#endif
     ;
 
-usingClauseDelete[Attributes.Raw attrs]
-    : K_USING K_TIMESTAMP ts=intValue { attrs.timestamp = ts; }
+usingClauseDelete[::shared_ptr<cql3::attributes::raw> attrs]
+    : K_USING K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
     ;
 
+#if 0
 /**
  * BEGIN BATCH
  *   UPDATE <CF> SET name1 = value1 WHERE KEY = keyname1;
@@ -1195,7 +1199,7 @@ specializedColumnOperation[std::vector<std::pair<shared_ptr<cql3::column_identif
                                                  shared_ptr<cql3::operation::raw_update>>>& operations,
                            shared_ptr<cql3::column_identifier::raw> key,
                            shared_ptr<cql3::term::raw> k]
-                           
+
     : '=' t=term
       {
           add_raw_update(operations, key, make_shared<cql3::operation::set_element>(k, t));
