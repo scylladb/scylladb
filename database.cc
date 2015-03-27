@@ -132,7 +132,7 @@ column_family::find_or_create_partition(const partition_key& key) {
 row&
 column_family::find_or_create_row(const partition_key& partition_key, const clustering_key& clustering_key) {
     mutation_partition& p = find_or_create_partition(partition_key);
-    return p.clustered_row(clustering_key);
+    return p.clustered_row(clustering_key).cells;
 }
 
 static inline int8_t hex_to_int(unsigned char c) {
@@ -610,15 +610,15 @@ mutation_partition::find_row(const clustering_key& key) {
     return &i->row().cells;
 }
 
-row&
+deletable_row&
 mutation_partition::clustered_row(const clustering_key& key) {
     auto i = _rows.find(key);
     if (i == _rows.end()) {
         auto e = new rows_entry(key);
         _rows.insert(i, *e);
-        return e->row().cells;
+        return e->row();
     }
-    return i->row().cells;
+    return i->row();
 }
 
 bool column_definition::is_compact_value() const {
@@ -658,12 +658,12 @@ void mutation::set_static_cell(const column_definition& def, atomic_cell_or_coll
 }
 
 void mutation::set_clustered_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value) {
-    auto& row = p.clustered_row(clustering_key::from_clustering_prefix(*schema, prefix));
+    auto& row = p.clustered_row(clustering_key::from_clustering_prefix(*schema, prefix)).cells;
     update_column(row, def, std::move(value));
 }
 
 void mutation::set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection value) {
-    auto& row = p.clustered_row(key);
+    auto& row = p.clustered_row(key).cells;
     update_column(row, def, std::move(value));
 }
 

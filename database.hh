@@ -190,7 +190,7 @@ public:
     void apply_row_tombstone(schema_ptr schema, clustering_key_prefix prefix, tombstone t);
     void apply(schema_ptr schema, const mutation_partition& p);
     row& static_row() { return _static_row; }
-    row& clustered_row(const clustering_key& key);
+    deletable_row& clustered_row(const clustering_key& key);
     row* find_row(const clustering_key& key);
     rows_entry* find_entry(schema_ptr schema, const clustering_key_prefix& key);
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key);
