@@ -510,7 +510,8 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
             auto e = new rows_entry(entry);
             _rows.insert(i, *e);
         } else {
-            i->apply(entry.row().t);
+            i->row().t.apply(entry.row().t);
+            i->row().created_at = std::max(i->row().created_at, entry.row().created_at);
             merge_cells(i->row().cells, entry.row().cells, find_regular_column_def);
         }
     }
@@ -753,10 +754,34 @@ static query::result::row get_row_slice(const row& cells, const std::vector<colu
     return result_row;
 }
 
+template <typename ColumnDefResolver>
+bool has_any_live_data(const row& cells, tombstone tomb, ColumnDefResolver&& id_to_def) {
+    for (auto&& e : cells) {
+        auto&& cell_or_collection = e.second;
+        const column_definition& def = id_to_def(e.first);
+        if (def.is_atomic()) {
+            auto&& c = cell_or_collection.as_atomic_cell();
+            if (c.is_live(tomb)) {
+                return true;
+            }
+        } else {
+            auto&& cell = cell_or_collection.as_collection_mutation();
+            auto&& ctype = static_pointer_cast<collection_type_impl>(def.type);
+            if (ctype->is_any_live(cell, tomb)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 query::result::partition
 column_family::get_partition_slice(mutation_partition& partition, const query::partition_slice& slice, uint32_t limit) {
     query::result::partition result;
 
+    auto regular_column_resolver = [this] (column_id id) {
+        return _schema->regular_column_at(id);
+    };
 
     for (auto&& range : slice.row_ranges) {
         if (limit == 0) {
@@ -766,16 +791,26 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
         // FIXME: Optimize for a full-tuple singular range. mutation_partition::range()
         // does two lookups to form a range, even for singular range. We need
         // only one lookup for a full-tuple singular range though.
-        for (auto&& row : partition.range(*_schema, range)) {
-            auto&& cells = row.row().cells;
+        for (auto&& e : partition.range(*_schema, range)) {
+            auto& row = e.row();
+            auto&& cells = row.cells;
 
-            // FIXME: handle removed rows properly. In CQL rows are separate entities (can be live or dead).
-            auto row_tombstone = partition.tombstone_for_row(*_schema, row);
+            auto row_tombstone = partition.tombstone_for_row(*_schema, e);
+            auto result_row = get_row_slice(cells, slice.regular_columns, row_tombstone, regular_column_resolver);
+            auto row_is_live = row.created_at > row_tombstone.timestamp;
 
-            result.rows.emplace_back(row.key(), get_row_slice(cells, slice.regular_columns, row_tombstone,
-                [this] (column_id id) { return _schema->regular_column_at(id); }));
-            if (--limit == 0) {
-                break;
+            // row_is_live is true for rows created using 'insert' statement
+            // which are not deleted yet. Such rows are considered as present
+            // even if no regular columns are live. Otherwise, a row is
+            // considered present if it has any cell which is live. So if
+            // we've got no live cell in the results we still have to check if
+            // any of the row's cell is live and we should return the row in
+            // such case.
+            if (row_is_live || !result_row.all_cells_empty() || has_any_live_data(cells, row_tombstone, regular_column_resolver)) {
+                result.rows.emplace_back(e.key(), std::move(result_row));
+                if (--limit == 0) {
+                    break;
+                }
             }
         }
     }

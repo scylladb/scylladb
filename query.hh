@@ -138,6 +138,15 @@ public:
 public:
     bool empty() const { return cells.empty(); }
     explicit operator bool() const { return !empty(); }
+
+    bool all_cells_empty() const {
+        for (auto&& c : cells) {
+            if (c) {
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 class result::partition {

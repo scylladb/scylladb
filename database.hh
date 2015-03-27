@@ -43,6 +43,7 @@ using row = std::map<column_id, atomic_cell_or_collection>;
 
 struct deletable_row final {
     tombstone t;
+    api::timestamp_type created_at = api::missing_timestamp;
     row cells;
 
     void apply(tombstone t_) {
