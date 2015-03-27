@@ -228,11 +228,16 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
         throw exceptions::invalid_request_exception("Invalid null value for list index");
     }
 
-    collection_mutation::view existing_list_ser = params.get_prefetched_list(m.key, row_key, column);
+    auto idx = net::ntoh(int32_t(*unaligned_cast<int32_t>(index->begin())));
+
+    auto existing_list_opt = params.get_prefetched_list(m.key, row_key, column);
+    if (!existing_list_opt) {
+        throw exceptions::invalid_request_exception(sprint("List index %d out of bound, list has size 0", idx));
+    }
+    collection_mutation::view existing_list_ser = *existing_list_opt;
     auto ltype = dynamic_pointer_cast<list_type_impl>(column.type);
     collection_type_impl::mutation_view existing_list = ltype->deserialize_mutation_form(existing_list_ser);
     // we verified that index is an int32_type
-    auto idx = net::ntoh(int32_t(*unaligned_cast<int32_t>(index->begin())));
     if (idx < 0 || size_t(idx) >= existing_list.cells.size()) {
         throw exceptions::invalid_request_exception(sprint("List index %d out of bound, list has size %d",
                 idx, existing_list.cells.size()));

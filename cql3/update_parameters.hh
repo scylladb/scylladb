@@ -123,7 +123,7 @@ public:
         return _timestamp;
     }
 
-    collection_mutation::view get_prefetched_list(const partition_key& pkey,
+    std::experimental::optional<collection_mutation::view> get_prefetched_list(const partition_key& pkey,
             const clustering_key& row_key, const column_definition& column) const {
         if (!_prefetched) {
             return {};
@@ -160,7 +160,7 @@ public:
         if (!cell) {
             return {};
         }
-        return cell->as_collection_mutation();
+        return {cell->as_collection_mutation()};
     }
 };
 
