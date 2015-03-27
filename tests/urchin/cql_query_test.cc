@@ -149,6 +149,15 @@ public:
         return {*this};
     }
 
+    rows_assertions is_empty() {
+        auto row_count = _rows->rs().size();
+        if (row_count != 0) {
+            auto&& first_row = *_rows->rs().rows().begin();
+            BOOST_FAIL(sprint("Expected no rows, but got %d. First row: %s", row_count, to_string(first_row)));
+        }
+        return {*this};
+    }
+
     rows_assertions with_row(std::initializer_list<bytes_opt> values) {
         std::vector<bytes_opt> expected_row(values);
         for (auto&& row : _rows->rs().rows()) {
@@ -504,6 +513,104 @@ SEASTAR_TEST_CASE(test_query_with_static_columns) {
                 assert_that(msg).is_rows().with_rows({
                     {from_hex("01"), from_hex("02")},
                 });
+            });
+        }).then([&e] {
+            return e.execute_cql("update cf set v = null where k = 0x00 and c = 0x02;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select s1 from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01")},
+                });
+            });
+        }).then([&e] {
+            return e.execute_cql("insert into cf (k, c) values (0x00, 0x02);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select s1 from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01")},
+                    {from_hex("01")},
+                });
+            });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_deletion_scenarios) {
+    return do_with_cql_env([] (auto& e) {
+        return e.create_table([](auto ks) {
+            // CQL: create table cf (k bytes, c bytes, v bytes, primary key (k, c));
+            return schema(ks, "cf",
+                {{"k", bytes_type}}, {{"c", bytes_type}}, {{"v", bytes_type}}, {}, utf8_type);
+        }).then([&e] {
+            return e.execute_cql("insert into cf (k, c, v) values (0x00, 0x05, 0x01) using timestamp 1;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01")},
+                });
+            });
+        }).then([&e] {
+            return e.execute_cql("update cf using timestamp 2 set v = null where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {{}},
+                });
+            });
+        }).then([&e] {
+            // same tampstamp, dead cell wins
+            return e.execute_cql("update cf using timestamp 2 set v = 0x02 where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {{}},
+                });
+            });
+        }).then([&e] {
+            return e.execute_cql("update cf using timestamp 3 set v = 0x02 where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("02")},
+                });
+            });
+        }).then([&e] {
+            // same timestamp, greater value wins
+            return e.execute_cql("update cf using timestamp 3 set v = 0x03 where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("03")},
+                });
+            });
+        }).then([&e] {
+            // same tampstamp, delete whole row, delete should win
+            return e.execute_cql("delete from cf using timestamp 3 where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().is_empty();
+            });
+        }).then([&e] {
+            // same timestamp, update should be shadowed by range tombstone
+            return e.execute_cql("update cf using timestamp 3 set v = 0x04 where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().is_empty();
+            });
+        }).then([&e] {
+            return e.execute_cql("update cf using timestamp 4 set v = 0x04 where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("04")},
+                });
+            });
+        }).then([&e] {
+            // deleting an orphan cell (row is considered as deleted) yields no row
+            return e.execute_cql("update cf using timestamp 5 set v = null where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().is_empty();
             });
         });
     });
