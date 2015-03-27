@@ -757,11 +757,12 @@ query::result::partition
 column_family::get_partition_slice(mutation_partition& partition, const query::partition_slice& slice, uint32_t limit) {
     query::result::partition result;
 
-    if (limit == 0) {
-        return result;
-    }
 
     for (auto&& range : slice.row_ranges) {
+        if (limit == 0) {
+            return result;
+        }
+
         // FIXME: Optimize for a full-tuple singular range. mutation_partition::range()
         // does two lookups to form a range, even for singular range. We need
         // only one lookup for a full-tuple singular range though.
