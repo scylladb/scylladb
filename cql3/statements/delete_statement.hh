@@ -81,50 +81,27 @@ public:
         }
 
     }
-
-    public static class Parsed extends ModificationStatement.Parsed
-    {
-        private final List<Operation.RawDeletion> deletions;
-        private final List<Relation> whereClause;
-
-        public Parsed(CFName name,
-                      Attributes.Raw attrs,
-                      List<Operation.RawDeletion> deletions,
-                      List<Relation> whereClause,
-                      List<Pair<ColumnIdentifier.Raw, ColumnCondition.Raw>> conditions,
-                      boolean ifExists)
-        {
-            super(name, attrs, conditions, false, ifExists);
-            this.deletions = deletions;
-            this.whereClause = whereClause;
-        }
-
-        protected ModificationStatement prepareInternal(CFMetaData cfm, VariableSpecifications boundNames, Attributes attrs) throws InvalidRequestException
-        {
-            DeleteStatement stmt = new DeleteStatement(ModificationStatement.StatementType.DELETE, boundNames.size(), cfm, attrs);
-
-            for (Operation.RawDeletion deletion : deletions)
-            {
-                ColumnIdentifier id = deletion.affectedColumn().prepare(cfm);
-                ColumnDefinition def = cfm.getColumnDefinition(id);
-                if (def == null)
-                    throw new InvalidRequestException(String.format("Unknown identifier %s", id));
-
-                // For compact, we only have one value except the key, so the only form of DELETE that make sense is without a column
-                // list. However, we support having the value name for coherence with the static/sparse case
-                if (def.isPrimaryKeyColumn())
-                    throw new InvalidRequestException(String.format("Invalid identifier %s for deletion (should not be a PRIMARY KEY part)", def.name));
-
-                Operation op = deletion.prepare(cfm.ksName, def);
-                op.collectMarkerSpecification(boundNames);
-                stmt.addOperation(op);
-            }
-
-            stmt.processWhereClause(whereClause, boundNames);
-            return stmt;
-        }
-    }
 #endif
+
+    class parsed : public modification_statement::parsed {
+    private:
+        std::vector<::shared_ptr<operation::raw_deletion>> _deletions;
+        std::vector<::shared_ptr<relation>> _where_clause;
+    public:
+        parsed(::shared_ptr<cf_name> name,
+               ::shared_ptr<attributes::raw> attrs,
+               std::vector<::shared_ptr<operation::raw_deletion>> deletions,
+               std::vector<::shared_ptr<relation>> where_clause,
+               conditions_vector conditions,
+               bool if_exists)
+            : modification_statement::parsed(std::move(name), std::move(attrs), std::move(conditions), false, if_exists)
+            , _deletions(std::move(deletions))
+            , _where_clause(std::move(where_clause))
+        { }
+    protected:
+        virtual ::shared_ptr<modification_statement> prepare_internal(schema_ptr schema,
+            ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs);
+    };
 };
 
 }

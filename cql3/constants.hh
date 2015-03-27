@@ -240,26 +240,16 @@ public:
             cf.addColumn(params.makeCounter(cname, -increment));
         }
     }
-
-    // This happens to also handle collection because it doesn't felt worth
-    // duplicating this further
-    public static class Deleter extends Operation
-    {
-        public Deleter(ColumnDefinition column)
-        {
-            super(column, null);
-        }
-
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            CellName cname = cf.getComparator().create(prefix, column);
-            if (column.type.isMultiCell())
-                cf.addAtom(params.makeRangeTombstone(cname.slice()));
-            else
-                cf.addColumn(params.makeTombstone(cname));
-        }
-    };
 #endif
+
+    class deleter : public operation {
+    public:
+        deleter(const column_definition& column)
+            : operation(column, {})
+        { }
+
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+    };
 };
 
 std::ostream& operator<<(std::ostream&out, constants::type t);

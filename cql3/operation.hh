@@ -159,7 +159,7 @@ public:
         /**
          * The name of the column affected by this delete operation.
          */
-        virtual ::shared_ptr<column_identifier::raw> affectedColumn() = 0;
+        virtual ::shared_ptr<column_identifier::raw> affected_column() = 0;
 
         /**
          * This method validates the operation (i.e. validate it is well typed)
@@ -252,28 +252,9 @@ public:
         virtual bool is_compatible_with(shared_ptr<raw_update> other) override;
     };
 
+    class column_deletion;
+
 #if 0
-    public static class ColumnDeletion implements RawDeletion
-    {
-        private final ColumnIdentifier.Raw id;
-
-        public ColumnDeletion(ColumnIdentifier.Raw id)
-        {
-            this.id = id;
-        }
-
-        public ColumnIdentifier.Raw affectedColumn()
-        {
-            return id;
-        }
-
-        public Operation prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException
-        {
-            // No validation, deleting a column is always "well typed"
-            return new Constants.Deleter(receiver);
-        }
-    }
-
     public static class ElementDeletion implements RawDeletion
     {
         private final ColumnIdentifier.Raw id;
