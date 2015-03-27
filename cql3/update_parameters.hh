@@ -100,7 +100,7 @@ public:
     }
 
     tombstone make_tombstone_just_before() const {
-        return {_timestamp, _local_deletion_time - gc_clock::duration(1) };
+        return {_timestamp - 1, _local_deletion_time};
     }
 
 #if 0
