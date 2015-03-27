@@ -25,7 +25,7 @@
 #ifndef CQL3_FUNCTIONS_NATIVE_AGGREGATE_FUNCTION_HH
 #define CQL3_FUNCTIONS_NATIVE_AGGREGATE_FUNCTION_HH
 
-#include "database.hh"
+#include "types.hh"
 #include "native_function.hh"
 #include "core/shared_ptr.hh"
 

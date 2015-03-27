@@ -25,7 +25,7 @@
 #ifndef CQL3_FUNCTIONS_SCALAR_FUNCTION_HH
 #define CQL3_FUNCTIONS_SCALAR_FUNCTION_HH
 
-#include "database.hh"
+#include "bytes.hh"
 #include <vector>
 
 namespace cql3 {

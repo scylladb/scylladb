@@ -29,7 +29,6 @@
 #include "service/query_state.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/query_options.hh"
-#include "database.hh"
 
 namespace transport {
 

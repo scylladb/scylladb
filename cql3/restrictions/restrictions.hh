@@ -29,7 +29,7 @@
 
 #include "cql3/query_options.hh"
 #include "types.hh"
-#include "database.hh"
+#include "schema.hh"
 
 namespace cql3 {
 

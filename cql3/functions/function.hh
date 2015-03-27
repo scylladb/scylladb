@@ -26,7 +26,7 @@
 #define CQL3_FUNCTIONS_FUNCTION_HH
 
 #include "function_name.hh"
-#include "database.hh"
+#include "types.hh"
 #include <vector>
 #include <experimental/optional>
 

@@ -27,7 +27,7 @@
 
 #include "cql3/selection/selectable.hh"
 
-#include "database.hh"
+#include "schema.hh"
 
 #include <algorithm>
 #include <functional>

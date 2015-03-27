@@ -26,7 +26,7 @@
 
 #include "exceptions/exceptions.hh"
 #include "core/sstring.hh"
-#include "database.hh"
+#include "schema.hh"
 
 namespace db {
 

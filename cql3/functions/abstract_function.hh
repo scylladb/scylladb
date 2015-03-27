@@ -25,7 +25,7 @@
 #ifndef CQL3_FUNCTIONS_ABSTRACT_FUNCTION_HH
 #define CQL3_FUNCTIONS_ABSTRACT_FUNCTION_HH
 
-#include "database.hh"
+#include "types.hh"
 #include <vector>
 #include <iostream>
 #include <boost/functional/hash.hpp>

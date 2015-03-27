@@ -25,7 +25,12 @@
 #ifndef CQL3_UPDATE_PARAMETERS_HH
 #define CQL3_UPDATE_PARAMETERS_HH
 
-#include "database.hh"
+#include "query.hh"
+#include "gc_clock.hh"
+#include "timestamp.hh"
+#include "schema.hh"
+#include "atomic_cell.hh"
+#include "tombstone.hh"
 #include "exceptions/exceptions.hh"
 
 namespace cql3 {

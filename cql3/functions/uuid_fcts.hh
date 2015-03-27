@@ -24,7 +24,7 @@
 
 #pragma once
 
-#include "database.hh"
+#include "types.hh"
 #include "native_scalar_function.hh"
 #include "utils/UUID.hh"
 
