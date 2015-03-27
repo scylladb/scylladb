@@ -730,28 +730,23 @@ static query::result::row get_row_slice(const row& cells, const std::vector<colu
             auto def = id_to_def(id);
             if (def.is_atomic()) {
                 auto c = i->second.as_atomic_cell();
-                if (c.timestamp() < tomb.timestamp) {
-                    result_row.cells.emplace_back(std::experimental::make_optional(
-                        atomic_cell_or_collection::from_atomic_cell(
-                            atomic_cell::make_dead(tomb.timestamp, tomb.ttl))));
+                if (!c.is_live(tomb)) {
+                    result_row.cells.emplace_back();
                 } else {
                     result_row.cells.emplace_back(std::experimental::make_optional(i->second));
                 }
             } else {
                 auto&& cell = i->second.as_collection_mutation();
                 auto&& ctype = static_pointer_cast<collection_type_impl>(def.type);
-                // cannot use mutation_view, since we'll modify some of the values
-                // FIXME: work around this somehow
-                collection_type_impl::mutation m = ctype->deserialize_mutation_form(cell).materialize();
-                for (auto&& e : m.cells) {
-                    auto& value = e.second;
-                    if (value.timestamp() < tomb.timestamp) {
-                        value = atomic_cell::make_dead(tomb.timestamp, tomb.ttl);
-                    }
-                }
-                auto m_ser = ctype->serialize_mutation_form(m);
-                result_row.cells.emplace_back(std::experimental::make_optional(
+                auto m_view = ctype->deserialize_mutation_form(cell);
+                m_view.tomb.apply(tomb);
+                auto m_ser = ctype->serialize_mutation_form_only_live(m_view);
+                if (ctype->is_empty(m_ser)) {
+                    result_row.cells.emplace_back();
+                } else {
+                    result_row.cells.emplace_back(std::experimental::make_optional(
                         atomic_cell_or_collection::from_collection_mutation(std::move(m_ser))));
+                }
             }
         }
     }

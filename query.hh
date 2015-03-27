@@ -132,7 +132,8 @@ public:
 
 class result::row {
 public:
-    // contains cells in the same order as requested by partition_slice
+    // Contains cells in the same order as requested by partition_slice.
+    // Contains only live cells.
     std::vector<std::experimental::optional<atomic_cell_or_collection>> cells;
 public:
     bool empty() const { return cells.empty(); }
