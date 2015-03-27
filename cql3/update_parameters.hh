@@ -119,6 +119,10 @@ public:
     }
 #endif
 
+    api::timestamp_type timestamp() const {
+        return _timestamp;
+    }
+
     collection_mutation::view get_prefetched_list(const partition_key& pkey,
             const clustering_key& row_key, const column_definition& column) const {
         if (!_prefetched) {
