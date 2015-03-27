@@ -404,13 +404,13 @@ cpu_pages::allocate_large_and_trim(unsigned n_pages, Trimmer trimmer) {
         span = &pages[span_idx];
 
     }
-    if (t.nr_pages < span->span_size) {
+    if (t.nr_pages < span_size) {
         free_span_no_merge(span_idx + t.nr_pages, span_size - t.nr_pages);
         span_size = t.nr_pages;
     }
-    auto span_end = &pages[span_idx + n_pages - 1];
+    auto span_end = &pages[span_idx + t.nr_pages - 1];
     span->free = span_end->free = false;
-    span->span_size = span_end->span_size = n_pages;
+    span->span_size = span_end->span_size = t.nr_pages;
     span->pool = nullptr;
     if (nr_free_pages < current_min_free_pages) {
         drain_cross_cpu_freelist();
