@@ -30,10 +30,13 @@ boost_tests = [
     'output_stream_test',
     'httpd',
     'urchin/types_test',
+    'urchin/keys_test',
     'urchin/mutation_test',
     'urchin/cql_query_test',
     'urchin/sstable_test',
     'urchin/commitlog_test',
+    'test-serialization',
+    'cartesian_product_test',
 ]
 
 other_tests = [
