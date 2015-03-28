@@ -217,14 +217,12 @@ static future<std::pair<char*, size_t>> read_file(sstring file_path)
     });
 }
 
-SEASTAR_TEST_CASE(check_compressed_info_func) {
-    auto sem = make_lw_shared<semaphore>(0);
-
-    return write_sst_info("tests/urchin/sstables/compressed", 1).then([sem] {
-        auto file_path = filename("tests/urchin/sstables/compressed", "la", 1, "big", "CompressionInfo.db");
-        return read_file(file_path).then([sem] (auto ret) {
-            auto file_path = filename("tests/urchin/sstables/compressed", "la", 2, "big", "CompressionInfo.db");
-            return read_file(file_path).then([ret, sem] (auto ret2) {
+static future<> check_component_integrity(sstring component) {
+    return write_sst_info("tests/urchin/sstables/compressed", 1).then([component] {
+        auto file_path = filename("tests/urchin/sstables/compressed", "la", 1, "big", component);
+        return read_file(file_path).then([component] (auto ret) {
+            auto file_path = filename("tests/urchin/sstables/compressed", "la", 2, "big", component);
+            return read_file(file_path).then([ret] (auto ret2) {
                 // assert that both files have the same size.
                 BOOST_REQUIRE(ret.second == ret2.second);
                 // assert that both files have the same content.
@@ -232,12 +230,13 @@ SEASTAR_TEST_CASE(check_compressed_info_func) {
                 // free buf from both files.
                 ::free(ret.first);
                 ::free(ret2.first);
-                sem->signal();
             });
         });
     });
+}
 
-    return sem->wait();
+SEASTAR_TEST_CASE(check_compressed_info_func) {
+    return check_component_integrity("CompressionInfo.db");
 }
 
 // Data file reading tests.
