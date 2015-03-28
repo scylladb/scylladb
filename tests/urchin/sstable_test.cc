@@ -239,6 +239,10 @@ SEASTAR_TEST_CASE(check_compressed_info_func) {
     return check_component_integrity("CompressionInfo.db");
 }
 
+SEASTAR_TEST_CASE(check_filter_func) {
+    return check_component_integrity("Filter.db");
+}
+
 // Data file reading tests.
 // We need these to be in the sstables namespace - and be friends of sstable -
 // so we can test private functions too.

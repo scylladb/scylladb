@@ -41,6 +41,9 @@ struct option {
 struct filter {
     uint32_t hashes;
     disk_array<uint32_t, uint64_t> buckets;
+
+    template <typename Describer>
+    future<> describe_type(Describer f) { return f(hashes, buckets); }
 };
 
 struct index_entry {

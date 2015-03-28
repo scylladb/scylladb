@@ -402,10 +402,6 @@ future<> parse(random_access_reader& in, disk_hash<Size, Key, Value>& h) {
     });
 }
 
-future<> parse(random_access_reader& in, filter& f) {
-    return parse(in, f.hashes, f.buckets);
-}
-
 future<> parse(random_access_reader& in, summary& s) {
     using pos_type = typename decltype(summary::positions)::value_type;
 
@@ -756,7 +752,9 @@ future<> sstable::load() {
 
 future<> sstable::store() {
     // TODO: write other components as well.
-    return write_compression();
+    return write_compression().then([this] {
+        return write_filter();
+    });
 }
 
 const bool sstable::has_component(component_type f) {

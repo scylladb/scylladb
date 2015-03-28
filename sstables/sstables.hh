@@ -79,9 +79,14 @@ private:
 
     future<> read_compression();
     future<> write_compression();
+
     future<> read_filter() {
         return read_simple<filter, component_type::Filter, &sstable::_filter>();
     }
+    future<> write_filter() {
+        return write_simple<filter, component_type::Filter, &sstable::_filter>();
+    }
+
     future<> read_summary() {
         return read_simple<summary, component_type::Summary, &sstable::_summary>();
     }
