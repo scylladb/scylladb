@@ -971,6 +971,27 @@ bool collection_type_impl::is_empty(collection_mutation::view cm) {
     return read_simple<uint32_t>(in) == 0;
 }
 
+bool collection_type_impl::is_any_live(collection_mutation::view cm, tombstone tomb) {
+    auto&& in = cm.data;
+    auto has_tomb = read_simple<bool>(in);
+    if (has_tomb) {
+        auto ts = read_simple<api::timestamp_type>(in);
+        auto ttl = read_simple<gc_clock::duration::rep>(in);
+        tomb.apply(tombstone{ts, gc_clock::time_point(gc_clock::duration(ttl))});
+    }
+    auto nr = read_simple<uint32_t>(in);
+    for (uint32_t i = 0; i != nr; ++i) {
+        auto ksize = read_simple<uint32_t>(in);
+        in.remove_prefix(ksize);
+        auto vsize = read_simple<uint32_t>(in);
+        auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
+        if (value.is_live(tomb)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 template <typename Iterator>
 collection_mutation::one
 do_serialize_mutation_form(
