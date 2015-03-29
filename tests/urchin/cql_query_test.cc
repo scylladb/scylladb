@@ -755,6 +755,11 @@ SEASTAR_TEST_CASE(test_list_insert_update) {
     }).then([state, db] {
         return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
                 "list1", list_type_impl::native_type({boost::any(1002), boost::any(2003)}));
+    }).then([state, db] {
+        return state->execute_cql("update cf set list1 = list1 - [1002, 2004] where p1 = 'key1';").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "list1", list_type_impl::native_type({2003}));
     }).then([db] {
         return db->stop();
     }).then_wrapped([db] (future<> f) mutable {

@@ -113,10 +113,7 @@ operation::subtraction::prepare(const sstring& keyspace, const column_definition
     }
 
     if (&ctype->_kind == &collection_type_impl::kind::list) {
-        fail(unimplemented::cause::COLLECTIONS);
-#if 0
-        return new Lists.Discarder(receiver, value.prepare(keyspace, receiver));
-#endif
+        return make_shared<lists::discarder>(receiver, _value->prepare(keyspace, receiver.column_specification));
     } else if (&ctype->_kind == &collection_type_impl::kind::set) {
         return make_shared<sets::discarder>(receiver, _value->prepare(keyspace, receiver.column_specification));
     } else if (&ctype->_kind == &collection_type_impl::kind::map) {

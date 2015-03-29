@@ -250,48 +250,18 @@ public:
             }
         }
     }
+#endif
 
-    public static class Discarder extends Operation
-    {
-        public Discarder(ColumnDefinition column, Term t)
-        {
-            super(column, t);
+    class discarder : public operation {
+    public:
+        discarder(const column_definition& column, shared_ptr<term> t)
+                : operation(column, std::move(t)) {
         }
+        virtual bool requires_read() override;
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+    };
 
-        @Override
-        public boolean requiresRead()
-        {
-            return true;
-        }
-
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            assert column.type.isMultiCell() : "Attempted to delete from a frozen list";
-            List<Cell> existingList = params.getPrefetchedList(rowKey, column.name);
-            // We want to call bind before possibly returning to reject queries where the value provided is not a list.
-            Term.Terminal value = t.bind(params.options);
-
-            if (existingList.isEmpty())
-                return;
-
-            if (value == null)
-                return;
-
-            assert value instanceof Lists.Value;
-
-            // Note: below, we will call 'contains' on this toDiscard list for each element of existingList.
-            // Meaning that if toDiscard is big, converting it to a HashSet might be more efficient. However,
-            // the read-before-write this operation requires limits its usefulness on big lists, so in practice
-            // toDiscard will be small and keeping a list will be more efficient.
-            List<ByteBuffer> toDiscard = ((Lists.Value)value).elements;
-            for (Cell cell : existingList)
-            {
-                if (toDiscard.contains(cell.value()))
-                    cf.addColumn(params.makeTombstone(cell.name()));
-            }
-        }
-    }
-
+#if 0
     public static class DiscarderByIndex extends Operation
     {
         public DiscarderByIndex(ColumnDefinition column, Term idx)

@@ -300,4 +300,56 @@ lists::do_append(shared_ptr<term> t,
     }
 }
 
+bool
+lists::discarder::requires_read() {
+    return true;
+}
+
+void
+lists::discarder::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+    assert(column.type->is_multi_cell()); // "Attempted to delete from a frozen list";
+    auto&& row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
+    auto&& existing_list = params.get_prefetched_list(m.key, row_key, column);
+    // We want to call bind before possibly returning to reject queries where the value provided is not a list.
+    auto&& value = _t->bind(params._options);
+
+    auto&& ltype = static_pointer_cast<list_type_impl>(column.type);
+
+    if (!existing_list) {
+        return;
+    }
+
+    auto&& elist = ltype->deserialize_mutation_form(*existing_list);
+
+    if (elist.cells.empty()) {
+        return;
+    }
+
+    if (!value) {
+        return;
+    }
+
+    auto lvalue = dynamic_pointer_cast<lists::value>(value);
+    assert(lvalue);
+
+    // Note: below, we will call 'contains' on this toDiscard list for each element of existingList.
+    // Meaning that if toDiscard is big, converting it to a HashSet might be more efficient. However,
+    // the read-before-write this operation requires limits its usefulness on big lists, so in practice
+    // toDiscard will be small and keeping a list will be more efficient.
+    auto&& to_discard = lvalue->_elements;
+    collection_type_impl::mutation mnew;
+    for (auto&& cell : elist.cells) {
+        auto have_value = [&] (bytes_view value) {
+            return std::find_if(to_discard.begin(), to_discard.end(),
+                                [ltype, value] (auto&& v) { return ltype->get_elements_type()->equal(v, value); })
+                                         != to_discard.end();
+        };
+        if (cell.second.is_live() && have_value(cell.second.value())) {
+            mnew.cells.emplace_back(bytes(cell.first.begin(), cell.first.end()), params.make_dead_cell());
+        }
+    }
+    auto mnew_ser = ltype->serialize_mutation_form(mnew);
+    m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(mnew_ser)));
+}
+
 }
