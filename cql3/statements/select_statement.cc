@@ -101,7 +101,7 @@ select_statement::execute(service::storage_proxy& proxy, lw_shared_ptr<query::re
 shared_ptr<transport::messages::result_message>
 select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd,
         const query_options& options, db_clock::time_point now) {
-    auto builder = _selection->make_result_set_builder(now, options.get_protocol_version());
+    auto builder = _selection->make_result_set_builder(now, options.get_serialization_format());
 
     auto add_value = [builder] (const column_definition& def, std::experimental::optional<atomic_cell_or_collection>& cell) {
         if (!cell) {

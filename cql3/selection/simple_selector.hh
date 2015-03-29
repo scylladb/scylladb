@@ -71,12 +71,12 @@ public:
         , _type(type)
     { }
 
-    virtual void add_input(int32_t protocol_version, result_set_builder& rs) override {
+    virtual void add_input(serialization_format sf, result_set_builder& rs) override {
         // TODO: can we steal it?
         _current = rs.current[_idx];
     }
 
-    virtual bytes_opt get_output(int32_t protocol_version) override {
+    virtual bytes_opt get_output(serialization_format sf) override {
         return std::move(_current);
     }
 

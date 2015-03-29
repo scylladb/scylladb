@@ -65,11 +65,11 @@ protected:
             _current.clear();
         }
 
-        virtual std::vector<bytes_opt> get_output_row(int32_t protocol_version) override {
+        virtual std::vector<bytes_opt> get_output_row(serialization_format sf) override {
             return std::move(_current);
         }
 
-        virtual void add_input_row(int32_t protocol_version, result_set_builder& rs) override {
+        virtual void add_input_row(serialization_format sf, result_set_builder& rs) override {
             _current = std::move(rs.current);
         }
 
@@ -133,18 +133,18 @@ protected:
             return _factories->contains_only_aggregate_functions();
         }
 
-        virtual std::vector<bytes_opt> get_output_row(int32_t protocol_version) override {
+        virtual std::vector<bytes_opt> get_output_row(serialization_format sf) override {
             std::vector<bytes_opt> output_row;
             output_row.reserve(_selectors.size());
             for (auto&& s : _selectors) {
-                output_row.emplace_back(s->get_output(protocol_version));
+                output_row.emplace_back(s->get_output(sf));
             }
             return output_row;
         }
 
-        virtual void add_input_row(int32_t protocol_version, result_set_builder& rs) {
+        virtual void add_input_row(serialization_format sf, result_set_builder& rs) {
             for (auto&& s : _selectors) {
-                s->add_input(protocol_version, rs);
+                s->add_input(sf, rs);
             }
         }
     };
@@ -197,11 +197,11 @@ selection::collect_metadata(schema_ptr schema, const std::vector<::shared_ptr<ra
     return r;
 }
 
-result_set_builder::result_set_builder(selection& s, db_clock::time_point now, int32_t protocol_version)
+result_set_builder::result_set_builder(selection& s, db_clock::time_point now, serialization_format sf)
     : _result_set(std::make_unique<result_set>(::make_shared<metadata>(*(s.get_result_metadata()))))
     , _selectors(s.new_selectors())
     , _now(now)
-    , _protocol_version(protocol_version)
+    , _serialization_format(sf)
 {
     if (s._collect_timestamps) {
         _timestamps.resize(s._columns.size(), 0);
