@@ -57,12 +57,12 @@ public:
 // data_stream_at() API below.
 class compressed_file_random_access_reader : public random_access_reader {
     lw_shared_ptr<file> _file;
-    lw_shared_ptr<compression_metadata> _cm;
+    sstables::compression* _cm;
 public:
     explicit compressed_file_random_access_reader(
-                lw_shared_ptr<file> f, lw_shared_ptr<compression_metadata> cm)
+                lw_shared_ptr<file> f, sstables::compression* cm)
         : _file(std::move(f))
-        , _cm(std::move(cm))
+        , _cm(cm)
     {
         seek(0);
     }
@@ -746,11 +746,10 @@ future<> sstable::load() {
     }).then([this] {
         return open_data();
     }).then([this] {
-        // After we have _compression and _data_file_size, we can build
-        // _compression_metatadata (and invalidate _compression).
+        // After we have _compression and _data_file_size, we can update
+        // _compression with additional information it needs:
         if (has_component(sstable::component_type::CompressionInfo)) {
-            _compression_metadata = make_lw_shared<compression_metadata>(
-                    std::move(_compression), _data_file_size);
+            _compression.update(_data_file_size);
         }
     });
 }
@@ -783,9 +782,9 @@ sstable::format_types sstable::format_from_sstring(sstring &s) {
 }
 
 input_stream<char> sstable::data_stream_at(uint64_t pos) {
-    if (_compression_metadata) {
+    if (_compression) {
         return make_compressed_file_input_stream(
-                _data_file, _compression_metadata, pos);
+                _data_file, &_compression, pos);
     } else {
         return make_file_input_stream(_data_file, pos);
     }

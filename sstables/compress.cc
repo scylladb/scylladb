@@ -14,36 +14,35 @@
 #include <zlib.h>
 #include <snappy-c.h>
 
-compression_metadata::compression_metadata(
-                sstables::compression &&c, uint64_t compressed_file_length)
-        : _compressed_file_length(compressed_file_length)
-        , _data_length(c.data_len)
-        , _chunk_offsets(std::move(c.offsets.elements))
-        , _chunk_length(c.chunk_len)
-{
-    // FIXME: also need compressed_file_length as parameter! We don't have it in sstables::compression
-    // FIXME: also process c.options (for crc-check frequency, etc.)
-    if (c.name.value == "LZ4Compressor") {
-        _uncompress = uncompress_lz4;
-    } else if (c.name.value == "SnappyCompressor") {
-        _uncompress = uncompress_snappy;
-    } else if (c.name.value == "DeflateCompressor") {
-        _uncompress = uncompress_deflate;
-    } else {
-        throw std::runtime_error("unsupported compression type");
-    }
+namespace sstables {
+
+void compression::update(uint64_t compressed_file_length) {
+    // FIXME: also process _compression.options (just for crc-check frequency)
+     if (name.value == "LZ4Compressor") {
+         _uncompress = uncompress_lz4;
+     } else if (name.value == "SnappyCompressor") {
+         _uncompress = uncompress_snappy;
+     } else if (name.value == "DeflateCompressor") {
+         _uncompress = uncompress_deflate;
+     } else {
+         throw std::runtime_error("unsupported compression type");
+     }
+
+     _compressed_file_length = compressed_file_length;
 }
 
-compression_metadata::chunk_and_offset
-compression_metadata::locate(uint64_t position) const {
+compression::chunk_and_offset
+compression::locate(uint64_t position) const {
     auto ucl = uncompressed_chunk_length();
     auto chunk_index = position / ucl;
     decltype(ucl) chunk_offset = position % ucl;
-    auto chunk_start = _chunk_offsets.at(chunk_index);
-    auto chunk_end = (chunk_index + 1 == _chunk_offsets.size())
+    auto chunk_start = offsets.elements.at(chunk_index);
+    auto chunk_end = (chunk_index + 1 == offsets.elements.size())
             ? _compressed_file_length
-            : _chunk_offsets.at(chunk_index + 1);
+            : offsets.elements.at(chunk_index + 1);
     return { chunk_start, chunk_end - chunk_start, chunk_offset };
+}
+
 }
 
 size_t uncompress_lz4(const char* input, size_t input_len,
@@ -146,12 +145,12 @@ read_exactly(lw_shared_ptr<file> f, uint64_t start, uint64_t len) {
 
 class compressed_file_data_source_impl : public data_source_impl {
     lw_shared_ptr<file> _file;
-    lw_shared_ptr<compression_metadata> _compression_metadata;
+    sstables::compression* _compression_metadata;
     uint64_t _pos = 0;
 public:
     compressed_file_data_source_impl(lw_shared_ptr<file> f,
-            lw_shared_ptr<compression_metadata> cm, uint64_t pos)
-            : _file(std::move(f)), _compression_metadata(std::move(cm)),
+            sstables::compression* cm, uint64_t pos)
+            : _file(std::move(f)), _compression_metadata(cm),
               _pos(pos)
             {}
     virtual future<temporary_buffer<char>> get() override {
@@ -191,16 +190,15 @@ public:
 class compressed_file_data_source : public data_source {
 public:
     compressed_file_data_source(lw_shared_ptr<file> f,
-            lw_shared_ptr<compression_metadata> cm, uint64_t offset)
+            sstables::compression* cm, uint64_t offset)
         : data_source(std::make_unique<compressed_file_data_source_impl>(
-                std::move(f), std::move(cm), offset))
+                std::move(f), cm, offset))
         {}
 };
 
 input_stream<char> make_compressed_file_input_stream(
-        lw_shared_ptr<file> f, lw_shared_ptr<compression_metadata> cm,
-        uint64_t offset)
+        lw_shared_ptr<file> f, sstables::compression* cm, uint64_t offset)
 {
     return input_stream<char>(compressed_file_data_source(
-            std::move(f), std::move(cm), offset));
+            std::move(f), cm, offset));
 }

@@ -54,7 +54,6 @@ private:
     std::unordered_set<component_type, enum_hash<component_type>> _components;
 
     compression _compression;
-    lw_shared_ptr<compression_metadata> _compression_metadata;
     filter _filter;
     summary _summary;
     statistics _statistics;

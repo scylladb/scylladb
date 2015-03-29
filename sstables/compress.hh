@@ -13,8 +13,8 @@
 // The compressed size of each chunk is different, so for allowing seeking
 // to a particular position in the uncompressed data, we need to also know
 // the position of each chunk. This offset vector is supplied externally as
-// a "compression_metadata" object (in Cassandra, this is read from a
-// separate "compression info" file).
+// a "compression_metadata" object, which also contains additional information
+// needed from decompression - such as the chunk size and compressor type.
 //
 // Cassandra supports three different compression algorithms for the chunks,
 // LZ4, Snappy, and Deflate - the default (and therefore most important) is
@@ -35,8 +35,7 @@
 #include "core/file.hh"
 #include "core/reactor.hh"
 #include "core/shared_ptr.hh"
-
-#include "sstables/types.hh"
+#include "types.hh"
 
 // An "uncompress_func" is a function which uncompresses the given compressed
 // input chunk, and writes the uncompressed data into the given output buffer.
@@ -53,17 +52,30 @@ uncompress_func uncompress_deflate;
 
 uint32_t checksum_adler32(const char* input, size_t input_len);
 
-class compression_metadata {
+namespace sstables {
+
+struct compression {
+    disk_string<uint16_t> name;
+    disk_array<uint32_t, option> options;
+    uint32_t chunk_len;
+    uint64_t data_len;
+    disk_array<uint32_t, uint64_t> offsets;
+
+    template <typename Describer>
+    future<> describe_type(Describer f) { return f(name, options, chunk_len, data_len, offsets); }
+
 private:
+    // Variables determined from the above deserialized values, held for convenience:
+    uncompress_func *_uncompress = nullptr;
+    // Variables *not* found in the "Compression Info" file (added by update()):
     uint64_t _compressed_file_length;
-    uint64_t _data_length;
-    // FIXME: There is no real reason why _chunk_offsets needs to be a
-    // contiguous vector. It could also be something non-contiguous, like
-    // std::dequeue. It also doesn't strictly need to be read up front.
-    std::vector<uint64_t> _chunk_offsets;
-    uncompress_func *_uncompress = uncompress_lz4;
-    unsigned _chunk_length = 65536; // constant size of uncompressed chunk
 public:
+    // After changing _compression, update() must be called to update
+    // additional variables depending on it.
+    void update(uint64_t compressed_file_length);
+    operator bool() const {
+        return _uncompress != nullptr;
+    }
     // locate() locates in the compressed file the given byte position of
     // the uncompressed data:
     //   1. The byte range containing the appropriate compressed chunk, and
@@ -80,18 +92,22 @@ public:
     chunk_and_offset locate(uint64_t position) const;
 
     unsigned uncompressed_chunk_length() const noexcept {
-        return _chunk_length;
+        return chunk_len;
     }
     size_t uncompress(
             const char* input, size_t input_len,
             char* output, size_t output_len) const {
         return _uncompress(input, input_len, output, output_len);
     }
-    // Move constructor from "struct compression". TODO: think if instead of
-    // such constructor, we should somehow unify these two types.
-    compression_metadata(sstables::compression &&c, uint64_t compressed_file_length);
 };
 
+}
+
+
+// Note: compression_metadata is passed by reference; The caller is
+// responsible for keeping the compression_metadata alive as long as there
+// are open streams on it. This should happen naturally on a higher level -
+// as long as we have *sstables* work in progress, we need to keep the whole
+// sstable alive, and the compression metadata is only a part of it.
 input_stream<char> make_compressed_file_input_stream(
-        lw_shared_ptr<file> f, lw_shared_ptr<compression_metadata> cm,
-        uint64_t offset = 0);
+        lw_shared_ptr<file> f, sstables::compression *cm, uint64_t offset = 0);

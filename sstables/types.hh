@@ -38,17 +38,6 @@ struct option {
     future<> describe_type(Describer f) { return f(key, value); }
 };
 
-struct compression {
-    disk_string<uint16_t> name;
-    disk_array<uint32_t, option> options;
-    uint32_t chunk_len;
-    uint64_t data_len;
-    disk_array<uint32_t, uint64_t> offsets;
-
-    template <typename Describer>
-    future<> describe_type(Describer f) { return f(name, options, chunk_len, data_len, offsets); }
-};
-
 struct filter {
     uint32_t hashes;
     disk_array<uint32_t, uint64_t> buckets;
