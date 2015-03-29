@@ -31,6 +31,7 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::RANGE_QUERIES: return out << "RANGE_QUERIES";
         case cause::THRIFT: return out << "THRIFT";
         case cause::VALIDATION: return out << "VALIDATION";
+        case cause::REVERSED: return out << "REVERSED";
     }
     assert(0);
 }

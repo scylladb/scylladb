@@ -1024,8 +1024,30 @@ public:
             return;
         }
 
-        // See org.apache.cassandra.transport.DataType#fromType and org.apache.cassandra.transport.OptionCodec#writeOne
-        fail(unimplemented::cause::COLLECTIONS);
+        if (type->is_reversed()) {
+            fail(unimplemented::cause::REVERSED);
+        }
+        if (type->is_collection()) {
+            auto&& ctype = static_cast<collection_type_impl*>(type.get());
+            if (&ctype->_kind == &collection_type_impl::kind::map) {
+                r.write_short(uint16_t(type_id::MAP));
+                auto&& mtype = static_cast<map_type_impl*>(ctype);
+                encode(r, mtype->get_keys_type());
+                encode(r, mtype->get_values_type());
+            } else if (&ctype->_kind == &collection_type_impl::kind::set) {
+                r.write_short(uint16_t(type_id::SET));
+                auto&& stype = static_cast<set_type_impl*>(ctype);
+                encode(r, stype->get_elements_type());
+            } else if (&ctype->_kind == &collection_type_impl::kind::list) {
+                r.write_short(uint16_t(type_id::LIST));
+                auto&& ltype = static_cast<list_type_impl*>(ctype);
+                encode(r, ltype->get_elements_type());
+            } else {
+                abort();
+            }
+            return;
+        }
+        abort();
     }
 };
 

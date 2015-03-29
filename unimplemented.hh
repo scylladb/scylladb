@@ -29,7 +29,8 @@ enum class cause {
     COLLECTION_RANGE_TOMBSTONES,
     RANGE_QUERIES,
     THRIFT,
-    VALIDATION
+    VALIDATION,
+    REVERSED,
 };
 
 void fail(cause what) __attribute__((noreturn));
