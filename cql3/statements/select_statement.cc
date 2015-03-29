@@ -110,18 +110,10 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
         }
 
         if (def.type->is_multi_cell()) {
-            fail(unimplemented::cause::COLLECTIONS);
-#if 0
-            List<Cell> cells = row.getMultiCellColumn(def.name);
-            ByteBuffer buffer = cells == null
-                             ? null
-                             : ((CollectionType)def.type).serializeForNativeProtocol(cells, options.getProtocolVersion());
-            result.add(buffer);
-            return;
-#endif
+            builder->add(def, cell->as_collection_mutation());
+        } else {
+            builder->add(def, cell->as_atomic_cell());
         }
-
-        builder->add(def, cell->as_atomic_cell());
     };
 
     for (auto&& e : results->partitions) {

@@ -251,13 +251,12 @@ public:
             }
             _ttls[current.size() - 1] = ttl.count();
         }
-#if 0
-            List<Cell> cells = row.getMultiCellColumn(def.name);
-            ByteBuffer buffer = cells == null
-                ? null
-                : ((CollectionType)def.type).serializeForNativeProtocol(cells, options.getProtocolVersion());
-            result.add(buffer);
-#endif
+    }
+
+    void add(const column_definition& def, collection_mutation::view c) {
+        auto&& ctype = static_cast<collection_type_impl*>(def.type.get());
+        current.emplace_back(ctype->to_value(c, _serialization_format));
+        // timestamps, ttls meaningless for collections
     }
 
     void new_row() {
