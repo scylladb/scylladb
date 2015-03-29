@@ -690,6 +690,11 @@ collection_type_impl::as_cql3_type() {
     return _cql3_type;
 }
 
+bytes
+collection_type_impl::to_value(collection_mutation::view mut, serialization_format sf) {
+    return to_value(deserialize_mutation_form(mut), sf);
+}
+
 collection_type_impl::mutation
 collection_type_impl::mutation_view::materialize() const {
     collection_type_impl::mutation m;
