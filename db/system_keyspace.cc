@@ -145,9 +145,8 @@ schema_ptr built_indexes() {
                 {"release_version", utf8_type},
                 {"schema_version", uuid_type},
                 {"thrift_version", utf8_type},
-                // FIXME: Cassandra also had these columns:
-                //    "tokens set<varchar>,"
-                //    "truncated_at map<uuid, blob>,"
+                {"tokens", set_type_impl::get_instance(utf8_type, false)},
+                {"truncated_at", map_type_impl::get_instance(uuid_type, bytes_type, false)},
         },
         // static columns
         {},
@@ -174,8 +173,7 @@ schema_ptr built_indexes() {
                 {"release_version", utf8_type},
                 {"rpc_address", inet_addr_type},
                 {"schema_version", utf8_type},
-                // FIXME: Cassandra also had these columns:
-                //    "tokens set<varchar>,"
+                {"tokens", set_type_impl::get_instance(utf8_type, false)},
         },
         // static columns
         {},
@@ -194,9 +192,9 @@ schema_ptr built_indexes() {
         // clustering key
         {},
         // regular columns
-        // FIXME: Cassandra also had this column:
-        // hints_dropped map<uuid, int>,
-        {},
+        {
+            {"hints_dropped", map_type_impl::get_instance(uuid_type, int32_type, false)},
+        },
         // static columns
         {},
         // regular column name type
@@ -234,8 +232,7 @@ schema_ptr built_indexes() {
         // regular columns
         {
             {"columnfamily_name", utf8_type},
-            // FIXME: Cassandra also had an additional column here:
-            // "inputs set<int>,"
+            {"inputs", set_type_impl::get_instance(int32_type, false)},
             {"keyspace_name", utf8_type},
         },
         // static columns
@@ -261,8 +258,7 @@ schema_ptr built_indexes() {
             {"columnfamily_name", utf8_type},
             {"compacted_at", timestamp_type},
             {"keyspace_name", utf8_type},
-            // FIXME: Cassandra also had an additional column here:
-            // rows_merged map<int, bigint>
+            {"rows_merged", map_type_impl::get_instance(int32_type, long_type, false)},
         },
         // static columns
         {},
@@ -289,8 +285,8 @@ schema_ptr built_indexes() {
         // regular columns
         {
             // FIXME: Cassandra also had two additional columns here:
-            // "rate_120m double,"
-            // "rate_15m double,"
+            {"rate_120m", double_type},
+            {"rate_15m", double_type},
         },
         // static columns
         {},
