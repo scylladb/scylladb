@@ -919,7 +919,7 @@ map_type_impl::to_value(mutation_view mut, serialization_format sf) {
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size() * 2);
     for (auto&& e : mut.cells) {
-        if (e.second.is_live()) {
+        if (e.second.is_live(mut.tomb)) {
             tmp.emplace_back(e.first);
             tmp.emplace_back(e.second.value());
         }
@@ -1288,7 +1288,7 @@ set_type_impl::to_value(mutation_view mut, serialization_format sf) {
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size());
     for (auto&& e : mut.cells) {
-        if (e.second.is_live()) {
+        if (e.second.is_live(mut.tomb)) {
             tmp.emplace_back(e.first);
         }
     }
@@ -1452,7 +1452,7 @@ list_type_impl::to_value(mutation_view mut, serialization_format sf) {
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size());
     for (auto&& e : mut.cells) {
-        if (e.second.is_live()) {
+        if (e.second.is_live(mut.tomb)) {
             tmp.emplace_back(e.second.value());
         }
     }
