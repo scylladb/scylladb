@@ -132,7 +132,7 @@ column_family::find_or_create_partition(const partition_key& key) {
 row&
 column_family::find_or_create_row(const partition_key& partition_key, const clustering_key& clustering_key) {
     mutation_partition& p = find_or_create_partition(partition_key);
-    return p.clustered_row(clustering_key);
+    return p.clustered_row(clustering_key).cells;
 }
 
 static inline int8_t hex_to_int(unsigned char c) {
@@ -510,7 +510,8 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
             auto e = new rows_entry(entry);
             _rows.insert(i, *e);
         } else {
-            i->apply(entry.row().t);
+            i->row().t.apply(entry.row().t);
+            i->row().created_at = std::max(i->row().created_at, entry.row().created_at);
             merge_cells(i->row().cells, entry.row().cells, find_regular_column_def);
         }
     }
@@ -610,15 +611,15 @@ mutation_partition::find_row(const clustering_key& key) {
     return &i->row().cells;
 }
 
-row&
+deletable_row&
 mutation_partition::clustered_row(const clustering_key& key) {
     auto i = _rows.find(key);
     if (i == _rows.end()) {
         auto e = new rows_entry(key);
         _rows.insert(i, *e);
-        return e->row().cells;
+        return e->row();
     }
-    return i->row().cells;
+    return i->row();
 }
 
 bool column_definition::is_compact_value() const {
@@ -653,6 +654,70 @@ mutation_partition::range(const schema& schema, const query::range<clustering_ke
     return boost::make_iterator_range(i1, i2);
 }
 
+void mutation::set_static_cell(const column_definition& def, atomic_cell_or_collection value) {
+    update_column(p.static_row(), def, std::move(value));
+}
+
+void mutation::set_clustered_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value) {
+    auto& row = p.clustered_row(clustering_key::from_clustering_prefix(*schema, prefix)).cells;
+    update_column(row, def, std::move(value));
+}
+
+void mutation::set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection value) {
+    auto& row = p.clustered_row(key).cells;
+    update_column(row, def, std::move(value));
+}
+
+void mutation::set_cell(const exploded_clustering_prefix& prefix, const bytes& name, const boost::any& value,
+        api::timestamp_type timestamp, ttl_opt ttl) {
+    auto column_def = schema->get_column_definition(name);
+    if (!column_def) {
+        throw std::runtime_error(sprint("no column definition found for '%s'", name));
+    }
+    return set_cell(prefix, *column_def, atomic_cell::make_live(timestamp, ttl, column_def->type->decompose(value)));
+}
+
+void mutation::set_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value) {
+    if (def.is_static()) {
+        set_static_cell(def, std::move(value));
+    } else if (def.is_regular()) {
+        set_clustered_cell(prefix, def, std::move(value));
+    } else {
+        throw std::runtime_error("attemting to store into a key cell");
+    }
+}
+
+std::experimental::optional<atomic_cell_or_collection>
+mutation::get_cell(const clustering_key& rkey, const column_definition& def) {
+    auto find_cell = [&def] (row& r) {
+        auto i = r.find(def.id);
+        if (i == r.end()) {
+            return std::experimental::optional<atomic_cell_or_collection>{};
+        }
+        return std::experimental::optional<atomic_cell_or_collection>{i->second};
+    };
+    if (def.is_static()) {
+        return find_cell(p.static_row());
+    } else {
+        auto r = p.find_row(rkey);
+        if (!r) {
+            return {};
+        }
+        return find_cell(*r);
+    }
+}
+
+void mutation::update_column(row& row, const column_definition& def, atomic_cell_or_collection&& value) {
+    // our mutations are not yet immutable
+    auto id = def.id;
+    auto i = row.lower_bound(id);
+    if (i == row.end() || i->first != id) {
+        row.emplace_hint(i, id, std::move(value));
+    } else {
+        merge_column(def, i->second, value);
+    }
+}
+
 template <typename ColumnDefResolver>
 static query::result::row get_row_slice(const row& cells, const std::vector<column_id>& columns, tombstone tomb,
         ColumnDefResolver&& id_to_def) {
@@ -666,56 +731,86 @@ static query::result::row get_row_slice(const row& cells, const std::vector<colu
             auto def = id_to_def(id);
             if (def.is_atomic()) {
                 auto c = i->second.as_atomic_cell();
-                if (c.timestamp() < tomb.timestamp) {
-                    result_row.cells.emplace_back(std::experimental::make_optional(
-                        atomic_cell_or_collection::from_atomic_cell(
-                            atomic_cell::make_dead(tomb.timestamp, tomb.ttl))));
+                if (!c.is_live(tomb)) {
+                    result_row.cells.emplace_back();
                 } else {
                     result_row.cells.emplace_back(std::experimental::make_optional(i->second));
                 }
             } else {
                 auto&& cell = i->second.as_collection_mutation();
                 auto&& ctype = static_pointer_cast<collection_type_impl>(def.type);
-                // cannot use mutation_view, since we'll modify some of the values
-                // FIXME: work around this somehow
-                collection_type_impl::mutation m = ctype->deserialize_mutation_form(cell).materialize();
-                for (auto&& e : m.cells) {
-                    auto& value = e.second;
-                    if (value.timestamp() < tomb.timestamp) {
-                        value = atomic_cell::make_dead(tomb.timestamp, tomb.ttl);
-                    }
-                }
-                auto m_ser = ctype->serialize_mutation_form(m);
-                result_row.cells.emplace_back(std::experimental::make_optional(
+                auto m_view = ctype->deserialize_mutation_form(cell);
+                m_view.tomb.apply(tomb);
+                auto m_ser = ctype->serialize_mutation_form_only_live(m_view);
+                if (ctype->is_empty(m_ser)) {
+                    result_row.cells.emplace_back();
+                } else {
+                    result_row.cells.emplace_back(std::experimental::make_optional(
                         atomic_cell_or_collection::from_collection_mutation(std::move(m_ser))));
+                }
             }
         }
     }
     return result_row;
 }
 
+template <typename ColumnDefResolver>
+bool has_any_live_data(const row& cells, tombstone tomb, ColumnDefResolver&& id_to_def) {
+    for (auto&& e : cells) {
+        auto&& cell_or_collection = e.second;
+        const column_definition& def = id_to_def(e.first);
+        if (def.is_atomic()) {
+            auto&& c = cell_or_collection.as_atomic_cell();
+            if (c.is_live(tomb)) {
+                return true;
+            }
+        } else {
+            auto&& cell = cell_or_collection.as_collection_mutation();
+            auto&& ctype = static_pointer_cast<collection_type_impl>(def.type);
+            if (ctype->is_any_live(cell, tomb)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 query::result::partition
 column_family::get_partition_slice(mutation_partition& partition, const query::partition_slice& slice, uint32_t limit) {
     query::result::partition result;
 
-    if (limit == 0) {
-        return result;
-    }
+    auto regular_column_resolver = [this] (column_id id) {
+        return _schema->regular_column_at(id);
+    };
 
     for (auto&& range : slice.row_ranges) {
+        if (limit == 0) {
+            return result;
+        }
+
         // FIXME: Optimize for a full-tuple singular range. mutation_partition::range()
         // does two lookups to form a range, even for singular range. We need
         // only one lookup for a full-tuple singular range though.
-        for (auto&& row : partition.range(*_schema, range)) {
-            auto&& cells = row.row().cells;
+        for (auto&& e : partition.range(*_schema, range)) {
+            auto& row = e.row();
+            auto&& cells = row.cells;
 
-            // FIXME: handle removed rows properly. In CQL rows are separate entities (can be live or dead).
-            auto row_tombstone = partition.tombstone_for_row(*_schema, row);
+            auto row_tombstone = partition.tombstone_for_row(*_schema, e);
+            auto result_row = get_row_slice(cells, slice.regular_columns, row_tombstone, regular_column_resolver);
+            auto row_is_live = row.created_at > row_tombstone.timestamp;
 
-            result.rows.emplace_back(row.key(), get_row_slice(cells, slice.regular_columns, row_tombstone,
-                [this] (column_id id) { return _schema->regular_column_at(id); }));
-            if (--limit == 0) {
-                break;
+            // row_is_live is true for rows created using 'insert' statement
+            // which are not deleted yet. Such rows are considered as present
+            // even if no regular columns are live. Otherwise, a row is
+            // considered present if it has any cell which is live. So if
+            // we've got no live cell in the results we still have to check if
+            // any of the row's cell is live and we should return the row in
+            // such case.
+            if (row_is_live || !result_row.all_cells_empty() || has_any_live_data(cells, row_tombstone, regular_column_resolver)) {
+                result.rows.emplace_back(e.key(), std::move(result_row));
+                if (--limit == 0) {
+                    break;
+                }
             }
         }
     }

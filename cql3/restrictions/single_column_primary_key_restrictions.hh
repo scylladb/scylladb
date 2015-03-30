@@ -155,15 +155,24 @@ public:
 
         if (_restrictions->is_all_eq()) {
             ranges.reserve(1);
+            if (_restrictions->size() == 1) {
+                auto&& e = *_restrictions->restrictions().begin();
+                const column_definition* def = e.first;
+                auto&& r = e.second;
+                auto&& val = r->value(options);
+                if (!val) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", def->name_as_text()));
+                }
+                ranges.emplace_back(range_type::make_singular(ValueType::from_single_value(*_schema, std::move(*val))));
+                return ranges;
+            }
             std::vector<bytes> components;
             components.reserve(_restrictions->size());
             for (auto&& e : _restrictions->restrictions()) {
                 const column_definition* def = e.first;
                 auto&& r = e.second;
                 assert(components.size() == _schema->position(*def));
-                auto values = r->values(options);
-                assert(values.size() == 1);
-                auto&& val = values[0];
+                auto&& val = r->value(options);
                 if (!val) {
                     throw exceptions::invalid_request_exception(sprint("Invalid null primary key part %s", def->name_as_text()));
                 }

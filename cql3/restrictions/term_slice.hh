@@ -27,7 +27,6 @@
 #include "cql3/restrictions/abstract_restriction.hh"
 #include "cql3/term.hh"
 #include "core/shared_ptr.hh"
-#include "database.hh"
 #include "to_string.hh"
 #include "exceptions/exceptions.hh"
 

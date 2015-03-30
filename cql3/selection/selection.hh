@@ -24,7 +24,7 @@
 
 #pragma once
 
-#include "database.hh"
+#include "bytes.hh"
 #include "schema.hh"
 #include "cql3/column_specification.hh"
 #include "exceptions/exceptions.hh"

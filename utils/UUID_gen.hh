@@ -27,7 +27,6 @@
 #include <chrono>
 
 #include "UUID.hh"
-#include "database.hh"
 #include "db_clock.hh"
 
 namespace utils {

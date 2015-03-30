@@ -6,6 +6,7 @@
 
 #include "bytes.hh"
 #include "timestamp.hh"
+#include "tombstone.hh"
 #include "gc_clock.hh"
 #include <cstdint>
 
@@ -101,6 +102,9 @@ public:
     static atomic_cell_view from_bytes(bytes_view data) { return atomic_cell_view(data); }
     bool is_live() const {
         return atomic_cell_type::is_live(_data);
+    }
+    bool is_live(tombstone t) const {
+        return is_live() && timestamp() > t.timestamp;
     }
     bool is_live_and_has_ttl() const {
         return atomic_cell_type::is_live_and_has_ttl(_data);

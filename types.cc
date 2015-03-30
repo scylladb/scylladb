@@ -14,6 +14,8 @@
 #include <cmath>
 #include <sstream>
 #include <boost/iterator/transform_iterator.hpp>
+#include <boost/range/adaptor/filtered.hpp>
+#include <boost/range/numeric.hpp>
 
 template<typename T>
 struct simple_type_traits {
@@ -441,6 +443,13 @@ struct uuid_type_impl : abstract_type {
 
 std::ostream& operator<<(std::ostream& os, const bytes& b) {
     return os << to_hex(b);
+}
+
+std::ostream& operator<<(std::ostream& os, const bytes_opt& b) {
+    if (b) {
+        return os << *b;
+    }
+    return os << "null";
 }
 
 struct inet_addr_type_impl : abstract_type {
@@ -960,37 +969,63 @@ auto collection_type_impl::deserialize_mutation_form(collection_mutation::view c
     return ret;
 }
 
+bool collection_type_impl::is_empty(collection_mutation::view cm) {
+    auto&& in = cm.data;
+    auto has_tomb = read_simple<bool>(in);
+    if (has_tomb) {
+        in.remove_prefix(sizeof(api::timestamp_type) + sizeof(gc_clock::duration::rep));
+    }
+    return read_simple<uint32_t>(in) == 0;
+}
+
+bool collection_type_impl::is_any_live(collection_mutation::view cm, tombstone tomb) {
+    auto&& in = cm.data;
+    auto has_tomb = read_simple<bool>(in);
+    if (has_tomb) {
+        auto ts = read_simple<api::timestamp_type>(in);
+        auto ttl = read_simple<gc_clock::duration::rep>(in);
+        tomb.apply(tombstone{ts, gc_clock::time_point(gc_clock::duration(ttl))});
+    }
+    auto nr = read_simple<uint32_t>(in);
+    for (uint32_t i = 0; i != nr; ++i) {
+        auto ksize = read_simple<uint32_t>(in);
+        in.remove_prefix(ksize);
+        auto vsize = read_simple<uint32_t>(in);
+        auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
+        if (value.is_live(tomb)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 template <typename Iterator>
 collection_mutation::one
 do_serialize_mutation_form(
         std::experimental::optional<tombstone> tomb,
-        Iterator begin, Iterator end) {
-    auto element_size = [] (auto&& e) -> size_t {
-        return 8 + e.first.size() + e.second.serialize().size();
+        boost::iterator_range<Iterator> cells) {
+    auto element_size = [] (size_t c, auto&& e) -> size_t {
+        return c + 8 + e.first.size() + e.second.serialize().size();
     };
-    auto size = std::accumulate(
-            boost::make_transform_iterator(begin, element_size),
-            boost::make_transform_iterator(end, element_size),
-            4);
+    auto size = accumulate(cells, (size_t)4, element_size);
     size += 1;
     if (tomb) {
-        size += sizeof(tomb->timestamp) + sizeof(tomb->ttl);
+        size += sizeof(tomb->timestamp) + sizeof(tomb->deletion_time);
     }
     bytes ret(bytes::initialized_later(), size);
     bytes::iterator out = ret.begin();
     *out++ = bool(tomb);
     if (tomb) {
         write(out, tomb->timestamp);
-        write(out, tomb->ttl.time_since_epoch().count());
+        write(out, tomb->deletion_time.time_since_epoch().count());
     }
     auto writeb = [&out] (bytes_view v) {
         serialize_int32(out, v.size());
         out = std::copy_n(v.begin(), v.size(), out);
     };
     // FIXME: overflow?
-    serialize_int32(out, std::distance(begin, end));
-    while (begin != end) {
-        auto&& kv = *begin++;
+    serialize_int32(out, boost::distance(cells));
+    for (auto&& kv : cells) {
         auto&& k = kv.first;
         auto&& v = kv.second;
         writeb(k);
@@ -1001,12 +1036,19 @@ do_serialize_mutation_form(
 
 collection_mutation::one
 collection_type_impl::serialize_mutation_form(const mutation& mut) {
-    return do_serialize_mutation_form(mut.tomb, mut.cells.begin(), mut.cells.end());
+    return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
 }
 
 collection_mutation::one
 collection_type_impl::serialize_mutation_form(mutation_view mut) {
-    return do_serialize_mutation_form(mut.tomb, mut.cells.begin(), mut.cells.end());
+    return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
+}
+
+collection_mutation::one
+collection_type_impl::serialize_mutation_form_only_live(mutation_view mut) {
+    return do_serialize_mutation_form(mut.tomb, mut.cells | boost::adaptors::filtered([t = mut.tomb] (auto&& e) {
+        return e.second.is_live(t);
+    }));
 }
 
 collection_mutation::one

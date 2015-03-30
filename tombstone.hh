@@ -13,11 +13,11 @@
  */
 struct tombstone final {
     api::timestamp_type timestamp;
-    gc_clock::time_point ttl;
+    gc_clock::time_point deletion_time;
 
-    tombstone(api::timestamp_type timestamp, gc_clock::time_point ttl)
+    tombstone(api::timestamp_type timestamp, gc_clock::time_point deletion_time)
         : timestamp(timestamp)
-        , ttl(ttl)
+        , deletion_time(deletion_time)
     { }
 
     tombstone()
@@ -29,9 +29,9 @@ struct tombstone final {
             return -1;
         } else if (timestamp > t.timestamp) {
             return 1;
-        } else if (ttl < t.ttl) {
+        } else if (deletion_time < t.deletion_time) {
             return -1;
-        } else if (ttl > t.ttl) {
+        } else if (deletion_time > t.deletion_time) {
             return 1;
         } else {
             return 0;
@@ -73,7 +73,7 @@ struct tombstone final {
     }
 
     friend std::ostream& operator<<(std::ostream& out, const tombstone& t) {
-        return out << "{timestamp=" << t.timestamp << ", ttl=" << t.ttl.time_since_epoch().count() << "}";
+        return out << "{timestamp=" << t.timestamp << ", deletion_time=" << t.deletion_time.time_since_epoch().count() << "}";
     }
 };
 

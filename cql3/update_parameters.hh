@@ -25,7 +25,12 @@
 #ifndef CQL3_UPDATE_PARAMETERS_HH
 #define CQL3_UPDATE_PARAMETERS_HH
 
-#include "database.hh"
+#include "query.hh"
+#include "gc_clock.hh"
+#include "timestamp.hh"
+#include "schema.hh"
+#include "atomic_cell.hh"
+#include "tombstone.hh"
 #include "exceptions/exceptions.hh"
 
 namespace cql3 {
@@ -95,7 +100,7 @@ public:
     }
 
     tombstone make_tombstone_just_before() const {
-        return {_timestamp, _local_deletion_time - gc_clock::duration(1) };
+        return {_timestamp - 1, _local_deletion_time};
     }
 
 #if 0
@@ -114,7 +119,11 @@ public:
     }
 #endif
 
-    collection_mutation::view get_prefetched_list(const partition_key& pkey,
+    api::timestamp_type timestamp() const {
+        return _timestamp;
+    }
+
+    std::experimental::optional<collection_mutation::view> get_prefetched_list(const partition_key& pkey,
             const clustering_key& row_key, const column_definition& column) const {
         if (!_prefetched) {
             return {};
@@ -151,7 +160,7 @@ public:
         if (!cell) {
             return {};
         }
-        return cell->as_collection_mutation();
+        return {cell->as_collection_mutation()};
     }
 };
 

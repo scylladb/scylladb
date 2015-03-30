@@ -51,6 +51,33 @@ void delete_statement::add_update_for_key(mutation& m, const exploded_clustering
     }
 }
 
+::shared_ptr<modification_statement>
+delete_statement::parsed::prepare_internal(schema_ptr schema, ::shared_ptr<variable_specifications> bound_names,
+        std::unique_ptr<attributes> attrs) {
+
+    auto stmt = ::make_shared<delete_statement>(statement_type::DELETE, bound_names->size(), schema, std::move(attrs));
+
+    for (auto&& deletion : _deletions) {
+        auto&& id = deletion->affected_column()->prepare_column_identifier(schema);
+        auto def = get_column_definition(schema, *id);
+        if (!def) {
+            throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *id));
+        }
+
+        // For compact, we only have one value except the key, so the only form of DELETE that make sense is without a column
+        // list. However, we support having the value name for coherence with the static/sparse case
+        if (def->is_primary_key()) {
+            throw exceptions::invalid_request_exception(sprint("Invalid identifier %s for deletion (should not be a PRIMARY KEY part)", def->name_as_text()));
+        }
+
+        auto&& op = deletion->prepare(schema->ks_name, *def);
+        op->collect_marker_specification(bound_names);
+        stmt->add_operation(op);
+    }
+
+    stmt->process_where_clause(_where_clause, std::move(bound_names));
+    return stmt;
 }
 
+}
 }

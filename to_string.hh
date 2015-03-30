@@ -8,40 +8,36 @@
 #include <vector>
 #include <sstream>
 
-/**
- * Converts a vector of pointers to Printable elements.
- * Printable is an object which has to_string() method.
- */
 template<typename Printable>
 static inline
-sstring
-to_string(const std::vector<Printable>& items) {
-    // TODO: optimize
+sstring join(sstring delimiter, const std::vector<Printable>& items) {
+    return join(delimiter, items.begin(), items.end());
+}
+
+template<typename Iterator>
+static inline
+sstring join(sstring delimiter, Iterator begin, Iterator end) {
     std::ostringstream oss;
-    size_t left = items.size();
-    oss << "[";
-    for (auto&& item : items) {
-        oss << item;
-        if (left != 1) {
-            oss << ", ";
+    while (begin != end) {
+        oss << *begin;
+        ++begin;
+        if (begin != end) {
+            oss << delimiter;
         }
-        --left;
     }
-    oss << "]";
     return oss.str();
 }
 
 template<typename Printable>
 static inline
-sstring join(sstring delimiter, const std::vector<Printable>& items) {
-    std::ostringstream oss;
-    size_t left = items.size();
-    for (auto&& item : items) {
-        oss << item;
-        if (left != 1) {
-            oss << delimiter;
-        }
-        --left;
-    }
-    return oss.str();
+sstring
+to_string(const std::vector<Printable>& items) {
+    return "[" + join(", ", items) + "]";
+}
+
+template<typename Printable>
+static inline
+sstring
+to_string(std::initializer_list<Printable> items) {
+    return "[" + join(", ", std::begin(items), std::end(items)) + "]";
 }

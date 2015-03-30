@@ -24,7 +24,6 @@
 #pragma once
 
 #include "core/shared_ptr.hh"
-#include "database.hh"
 #include "core/sstring.hh"
 #include "util/serialization.hh"
 

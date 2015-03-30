@@ -123,7 +123,7 @@ public:
             ::shared_ptr<attributes::raw> attrs,
             std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<operation::raw_update>>> updates,
             std::vector<relation_ptr> where_clause,
-            std::vector<std::pair<::shared_ptr<column_identifier::raw>, ::shared_ptr<column_condition::raw>>> conditions)
+            conditions_vector conditions)
                 : modification_statement::parsed(std::move(name), std::move(attrs), std::move(conditions), false, false)
                 , _updates(std::move(updates))
                 , _where_clause(std::move(where_clause))

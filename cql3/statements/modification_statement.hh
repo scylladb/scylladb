@@ -456,10 +456,10 @@ public:
         const bool _if_not_exists;
         const bool _if_exists;
     protected:
-        parsed(::shared_ptr<cf_name> name, ::shared_ptr<attributes::raw> attrs, const conditions_vector& conditions, bool if_not_exists, bool if_exists)
+        parsed(::shared_ptr<cf_name> name, ::shared_ptr<attributes::raw> attrs, conditions_vector conditions, bool if_not_exists, bool if_exists)
             : cf_statement{std::move(name)}
-            , _attrs{attrs}
-            , _conditions{conditions}
+            , _attrs{std::move(attrs)}
+            , _conditions{std::move(conditions)}
             , _if_not_exists{if_not_exists}
             , _if_exists{if_exists}
         { }

@@ -26,7 +26,8 @@
 
 #include "exceptions/exceptions.hh"
 #include "unimplemented.hh"
-#include "database.hh"
+#include "timestamp.hh"
+#include "db_clock.hh"
 
 namespace service {
 

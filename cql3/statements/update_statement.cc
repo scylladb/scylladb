@@ -56,6 +56,11 @@ void update_statement::add_update_for_key(mutation& m, const exploded_clustering
                     update.execute(key, cf, prefix, params);
             }
 #endif
+    } else {
+        if (type == statement_type::INSERT && prefix) {
+            auto& row = m.p.clustered_row(clustering_key::from_clustering_prefix(*s, prefix));
+            row.created_at = params.timestamp();
+        }
     }
 
     for (auto&& update : _column_operations) {

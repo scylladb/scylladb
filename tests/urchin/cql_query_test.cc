@@ -8,6 +8,7 @@
 #include "core/distributed.hh"
 #include "tests/test-utils.hh"
 #include "tests/urchin/cql_test_env.hh"
+#include "to_string.hh"
 
 struct conversation_state {
     service::storage_proxy proxy;
@@ -148,6 +149,15 @@ public:
         return {*this};
     }
 
+    rows_assertions is_empty() {
+        auto row_count = _rows->rs().size();
+        if (row_count != 0) {
+            auto&& first_row = *_rows->rs().rows().begin();
+            BOOST_FAIL(sprint("Expected no rows, but got %d. First row: %s", row_count, to_string(first_row)));
+        }
+        return {*this};
+    }
+
     rows_assertions with_row(std::initializer_list<bytes_opt> values) {
         std::vector<bytes_opt> expected_row(values);
         for (auto&& row : _rows->rs().rows()) {
@@ -161,13 +171,26 @@ public:
 
     // Verifies that the result has the following rows and only that rows, in that order.
     rows_assertions with_rows(std::initializer_list<std::initializer_list<bytes_opt>> rows) {
-        with_size(rows.size());
-        BOOST_REQUIRE(std::equal(rows.begin(), rows.end(),
-            _rows->rs().rows().begin(), [] (auto&& lhs, auto&& rhs) {
-                return std::equal(
-                    std::begin(lhs), std::end(lhs),
-                    std::begin(rhs), std::end(rhs));
-        }));
+        auto actual_i = _rows->rs().rows().begin();
+        auto actual_end = _rows->rs().rows().end();
+        int row_nr = 0;
+        for (auto&& row : rows) {
+            if (actual_i == actual_end) {
+                BOOST_FAIL(sprint("Expected more rows (%d), got %d", rows.size(), _rows->rs().size()));
+            }
+            auto& actual = *actual_i;
+            if (!std::equal(
+                    std::begin(row), std::end(row),
+                    std::begin(actual), std::end(actual))) {
+                BOOST_FAIL(sprint("row %d differs, expected %s got %s", row_nr, to_string(row), to_string(actual)));
+            }
+            ++actual_i;
+            ++row_nr;
+        }
+        if (actual_i != actual_end) {
+            BOOST_FAIL(sprint("Expected less rows (%d), got %d. Next row is: %s", rows.size(), _rows->rs().size(),
+                to_string(*actual_i)));
+        }
         return {*this};
     }
 };
@@ -490,6 +513,104 @@ SEASTAR_TEST_CASE(test_query_with_static_columns) {
                 assert_that(msg).is_rows().with_rows({
                     {from_hex("01"), from_hex("02")},
                 });
+            });
+        }).then([&e] {
+            return e.execute_cql("update cf set v = null where k = 0x00 and c = 0x02;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select s1 from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01")},
+                });
+            });
+        }).then([&e] {
+            return e.execute_cql("insert into cf (k, c) values (0x00, 0x02);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select s1 from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01")},
+                    {from_hex("01")},
+                });
+            });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_deletion_scenarios) {
+    return do_with_cql_env([] (auto& e) {
+        return e.create_table([](auto ks) {
+            // CQL: create table cf (k bytes, c bytes, v bytes, primary key (k, c));
+            return schema(ks, "cf",
+                {{"k", bytes_type}}, {{"c", bytes_type}}, {{"v", bytes_type}}, {}, utf8_type);
+        }).then([&e] {
+            return e.execute_cql("insert into cf (k, c, v) values (0x00, 0x05, 0x01) using timestamp 1;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01")},
+                });
+            });
+        }).then([&e] {
+            return e.execute_cql("update cf using timestamp 2 set v = null where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {{}},
+                });
+            });
+        }).then([&e] {
+            // same tampstamp, dead cell wins
+            return e.execute_cql("update cf using timestamp 2 set v = 0x02 where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {{}},
+                });
+            });
+        }).then([&e] {
+            return e.execute_cql("update cf using timestamp 3 set v = 0x02 where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("02")},
+                });
+            });
+        }).then([&e] {
+            // same timestamp, greater value wins
+            return e.execute_cql("update cf using timestamp 3 set v = 0x03 where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("03")},
+                });
+            });
+        }).then([&e] {
+            // same tampstamp, delete whole row, delete should win
+            return e.execute_cql("delete from cf using timestamp 3 where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().is_empty();
+            });
+        }).then([&e] {
+            // same timestamp, update should be shadowed by range tombstone
+            return e.execute_cql("update cf using timestamp 3 set v = 0x04 where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().is_empty();
+            });
+        }).then([&e] {
+            return e.execute_cql("update cf using timestamp 4 set v = 0x04 where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("04")},
+                });
+            });
+        }).then([&e] {
+            // deleting an orphan cell (row is considered as deleted) yields no row
+            return e.execute_cql("update cf using timestamp 5 set v = null where k = 0x00 and c = 0x05;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().is_empty();
             });
         });
     });

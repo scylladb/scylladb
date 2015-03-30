@@ -50,4 +50,22 @@ public:
     virtual bool is_compatible_with(::shared_ptr <raw_update> other) override;
 };
 
+class operation::column_deletion : public raw_deletion {
+private:
+    ::shared_ptr<column_identifier::raw> _id;
+public:
+    column_deletion(::shared_ptr<column_identifier::raw> id)
+        : _id(std::move(id))
+    { }
+
+    virtual ::shared_ptr<column_identifier::raw> affected_column() override {
+        return _id;
+    }
+
+    ::shared_ptr<operation> prepare(const sstring& keyspace, const column_definition& receiver) {
+        // No validation, deleting a column is always "well typed"
+        return ::make_shared<constants::deleter>(receiver);
+    }
+};
+
 }

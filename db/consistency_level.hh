@@ -26,7 +26,7 @@
 
 #include "exceptions/exceptions.hh"
 #include "core/sstring.hh"
-#include "database.hh"
+#include "schema.hh"
 
 namespace db {
 
@@ -322,7 +322,7 @@ bool is_datacenter_local(consistency_level l)
 #endif
 
 static inline
-void validate_for_read(const sstring keyspace_name, consistency_level cl) {
+void validate_for_read(const sstring& keyspace_name, consistency_level cl) {
     switch (cl) {
         case consistency_level::ANY:
             throw exceptions::invalid_request_exception("ANY ConsistencyLevel is only supported for writes");
@@ -334,7 +334,7 @@ void validate_for_read(const sstring keyspace_name, consistency_level cl) {
 }
 
 static inline
-void validate_for_write(const sstring keyspace_name, consistency_level cl) {
+void validate_for_write(const sstring& keyspace_name, consistency_level cl) {
     switch (cl) {
         case consistency_level::SERIAL:
         case consistency_level::LOCAL_SERIAL:

@@ -20,4 +20,5 @@ sstring to_hex(const bytes& b);
 sstring to_hex(const bytes_opt& b);
 
 std::ostream& operator<<(std::ostream& os, const bytes& b);
+std::ostream& operator<<(std::ostream& os, const bytes_opt& b);
 

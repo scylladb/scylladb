@@ -335,10 +335,13 @@ public:
     template <typename BytesViewIterator>
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, serialization_format sf);
     mutation_view deserialize_mutation_form(collection_mutation::view in);
+    bool is_empty(collection_mutation::view in);
+    bool is_any_live(collection_mutation::view in, tombstone tomb);
     virtual bytes to_value(mutation_view mut, serialization_format sf) = 0;
     // FIXME: use iterators?
     collection_mutation::one serialize_mutation_form(const mutation& mut);
     collection_mutation::one serialize_mutation_form(mutation_view mut);
+    collection_mutation::one serialize_mutation_form_only_live(mutation_view mut);
     collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b);
 };
 
