@@ -785,7 +785,7 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
 
     for (auto&& range : slice.row_ranges) {
         if (limit == 0) {
-            return result;
+            break;
         }
 
         // FIXME: Optimize for a full-tuple singular range. mutation_partition::range()
