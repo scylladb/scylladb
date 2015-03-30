@@ -30,6 +30,7 @@
 #include "variable_specifications.hh"
 #include "restrictions/restriction.hh"
 #include "statements/bound.hh"
+#include "term.hh"
 
 namespace cql3 {
 
@@ -198,7 +199,7 @@ public:
     virtual ::shared_ptr<restrictions::restriction> new_contains_restriction(schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names, bool isKey) = 0;
 
-#if 0
+protected:
 
     /**
      * Converts the specified <code>Raw</code> into a <code>Term</code>.
@@ -210,11 +211,10 @@ public:
      * @return the <code>Term</code> corresponding to the specified <code>Raw</code>
      * @throws InvalidRequestException if the <code>Raw</code> term is not valid
      */
-    protected abstract Term toTerm(List<? extends ColumnSpecification> receivers,
-                                   Term.Raw raw,
-                                   String keyspace,
-                                   VariableSpecifications boundNames)
-                                   throws InvalidRequestException;
+    virtual ::shared_ptr<term> to_term(const std::vector<::shared_ptr<column_specification>>& receivers,
+                                       ::shared_ptr<term::raw> raw,
+                                       const sstring& keyspace,
+                                       ::shared_ptr<variable_specifications> boundNames) = 0;
 
     /**
      * Converts the specified <code>Raw</code> terms into a <code>Term</code>s.
@@ -226,24 +226,17 @@ public:
      * @return the <code>Term</code>s corresponding to the specified <code>Raw</code> terms
      * @throws InvalidRequestException if the <code>Raw</code> terms are not valid
      */
-    protected final List<Term> toTerms(List<? extends ColumnSpecification> receivers,
-                                       List<? extends Term.Raw> raws,
-                                       String keyspace,
-                                       VariableSpecifications boundNames) throws InvalidRequestException
-    {
-        if (raws == null)
-            return null;
-
-        List<Term> terms = new ArrayList<>();
-        for (int i = 0, m = raws.size(); i < m; i++)
-            terms.add(toTerm(receivers, raws.get(i), keyspace, boundNames));
-
+    std::vector<::shared_ptr<term>> to_terms(const std::vector<::shared_ptr<column_specification>>& receivers,
+                                             const std::vector<::shared_ptr<term::raw>>& raws,
+                                             const sstring& keyspace,
+                                             ::shared_ptr<variable_specifications> boundNames) {
+        std::vector<::shared_ptr<term>> terms;
+        for (auto&& r : raws) {
+            terms.emplace_back(to_term(receivers, r, keyspace, boundNames));
+        }
         return terms;
     }
 
-#endif
-
-protected:
     /**
      * Converts the specified entity into a column definition.
      *

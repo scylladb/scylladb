@@ -81,14 +81,11 @@ public:
         : single_column_relation(std::move(entity), {}, type, std::move(value))
     { }
 
-#if 0
-    public static SingleColumnRelation createInRelation(::shared_ptr<column_identifier::raw> entity, List<::shared_ptr<term::raw>> in_values)
-    {
-        return new SingleColumnRelation(entity, null, operator_type::IN, null, in_values);
+    static ::shared_ptr<single_column_relation> create_in_relation(::shared_ptr<column_identifier::raw> entity,
+                                                                   std::vector<::shared_ptr<term::raw>> in_values) {
+        return ::make_shared(single_column_relation(std::move(entity), {}, operator_type::IN, {}, std::move(in_values)));
     }
-#endif
 
-public:
     ::shared_ptr<column_identifier::raw> get_entity() {
         return _entity;
     }
@@ -97,9 +94,9 @@ public:
         return _map_key;
     }
 protected:
-    ::shared_ptr<term> to_term(std::vector<::shared_ptr<column_specification>> receivers,
+    virtual ::shared_ptr<term> to_term(const std::vector<::shared_ptr<column_specification>>& receivers,
                           ::shared_ptr<term::raw> raw, const sstring& keyspace,
-                          ::shared_ptr<variable_specifications> bound_names);
+                          ::shared_ptr<variable_specifications> bound_names) override;
 
 #if 0
     public SingleColumnRelation withNonStrictOperator()
@@ -131,20 +128,7 @@ protected:
                                            ::shared_ptr<variable_specifications> bound_names);
 
     virtual ::shared_ptr<restrictions::restriction> new_IN_restriction(schema_ptr schema,
-                                           ::shared_ptr<variable_specifications> bound_names) override {
-        throw std::runtime_error("not implemented");
-#if 0
-        ColumnDefinition columnDef = schema.getColumnDefinition(getEntity().prepare(schema));
-        List<? extends ColumnSpecification> receivers = toReceivers(schema, columnDef);
-        List<Term> terms = toTerms(receivers, in_values, schema.ksName, bound_names);
-        if (terms == null)
-        {
-            Term term = toTerm(receivers, value, schema.ksName, bound_names);
-            return new SingleColumnRestriction.InWithMarker(columnDef, (Lists.Marker) term);
-        }
-        return new SingleColumnRestriction.InWithValues(columnDef, terms);
-#endif
-    }
+                                           ::shared_ptr<variable_specifications> bound_names) override;
 
     virtual ::shared_ptr<restrictions::restriction> new_slice_restriction(schema_ptr schema,
             ::shared_ptr<variable_specifications> bound_names,
