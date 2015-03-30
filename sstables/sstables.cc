@@ -130,10 +130,10 @@ static void check_buf_size(temporary_buffer<char>& buf, size_t expected) {
 template <typename T, typename U>
 static void check_truncate_and_assign(T& to, const U from) {
     static_assert(std::is_integral<T>::value && std::is_integral<U>::value, "T and U must be integral");
-    if (from >= std::numeric_limits<T>::max()) {
-        throw std::overflow_error("assigning U to T would cause an overflow");
-    }
     to = from;
+    if (to != from) {
+        throw std::overflow_error("assigning U to T caused an overflow");
+    }
 }
 
 // Base parser, parses an integer type
