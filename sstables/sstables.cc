@@ -795,7 +795,9 @@ input_stream<char> sstable::data_stream_at(uint64_t pos) {
 // range, and too small reads, and repeated waits, when reading a large range
 // which we should have started at once.
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len) {
-    return data_stream_at(pos).read_exactly(len);
+    auto stream = std::make_unique<input_stream<char>>(data_stream_at(pos));
+    auto fut = stream->read_exactly(len);
+    return fut.then([stream = std::move(stream)] (temporary_buffer<char> buf) { return buf; });
 }
 
 }
