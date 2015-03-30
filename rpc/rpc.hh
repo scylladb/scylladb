@@ -26,6 +26,7 @@
 #include "net/api.hh"
 #include "core/reactor.hh"
 #include "core/iostream.hh"
+#include "core/shared_ptr.hh"
 
 namespace rpc {
 
@@ -79,7 +80,7 @@ public:
     private:
         protocol& _proto;
     public:
-        class connection : public protocol::connection {
+        class connection : public protocol::connection, public enable_lw_shared_from_this<connection> {
             server& _server;
             MsgType _type = 0;
             client_info _info;
@@ -121,7 +122,7 @@ public:
     };
     friend server;
 private:
-    using rpc_handler = std::function<future<>(typename server::connection&)>;
+    using rpc_handler = std::function<future<>(lw_shared_ptr<typename server::connection>)>;
     std::unordered_map<MsgType, rpc_handler> _handlers;
     Serializer _serializer;
     std::function<void(const sstring&)> _logger;
