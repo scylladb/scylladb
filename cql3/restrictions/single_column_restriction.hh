@@ -199,6 +199,10 @@ public:
         return v;
     }
 
+    virtual bytes_opt value(const query_options& options) override {
+        return _value->bind_and_get(options);
+    }
+
     virtual sstring to_string() override {
         return sprint("EQ(%s)", _value->to_string());
     }

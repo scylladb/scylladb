@@ -50,6 +50,12 @@ public:
 
     virtual std::vector<bytes_opt> values(const query_options& options) = 0;
 
+    virtual bytes_opt value(const query_options& options) {
+        auto vec = values(options);
+        assert(vec.size() == 1);
+        return std::move(vec[0]);
+    }
+
     /**
      * Returns <code>true</code> if one of the restrictions use the specified function.
      *
