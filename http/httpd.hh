@@ -26,6 +26,7 @@
 #include "http/request.hh"
 #include "core/reactor.hh"
 #include "core/sstring.hh"
+#include <experimental/string_view>
 #include "core/app-template.hh"
 #include "core/circular_buffer.hh"
 #include "core/distributed.hh"
@@ -86,7 +87,7 @@ public:
                                 try {
                                     f.get();
                                 } catch (std::exception& ex) {
-                                    std::cout << "request error " << ex.what() << "\n";
+                                    std::cerr << "request error " << ex.what() << std::endl;
                                 }
                             });
                     do_accepts(which);
@@ -94,7 +95,7 @@ public:
             try {
                 f.get();
             } catch (std::exception& ex) {
-                std::cout << "accept failed: " << ex.what() << "\n";
+                std::cerr << "accept failed: " << ex.what() << std::endl;
             }
         });
     }
@@ -140,16 +141,19 @@ public:
         }
         future<> read_one() {
             _parser.init();
-            return _read_buf.consume(_parser).then([this] {
+            return _read_buf.consume(_parser).then([this] () mutable {
                 if (_parser.eof()) {
                     _done = true;
                     return make_ready_future<>();
                 }
                 ++_server._requests_served;
-                _req = _parser.get_parsed_request();
-                return _replies.not_full().then([this] {
-                            _done = generate_reply(std::move(_req));
-                        });
+                std::unique_ptr<httpd::request> req = _parser.get_parsed_request();
+
+                return _replies.not_full().then([req = std::move(req), this] () mutable {
+                    return generate_reply(std::move(req));
+                }).then([this](bool done) {
+                    _done = done;
+                });
             });
         }
         future<> respond() {
@@ -199,7 +203,92 @@ public:
                 return write_reply_headers(++hi);
             });
         }
-        bool generate_reply(std::unique_ptr<request> req) {
+
+        static short hex_to_byte(char c) {
+            if (c >='a' && c <= 'z') {
+                return c - 'a' + 10;
+            } else if (c >='A' && c <= 'Z') {
+                return c - 'A' + 10;
+            }
+            return c - '0';
+        }
+
+        /**
+         * Convert a hex encoded 2 bytes substring to char
+         */
+        static char hexstr_to_char(const std::experimental::string_view& in, size_t from) {
+
+            return static_cast<char>(hex_to_byte(in[from]) * 16 + hex_to_byte(in[from + 1]));
+        }
+
+        /**
+         * URL_decode a substring and place it in the given out sstring
+         */
+        static bool url_decode(const std::experimental::string_view& in, sstring& out) {
+            size_t pos = 0;
+            char buff[in.length()];
+            for (size_t i = 0; i < in.length(); ++i) {
+                if (in[i] == '%') {
+                    if (i + 3 <= in.size()) {
+                        buff[pos++] = hexstr_to_char(in, i + 1);
+                        i += 2;
+                    } else {
+                        return false;
+                    }
+                } else if (in[i] == '+') {
+                    buff[pos++] = ' ';
+                } else {
+                    buff[pos++] = in[i];
+                }
+            }
+            out = sstring(buff, pos);
+            return true;
+        }
+
+        /**
+         * Add a single query parameter to the parameter list
+         */
+        static void add_param(request& req, const std::experimental::string_view& param) {
+            size_t split = param.find('=');
+
+            if (split >= param.length() - 1) {
+                sstring key;
+                if (url_decode(param.substr(0,split) , key)) {
+                    req.query_parameters[key] = "";
+                }
+            } else {
+                sstring key;
+                sstring value;
+                if (url_decode(param.substr(0,split), key)
+                        && url_decode(param.substr(split + 1), value)) {
+                    req.query_parameters[key] = value;
+                }
+            }
+
+        }
+
+        /**
+         * Set the query parameters in the request objects.
+         * query param appear after the question mark and are separated
+         * by the ampersand sign
+         */
+        static sstring set_query_param(request& req) {
+            size_t pos = req._url.find('?');
+            if (pos == sstring::npos) {
+                return req._url;
+            }
+            size_t curr = pos + 1;
+            size_t end_param;
+            std::experimental::string_view url = req._url;
+            while ((end_param = req._url.find('&', curr)) != sstring::npos) {
+                add_param(req, url.substr(curr, end_param - curr) );
+                curr = end_param + 1;
+            }
+            add_param(req, url.substr(pos + 1));
+            return req._url.substr(0, pos);
+        }
+
+        future<bool> generate_reply(std::unique_ptr<request> req) {
             auto resp = std::make_unique<reply>();
             bool conn_keep_alive = false;
             bool conn_close = false;
@@ -226,10 +315,13 @@ public:
                 // HTTP/0.9 goes here
                 should_close = true;
             }
-            _server._routes.handle(req->_url, *(req.get()), *(resp.get()));
+            sstring url = set_query_param(*req.get());
+            return _server._routes.handle(url, std::move(req), std::move(resp)).
             // Caller guarantees enough room
-            _replies.push(std::move(resp));
-            return should_close;
+            then([this, should_close](std::unique_ptr<reply> rep) {
+                this->_replies.push(std::move(rep));
+                return make_ready_future<bool>(should_close);
+            });
         }
         future<> write_body() {
             return _write_buf.write(_resp->_content.begin(),

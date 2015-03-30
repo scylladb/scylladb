@@ -210,7 +210,7 @@ deps = {
     'seastar.pc': [],
     'apps/seastar/seastar': ['apps/seastar/main.cc'] + core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
-    'apps/httpd/httpd': ['http/common.cc', 'http/routes.cc', 'json/json_elements.cc', 'json/formatter.cc', 'http/matcher.cc', 'http/mime_types.cc', 'http/httpd.cc', 'http/reply.cc', 'http/request_parser.rl', 'apps/httpd/main.cc'] + libnet + core,
+    'apps/httpd/httpd': ['apps/httpd/demo.json', 'http/json_path.cc', 'http/file_handler.cc', 'http/common.cc', 'http/routes.cc', 'json/json_elements.cc', 'json/formatter.cc', 'http/matcher.cc', 'http/mime_types.cc', 'http/httpd.cc', 'http/reply.cc', 'http/request_parser.rl', 'apps/httpd/main.cc'] + libnet + core,
     'apps/memcached/memcached': ['apps/memcached/memcache.cc'] + memcache_base,
     'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
@@ -230,7 +230,7 @@ deps = {
     'apps/seawreck/seawreck': ['apps/seawreck/seawreck.cc', 'apps/seawreck/http_response_parser.rl'] + core + libnet,
     'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
     'tests/sstring_test': ['tests/sstring_test.cc'] + core,
-    'tests/httpd': ['http/common.cc', 'http/routes.cc', 'json/json_elements.cc', 'json/formatter.cc', 'http/matcher.cc', 'tests/httpd.cc', 'http/mime_types.cc', 'http/reply.cc'] + core,
+    'tests/httpd': ['http/common.cc', 'http/routes.cc', 'http/json_path.cc', 'json/json_elements.cc', 'json/formatter.cc', 'http/matcher.cc', 'tests/httpd.cc', 'http/mime_types.cc', 'http/reply.cc'] + core,
     'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc', 'core/posix.cc'],
     'tests/output_stream_test': ['tests/output_stream_test.cc'] + core + libnet,
     'tests/udp_zero_copy': ['tests/udp_zero_copy.cc'] + core + libnet,
@@ -321,6 +321,9 @@ with open(buildfile, 'w') as f:
         rule gen
             command = echo -e $text > $out
             description = GEN $out
+        rule swagger
+            command = json/json2code.py -f $in -o $out
+            description = SWAGGER $out
         ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
@@ -347,6 +350,7 @@ with open(buildfile, 'w') as f:
             artifacts = str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))))
         compiles = {}
         ragels = {}
+        swaggers = {}
         for binary in build_artifacts:
             srcs = deps[binary]
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
@@ -375,15 +379,21 @@ with open(buildfile, 'w') as f:
                 elif src.endswith('.rl'):
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.rl', '.hh')
                     ragels[hh] = src
+                elif src.endswith('.json'):
+                    hh = '$builddir/' + mode + '/gen/' + src + '.hh'
+                    swaggers[hh] = src
                 else:
                     raise Exception('No rule for ' + src)
         for obj in compiles:
             src = compiles[obj]
-            gen_headers = ragels.keys()
+            gen_headers = list(ragels.keys()) + list(swaggers.keys())
             f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
         for hh in ragels:
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))
+        for hh in swaggers:
+            src = swaggers[hh]
+            f.write('build {}: swagger {}\n'.format(hh,src))
     f.write(textwrap.dedent('''\
         rule configure
           command = python3 configure.py $configure_args

@@ -392,6 +392,45 @@ reactor::open_file_dma(sstring name, open_flags flags) {
     });
 }
 
+directory_entry_type stat_to_entry_type(__mode_t type) {
+    if (S_ISDIR(type)) {
+        return directory_entry_type::directory;
+    }
+    if (S_ISBLK(type)) {
+        return directory_entry_type::block_device;
+    }
+    if (S_ISCHR(type)) {
+            return directory_entry_type::char_device;
+    }
+    if (S_ISFIFO(type)) {
+        return directory_entry_type::fifo;
+    }
+    if (S_ISLNK(type)) {
+        return directory_entry_type::link;
+    }
+    return directory_entry_type::regular;
+
+}
+
+future<std::experimental::optional<directory_entry_type>>
+reactor::file_type(sstring name) {
+    return _thread_pool.submit<syscall_result_extra<struct stat>>([name] {
+        struct stat st;
+        auto ret = stat(name.c_str(), &st);
+        return wrap_syscall(ret, st);
+    }).then([] (syscall_result_extra<struct stat> sr) {
+        if (long(sr.result) == -1) {
+            if (sr.result != ENOENT && sr.result != ENOTDIR) {
+                sr.throw_if_error();
+            }
+            return make_ready_future<std::experimental::optional<directory_entry_type> >
+                (std::experimental::optional<directory_entry_type>() );
+        }
+        return make_ready_future<std::experimental::optional<directory_entry_type> >
+            (std::experimental::optional<directory_entry_type>(stat_to_entry_type(sr.extra.st_mode)) );
+    });
+}
+
 future<file>
 reactor::open_directory(sstring name) {
     return _thread_pool.submit<syscall_result<int>>([name] {
