@@ -670,6 +670,16 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
     }).then([state, db] {
         return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
                 "map1", map_type_impl::native_type({{{1002, 5002}}}));
+    }).then([state, db] {
+        return state->execute_cql("select * from cf where p1 = 'key1';").then([] (auto msg) {
+            auto my_map_type = map_type_impl::get_instance(int32_type, int32_type, true);
+            assert_that(msg).is_rows()
+                .with_size(1)
+                .with_row({
+                     {utf8_type->decompose(sstring("key1"))},
+                     {my_map_type->decompose(map_type_impl::native_type{{{1002, 5002}}})},
+                 });
+        });
     }).then([db] {
         return db->stop();
     }).then_wrapped([db] (future<> f) mutable {
@@ -719,6 +729,16 @@ SEASTAR_TEST_CASE(test_set_insert_update) {
     }).then([state, db] {
         return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
                 "set1", set_type_impl::native_type({1019}));
+    }).then([state, db] {
+        return state->execute_cql("select * from cf where p1 = 'key1';").then([] (auto msg) {
+            auto my_set_type = set_type_impl::get_instance(int32_type, true);
+            assert_that(msg).is_rows()
+                .with_size(1)
+                .with_row({
+                     {utf8_type->decompose(sstring("key1"))},
+                     {my_set_type->decompose(set_type_impl::native_type{{1019}})},
+                 });
+        });
     }).then([db] {
         return db->stop();
     }).then_wrapped([db] (future<> f) mutable {
@@ -755,6 +775,21 @@ SEASTAR_TEST_CASE(test_list_insert_update) {
     }).then([state, db] {
         return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
                 "list1", list_type_impl::native_type({boost::any(1002), boost::any(2003)}));
+    }).then([state, db] {
+        return state->execute_cql("update cf set list1 = list1 - [1002, 2004] where p1 = 'key1';").discard_result();
+    }).then([state, db] {
+        return require_column_has_value(*db, ks_name, table_name, {sstring("key1")}, {},
+                "list1", list_type_impl::native_type({2003}));
+    }).then([state, db] {
+        return state->execute_cql("select * from cf where p1 = 'key1';").then([] (auto msg) {
+            auto my_list_type = list_type_impl::get_instance(int32_type, true);
+            assert_that(msg).is_rows()
+                .with_size(1)
+                .with_row({
+                     {utf8_type->decompose(sstring("key1"))},
+                     {my_list_type->decompose(list_type_impl::native_type{{2003}})},
+                 });
+        });
     }).then([db] {
         return db->stop();
     }).then_wrapped([db] (future<> f) mutable {

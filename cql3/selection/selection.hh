@@ -49,9 +49,9 @@ public:
     * @param rs the <code>ResultSetBuilder</code>
     * @throws InvalidRequestException
     */
-    virtual void add_input_row(int32_t protocol_version, result_set_builder& rs) = 0;
+    virtual void add_input_row(serialization_format sf, result_set_builder& rs) = 0;
 
-    virtual std::vector<bytes_opt> get_output_row(int32_t protocol_version) = 0;
+    virtual std::vector<bytes_opt> get_output_row(serialization_format sf) = 0;
 
     virtual void reset() = 0;
 };
@@ -186,8 +186,8 @@ public:
         return _columns.size();
     }
 
-    ::shared_ptr<result_set_builder> make_result_set_builder(db_clock::time_point now, int32_t protocol_version) {
-        return ::make_shared<result_set_builder>(*this, now, protocol_version);
+    ::shared_ptr<result_set_builder> make_result_set_builder(db_clock::time_point now, serialization_format sf) {
+        return ::make_shared<result_set_builder>(*this, now, sf);
     }
 
     virtual bool is_aggregate() const = 0;
@@ -227,9 +227,9 @@ private:
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;
     const db_clock::time_point _now;
-    int32_t _protocol_version;
+    serialization_format _serialization_format;
 public:
-    result_set_builder(selection& s, db_clock::time_point now, int32_t protocol_version);
+    result_set_builder(selection& s, db_clock::time_point now, serialization_format sf);
 
     void add_empty() {
         current.emplace_back();
@@ -251,20 +251,19 @@ public:
             }
             _ttls[current.size() - 1] = ttl.count();
         }
-#if 0
-            List<Cell> cells = row.getMultiCellColumn(def.name);
-            ByteBuffer buffer = cells == null
-                ? null
-                : ((CollectionType)def.type).serializeForNativeProtocol(cells, options.getProtocolVersion());
-            result.add(buffer);
-#endif
+    }
+
+    void add(const column_definition& def, collection_mutation::view c) {
+        auto&& ctype = static_cast<collection_type_impl*>(def.type.get());
+        current.emplace_back(ctype->to_value(c, _serialization_format));
+        // timestamps, ttls meaningless for collections
     }
 
     void new_row() {
         if (!current.empty()) {
-            _selectors->add_input_row(_protocol_version, *this);
+            _selectors->add_input_row(_serialization_format, *this);
             if (!_selectors->is_aggregate()) {
-                _result_set->add_row(_selectors->get_output_row(_protocol_version));
+                _result_set->add_row(_selectors->get_output_row(_serialization_format));
                 _selectors->reset();
             }
             current.clear();
@@ -273,13 +272,13 @@ public:
 
     std::unique_ptr<result_set> build() {
         if (!current.empty()) {
-            _selectors->add_input_row(_protocol_version, *this);
-            _result_set->add_row(_selectors->get_output_row(_protocol_version));
+            _selectors->add_input_row(_serialization_format, *this);
+            _result_set->add_row(_selectors->get_output_row(_serialization_format));
             _selectors->reset();
             current.clear();
         }
         if (_result_set->empty() && _selectors->is_aggregate()) {
-            _result_set->add_row(_selectors->get_output_row(_protocol_version));
+            _result_set->add_row(_selectors->get_output_row(_serialization_format));
         }
         return std::move(_result_set);
     }

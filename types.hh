@@ -338,6 +338,7 @@ public:
     bool is_empty(collection_mutation::view in);
     bool is_any_live(collection_mutation::view in, tombstone tomb);
     virtual bytes to_value(mutation_view mut, serialization_format sf) = 0;
+    bytes to_value(collection_mutation::view mut, serialization_format sf);
     // FIXME: use iterators?
     collection_mutation::one serialize_mutation_form(const mutation& mut);
     collection_mutation::one serialize_mutation_form(mutation_view mut);
