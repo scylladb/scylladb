@@ -31,11 +31,10 @@ using namespace cql3::restrictions;
 namespace cql3 {
 
 ::shared_ptr<term>
-single_column_relation::to_term(std::vector<::shared_ptr<column_specification>> receivers,
-        ::shared_ptr<term::raw> raw,
-        const sstring& keyspace,
-        ::shared_ptr<variable_specifications> bound_names)
-{
+single_column_relation::to_term(const std::vector<::shared_ptr<column_specification>>& receivers,
+                                ::shared_ptr<term::raw> raw,
+                                const sstring& keyspace,
+                                ::shared_ptr<variable_specifications> bound_names) {
     // TODO: optimize vector away, accept single column_specification
     assert(receivers.size() == 1);
     auto term = raw->prepare(keyspace, receivers[0]);
@@ -44,8 +43,7 @@ single_column_relation::to_term(std::vector<::shared_ptr<column_specification>> 
 }
 
 ::shared_ptr<restrictions::restriction>
-single_column_relation::new_EQ_restriction(schema_ptr schema, ::shared_ptr<variable_specifications> bound_names)
-{
+single_column_relation::new_EQ_restriction(schema_ptr schema, ::shared_ptr<variable_specifications> bound_names) {
     const column_definition& column_def = to_column_definition(schema, _entity);
     if (!_map_key) {
         auto term = to_term(to_receivers(schema, column_def), _value, schema->ks_name, bound_names);
@@ -58,6 +56,21 @@ single_column_relation::new_EQ_restriction(schema_ptr schema, ::shared_ptr<varia
         Term entryValue = toTerm(Collections.singletonList(receivers.get(1)), value, schema.ksName, bound_names);
         return new SingleColumnRestriction.Contains(columnDef, entryKey, entryValue);
 #endif
+}
+
+::shared_ptr<restrictions::restriction>
+single_column_relation::new_IN_restriction(schema_ptr schema, ::shared_ptr<variable_specifications> bound_names) {
+    const column_definition& column_def = to_column_definition(schema, _entity);
+    auto receivers = to_receivers(schema, column_def);
+    auto terms = to_terms(receivers, _in_values, schema->ks_name, bound_names);
+    if (terms.empty()) {
+        fail(unimplemented::cause::COLLECTIONS);
+#if 0
+        auto term = to_term(receivers, _value, schema->ks_name, bound_names);
+        return new SingleColumnRestriction.InWithMarker(columnDef, (Lists.Marker) term);
+#endif
+    }
+    return ::make_shared<single_column_restriction::IN_with_values>(column_def, std::move(terms));
 }
 
 std::vector<::shared_ptr<column_specification>>

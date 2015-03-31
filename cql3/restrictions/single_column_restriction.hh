@@ -80,66 +80,10 @@ public:
 #endif
 
     class EQ;
+    class IN;
+    class IN_with_values;
 
 #if 0
-    public static abstract class IN extends SingleColumnRestriction
-    {
-        public IN(ColumnDefinition columnDef)
-        {
-            super(columnDef);
-        }
-
-        @Override
-        public final boolean isIN()
-        {
-            return true;
-        }
-
-        @Override
-        public final Restriction mergeWith(Restriction otherRestriction) throws InvalidRequestException
-        {
-            throw invalidRequest("%s cannot be restricted by more than one relation if it includes a IN", columnDef.name);
-        }
-
-        @Override
-        protected final boolean isSupportedBy(SecondaryIndex index)
-        {
-            return index.supportsOperator(Operator.IN);
-        }
-    }
-
-    public static class InWithValues extends IN
-    {
-        protected final List<Term> values;
-
-        public InWithValues(ColumnDefinition columnDef, List<Term> values)
-        {
-            super(columnDef);
-            this.values = values;
-        }
-
-        @Override
-        public boolean usesFunction(String ksName, String functionName)
-        {
-            return usesFunction(values, ksName, functionName);
-        }
-
-        @Override
-        public List<ByteBuffer> values(QueryOptions options) throws InvalidRequestException
-        {
-            List<ByteBuffer> buffers = new ArrayList<>(values.size());
-            for (Term value : values)
-                buffers.add(value.bindAndGet(options));
-            return buffers;
-        }
-
-        @Override
-        public String toString()
-        {
-            return String.format("IN(%s)", values);
-        }
-    }
-
     public static class InWithMarker extends IN
     {
         protected final AbstractMarker marker;
@@ -219,6 +163,56 @@ public:
             return index.supportsOperator(Operator.EQ);
         }
 #endif
+};
+
+class single_column_restriction::IN : public single_column_restriction {
+public:
+    IN(const column_definition& column_def)
+        : single_column_restriction(column_def)
+    { }
+
+    virtual bool is_IN() override {
+        return true;
+    }
+
+    virtual void merge_with(::shared_ptr<restriction> r) override {
+        throw exceptions::invalid_request_exception(sprint(
+            "%s cannot be restricted by more than one relation if it includes a IN", _column_def.name_as_text()));
+    }
+
+#if 0
+    @Override
+    protected final boolean isSupportedBy(SecondaryIndex index)
+    {
+        return index.supportsOperator(Operator.IN);
+    }
+#endif
+};
+
+class single_column_restriction::IN_with_values : public single_column_restriction::IN {
+protected:
+    std::vector<::shared_ptr<term>> _values;
+public:
+    IN_with_values(const column_definition& column_def, std::vector<::shared_ptr<term>> values)
+        : single_column_restriction::IN(column_def)
+        , _values(std::move(values))
+    { }
+
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+        return abstract_restriction::uses_function(_values, ks_name, function_name);
+    }
+
+    virtual std::vector<bytes_opt> values(const query_options& options) override {
+        std::vector<bytes_opt> ret;
+        for (auto&& v : _values) {
+            ret.emplace_back(v->bind_and_get(options));
+        }
+        return ret;
+    }
+
+    virtual sstring to_string() override {
+        return sprint("IN(%s)", ::to_string(_values));
+    }
 };
 
 class single_column_restriction::slice : public single_column_restriction {

@@ -19,10 +19,10 @@ void time_it(Func func, int iterations = 5) {
 
     for (int i = 0; i < iterations; i++) {
         auto start = clk::now();
-        auto end_at = lowres_clock::now() + std::chrono::seconds(1);
+        auto end_at = start + std::chrono::seconds(1);
         uint64_t count = 0;
 
-        while (lowres_clock::now() < end_at) {
+        while (clk::now() < end_at) {
             for (int i = 0; i < 10000; i++) { // amortize clock reading cost
                 func();
                 count++;

@@ -531,6 +531,22 @@ SEASTAR_TEST_CASE(test_query_with_static_columns) {
                     {from_hex("01")},
                 });
             });
+        }).then([&e] {
+            // Try 'in' restriction out
+            return e.execute_cql("select s1, v from cf where k = 0x00 and c in (0x01, 0x02);").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01"), from_hex("02")},
+                    {from_hex("01"), {}}
+                });
+            });
+        }).then([&e] {
+            // Verify that limit is respected for multiple clustering ranges and that static columns
+            // are populated when limit kicks in.
+            return e.execute_cql("select s1, v from cf where k = 0x00 and c in (0x01, 0x02) limit 1;").then([](auto msg) {
+                assert_that(msg).is_rows().with_rows({
+                    {from_hex("01"), from_hex("02")}
+                });
+            });
         });
     });
 }
