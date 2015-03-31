@@ -70,6 +70,80 @@ midpoint(const token& t1, const token& t2) {
     return token{token::kind::key, std::move(avg)};
 }
 
+static inline unsigned char get_byte(const bytes& b, size_t off) {
+    if (off < b.size()) {
+        return b[off];
+    } else {
+        return 0;
+    }
+}
+
+bool i_partitioner::is_equal(const token& t1, const token& t2) {
+
+    size_t sz = std::max(t1._data.size(), t2._data.size());
+
+    for (size_t i = 0; i < sz; i++) {
+        auto b1 = get_byte(t1._data, i);
+        auto b2 = get_byte(t2._data, i);
+        if (b1 != b2) {
+            return false;
+        }
+    }
+    return true;
+
+}
+
+bool i_partitioner::is_less(const token& t1, const token& t2) {
+
+    size_t sz = std::max(t1._data.size(), t2._data.size());
+
+    for (size_t i = 0; i < sz; i++) {
+        auto b1 = get_byte(t1._data, i);
+        auto b2 = get_byte(t2._data, i);
+        if (b1 < b2) {
+            return true;
+        } else if (b1 > b2) {
+            return false;
+        }
+    }
+    return false;
+}
+
+bool operator==(const token& t1, const token& t2)
+{
+    if (t1._kind != t2._kind) {
+        return false;
+    } else if (t1._kind == token::kind::key) {
+        return global_partitioner().is_equal(t1, t2);
+    }
+    return true;
+}
+
+bool operator<(const token& t1, const token& t2)
+{
+    if (t1._kind < t2._kind) {
+        return true;
+    } else if (t1._kind == token::kind::key && t2._kind == token::kind::key) {
+        return global_partitioner().is_less(t1, t2);
+    }
+    return false;
+}
+
+bool operator<(const decorated_key& lht, const decorated_key& rht) {
+    if (lht._token == rht._token) {
+        return static_cast<bytes_view>(lht._key) < rht._key;
+    } else {
+        return lht._token < rht._token;
+    }
+}
+
+bool operator==(const decorated_key& lht, const decorated_key& rht) {
+    if (lht._token == rht._token) {
+        return static_cast<bytes_view>(lht._key) == rht._key;
+    }
+    return false;
+}
+
 // FIXME: get from global config
 // FIXME: make it per-keyspace
 murmur3_partitioner default_partitioner;

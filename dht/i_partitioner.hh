@@ -63,6 +63,9 @@ public:
 
 token midpoint(const token& t1, const token& t2);
 token minimum_token();
+bool operator==(const token& t1, const token& t2);
+bool operator<(const token& t1, const token& t2);
+
 
 class decorated_key {
 public:
@@ -143,8 +146,30 @@ public:
     virtual std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens) = 0;
 
     virtual data_type get_token_validator() = 0;
+
+protected:
+    /**
+     * @return true if t1's _data array is equal t2's. _kind comparison should be done separately.
+     */
+    virtual bool is_equal(const token& t1, const token& t2);
+    /**
+     * @return true if t1's _data array is less then t2's. _kind comparison should be done separately.
+     */
+    virtual bool is_less(const token& t1, const token& t2);
+
+    friend bool operator==(const token& t1, const token& t2);
+    friend bool operator<(const token& t1, const token& t2);
 };
 
 i_partitioner& global_partitioner();
 
 } // dht
+
+namespace std {
+template<>
+struct hash<dht::token> {
+    size_t operator()(const dht::token& t) const {
+        return (t._kind == dht::token::kind::key) ? std::hash<bytes>()(t._data) : 0;
+    }
+};
+}

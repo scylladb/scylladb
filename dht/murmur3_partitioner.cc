@@ -32,6 +32,33 @@ murmur3_partitioner::get_token(const partition_key& key_) {
     return token{token::kind::key, std::move(b)};
 }
 
+inline long long_token(const token& t) {
+
+    if (t._data.size() != sizeof(long)) {
+        throw runtime_exception(sprint("Invalid token. Should have size %ld, has size %ld\n", sizeof(long), t._data.size()));
+    }
+
+    auto ptr = const_cast<char *>(t._data.c_str());
+    auto lp = reinterpret_cast<long *>(ptr);
+    return net::ntoh(*lp);
+}
+
+bool murmur3_partitioner::is_equal(const token& t1, const token& t2) {
+
+    auto l1 = long_token(t1);
+    auto l2 = long_token(t2);
+
+    return l1 == l2;
+}
+
+bool murmur3_partitioner::is_less(const token& t1, const token& t2) {
+
+    auto l1 = long_token(t1);
+    auto l2 = long_token(t2);
+
+    return l1 < l2;
+}
+
 std::map<token, float>
 murmur3_partitioner::describe_ownership(const std::vector<token>& sorted_tokens) {
     abort();
