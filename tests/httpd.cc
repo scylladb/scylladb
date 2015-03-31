@@ -14,6 +14,7 @@
 #include "json/formatter.hh"
 #include "http/routes.hh"
 #include "http/exception.hh"
+#include "http/transformers.hh"
 
 using namespace httpd;
 
@@ -127,4 +128,15 @@ BOOST_AUTO_TEST_CASE(test_routes) {
     BOOST_REQUIRE_EQUAL((int )rep->_status,
             (int )reply::status_type::not_found);
 
+}
+
+BOOST_AUTO_TEST_CASE(test_transformer) {
+    request req;
+    content_replace cr("json");
+    sstring content = "hello-{{Protocol}}-xyz-{{Host}}";
+    cr.transform(content, req, "html");
+    BOOST_REQUIRE_EQUAL(content, "hello-{{Protocol}}-xyz-{{Host}}");
+    req._headers["Host"] = "localhost";
+    cr.transform(content, req, "json");
+    BOOST_REQUIRE_EQUAL(content, "hello-http-xyz-localhost");
 }
