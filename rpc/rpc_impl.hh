@@ -208,7 +208,7 @@ auto send_helper(MsgType t, std::index_sequence<I...>) {
     };
 }
 
-template<typename Serializer, typename MsgType, typename Payload, typename... T>
+template<typename Serializer, typename MsgType, typename Payload>
 struct snd_reply_base : reply_payload<Payload> {
     id_type id;
 
@@ -219,8 +219,8 @@ struct snd_reply_base : reply_payload<Payload> {
 };
 
 template<typename Serializer, typename MsgType, typename T>
-struct snd_reply : snd_reply_base<Serializer, MsgType, T, T> {
-    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, T, T>(xid) {}
+struct snd_reply : snd_reply_base<Serializer, MsgType, T> {
+    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, T>(xid) {}
     inline void set_val(std::tuple<T>&& val) {
         this->v = std::move(std::get<0>(val));
     }
@@ -230,8 +230,8 @@ struct snd_reply : snd_reply_base<Serializer, MsgType, T, T> {
 };
 
 template<typename Serializer, typename MsgType, typename... T>
-struct snd_reply<Serializer, MsgType, future<T...>> : snd_reply_base<Serializer, MsgType, std::tuple<T...>, T...> {
-    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, std::tuple<T...>, T...>(xid) {}
+struct snd_reply<Serializer, MsgType, future<T...>> : snd_reply_base<Serializer, MsgType, std::tuple<T...>> {
+    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, std::tuple<T...>>(xid) {}
     inline void set_val(std::tuple<T...>&& val) {
         this->v = std::move(val);
     }
@@ -241,8 +241,8 @@ struct snd_reply<Serializer, MsgType, future<T...>> : snd_reply_base<Serializer,
 };
 
 template<typename Serializer, typename MsgType>
-struct snd_reply<Serializer, MsgType, void> : snd_reply_base<Serializer, MsgType, void, void> {
-    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, void, void>(xid) {}
+struct snd_reply<Serializer, MsgType, void> : snd_reply_base<Serializer, MsgType, void> {
+    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, void>(xid) {}
     inline void set_val(std::tuple<>&& val) {
     }
     inline future<> reply(typename protocol<Serializer, MsgType>::server::connection& client) {
@@ -252,8 +252,8 @@ struct snd_reply<Serializer, MsgType, void> : snd_reply_base<Serializer, MsgType
 
 // specialization for no_wait_type which does not send a reply
 template<typename Serializer, typename MsgType>
-struct snd_reply<Serializer, MsgType, no_wait_type> : snd_reply_base<Serializer, MsgType, no_wait_type, no_wait_type> {
-    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, no_wait_type, no_wait_type>(xid) {}
+struct snd_reply<Serializer, MsgType, no_wait_type> : snd_reply_base<Serializer, MsgType, no_wait_type> {
+    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, no_wait_type>(xid) {}
     inline void set_val(std::tuple<no_wait_type>&& val) {
     }
     inline future<> reply(typename protocol<Serializer, MsgType>::server::connection& client) {
