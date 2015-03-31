@@ -130,87 +130,88 @@ public:
         virtual ::shared_ptr<term> prepare(const sstring& keyspace, const std::vector<column_specification>& receiver) = 0;
     };
 };
-    /**
-     * A terminal term, one that can be reduced to a byte buffer directly.
-     *
-     * This includes most terms that don't have a bind marker (an exception
-     * being delayed call for non pure function that are NonTerminal even
-     * if they don't have bind markers).
-     *
-     * This can be only one of:
-     *   - a constant value
-     *   - a collection value
-     *
-     * Note that a terminal term will always have been type checked, and thus
-     * consumer can (and should) assume so.
-     */
-    class terminal : public term {
-    public:
-        virtual void collect_marker_specification(::shared_ptr<variable_specifications> bound_names) {
-        }
 
-        virtual ::shared_ptr<terminal> bind(const query_options& options) override {
-            return static_pointer_cast<terminal>(this->shared_from_this());
-        }
+/**
+ * A terminal term, one that can be reduced to a byte buffer directly.
+ *
+ * This includes most terms that don't have a bind marker (an exception
+ * being delayed call for non pure function that are NonTerminal even
+ * if they don't have bind markers).
+ *
+ * This can be only one of:
+ *   - a constant value
+ *   - a collection value
+ *
+ * Note that a terminal term will always have been type checked, and thus
+ * consumer can (and should) assume so.
+ */
+class terminal : public term {
+public:
+    virtual void collect_marker_specification(::shared_ptr<variable_specifications> bound_names) {
+    }
 
-        virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-            return false;
-        }
+    virtual ::shared_ptr<terminal> bind(const query_options& options) override {
+        return static_pointer_cast<terminal>(this->shared_from_this());
+    }
 
-        // While some NonTerminal may not have bind markers, no Term can be Terminal
-        // with a bind marker
-        virtual bool contains_bind_marker() const override {
-            return false;
-        }
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
+        return false;
+    }
 
-        /**
-         * @return the serialized value of this terminal.
-         */
-        virtual bytes_opt get(const query_options& options) = 0;
-
-        virtual bytes_opt bind_and_get(const query_options& options) override {
-            return get(options);
-        }
-
-        virtual sstring to_string() const = 0;
-    };
-
-    class multi_item_terminal : public terminal {
-    public:
-        virtual std::vector<bytes> get_elements() = 0;
-    };
-
-    class collection_terminal {
-    public:
-        virtual ~collection_terminal() {}
-        /** Gets the value of the collection when serialized with the given protocol version format */
-        virtual bytes get_with_protocol_version(serialization_format sf) = 0;
-    };
+    // While some NonTerminal may not have bind markers, no Term can be Terminal
+    // with a bind marker
+    virtual bool contains_bind_marker() const override {
+        return false;
+    }
 
     /**
-     * A non terminal term, i.e. a term that can only be reduce to a byte buffer
-     * at execution time.
-     *
-     * We have the following type of NonTerminal:
-     *   - marker for a constant value
-     *   - marker for a collection value (list, set, map)
-     *   - a function having bind marker
-     *   - a non pure function (even if it doesn't have bind marker - see #5616)
+     * @return the serialized value of this terminal.
      */
-    class non_terminal : public term {
-    public:
-        virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
-            return false;
-        }
+    virtual bytes_opt get(const query_options& options) = 0;
 
-        virtual bytes_opt bind_and_get(const query_options& options) override {
-            auto t = bind(options);
-            if (t) {
-                return t->get(options);
-            }
-            return {};
-        };
+    virtual bytes_opt bind_and_get(const query_options& options) override {
+        return get(options);
+    }
+
+    virtual sstring to_string() const = 0;
+};
+
+class multi_item_terminal : public terminal {
+public:
+    virtual std::vector<bytes> get_elements() = 0;
+};
+
+class collection_terminal {
+public:
+    virtual ~collection_terminal() {}
+    /** Gets the value of the collection when serialized with the given protocol version format */
+    virtual bytes get_with_protocol_version(serialization_format sf) = 0;
+};
+
+/**
+ * A non terminal term, i.e. a term that can only be reduce to a byte buffer
+ * at execution time.
+ *
+ * We have the following type of NonTerminal:
+ *   - marker for a constant value
+ *   - marker for a collection value (list, set, map)
+ *   - a function having bind marker
+ *   - a non pure function (even if it doesn't have bind marker - see #5616)
+ */
+class non_terminal : public term {
+public:
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
+        return false;
+    }
+
+    virtual bytes_opt bind_and_get(const query_options& options) override {
+        auto t = bind(options);
+        if (t) {
+            return t->get(options);
+        }
+        return {};
     };
+};
 
 }
 
