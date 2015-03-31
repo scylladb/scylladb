@@ -178,7 +178,7 @@ core = [
 defines = []
 libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
-
+xen_used = False
 def have_xen():
     source  = '#include <stdint.h>\n'
     source += '#include <xen/xen.h>\n'
@@ -199,7 +199,11 @@ if apply_tristate(args.xen, test = have_xen,
                 'core/xen/gntalloc.cc',
                 'core/xen/evtchn.cc',
             ]
+    xen_used=True
 
+if xen_used and args.dpdk_target:
+    print("Error: only xen or dpdk can be used, not both.")
+    sys.exit(1)
 
 memcache_base = [
     'apps/memcached/ascii.rl'
