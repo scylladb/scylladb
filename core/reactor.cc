@@ -392,6 +392,16 @@ reactor::open_file_dma(sstring name, open_flags flags) {
     });
 }
 
+future<>
+reactor::remove_file(sstring pathname) {
+    return engine()._thread_pool.submit<syscall_result<int>>([this, pathname] {
+        return wrap_syscall<int>(::unlink(pathname.c_str()));
+    }).then([] (syscall_result<int> sr) {
+        sr.throw_if_error();
+        return make_ready_future<>();
+    });
+}
+
 directory_entry_type stat_to_entry_type(__mode_t type) {
     if (S_ISDIR(type)) {
         return directory_entry_type::directory;
@@ -1655,6 +1665,10 @@ future<file> open_file_dma(sstring name, open_flags flags) {
 
 future<file> open_directory(sstring name) {
     return engine().open_directory(std::move(name));
+}
+
+future<> remove_file(sstring pathname) {
+    return engine().remove_file(std::move(pathname));
 }
 
 server_socket listen(socket_address sa) {
