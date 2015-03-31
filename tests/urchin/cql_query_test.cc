@@ -18,7 +18,9 @@
 
 SEASTAR_TEST_CASE(test_create_keyspace_statement) {
     return do_with_cql_env([] (auto& e) {
-        return e.execute_cql("create keyspace ks with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };").discard_result();
+        return e.execute_cql("create keyspace ks2 with replication = { 'class' : 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor' : 1 };").discard_result().then([&e] {
+            return e.require_keyspace_exists("ks2");
+        });
     });
 }
 
