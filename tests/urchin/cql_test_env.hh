@@ -81,6 +81,57 @@ public:
         });
     }
 
+    future<> require_column_has_value(const sstring& table_name,
+                                      std::vector<boost::any> pk,
+                                      std::vector<boost::any> ck,
+                                      const sstring& column_name,
+                                      boost::any expected) {
+        auto& db = _db->local();
+        auto ks = db.find_keyspace(ks_name);
+        assert(ks != nullptr);
+        auto cf = ks->find_column_family(table_name);
+        assert(cf != nullptr);
+        auto schema = cf->_schema;
+        auto pkey = partition_key::from_deeply_exploded(*schema, pk);
+        auto dk = dht::global_partitioner().decorate_key(pkey);
+        auto shard = db.shard_of(dk._token);
+        return _db->invoke_on(shard, [pkey = std::move(pkey),
+                                     ck = std::move(ck),
+                                     ks_name = std::move(ks_name),
+                                     column_name = std::move(column_name),
+                                     expected = std::move(expected),
+                                     table_name = std::move(table_name)] (database& db) {
+            auto ks = db.find_keyspace(ks_name);
+            assert(ks != nullptr);
+            auto cf = ks->find_column_family(table_name);
+            assert(cf != nullptr);
+            auto schema = cf->_schema;
+            auto p = cf->find_partition(pkey);
+            assert(p != nullptr);
+            auto row = p->find_row(clustering_key::from_deeply_exploded(*schema, ck));
+            assert(row != nullptr);
+            auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
+            assert(col_def != nullptr);
+            auto i = row->find(col_def->id);
+            if (i == row->end()) {
+                assert(((void)"column not set", 0));
+            }
+            bytes actual;
+            if (!col_def->type->is_multi_cell()) {
+                auto cell = i->second.as_atomic_cell();
+                assert(cell.is_live());
+                actual = { cell.value().begin(), cell.value().end() };
+            } else {
+                auto cell = i->second.as_collection_mutation();
+                auto type = dynamic_pointer_cast<collection_type_impl>(col_def->type);
+                actual = type->to_value(type->deserialize_mutation_form(cell),
+                                        serialization_format::internal());
+            }
+            assert(col_def->type->equal(actual, col_def->type->decompose(expected)));
+            row->find(col_def->id);
+        });
+    }
+
     future<> start() {
         return _core_local.start();
     }
