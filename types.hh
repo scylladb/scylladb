@@ -196,7 +196,13 @@ public:
     bool is_value_compatible_with(abstract_type& other) {
         return is_value_compatible_with_internal(*other.underlying_type());
     }
+    bool equals(const shared_ptr<abstract_type>& other) const {
+        return equals(*other);
+    }
 protected:
+    virtual bool equals(const abstract_type& other) const {
+        return this == &other;
+    }
     /**
      * Needed to handle ReversedType in value-compatibility checks.  Subclasses should implement this instead of
      * is_value_compatible_with().
