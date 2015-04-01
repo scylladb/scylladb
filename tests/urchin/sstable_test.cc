@@ -30,7 +30,13 @@ namespace sstables {
 class test {
     sstable_ptr _sst;
 public:
+
     test(sstable_ptr s) : _sst(s) {}
+
+    summary& _summary() {
+        return _sst->_summary;
+    }
+
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len) {
         return _sst->data_read(pos, len);
     }
@@ -556,5 +562,195 @@ SEASTAR_TEST_CASE(read_set) {
                return make_ready_future<>();
             });
         });
+    });
+}
+
+schema_ptr composite_schema() {
+    static thread_local auto s = make_lw_shared(schema({}, "tests", "composite",
+        // partition key
+        {{"name", bytes_type}, {"col1", bytes_type}},
+        // clustering key
+        {},
+        // regular columns
+        {},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "Table with a composite key as pkey"
+       ));
+    return s;
+}
+
+schema_ptr set_schema() {
+    auto my_set_type = set_type_impl::get_instance(bytes_type, false);
+    static thread_local auto s = make_lw_shared(schema({}, "tests", "set_pk",
+        // partition key
+        {{"ss", my_set_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+            {"ns", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "Table with a set as pkeys"
+       ));
+    return s;
+}
+
+schema_ptr map_schema() {
+    auto my_map_type = map_type_impl::get_instance(bytes_type, bytes_type, false);
+    static thread_local auto s = make_lw_shared(schema({}, "tests", "map_pk",
+        // partition key
+        {{"ss", my_map_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+            {"ns", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "Table with a map as pkeys"
+       ));
+    return s;
+}
+
+schema_ptr list_schema() {
+    auto my_list_type = list_type_impl::get_instance(bytes_type, false);
+    static thread_local auto s = make_lw_shared(schema({}, "tests", "list_pk",
+        // partition key
+        {{"ss", my_list_type}},
+        // clustering key
+        {},
+        // regular columns
+        {
+            {"ns", utf8_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "Table with a list as pkeys"
+       ));
+    return s;
+}
+
+
+SEASTAR_TEST_CASE(find_key_map) {
+    return reusable_sst("tests/urchin/sstables/map_pk", 1).then([] (auto sstp) {
+        schema_ptr s = map_schema();
+        auto& summary = sstables::test(sstp)._summary();
+        std::vector<boost::any> kk;
+
+        auto b1 = to_bytes("2");
+        auto b2 = to_bytes("2");
+
+        auto map_element = std::make_pair<boost::any, boost::any>(boost::any(b1), boost::any(b2));
+        std::vector<std::pair<boost::any, boost::any>> map;
+        map.push_back(map_element);
+
+        kk.push_back(map);
+
+        auto key = sstables::key::from_deeply_exploded(*s, kk);
+        BOOST_REQUIRE(summary.binary_search(key) == 0);
+    });
+}
+
+SEASTAR_TEST_CASE(find_key_set) {
+    return reusable_sst("tests/urchin/sstables/set_pk", 1).then([] (auto sstp) {
+        schema_ptr s = set_schema();
+        auto& summary = sstables::test(sstp)._summary();
+        std::vector<boost::any> kk;
+
+        std::vector<boost::any> set;
+
+        bytes b1("1");
+        bytes b2("2");
+
+        set.push_back(boost::any(b1));
+        set.push_back(boost::any(b2));
+        kk.push_back(set);
+
+        auto key = sstables::key::from_deeply_exploded(*s, kk);
+        BOOST_REQUIRE(summary.binary_search(key) == 0);
+    });
+}
+
+SEASTAR_TEST_CASE(find_key_list) {
+    return reusable_sst("tests/urchin/sstables/list_pk", 1).then([] (auto sstp) {
+        schema_ptr s = set_schema();
+        auto& summary = sstables::test(sstp)._summary();
+        std::vector<boost::any> kk;
+
+        std::vector<boost::any> list;
+
+        bytes b1("1");
+        bytes b2("2");
+        list.push_back(boost::any(b1));
+        list.push_back(boost::any(b2));
+
+        kk.push_back(list);
+
+        auto key = sstables::key::from_deeply_exploded(*s, kk);
+        BOOST_REQUIRE(summary.binary_search(key) == 0);
+    });
+}
+
+
+SEASTAR_TEST_CASE(find_key_composite) {
+    return reusable_sst("tests/urchin/sstables/composite", 1).then([] (auto sstp) {
+        schema_ptr s = composite_schema();
+        auto& summary = sstables::test(sstp)._summary();
+        std::vector<boost::any> kk;
+
+        auto b1 = bytes("HCG8Ee7ENWqfCXipk4-Ygi2hzrbfHC8pTtH3tEmV3d9p2w8gJPuMN_-wp1ejLRf4kNEPEgtgdHXa6NoFE7qUig==");
+        auto b2 = bytes("VJizqYxC35YpLaPEJNt_4vhbmKJxAg54xbiF1UkL_9KQkqghVvq34rZ6Lm8eRTi7JNJCXcH6-WtNUSFJXCOfdg==");
+
+        kk.push_back(boost::any(b1));
+        kk.push_back(boost::any(b2));
+
+        auto key = sstables::key::from_deeply_exploded(*s, kk);
+        BOOST_REQUIRE(summary.binary_search(key) == 0);
+    });
+}
+
+SEASTAR_TEST_CASE(all_in_place) {
+    return reusable_sst("tests/urchin/sstables/bigsummary", 76).then([] (auto sstp) {
+        auto& summary = sstables::test(sstp)._summary();
+
+        int idx = 0;
+        for (auto& e: summary.entries) {
+            auto key = sstables::key::from_bytes(e.key);
+            BOOST_REQUIRE(summary.binary_search(key) == idx++);
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
+    return reusable_sst("tests/urchin/sstables/composite", 1).then([] (auto sstp) {
+        schema_ptr s = composite_schema();
+        auto& summary = sstables::test(sstp)._summary();
+        std::vector<boost::any> kk;
+
+        auto b1 = bytes("ZEunFCoqAidHOrPiU3U6UAvUU01IYGvT3kYtYItJ1ODTk7FOsEAD-dqmzmFNfTDYvngzkZwKrLxthB7ItLZ4HQ==");
+        auto b2 = bytes("K-GpWx-QtyzLb12z5oNS0C03d3OzNyBKdYJh1XjHiC53KudoqdoFutHUMFLe6H9Emqv_fhwIJEKEb5Csn72f9A==");
+
+        kk.push_back(boost::any(b1));
+        kk.push_back(boost::any(b2));
+
+        auto key = sstables::key::from_deeply_exploded(*s, kk);
+        // (result + 1) * -1 -1 = 0
+        BOOST_REQUIRE(summary.binary_search(key) == -2);
     });
 }
