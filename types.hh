@@ -171,9 +171,7 @@ public:
         validate(v);
     }
     virtual bool is_compatible_with(abstract_type& previous) {
-        // FIXME
-        abort();
-        return false;
+        return equals(previous);
     }
     /*
      * Types which are wrappers over other types should override this.
