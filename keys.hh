@@ -281,6 +281,7 @@ public:
     bool is_full(const schema& s) const {
         return _v.size() == s.clustering_key_size();
     }
+    friend std::ostream& operator<<(std::ostream& os, const exploded_clustering_prefix& ecp);
 };
 
 class clustering_key : public prefixable_full_tuple<clustering_key, clustering_key_prefix> {

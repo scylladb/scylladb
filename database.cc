@@ -8,11 +8,13 @@
 #include "core/future-util.hh"
 #include "db/system_keyspace.hh"
 #include "db/consistency_level.hh"
+#include "to_string.hh"
 
 #include "cql3/column_identifier.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
+#include <boost/range/adaptor/transformed.hpp>
 
 thread_local logging::logger dblog("database");
 
@@ -901,6 +903,13 @@ std::ostream& operator<<(std::ostream& os, db::consistency_level cl) {
     }
 }
 
+}
+
+std::ostream&
+operator<<(std::ostream& os, const exploded_clustering_prefix& ecp) {
+    // Can't pass to_hex() to transformed(), since it is overloaded, so wrap:
+    auto enhex = [] (auto&& x) { return to_hex(x); };
+    return fprint(os, "prefix{%s}", ::join(":", ecp._v | boost::adaptors::transformed(enhex)));
 }
 
 std::ostream&
