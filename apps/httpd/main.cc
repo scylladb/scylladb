@@ -24,6 +24,7 @@
 #include "http/function_handlers.hh"
 #include "http/file_handler.hh"
 #include "apps/httpd/demo.json.hh"
+#include "http/api_docs.hh"
 
 namespace bpo = boost::program_options;
 
@@ -70,14 +71,19 @@ int main(int ac, char** av) {
             [&] {
                 auto&& config = app.configuration();
                 uint16_t port = config["port"].as<uint16_t>();
-                auto server = new distributed<http_server>;
-                server->start().then([server = std::move(server), port] () mutable {
-                            server->invoke_on_all([](http_server& server) {
-                                set_routes(server._routes);
-                            });
-                            server->invoke_on_all(&http_server::listen, ipv4_addr {port});
-                        }).then([port] {
-                            std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
-                        });
+                auto server = new http_server_control();
+                auto rb= make_shared<api_registry_builder>("apps/httpd/");
+                server->start().then([server] {
+                    server->set_routes(set_routes);
+                }).then([server, rb]{
+                    server->set_routes(rb->set_api_doc());
+                }).then([server, rb]{
+                    server->set_routes(rb->register_function("demo", "hello world application"));
+                }).then([server, port] {
+                    server->listen(port);
+                }).then([port] {
+                    std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
+                });
+
             });
 }
