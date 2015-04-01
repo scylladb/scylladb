@@ -54,7 +54,7 @@ class functions {
 private:
     static std::unordered_multimap<function_name, shared_ptr<function>> init() {
         std::unordered_multimap<function_name, shared_ptr<function>> ret;
-        auto declare = [&ret] (shared_ptr<function> f) { ret.emplace(f->name(), std::move(f)); };
+        auto declare = [&ret] (shared_ptr<function> f) { ret.emplace(f->name(), f); };
         declare(aggregate_fcts::make_count_rows_function());
         declare(time_uuid_fcts::make_now_fct());
         declare(time_uuid_fcts::make_min_timeuuid_fct());
