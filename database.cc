@@ -194,7 +194,7 @@ sstring to_hex(const bytes& b) {
 }
 
 sstring to_hex(const bytes_opt& b) {
-    return b ? "null" : to_hex(*b);
+    return !b ? "null" : to_hex(*b);
 }
 
 class lister {
