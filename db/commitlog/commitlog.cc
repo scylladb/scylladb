@@ -125,6 +125,7 @@ public:
     future<sseg_ptr> active_segment();
     future<> clear();
 
+    void discard_unused_segments();
     void discard_completed_segments(const cf_id_type& id,
             const replay_position& pos);
     void sync();
@@ -380,6 +381,10 @@ public:
         return _file_pos + _buf_pos;
     }
 
+    size_t size_on_disk() const {
+        return _file_pos;
+    }
+
     // ensures no more of this segment is writeable, by allocating any unused section at the end and marking it discarded
     // a.k.a. zero the tail.
     size_t clear_buffer_slack() {
@@ -400,6 +405,9 @@ public:
         } else if (pos.id > _desc.id) {
             mark_clean(id, std::numeric_limits<position_type>::max());
         }
+    }
+    void mark_clean() {
+        _cf_dirty.clear();
     }
     bool is_still_allocating() const {
         return !_closed && position() < _segment_manager->max_size;
@@ -453,6 +461,26 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     descriptor d(next_id());
     return engine().open_file_dma(cfg.commit_log_location + "/" + d.filename(), open_flags::wo|open_flags::create).then(
             [this, d](file f) {
+                if (cfg.commitlog_total_space_in_mb != 0) {
+                    auto i = _segments.rbegin();
+                    auto e = _segments.rend();
+                    size_t s = 0, n = 0;
+
+                    while (i != e) {
+                        auto& seg = *i;
+                        s += seg->size_on_disk();
+                        if (!seg->is_still_allocating() && s >= cfg.commitlog_total_space_in_mb) {
+                            seg->mark_clean();
+                            ++n;
+                        }
+                        ++i;
+                    }
+
+                    if (n > 0) {
+                        discard_unused_segments();
+                    }
+                }
+
                 _segments.emplace_back(make_lw_shared<segment>(this, d, std::move(f)));
                 return make_ready_future<sseg_ptr>(_segments.back());
             });
@@ -472,14 +500,21 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
  */
 void db::commitlog::segment_manager::discard_completed_segments(
         const cf_id_type& id, const replay_position& pos) {
-    auto i = std::remove_if(_segments.begin(), _segments.end(), [=](auto& s) {
+    for (auto&s : _segments) {
         s->mark_clean(id, pos);
+    }
+    discard_unused_segments();
+}
+
+void db::commitlog::segment_manager::discard_unused_segments() {
+    auto i = std::remove_if(_segments.begin(), _segments.end(), [=](auto& s) {
         return s->is_unused();
     });
     if (i != _segments.end()) {
         _segments.erase(i, _segments.end());
     }
 }
+
 /*
  * Sync all segments, then clear them out. To ensure all ops are done.
  * (Assumes you have barriered adding ops!)
