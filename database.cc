@@ -902,3 +902,16 @@ std::ostream& operator<<(std::ostream& os, db::consistency_level cl) {
 }
 
 }
+
+std::ostream&
+operator<<(std::ostream& os, const atomic_cell_view& acv) {
+    return fprint(os, "atomic_cell{%s;ts=%d;ttl=%d}",
+            (acv.is_live() ? to_hex(acv.value()) : sstring("DEAD")),
+            acv.timestamp(),
+            acv.is_live_and_has_ttl() ? acv.ttl()->time_since_epoch().count() : -1);
+}
+
+std::ostream&
+operator<<(std::ostream& os, const atomic_cell& ac) {
+    return os << atomic_cell_view(ac);
+}

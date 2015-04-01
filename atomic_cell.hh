@@ -128,6 +128,7 @@ public:
         return _data;
     }
     friend class atomic_cell;
+    friend std::ostream& operator<<(std::ostream& os, const atomic_cell_view& acv);
 };
 
 class atomic_cell final {
@@ -177,6 +178,7 @@ public:
         return atomic_cell_type::make_live(timestamp, ttl, value);
     }
     friend class atomic_cell_or_collection;
+    friend std::ostream& operator<<(std::ostream& os, const atomic_cell& ac);
 };
 
 // Represents a mutation of a collection.  Actual format is determined by collection type,
