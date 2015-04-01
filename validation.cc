@@ -58,8 +58,9 @@ validate_column_family(database& db, const sstring& keyspace_name, const sstring
         throw exceptions::invalid_request_exception("Keyspace not set");
     }
 
-    keyspace* ks = db.find_keyspace(keyspace_name);
-    if (!ks) {
+    try {
+        db.find_keyspace(keyspace_name);
+    } catch (...) {
         throw exceptions::keyspace_not_defined_exception(sprint("Keyspace %s does not exist", keyspace_name));
     }
 
@@ -67,12 +68,11 @@ validate_column_family(database& db, const sstring& keyspace_name, const sstring
         throw exceptions::invalid_request_exception("non-empty table is required");
     }
 
-    auto schema = ks->find_schema(cf_name);
-    if (!schema) {
+    try {
+        return db.find_schema(keyspace_name, cf_name);
+    } catch (...) {
         throw exceptions::invalid_request_exception(sprint("unconfigured table %s", cf_name));
     }
-
-    return schema;
 }
 
 }

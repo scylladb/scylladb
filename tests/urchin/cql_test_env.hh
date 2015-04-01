@@ -76,8 +76,8 @@ public:
     future<> create_table(SchemaMaker schema_maker) {
         return _db->invoke_on_all([schema_maker, this] (database& db) {
             auto cf_schema = make_lw_shared(schema_maker(ks_name));
-            auto& ks = db.find_or_create_keyspace(ks_name);
-            ks.column_families.emplace(cf_schema->cf_name, column_family(cf_schema));
+            db.find_or_create_keyspace(ks_name);
+            db.add_column_family(column_family(cf_schema));
         });
     }
 
@@ -87,11 +87,8 @@ public:
                                       const sstring& column_name,
                                       boost::any expected) {
         auto& db = _db->local();
-        auto ks = db.find_keyspace(ks_name);
-        assert(ks != nullptr);
-        auto cf = ks->find_column_family(table_name);
-        assert(cf != nullptr);
-        auto schema = cf->_schema;
+        auto& cf = db.find_column_family(ks_name, table_name);
+        auto schema = cf._schema;
         auto pkey = partition_key::from_deeply_exploded(*schema, pk);
         auto dk = dht::global_partitioner().decorate_key(pkey);
         auto shard = db.shard_of(dk._token);
@@ -101,12 +98,9 @@ public:
                                      column_name = std::move(column_name),
                                      expected = std::move(expected),
                                      table_name = std::move(table_name)] (database& db) {
-            auto ks = db.find_keyspace(ks_name);
-            assert(ks != nullptr);
-            auto cf = ks->find_column_family(table_name);
-            assert(cf != nullptr);
-            auto schema = cf->_schema;
-            auto p = cf->find_partition(pkey);
+            auto& cf = db.find_column_family(ks_name, table_name);
+            auto schema = cf._schema;
+            auto p = cf.find_partition(pkey);
             assert(p != nullptr);
             auto row = p->find_row(clustering_key::from_deeply_exploded(*schema, ck));
             assert(row != nullptr);

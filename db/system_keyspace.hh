@@ -49,7 +49,7 @@ extern schema_ptr batchlog();
 extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 
 std::vector<schema_ptr> all_tables();
-keyspace make();
+void make(database& db);
 
 #if 0
 

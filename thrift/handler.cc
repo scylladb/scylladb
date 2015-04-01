@@ -79,7 +79,6 @@ void complete(future<foreign_ptr<lw_shared_ptr<T>>>& fut,
 
 class CassandraAsyncHandler : public CassandraCobSvIf {
     distributed<database>& _db;
-    keyspace* _ks = nullptr;  // FIXME: reference counting for in-use detection?
     sstring _ks_name;
     sstring _cql_version;
 public:
@@ -91,7 +90,6 @@ public:
 
     void set_keyspace(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
         try {
-            _ks = &_db.local().keyspaces.at(keyspace);
             _ks_name = keyspace;
             cob();
         } catch (std::out_of_range& e) {
@@ -107,9 +105,10 @@ public:
     }
 
     void get_slice(tcxx::function<void(std::vector<ColumnOrSuperColumn>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& key, const ColumnParent& column_parent, const SlicePredicate& predicate, const ConsistencyLevel::type consistency_level) {
-        auto& ks = lookup_keyspace(_db.local(), _ks_name);
-        auto schema = ks.find_schema(column_parent.column_family);
-        if (!_ks) {
+        schema_ptr schema;
+        try {
+            schema = _db.local().find_schema(_ks_name, column_parent.column_family);
+        } catch (...) {
             return complete_with_exception<InvalidRequestException>(std::move(exn_cob), "column family %s not found", column_parent.column_family);
         }
         auto pk = key_from_thrift(schema, to_bytes(key));
@@ -124,8 +123,7 @@ public:
             if (!column_parent.super_column.empty()) {
                 throw unimplemented_exception();
             }
-            auto& ks = lookup_keyspace(db, _ks_name);
-            auto& cf = lookup_column_family(ks, column_parent.column_family);
+            auto& cf = lookup_column_family(_db.local(), _ks_name, column_parent.column_family);
             if (predicate.__isset.column_names) {
                 throw unimplemented_exception();
             } else if (predicate.__isset.slice_range) {
@@ -235,7 +233,7 @@ public:
     }
 
     void batch_mutate(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::map<std::string, std::map<std::string, std::vector<Mutation> > > & mutation_map, const ConsistencyLevel::type consistency_level) {
-        if (!_ks) {
+        if (_ks_name.empty()) {
             return complete_with_exception<InvalidRequestException>(std::move(exn_cob), "keyspace not set");
         }
         // Would like to use move_iterator below, but Mutation is filled with some const stuff.
@@ -249,7 +247,7 @@ public:
                     [this, thrift_key] (std::pair<std::string, std::vector<Mutation>> cf_mutations) {
                 sstring cf_name = cf_mutations.first;
                 const std::vector<Mutation>& mutations = cf_mutations.second;
-                auto& cf = lookup_column_family(*_ks, cf_name);
+                auto& cf = lookup_column_family(_db.local(), _ks_name, cf_name);
                 mutation m_to_apply(key_from_thrift(cf._schema, thrift_key), cf._schema);
                 auto empty_clustering_key = clustering_key::make_empty(*cf._schema);
                 for (const Mutation& m : mutations) {
@@ -294,8 +292,7 @@ public:
                 auto dk = dht::global_partitioner().decorate_key(m_to_apply.key);
                 auto shard = _db.local().shard_of(dk._token);
                 return _db.invoke_on(shard, [this, cf_name, m_to_apply = std::move(m_to_apply)] (database& db) {
-                    auto& ks = db.keyspaces.at(_ks_name);
-                    auto& cf = ks.column_families.at(cf_name);
+                    auto& cf = db.find_column_family(_ks_name, cf_name);
                     cf.apply(m_to_apply);
                 });
             });
@@ -413,13 +410,13 @@ public:
 
     void system_add_keyspace(tcxx::function<void(std::string const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const KsDef& ks_def) {
         std::string schema_id = "schema-id";  // FIXME: make meaningful
-        if (_db.local().keyspaces.count(ks_def.name)) {
+        if (_db.local().has_keyspace(ks_def.name)) {
             InvalidRequestException ire;
             ire.why = sprint("Keyspace %s already exists", ks_def.name);
             exn_cob(TDelayedException::delayException(ire));
         }
         _db.invoke_on_all([this, ks_def = std::move(ks_def)] (database& db) {
-            keyspace& ks = db.keyspaces[ks_def.name];
+            db.add_keyspace(ks_def.name, keyspace());
             for (const CfDef& cf_def : ks_def.cf_defs) {
                 std::vector<schema::column> partition_key;
                 std::vector<schema::column> clustering_key;
@@ -437,7 +434,7 @@ public:
                     std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
                     std::vector<schema::column>(), column_name_type);
                 column_family cf(s);
-                ks.column_families.emplace(cf_def.name, std::move(cf));
+                db.add_column_family(std::move(cf));
             }
         }).then([schema_id = std::move(schema_id)] {
             return make_ready_future<std::string>(std::move(schema_id));
@@ -511,18 +508,11 @@ public:
     }
 
 private:
-    static column_family& lookup_column_family(keyspace& ks, const sstring& cf_name) {
+    static column_family& lookup_column_family(database& db, const sstring& ks_name, const sstring& cf_name) {
         try {
-            return ks.column_families.at(cf_name);
+            return db.find_column_family(ks_name, cf_name);
         } catch (std::out_of_range&) {
             throw make_exception<InvalidRequestException>("column family %s not found", cf_name);
-        }
-    }
-    static keyspace& lookup_keyspace(database& db, const sstring& ks_name) {
-        try {
-            return db.keyspaces.at(ks_name);
-        } catch (std::out_of_range&) {
-            throw make_exception<InvalidRequestException>("Keyspace %s not found", ks_name);
         }
     }
     static partition_key key_from_thrift(schema_ptr s, bytes k) {

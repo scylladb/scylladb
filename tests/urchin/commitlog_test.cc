@@ -139,8 +139,8 @@ inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os
 SEASTAR_TEST_CASE(test_create_commitlog){
 return make_commitlog().then([](tmplog_ptr log) {
             sstring tmp = "hej bubba cow";
-            return log->second.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), [tmp](char * dst) {
-                        std::copy(tmp.begin(), tmp.end(), dst);
+            return log->second.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), [tmp](db::commitlog::output& dst) {
+                        dst.write(tmp.begin(), tmp.end());
                     }).then([](db::replay_position rp) {
                         BOOST_CHECK_NE(rp, db::replay_position());
                     }).finally([log]() {
@@ -155,8 +155,8 @@ commitlog::config cfg;
 cfg.mode = commitlog::sync_mode::BATCH;
 return make_commitlog(cfg).then([](tmplog_ptr log) {
             sstring tmp = "hej bubba cow";
-            return log->second.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), [tmp](char * dst) {
-                        std::copy(tmp.begin(), tmp.end(), dst);
+            return log->second.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), [tmp](db::commitlog::output& dst) {
+                        dst.write(tmp.begin(), tmp.end());
                     }).then([log](replay_position rp) {
                         BOOST_CHECK_NE(rp, db::replay_position());
                         return count_files_with_size(log->first.path).then([log](size_t n) {
@@ -175,8 +175,8 @@ return make_commitlog().then([](tmplog_ptr log) {
             return do_until([state]() {return *state;},
                     [log, state, uuid]() {
                         sstring tmp = "hej bubba cow";
-                        return log->second.add_mutation(uuid, tmp.size(), [tmp](char * dst) {
-                                    std::copy(tmp.begin(), tmp.end(), dst);
+                        return log->second.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                                    dst.write(tmp.begin(), tmp.end());
                                 }).then([log, state](replay_position rp) {
                                     BOOST_CHECK_NE(rp, db::replay_position());
                                     return count_files_with_size(log->first.path).then([state](size_t n) {
@@ -199,8 +199,8 @@ return make_commitlog(cfg).then([](tmplog_ptr log) {
             return do_until([state]() {return *state;},
                     [log, state, uuid]() {
                         sstring tmp = "hej bubba cow";
-                        return log->second.add_mutation(uuid, tmp.size(), [tmp](char * dst) {
-                                    std::copy(tmp.begin(), tmp.end(), dst);
+                        return log->second.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                                    dst.write(tmp.begin(), tmp.end());
                                 }).then([log, state](replay_position rp) {
                                     BOOST_CHECK_NE(rp, db::replay_position());
                                     *state = rp.id > 1;
@@ -242,8 +242,8 @@ return make_commitlog(cfg).then([](tmplog_ptr log) {
                     [log, state]() {
                         sstring tmp = "hej bubba cow";
                         auto uuid = state->next_uuid();
-                        return log->second.add_mutation(uuid, tmp.size(), [tmp](char * dst) {
-                                    std::copy(tmp.begin(), tmp.end(), dst);
+                        return log->second.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                                    dst.write(tmp.begin(), tmp.end());
                                 }).then([log, state, uuid](replay_position pos) {
                                     state->done = pos.id > 1;
                                     state->rps[uuid] = pos;
@@ -268,8 +268,8 @@ return make_commitlog(cfg).then([](tmplog_ptr log) {
 SEASTAR_TEST_CASE(test_equal_record_limit){
 return make_commitlog().then([](tmplog_ptr log) {
             auto size = log->second.max_record_size();
-            return log->second.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](char * dst) {
-                        std::fill(dst, dst + size, 1);
+            return log->second.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](db::commitlog::output& dst) {
+                        dst.write(char(1), size);
                     }).then([](db::replay_position rp) {
                         BOOST_CHECK_NE(rp, db::replay_position());
                     }).finally([log]() {
@@ -281,8 +281,8 @@ return make_commitlog().then([](tmplog_ptr log) {
 SEASTAR_TEST_CASE(test_exceed_record_limit){
 return make_commitlog().then([](tmplog_ptr log) {
             auto size = log->second.max_record_size() + 1;
-            return log->second.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](char * dst) {
-                        std::fill(dst, dst + size, 1);
+            return log->second.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](db::commitlog::output& dst) {
+                        dst.write(char(1), size);
                     }).then([](db::replay_position rp) {
                         // should not reach.
                     }).then_wrapped([](future<> f) {

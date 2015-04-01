@@ -8,7 +8,7 @@
 #include "core/future-util.hh"
 #include "db/system_keyspace.hh"
 #include "db/consistency_level.hh"
-
+#include "utils/UUID_gen.hh"
 #include "cql3/column_identifier.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -304,30 +304,9 @@ future<> column_family::populate(sstring sstdir) {
     });
 }
 
-future<> keyspace::populate(sstring ksdir) {
-    return lister::scan_dir(ksdir, directory_entry_type::directory, [this, ksdir] (directory_entry de) {
-        auto comps = parse_fname(de.name);
-        if (comps.size() != 2) {
-            dblog.error("Keyspace {}: Skipping malformed CF {} ", ksdir, de.name);
-            return make_ready_future<>();
-        }
-        sstring cfname = comps[0];
-
-        auto sstdir = ksdir + "/" + de.name;
-        if (column_families.count(cfname) != 0) {
-            dblog.info("Keyspace {}: Reading CF {} ", ksdir, comps[0]);
-
-            // FIXME: Increase parallelism.
-            return column_families.at(cfname).populate(sstdir);
-        } else {
-            dblog.warn("{}, CF {}: schema not loaded!", ksdir, comps[0]);
-            return make_ready_future<>();
-        }
-    });
-}
 
 database::database() {
-    keyspaces.emplace("system", db::system_keyspace::make());
+    db::system_keyspace::make(*this);
 }
 
 future<> database::populate(sstring datadir) {
@@ -335,12 +314,31 @@ future<> database::populate(sstring datadir) {
         auto& ks_name = de.name;
         auto ksdir = datadir + "/" + de.name;
 
-        auto i = keyspaces.find(ks_name);
-        if (i == keyspaces.end()) {
+        auto i = _keyspaces.find(ks_name);
+        if (i == _keyspaces.end()) {
             dblog.warn("Skipping undefined keyspace: {}", ks_name);
         } else {
             dblog.warn("Populating Keyspace {}", ks_name);
-            return i->second.populate(ksdir);
+            return lister::scan_dir(ksdir, directory_entry_type::directory, [this, ksdir, ks_name] (directory_entry de) {
+                auto comps = parse_fname(de.name);
+                if (comps.size() != 2) {
+                    dblog.error("Keyspace {}: Skipping malformed CF {} ", ksdir, de.name);
+                    return make_ready_future<>();
+                }
+                sstring cfname = comps[0];
+
+                auto sstdir = ksdir + "/" + de.name;
+
+                try {
+                    auto& cf = find_column_family(ks_name, cfname);
+                    dblog.info("Keyspace {}: Reading CF {} ", ksdir, cfname);
+                    // FIXME: Increase parallelism.
+                    return cf.populate(sstdir);
+                } catch (no_such_column_family&) {
+                    dblog.warn("{}, CF {}: schema not loaded!", ksdir, comps[0]);
+                    return make_ready_future<>();
+                }
+            });
         }
         return make_ready_future<>();
     });
@@ -384,49 +382,115 @@ column_definition::name() const {
     return _name;
 }
 
-column_family*
-keyspace::find_column_family(const sstring& cf_name) {
-    auto i = column_families.find(cf_name);
-    if (i == column_families.end()) {
-        return nullptr;
+void database::add_keyspace(sstring name, keyspace k) {
+    if (_keyspaces.count(name) != 0) {
+        throw std::invalid_argument("Keyspace " + name + " already exists");
     }
-    return &i->second;
+    _keyspaces.emplace(std::move(name), std::move(k));
 }
 
-schema_ptr
-keyspace::find_schema(const sstring& cf_name) {
-    auto cf = find_column_family(cf_name);
-    if (!cf) {
-        return {};
+void database::add_column_family(const utils::UUID& uuid, column_family cf) {
+    if (_keyspaces.count(cf._schema->ks_name) == 0) {
+        throw std::invalid_argument("Keyspace " + cf._schema->ks_name + " not defined");
     }
-    return cf->_schema;
+    if (_column_families.count(uuid) != 0) {
+        throw std::invalid_argument("UUID " + uuid.to_sstring() + " already mapped");
+    }
+    auto kscf = std::make_pair(cf._schema->ks_name, cf._schema->cf_name);
+    if (_ks_cf_to_uuid.count(kscf) != 0) {
+        throw std::invalid_argument("Column family " + cf._schema->cf_name + " exists");
+    }
+    _column_families.emplace(uuid, std::move(cf));
+    _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
 }
 
-schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) {
-    auto ks = find_keyspace(ks_name);
-    if (!ks) {
-        return {};
-    }
-
-    return ks->find_schema(cf_name);
+void database::add_column_family(column_family cf) {
+    add_column_family(utils::UUID_gen::get_time_UUID(), std::move(cf));
 }
 
-keyspace*
-database::find_keyspace(const sstring& name) {
-    auto i = keyspaces.find(name);
-    if (i != keyspaces.end()) {
-        return &i->second;
+const utils::UUID& database::find_uuid(sstring ks, sstring cf) const throw (std::out_of_range) {
+    return _ks_cf_to_uuid.at(std::make_pair(ks, cf));
+}
+
+const utils::UUID& database::find_uuid(schema_ptr schema) const throw (std::out_of_range) {
+    return find_uuid(schema->ks_name, schema->cf_name);
+}
+
+keyspace& database::find_keyspace(const sstring& name) throw (no_such_keyspace) {
+    try {
+        return _keyspaces.at(name);
+    } catch (...) {
+        std::throw_with_nested(no_such_keyspace(name));
     }
-    return nullptr;
+}
+
+const keyspace& database::find_keyspace(const sstring& name) const throw (no_such_keyspace) {
+    try {
+        return _keyspaces.at(name);
+    } catch (...) {
+        std::throw_with_nested(no_such_keyspace(name));
+    }
+}
+
+bool database::has_keyspace(const sstring& name) const {
+    return _keyspaces.count(name) != 0;
+}
+
+column_family& database::find_column_family(const sstring& ks_name, const sstring& cf_name) throw (no_such_column_family) {
+    try {
+        return find_column_family(find_uuid(ks_name, cf_name));
+    } catch (...) {
+        std::throw_with_nested(no_such_column_family(ks_name + ":" + cf_name));
+    }
+}
+
+const column_family& database::find_column_family(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family) {
+    try {
+        return find_column_family(find_uuid(ks_name, cf_name));
+    } catch (...) {
+        std::throw_with_nested(no_such_column_family(ks_name + ":" + cf_name));
+    }
+}
+
+column_family& database::find_column_family(const utils::UUID& uuid) throw (no_such_column_family) {
+    try {
+        return _column_families.at(uuid);
+    } catch (...) {
+        std::throw_with_nested(no_such_column_family(uuid.to_sstring()));
+    }
+}
+
+const column_family& database::find_column_family(const utils::UUID& uuid) const throw (no_such_column_family) {
+    try {
+        return _column_families.at(uuid);
+    } catch (...) {
+        std::throw_with_nested(no_such_column_family(uuid.to_sstring()));
+    }
+}
+
+column_family& database::find_column_family(schema_ptr schema) throw (no_such_column_family) {
+    return find_column_family(schema->ks_name, schema->cf_name);
+}
+
+const column_family& database::find_column_family(schema_ptr schema) const throw (no_such_column_family) {
+    return find_column_family(schema->ks_name, schema->cf_name);
+}
+
+schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family) {
+    return find_schema(find_uuid(ks_name, cf_name));
+}
+
+schema_ptr database::find_schema(const utils::UUID& uuid) const throw (no_such_column_family) {
+    return find_column_family(uuid)._schema;
 }
 
 keyspace&
 database::find_or_create_keyspace(const sstring& name) {
-    auto i = keyspaces.find(name);
-    if (i != keyspaces.end()) {
+    auto i = _keyspaces.find(name);
+    if (i != _keyspaces.end()) {
         return i->second;
     }
-    return keyspaces.emplace(name, keyspace()).first->second;
+    return _keyspaces.emplace(name, keyspace()).first->second;
 }
 
 void
@@ -868,18 +932,13 @@ database::query(const query::read_command& cmd) {
         return make_ready_future<lw_shared_ptr<query::result>>(make_lw_shared(query::result()));
     };
 
-    auto ks = find_keyspace(cmd.keyspace);
-    if (!ks) {
+    try {
+        auto& cf = find_column_family(cmd.keyspace, cmd.column_family);
+        return cf.query(cmd);
+    } catch (...) {
         // FIXME: load from sstables
         return make_empty();
     }
-
-    auto cf = ks->find_column_family(cmd.column_family);
-    if (!cf) {
-        return make_empty();
-    }
-
-    return cf->query(cmd);
 }
 
 namespace db {

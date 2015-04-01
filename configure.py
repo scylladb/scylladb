@@ -128,6 +128,8 @@ urchin_tests = [
     'tests/urchin/sstable_test',
     'tests/urchin/commitlog_test',
     'tests/cartesian_product_test',
+    'tests/urchin/hash_test',
+    'tests/urchin/serializer_test',
 ]
 
 tests = [
@@ -306,6 +308,7 @@ urchin_core = (['database.cc',
                  'db/system_keyspace.cc',
                  'db/legacy_schema_tables.cc',
                  'db/commitlog/commitlog.cc',
+                 'db/serializer.cc',
                  'io/io.cc',
                  'utils/utils.cc',
                  'utils/UUID_gen.cc',
