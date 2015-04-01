@@ -119,6 +119,10 @@ public:
 
         virtual sstring to_string() const = 0;
 
+        virtual sstring assignment_testable_source_context() const override {
+            return to_string();
+        }
+
         friend std::ostream& operator<<(std::ostream& os, const raw& r) {
             // FIXME: kill const_cast
             return os << const_cast<raw&>(r).to_string();
