@@ -48,6 +48,8 @@ options {
 #include "cql3/maps.hh"
 #include "cql3/sets.hh"
 #include "cql3/lists.hh"
+#include "cql3/functions/function_name.hh"
+#include "cql3/functions/function_call.hh"
 #include "core/sstring.hh"
 #include "CqlLexer.hpp"
 
@@ -1121,31 +1123,29 @@ intValue returns [::shared_ptr<cql3::term::raw> value]
     | QMARK         { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
     ;
 
-#if 0
-functionName returns [FunctionName s]
-    : (ks=keyspaceName '.')? f=allowedFunctionName   { $s = new FunctionName(ks, f); }
+functionName returns [cql3::functions::function_name s]
+    : (ks=keyspaceName '.')? f=allowedFunctionName   { $s.keyspace = std::move(ks); $s.name = std::move(f); }
     ;
 
-allowedFunctionName returns [String s]
-    : f=IDENT                       { $s = $f.text.toLowerCase(); }
+allowedFunctionName returns [sstring s]
+    : f=IDENT                       { $s = $f.text; std::transform(s.begin(), s.end(), s.begin(), ::tolower); }
     | f=QUOTED_NAME                 { $s = $f.text; }
     | u=unreserved_function_keyword { $s = u; }
     | K_TOKEN                       { $s = "token"; }
     | K_COUNT                       { $s = "count"; }
     ;
 
-functionArgs returns [List<Term.Raw> a]
-    : '(' ')' { $a = Collections.emptyList(); }
-    | '(' t1=term { List<Term.Raw> args = new ArrayList<Term.Raw>(); args.add(t1); }
-          ( ',' tn=term { args.add(tn); } )*
-       ')' { $a = args; }
+functionArgs returns [std::vector<shared_ptr<cql3::term::raw>> a]
+    : '(' ')'
+    | '(' t1=term { a.push_back(std::move(t1)); }
+          ( ',' tn=term { a.push_back(std::move(tn)); } )*
+       ')'
     ;
-#endif
 
 term returns [::shared_ptr<cql3::term::raw> term]
     : v=value                          { $term = v; }
+    | f=functionName args=functionArgs { $term = ::make_shared<cql3::functions::function_call::raw>(std::move(f), std::move(args)); }
 #if 0
-    | f=functionName args=functionArgs { $term = new FunctionCall.Raw(f, args); }
     | '(' c=comparatorType ')' t=term  { $term = new TypeCast(c, t); }
 #endif
     ;
