@@ -187,6 +187,7 @@ http = ['http/transformers.cc',
         'http/httpd.cc',
         'http/reply.cc',
         'http/request_parser.rl',
+        'http/api_docs.cc',
         ]
 defines = []
 libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt'
