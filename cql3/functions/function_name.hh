@@ -36,13 +36,14 @@ namespace functions {
 
 class function_name final {
 public:
-    const sstring keyspace;
-    const sstring name;
+    sstring keyspace;
+    sstring name;
 
     static function_name native_function(sstring name) {
         return function_name(db::system_keyspace::NAME, name);
     }
 
+    function_name() = default; // for ANTLR
     function_name(sstring keyspace, sstring name)
             : keyspace(std::move(keyspace)), name(std::move(name)) {
     }
