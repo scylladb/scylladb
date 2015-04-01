@@ -142,20 +142,20 @@ public:
     virtual void reset() override {
         _max = {};
     }
-    virtual opt_bytes compute() override {
+    virtual opt_bytes compute(int protocol_version) override {
         if (!_max) {
             return {};
         }
-        return data_type_for<Type>().decompose(*_max);
+        return data_type_for<Type>()->decompose(*_max);
     }
     virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
+        auto val = boost::any_cast<Type>(data_type_for<Type>()->compose(*values[0]));
         if (!_max) {
-            _max = values[0];
+            _max = val;
         } else {
-            auto val = boost::any_cast<Type>(data_type_for<Type>().compose(*values[0]));
             _max = std::max(*_max, val);
         }
     }
@@ -179,7 +179,7 @@ public:
 template <typename Type>
 shared_ptr<aggregate_function>
 make_max_function() {
-    return shared_ptr<max_function_for<Type>>();
+    return make_shared<max_function_for<Type>>();
 }
 
 template <typename Type>
