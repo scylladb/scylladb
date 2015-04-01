@@ -1318,28 +1318,16 @@ void smp::pin(unsigned cpu_id) {
 #endif
 
 void smp::allocate_reactor() {
-    // we cannot just write "local_engin = new reactor" since reactor's constructor
-    // uses local_engine
-    struct set_local_engine {
-        set_local_engine(reactor * r) {
-            local_engine = r;
-        }
-        ~set_local_engine() {
-            local_engine = nullptr;
-        }
-    };
-    class local_reactor : private set_local_engine, public reactor {
-    public:
-        local_reactor()
-            : set_local_engine(this)
-        {}
-    };
-
-    static thread_local std::unique_ptr<local_reactor> reactor_holder;
+    static thread_local std::unique_ptr<reactor> reactor_holder;
 
     assert(!reactor_holder);
 
-    reactor_holder.reset(new local_reactor());
+    // we cannot just write "local_engin = new reactor" since reactor's constructor
+    // uses local_engine
+    auto buf = new (with_alignment(64)) char[sizeof(reactor)];
+    local_engine = reinterpret_cast<reactor*>(buf);
+    new (buf) reactor;
+    reactor_holder.reset(local_engine);
 }
 
 void smp::cleanup() {
