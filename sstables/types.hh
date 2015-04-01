@@ -115,6 +115,7 @@ struct summary_la {
     // filled with the same data. It's too early to judge that the data is useless.
     // However, it was tested that Cassandra loads successfully a Summary file with
     // this structure removed from it. Anyway, let's pay attention to it.
+    int binary_search(const key& sk);
 };
 using summary = summary_la;
 
