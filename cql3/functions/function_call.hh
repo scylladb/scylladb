@@ -52,7 +52,7 @@ public:
     }
 
     virtual shared_ptr<terminal> bind(const query_options& options) override {
-        return make_terminal(bind_and_get(options), options.get_protocol_version());
+        return make_terminal(bind_and_get(options), options.get_serialization_format());
     }
 
     virtual bytes_opt bind_and_get(const query_options& options) override {
@@ -67,12 +67,12 @@ public:
             }
             buffers.push_back(std::move(*val));
         }
-        return execute_internal(options.get_protocol_version(), std::move(buffers));
+        return execute_internal(options.get_serialization_format(), std::move(buffers));
     }
 
 private:
-    bytes execute_internal(int protocol_version, std::vector<bytes> params) {
-        bytes result = _fun->execute(protocol_version, params);
+    bytes execute_internal(serialization_format sf, std::vector<bytes> params) {
+        bytes result = _fun->execute(sf, params);
         try {
             // Check the method didn't lied on it's declared return type
 #if 0
@@ -102,7 +102,7 @@ public:
     }
 
 private:
-    shared_ptr<terminal> make_terminal(bytes_opt result, int version)  {
+    shared_ptr<terminal> make_terminal(bytes_opt result, serialization_format sf)  {
         if (!dynamic_pointer_cast<shared_ptr<db::marshal::collection_type>>(_fun->return_type())) {
 #if 0
             return constants.value(result);

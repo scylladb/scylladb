@@ -42,7 +42,7 @@ public:
      * @return the result of applying this function to the parameter
      * @throws InvalidRequestException if this function cannot not be applied to the parameter
      */
-    virtual bytes execute(int protocol_version, const std::vector<bytes>& parameters) = 0;
+    virtual bytes execute(serialization_format sf, const std::vector<bytes>& parameters) = 0;
 };
 
 

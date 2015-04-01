@@ -58,8 +58,8 @@ public:
             : native_scalar_function(std::move(name), std::move(return_type), std::move(arg_types))
             , _func(std::forward<Func>(func)) {
     }
-    virtual bytes execute(int protocol_version, const std::vector<bytes>& parameters) override {
-        return _func(protocol_version, parameters);
+    virtual bytes execute(serialization_format sf, const std::vector<bytes>& parameters) override {
+        return _func(sf, parameters);
     }
 };
 

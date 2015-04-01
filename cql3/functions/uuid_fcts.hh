@@ -36,7 +36,7 @@ inline
 shared_ptr<function>
 make_uuid_fct() {
     return make_native_scalar_function<false>("uuid", uuid_type, {},
-            [] (int protocol_version, const std::vector<bytes>& parameters) {
+            [] (serialization_format sf, const std::vector<bytes>& parameters) {
         return uuid_type->decompose(boost::any(utils::make_random_uuid()));
     });
 }
