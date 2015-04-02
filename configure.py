@@ -298,7 +298,7 @@ defines = ' '.join(['-D' + d for d in defines])
 globals().update(vars(args))
 
 total_memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
-link_pool_depth = max(int(total_memory / 15e9), 1)
+link_pool_depth = max(int(total_memory / 7e9), 1)
 
 build_modes = modes if args.mode == 'all' else [args.mode]
 build_artifacts = all_artifacts if not args.artifacts else args.artifacts
