@@ -43,7 +43,11 @@ void set_routes(routes& r) {
     function_handler* h1 = new function_handler([](const_req req) {
         return "hello";
     });
+    function_handler* h2 = new function_handler([](std::unique_ptr<request> req) {
+            return make_ready_future<json::json_return_type>("json-future");
+    });
     r.add(operation_type::GET, url("/"), h1);
+    r.add(operation_type::GET, url("/jf"), h2);
     r.add(operation_type::GET, url("/file").remainder("path"),
             new directory_handler("/"));
     demo_json::hello_world.set(r,
