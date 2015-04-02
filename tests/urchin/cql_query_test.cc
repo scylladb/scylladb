@@ -34,7 +34,7 @@ SEASTAR_TEST_CASE(test_insert_statement) {
     return do_with_cql_env([] (auto& e) {
         return e.create_table([](auto ks_name) {
             // CQL: create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));
-            return schema(ks_name, "cf",
+            return schema({}, ks_name, "cf",
                           {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, c1, r1) values ('key1', 1, 100);").discard_result();
@@ -52,7 +52,7 @@ SEASTAR_TEST_CASE(test_select_statement) {
    return do_with_cql_env([] (auto& e) {
         return e.create_table([](auto ks_name) {
             // CQL: create table cf (p1 varchar, c1 int, c2 int, r1 int, PRIMARY KEY (p1, c1, c2));
-            return schema(ks_name, "cf",
+            return schema({}, ks_name, "cf",
                 {{"p1", utf8_type}},
                 {{"c1", int32_type}, {"c2", int32_type}},
                 {{"r1", int32_type}},
@@ -144,7 +144,7 @@ SEASTAR_TEST_CASE(test_cassandra_stress_like_write_and_read) {
         };
 
         return e.create_table([](auto ks_name) {
-            return schema(ks_name, "cf",
+            return schema({}, ks_name, "cf",
                           {{"KEY", bytes_type}},
                           {},
                           {{"C0", bytes_type},
@@ -171,7 +171,7 @@ SEASTAR_TEST_CASE(test_cassandra_stress_like_write_and_read) {
 SEASTAR_TEST_CASE(test_range_queries) {
    return do_with_cql_env([] (auto& e) {
         return e.create_table([](auto ks_name) {
-            return schema(ks_name, "cf",
+            return schema({}, ks_name, "cf",
                 {{"k", bytes_type}},
                 {{"c0", bytes_type}, {"c1", bytes_type}},
                 {{"v", bytes_type}},
@@ -268,7 +268,7 @@ SEASTAR_TEST_CASE(test_range_queries) {
 SEASTAR_TEST_CASE(test_ordering_of_composites_with_variable_length_components) {
     return do_with_cql_env([] (auto& e) {
         return e.create_table([](auto ks) {
-            return schema(ks, "cf",
+            return schema({}, ks, "cf",
                 {{"k", bytes_type}},
                 // We need more than one clustering column so that the single-element tuple format optimisation doesn't kick in
                 {{"c0", bytes_type}, {"c1", bytes_type}},
@@ -297,7 +297,7 @@ SEASTAR_TEST_CASE(test_query_with_static_columns) {
     return do_with_cql_env([] (auto& e) {
         return e.create_table([](auto ks) {
             // CQL: create table cf (k bytes, c bytes, v bytes, s1 bytes static, primary key (k, c));
-            return schema(ks, "cf",
+            return schema({}, ks, "cf",
                 {{"k", bytes_type}},
                 {{"c", bytes_type}},
                 {{"v", bytes_type}},
@@ -376,7 +376,7 @@ SEASTAR_TEST_CASE(test_deletion_scenarios) {
     return do_with_cql_env([] (auto& e) {
         return e.create_table([](auto ks) {
             // CQL: create table cf (k bytes, c bytes, v bytes, primary key (k, c));
-            return schema(ks, "cf",
+            return schema({}, ks, "cf",
                 {{"k", bytes_type}}, {{"c", bytes_type}}, {{"v", bytes_type}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql("insert into cf (k, c, v) values (0x00, 0x05, 0x01) using timestamp 1;").discard_result();
@@ -458,7 +458,7 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
         return e.create_table([](auto ks_name) {
             // CQL: create table cf (p1 varchar primary key, map1 map<int, int>);
             auto my_map_type = map_type_impl::get_instance(int32_type, int32_type, true);
-            return schema(ks_name, "cf",
+            return schema({}, ks_name, "cf",
                           {{"p1", utf8_type}}, {}, {{"map1", my_map_type}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, map1) values ('key1', { 1001: 2001 });").discard_result();
@@ -533,7 +533,7 @@ SEASTAR_TEST_CASE(test_set_insert_update) {
         return e.create_table([](auto ks_name) {
             // CQL: create table cf (p1 varchar primary key, set1 set<int>);
             auto my_set_type = set_type_impl::get_instance(int32_type, true);
-            return schema(ks_name, "cf",
+            return schema({}, ks_name, "cf",
                           {{"p1", utf8_type}}, {}, {{"set1", my_set_type}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, set1) values ('key1', { 1001 });").discard_result();
@@ -589,7 +589,7 @@ SEASTAR_TEST_CASE(test_list_insert_update) {
         return e.create_table([](auto ks_name) {
             // CQL: create table cf (p1 varchar primary key, list1 list<int>);
             auto my_list_type = list_type_impl::get_instance(int32_type, true);
-            return schema(ks_name, "cf",
+            return schema({}, ks_name, "cf",
                 {{"p1", utf8_type}}, {}, {{"list1", my_list_type}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, list1) values ('key1', [ 1001 ]);").discard_result();
@@ -636,7 +636,7 @@ SEASTAR_TEST_CASE(test_functions) {
     return do_with_cql_env([] (auto&& e) {
         return e.create_table([](auto ks_name) {
             // CQL: create table cf (p1 varchar primary key, u uuid, tu timeuuid);
-            return schema(ks_name, "cf",
+            return schema({}, ks_name, "cf",
                 {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"tu", timeuuid_type}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql("insert into cf (p1, c1, tu) values ('key1', 1, now());").discard_result();
@@ -712,7 +712,7 @@ SEASTAR_TEST_CASE(test_writetime_and_ttl) {
     return do_with_cql_env([] (auto&& e) {
         return e.create_table([](auto ks_name) {
             // CQL: create table cf (p1 varchar primary key, i int);
-            return schema(ks_name, "cf",
+            return schema({}, ks_name, "cf",
                 {{"p1", utf8_type}}, {}, {{"i", int32_type}}, {}, utf8_type);
         }).then([&e] {
             auto q = sprint("insert into cf (p1, i) values ('key1', 1) using timestamp %d;", the_timestamp);
@@ -732,7 +732,7 @@ SEASTAR_TEST_CASE(test_batch) {
     return do_with_cql_env([] (auto&& e) {
         return e.create_table([](auto ks_name) {
             // CQL: create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));
-            return schema(ks_name, "cf",
+            return schema({}, ks_name, "cf",
                           {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql(
@@ -754,7 +754,7 @@ SEASTAR_TEST_CASE(test_tuples) {
     return do_with_cql_env([tt] (auto& e) {
         return e.create_table([tt](auto ks_name) {
             // CQL: "create table cf (id int primary key, t tuple<int, bigint, text>);
-            return schema(ks_name, "cf",
+            return schema({}, ks_name, "cf",
                 {{"id", int32_type}}, {}, {{"t", tt}}, {}, utf8_type);
         }).then([&e] {
             return e.execute_cql("insert into cf (id, t) values (1, (1001, 2001, 'abc1'));").discard_result();

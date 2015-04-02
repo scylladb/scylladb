@@ -85,7 +85,7 @@ future<> test_write(cql_test_env& env, test_config& cfg) {
 future<> do_test(cql_test_env& env, test_config& cfg) {
     std::cout << "Running test with config: " << cfg << std::endl;
     return env.create_table([] (auto ks_name) {
-        return schema(ks_name, "cf",
+        return schema({}, ks_name, "cf",
                 {{"KEY", bytes_type}},
                 {},
                 {{"C0", bytes_type}, {"C1", bytes_type}, {"C2", bytes_type}, {"C3", bytes_type}, {"C4", bytes_type}},

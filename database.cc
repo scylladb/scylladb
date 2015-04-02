@@ -61,13 +61,21 @@ void schema::rehash_columns() {
     }
 }
 
-schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_key,
+raw_schema::raw_schema(utils::UUID id)
+    : _id(id)
+{ }
+
+schema::schema(std::experimental::optional<utils::UUID> id,
+    sstring ks_name,
+    sstring cf_name,
+    std::vector<column> partition_key,
     std::vector<column> clustering_key,
     std::vector<column> regular_columns,
     std::vector<column> static_columns,
     data_type regular_column_name_type,
     sstring comment)
-        : _regular_columns_by_name(serialized_compare(regular_column_name_type))
+        : raw_schema(id ? *id : utils::UUID_gen::get_time_UUID())
+        , _regular_columns_by_name(serialized_compare(regular_column_name_type))
 {
     this->_comment = std::move(comment);
     this->ks_name = std::move(ks_name);
@@ -412,7 +420,8 @@ void database::add_column_family(const utils::UUID& uuid, column_family&& cf) {
 }
 
 void database::add_column_family(column_family&& cf) {
-    add_column_family(utils::UUID_gen::get_time_UUID(), std::move(cf));
+    auto id = cf._schema->id();
+    add_column_family(id, std::move(cf));
 }
 
 const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range) {
@@ -1046,4 +1055,9 @@ operator<<(std::ostream& os, const atomic_cell_view& acv) {
 std::ostream&
 operator<<(std::ostream& os, const atomic_cell& ac) {
     return os << atomic_cell_view(ac);
+}
+
+utils::UUID generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
+    // FIXME: generate it like org.apache.cassandra.config.CFMetaData#generateLegacyCfId() does
+    return utils::UUID_gen::get_time_UUID();
 }
