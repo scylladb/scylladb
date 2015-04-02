@@ -23,6 +23,15 @@ void mutation::set_clustered_cell(const exploded_clustering_prefix& prefix, cons
     update_column(row, def, std::move(value));
 }
 
+void mutation::set_clustered_cell(const clustering_key& key, const bytes& name, const boost::any& value,
+        api::timestamp_type timestamp, ttl_opt ttl) {
+    auto column_def = _schema->get_column_definition(name);
+    if (!column_def) {
+        throw std::runtime_error(sprint("no column definition found for '%s'", name));
+    }
+    return set_clustered_cell(key, *column_def, atomic_cell::make_live(timestamp, ttl, column_def->type->decompose(value)));
+}
+
 void mutation::set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection value) {
     auto& row = _p.clustered_row(key).cells;
     update_column(row, def, std::move(value));
