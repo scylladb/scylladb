@@ -32,6 +32,9 @@ public:
     size_t avail() const {
         return _view.size();
     }
+    bool has_next() const {
+        return !_view.empty();
+    }
     void ensure(size_t s) const {
         if (avail() < s) {
             throw std::out_of_range("Buffer underflow");
@@ -39,6 +42,18 @@ public:
     }
     template<typename T> T peek() const;
     template<typename T> T read();
+
+    bytes_view read_view(size_t len) {
+        ensure(len);
+        bytes_view v(_view.begin(), len);
+        _view.remove_prefix(len);
+        return v;
+    }
+
+    bytes_view read_view_to_blob() {
+        auto len = read<uint32_t>();
+        return read_view(len);
+    }
 private:
     template<typename T> size_t ssize(const T &) const;
     template<typename T>
