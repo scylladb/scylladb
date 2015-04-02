@@ -44,7 +44,7 @@ select_statement::execute(service::storage_proxy& proxy, service::query_state& s
     int32_t limit = get_limit(options);
     auto now = db_clock::now();
 
-    auto command = ::make_lw_shared<query::read_command>(_schema->ks_name, _schema->cf_name,
+    auto command = ::make_lw_shared<query::read_command>(_schema->id(),
         _restrictions->get_partition_key_ranges(options), make_partition_slice(options), limit);
 
     int32_t page_size = options.get_page_size();

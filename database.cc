@@ -963,7 +963,7 @@ database::query(const query::read_command& cmd) {
     };
 
     try {
-        auto& cf = find_column_family(cmd.keyspace, cmd.column_family);
+        column_family& cf = find_column_family(cmd.cf_id);
         return cf.query(cmd);
     } catch (...) {
         // FIXME: load from sstables

@@ -182,16 +182,14 @@ public:
 
 class read_command {
 public:
-    sstring keyspace;
-    sstring column_family;
+    utils::UUID cf_id;
     std::vector<partition_range> partition_ranges; // ranges must be non-overlapping
     partition_slice slice;
     uint32_t row_limit;
 public:
-    read_command(const sstring& keyspace, const sstring& column_family, std::vector<partition_range> partition_ranges,
+    read_command(const utils::UUID& cf_id, std::vector<partition_range> partition_ranges,
             partition_slice slice, uint32_t row_limit)
-        : keyspace(keyspace)
-        , column_family(column_family)
+        : cf_id(cf_id)
         , partition_ranges(std::move(partition_ranges))
         , slice(std::move(slice))
         , row_limit(row_limit)
