@@ -15,6 +15,20 @@ using namespace sstables;
 static auto la = sstable::version_types::la;
 static auto big = sstable::format_types::big;
 
+using sstable_ptr = lw_shared_ptr<sstable>;
+
+namespace sstables {
+
+class test {
+    sstable_ptr _sst;
+public:
+    test(sstable_ptr s) : _sst(s) {}
+    future<temporary_buffer<char>> data_read(uint64_t pos, size_t len) {
+        return _sst->data_read(pos, len);
+    }
+};
+}
+
 static future<> broken_sst(sstring dir, unsigned long epoch) {
 
     auto sst = std::make_unique<sstable>(dir, epoch, la, big);
@@ -30,7 +44,6 @@ static future<> broken_sst(sstring dir, unsigned long epoch) {
     });
 }
 
-using sstable_ptr = lw_shared_ptr<sstable>;
 static future<sstable_ptr> reusable_sst(sstring dir, unsigned long epoch) {
     auto sst = make_lw_shared<sstable>(dir, epoch, la, big);
     auto fut = sst->load();
@@ -243,16 +256,11 @@ SEASTAR_TEST_CASE(check_filter_func) {
     return check_component_integrity("Filter.db");
 }
 
-// Data file reading tests.
-// We need these to be in the sstables namespace - and be friends of sstable -
-// so we can test private functions too.
-namespace sstables {
-
 SEASTAR_TEST_CASE(uncompressed_random_access_read) {
     return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([] (auto sstp) {
         // note: it's important to pass on a shared copy of sstp to prevent its
         // destruction until the continuation finishes reading!
-        return sstp->data_read(97, 6).then([sstp] (temporary_buffer<char> buf) {
+        return sstables::test(sstp).data_read(97, 6).then([sstp] (temporary_buffer<char> buf) {
             BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
             return make_ready_future<>();
         });
@@ -261,11 +269,9 @@ SEASTAR_TEST_CASE(uncompressed_random_access_read) {
 
 SEASTAR_TEST_CASE(compressed_random_access_read) {
     return reusable_sst("tests/urchin/sstables/compressed", 1).then([] (auto sstp) {
-        return sstp->data_read(97, 6).then([sstp] (temporary_buffer<char> buf) {
+        return sstables::test(sstp).data_read(97, 6).then([sstp] (temporary_buffer<char> buf) {
             BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
             return make_ready_future<>();
         });
     });
-}
-
 }

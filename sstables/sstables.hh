@@ -127,8 +127,9 @@ public:
 
     void set_generation(unsigned long generation) { _generation = generation; }
 
-    // Allow the test cases from sstable_test.cc to test private methods
-    friend class uncompressed_random_access_read;
-    friend class compressed_random_access_read;
+    // Allow the test cases from sstable_test.cc to test private methods. We use
+    // a placeholder to avoid cluttering this class too much. The sstable_test class
+    // will then re-export as public every method it needs.
+    friend class test;
 };
 }
