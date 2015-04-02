@@ -63,6 +63,7 @@ private:
     ::shared_ptr<metadata> _metadata;
     const bool _collect_timestamps;
     const bool _collect_TTLs;
+    const bool _contains_static_columns;
 protected:
     selection(schema_ptr schema, std::vector<const column_definition*> columns, std::vector<::shared_ptr<column_specification>> metadata_,
             bool collect_timestamps, bool collect_TTLs)
@@ -71,6 +72,7 @@ protected:
         , _metadata(::make_shared<metadata>(std::move(metadata_)))
         , _collect_timestamps(collect_timestamps)
         , _collect_TTLs(collect_TTLs)
+        , _contains_static_columns(std::any_of(_columns.begin(), _columns.end(), std::mem_fn(&column_definition::is_static)))
     { }
     virtual ~selection() {}
 public:
@@ -84,15 +86,7 @@ public:
      * @return <code>true</code> if this selection contains static columns, <code>false</code> otherwise;
      */
     bool contains_static_columns() const {
-        if (!_schema->has_static_columns()) {
-            return false;
-        }
-
-        if (is_wildcard()) {
-            return true;
-        }
-
-        return std::any_of(_columns.begin(), _columns.end(), [] (auto&& def) { return def->is_static(); });
+        return _contains_static_columns;
     }
 
     /**
