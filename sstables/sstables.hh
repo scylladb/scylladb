@@ -16,6 +16,7 @@
 #include "types.hh"
 #include "core/enum.hh"
 #include "compress.hh"
+#include "row.hh"
 
 namespace sstables {
 
@@ -103,6 +104,14 @@ private:
     // This function is intended (and optimized for) random access, not
     // for iteration through all the rows.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len);
+
+    // Caller needs to ensure that the "consumer" object will be alive until
+    // the future completes. It is therefore recommended to use the do_with()
+    // idiom.
+    // If the given range contains more than one row, more than one row can be
+    // consumed. However, this implementation reads the entire range into,
+    // memory, so should not be used to iterate over the entire sstable.
+    future<> data_consume_row(uint64_t pos, size_t len, row_consumer& consumer);
 
 public:
     sstable(sstring dir, unsigned long generation, version_types v, format_types f) : _dir(dir), _generation(generation), _version(v), _format(f) {}
