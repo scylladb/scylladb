@@ -50,9 +50,9 @@ future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutat
 
 future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush);
 
-mutation make_create_keyspace_mutation(lw_shared_ptr<config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
+std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 
-void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, mutation& m);
+void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, const partition_key& pkey, std::vector<mutation>& mutations);
 
 } // namespace legacy_schema_tables
 } // namespace db

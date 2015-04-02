@@ -765,14 +765,16 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      * Keyspace metadata serialization/deserialization.
      */
 
-    mutation make_create_keyspace_mutation(lw_shared_ptr<config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions)
+    std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions)
     {
+        std::vector<mutation> mutations;
         schema_ptr s = keyspaces();
         auto pkey = partition_key::from_exploded(*s, {utf8_type->decompose(keyspace->name)});
         mutation m(pkey, s);
         exploded_clustering_prefix ckey;
         m.set_cell(ckey, "durable_writes", keyspace->durable_writes, timestamp);
         m.set_cell(ckey, "strategy_class", keyspace->strategy_name, timestamp);
+        mutations.emplace_back(std::move(m));
 #if 0
         adder.add("strategy_options", json(keyspace.strategyOptions));
 #endif
@@ -783,11 +785,10 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                 addTypeToSchemaMutation(type, timestamp, mutation);
 #endif
             for (auto&& kv : keyspace->cf_meta_data()) {
-                add_table_to_schema_mutation(kv.second, timestamp, true, m);
+                add_table_to_schema_mutation(kv.second, timestamp, true, pkey, mutations);
             }
         }
-
-        return m;
+        return mutations;
     }
 
 #if 0
@@ -925,7 +926,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
     }
 #endif
 
-    void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, mutation& m)
+    void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, const partition_key& pkey, std::vector<mutation>& mutations)
     {
         throw std::runtime_error("not implemented");
 #if 0
