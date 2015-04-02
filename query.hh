@@ -176,6 +176,7 @@ public:
         , static_columns(std::move(static_columns))
         , regular_columns(std::move(regular_columns))
     { }
+    friend std::ostream& operator<<(std::ostream& out, const partition_slice& ps);
 };
 
 class read_command {

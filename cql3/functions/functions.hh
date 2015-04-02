@@ -33,7 +33,10 @@
 #include "bytes_conversion_fcts.hh"
 #include "cql3/assignment_testable.hh"
 #include "cql3/cql3_type.hh"
+#include "cql3/column_identifier.hh"
+#include "to_string.hh"
 #include <unordered_map>
+#include <boost/lexical_cast.hpp>
 
 namespace cql3 {
 
@@ -51,7 +54,7 @@ class functions {
 private:
     static std::unordered_multimap<function_name, shared_ptr<function>> init() {
         std::unordered_multimap<function_name, shared_ptr<function>> ret;
-        auto declare = [&ret] (shared_ptr<function> f) { ret.emplace(f->name(), std::move(f)); };
+        auto declare = [&ret] (shared_ptr<function> f) { ret.emplace(f->name(), f); };
         declare(aggregate_fcts::make_count_rows_function());
         declare(time_uuid_fcts::make_now_fct());
         declare(time_uuid_fcts::make_min_timeuuid_fct());
@@ -109,84 +112,100 @@ private:
         return ret;
     }
 
-#if 0
-    public static ColumnSpecification makeArgSpec(String receiverKs, String receiverCf, Function fun, int i)
-    {
-        return new ColumnSpecification(receiverKs,
-                                       receiverCf,
-                                       new ColumnIdentifier("arg" + i +  "(" + fun.name().toString().toLowerCase() + ")", true),
-                                       fun.argTypes().get(i));
+public:
+    static shared_ptr<column_specification> make_arg_spec(const sstring& receiver_ks, const sstring& receiver_cf,
+            const function& fun, size_t i) {
+        auto&& name = boost::lexical_cast<std::string>(fun.name());
+        std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+        return ::make_shared<column_specification>(receiver_ks,
+                                       receiver_cf,
+                                       ::make_shared<column_identifier>(sprint("arg%d(%s)", i, name), true),
+                                       fun.arg_types()[i]);
     }
-#endif
+
     static int get_overload_count(const function_name& name) {
         return _declared.count(name);
     }
 
+public:
     static shared_ptr<function> get(const sstring& keyspace,
                                     const function_name& name,
                                     const std::vector<shared_ptr<assignment_testable>>& provided_args,
                                     const sstring& receiver_ks,
                                     const sstring& receiver_cf) {
+        // FIXME:
 #if 0
         // later
         if (name.has_keyspace()
             ? name.equals(TOKEN_FUNCTION_NAME)
             : name.name.equals(TOKEN_FUNCTION_NAME.name))
             return new TokenFct(Schema.instance.getCFMetaData(receiverKs, receiverCf));
-
-        List<Function> candidates;
-        if (!name.hasKeyspace())
-        {
-            // function name not fully qualified
-            candidates = new ArrayList<>();
+#endif
+        std::vector<shared_ptr<function>> candidates;
+        auto&& add_declared = [&] (function_name fn) {
+            auto&& fns = _declared.equal_range(fn);
+            for (auto i = fns.first; i != fns.second; ++i) {
+                candidates.push_back(i->second);
+            }
+        };
+        if (!name.has_keyspace()) {
             // add 'SYSTEM' (native) candidates
-            candidates.addAll(declared.get(name.asNativeFunction()));
-            // add 'current keyspace' candidates
-            candidates.addAll(declared.get(new FunctionName(keyspace, name.name)));
-        }
-        else
+            add_declared(name.as_native_function());
+            add_declared(function_name(keyspace, name.name));
+        } else {
             // function name is fully qualified (keyspace + name)
-            candidates = declared.get(name);
+            add_declared(name);
+        }
 
-        if (candidates.isEmpty())
-            return null;
+        if (candidates.empty()) {
+            return {};
+        }
 
         // Fast path if there is only one choice
-        if (candidates.size() == 1)
-        {
-            Function fun = candidates.get(0);
-            validateTypes(keyspace, fun, providedArgs, receiverKs, receiverCf);
+        if (candidates.size() == 1) {
+            auto fun = std::move(candidates[0]);
+            validate_types(keyspace, fun, provided_args, receiver_ks, receiver_cf);
             return fun;
         }
 
-        List<Function> compatibles = null;
-        for (Function toTest : candidates)
-        {
-            AssignmentTestable.TestResult r = matchAguments(keyspace, toTest, providedArgs, receiverKs, receiverCf);
-            switch (r)
-            {
-                case EXACT_MATCH:
+        std::vector<shared_ptr<function>> compatibles;
+        for (auto&& to_test : candidates) {
+            auto r = match_arguments(keyspace, to_test, provided_args, receiver_ks, receiver_cf);
+            switch (r) {
+                case assignment_testable::test_result::EXACT_MATCH:
                     // We always favor exact matches
-                    return toTest;
-                case WEAKLY_ASSIGNABLE:
-                    if (compatibles == null)
-                        compatibles = new ArrayList<>();
-                    compatibles.add(toTest);
+                    return to_test;
+                case assignment_testable::test_result::WEAKLY_ASSIGNABLE:
+                    compatibles.push_back(std::move(to_test));
                     break;
-            }
+                default:
+                    ;
+            };
         }
 
-        if (compatibles == null || compatibles.isEmpty())
-            throw new InvalidRequestException(String.format("Invalid call to function %s, none of its type signatures match (known type signatures: %s)",
-                                                            name, toString(candidates)));
+        if (compatibles.empty()) {
+            throw exceptions::invalid_request_exception(
+                    sprint("Invalid call to function %s, none of its type signatures match (known type signatures: %s)",
+                                                            name, join(", ", candidates)));
+        }
 
-        if (compatibles.size() > 1)
-            throw new InvalidRequestException(String.format("Ambiguous call to function %s (can be matched by following signatures: %s): use type casts to disambiguate",
-                        name, toString(compatibles)));
+        if (compatibles.size() > 1) {
+            throw exceptions::invalid_request_exception(
+                    sprint("Ambiguous call to function %s (can be matched by following signatures: %s): use type casts to disambiguate",
+                        name, join(", ", compatibles)));
+        }
 
-        return compatibles.get(0);
-#endif
-        abort();
+        return std::move(compatibles[0]);
+    }
+
+    template <typename AssignmentTestablePtrRange>
+    static shared_ptr<function> get(const sstring& keyspace,
+                                    const function_name& name,
+                                    AssignmentTestablePtrRange&& provided_args,
+                                    const sstring& receiver_ks,
+                                    const sstring& receiver_cf) {
+        const std::vector<shared_ptr<assignment_testable>> args(std::begin(provided_args), std::end(provided_args));
+        return get(keyspace, name, args, receiver_ks, receiver_cf);
     }
 
     static std::vector<shared_ptr<function>> find(const function_name& name) {
@@ -208,75 +227,68 @@ private:
         return {};
     }
 
-#if 0
+private:
     // This method and matchArguments are somewhat duplicate, but this method allows us to provide more precise errors in the common
     // case where there is no override for a given function. This is thus probably worth the minor code duplication.
-    private static void validateTypes(String keyspace,
-                                      Function fun,
-                                      List<? extends AssignmentTestable> providedArgs,
-                                      String receiverKs,
-                                      String receiverCf)
-    throws InvalidRequestException
-    {
-        if (providedArgs.size() != fun.argTypes().size())
-            throw new InvalidRequestException(String.format("Invalid number of arguments in call to function %s: %d required but %d provided", fun.name(), fun.argTypes().size(), providedArgs.size()));
+    static void validate_types(const sstring& keyspace,
+                              shared_ptr<function> fun,
+                              const std::vector<shared_ptr<assignment_testable>>& provided_args,
+                              const sstring& receiver_ks,
+                              const sstring& receiver_cf) {
+        if (provided_args.size() != fun->arg_types().size()) {
+            throw exceptions::invalid_request_exception(
+                    sprint("Invalid number of arguments in call to function %s: %d required but %d provided",
+                            fun->name(), fun->arg_types().size(), provided_args.size()));
+        }
 
-        for (int i = 0; i < providedArgs.size(); i++)
-        {
-            AssignmentTestable provided = providedArgs.get(i);
+        for (size_t i = 0; i < provided_args.size(); ++i) {
+            auto&& provided = provided_args[i];
 
             // If the concrete argument is a bind variables, it can have any type.
             // We'll validate the actually provided value at execution time.
-            if (provided == null)
-                continue;
-
-            ColumnSpecification expected = makeArgSpec(receiverKs, receiverCf, fun, i);
-            if (!provided.testAssignment(keyspace, expected).isAssignable())
-                throw new InvalidRequestException(String.format("Type error: %s cannot be passed as argument %d of function %s of type %s", provided, i, fun.name(), expected.type.asCQL3Type()));
-        }
-    }
-
-    private static AssignmentTestable.TestResult matchAguments(String keyspace,
-                                                               Function fun,
-                                                               List<? extends AssignmentTestable> providedArgs,
-                                                               String receiverKs,
-                                                               String receiverCf)
-    {
-        if (providedArgs.size() != fun.argTypes().size())
-            return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
-
-        // It's an exact match if all are exact match, but is not assignable as soon as any is non assignable.
-        AssignmentTestable.TestResult res = AssignmentTestable.TestResult.EXACT_MATCH;
-        for (int i = 0; i < providedArgs.size(); i++)
-        {
-            AssignmentTestable provided = providedArgs.get(i);
-            if (provided == null)
-            {
-                res = AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
+            if (!provided) {
                 continue;
             }
 
-            ColumnSpecification expected = makeArgSpec(receiverKs, receiverCf, fun, i);
-            AssignmentTestable.TestResult argRes = provided.testAssignment(keyspace, expected);
-            if (argRes == AssignmentTestable.TestResult.NOT_ASSIGNABLE)
-                return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
-            if (argRes == AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE)
-                res = AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
+            auto&& expected = make_arg_spec(receiver_ks, receiver_cf, *fun, i);
+            if (!is_assignable(provided->test_assignment(keyspace, expected))) {
+                throw exceptions::invalid_request_exception(
+                        sprint("Type error: %s cannot be passed as argument %d of function %s of type %s",
+                                provided, i, fun->name(), expected->type->as_cql3_type()));
+            }
+        }
+    }
+
+    static assignment_testable::test_result match_arguments(const sstring& keyspace,
+            shared_ptr<function> fun,
+            const std::vector<shared_ptr<assignment_testable>>& provided_args,
+            const sstring& receiver_ks,
+            const sstring& receiver_cf) {
+        if (provided_args.size() != fun->arg_types().size()) {
+            return assignment_testable::test_result::NOT_ASSIGNABLE;
+        }
+
+        // It's an exact match if all are exact match, but is not assignable as soon as any is non assignable.
+        auto res = assignment_testable::test_result::EXACT_MATCH;
+        for (size_t i = 0; i < provided_args.size(); ++i) {
+            auto&& provided = provided_args[i];
+            if (!provided) {
+                res = assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+                continue;
+            }
+            auto&& expected = make_arg_spec(receiver_ks, receiver_cf, *fun, i);
+            auto arg_res = provided->test_assignment(keyspace, expected);
+            if (arg_res == assignment_testable::test_result::NOT_ASSIGNABLE) {
+                return assignment_testable::test_result::NOT_ASSIGNABLE;
+            }
+            if (arg_res == assignment_testable::test_result::WEAKLY_ASSIGNABLE) {
+                res = assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+            }
         }
         return res;
     }
 
-    private static String toString(List<Function> funs)
-    {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < funs.size(); i++)
-        {
-            if (i > 0) sb.append(", ");
-            sb.append(funs.get(i));
-        }
-        return sb.toString();
-    }
-
+#if 0
     // This is *not* thread safe but is only called in SchemaTables that is synchronized.
     public static void addFunction(AbstractFunction fun)
     {

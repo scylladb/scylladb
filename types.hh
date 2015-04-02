@@ -171,9 +171,7 @@ public:
         validate(v);
     }
     virtual bool is_compatible_with(abstract_type& previous) {
-        // FIXME
-        abort();
-        return false;
+        return equals(previous);
     }
     /*
      * Types which are wrappers over other types should override this.
@@ -196,7 +194,13 @@ public:
     bool is_value_compatible_with(abstract_type& other) {
         return is_value_compatible_with_internal(*other.underlying_type());
     }
+    bool equals(const shared_ptr<abstract_type>& other) const {
+        return equals(*other);
+    }
 protected:
+    virtual bool equals(const abstract_type& other) const {
+        return this == &other;
+    }
     /**
      * Needed to handle ReversedType in value-compatibility checks.  Subclasses should implement this instead of
      * is_value_compatible_with().

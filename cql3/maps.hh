@@ -159,7 +159,7 @@ public:
             : map(std::move(map)) {
         }
 
-        static value from_serialized(bytes value, map_type type, serialization_format sf) {
+        static value from_serialized(bytes_view value, map_type type, serialization_format sf) {
             try {
                 // Collections have this small hack that validate cannot be called on a serialized object,
                 // but compose does the validation (so we're fine).

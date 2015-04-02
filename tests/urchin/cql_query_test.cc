@@ -10,6 +10,8 @@
 #include "tests/urchin/cql_test_env.hh"
 #include "tests/urchin/cql_assertions.hh"
 #include "to_string.hh"
+#include <boost/range/adaptors.hpp>
+#include <boost/range/algorithm.hpp>
 
 SEASTAR_TEST_CASE(test_create_keyspace_statement) {
     return do_with_cql_env([] (auto& e) {
@@ -598,6 +600,45 @@ SEASTAR_TEST_CASE(test_list_insert_update) {
                          {my_list_type->decompose(list_type_impl::native_type{{2003}})},
                      });
             });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_functions) {
+    return do_with_cql_env([] (auto&& e) {
+        return e.create_table([](auto ks_name) {
+            // CQL: create table cf (p1 varchar primary key, u uuid, tu timeuuid);
+            return schema(ks_name, "cf",
+                {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"tu", timeuuid_type}}, {}, utf8_type);
+        }).then([&e] {
+            return e.execute_cql("insert into cf (p1, c1, tu) values ('key1', 1, now());").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into cf (p1, c1, tu) values ('key1', 2, now());").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into cf (p1, c1, tu) values ('key1', 3, now());").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select tu from cf where p1 in ('key1');");
+        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+            using namespace transport::messages;
+            struct validator : result_message::visitor {
+                std::vector<bytes_opt> res;
+                virtual void visit(const result_message::void_message&) override { throw "bad"; }
+                virtual void visit(const result_message::set_keyspace&) override { throw "bad"; }
+                virtual void visit(const result_message::prepared&) override { throw "bad"; }
+                virtual void visit(const result_message::schema_change&) override { throw "bad"; }
+                virtual void visit(const result_message::rows& rows) override {
+                    BOOST_REQUIRE_EQUAL(rows.rs().rows().size(), 3);
+                    for (auto&& rw : rows.rs().rows()) {
+                        BOOST_REQUIRE_EQUAL(rw.size(), 1);
+                        res.push_back(rw[0]);
+                    }
+                }
+            };
+            validator v;
+            msg->accept(v);
+            // No boost::adaptors::sorted
+            boost::sort(v.res);
+            BOOST_REQUIRE_EQUAL(boost::distance(v.res | boost::adaptors::uniqued), 3);
         });
     });
 }

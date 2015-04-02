@@ -26,6 +26,7 @@
 #define CQL3_FUNCTION_NAME_HH
 
 #include "core/sstring.hh"
+#include "db/system_keyspace.hh"
 #include <iostream>
 #include <functional>
 
@@ -35,26 +36,21 @@ namespace functions {
 
 class function_name final {
 public:
-    const sstring keyspace;
-    const sstring name;
+    sstring keyspace;
+    sstring name;
 
     static function_name native_function(sstring name) {
-        abort();
-#if 0
-        return new FunctionName(SystemKeyspace.NAME, name);
-#endif
+        return function_name(db::system_keyspace::NAME, name);
     }
 
+    function_name() = default; // for ANTLR
     function_name(sstring keyspace, sstring name)
             : keyspace(std::move(keyspace)), name(std::move(name)) {
     }
 
-#if 0
-    public FunctionName asNativeFunction()
-    {
-        return FunctionName.nativeFunction(name);
+    function_name as_native_function() const {
+        return native_function(name);
     }
-#endif
 
     bool has_keyspace() const {
         return !keyspace.empty();

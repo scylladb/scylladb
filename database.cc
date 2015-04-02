@@ -9,10 +9,13 @@
 #include "db/system_keyspace.hh"
 #include "db/consistency_level.hh"
 #include "utils/UUID_gen.hh"
+#include "to_string.hh"
+
 #include "cql3/column_identifier.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
+#include <boost/range/adaptor/transformed.hpp>
 
 thread_local logging::logger dblog("database");
 
@@ -192,7 +195,7 @@ sstring to_hex(const bytes& b) {
 }
 
 sstring to_hex(const bytes_opt& b) {
-    return b ? "null" : to_hex(*b);
+    return !b ? "null" : to_hex(*b);
 }
 
 class lister {
@@ -960,4 +963,24 @@ std::ostream& operator<<(std::ostream& os, db::consistency_level cl) {
     }
 }
 
+}
+
+std::ostream&
+operator<<(std::ostream& os, const exploded_clustering_prefix& ecp) {
+    // Can't pass to_hex() to transformed(), since it is overloaded, so wrap:
+    auto enhex = [] (auto&& x) { return to_hex(x); };
+    return fprint(os, "prefix{%s}", ::join(":", ecp._v | boost::adaptors::transformed(enhex)));
+}
+
+std::ostream&
+operator<<(std::ostream& os, const atomic_cell_view& acv) {
+    return fprint(os, "atomic_cell{%s;ts=%d;ttl=%d}",
+            (acv.is_live() ? to_hex(acv.value()) : sstring("DEAD")),
+            acv.timestamp(),
+            acv.is_live_and_has_ttl() ? acv.ttl()->time_since_epoch().count() : -1);
+}
+
+std::ostream&
+operator<<(std::ostream& os, const atomic_cell& ac) {
+    return os << atomic_cell_view(ac);
 }

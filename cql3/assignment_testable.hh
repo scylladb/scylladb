@@ -51,7 +51,9 @@ public:
 
     // Test all elements of toTest for assignment. If all are exact match, return exact match. If any is not assignable,
     // return not assignable. Otherwise, return weakly assignable.
-    static test_result test_all(const sstring& keyspace, ::shared_ptr<column_specification> receiver, const std::vector<::shared_ptr<assignment_testable>>& to_test) {
+    template <typename AssignmentTestablePtrRange>
+    static test_result test_all(const sstring& keyspace, ::shared_ptr<column_specification> receiver,
+                AssignmentTestablePtrRange&& to_test) {
         test_result res = test_result::EXACT_MATCH;
         for (auto&& rt : to_test) {
             if (rt == nullptr) {
@@ -80,6 +82,9 @@ public:
      * testing "strong" equality to decide the most precise overload to pick when multiple could match.
      */
     virtual test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver) = 0;
+
+    // for error reporting
+    virtual sstring assignment_testable_source_context() const = 0;
 };
 
 inline bool is_assignable(assignment_testable::test_result tr) {
@@ -90,7 +95,11 @@ inline bool is_exact_match(assignment_testable::test_result tr) {
     return assignment_testable::is_exact_match(tr);
 }
 
-
+inline
+std::ostream&
+operator<<(std::ostream& os, const assignment_testable& at) {
+    return os << at.assignment_testable_source_context();
+}
 
 }
 

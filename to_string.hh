@@ -8,9 +8,9 @@
 #include <vector>
 #include <sstream>
 
-template<typename Printable>
+template<typename PrintableRange>
 static inline
-sstring join(sstring delimiter, const std::vector<Printable>& items) {
+sstring join(sstring delimiter, const PrintableRange& items) {
     return join(delimiter, items.begin(), items.end());
 }
 
