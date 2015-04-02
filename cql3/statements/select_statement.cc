@@ -101,18 +101,18 @@ select_statement::execute(service::storage_proxy& proxy, lw_shared_ptr<query::re
 shared_ptr<transport::messages::result_message>
 select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd,
         const query_options& options, db_clock::time_point now) {
-    auto builder = _selection->make_result_set_builder(now, options.get_serialization_format());
+    cql3::selection::result_set_builder builder(*_selection, now, options.get_serialization_format());
 
-    auto add_value = [builder] (const column_definition& def, std::experimental::optional<atomic_cell_or_collection>& cell) {
+    auto add_value = [&builder] (const column_definition& def, std::experimental::optional<atomic_cell_or_collection>& cell) {
         if (!cell) {
-            builder->add_empty();
+            builder.add_empty();
             return;
         }
 
         if (def.type->is_multi_cell()) {
-            builder->add(def, cell->as_collection_mutation());
+            builder.add(def, cell->as_collection_mutation());
         } else {
-            builder->add(def, cell->as_atomic_cell());
+            builder.add(def, cell->as_atomic_cell());
         }
     };
 
@@ -124,15 +124,15 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
         if (!partition.static_row.empty() && partition.rows.empty()
                 && !_restrictions->uses_secondary_indexing()
                 && _restrictions->has_no_clustering_columns_restriction()) {
-            builder->new_row();
+            builder.new_row();
             uint32_t static_id = 0;
             for (auto&& def : _selection->get_columns()) {
                 if (def->is_partition_key()) {
-                    builder->add(key[def->component_index()]);
+                    builder.add(key[def->component_index()]);
                 } else if (def->is_static()) {
                     add_value(*def, partition.static_row.cells[static_id++]);
                 } else {
-                    builder->add_empty();
+                    builder.add_empty();
                 }
             }
         } else {
@@ -141,15 +141,14 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
                 auto& cells = e.second.cells;
                 uint32_t static_id = 0;
                 uint32_t regular_id = 0;
-
-                builder->new_row();
+                builder.new_row();
                 for (auto&& def : _selection->get_columns()) {
                     switch (def->kind) {
                         case column_definition::column_kind::PARTITION:
-                            builder->add(key[def->component_index()]);
+                            builder.add(key[def->component_index()]);
                             break;
                         case column_definition::column_kind::CLUSTERING:
-                            builder->add(c_key[def->component_index()]);
+                            builder.add(c_key[def->component_index()]);
                             break;
                         case column_definition::column_kind::REGULAR:
                             add_value(*def, cells[regular_id++]);
@@ -165,7 +164,7 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
         }
     }
 
-    auto rs = builder->build();
+    auto rs = builder.build();
     if (needs_post_query_ordering()) {
         rs->sort(_ordering_comparator);
     }

@@ -186,10 +186,6 @@ public:
         return _columns.size();
     }
 
-    ::shared_ptr<result_set_builder> make_result_set_builder(db_clock::time_point now, serialization_format sf) {
-        return ::make_shared<result_set_builder>(*this, now, sf);
-    }
-
     virtual bool is_aggregate() const = 0;
 
     /**
