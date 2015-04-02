@@ -233,6 +233,12 @@ public:
 
     void add_empty() {
         current->emplace_back();
+        if (!_timestamps.empty()) {
+            _timestamps[current->size() - 1] = api::min_timestamp;
+        }
+        if (!_ttls.empty()) {
+            _ttls[current->size() - 1] = -1;
+        }
     }
 
     void add(bytes_opt value) {
