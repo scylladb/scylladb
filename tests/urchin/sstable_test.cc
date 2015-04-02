@@ -26,6 +26,9 @@ public:
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len) {
         return _sst->data_read(pos, len);
     }
+    future<index_list> read_indexes(uint64_t position, uint64_t quantity) {
+        return _sst->read_indexes(position, quantity);
+    }
 };
 }
 
@@ -95,7 +98,7 @@ SEASTAR_TEST_CASE(composite_index) {
 template<uint64_t Position, uint64_t Howmany, uint64_t Expected>
 future<> index_read(sstring path) {
     return reusable_sst(path, 1).then([] (sstable_ptr ptr) {
-        return ptr->read_indexes_for_testing(Position, Howmany).then([ptr] (auto vec) {
+        return sstables::test(ptr).read_indexes(Position, Howmany).then([ptr] (auto vec) {
             BOOST_REQUIRE(vec.size() == Expected);
             return make_ready_future<>();
         });

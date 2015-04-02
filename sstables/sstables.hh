@@ -117,9 +117,6 @@ public:
         return read_indexes(position, _summary.header.sampling_level);
     }
 
-    future<index_list> read_indexes_for_testing(uint64_t position, uint64_t quantity) {
-        return read_indexes(position, quantity);
-    }
     future<> load();
     future<> store();
 
