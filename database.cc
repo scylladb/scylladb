@@ -728,10 +728,10 @@ std::ostream& operator<<(std::ostream& os, const mutation_partition& mp) {
     return fprint(os, "{mutation_partition: ...}");
 }
 
-boost::iterator_range<mutation_partition::rows_type::iterator>
-mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) {
+boost::iterator_range<mutation_partition::rows_type::const_iterator>
+mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) const {
     if (r.is_full()) {
-        return boost::make_iterator_range(_rows.begin(), _rows.end());
+        return boost::make_iterator_range(_rows.cbegin(), _rows.cend());
     }
     auto cmp = rows_entry::key_comparator(clustering_key::prefix_equality_less_compare(schema));
     if (r.is_singular()) {
@@ -740,10 +740,10 @@ mutation_partition::range(const schema& schema, const query::range<clustering_ke
     }
     auto i1 = r.start() ? (r.start()->is_inclusive()
             ? _rows.lower_bound(r.start()->value(), cmp)
-            : _rows.upper_bound(r.start()->value(), cmp)) : _rows.begin();
+            : _rows.upper_bound(r.start()->value(), cmp)) : _rows.cbegin();
     auto i2 = r.end() ? (r.end()->is_inclusive()
             ? _rows.upper_bound(r.end()->value(), cmp)
-            : _rows.lower_bound(r.end()->value(), cmp)) : _rows.end();
+            : _rows.lower_bound(r.end()->value(), cmp)) : _rows.cend();
     return boost::make_iterator_range(i1, i2);
 }
 
