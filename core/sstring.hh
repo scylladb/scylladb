@@ -209,6 +209,63 @@ public:
         return npos;
     }
 
+    /**
+     * find_last_of find the last occurrence of c in the string.
+     * When pos is specified, the search only includes characters
+     * at or before position pos.
+     *
+     */
+    size_t find_last_of (char_type c, size_t pos = npos) const noexcept {
+        const char_type* str_start = str();
+        if (size()) {
+            if (pos >= size()) {
+                pos = size() - 1;
+            }
+            const char_type* p = str_start + pos + 1;
+            do {
+                p--;
+                if (*p == c) {
+                    return (p - str_start);
+                }
+            } while (p != str_start);
+        }
+        return npos;
+    }
+
+    /**
+     *  Append a C substring.
+     *  @param s  The C string to append.
+     *  @param n  The number of characters to append.
+     *  @return  Reference to this string.
+     */
+    basic_sstring& append (const char_type* s, size_t n) {
+        basic_sstring ret(initialized_later(), size() + n);
+        std::copy(begin(), end(), ret.begin());
+        std::copy(s, s + n, ret.begin() + size());
+        *this = ret;
+        return *this;
+    }
+
+    /**
+     *  Returns a read/write reference to the data at the last
+     *  element of the string.
+     *  This function shall not be called on empty strings.
+     */
+    reference
+    back() noexcept {
+        return operator[](size() - 1);
+    }
+
+    /**
+     *  Returns a  read-only (constant) reference to the data at the last
+     *  element of the string.
+     *  This function shall not be called on empty strings.
+     */
+    const_reference
+    back() const noexcept {
+        return operator[](size() - 1);
+    }
+
     basic_sstring substr(size_t from, size_t len = npos)  const {
         if (from > size()) {
             throw std::out_of_range("sstring::substr out of range");

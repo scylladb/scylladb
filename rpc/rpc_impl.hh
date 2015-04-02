@@ -155,7 +155,8 @@ struct build_msg_type<Ft, At&&> {
 };
 
 template<typename Ret, typename Serializer, typename MsgType>
-inline auto wait_for_reply(typename protocol<Serializer, MsgType>::client& dst, id_type msg_id, std::enable_if_t<!std::is_same<Ret, no_wait_type>::value, void*> = nullptr) {
+inline auto wait_for_reply(typename protocol<Serializer, MsgType>::client& dst, id_type msg_id, future<> sent, std::enable_if_t<!std::is_same<Ret, no_wait_type>::value, void*> = nullptr) {
+    sent.finally([]{}); // discard result or exception, this path does not need to wait for message to be send
     using reply_type = rcv_reply<Serializer, MsgType, Ret>;
     auto lambda = [] (reply_type& r, typename protocol<Serializer, MsgType>::client& dst, id_type msg_id) mutable {
         if (msg_id >= 0) {
@@ -175,8 +176,8 @@ inline auto wait_for_reply(typename protocol<Serializer, MsgType>::client& dst, 
 }
 
 template<typename Ret, typename Serializer, typename MsgType>
-inline auto wait_for_reply(typename protocol<Serializer, MsgType>::client& dst, id_type msg_id, std::enable_if_t<std::is_same<Ret, no_wait_type>::value, void*> = nullptr) {
-    return make_ready_future<>();
+inline auto wait_for_reply(typename protocol<Serializer, MsgType>::client& dst, id_type msg_id, future<>&& sent, std::enable_if_t<std::is_same<Ret, no_wait_type>::value, void*> = nullptr) {
+    return std::move(sent);
 }
 
 // Returns lambda that can be used to send rpc messages.
@@ -199,16 +200,20 @@ auto send_helper(MsgType t, std::index_sequence<I...>) {
         auto msg_id = dst.next_message_id();
         auto m = std::make_unique<message<MsgType, typename std::tuple_element<I, types>::type...>>(t, msg_id, std::forward<decltype(args)>(args)...);
         auto xargs = std::tie(m->t, m->id, std::get<I>(m->args)...); // holds references to all message elements
-        dst.out_ready() = dst.out_ready().then([&dst, xargs = std::move(xargs), m = std::move(m)] () mutable {
-            return marshall(dst.serializer(), dst.out(), std::move(xargs)).then([m = std::move(m)] {});
+        promise<> sent; // will be fulfilled when data is sent
+        auto fsent = sent.get_future();
+        dst.out_ready() = dst.out_ready().then([&dst, xargs = std::move(xargs), m = std::move(m), sent = std::move(sent)] () mutable {
+            return marshall(dst.serializer(), dst.out(), std::move(xargs)).then([m = std::move(m)] {}).finally([sent = std::move(sent)] () mutable {
+                sent.set_value();
+            });
         });
 
         // prepare reply handler, if return type is now_wait_type this does nothing, since no reply will be sent
-        return wait_for_reply<typename F::return_type, Serializer, MsgType>(dst, msg_id);
+        return wait_for_reply<typename F::return_type, Serializer, MsgType>(dst, msg_id, std::move(fsent));
     };
 }
 
-template<typename Serializer, typename MsgType, typename Payload, typename... T>
+template<typename Serializer, typename MsgType, typename Payload>
 struct snd_reply_base : reply_payload<Payload> {
     id_type id;
 
@@ -219,8 +224,8 @@ struct snd_reply_base : reply_payload<Payload> {
 };
 
 template<typename Serializer, typename MsgType, typename T>
-struct snd_reply : snd_reply_base<Serializer, MsgType, T, T> {
-    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, T, T>(xid) {}
+struct snd_reply : snd_reply_base<Serializer, MsgType, T> {
+    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, T>(xid) {}
     inline void set_val(std::tuple<T>&& val) {
         this->v = std::move(std::get<0>(val));
     }
@@ -230,8 +235,8 @@ struct snd_reply : snd_reply_base<Serializer, MsgType, T, T> {
 };
 
 template<typename Serializer, typename MsgType, typename... T>
-struct snd_reply<Serializer, MsgType, future<T...>> : snd_reply_base<Serializer, MsgType, std::tuple<T...>, T...> {
-    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, std::tuple<T...>, T...>(xid) {}
+struct snd_reply<Serializer, MsgType, future<T...>> : snd_reply_base<Serializer, MsgType, std::tuple<T...>> {
+    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, std::tuple<T...>>(xid) {}
     inline void set_val(std::tuple<T...>&& val) {
         this->v = std::move(val);
     }
@@ -241,8 +246,8 @@ struct snd_reply<Serializer, MsgType, future<T...>> : snd_reply_base<Serializer,
 };
 
 template<typename Serializer, typename MsgType>
-struct snd_reply<Serializer, MsgType, void> : snd_reply_base<Serializer, MsgType, void, void> {
-    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, void, void>(xid) {}
+struct snd_reply<Serializer, MsgType, void> : snd_reply_base<Serializer, MsgType, void> {
+    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, void>(xid) {}
     inline void set_val(std::tuple<>&& val) {
     }
     inline future<> reply(typename protocol<Serializer, MsgType>::server::connection& client) {
@@ -252,8 +257,8 @@ struct snd_reply<Serializer, MsgType, void> : snd_reply_base<Serializer, MsgType
 
 // specialization for no_wait_type which does not send a reply
 template<typename Serializer, typename MsgType>
-struct snd_reply<Serializer, MsgType, no_wait_type> : snd_reply_base<Serializer, MsgType, no_wait_type, no_wait_type> {
-    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, no_wait_type, no_wait_type>(xid) {}
+struct snd_reply<Serializer, MsgType, no_wait_type> : snd_reply_base<Serializer, MsgType, no_wait_type> {
+    snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, no_wait_type>(xid) {}
     inline void set_val(std::tuple<no_wait_type>&& val) {
     }
     inline future<> reply(typename protocol<Serializer, MsgType>::server::connection& client) {

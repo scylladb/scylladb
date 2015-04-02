@@ -577,7 +577,7 @@ public:
         });
     }
 
-    future<> discard_result() && noexcept {
+    future<> discard_result() noexcept {
         return then([] (T&&...) {});
     }
 

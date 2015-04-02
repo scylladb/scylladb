@@ -237,6 +237,7 @@ urchin_libs = '-llz4 -lsnappy -lz'
 
 libs = urchin_libs + ' ' + libs
 
+xen_used = False
 def have_xen():
     source  = '#include <stdint.h>\n'
     source += '#include <xen/xen.h>\n'
@@ -257,7 +258,11 @@ if apply_tristate(args.xen, test = have_xen,
                 'core/xen/gntalloc.cc',
                 'core/xen/evtchn.cc',
             ]
+    xen_used=True
 
+if xen_used and args.dpdk_target:
+    print("Error: only xen or dpdk can be used, not both.")
+    sys.exit(1)
 
 memcache_base = [
     'apps/memcached/ascii.rl'
@@ -332,7 +337,7 @@ deps = {
     'seastar.pc': [],
     'seastar': ['main.cc'] + urchin_core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
-    'apps/httpd/httpd': ['http/common.cc', 'http/routes.cc', 'json/json_elements.cc', 'json/formatter.cc', 'http/matcher.cc', 'http/mime_types.cc', 'http/httpd.cc', 'http/reply.cc', 'http/request_parser.rl', 'apps/httpd/main.cc'] + libnet + core,
+    'apps/httpd/httpd': ['apps/httpd/demo.json', 'http/json_path.cc', 'http/file_handler.cc', 'http/common.cc', 'http/routes.cc', 'json/json_elements.cc', 'json/formatter.cc', 'http/matcher.cc', 'http/mime_types.cc', 'http/httpd.cc', 'http/reply.cc', 'http/request_parser.rl', 'apps/httpd/main.cc'] + libnet + core,
     'apps/memcached/memcached': ['apps/memcached/memcache.cc'] + memcache_base,
     'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
@@ -352,7 +357,7 @@ deps = {
     'apps/seawreck/seawreck': ['apps/seawreck/seawreck.cc', 'apps/seawreck/http_response_parser.rl'] + core + libnet,
     'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
     'tests/sstring_test': ['tests/sstring_test.cc'] + core,
-    'tests/httpd': ['http/common.cc', 'http/routes.cc', 'json/json_elements.cc', 'json/formatter.cc', 'http/matcher.cc', 'tests/httpd.cc', 'http/mime_types.cc', 'http/reply.cc'] + core,
+    'tests/httpd': ['http/common.cc', 'http/routes.cc', 'http/json_path.cc', 'json/json_elements.cc', 'json/formatter.cc', 'http/matcher.cc', 'tests/httpd.cc', 'http/mime_types.cc', 'http/reply.cc'] + core,
     'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc', 'core/posix.cc'],
     'tests/output_stream_test': ['tests/output_stream_test.cc'] + core + libnet,
     'tests/udp_zero_copy': ['tests/udp_zero_copy.cc'] + core + libnet,
@@ -419,7 +424,7 @@ defines = ' '.join(['-D' + d for d in defines])
 globals().update(vars(args))
 
 total_memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
-link_pool_depth = max(int(total_memory / 15e9), 1)
+link_pool_depth = max(int(total_memory / 7e9), 1)
 
 build_modes = modes if args.mode == 'all' else [args.mode]
 build_artifacts = all_artifacts if not args.artifacts else args.artifacts
@@ -446,6 +451,9 @@ with open(buildfile, 'w') as f:
         rule gen
             command = echo -e $text > $out
             description = GEN $out
+        rule swagger
+            command = json/json2code.py -f $in -o $out
+            description = SWAGGER $out
         ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
@@ -478,6 +486,7 @@ with open(buildfile, 'w') as f:
             artifacts = str.join(' ', ('$builddir/' + mode + '/' + x for x in build_artifacts))))
         compiles = {}
         ragels = {}
+        swaggers = {}
         thrifts = set()
         antlr3_grammars = set()
         for binary in build_artifacts:
@@ -517,6 +526,9 @@ with open(buildfile, 'w') as f:
                 elif src.endswith('.rl'):
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.rl', '.hh')
                     ragels[hh] = src
+                elif src.endswith('.json'):
+                    hh = '$builddir/' + mode + '/gen/' + src + '.hh'
+                    swaggers[hh] = src
                 elif src.endswith('.thrift'):
                     thrifts.add(src)
                 elif src.endswith('.g'):
@@ -530,10 +542,14 @@ with open(buildfile, 'w') as f:
                 gen_headers += th.headers('$builddir/{}/gen'.format(mode))
             for g in antlr3_grammars:
                 gen_headers += g.headers('$builddir/{}/gen'.format(mode))
+            gen_headers += list(swaggers.keys())
             f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
         for hh in ragels:
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))
+        for hh in swaggers:
+            src = swaggers[hh]
+            f.write('build {}: swagger {}\n'.format(hh,src))
         for thrift in thrifts:
             outs = ' '.join(thrift.generated('$builddir/{}/gen'.format(mode)))
             f.write('build {}: thrift.{} {}\n'.format(outs, mode, thrift.source))

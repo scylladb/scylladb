@@ -105,7 +105,7 @@ public:
             return make_ready_future<>();
         });
     }
-    future<> close() { return make_ready_future<>(); }
+    future<> close() { return _file->flush(); }
 };
 
 class file_data_sink : public data_sink {

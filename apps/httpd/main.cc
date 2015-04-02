@@ -21,6 +21,9 @@
 
 #include "http/httpd.hh"
 #include "http/handlers.hh"
+#include "http/function_handlers.hh"
+#include "http/file_handler.hh"
+#include "apps/httpd/demo.json.hh"
 
 namespace bpo = boost::program_options;
 
@@ -28,12 +31,32 @@ using namespace httpd;
 
 class handl : public httpd::handler_base {
 public:
-    virtual void handle(const sstring& path, parameters* params,
-            httpd::const_req& req, httpd::reply& rep) {
-        rep._content = "hello";
-        rep.done("html");
+    virtual future<std::unique_ptr<reply> > handle(const sstring& path,
+            std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+        rep->_content = "hello";
+        rep->done("html");
+        return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
     }
 };
+
+void set_routes(routes& r) {
+    function_handler* h1 = new function_handler([](const_req req) {
+        return "hello";
+    });
+    r.add(operation_type::GET, url("/"), h1);
+    r.add(operation_type::GET, url("/file").remainder("path"),
+            new directory_handler("/"));
+    demo_json::hello_world.set(r,
+            [](const_req req) {
+                demo_json::my_object obj;
+                obj.var1 = req.param.at("var1");
+                obj.var2 = req.param.at("var2");
+                demo_json::ns_hello_world::query_enum v = demo_json::ns_hello_world::str2query_enum(req.query_parameters.at("query_enum"));
+                // This demonstrate enum conversion
+                obj.enum_var = v;
+                return obj;
+            });
+}
 
 int main(int ac, char** av) {
     app_template app;
@@ -46,8 +69,7 @@ int main(int ac, char** av) {
                 auto server = new distributed<http_server>;
                 server->start().then([server = std::move(server), port] () mutable {
                             server->invoke_on_all([](http_server& server) {
-                                handl* h1 = new handl();
-                                server._routes.add(operation_type::GET, url("/"), h1);
+                                set_routes(server._routes);
                             });
                             server->invoke_on_all(&http_server::listen, ipv4_addr {port});
                         }).then([port] {

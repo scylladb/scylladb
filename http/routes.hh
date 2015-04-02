@@ -30,6 +30,7 @@
 #include <boost/program_options/variables_map.hpp>
 #include <unordered_map>
 #include <vector>
+#include "core/future-util.hh"
 
 namespace httpd {
 
@@ -125,7 +126,7 @@ public:
      * @param req the http request
      * @param rep the http reply
      */
-    void handle(const sstring& path, httpd::request& req, httpd::reply& rep);
+    future<std::unique_ptr<reply> > handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep);
 
 private:
 
