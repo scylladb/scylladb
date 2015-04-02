@@ -319,6 +319,9 @@ urchin_core = (['database.cc',
                  'dht/murmur3_partitioner.cc',
                  'unimplemented.cc',
                  'query.cc',
+                 'locator/abstract_replication_strategy.cc',
+                 'locator/simple_strategy.cc',
+                 'locator/token_metadata.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]

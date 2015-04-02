@@ -385,11 +385,11 @@ column_definition::name() const {
     return _name;
 }
 
-void database::add_keyspace(sstring name, keyspace k) {
+keyspace& database::add_keyspace(sstring name, keyspace k) {
     if (_keyspaces.count(name) != 0) {
         throw std::invalid_argument("Keyspace " + name + " already exists");
     }
-    _keyspaces.emplace(std::move(name), std::move(k));
+    return _keyspaces.emplace(std::move(name), std::move(k)).first->second;
 }
 
 void database::add_column_family(const utils::UUID& uuid, column_family cf) {
@@ -469,6 +469,28 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
     } catch (...) {
         std::throw_with_nested(no_such_column_family(uuid.to_sstring()));
     }
+}
+
+void
+keyspace::create_replication_strategy(config::ks_meta_data& ksm) {
+    static thread_local locator::token_metadata tm;
+    static std::unordered_map<sstring, sstring> options = {{"replication_factor", "3"}};
+    auto d2t = [](double d) {
+        unsigned long l = net::hton(static_cast<unsigned long>(d*(std::numeric_limits<unsigned long>::max())));
+        std::array<char, 8> a;
+        memcpy(a.data(), &l, 8);
+        return a;
+    };
+    tm.update_normal_token({dht::token::kind::key, {d2t(0).data(), 8}}, to_sstring("127.0.0.1"));
+    tm.update_normal_token({dht::token::kind::key, {d2t(1.0/4).data(), 8}}, to_sstring("127.0.0.2"));
+    tm.update_normal_token({dht::token::kind::key, {d2t(2.0/4).data(), 8}}, to_sstring("127.0.0.3"));
+    tm.update_normal_token({dht::token::kind::key, {d2t(3.0/4).data(), 8}}, to_sstring("127.0.0.4"));
+    _replication_strategy = locator::abstract_replication_strategy::create_replication_strategy(ksm.name, ksm.strategy_name, tm, options);
+}
+
+locator::abstract_replication_strategy&
+keyspace::get_replication_strategy() {
+    return *_replication_strategy;
 }
 
 column_family& database::find_column_family(schema_ptr schema) throw (no_such_column_family) {

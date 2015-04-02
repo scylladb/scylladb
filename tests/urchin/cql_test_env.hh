@@ -76,8 +76,16 @@ public:
     future<> create_table(SchemaMaker schema_maker) {
         return _db->invoke_on_all([schema_maker, this] (database& db) {
             auto cf_schema = make_lw_shared(schema_maker(ks_name));
-            db.find_or_create_keyspace(ks_name);
+            auto& ks = db.find_or_create_keyspace(ks_name);
             db.add_column_family(column_family(cf_schema));
+            config::ks_meta_data ksm(ks_name,
+                    "org.apache.cassandra.locator.SimpleStrategy",
+                    std::unordered_map<sstring, sstring>(),
+                    false,
+                    std::vector<schema_ptr>(),
+                    shared_ptr<config::ut_meta_data>()
+                    );
+            ks.create_replication_strategy(ksm);
         });
     }
 

@@ -6,6 +6,8 @@
 #define DATABASE_HH_
 
 #include "dht/i_partitioner.hh"
+#include "config/ks_meta_data.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
 #include "net/byteorder.hh"
@@ -259,8 +261,10 @@ private:
 };
 
 class keyspace {
+    std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
 public:
-    // empty right now. placeholder for metadata(?)
+    void create_replication_strategy(config::ks_meta_data& ksm);
+    locator::abstract_replication_strategy& get_replication_strategy();
 };
 
 class no_such_keyspace : public std::runtime_error {
@@ -288,7 +292,7 @@ public:
     future<> init_from_data_directory(sstring datadir);
     future<> populate(sstring datadir);
 
-    void add_keyspace(sstring name, keyspace k);
+    keyspace& add_keyspace(sstring name, keyspace k);
     /** Adds cf with auto-generated UUID. */
     void add_column_family(column_family);
     void add_column_family(const utils::UUID&, column_family);

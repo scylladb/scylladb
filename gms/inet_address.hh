@@ -42,12 +42,23 @@ public:
     friend inline bool operator==(const inet_address& x, const inet_address& y) {
         return x._addr == y._addr;
     }
+    friend inline bool operator!=(const inet_address& x, const inet_address& y) {
+        return x._addr != y._addr;
+    }
     friend inline bool operator<(const inet_address& x, const inet_address& y) {
         return x._addr.ip < y._addr.ip;
     }
     friend inline std::ostream& operator<<(std::ostream& os, const inet_address& x) {
         return os << x._addr;
     }
+    friend struct std::hash<inet_address>;
 };
 
+}
+
+namespace std {
+template<>
+struct hash<gms::inet_address> {
+    size_t operator()(gms::inet_address a) const { return std::hash<net::ipv4_address>()(a._addr); }
+};
 }

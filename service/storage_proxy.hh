@@ -37,6 +37,7 @@ private:
 public:
     storage_proxy(distributed<database>& db) : _db(db) {}
 
+    future<> mutate_locally(const mutation& m, dht::decorated_key& dk);
     future<> mutate_locally(std::vector<mutation> mutations);
 
     /**

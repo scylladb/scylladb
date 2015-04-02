@@ -467,22 +467,27 @@ namespace service {
 
 
 future<>
+storage_proxy::mutate_locally(const mutation& m, dht::decorated_key& dk) {
+    auto shard = _db.local().shard_of(dk._token);
+    return _db.invoke_on(shard, [&m] (database& db) -> void {
+        // FIXME: lookup column_family by UUID
+        try {
+            auto& cf = db.find_column_family(m.schema);
+            cf.apply(m);
+        } catch (no_such_column_family&) {
+            // TODO: log a warning
+            // FIXME: load keyspace meta-data from storage
+        }
+    });
+}
+
+future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutations) {
     auto pmut = make_lw_shared(std::move(mutations));
     return parallel_for_each(pmut->begin(), pmut->end(), [this, pmut] (const mutation& m) {
         auto dk = dht::global_partitioner().decorate_key(m.key);
-        auto shard = _db.local().shard_of(dk._token);
-        return _db.invoke_on(shard, [&m, pmut] (database& db) -> void {
-            // FIXME: lookup column_family by UUID
-            try {
-                auto& cf = db.find_column_family(m.schema);
-                cf.apply(m);
-            } catch (no_such_column_family&) {
-                // TODO: log a warning
-                // FIXME: load keyspace meta-data from storage
-            }
-        });
-    });
+        return mutate_locally(m, dk);
+    }).finally([pmut]{});
 }
 
 /**
@@ -496,8 +501,18 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations) {
  */
 future<>
 storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl) {
-    // FIXME: send it to replicas instead of applying locally
-    return mutate_locally(std::move(mutations));
+    auto pmut = make_lw_shared(std::move(mutations));
+    return parallel_for_each(pmut->begin(), pmut->end(), [this, pmut] (const mutation& m) {
+        auto dk = dht::global_partitioner().decorate_key(m.key);
+        try {
+            keyspace& ks = _db.local().find_keyspace(m.schema->ks_name);
+            std::vector<gms::inet_address> natural_endpoints = ks.get_replication_strategy().get_natural_endpoints(dk._token);
+            // FIXME: send it to replicas instead of applying locally
+            return mutate_locally(m, dk);
+        } catch (no_such_keyspace& ex) {
+            assert(false);
+        }
+    }).finally([pmut]{});
 #if 0
         Tracing.trace("Determining replicas for mutation");
         final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());

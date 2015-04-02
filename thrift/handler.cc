@@ -416,7 +416,9 @@ public:
             exn_cob(TDelayedException::delayException(ire));
         }
         _db.invoke_on_all([this, ks_def = std::move(ks_def)] (database& db) {
-            db.add_keyspace(ks_def.name, keyspace());
+            keyspace& ks = db.add_keyspace(ks_def.name, keyspace());
+            std::vector<schema_ptr> cf_defs;
+            cf_defs.reserve(ks_def.cf_defs.size());
             for (const CfDef& cf_def : ks_def.cf_defs) {
                 std::vector<schema::column> partition_key;
                 std::vector<schema::column> clustering_key;
@@ -435,7 +437,15 @@ public:
                     std::vector<schema::column>(), column_name_type);
                 column_family cf(s);
                 db.add_column_family(std::move(cf));
+                cf_defs.push_back(s);
             }
+            config::ks_meta_data ksm(to_sstring(ks_def.name),
+                    to_sstring(ks_def.strategy_class),
+                    std::unordered_map<sstring, sstring>(),//ks_def.strategy_options,
+                    ks_def.durable_writes,
+                    cf_defs,
+                    shared_ptr<config::ut_meta_data>());
+            ks.create_replication_strategy(ksm);
         }).then([schema_id = std::move(schema_id)] {
             return make_ready_future<std::string>(std::move(schema_id));
         }).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<std::string> result) {

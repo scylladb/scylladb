@@ -66,6 +66,14 @@ public:
                 ;
     }
 
+    bool operator<(const UUID& v) const {
+         if (most_sig_bits != v.most_sig_bits) {
+             return most_sig_bits < v.most_sig_bits;
+         } else {
+             return least_sig_bits < v.least_sig_bits;
+         }
+    }
+
     bytes to_bytes() const {
         bytes b(bytes::initialized_later(),16);
         auto i = b.begin();
