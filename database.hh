@@ -326,6 +326,7 @@ public:
     }
     unsigned shard_of(const dht::token& t);
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
+    friend std::ostream& operator<<(std::ostream& out, const database& db);
 };
 
 // FIXME: stub

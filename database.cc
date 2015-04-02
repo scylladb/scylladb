@@ -720,14 +720,6 @@ bool column_definition::is_compact_value() const {
     return false;
 }
 
-std::ostream& operator<<(std::ostream& os, const mutation& m) {
-    return fprint(os, "{mutation: schema %p key %s data %s}", m.schema.get(), static_cast<bytes_view>(m.key), m.p);
-}
-
-std::ostream& operator<<(std::ostream& os, const mutation_partition& mp) {
-    return fprint(os, "{mutation_partition: ...}");
-}
-
 boost::iterator_range<mutation_partition::rows_type::const_iterator>
 mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) const {
     if (r.is_full()) {
@@ -968,6 +960,51 @@ database::query(const query::read_command& cmd) {
         // FIXME: load from sstables
         return make_empty();
     }
+}
+
+std::ostream& operator<<(std::ostream& out, const atomic_cell_or_collection& c) {
+    return out << to_hex(c._data);
+}
+
+void print_partition(std::ostream& out, const schema& s, const mutation_partition& mp) {
+    out << "{rows={\n";
+    for (auto&& e : mp.range(s, query::range<clustering_key_prefix>())) {
+        out << e.key() << " => ";
+        for (auto&& cell_e : e.row().cells) {
+            out << cell_e.first << ":";
+            out << cell_e.second << " ";
+        }
+        out << "\n";
+    }
+    out << "}}";
+}
+
+std::ostream& operator<<(std::ostream& os, const mutation& m) {
+    fprint(os, "{mutation: schema %p key %s data ", m.schema.get(), static_cast<bytes_view>(m.key));
+    print_partition(os, *m.schema, m.p);
+    os << "}";
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& out, const column_family& cf) {
+    out << "{\n";
+    for (auto&& e : cf.partitions) {
+        out << e.first << " => ";
+        print_partition(out, *cf._schema, e.second);
+        out << "\n";
+    }
+    out << "}";
+    return out;
+}
+
+std::ostream& operator<<(std::ostream& out, const database& db) {
+    out << "{\n";
+    for (auto&& e : db._column_families) {
+        auto&& cf = e.second;
+        out << "(" << e.first.to_sstring() << ", " << cf._schema->cf_name << ", " << cf._schema->ks_name << "): " << cf << "\n";
+    }
+    out << "}";
+    return out;
 }
 
 namespace db {

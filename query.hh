@@ -40,6 +40,7 @@ public:
         , _end()
         , _singular(true)
     { }
+    range() : range({}, {}) {}
 public:
     static range make(bound start, bound end) {
         return range({std::move(start)}, {std::move(end)});

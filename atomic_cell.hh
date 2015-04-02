@@ -9,6 +9,7 @@
 #include "tombstone.hh"
 #include "gc_clock.hh"
 #include <cstdint>
+#include <iostream>
 
 template<typename T>
 static inline
@@ -223,6 +224,7 @@ public:
     collection_mutation::view as_collection_mutation() const {
         return collection_mutation::view{_data};
     }
+    friend std::ostream& operator<<(std::ostream&, const atomic_cell_or_collection&);
 };
 
 class column_definition;
