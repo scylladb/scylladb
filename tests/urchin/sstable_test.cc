@@ -29,6 +29,14 @@ public:
     future<index_list> read_indexes(uint64_t position, uint64_t quantity) {
         return _sst->read_indexes(position, quantity);
     }
+
+    future<> read_statistics() {
+        return _sst->read_statistics();
+    }
+
+    statistics& get_statistics() {
+        return _sst->_statistics;
+    }
 };
 }
 
@@ -206,14 +214,19 @@ const sstring filename(sstring dir, sstring version, unsigned long generation, s
     return dir + "/" + version + "-" + to_sstring(generation) + "-" + format + "-" + component;
 }
 
-static future<> write_sst_info(sstring dir, unsigned long generation) {
+static future<sstable_ptr> do_write_sst(sstring dir, unsigned long generation) {
     auto sst = make_lw_shared<sstable>(dir, generation, la, big);
     return sst->load().then([sst, generation] {
         sst->set_generation(generation + 1);
-        return sst->store().then([sst] {
-            return make_ready_future<>();
+        auto fut = sst->store();
+        return std::move(fut).then([sst = std::move(sst)] {
+            return make_ready_future<sstable_ptr>(std::move(sst));
         });
     });
+}
+
+static future<> write_sst_info(sstring dir, unsigned long generation) {
+    return do_write_sst(dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
 }
 
 static future<std::pair<char*, size_t>> read_file(sstring file_path)
@@ -257,6 +270,26 @@ SEASTAR_TEST_CASE(check_compressed_info_func) {
 
 SEASTAR_TEST_CASE(check_filter_func) {
     return check_component_integrity("Filter.db");
+}
+
+SEASTAR_TEST_CASE(check_statistics_func) {
+    return do_write_sst("tests/urchin/sstables/compressed", 1).then([] (auto sst1) {
+        auto sst2 = make_lw_shared<sstable>("tests/urchin/sstables/compressed", 2, la, big);
+        return sstables::test(sst2).read_statistics().then([sst1, sst2] {
+            statistics& sst1_s = sstables::test(sst1).get_statistics();
+            statistics& sst2_s = sstables::test(sst2).get_statistics();
+
+            BOOST_REQUIRE(sst1_s.hash.map.size() == sst2_s.hash.map.size());
+            BOOST_REQUIRE(sst1_s.contents.size() == sst2_s.contents.size());
+
+            return do_for_each(sst1_s.hash.map.begin(), sst1_s.hash.map.end(),
+                    [sst1, sst2, &sst1_s, &sst2_s] (auto val) {
+                BOOST_REQUIRE(val.second == sst2_s.hash.map[val.first]);
+                return make_ready_future<>();
+            });
+            // TODO: compare the field contents from both sstables.
+        });
+    });
 }
 
 SEASTAR_TEST_CASE(uncompressed_random_access_read) {

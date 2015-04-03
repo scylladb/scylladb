@@ -93,19 +93,31 @@ struct estimated_histogram {
     struct eh_elem {
         uint64_t offset;
         uint64_t bucket;
+
+        template <typename Describer>
+        future<> describe_type(Describer f) { return f(offset, bucket); }
     };
 
     disk_array<uint32_t, eh_elem> elements;
+
+    template <typename Describer>
+    future<> describe_type(Describer f) { return f(elements); }
 };
 
 struct replay_position {
     uint64_t segment;
     uint32_t position;
+
+    template <typename Describer>
+    future<> describe_type(Describer f) { return f(segment, position); }
 };
 
 struct streaming_histogram {
     uint32_t max_bin_size;
     disk_hash<uint32_t, double, uint64_t> hash;
+
+    template <typename Describer>
+    future<> describe_type(Describer f) { return f(max_bin_size, hash); }
 };
 
 struct metadata {
@@ -114,11 +126,17 @@ struct metadata {
 struct validation_metadata : public metadata {
     disk_string<uint16_t> partitioner;
     double filter_chance;
+
+    template <typename Describer>
+    future<> describe_type(Describer f) { return f(partitioner, filter_chance); }
 };
 
 struct compaction_metadata : public metadata {
     disk_array<uint32_t, uint32_t> ancestors;
     disk_array<uint32_t, uint8_t> cardinality;
+
+    template <typename Describer>
+    future<> describe_type(Describer f) { return f(ancestors, cardinality); }
 };
 
 struct la_stats_metadata : public metadata {
@@ -135,6 +153,25 @@ struct la_stats_metadata : public metadata {
     disk_array<uint32_t, disk_string<uint16_t>> min_column_names;
     disk_array<uint32_t, disk_string<uint16_t>> max_column_names;
     bool has_legacy_counter_shards;
+
+    template <typename Describer>
+    future<> describe_type(Describer f) {
+        return f(
+            estimated_row_size,
+            estimated_column_count,
+            position,
+            min_timestamp,
+            max_timestamp,
+            max_local_deletion_time,
+            compression_ratio,
+            estimated_tombstone_drop_time,
+            sstable_level,
+            repaired_at,
+            min_column_names,
+            max_column_names,
+            has_legacy_counter_shards
+        );
+    }
 };
 using stats_metadata = la_stats_metadata;
 

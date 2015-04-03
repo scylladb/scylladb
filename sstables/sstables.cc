@@ -176,7 +176,7 @@ parse(random_access_reader& in, T& i) {
 template <typename T>
 typename std::enable_if_t<std::is_enum<T>::value, future<>>
 write(output_stream<char>& out, T i) {
-    return write(out, reinterpret_cast<typename std::underlying_type<T>::type>(i));
+    return write(out, static_cast<typename std::underlying_type<T>::type>(i));
 }
 
 future<> parse(random_access_reader& in, bool& i) {
@@ -402,6 +402,24 @@ future<> parse(random_access_reader& in, disk_hash<Size, Key, Value>& h) {
     });
 }
 
+template <typename Key, typename Value>
+future<> write(output_stream<char>& out, std::unordered_map<Key, Value>& map) {
+    return do_for_each(map.begin(), map.end(), [&out, &map] (auto val) {
+        Key key = val.first;
+        Value value = val.second;
+        return write(out, key, value);
+    });
+}
+
+template <typename Size, typename Key, typename Value>
+future<> write(output_stream<char>& out, disk_hash<Size, Key, Value>& h) {
+    Size len = 0;
+    check_truncate_and_assign(len, h.map.size());
+    return write(out, len).then([&out, &h] {
+        return write(out, h.map);
+    });
+}
+
 future<> parse(random_access_reader& in, summary& s) {
     using pos_type = typename decltype(summary::positions)::value_type;
 
@@ -470,30 +488,6 @@ future<summary_entry&> sstable::read_summary_entry(size_t i) {
     return make_ready_future<summary_entry&>(_summary.entries[i]);
 }
 
-future<> parse(random_access_reader& in, struct replay_position& rp) {
-    return parse(in, rp.segment, rp.position);
-}
-
-future<> parse(random_access_reader& in, estimated_histogram::eh_elem &e) {
-    return parse(in, e.offset, e.bucket);
-}
-
-future<> parse(random_access_reader& in, estimated_histogram &e) {
-    return parse(in, e.elements);
-}
-
-future<> parse(random_access_reader& in, streaming_histogram &h) {
-    return parse(in, h.max_bin_size, h.hash);
-}
-
-future<> parse(random_access_reader& in, validation_metadata& m) {
-    return parse(in, m.partitioner, m.filter_chance);
-}
-
-future<> parse(random_access_reader& in, compaction_metadata& m) {
-    return parse(in, m.ancestors, m.cardinality);
-}
-
 future<> parse(random_access_reader& in, index_entry& ie) {
     return parse(in, ie.key, ie.position, ie.promoted_index);
 }
@@ -508,22 +502,9 @@ future<> parse(random_access_reader& in, std::unique_ptr<metadata>& p) {
     return parse(in, *static_cast<Child *>(p.get()));
 }
 
-future<> parse(random_access_reader& in, stats_metadata& m) {
-    return parse(in,
-        m.estimated_row_size,
-        m.estimated_column_count,
-        m.position,
-        m.min_timestamp,
-        m.max_timestamp,
-        m.max_local_deletion_time,
-        m.compression_ratio,
-        m.estimated_tombstone_drop_time,
-        m.sstable_level,
-        m.repaired_at,
-        m.min_column_names,
-        m.max_column_names,
-        m.has_legacy_counter_shards
-    );
+template <typename Child>
+future<> write(output_stream<char>& out, std::unique_ptr<metadata>& p) {
+    return write(out, *static_cast<Child *>(p.get()));
 }
 
 future<> parse(random_access_reader& in, statistics& s) {
@@ -540,6 +521,37 @@ future<> parse(random_access_reader& in, statistics& s) {
                     return parse<stats_metadata>(in, s.contents[val.first]);
                 default:
                     sstlog.warn("Invalid metadata type at Statistics file: {} ", int(val.first));
+                    return make_ready_future<>();
+                }
+        });
+    });
+}
+
+future<> write(output_stream<char>& out, statistics& s) {
+    return write(out, s.hash).then([&out, &s] {
+        struct kv {
+            metadata_type key;
+            uint32_t value;
+        };
+        // sort map by file offset value and store the result into a vector.
+        // this is indeed needed because output stream cannot afford random writes.
+        auto v = make_shared<std::vector<kv>>();
+        v->reserve(s.hash.map.size());
+        for (auto val : s.hash.map) {
+            kv tmp = { val.first, val.second };
+            v->push_back(tmp);
+        }
+        std::sort(v->begin(), v->end(), [] (kv i, kv j) { return i.value < j.value; });
+        return do_for_each(v->begin(), v->end(), [&out, &s, v] (auto val) mutable {
+            switch (val.key) {
+                case metadata_type::Validation:
+                    return write<validation_metadata>(out, s.contents[val.key]);
+                case metadata_type::Compaction:
+                    return write<compaction_metadata>(out, s.contents[val.key]);
+                case metadata_type::Stats:
+                    return write<stats_metadata>(out, s.contents[val.key]);
+                default:
+                    sstlog.warn("Invalid metadata type at Statistics file: {} ", int(val.key));
                     return make_ready_future<>();
                 }
         });
@@ -719,6 +731,10 @@ future<> sstable::read_statistics() {
     return read_simple<statistics, component_type::Statistics, &sstable::_statistics>();
 }
 
+future<> sstable::write_statistics() {
+    return write_simple<statistics, component_type::Statistics, &sstable::_statistics>();
+}
+
 future<> sstable::open_data() {
     return when_all(engine().open_file_dma(filename(component_type::Index), open_flags::ro),
                     engine().open_file_dma(filename(component_type::Data), open_flags::ro)).then([this] (auto files) {
@@ -752,7 +768,9 @@ future<> sstable::load() {
 
 future<> sstable::store() {
     // TODO: write other components as well.
-    return write_compression().then([this] {
+    return write_statistics().then([this] {
+        return write_compression();
+    }).then([this] {
         return write_filter();
     });
 }

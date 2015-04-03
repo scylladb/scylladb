@@ -91,7 +91,10 @@ private:
     future<> read_summary() {
         return read_simple<summary, component_type::Summary, &sstable::_summary>();
     }
+
     future<> read_statistics();
+    future<> write_statistics();
+
     future<> open_data();
 
     future<index_list> read_indexes(uint64_t position, uint64_t quantity);
