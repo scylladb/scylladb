@@ -261,9 +261,9 @@ private:
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
     future<> probe_file(sstring sstdir, sstring fname);
-    // Returns at most "limit" rows
-    query::result::partition get_partition_slice(mutation_partition& partition,
-        const query::partition_slice& slice, uint32_t limit);
+    // Returns at most "limit" rows. The limit must be greater than 0.
+    void get_partition_slice(mutation_partition& partition, const query::partition_slice& slice,
+        uint32_t limit, query::result::partition_writer&);
 };
 
 class keyspace {

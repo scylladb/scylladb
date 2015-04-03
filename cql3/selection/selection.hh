@@ -26,6 +26,7 @@
 
 #include "bytes.hh"
 #include "schema.hh"
+#include "query.hh"
 #include "cql3/column_specification.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/result_set.hh"
@@ -156,6 +157,8 @@ public:
     virtual bool uses_function(const sstring &ks_name, const sstring& function_name) const {
         return false;
     }
+
+    query::partition_slice::option_set get_query_options();
 private:
     static bool processes_selection(const std::vector<::shared_ptr<raw_selector>>& raw_selectors) {
         return std::any_of(raw_selectors.begin(), raw_selectors.end(),
@@ -235,15 +238,16 @@ public:
         current->emplace_back(std::move(value));
     }
 
-    void add(const column_definition& def, atomic_cell_view c) {
+    void add(const column_definition& def, const query::result_atomic_cell_view& c) {
         current->emplace_back(get_value(def.type, c));
         if (!_timestamps.empty()) {
-            _timestamps[current->size() - 1] = c.is_dead() ? api::min_timestamp : c.timestamp();
+            _timestamps[current->size() - 1] = c.timestamp();
         }
         if (!_ttls.empty()) {
             gc_clock::duration ttl(-1);
-            if (c.is_live_and_has_ttl()) {
-                ttl = *c.ttl() - to_gc_clock(_now);
+            auto maybe_ttl = c.ttl();
+            if (maybe_ttl) {
+                ttl = *maybe_ttl - to_gc_clock(_now);
             }
             _ttls[current->size() - 1] = ttl.count();
         }
@@ -292,10 +296,7 @@ public:
         return _ttls[idx];
     }
 private:
-    bytes_opt get_value(data_type t, atomic_cell_view c) {
-        if (c.is_dead()) {
-            return {};
-        }
+    bytes_opt get_value(data_type t, query::result_atomic_cell_view c) {
         if (t->is_counter()) {
             fail(unimplemented::cause::COUNTERS);
 #if 0

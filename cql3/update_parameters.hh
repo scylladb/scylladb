@@ -32,6 +32,9 @@
 #include "atomic_cell.hh"
 #include "tombstone.hh"
 #include "exceptions/exceptions.hh"
+#include "cql3/query_options.hh"
+
+#include <unordered_map>
 
 namespace cql3 {
 
@@ -41,8 +44,39 @@ namespace cql3 {
 class update_parameters final {
 public:
     struct prefetch_data {
-        query::partition_slice slice;
-        query::result result;
+        using key = std::pair<partition_key, clustering_key>;
+        struct key_hashing {
+            partition_key::hashing pk_hash;
+            clustering_key::hashing ck_hash;
+
+            key_hashing(const schema& s)
+                : pk_hash(s)
+                , ck_hash(s)
+            { }
+
+            size_t operator()(const key& k) const {
+                return pk_hash(k.first) ^ ck_hash(k.second);
+            }
+        };
+        struct key_equality {
+            partition_key::equality pk_eq;
+            clustering_key::equality ck_eq;
+
+            key_equality(const schema& s)
+                : pk_eq(s)
+                , ck_eq(s)
+            { }
+
+            bool operator()(const key& k1, const key& k2) const {
+                return pk_eq(k1.first, k2.first) && ck_eq(k1.second, k2.second);
+            }
+        };
+        using row = std::unordered_map<column_id, collection_mutation::one>;
+    public:
+        std::unordered_map<key, row, key_hashing, key_equality> rows;
+        schema_ptr schema;
+    public:
+        prefetch_data(schema_ptr schema);
     };
     // Note: value (mutation) only required to contain the rows we are interested in
     using prefetched_rows_type = std::experimental::optional<prefetch_data>;
@@ -123,45 +157,8 @@ public:
         return _timestamp;
     }
 
-    std::experimental::optional<collection_mutation::view> get_prefetched_list(const partition_key& pkey,
-            const clustering_key& row_key, const column_definition& column) const {
-        if (!_prefetched) {
-            return {};
-        }
-        auto&& parts = _prefetched->result.partitions;
-        auto&& pkcmp = partition_key::equality(*_schema);
-        auto i = std::find_if(parts.begin(), parts.end(), [&] (auto&& key_and_part) {
-            return pkcmp(pkey, key_and_part.first);
-        });
-        if (i == parts.end()) {
-            return {};
-        }
-        auto&& part = i->second;
-        auto which = &query::partition_slice::regular_columns;
-        if (column.is_static()) {
-            which = &query::partition_slice::static_columns;
-        }
-        auto&& idxvec = _prefetched->slice.*which;
-        auto&& j = std::find(idxvec.begin(), idxvec.end(), column.id);
-        assert(j != idxvec.end());
-        auto colidx = j - idxvec.begin();
-        auto* row = &part.static_row;
-        auto&& keycmp = clustering_key::equality(*_schema);
-        if (!column.is_static()) {
-            auto k = std::find_if(part.rows.begin(), part.rows.end(), [&] (auto&& key_and_row) {
-                return keycmp(row_key, key_and_row.first);
-            });
-            if (k == part.rows.end()) {
-                return {};
-            }
-            row = &k->second;
-        }
-        auto&& cell = row->cells[colidx];
-        if (!cell) {
-            return {};
-        }
-        return {cell->as_collection_mutation()};
-    }
+    std::experimental::optional<collection_mutation::view> get_prefetched_list(
+        const partition_key& pkey, const clustering_key& row_key, const column_definition& column) const;
 };
 
 }

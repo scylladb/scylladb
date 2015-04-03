@@ -29,6 +29,22 @@ namespace cql3 {
 
 namespace selection {
 
+query::partition_slice::option_set selection::get_query_options() {
+    query::partition_slice::option_set opts;
+
+    opts.set_if<query::partition_slice::option::send_timestamp_and_ttl>(_collect_timestamps || _collect_TTLs);
+
+    opts.set_if<query::partition_slice::option::send_partition_key>(
+        std::any_of(_columns.begin(), _columns.end(),
+            std::mem_fn(&column_definition::is_partition_key)));
+
+    opts.set_if<query::partition_slice::option::send_clustering_key>(
+        std::any_of(_columns.begin(), _columns.end(),
+            std::mem_fn(&column_definition::is_clustering_key)));
+
+    return opts;
+}
+
 // Special cased selection for when no function is used (this save some allocations).
 class simple_selection : public selection {
 private:

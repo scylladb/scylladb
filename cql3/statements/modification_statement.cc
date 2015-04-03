@@ -29,6 +29,7 @@
 #include "core/shared_ptr.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
+#include <boost/range/adaptor/filtered.hpp>
 
 namespace cql3 {
 
@@ -87,6 +88,56 @@ modification_statement::make_update_parameters(
             });
 }
 
+
+// Implements ResultVisitor concept from query.hh
+class prefetch_data_builder {
+    update_parameters::prefetch_data& _data;
+    const query::partition_slice& _ps;
+    std::experimental::optional<partition_key> _pkey;
+public:
+    prefetch_data_builder(update_parameters::prefetch_data& data, const query::partition_slice& ps)
+        : _data(data)
+        , _ps(ps)
+    { }
+
+    void accept_new_partition(const partition_key& key, uint32_t row_count) {
+        _pkey = key;
+    }
+
+    void accept_new_partition(uint32_t row_count) {
+        assert(0);
+    }
+
+    void accept_new_row(const clustering_key& key, const query::result_row_view& static_row,
+                    const query::result_row_view& row) {
+        update_parameters::prefetch_data::row cells;
+
+        auto add_cell = [&cells] (column_id id, std::experimental::optional<collection_mutation::view>&& cell) {
+            if (cell) {
+                cells.emplace(id, collection_mutation::one{to_bytes(cell->data)});
+            }
+        };
+
+        auto static_row_iterator = static_row.iterator();
+        for (auto&& id : _ps.static_columns) {
+            add_cell(id, static_row_iterator.next_collection_cell());
+        }
+
+        auto row_iterator = row.iterator();
+        for (auto&& id : _ps.regular_columns) {
+            add_cell(id, row_iterator.next_collection_cell());
+        }
+
+        _data.rows.emplace(std::make_pair(*_pkey, key), std::move(cells));
+    }
+
+    void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
+        assert(0);
+    }
+
+    void accept_partition_end(const query::result_row_view& static_row) {}
+};
+
 future<update_parameters::prefetched_rows_type>
 modification_statement::read_required_rows(
         service::storage_proxy& proxy,
@@ -104,14 +155,24 @@ modification_statement::read_required_rows(
         throw exceptions::invalid_request_exception(sprint("Write operation require a read but consistency %s is not supported on reads", cl));
     }
 
-    // FIXME: we read all columns, but could be enhanced just to read the list(s) being RMWed
+    static auto is_collection = [] (const column_definition& def) {
+        return def.type->is_collection();
+    };
+
+    // FIXME: we read all collection columns, but could be enhanced just to read the list(s) being RMWed
     std::vector<column_id> static_cols;
-    boost::range::push_back(static_cols, s->static_columns() | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
+    boost::range::push_back(static_cols, s->static_columns()
+        | boost::adaptors::filtered(is_collection) | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
     std::vector<column_id> regular_cols;
-    boost::range::push_back(regular_cols, s->regular_columns() | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
+    boost::range::push_back(regular_cols, s->regular_columns()
+        | boost::adaptors::filtered(is_collection) | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
     query::partition_slice ps(
             {query::clustering_range(clustering_key_prefix::from_clustering_prefix(*s, *prefix))},
-            std::move(static_cols), std::move(regular_cols));
+            std::move(static_cols),
+            std::move(regular_cols),
+            query::partition_slice::option_set::of<
+                query::partition_slice::option::send_partition_key,
+                query::partition_slice::option::send_clustering_key>());
     // FIXME: our read_command doesn't take a time parameter, origin's does?
     // auto now = db_clock::now();
     std::vector<query::partition_range> pr;
@@ -122,7 +183,12 @@ modification_statement::read_required_rows(
     // FIXME: ignoring "local"
     return proxy.query(make_lw_shared(std::move(cmd)), cl).then([this, ps] (auto result) {
         // FIXME: copying
-        return update_parameters::prefetched_rows_type({std::move(ps), *result});
+        // FIXME: Use scattered_reader to avoid copying
+        bytes_ostream buf(result->buf());
+        query::result_view v(buf.linearize());
+        auto prefetched_rows = update_parameters::prefetched_rows_type({update_parameters::prefetch_data(s)});
+        v.consume(ps, prefetch_data_builder(prefetched_rows.value(), ps));
+        return prefetched_rows;
     });
 }
 

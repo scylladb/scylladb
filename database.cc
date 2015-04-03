@@ -813,22 +813,20 @@ void mutation::update_column(row& row, const column_definition& def, atomic_cell
 }
 
 template <typename ColumnDefResolver>
-static query::result::row get_row_slice(const row& cells, const std::vector<column_id>& columns, tombstone tomb,
-        ColumnDefResolver&& id_to_def) {
-    query::result::row result_row;
-    result_row.cells.reserve(columns.size());
+static void get_row_slice(const row& cells, const std::vector<column_id>& columns, tombstone tomb,
+        ColumnDefResolver&& id_to_def, query::result::row_writer& writer) {
     for (auto id : columns) {
         auto i = cells.find(id);
         if (i == cells.end()) {
-            result_row.cells.emplace_back();
+            writer.add_empty();
         } else {
-            auto def = id_to_def(id);
+            auto&& def = id_to_def(id);
             if (def.is_atomic()) {
                 auto c = i->second.as_atomic_cell();
                 if (!c.is_live(tomb)) {
-                    result_row.cells.emplace_back();
+                    writer.add_empty();
                 } else {
-                    result_row.cells.emplace_back(std::experimental::make_optional(i->second));
+                    writer.add(i->second.as_atomic_cell());
                 }
             } else {
                 auto&& cell = i->second.as_collection_mutation();
@@ -837,15 +835,13 @@ static query::result::row get_row_slice(const row& cells, const std::vector<colu
                 m_view.tomb.apply(tomb);
                 auto m_ser = ctype->serialize_mutation_form_only_live(m_view);
                 if (ctype->is_empty(m_ser)) {
-                    result_row.cells.emplace_back();
+                    writer.add_empty();
                 } else {
-                    result_row.cells.emplace_back(std::experimental::make_optional(
-                        atomic_cell_or_collection::from_collection_mutation(std::move(m_ser))));
+                    writer.add(m_ser);
                 }
             }
         }
     }
-    return result_row;
 }
 
 template <typename ColumnDefResolver>
@@ -869,13 +865,28 @@ bool has_any_live_data(const row& cells, tombstone tomb, ColumnDefResolver&& id_
     return false;
 }
 
-query::result::partition
-column_family::get_partition_slice(mutation_partition& partition, const query::partition_slice& slice, uint32_t limit) {
-    query::result::partition result;
-
+void
+column_family::get_partition_slice(mutation_partition& partition,
+                                   const query::partition_slice& slice,
+                                   uint32_t limit,
+                                   query::result::partition_writer& pw) {
     auto regular_column_resolver = [this] (column_id id) -> const column_definition& {
         return _schema->regular_column_at(id);
     };
+
+    // So that we can always add static row before we know how many clustered rows there will be,
+    // without exceeding the limit.
+    assert(limit > 0);
+
+    if (!slice.static_columns.empty()) {
+        auto static_column_resolver = [this] (column_id id) -> const column_definition& {
+            return _schema->static_column_at(id);
+        };
+        auto row_builder = pw.add_static_row();
+        get_row_slice(partition.static_row(), slice.static_columns, partition.tombstone_for_static_row(),
+            static_column_resolver, row_builder);
+        row_builder.finish();
+    }
 
     for (auto&& range : slice.row_ranges) {
         if (limit == 0) {
@@ -890,7 +901,6 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
             auto&& cells = row.cells;
 
             auto row_tombstone = partition.tombstone_for_row(*_schema, e);
-            auto result_row = get_row_slice(cells, slice.regular_columns, row_tombstone, regular_column_resolver);
             auto row_is_live = row.created_at > row_tombstone.timestamp;
 
             // row_is_live is true for rows created using 'insert' statement
@@ -900,60 +910,55 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
             // we've got no live cell in the results we still have to check if
             // any of the row's cell is live and we should return the row in
             // such case.
-            if (row_is_live || !result_row.all_cells_empty() || has_any_live_data(cells, row_tombstone, regular_column_resolver)) {
-                result.rows.emplace_back(e.key(), std::move(result_row));
+            if (row_is_live || has_any_live_data(cells, row_tombstone, regular_column_resolver)) {
+                auto row_builder = pw.add_row(e.key());
+                get_row_slice(cells, slice.regular_columns, row_tombstone, regular_column_resolver, row_builder);
+                row_builder.finish();
                 if (--limit == 0) {
                     break;
                 }
             }
         }
     }
-
-    if (!slice.static_columns.empty()) {
-        // When there are no clustered rows, static row counts as one row with respect to row limit
-        if (!result.rows.empty() || limit > 0) {
-            result.static_row = get_row_slice(partition.static_row(), slice.static_columns, partition.tombstone_for_static_row(),
-                [this] (column_id id) -> const column_definition& { return _schema->static_column_at(id); });
-        }
-    }
-
-    return result;
 }
 
 future<lw_shared_ptr<query::result>>
 column_family::query(const query::read_command& cmd) {
-    auto result = make_lw_shared<query::result>();
+    query::result::builder builder(cmd.slice);
 
     uint32_t limit = cmd.row_limit;
     for (auto&& range : cmd.partition_ranges) {
+        if (limit == 0) {
+            break;
+        }
         if (range.is_singular()) {
             auto& key = range.start_value();
             auto partition = find_partition(key);
             if (!partition) {
-                return make_ready_future<lw_shared_ptr<query::result>>(result);
+                break;
             }
-            result->partitions.emplace_back(key,
-                get_partition_slice(*partition, cmd.slice, limit));
-            limit -= result->partitions.back().second.row_count();
-            if (limit == 0) {
-                return make_ready_future<lw_shared_ptr<query::result>>(result);
-            }
+            auto p_builder = builder.add_partition(key);
+            get_partition_slice(*partition, cmd.slice, limit, p_builder);
+            p_builder.finish();
+            limit -= p_builder.row_count();
         } else if (range.is_full()) {
             for (auto&& e : partitions) {
                 auto& key = e.first;
                 auto& partition = e.second;
-                result->partitions.emplace_back(key,
-                    get_partition_slice(partition, cmd.slice, limit));
-                limit -= result->partitions.back().second.row_count();
+                auto p_builder = builder.add_partition(key);
+                get_partition_slice(partition, cmd.slice, limit, p_builder);
+                p_builder.finish();
+                limit -= p_builder.row_count();
                 if (limit == 0) {
-                    return make_ready_future<lw_shared_ptr<query::result>>(result);
+                    break;
                 }
             }
         } else {
             fail(unimplemented::cause::RANGE_QUERIES);
         }
     }
-    return make_ready_future<lw_shared_ptr<query::result>>(result);
+    return make_ready_future<lw_shared_ptr<query::result>>(
+            make_lw_shared<query::result>(builder.build()));
 }
 
 future<lw_shared_ptr<query::result>>

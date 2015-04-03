@@ -98,70 +98,112 @@ select_statement::execute(service::storage_proxy& proxy, lw_shared_ptr<query::re
         });
 }
 
+// Implements ResultVisitor concept from query.hh
+class result_set_building_visitor {
+    cql3::selection::result_set_builder& builder;
+    select_statement& stmt;
+    uint32_t _row_count;
+    std::vector<bytes> _partition_key;
+    std::vector<bytes> _clustering_key;
+public:
+    result_set_building_visitor(cql3::selection::result_set_builder& builder, select_statement& stmt)
+        : builder(builder)
+        , stmt(stmt)
+        , _row_count(0)
+    { }
+
+    void add_value(const column_definition& def, query::result_row_view::iterator_type& i) {
+        if (def.type->is_multi_cell()) {
+            auto cell = i.next_collection_cell();
+            if (!cell) {
+                builder.add_empty();
+                return;
+            }
+            builder.add(def, *cell);
+        } else {
+            auto cell = i.next_atomic_cell();
+            if (!cell) {
+                builder.add_empty();
+                return;
+            }
+            builder.add(def, *cell);
+        }
+    };
+
+    void accept_new_partition(const partition_key& key, uint32_t row_count) {
+        _partition_key = key.explode(*stmt._schema);
+        _row_count = row_count;
+    }
+
+    void accept_new_partition(uint32_t row_count) {
+        _row_count = row_count;
+    }
+
+    void accept_new_row(const clustering_key& key, const query::result_row_view& static_row,
+            const query::result_row_view& row) {
+        _clustering_key = key.explode(*stmt._schema);
+        accept_new_row(static_row, row);
+    }
+
+    void accept_new_row(const query::result_row_view& static_row, const query::result_row_view& row) {
+        auto static_row_iterator = static_row.iterator();
+        auto row_iterator = row.iterator();
+        builder.new_row();
+        for (auto&& def : stmt._selection->get_columns()) {
+            switch (def->kind) {
+                case column_definition::column_kind::PARTITION:
+                    builder.add(_partition_key[def->component_index()]);
+                    break;
+                case column_definition::column_kind::CLUSTERING:
+                    builder.add(_clustering_key[def->component_index()]);
+                    break;
+                case column_definition::column_kind::REGULAR:
+                    add_value(*def, row_iterator);
+                    break;
+                case column_definition::column_kind::STATIC:
+                    add_value(*def, static_row_iterator);
+                    break;
+                default:
+                    assert(0);
+            }
+        }
+    }
+
+    void accept_partition_end(const query::result_row_view& static_row) {
+        if (_row_count == 0
+            && !static_row.empty()
+            && !stmt._restrictions->uses_secondary_indexing()
+            && stmt._restrictions->has_no_clustering_columns_restriction())
+        {
+            builder.new_row();
+            auto static_row_iterator = static_row.iterator();
+            for (auto&& def : stmt._selection->get_columns()) {
+                if (def->is_partition_key()) {
+                    builder.add(_partition_key[def->component_index()]);
+                } else if (def->is_static()) {
+                    add_value(*def, static_row_iterator);
+                } else {
+                    builder.add_empty();
+                }
+            }
+        }
+    }
+};
+
 shared_ptr<transport::messages::result_message>
 select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd,
         const query_options& options, db_clock::time_point now) {
     cql3::selection::result_set_builder builder(*_selection, now, options.get_serialization_format());
 
-    auto add_value = [&builder] (const column_definition& def, std::experimental::optional<atomic_cell_or_collection>& cell) {
-        if (!cell) {
-            builder.add_empty();
-            return;
-        }
-
-        if (def.type->is_multi_cell()) {
-            builder.add(def, cell->as_collection_mutation());
-        } else {
-            builder.add(def, cell->as_atomic_cell());
-        }
-    };
-
-    for (auto&& e : results->partitions) {
-        // FIXME: deserialize into views
-        auto key = e.first.explode(*_schema);
-        auto& partition = e.second;
-
-        if (!partition.static_row.empty() && partition.rows.empty()
-                && !_restrictions->uses_secondary_indexing()
-                && _restrictions->has_no_clustering_columns_restriction()) {
-            builder.new_row();
-            uint32_t static_id = 0;
-            for (auto&& def : _selection->get_columns()) {
-                if (def->is_partition_key()) {
-                    builder.add(key[def->component_index()]);
-                } else if (def->is_static()) {
-                    add_value(*def, partition.static_row.cells[static_id++]);
-                } else {
-                    builder.add_empty();
-                }
-            }
-        } else {
-            for (auto&& e : partition.rows) {
-                auto c_key = e.first.explode(*_schema);
-                auto& cells = e.second.cells;
-                uint32_t static_id = 0;
-                uint32_t regular_id = 0;
-                builder.new_row();
-                for (auto&& def : _selection->get_columns()) {
-                    switch (def->kind) {
-                        case column_definition::column_kind::PARTITION:
-                            builder.add(key[def->component_index()]);
-                            break;
-                        case column_definition::column_kind::CLUSTERING:
-                            builder.add(c_key[def->component_index()]);
-                            break;
-                        case column_definition::column_kind::REGULAR:
-                            add_value(*def, cells[regular_id++]);
-                            break;
-                        case column_definition::column_kind::STATIC:
-                            add_value(*def, partition.static_row.cells[static_id++]);
-                            break;
-                        default:
-                            assert(0);
-                    }
-                }
-            }
-        }
+    // FIXME: This special casing saves us the cost of copying an already
+    // linearized response. When we switch views to scattered_reader this will go away.
+    if (results->buf().is_linearized()) {
+        query::result_view view(results->buf().view());
+        view.consume(cmd->slice, result_set_building_visitor(builder, *this));
+    } else {
+        bytes_ostream w(results->buf());
+        query::result_view view(w.linearize());
+        view.consume(cmd->slice, result_set_building_visitor(builder, *this));
     }
 
     auto rs = builder.build();

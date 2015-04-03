@@ -47,6 +47,7 @@ namespace statements {
  *
  */
 class select_statement : public cql_statement {
+    friend class result_set_building_visitor;
 public:
     class parameters final {
     public:
@@ -93,6 +94,8 @@ private:
      * The comparator used to orders results when multiple keys are selected (using IN).
      */
     ordering_comparator_type _ordering_comparator;
+
+    query::partition_slice::option_set _opts;
 public:
     select_statement(schema_ptr schema,
             uint32_t bound_terms,
@@ -110,7 +113,9 @@ public:
         , _is_reversed(is_reversed)
         , _limit(std::move(limit))
         , _ordering_comparator(std::move(ordering_comparator))
-    { }
+    {
+        _opts = _selection->get_query_options();
+    }
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return _selection->uses_function(ks_name, function_name)
@@ -244,11 +249,11 @@ public:
         }
 
         if (_parameters->is_distinct()) {
-            return query::partition_slice({}, std::move(static_columns), {});
+            return query::partition_slice({}, std::move(static_columns), {}, _opts);
         }
 
         return query::partition_slice(_restrictions->get_clustering_bounds(options),
-            std::move(static_columns), std::move(regular_columns));
+            std::move(static_columns), std::move(regular_columns), _opts);
     }
 
 #if 0
