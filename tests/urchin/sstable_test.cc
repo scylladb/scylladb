@@ -32,9 +32,9 @@ public:
 };
 }
 
-static future<> broken_sst(sstring dir, unsigned long epoch) {
+static future<> broken_sst(sstring dir, unsigned long generation) {
 
-    auto sst = std::make_unique<sstable>(dir, epoch, la, big);
+    auto sst = std::make_unique<sstable>(dir, generation, la, big);
     auto fut = sst->load();
     return std::move(fut).then_wrapped([sst = std::move(sst)] (future<> f) mutable {
         try {
@@ -47,16 +47,16 @@ static future<> broken_sst(sstring dir, unsigned long epoch) {
     });
 }
 
-static future<sstable_ptr> reusable_sst(sstring dir, unsigned long epoch) {
-    auto sst = make_lw_shared<sstable>(dir, epoch, la, big);
+static future<sstable_ptr> reusable_sst(sstring dir, unsigned long generation) {
+    auto sst = make_lw_shared<sstable>(dir, generation, la, big);
     auto fut = sst->load();
     return std::move(fut).then([sst = std::move(sst)] {
         return make_ready_future<sstable_ptr>(std::move(sst));
     });
 }
 
-static future<> working_sst(sstring dir, unsigned long epoch) {
-    return reusable_sst(dir, epoch).then([] (auto ptr) { return make_ready_future<>(); });
+static future<> working_sst(sstring dir, unsigned long generation) {
+    return reusable_sst(dir, generation).then([] (auto ptr) { return make_ready_future<>(); });
 }
 
 SEASTAR_TEST_CASE(empty_toc) {
