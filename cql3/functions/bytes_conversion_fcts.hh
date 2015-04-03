@@ -41,7 +41,7 @@ make_to_blob_function(data_type from_type) {
     // FIXME: use cql3 type name
     auto name = from_type->name() + "asblob";
     return make_native_scalar_function<true>(name, bytes_type, { from_type },
-            [] (serialization_format sf, const std::vector<bytes>& parameters) {
+            [] (serialization_format sf, const std::vector<bytes_opt>& parameters) {
         return parameters[0];
     });
 }
@@ -52,13 +52,13 @@ make_from_blob_function(data_type to_type) {
     // FIXME: use cql3 type name
     sstring name = sstring("blobas") + to_type->name();
     return make_native_scalar_function<true>(name, to_type, { bytes_type },
-            [name, to_type] (serialization_format sf, const std::vector<bytes>& parameters) {
+            [name, to_type] (serialization_format sf, const std::vector<bytes_opt>& parameters) -> bytes_opt {
         auto&& val = parameters[0];
+        if (!val) {
+            return val;
+        }
         try {
-#if 0
-                    if (val != null)
-#endif
-            to_type->validate(val);
+            to_type->validate(*val);
             return val;
         } catch (marshal_exception& e) {
             using namespace exceptions;
@@ -73,7 +73,7 @@ inline
 shared_ptr<function>
 make_varchar_as_blob_fct() {
     return make_native_scalar_function<true>("varcharasblob", bytes_type, { utf8_type },
-            [] (serialization_format sf, const std::vector<bytes>& parameters) {
+            [] (serialization_format sf, const std::vector<bytes_opt>& parameters) -> bytes_opt {
         return parameters[0];
     });
 }
@@ -82,7 +82,7 @@ inline
 shared_ptr<function>
 make_blob_as_varchar_fct() {
     return make_native_scalar_function<true>("blobasvarchar", utf8_type, { bytes_type },
-            [] (serialization_format sf, const std::vector<bytes>& parameters) {
+            [] (serialization_format sf, const std::vector<bytes_opt>& parameters) -> bytes_opt {
         return parameters[0];
     });
 }

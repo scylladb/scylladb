@@ -61,7 +61,7 @@ public:
     }
 
     virtual bytes_opt bind_and_get(const query_options& options) override {
-        std::vector<bytes> buffers;
+        std::vector<bytes_opt> buffers;
         buffers.reserve(_terms.size());
         for (auto&& t : _terms) {
             // For now, we don't allow nulls as argument as no existing function needs it and it
@@ -70,20 +70,19 @@ public:
             if (!val) {
                 throw exceptions::invalid_request_exception(sprint("Invalid null value for argument to %s", *_fun));
             }
-            buffers.push_back(std::move(*val));
+            buffers.push_back(std::move(val));
         }
         return execute_internal(options.get_serialization_format(), *_fun, std::move(buffers));
     }
 
 private:
-    static bytes execute_internal(serialization_format sf, scalar_function& fun, std::vector<bytes> params) {
-        bytes result = fun.execute(sf, params);
+    static bytes_opt execute_internal(serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params) {
+        bytes_opt result = fun.execute(sf, params);
         try {
             // Check the method didn't lied on it's declared return type
-#if 0
-            if (result != null)
-#endif
-            fun.return_type()->validate(result);
+            if (result) {
+                fun.return_type()->validate(*result);
+            }
             return result;
         } catch (marshal_exception e) {
             throw runtime_exception(sprint("Return of function %s (%s) is not a valid value for its declared return type %s",
@@ -186,13 +185,12 @@ public:
     private:
         // All parameters must be terminal
         static bytes_opt execute(scalar_function& fun, std::vector<shared_ptr<term>> parameters) {
-            std::vector<bytes> buffers;
+            std::vector<bytes_opt> buffers;
             buffers.reserve(parameters.size());
             for (auto&& t : parameters) {
                 assert(dynamic_cast<terminal*>(t.get()));
-                // FIXME: converting bytes_opt to bytes.  Losing anything?
                 auto&& param = static_cast<terminal*>(t.get())->get(query_options::DEFAULT);
-                buffers.push_back(param ? std::move(*param) : bytes());
+                buffers.push_back(std::move(param));
             }
 
             return execute_internal(serialization_format::internal(), fun, buffers);

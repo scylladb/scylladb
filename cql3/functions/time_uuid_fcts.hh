@@ -39,8 +39,8 @@ inline
 shared_ptr<function>
 make_now_fct() {
     return make_native_scalar_function<false>("now", timeuuid_type, {},
-            [] (serialization_format sf, const std::vector<bytes>& values) {
-        return to_bytes(utils::UUID_gen::get_time_UUID());
+            [] (serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
+        return {to_bytes(utils::UUID_gen::get_time_UUID())};
     });
 }
 
@@ -48,20 +48,18 @@ inline
 shared_ptr<function>
 make_min_timeuuid_fct() {
     return make_native_scalar_function<true>("mintimeuuid", timeuuid_type, { timestamp_type },
-            [] (serialization_format sf, const std::vector<bytes>& values) {
-        // FIXME: should values be a vector<optional<bytes>>?
+            [] (serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
         auto& bb = values[0];
-        if (bb.empty()) {
-            // FIXME: better null representation?
-            return bytes();
+        if (!bb) {
+            return {};
         }
-        auto ts_obj = timestamp_type->compose(bb);
+        auto ts_obj = timestamp_type->compose(*bb);
         if (ts_obj.empty()) {
-            return bytes();
+            return {};
         }
         auto ts = boost::any_cast<db_clock::time_point>(ts_obj);
         auto uuid = utils::UUID_gen::min_time_UUID(ts.time_since_epoch().count());
-        return timeuuid_type->decompose(uuid);
+        return {timeuuid_type->decompose(uuid)};
     });
 }
 
@@ -69,20 +67,19 @@ inline
 shared_ptr<function>
 make_max_timeuuid_fct() {
     return make_native_scalar_function<true>("maxtimeuuid", timeuuid_type, { timestamp_type },
-            [] (serialization_format sf, const std::vector<bytes>& values) {
+            [] (serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
         // FIXME: should values be a vector<optional<bytes>>?
         auto& bb = values[0];
-        if (bb.empty()) {
-            // FIXME: better null representation?
-            return bytes();
+        if (!bb) {
+            return {};
         }
-        auto ts_obj = timestamp_type->compose(bb);
+        auto ts_obj = timestamp_type->compose(*bb);
         if (ts_obj.empty()) {
-            return bytes();
+            return {};
         }
         auto ts = boost::any_cast<db_clock::time_point>(ts_obj);
         auto uuid = utils::UUID_gen::max_time_UUID(ts.time_since_epoch().count());
-        return timeuuid_type->decompose(uuid);
+        return {timeuuid_type->decompose(uuid)};
     });
 }
 
@@ -90,14 +87,14 @@ inline
 shared_ptr<function>
 make_date_of_fct() {
     return make_native_scalar_function<true>("dateof", timestamp_type, { timeuuid_type },
-            [] (serialization_format sf, const std::vector<bytes>& values) {
+            [] (serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
         using namespace utils;
         auto& bb = values[0];
-        if (bb.empty()) {
-            return bytes();
+        if (!bb) {
+            return {};
         }
-        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(UUID_gen::get_UUID(bb))));
-        return timestamp_type->decompose(ts);
+        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb))));
+        return {timestamp_type->decompose(ts)};
     });
 }
 
@@ -105,13 +102,13 @@ inline
 shared_ptr<function>
 make_unix_timestamp_of_fcf() {
     return make_native_scalar_function<true>("unixtimestampof", long_type, { timeuuid_type },
-            [] (serialization_format sf, const std::vector<bytes>& values) {
+            [] (serialization_format sf, const std::vector<bytes_opt>& values) -> bytes_opt {
         using namespace utils;
         auto& bb = values[0];
-        if (bb.empty()) {
-            return bytes();
+        if (!bb) {
+            return {};
         }
-        return long_type->decompose(UUID_gen::unix_timestamp(UUID_gen::get_UUID(bb)));
+        return {long_type->decompose(UUID_gen::unix_timestamp(UUID_gen::get_UUID(*bb)))};
     });
 }
 
