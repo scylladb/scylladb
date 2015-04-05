@@ -591,11 +591,17 @@ qp::txq::txq(qp& dev, ring_config config)
 
 uint32_t
 qp::txq::post(circular_buffer<packet>& pb) {
+    uint64_t bytes = 0, nr_frags = 0;
+
     _packets.clear();
 
     while (!pb.empty() && pb.front().nr_frags() + 1 <= _ring.available_descriptors().current()) {
         net_hdr_mrg vhdr = {};
         auto p = std::move(pb.front());
+
+        bytes    += p.len();
+        nr_frags += p.nr_frags();
+
         pb.pop_front();
         // Handle TCP checksum offload
         auto oi = p.offload_info();
@@ -642,6 +648,9 @@ qp::txq::post(circular_buffer<packet>& pb) {
         _packets.emplace_back(packet_as_buffer_chain{ std::move(q) });
     }
     _ring.post(_packets.begin(), _packets.end());
+
+    _dev._stats.tx.good.update_frags_stats(nr_frags, bytes);
+
     return _packets.size();
 }
 
@@ -723,7 +732,12 @@ qp::rxq::complete_buffer(single_buffer&& bc, size_t len) {
             del = make_object_deleter(std::move(_buffers));
         }
         packet p(_fragments.begin(), _fragments.end(), std::move(del));
+
+        _dev._stats.rx.good.update_frags_stats(p.nr_frags(), p.len());
+
         _dev._dev->l2receive(std::move(p));
+
+
         _ring.available_descriptors().signal(_fragments.size());
     }
 }
