@@ -288,38 +288,36 @@ class dpdk_qp : public net::qp {
          * way.
          *
          * @param p packet to translate
-         * @param dev Parent dpdk_device
-         * @param fc Buffers' factory to use
+         * @param qp dpdk_qp handle
          *
          * @return the HEAD tx_buf of the cluster or nullptr in case of a
          *         failure
          */
         static tx_buf* from_packet_zc(
-            packet&& p, dpdk_device& dev, tx_buf_factory& fc) {
+            packet&& p, dpdk_qp& qp) {
 
             return from_packet(check_frag0, translate_one_frag, copy_one_frag,
                 [](packet&& _p, tx_buf& _last_seg) {
                     _last_seg.set_packet(std::move(_p));
-                }, std::move(p), dev, fc);
+                }, std::move(p), qp);
         }
 
         /**
          * Creates a tx_buf cluster representing a given packet in a "copy" way.
          *
          * @param p packet to translate
-         * @param dev Parent dpdk_device
-         * @param fc Buffers' factory to use
+         * @param qp dpdk_qp handle
          *
          * @return the HEAD tx_buf of the cluster or nullptr in case of a
          *         failure
          */
         static tx_buf* from_packet_copy(
-            packet&& p, dpdk_device& dev, tx_buf_factory& fc) {
+            packet&& p, dpdk_qp& qp) {
 
             return from_packet([](packet& _p) { return true; },
                                copy_one_frag, copy_one_frag,
                                [](packet&& _p, tx_buf& _last_seg) {},
-                               std::move(p), dev, fc);
+                               std::move(p), qp);
         }
     private:
         /**
@@ -330,8 +328,7 @@ class dpdk_qp : public net::qp {
          * @param do_one_frag Functor that handles a single frag translation
          * @param fin Functor that performs a cluster finalization
          * @param p packet to translate
-         * @param dev Parent dpdk_device object
-         * @param fc Buffers' factory to use
+         * @param qp dpdk_qp handle
          *
          * @return the HEAD tx_buf of the cluster or nullptr in case of a
          *         failure
@@ -341,7 +338,7 @@ class dpdk_qp : public net::qp {
         static tx_buf* from_packet(
             FirstFragCheck frag0_check, TrOneFunc do_one_frag,
             CopyOneFunc copy_one_frag, FinalizeFunc fin,
-            packet&& p, dpdk_device& dev, tx_buf_factory& fc) {
+            packet&& p, dpdk_qp& qp) {
 
             // Too fragmented - linearize
             if (p.nr_frags() > max_frags) {
@@ -356,10 +353,10 @@ class dpdk_qp : public net::qp {
             // copied and if yes - send it in a copy way
             //
             if (!frag0_check(p)) {
-                if (!copy_one_frag(fc, p.frag(0), head, last_seg, nsegs)) {
+                if (!copy_one_frag(qp, p.frag(0), head, last_seg, nsegs)) {
                     return nullptr;
                 }
-            } else if (!do_one_frag(fc, p.frag(0), head, last_seg, nsegs)) {
+            } else if (!do_one_frag(qp, p.frag(0), head, last_seg, nsegs)) {
                 return nullptr;
             }
 
@@ -367,7 +364,7 @@ class dpdk_qp : public net::qp {
 
             for (unsigned i = 1; i < p.nr_frags(); i++) {
                 rte_mbuf *h = nullptr, *new_last_seg = nullptr;
-                if (!do_one_frag(fc, p.frag(i), h, new_last_seg, nsegs)) {
+                if (!do_one_frag(qp, p.frag(i), h, new_last_seg, nsegs)) {
                     me(head)->recycle();
                     return nullptr;
                 }
@@ -391,7 +388,7 @@ class dpdk_qp : public net::qp {
                 rte_mbuf_l2_len(head) = sizeof(struct ether_hdr);
                 rte_mbuf_l3_len(head) = oi.ip_hdr_len;
             }
-            if (dev.hw_features().tx_csum_l4_offload) {
+            if (qp.port().hw_features().tx_csum_l4_offload) {
                 if (oi.protocol == ip_protocol_num::tcp) {
                     head->ol_flags |= PKT_TX_TCP_CKSUM;
                     // TODO: Take a VLAN header into an account here
@@ -424,7 +421,7 @@ class dpdk_qp : public net::qp {
          *
          * @param do_one_buf Functor responsible for a single rte_mbuf
          *                   handling
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param frag Fragment to copy (in)
          * @param head Head of the cluster (out)
          * @param last_seg Last segment of the cluster (out)
@@ -433,7 +430,7 @@ class dpdk_qp : public net::qp {
          * @return TRUE in case of success
          */
         template <class DoOneBufFunc>
-        static bool do_one_frag(DoOneBufFunc do_one_buf, tx_buf_factory& fc,
+        static bool do_one_frag(DoOneBufFunc do_one_buf, dpdk_qp& qp,
                                 fragment& frag, rte_mbuf*& head,
                                 rte_mbuf*& last_seg, unsigned& nsegs) {
             //
@@ -450,7 +447,7 @@ class dpdk_qp : public net::qp {
             assert(frag.size);
 
             // Create a HEAD of mbufs' cluster and set the first bytes into it
-            len = do_one_buf(fc, head, base, left_to_set);
+            len = do_one_buf(qp, head, base, left_to_set);
             if (!len) {
                 return false;
             }
@@ -465,7 +462,7 @@ class dpdk_qp : public net::qp {
             //
             rte_mbuf* prev_seg = head;
             while (left_to_set) {
-                len = do_one_buf(fc, m, base, left_to_set);
+                len = do_one_buf(qp, m, base, left_to_set);
                 if (!len) {
                     me(head)->recycle();
                     return false;
@@ -488,7 +485,7 @@ class dpdk_qp : public net::qp {
         /**
          * Zero-copy handling of a single net::fragment.
          *
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param frag Fragment to copy (in)
          * @param head Head of the cluster (out)
          * @param last_seg Last segment of the cluster (out)
@@ -496,17 +493,17 @@ class dpdk_qp : public net::qp {
          *
          * @return TRUE in case of success
          */
-        static bool translate_one_frag(tx_buf_factory& fc, fragment& frag,
+        static bool translate_one_frag(dpdk_qp& qp, fragment& frag,
                                        rte_mbuf*& head, rte_mbuf*& last_seg,
                                        unsigned& nsegs) {
-            return do_one_frag(set_one_data_buf, fc, frag, head,
+            return do_one_frag(set_one_data_buf, qp, frag, head,
                                last_seg, nsegs);
         }
 
         /**
          * Copies one net::fragment into the cluster of rte_mbuf's.
          *
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param frag Fragment to copy (in)
          * @param head Head of the cluster (out)
          * @param last_seg Last segment of the cluster (out)
@@ -517,10 +514,10 @@ class dpdk_qp : public net::qp {
          *
          * @return TRUE in case of success
          */
-        static bool copy_one_frag(tx_buf_factory& fc, fragment& frag,
+        static bool copy_one_frag(dpdk_qp& qp, fragment& frag,
                                   rte_mbuf*& head, rte_mbuf*& last_seg,
                                   unsigned& nsegs) {
-            return do_one_frag(copy_one_data_buf, fc, frag, head,
+            return do_one_frag(copy_one_data_buf, qp, frag, head,
                                last_seg, nsegs);
         }
 
@@ -528,7 +525,7 @@ class dpdk_qp : public net::qp {
          * Allocates a single rte_mbuf and sets it to point to a given data
          * buffer.
          *
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param m New allocated rte_mbuf (out)
          * @param va virtual address of a data buffer (in)
          * @param buf_len length of the data to copy (in)
@@ -536,7 +533,7 @@ class dpdk_qp : public net::qp {
          * @return The actual number of bytes that has been set in the mbuf
          */
         static size_t set_one_data_buf(
-            tx_buf_factory& fc, rte_mbuf*& m, char* va, size_t buf_len) {
+            dpdk_qp& qp, rte_mbuf*& m, char* va, size_t buf_len) {
 
             using namespace memory;
             translation tr = translate(va, buf_len);
@@ -551,10 +548,10 @@ class dpdk_qp : public net::qp {
             phys_addr_t pa = tr.addr;
 
             if (!tr.size) {
-                return copy_one_data_buf(fc, m, va, buf_len);
+                return copy_one_data_buf(qp, m, va, buf_len);
             }
 
-            tx_buf* buf = fc.get();
+            tx_buf* buf = qp.get_tx_buf();
             if (!buf) {
                 return 0;
             }
@@ -571,7 +568,7 @@ class dpdk_qp : public net::qp {
         /**
          *  Allocates a single rte_mbuf and copies a given data into it.
          *
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param m New allocated rte_mbuf (out)
          * @param data Data to copy from (in)
          * @param buf_len length of the data to copy (in)
@@ -579,9 +576,9 @@ class dpdk_qp : public net::qp {
          * @return The actual number of bytes that has been copied
          */
         static size_t copy_one_data_buf(
-            tx_buf_factory& fc, rte_mbuf*& m, char* data, size_t buf_len)
+            dpdk_qp& qp, rte_mbuf*& m, char* data, size_t buf_len)
         {
-            tx_buf* buf = fc.get();
+            tx_buf* buf = qp.get_tx_buf();
             if (!buf) {
                 return 0;
             }
@@ -593,7 +590,6 @@ class dpdk_qp : public net::qp {
             // mbuf_put()
             rte_mbuf_data_len(m) = len;
             rte_mbuf_pkt_len(m)  = len;
-
 
             rte_memcpy(rte_pktmbuf_mtod(m, void*), data, len);
 
@@ -901,17 +897,18 @@ public:
         if (HugetlbfsMemBackend) {
             // Zero-copy send
             return _send(pb, [&] (packet&& p) {
-                return tx_buf::from_packet_zc(
-                                        std::move(p), *_dev, _tx_buf_factory);
+                return tx_buf::from_packet_zc(std::move(p), *this);
             });
         } else {
             // "Copy"-send
             return _send(pb, [&](packet&& p) {
-                return tx_buf::from_packet_copy(
-                                        std::move(p), *_dev, _tx_buf_factory);
+                return tx_buf::from_packet_copy(std::move(p), *this);
             });
         }
     }
+
+    dpdk_device& port() const { return *_dev; }
+    tx_buf* get_tx_buf() { return _tx_buf_factory.get(); }
 private:
 
     template <class Func>
