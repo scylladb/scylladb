@@ -445,8 +445,8 @@ public:
         return str()[pos];
     }
 
-    operator std::experimental::string_view() const {
-        return std::experimental::string_view(str(), size());
+    operator std::experimental::basic_string_view<char_type>() const {
+        return std::experimental::basic_string_view<char_type>(str(), size());
     }
 };
 template <typename char_type, typename Size, Size max_size>
@@ -515,7 +515,7 @@ namespace std {
 template <typename char_type, typename size_type, size_type max_size>
 struct hash<basic_sstring<char_type, size_type, max_size>> {
     size_t operator()(const basic_sstring<char_type, size_type, max_size>& s) const {
-        return std::hash<std::experimental::string_view>()(s);
+        return std::hash<std::experimental::basic_string_view<char_type>>()(s);
     }
 };
 
