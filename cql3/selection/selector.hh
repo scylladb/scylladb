@@ -166,7 +166,7 @@ public:
      *
      * @return a column name
      */
-    virtual const sstring& column_name() = 0;
+    virtual sstring column_name() = 0;
 
     /**
      * Returns the type of the values returned by the selector instances created by this factory.
