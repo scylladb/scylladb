@@ -6,6 +6,7 @@
 #include "core/sstring.hh"
 #include "core/future-util.hh"
 #include "core/align.hh"
+#include "core/do_with.hh"
 #include "sstables/sstables.hh"
 #include "tests/test-utils.hh"
 #include <memory>
@@ -37,6 +38,12 @@ public:
     statistics& get_statistics() {
         return _sst->_statistics;
     }
+#define IMPORT(name) \
+        template<typename... Args> \
+        future<> name(Args&&... args) { \
+            return _sst->name(std::forward<Args>(args)...); \
+        }
+    IMPORT(data_consume_row);
 };
 }
 
@@ -308,6 +315,79 @@ SEASTAR_TEST_CASE(compressed_random_access_read) {
         return sstables::test(sstp).data_read(97, 6).then([sstp] (temporary_buffer<char> buf) {
             BOOST_REQUIRE(sstring(buf.get(), buf.size()) == "gustaf");
             return make_ready_future<>();
+        });
+    });
+}
+
+class test_row_consumer : public row_consumer {
+public:
+    const uint64_t desired_timestamp;
+    test_row_consumer(uint64_t t) : desired_timestamp(t) { }
+    int count_row_start = 0;
+    int count_cell = 0;
+    int count_row_end = 0;
+    virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
+        BOOST_REQUIRE(key == "vinna");
+        BOOST_REQUIRE(deltime.local_deletion_time == (uint32_t)std::numeric_limits<int32_t>::max());
+        BOOST_REQUIRE(deltime.marked_for_delete_at == (uint64_t)std::numeric_limits<int64_t>::min());
+        count_row_start++;
+    }
+
+    virtual void consume_cell(bytes_view col_name, bytes_view value, uint64_t timestamp) {
+        switch (count_cell) {
+        case 0:
+            // The silly "cql marker" column
+            BOOST_REQUIRE(col_name.size() == 3 && col_name[0] == 0 && col_name[1] == 0 && col_name[2] == 0);
+            BOOST_REQUIRE(value.size() == 0);
+            BOOST_REQUIRE(timestamp == desired_timestamp);
+            break;
+        case 1:
+            BOOST_REQUIRE(col_name.size() == 7 && col_name[0] == 0 &&
+                    col_name[1] == 4 && col_name[2] == 'c' &&
+                    col_name[3] == 'o' && col_name[4] == 'l' &&
+                    col_name[5] == '1' && col_name[6] == '\0');
+            BOOST_REQUIRE(value == "daughter");
+            BOOST_REQUIRE(timestamp == desired_timestamp);
+            break;
+        case 2:
+            BOOST_REQUIRE(col_name.size() == 7 && col_name[0] == 0 &&
+                    col_name[1] == 4 && col_name[2] == 'c' &&
+                    col_name[3] == 'o' && col_name[4] == 'l' &&
+                    col_name[5] == '2' && col_name[6] == '\0');
+            BOOST_REQUIRE(value.size() == 4 && value[0] == 0 &&
+                    value[1] == 0 && value[2] == 0 && value[3] == 3);
+            BOOST_REQUIRE(timestamp == desired_timestamp);
+            break;
+        }
+        count_cell++;
+    }
+    virtual void consume_row_end() override {
+        count_row_end++;
+    }
+};
+
+SEASTAR_TEST_CASE(uncompressed_row_read) {
+    return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([] (auto sstp) {
+        return do_with(test_row_consumer(1418656871665302), [sstp] (auto& c) {
+            return sstables::test(sstp).data_consume_row(0, 95, c).then([sstp, &c] {
+                BOOST_REQUIRE(c.count_row_start == 1);
+                BOOST_REQUIRE(c.count_cell == 3);
+                BOOST_REQUIRE(c.count_row_end == 1);
+                return make_ready_future<>();
+            });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(compressed_row_read) {
+    return reusable_sst("tests/urchin/sstables/compressed", 1).then([] (auto sstp) {
+        return do_with(test_row_consumer(1418654707438005), [sstp] (auto& c) {
+            return sstables::test(sstp).data_consume_row(0, 95, c).then([sstp, &c] {
+                BOOST_REQUIRE(c.count_row_start == 1);
+                BOOST_REQUIRE(c.count_cell == 3);
+                BOOST_REQUIRE(c.count_row_end == 1);
+                return make_ready_future<>();
+            });
         });
     });
 }
