@@ -116,12 +116,7 @@ public:
      * @param schema the column family schema
      * @return a column specification
      */
-    ::shared_ptr<column_specification> get_column_specification(schema_ptr schema) {
-        return ::make_shared<column_specification>(schema->ks_name,
-            schema->cf_name,
-            ::make_shared<column_identifier>(column_name(), true),
-            get_return_type());
-    }
+    ::shared_ptr<column_specification> get_column_specification(schema_ptr schema);
 
     /**
      * Creates a new <code>selector</code> instance.
