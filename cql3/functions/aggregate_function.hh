@@ -61,7 +61,7 @@ public:
          * @param protocol_version native protocol version
          * @param values the values to add to the aggregate.
          */
-        virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) = 0;
+        virtual void add_input(serialization_format sf, const std::vector<opt_bytes>& values) = 0;
 
         /**
          * Computes and returns the aggregate current value.
@@ -69,7 +69,7 @@ public:
          * @param protocol_version native protocol version
          * @return the aggregate current value.
          */
-        virtual opt_bytes compute(int protocol_version) = 0;
+        virtual opt_bytes compute(serialization_format sf) = 0;
 
         /**
          * Reset this aggregate.
