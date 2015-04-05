@@ -175,6 +175,20 @@ core = [
     'rpc/rpc.cc',
     ]
 
+http = ['http/transformers.cc',
+        'http/json_path.cc',
+        'http/file_handler.cc',
+        'http/common.cc',
+        'http/routes.cc',
+        'json/json_elements.cc',
+        'json/formatter.cc',
+        'http/matcher.cc',
+        'http/mime_types.cc',
+        'http/httpd.cc',
+        'http/reply.cc',
+        'http/request_parser.rl',
+        'http/api_docs.cc',
+        ]
 defines = []
 libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
@@ -214,7 +228,7 @@ deps = {
     'seastar.pc': [],
     'apps/seastar/seastar': ['apps/seastar/main.cc'] + core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
-    'apps/httpd/httpd': ['apps/httpd/demo.json', 'http/json_path.cc', 'http/file_handler.cc', 'http/common.cc', 'http/routes.cc', 'json/json_elements.cc', 'json/formatter.cc', 'http/matcher.cc', 'http/mime_types.cc', 'http/httpd.cc', 'http/reply.cc', 'http/request_parser.rl', 'apps/httpd/main.cc'] + libnet + core,
+    'apps/httpd/httpd': ['apps/httpd/demo.json', 'apps/httpd/main.cc'] + http + libnet + core,
     'apps/memcached/memcached': ['apps/memcached/memcache.cc'] + memcache_base,
     'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
@@ -234,7 +248,7 @@ deps = {
     'apps/seawreck/seawreck': ['apps/seawreck/seawreck.cc', 'apps/seawreck/http_response_parser.rl'] + core + libnet,
     'tests/blkdiscard_test': ['tests/blkdiscard_test.cc'] + core,
     'tests/sstring_test': ['tests/sstring_test.cc'] + core,
-    'tests/httpd': ['http/common.cc', 'http/routes.cc', 'http/json_path.cc', 'json/json_elements.cc', 'json/formatter.cc', 'http/matcher.cc', 'tests/httpd.cc', 'http/mime_types.cc', 'http/reply.cc'] + core,
+    'tests/httpd': ['tests/httpd.cc'] + http + core,
     'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc', 'core/posix.cc'],
     'tests/output_stream_test': ['tests/output_stream_test.cc'] + core + libnet,
     'tests/udp_zero_copy': ['tests/udp_zero_copy.cc'] + core + libnet,

@@ -128,8 +128,6 @@ public:
      */
     future<std::unique_ptr<reply> > handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep);
 
-private:
-
     /**
      * Search and return an exact match
      * @param url the request url
@@ -139,6 +137,8 @@ private:
         return (_map[type].find(url) == _map[type].end()) ?
                 nullptr : _map[type][url];
     }
+
+private:
 
     /**
      * Search and return a handler by the operation type and url
