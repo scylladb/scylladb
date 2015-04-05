@@ -91,3 +91,33 @@ BOOST_AUTO_TEST_CASE(test_append) {
     BOOST_REQUIRE_EQUAL(sstring("aba").append("1234", 4), "aba1234");
     BOOST_REQUIRE_EQUAL(sstring("aba").append("1234", 0), "aba");
 }
+
+BOOST_AUTO_TEST_CASE(test_replace) {
+    BOOST_REQUIRE_EQUAL(sstring("abc").replace(1,1, "xyz", 1), "axc");
+    BOOST_REQUIRE_EQUAL(sstring("abc").replace(3,2, "xyz", 2), "abcxy");
+    BOOST_REQUIRE_EQUAL(sstring("abc").replace(2,2, "xyz", 2), "abxy");
+    BOOST_REQUIRE_EQUAL(sstring("abc").replace(0,2, "", 0), "c");
+    BOOST_REQUIRE_THROW(sstring("abc").replace(4,1, "xyz", 1), std::out_of_range);
+    const char* s = "xyz";
+    sstring str("abcdef");
+    BOOST_REQUIRE_EQUAL(str.replace(str.begin() + 1 , str.begin() + 3, s + 1, s + 3), "ayzdef");
+    BOOST_REQUIRE_THROW(sstring("abc").replace(4,1, "xyz", 1), std::out_of_range);
+
+}
+
+BOOST_AUTO_TEST_CASE(test_insert) {
+    sstring str("abc");
+    const char* s = "xyz";
+    str.insert(str.begin() +1, s + 1, s + 2);
+    BOOST_REQUIRE_EQUAL(str, "aybc");
+    str = "abc";
+    BOOST_REQUIRE_THROW(str.insert(str.begin() + 5, s + 1, s + 2), std::out_of_range);
+}
+
+BOOST_AUTO_TEST_CASE(test_erase) {
+    sstring str("abcdef");
+    auto i = str.erase(str.begin() + 1, str.begin() + 3);
+    BOOST_REQUIRE_EQUAL(*i, 'd');
+    BOOST_REQUIRE_EQUAL(str, "adef");
+    BOOST_REQUIRE_THROW(str.erase(str.begin() + 5, str.begin() + 6), std::out_of_range);
+}

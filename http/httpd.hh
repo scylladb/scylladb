@@ -346,6 +346,45 @@ public:
         return tmp;
     }
 };
+
+/*
+ * A helper class to start, set and listen an http server
+ * typical use would be:
+ *
+ * auto server = new http_server_control();
+ *                 server->start().then([server] {
+ *                 server->set_routes(set_routes);
+ *              }).then([server, port] {
+ *                  server->listen(port);
+ *              }).then([port] {
+ *                  std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
+ *              });
+ */
+class http_server_control {
+    distributed<http_server>* _server_dist;
+public:
+    http_server_control() : _server_dist(new distributed<http_server>) {
+    }
+
+    future<> start() {
+        return _server_dist->start();
+    }
+
+    future<> set_routes(std::function<void(routes& r)> fun) {
+        return _server_dist->invoke_on_all([fun](http_server& server) {
+            fun(server._routes);
+        });
+    }
+
+    future<> listen(uint16_t port) {
+        return _server_dist->invoke_on_all(&http_server::listen, ipv4_addr {port});
+    }
+
+    distributed<http_server>& server() {
+        return *_server_dist;
+    }
+};
+
 }
 
 #endif /* APPS_HTTPD_HTTPD_HH_ */

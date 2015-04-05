@@ -247,6 +247,82 @@ public:
     }
 
     /**
+     *  Replace characters with a value of a C style substring.
+     *
+     */
+    basic_sstring& replace(size_type pos, size_type n1, const char_type* s,
+             size_type n2) {
+        if (pos > size()) {
+            throw std::out_of_range("sstring::replace out of range");
+        }
+
+        if (pos + n1 > size()) {
+            n1 = size() - pos;
+        }
+
+        if (n1 == n2) {
+            if (n2) {
+                std::copy(s, s + n2, begin() + pos);
+            }
+            return *this;
+        }
+        basic_sstring ret(initialized_later(), size() + n2 - n1);
+        char_type* p= ret.begin();
+        std::copy(begin(), begin() + pos, p);
+        p += pos;
+        if (n2) {
+            std::copy(s, s + n2, p);
+        }
+        p += n2;
+        std::copy(begin() + pos + n1, end(), p);
+        *this = ret;
+        return *this;
+    }
+
+    template <class InputIterator>
+    basic_sstring& replace (const_iterator _i1, const_iterator _i2,
+            InputIterator first, InputIterator last) {
+        char_type* i1 = begin() + (_i1 - begin());
+        char_type* i2 = begin() + (_i2 - begin());
+        if (i1 < begin() || i1 > end() || i2 < begin()) {
+            throw std::out_of_range("sstring::replace out of range");
+        }
+        if (i2 > end()) {
+            i2 = end();
+        }
+
+        if (i2 - i1 == last - first) {
+            std::copy(first, last, i1);
+            return *this;
+        }
+        basic_sstring ret(initialized_later(), size() + (last - first) - (i2 - i1));
+        char_type* p = ret.begin();
+        std::copy(begin(), i1, p);
+        p += i1 - begin();
+        for (InputIterator i = first; i != last; i++, p++) {
+            *p = *i;
+        }
+        std::copy(i2, end(), p);
+        *this = ret;
+        return *this;
+    }
+
+    iterator erase(iterator first, iterator last) {
+        size_t pos = first - begin();
+        replace(pos, last - first, nullptr, 0);
+        return begin() + pos;
+    }
+
+    /**
+     * Inserts additional characters into the string right before
+     * the character indicated by p.
+     */
+    template <class InputIterator>
+    void insert(const_iterator p, InputIterator beg, InputIterator end) {
+        replace(p, p, beg, end);
+    }
+
+    /**
      *  Returns a read/write reference to the data at the last
      *  element of the string.
      *  This function shall not be called on empty strings.
@@ -369,8 +445,8 @@ public:
         return str()[pos];
     }
 
-    operator std::experimental::string_view() const {
-        return std::experimental::string_view(str(), size());
+    operator std::experimental::basic_string_view<char_type>() const {
+        return std::experimental::basic_string_view<char_type>(str(), size());
     }
 };
 template <typename char_type, typename Size, Size max_size>
@@ -439,7 +515,7 @@ namespace std {
 template <typename char_type, typename size_type, size_type max_size>
 struct hash<basic_sstring<char_type, size_type, max_size>> {
     size_t operator()(const basic_sstring<char_type, size_type, max_size>& s) const {
-        return std::hash<std::experimental::string_view>()(s);
+        return std::hash<std::experimental::basic_string_view<char_type>>()(s);
     }
 };
 

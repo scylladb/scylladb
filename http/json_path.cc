@@ -47,6 +47,9 @@ void path_description::set(routes& _routes,
     set(_routes, new function_handler(f));
 }
 
+void path_description::set(routes& _routes, const future_json_function& f) const {
+    set(_routes, new function_handler(f));
+}
 path_description::path_description(const sstring& path, operation_type method,
         const sstring& nickname,
         const std::vector<std::pair<sstring, bool>>& path_parameters,
