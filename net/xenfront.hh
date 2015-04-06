@@ -125,7 +125,7 @@ public:
 
     entries entries;
 
-    future<> process_ring(std::function<bool (gntref &entry, T& el)> func, grant_head *refs);
+    void process_ring(std::function<bool (gntref &entry, T& el)> func, grant_head *refs);
 
     void dump() {
         _sring->dump();

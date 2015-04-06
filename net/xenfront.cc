@@ -212,7 +212,7 @@ unsigned front_ring<T>::entries::get_index() {
 }
 
 template <typename T>
-future<> front_ring<T>::process_ring(std::function<bool (gntref &entry, T& el)> func, grant_head *refs)
+void front_ring<T>::process_ring(std::function<bool (gntref &entry, T& el)> func, grant_head *refs)
 {
     auto prod = _sring->rsp_prod;
     rmb();
@@ -240,20 +240,22 @@ future<> front_ring<T>::process_ring(std::function<bool (gntref &entry, T& el)> 
     }
     rsp_cons = prod;
     _sring->rsp_event = prod + 1;
-
-    return make_ready_future<>();
 }
 
 future<> xenfront_qp::queue_rx_packet()
 {
     uint64_t bunch;
-    return _rx_ring.process_ring([this, &bunch] (gntref &entry, rx &rx) mutable {
+
+    _rx_ring.process_ring([this, &bunch] (gntref &entry, rx &rx) mutable {
         packet p(static_cast<char *>(entry.page) + rx.rsp.offset, rx.rsp.status);
         _dev->l2receive(std::move(p));
         bunch++;
         return true;
     }, _rx_refs);
+
     _stats.rx.good.update_pkts_bunch(bunch);
+
+    return make_ready_future<>();
 }
 
 void xenfront_qp::alloc_one_rx_reference(unsigned index) {
@@ -283,7 +285,7 @@ future<> xenfront_qp::alloc_rx_references() {
 
 future<> xenfront_qp::handle_tx_completions() {
 
-    return _tx_ring.process_ring([this] (gntref &entry, tx &tx) {
+    _tx_ring.process_ring([this] (gntref &entry, tx &tx) {
         if (tx.rsp.status == 1) {
             return false;
         }
@@ -295,6 +297,8 @@ future<> xenfront_qp::handle_tx_completions() {
 
         return true;
     }, _tx_refs);
+
+    return make_ready_future<>();
 }
 
 port xenfront_qp::bind_tx_evtchn(bool split) {
