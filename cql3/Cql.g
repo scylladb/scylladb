@@ -64,36 +64,6 @@ using conditions_type = std::vector<std::pair<::shared_ptr<cql3::column_identifi
 using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>;
 }
 
-@header {
-#if 0
-    package org.apache.cassandra.cql3;
-
-    import java.util.ArrayList;
-    import java.util.Arrays;
-    import java.util.Collections;
-    import java.util.EnumSet;
-    import java.util.HashSet;
-    import java.util.HashMap;
-    import java.util.LinkedHashMap;
-    import java.util.List;
-    import java.util.Map;
-    import java.util.Set;
-
-    import org.apache.cassandra.auth.Permission;
-    import org.apache.cassandra.auth.DataResource;
-    import org.apache.cassandra.auth.IResource;
-    import org.apache.cassandra.cql3.*;
-    import org.apache.cassandra.cql3.statements.*;
-    import org.apache.cassandra.cql3.selection.*;
-    import org.apache.cassandra.cql3.functions.*;
-    import org.apache.cassandra.db.marshal.CollectionType;
-    import org.apache.cassandra.exceptions.ConfigurationException;
-    import org.apache.cassandra.exceptions.InvalidRequestException;
-    import org.apache.cassandra.exceptions.SyntaxException;
-    import org.apache.cassandra.utils.Pair;
-#endif
-}
-
 @context {
     using listener_type = cql3::error_listener<RecognizerType>;
     listener_type* listener;
@@ -220,32 +190,9 @@ using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifi
 @lexer::header {
 #pragma GCC diagnostic ignored "-Wunused-variable"
 #pragma GCC diagnostic ignored "-Wunused-function"
-#if 0
-    package org.apache.cassandra.cql3;
-
-    import org.apache.cassandra.exceptions.SyntaxException;
-#endif
 }
 
 @lexer::context {
-#if 0
-    List<Token> tokens = new ArrayList<Token>();
-
-    public void emit(Token token)
-    {
-        state.token = token;
-        tokens.add(token);
-    }
-
-    public Token nextToken()
-    {
-        super.nextToken();
-        if (tokens.size() == 0)
-            return new CommonToken(Token.EOF);
-        return tokens.remove(0);
-    }
-#endif
-
     using listener_type = cql3::error_listener<RecognizerType>;
 
     listener_type* listener;
