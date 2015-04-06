@@ -116,12 +116,7 @@ public:
      * @param schema the column family schema
      * @return a column specification
      */
-    ::shared_ptr<column_specification> get_column_specification(schema_ptr schema) {
-        return ::make_shared<column_specification>(schema->ks_name,
-            schema->cf_name,
-            ::make_shared<column_identifier>(column_name(), true),
-            get_return_type());
-    }
+    ::shared_ptr<column_specification> get_column_specification(schema_ptr schema);
 
     /**
      * Creates a new <code>selector</code> instance.
@@ -166,7 +161,7 @@ public:
      *
      * @return a column name
      */
-    virtual const sstring& column_name() = 0;
+    virtual sstring column_name() = 0;
 
     /**
      * Returns the type of the values returned by the selector instances created by this factory.

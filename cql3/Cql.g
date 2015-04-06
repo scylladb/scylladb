@@ -364,8 +364,8 @@ unaliasedSelector returns [shared_ptr<selectable::raw> s]
 #if 0
        | K_WRITETIME '(' c=cident ')'              { tmp = new Selectable.WritetimeOrTTL.Raw(c, true); }
        | K_TTL       '(' c=cident ')'              { tmp = new Selectable.WritetimeOrTTL.Raw(c, false); }
-       | f=functionName args=selectionFunctionArgs { tmp = new Selectable.WithFunction.Raw(f, args); }
 #endif
+       | f=functionName args=selectionFunctionArgs { tmp = ::make_shared<selectable::with_function::raw>(std::move(f), std::move(args)); }
        )
 #if 0
        ( '.' fi=cident { tmp = new Selectable.WithFieldSelection.Raw(tmp, fi); } )*
@@ -373,14 +373,14 @@ unaliasedSelector returns [shared_ptr<selectable::raw> s]
     { $s = tmp; }
     ;
 
-#if 0
-selectionFunctionArgs returns [List<Selectable.Raw> a]
-    : '(' ')' { $a = Collections.emptyList(); }
-    | '(' s1=unaliasedSelector { List<Selectable.Raw> args = new ArrayList<Selectable.Raw>(); args.add(s1); }
-          ( ',' sn=unaliasedSelector { args.add(sn); } )*
-      ')' { $a = args; }
+selectionFunctionArgs returns [std::vector<shared_ptr<selectable::raw>> a]
+    : '(' ')'
+    | '(' s1=unaliasedSelector { a.push_back(std::move(s1)); }
+          ( ',' sn=unaliasedSelector { a.push_back(std::move(sn)); } )*
+      ')'
     ;
 
+#if 0
 selectCountClause returns [List<RawSelector> expr]
     @init{ ColumnIdentifier alias = new ColumnIdentifier("count", false); }
     : K_COUNT '(' countArgument ')' (K_AS c=ident { alias = c; })? { $expr = new ArrayList<RawSelector>(); $expr.add( new RawSelector(new Selectable.WithFunction.Raw(FunctionName.nativeFunction("countRows"), Collections.<Selectable.Raw>emptyList()), alias));}

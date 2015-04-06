@@ -43,7 +43,7 @@ public:
         , _type(type)
     { }
 
-    virtual const sstring& column_name() override {
+    virtual sstring column_name() override {
         return _column_name;
     }
 

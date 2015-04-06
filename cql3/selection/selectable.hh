@@ -29,6 +29,7 @@
 #include "schema.hh"
 #include "core/shared_ptr.hh"
 #include "cql3/selection/selector.hh"
+#include "cql3/functions/function_name.hh"
 
 namespace cql3 {
 
@@ -134,71 +135,11 @@ public:
             }
         }
     }
+#endif
 
-    public static class WithFunction extends Selectable
-    {
-        public final FunctionName functionName;
-        public final List<Selectable> args;
+    class with_function;
 
-        public WithFunction(FunctionName functionName, List<Selectable> args)
-        {
-            this.functionName = functionName;
-            this.args = args;
-        }
-
-        @Override
-        public String toString()
-        {
-            return new StrBuilder().append(functionName)
-                                   .append("(")
-                                   .appendWithSeparators(args, ", ")
-                                   .append(")")
-                                   .toString();
-        }
-
-        public Selector.Factory newSelectorFactory(CFMetaData cfm,
-                                                   List<ColumnDefinition> defs) throws InvalidRequestException
-        {
-            SelectorFactories factories  =
-                    SelectorFactories.createFactoriesAndCollectColumnDefinitions(args, cfm, defs);
-
-            // resolve built-in functions before user defined functions
-            Function fun = Functions.get(cfm.ksName, functionName, factories.newInstances(), cfm.ksName, cfm.cfName);
-            if (fun == null)
-                throw new InvalidRequestException(String.format("Unknown function '%s'", functionName));
-            if (fun.returnType() == null)
-                throw new InvalidRequestException(String.format("Unknown function %s called in selection clause",
-                                                                functionName));
-
-            return AbstractFunctionSelector.newFactory(fun, factories);
-        }
-
-        public static class Raw implements Selectable.Raw
-        {
-            private final FunctionName functionName;
-            private final List<Selectable.Raw> args;
-
-            public Raw(FunctionName functionName, List<Selectable.Raw> args)
-            {
-                this.functionName = functionName;
-                this.args = args;
-            }
-
-            public WithFunction prepare(CFMetaData cfm)
-            {
-                List<Selectable> preparedArgs = new ArrayList<>(args.size());
-                for (Selectable.Raw arg : args)
-                    preparedArgs.add(arg.prepare(cfm));
-                return new WithFunction(functionName, preparedArgs);
-            }
-
-            public boolean processesSelection()
-            {
-                return true;
-            }
-        }
-    }
-
+#if 0
     public static class WithFieldSelection extends Selectable
     {
         public final Selectable selected;
@@ -263,6 +204,39 @@ public:
         }
     }
 #endif
+};
+
+class selectable::with_function : public selectable {
+    functions::function_name _function_name;
+    std::vector<shared_ptr<selectable>> _args;
+public:
+    with_function(functions::function_name fname, std::vector<shared_ptr<selectable>> args)
+        : _function_name(std::move(fname)), _args(std::move(args)) {
+    }
+
+#if 0
+    @Override
+    public String toString()
+    {
+        return new StrBuilder().append(functionName)
+                               .append("(")
+                               .appendWithSeparators(args, ", ")
+                               .append(")")
+                               .toString();
+    }
+#endif
+
+    virtual shared_ptr<selector::factory> new_selector_factory(schema_ptr s, std::vector<const column_definition*>& defs) override;
+    class raw : public selectable::raw {
+        functions::function_name _function_name;
+        std::vector<shared_ptr<selectable::raw>> _args;
+    public:
+        raw(functions::function_name function_name, std::vector<shared_ptr<selectable::raw>> args)
+                : _function_name(std::move(function_name)), _args(std::move(args)) {
+        }
+        virtual shared_ptr<selectable> prepare(schema_ptr s) override;
+        virtual bool processes_selection() const override;
+    };
 };
 
 }
