@@ -591,6 +591,8 @@ class dpdk_qp : public net::qp {
             rte_mbuf_data_len(m) = len;
             rte_mbuf_pkt_len(m)  = len;
 
+            qp._stats.tx.good.update_copy_stats(1, len);
+
             rte_memcpy(rte_pktmbuf_mtod(m, void*), data, len);
 
             return len;
@@ -931,9 +933,16 @@ private:
                                          _tx_burst.data() + _tx_burst_idx,
                                          _tx_burst.size() - _tx_burst_idx);
 
+        uint64_t nr_frags = 0, bytes = 0;
+
         for (int i = 0; i < sent; i++) {
+            rte_mbuf* m = _tx_burst[_tx_burst_idx + i];
+            bytes    += rte_mbuf_pkt_len(m);
+            nr_frags += rte_mbuf_nb_segs(m);
             pb.pop_front();
         }
+
+        _stats.tx.good.update_frags_stats(nr_frags, bytes);
 
         _tx_burst_idx += sent;
 
@@ -1600,10 +1609,14 @@ template <bool HugetlbfsMemBackend>
 void dpdk_qp<HugetlbfsMemBackend>::process_packets(
     struct rte_mbuf **bufs, uint16_t count)
 {
-    _stats.rx.good.update_pkts_bunch(count);
+    uint64_t nr_frags = 0, bytes = 0;
+
     for (uint16_t i = 0; i < count; i++) {
         struct rte_mbuf *m = bufs[i];
         offload_info oi;
+
+        nr_frags += rte_mbuf_nb_segs(m);
+        bytes    += rte_mbuf_pkt_len(m);
 
         packet p = from_mbuf(m);
 
@@ -1617,6 +1630,7 @@ void dpdk_qp<HugetlbfsMemBackend>::process_packets(
         if (_dev->hw_features().rx_csum_offload) {
             if (m->ol_flags & (PKT_RX_IP_CKSUM_BAD | PKT_RX_L4_CKSUM_BAD)) {
                 // Packet with bad checksum, just drop it.
+                _stats.rx.bad.inc_csum_err();
                 continue;
             }
             // Note that when _hw_features.rx_csum_offload is on, the receive
@@ -1630,6 +1644,14 @@ void dpdk_qp<HugetlbfsMemBackend>::process_packets(
         }
 
         _dev->l2receive(std::move(p));
+    }
+
+    _stats.rx.good.update_pkts_bunch(count);
+    _stats.rx.good.update_frags_stats(nr_frags, bytes);
+
+    if (!HugetlbfsMemBackend) {
+        _stats.rx.good.copy_frags = _stats.rx.good.nr_frags;
+        _stats.rx.good.copy_bytes = _stats.rx.good.bytes;
     }
 }
 
