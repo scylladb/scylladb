@@ -1564,7 +1564,7 @@ reactor_backend_osv::make_reactor_notifier() {
 reactor_backend_osv::reactor_backend_osv() {
 }
 
-void
+bool
 reactor_backend_osv::wait_and_process() {
     _poller.process();
     // osv::poller::process runs pollable's callbacks, but does not currently
@@ -1574,6 +1574,7 @@ reactor_backend_osv::wait_and_process() {
         _timer_promise.set_value();
         _timer_promise = promise<>();
     }
+    return true;
 }
 
 future<>

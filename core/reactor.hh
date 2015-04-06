@@ -585,12 +585,13 @@ private:
 public:
     reactor_backend_osv();
     virtual ~reactor_backend_osv() override { }
-    virtual void wait_and_process() override;
+    virtual bool wait_and_process() override;
     virtual future<> readable(pollable_fd_state& fd) override;
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
     virtual future<> notified(reactor_notifier *n) override;
     virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
+    void enable_timer(clock_type::time_point when);
     friend class reactor_notifier_osv;
 };
 #endif /* HAVE_OSV */
