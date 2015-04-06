@@ -222,7 +222,7 @@ private:
     std::unique_ptr<result_set> _result_set;
     std::unique_ptr<selectors> _selectors;
 public:
-    std::vector<bytes_opt> current;
+    std::experimental::optional<std::vector<bytes_opt>> current;
 private:
     std::vector<api::timestamp_type> _timestamps;
     std::vector<int32_t> _ttls;
@@ -232,50 +232,55 @@ public:
     result_set_builder(selection& s, db_clock::time_point now, serialization_format sf);
 
     void add_empty() {
-        current.emplace_back();
+        current->emplace_back();
     }
 
     void add(bytes_opt value) {
-        current.emplace_back(std::move(value));
+        current->emplace_back(std::move(value));
     }
 
     void add(const column_definition& def, atomic_cell_view c) {
-        current.emplace_back(get_value(def.type, c));
+        current->emplace_back(get_value(def.type, c));
         if (!_timestamps.empty()) {
-            _timestamps[current.size() - 1] = c.is_dead() ? api::min_timestamp : c.timestamp();
+            _timestamps[current->size() - 1] = c.is_dead() ? api::min_timestamp : c.timestamp();
         }
         if (!_ttls.empty()) {
             gc_clock::duration ttl(-1);
             if (c.is_live_and_has_ttl()) {
                 ttl = *c.ttl() - to_gc_clock(_now);
             }
-            _ttls[current.size() - 1] = ttl.count();
+            _ttls[current->size() - 1] = ttl.count();
         }
     }
 
     void add(const column_definition& def, collection_mutation::view c) {
         auto&& ctype = static_cast<collection_type_impl*>(def.type.get());
-        current.emplace_back(ctype->to_value(c, _serialization_format));
+        current->emplace_back(ctype->to_value(c, _serialization_format));
         // timestamps, ttls meaningless for collections
     }
 
     void new_row() {
-        if (!current.empty()) {
+        if (current) {
             _selectors->add_input_row(_serialization_format, *this);
             if (!_selectors->is_aggregate()) {
                 _result_set->add_row(_selectors->get_output_row(_serialization_format));
                 _selectors->reset();
             }
-            current.clear();
+            current->clear();
+        } else {
+            // FIXME: we use optional<> here because we don't have an end_row() signal
+            //        instead, !current means that new_row has never been called, so this
+            //        call to new_row() does not end a previous row.
+            current.emplace();
         }
     }
 
     std::unique_ptr<result_set> build() {
-        if (!current.empty()) {
+        if (current) {
             _selectors->add_input_row(_serialization_format, *this);
             _result_set->add_row(_selectors->get_output_row(_serialization_format));
             _selectors->reset();
-            current.clear();
+            current = std::experimental::nullopt;
         }
         if (_result_set->empty() && _selectors->is_aggregate()) {
             _result_set->add_row(_selectors->get_output_row(_serialization_format));
