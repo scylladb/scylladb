@@ -242,7 +242,7 @@ public:
         basic_sstring ret(initialized_later(), size() + n);
         std::copy(begin(), end(), ret.begin());
         std::copy(s, s + n, ret.begin() + size());
-        *this = ret;
+        *this = std::move(ret);
         return *this;
     }
 
@@ -256,7 +256,7 @@ public:
             throw std::out_of_range("sstring::replace out of range");
         }
 
-        if (pos + n1 > size()) {
+        if (n1 > size() - pos) {
             n1 = size() - pos;
         }
 
@@ -275,15 +275,13 @@ public:
         }
         p += n2;
         std::copy(begin() + pos + n1, end(), p);
-        *this = ret;
+        *this = std::move(ret);
         return *this;
     }
 
     template <class InputIterator>
-    basic_sstring& replace (const_iterator _i1, const_iterator _i2,
+    basic_sstring& replace (const_iterator i1, const_iterator i2,
             InputIterator first, InputIterator last) {
-        char_type* i1 = begin() + (_i1 - begin());
-        char_type* i2 = begin() + (_i2 - begin());
         if (i1 < begin() || i1 > end() || i2 < begin()) {
             throw std::out_of_range("sstring::replace out of range");
         }
@@ -292,18 +290,16 @@ public:
         }
 
         if (i2 - i1 == last - first) {
-            std::copy(first, last, i1);
+            //in place replacement
+            std::copy(first, last, const_cast<char_type*>(i1));
             return *this;
         }
         basic_sstring ret(initialized_later(), size() + (last - first) - (i2 - i1));
         char_type* p = ret.begin();
-        std::copy(begin(), i1, p);
-        p += i1 - begin();
-        for (InputIterator i = first; i != last; i++, p++) {
-            *p = *i;
-        }
-        std::copy(i2, end(), p);
-        *this = ret;
+        p = std::copy(cbegin(), i1, p);
+        p = std::copy(first, last, p);
+        std::copy(i2, cend(), p);
+        *this = std::move(ret);
         return *this;
     }
 
@@ -418,6 +414,8 @@ public:
     }
     const char_type* begin() const { return str(); }
     const char_type* end() const { return str() + size(); }
+    const char_type* cbegin() const { return str(); }
+    const char_type* cend() const { return str() + size(); }
     char_type* begin() { return str(); }
     char_type* end() { return str() + size(); }
     bool operator==(const basic_sstring& x) const {
