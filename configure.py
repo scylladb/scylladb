@@ -20,6 +20,19 @@ import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile, re
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
 
+def get_flags():
+    with open('/proc/cpuinfo') as f:
+        for line in f:
+            if line.strip():
+                if line.rstrip('\n').startswith('flags'):
+                    return re.sub(r'^flags\s+: ', '', line).split()
+
+def has_avx():
+    return 'avx' in get_flags()
+
+def has_avx2():
+    return 'avx2' in get_flags()
+
 def add_tristate(arg_parser, name, dest, help):
     arg_parser.add_argument('--enable-' + name, dest = dest, action = 'store_true', default = None,
                             help = 'Enable ' + help)
@@ -404,7 +417,9 @@ if args.with_osv:
 if args.dpdk_target:
     args.user_cflags = (args.user_cflags +
         ' -DHAVE_DPDK -I' +
-        args.dpdk_target + '/include -Wno-error=literal-suffix -Wno-literal-suffix -Wno-invalid-offsetof')
+        args.dpdk_target + '/include -Wno-error=literal-suffix -Wno-literal-suffix -Wno-invalid-offsetof -m64' +
+        ' -mavx' if has_avx() else '' +
+        ' -mavx2' if has_avx2() else '')
     libs += (' -L' + args.dpdk_target + '/lib ' +
         '-lintel_dpdk -lrt -lm -ldl')
 
