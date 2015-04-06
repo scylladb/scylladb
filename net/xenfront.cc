@@ -244,7 +244,7 @@ void front_ring<T>::process_ring(std::function<bool (gntref &entry, T& el)> func
 
 future<> xenfront_qp::queue_rx_packet()
 {
-    uint64_t bunch;
+    uint64_t bunch = 0;
 
     _rx_ring.process_ring([this, &bunch] (gntref &entry, rx &rx) mutable {
         packet p(static_cast<char *>(entry.page) + rx.rsp.offset, rx.rsp.status);
