@@ -154,6 +154,9 @@ public:
               _pos(pos)
             {}
     virtual future<temporary_buffer<char>> get() override {
+        if (_pos >= _compression_metadata->data_len) {
+            return make_ready_future<temporary_buffer<char>>();
+        }
         auto addr = _compression_metadata->locate(_pos);
         return read_exactly(_file, addr.chunk_start, addr.chunk_len).
             then([this, addr](temporary_buffer<char> buf) {
@@ -182,6 +185,7 @@ public:
                         out.get_write(), out.size());
                 out.trim(len);
                 out.trim_front(addr.offset);
+                _pos += out.size();
                 return out;
         });
     }
