@@ -279,9 +279,7 @@ selectStatement returns [shared_ptr<select_statement::raw_statement> expr]
     }
     : K_SELECT ( ( K_DISTINCT { is_distinct = true; } )?
                  sclause=selectClause
-#if 0
                | sclause=selectCountClause
-#endif
                )
       K_FROM cf=columnFamilyName
       ( K_WHERE wclause=whereClause )?
@@ -327,17 +325,22 @@ selectionFunctionArgs returns [std::vector<shared_ptr<selectable::raw>> a]
       ')'
     ;
 
-#if 0
-selectCountClause returns [List<RawSelector> expr]
-    @init{ ColumnIdentifier alias = new ColumnIdentifier("count", false); }
-    : K_COUNT '(' countArgument ')' (K_AS c=ident { alias = c; })? { $expr = new ArrayList<RawSelector>(); $expr.add( new RawSelector(new Selectable.WithFunction.Raw(FunctionName.nativeFunction("countRows"), Collections.<Selectable.Raw>emptyList()), alias));}
+selectCountClause returns [std::vector<shared_ptr<raw_selector>> expr]
+    @init{ auto alias = make_shared<cql3::column_identifier>("count", false); }
+    : K_COUNT '(' countArgument ')' (K_AS c=ident { alias = c; })? {
+        auto&& with_fn = ::make_shared<cql3::selection::selectable::with_function::raw>(
+     	    cql3::functions::function_name::native_function("countRows"),
+     	        std::vector<shared_ptr<cql3::selection::selectable::raw>>()); 
+     	$expr.push_back(make_shared<cql3::selection::raw_selector>(with_fn, alias));
+     }
     ;
 
 countArgument
-    : '\*'
-    | i=INTEGER { if (!i.getText().equals("1")) addRecognitionError("Only COUNT(1) is supported, got COUNT(" + i.getText() + ")");}
+    : '*'
+    | i=INTEGER { if (i->getText() != "1") {
+                    add_recognition_error("Only COUNT(1) is supported, got COUNT(" + i->getText() + ")");
+                } }
     ;
-#endif
 
 whereClause returns [std::vector<cql3::relation_ptr> clause]
     : relation[$clause] (K_AND relation[$clause])*
