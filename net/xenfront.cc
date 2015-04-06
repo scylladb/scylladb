@@ -253,7 +253,7 @@ future<> xenfront_qp::queue_rx_packet()
         bunch++;
         return true;
     }, _rx_refs);
-    update_rx_count(bunch);
+    _stats.rx.good.update_pkts_bunch(bunch);
 }
 
 void xenfront_qp::alloc_one_rx_reference(unsigned index) {
@@ -310,7 +310,7 @@ port xenfront_qp::bind_rx_evtchn(bool split) {
 }
 
 xenfront_qp::xenfront_qp(xenfront_device* dev, boost::program_options::variables_map opts)
-    : _dev(dev)
+    : qp(true), _dev(dev)
     , _otherend(_dev->_xenstore->read<int>(path("backend-id")))
     , _backend(_dev->_xenstore->read(path("backend")))
     , _gntalloc(gntalloc::instance(_dev->_userspace, _otherend))

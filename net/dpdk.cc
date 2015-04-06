@@ -1405,7 +1405,7 @@ void dpdk_device::check_port_link_status()
 
 template <bool HugetlbfsMemBackend>
 dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid)
-     : _dev(dev), _qid(qid),
+     : qp(true, "network", qid), _dev(dev), _qid(qid),
        _rx_gc_poller([&] { return rx_gc(); }),
        _tx_buf_factory(qid),
        _tx_gc_poller([&] { return _tx_buf_factory.gc(); })
@@ -1603,7 +1603,7 @@ template <bool HugetlbfsMemBackend>
 void dpdk_qp<HugetlbfsMemBackend>::process_packets(
     struct rte_mbuf **bufs, uint16_t count)
 {
-    update_rx_count(count);
+    _stats.rx.good.update_pkts_bunch(count);
     for (uint16_t i = 0; i < count; i++) {
         struct rte_mbuf *m = bufs[i];
         offload_info oi;

@@ -556,7 +556,7 @@ protected:
             _ring.wake_notifier_wait();
         }
         void update_rx_count(uint64_t c) {
-            _dev.update_rx_count(c);
+            _dev._stats.rx.good.update_pkts_bunch(c);
         }
     private:
         future<> prepare_buffers();
