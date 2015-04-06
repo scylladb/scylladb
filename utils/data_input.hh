@@ -55,7 +55,7 @@ private:
 template<> inline sstring data_input::peek<sstring>() const {
     auto len = peek<uint16_t>();
     ensure(sizeof(uint16_t) + len);
-    return sstring(_view.data() + sizeof(uint16_t), len);
+    return sstring(reinterpret_cast<const char*>(_view.data()) + sizeof(uint16_t), len);
 }
 template<> inline size_t data_input::ssize<sstring>(const sstring & s) const {
     return sizeof(uint16_t) + s.size();

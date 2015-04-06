@@ -465,7 +465,7 @@ future<> parse(random_access_reader& in, summary& s) {
                     check_buf_size(buf, entrysize);
 
                     auto keysize = entrysize - 8;
-                    entry.key = bytes(buf.get(), keysize);
+                    entry.key = bytes(reinterpret_cast<const int8_t*>(buf.get()), keysize);
                     buf.trim_front(keysize);
                     read_integer(buf, entry.position);
 
@@ -844,7 +844,7 @@ bytes_view consume_bytes(uint32_t len, const char*& p, const char *end, const ch
     if (p + len > end) {
         throw malformed_sstable_exception("cannot read " + sstring(why));
     }
-    bytes_view ret(p, len);
+    bytes_view ret(reinterpret_cast<const int8_t*>(p), len);
     p += len;
     return ret;
 }

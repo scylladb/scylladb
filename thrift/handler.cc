@@ -77,6 +77,10 @@ void complete(future<foreign_ptr<lw_shared_ptr<T>>>& fut,
     }
 }
 
+std::string bytes_to_string(bytes_view v) {
+    return { reinterpret_cast<const char*>(v.begin()), v.size() };
+}
+
 class CassandraAsyncHandler : public CassandraCobSvIf {
     distributed<database>& _db;
     sstring _ks_name;
@@ -146,8 +150,8 @@ public:
                         if (def.is_atomic()) {
                             if (cell.is_live()) { // FIXME: we should actually use tombstone information from all levels
                                 Column col;
-                                col.__set_name(def.name());
-                                col.__set_value(std::string(cell.value()));
+                                col.__set_name(bytes_to_string(def.name()));
+                                col.__set_value(bytes_to_string(cell.value()));
                                 col.__set_timestamp(cell.timestamp());
                                 // FIXME: set ttl
                                 ColumnOrSuperColumn v;

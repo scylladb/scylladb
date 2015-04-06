@@ -29,11 +29,11 @@ public:
             : data_output(p, p + n) {
     }
     data_output(bytes& b)
-            : data_output(b.begin(), b.end()) {
+            : data_output(reinterpret_cast<char*>(b.begin()), b.size()) {
     }
     data_output(bytes& b, size_t off, size_t n = bytes::npos)
-            : data_output(b.begin() + off,
-                    b.begin() + off + std::min(b.size() - off, n)) {
+            : data_output(reinterpret_cast<char*>(b.begin()) + off,
+                    reinterpret_cast<char*>(b.begin()) + off + std::min(b.size() - off, n)) {
         if (off > b.size()) {
             throw std::out_of_range("Offset out of range");
         }

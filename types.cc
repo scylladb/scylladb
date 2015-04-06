@@ -141,7 +141,7 @@ struct string_type_impl : public abstract_type {
     }
     virtual boost::any deserialize(bytes_view v) override {
         // FIXME: validation?
-        return boost::any(sstring(v.begin(), v.end()));
+        return boost::any(sstring(reinterpret_cast<const char*>(v.begin()), v.size()));
     }
     virtual bool less(bytes_view v1, bytes_view v2) override {
         return less_unsigned(v1, v2);
@@ -156,10 +156,10 @@ struct string_type_impl : public abstract_type {
         return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) override {
-        return to_bytes(s);
+        return to_bytes(bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size()));
     }
     virtual sstring to_string(const bytes& b) override {
-        return sstring(b);
+        return sstring(reinterpret_cast<const char*>(b.begin()), b.size());
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
         return _cql3_type();
@@ -450,6 +450,14 @@ std::ostream& operator<<(std::ostream& os, const bytes_opt& b) {
         return os << *b;
     }
     return os << "null";
+}
+
+namespace std {
+
+std::ostream& operator<<(std::ostream& os, const bytes_view& b) {
+    return os << to_hex(b);
+}
+
 }
 
 struct inet_addr_type_impl : abstract_type {

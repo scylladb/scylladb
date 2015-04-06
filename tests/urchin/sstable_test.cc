@@ -18,6 +18,10 @@ static auto big = sstable::format_types::big;
 
 using sstable_ptr = lw_shared_ptr<sstable>;
 
+bytes as_bytes(const sstring& s) {
+    return { reinterpret_cast<const int8_t*>(s.begin()), s.size() };
+}
+
 namespace sstables {
 
 class test {
@@ -327,7 +331,7 @@ public:
     int count_cell = 0;
     int count_row_end = 0;
     virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
-        BOOST_REQUIRE(key == "vinna");
+        BOOST_REQUIRE(key == as_bytes("vinna"));
         BOOST_REQUIRE(deltime.local_deletion_time == (uint32_t)std::numeric_limits<int32_t>::max());
         BOOST_REQUIRE(deltime.marked_for_delete_at == (uint64_t)std::numeric_limits<int64_t>::min());
         count_row_start++;
@@ -346,7 +350,7 @@ public:
                     col_name[1] == 4 && col_name[2] == 'c' &&
                     col_name[3] == 'o' && col_name[4] == 'l' &&
                     col_name[5] == '1' && col_name[6] == '\0');
-            BOOST_REQUIRE(value == "daughter");
+            BOOST_REQUIRE(value == as_bytes("daughter"));
             BOOST_REQUIRE(timestamp == desired_timestamp);
             break;
         case 2:

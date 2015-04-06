@@ -583,28 +583,31 @@ struct hash<shared_ptr<abstract_type>> : boost::hash<shared_ptr<abstract_type>> 
 
 }
 
+// FIXME: make more explicit
 inline
 bytes
 to_bytes(const char* x) {
-    return bytes(reinterpret_cast<const char*>(x), std::strlen(x));
+    return bytes(reinterpret_cast<const int8_t*>(x), std::strlen(x));
 }
 
+// FIXME: make more explicit
 inline
 bytes
 to_bytes(const std::string& x) {
-    return bytes(reinterpret_cast<const char*>(x.data()), x.size());
+    return bytes(reinterpret_cast<const int8_t*>(x.data()), x.size());
 }
 
 inline
 bytes
-to_bytes(sstring_view x) {
+to_bytes(bytes_view x) {
     return bytes(x.begin(), x.size());
 }
 
+// FIXME: make more explicit
 inline
 bytes
 to_bytes(const sstring& x) {
-    return bytes(reinterpret_cast<const char*>(x.c_str()), x.size());
+    return bytes(reinterpret_cast<const int8_t*>(x.c_str()), x.size());
 }
 
 inline
@@ -615,7 +618,7 @@ to_bytes(const utils::UUID& uuid) {
         uint64_t lsb;
     } tmp = { net::hton(uint64_t(uuid.get_most_significant_bits())),
         net::hton(uint64_t(uuid.get_least_significant_bits())) };
-    return bytes(reinterpret_cast<char*>(&tmp), 16);
+    return bytes(reinterpret_cast<int8_t*>(&tmp), 16);
 }
 
 // This follows java.util.Comparator

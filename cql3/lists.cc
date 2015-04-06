@@ -283,7 +283,7 @@ lists::do_append(shared_ptr<term> t,
         appended.cells.reserve(to_add.size());
         for (auto&& e : to_add) {
             auto uuid1 = utils::UUID_gen::get_time_UUID_bytes();
-            auto uuid = bytes(reinterpret_cast<const char*>(uuid1.data()), uuid1.size());
+            auto uuid = bytes(reinterpret_cast<const int8_t*>(uuid1.data()), uuid1.size());
             appended.cells.emplace_back(std::move(uuid), params.make_cell(e));
         }
         m.set_cell(prefix, column, ltype->serialize_mutation_form(appended));

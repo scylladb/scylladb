@@ -9,18 +9,20 @@
 
 static const sstring table_name = "cf";
 
-static sstring make_key(int sequence) {
-    return sprint("0xdeadbeefcafebabe%04d", sequence);
+static bytes make_key(int sequence) {
+    uint8_t x[] = { 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe,
+            uint8_t(sequence/100), uint8_t(sequence % 100) };
+    return bytes(reinterpret_cast<int8_t*>(x), sizeof(x));
 };
 
-static auto execute_update_for_key(cql_test_env& env, const sstring& key) {
+static auto execute_update_for_key(cql_test_env& env, const bytes& key) {
     return env.execute_cql(sprint("UPDATE cf SET "
         "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
         "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
         "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
         "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
         "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27 "
-        "WHERE \"KEY\"=%s;", key)).discard_result();
+        "WHERE \"KEY\"=0x%s;", key)).discard_result();
 };
 
 static auto constexpr n_partitons = 1000;

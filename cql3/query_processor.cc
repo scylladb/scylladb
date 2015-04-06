@@ -157,7 +157,7 @@ static bytes md5_calculate(const std::experimental::string_view& s)
     CryptoPP::Weak::MD5 hash;
     unsigned char digest[size];
     hash.CalculateDigest(digest, reinterpret_cast<const unsigned char*>(s.data()), s.size());
-    return std::move(bytes{reinterpret_cast<const char*>(digest), size});
+    return std::move(bytes{reinterpret_cast<const int8_t*>(digest), size});
 }
 
 bytes query_processor::compute_id(const std::experimental::string_view& query_string, const sstring& keyspace)

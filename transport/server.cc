@@ -652,7 +652,7 @@ bytes cql_server::connection::read_short_bytes(temporary_buffer<char>& buf)
 {
     auto n = read_short(buf);
     check_room(buf, n);
-    bytes s{buf.begin(), static_cast<size_t>(n)};
+    bytes s{reinterpret_cast<const int8_t*>(buf.begin()), static_cast<size_t>(n)};
     assert(n >= 0);
     buf.trim_front(n);
     return s;
@@ -806,7 +806,7 @@ bytes_opt cql_server::connection::read_value(temporary_buffer<char>& buf) {
         return {};
     }
     check_room(buf, len);
-    bytes b(buf.begin(), buf.begin() + len);
+    bytes b(reinterpret_cast<const int8_t*>(buf.begin()), len);
     buf.trim_front(len);
     return {std::move(b)};
 }

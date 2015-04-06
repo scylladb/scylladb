@@ -477,7 +477,7 @@ keyspace::create_replication_strategy(config::ks_meta_data& ksm) {
     static std::unordered_map<sstring, sstring> options = {{"replication_factor", "3"}};
     auto d2t = [](double d) {
         unsigned long l = net::hton(static_cast<unsigned long>(d*(std::numeric_limits<unsigned long>::max())));
-        std::array<char, 8> a;
+        std::array<int8_t, 8> a;
         memcpy(a.data(), &l, 8);
         return a;
     };
