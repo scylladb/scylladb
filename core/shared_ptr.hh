@@ -158,6 +158,7 @@ public:
     using element_type = T;
 
     lw_shared_ptr() noexcept = default;
+    lw_shared_ptr(std::nullptr_t) noexcept : lw_shared_ptr() {}
     lw_shared_ptr(const lw_shared_ptr& x) noexcept : _p(x._p) {
         if (_p) {
             ++_p->_count;
@@ -184,6 +185,9 @@ public:
             new (this) lw_shared_ptr(std::move(x));
         }
         return *this;
+    }
+    lw_shared_ptr& operator=(std::nullptr_t) noexcept {
+        return *this = lw_shared_ptr();
     }
     lw_shared_ptr& operator=(T&& x) noexcept {
         this->~lw_shared_ptr();
@@ -309,6 +313,7 @@ private:
     }
 public:
     shared_ptr() noexcept = default;
+    shared_ptr(std::nullptr_t) noexcept : shared_ptr() {}
     shared_ptr(const shared_ptr& x) noexcept
             : _b(x._b)
             , _p(x._p) {
@@ -355,6 +360,9 @@ public:
             new (this) shared_ptr(std::move(x));
         }
         return *this;
+    }
+    shared_ptr& operator=(std::nullptr_t) noexcept {
+        return *this = shared_ptr();
     }
     template <typename U, typename = std::enable_if_t<std::is_base_of<T, U>::value>>
     shared_ptr& operator=(const shared_ptr<U>& x) noexcept {
