@@ -47,11 +47,13 @@ other_tests = [
 
 last_len = 0
 
-def print_status(msg):
+def print_status_short(msg):
     global last_len
     print('\r' + ' '*last_len, end='')
     last_len = len(msg)
     print('\r' + msg, end='')
+
+print_status_verbose = print
 
 class Alarm(Exception):
     pass
@@ -67,9 +69,12 @@ if __name__ == "__main__":
     parser.add_argument('--mode', choices=all_modes, help="Run only tests for given build mode")
     parser.add_argument('--timeout', action="store",default="300",type=int, help="timeout value for test execution")
     parser.add_argument('--jenkins', action="store",help="jenkins output file prefix")
+    parser.add_argument('--verbose', '-v', action = 'store_true', default = False,
+                        help = 'Verbose reporting')
     args = parser.parse_args()
 
     black_hole = open('/dev/null', 'w')
+    print_status = print_status_verbose if args.verbose else print_status_short
 
     test_to_run = []
     modes_to_run = all_modes if not args.mode else [args.mode]
