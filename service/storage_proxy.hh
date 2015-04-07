@@ -38,6 +38,10 @@ private:
 public:
     storage_proxy(distributed<database>& db) : _db(db) {}
 
+    distributed<database>& get_db() {
+        return _db;
+    }
+
     future<> mutate_locally(const mutation& m);
     future<> mutate_locally(std::vector<mutation> mutations);
 
