@@ -28,7 +28,7 @@ namespace cql3 {
 
 thread_local const query_options::specific_options query_options::specific_options::DEFAULT{-1, {}, {}, api::missing_timestamp};
 
-thread_local default_query_options query_options::DEFAULT{db::consistency_level::ONE,
+thread_local query_options query_options::DEFAULT{db::consistency_level::ONE, std::experimental::nullopt,
     {}, false, query_options::specific_options::DEFAULT, 3, serialization_format::use_32_bit()};
 
 }

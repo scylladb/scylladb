@@ -720,7 +720,7 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(tempor
 {
     auto consistency = read_consistency(buf);
     if (_version == 1) {
-        return std::make_unique<cql3::default_query_options>(consistency, std::vector<bytes_opt>{},
+        return std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, std::vector<bytes_opt>{},
             false, cql3::query_options::specific_options::DEFAULT, 1, _serialization_format);
     }
 
@@ -767,19 +767,19 @@ std::unique_ptr<cql3::query_options> cql_server::connection::read_options(tempor
             }
         }
 
-        options = std::make_unique<cql3::default_query_options>(consistency, std::move(values), skip_metadata,
+        std::experimental::optional<std::vector<sstring>> onames;
+        if (!names.empty()) {
+            onames = std::move(names);
+        }
+        options = std::make_unique<cql3::query_options>(consistency, std::move(onames), std::move(values), skip_metadata,
             cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts}, _version,
             _serialization_format);
     } else {
-        options = std::make_unique<cql3::default_query_options>(consistency, std::move(values), skip_metadata,
+        options = std::make_unique<cql3::query_options>(consistency, std::experimental::nullopt, std::move(values), skip_metadata,
             cql3::query_options::specific_options::DEFAULT, _version, _serialization_format);
     }
 
-    if (names.empty()) {
-        return std::move(options);
-    }
-
-    return std::make_unique<cql3::options_with_names>(std::move(options), std::move(names));
+    return std::move(options);
 }
 
 void cql_server::connection::read_name_and_value_list(temporary_buffer<char>& buf, std::vector<sstring>& names, std::vector<bytes_opt>& values) {

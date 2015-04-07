@@ -36,15 +36,11 @@
 
 namespace cql3 {
 
-class default_query_options;
-
 /**
  * Options for a query.
  */
 class query_options {
-    serialization_format _serialization_format;
 public:
-    explicit query_options(serialization_format sf) : _serialization_format(sf) {}
     // Options that are likely to not be present in most queries
     struct specific_options final {
         static thread_local const specific_options DEFAULT;
@@ -54,11 +50,29 @@ public:
         const std::experimental::optional<db::consistency_level> serial_consistency;
         const api::timestamp_type timestamp;
     };
+private:
+    const db::consistency_level _consistency;
+    const std::experimental::optional<std::vector<sstring>> _names;
+    std::vector<bytes_opt> _values;
+    const bool _skip_metadata;
+    const specific_options _options;
+    const int32_t _protocol_version; // transient
+    serialization_format _serialization_format;
+public:
+    explicit query_options(db::consistency_level consistency,
+            std::experimental::optional<std::vector<sstring>> names, std::vector<bytes_opt> values,
+            bool skip_metadata, specific_options options, int32_t protocol_version, serialization_format sf)
+            : _consistency(consistency)
+            , _names(std::move(names))
+            , _values(std::move(values))
+            , _skip_metadata(skip_metadata)
+            , _options(std::move(options))
+            , _protocol_version(protocol_version)
+            , _serialization_format(sf)
+        { }
 
     // It can't be const because of prepare()
-    static thread_local default_query_options DEFAULT;
-
-    virtual ~query_options() {}
+    static thread_local query_options DEFAULT;
 
 #if 0
     public static final CBCodec<QueryOptions> codec = new Codec();
@@ -94,9 +108,15 @@ public:
     }
 #endif
 
-    virtual db::consistency_level get_consistency() const = 0;
-    virtual const std::vector<bytes_opt>& get_values() const = 0;
-    virtual bool skip_metadata() const = 0;
+    db::consistency_level get_consistency() const {
+        return _consistency;
+    }
+    const std::vector<bytes_opt>& get_values() const {
+        return _values;
+    }
+    bool skip_metadata() const {
+        return _skip_metadata;
+    }
 
     /**  The pageSize for this query. Will be <= 0 if not relevant for the query.  */
     int32_t get_page_size() const { return get_specific_options().page_size; }
@@ -120,13 +140,34 @@ public:
      * The protocol version for the query. Will be 3 if the object don't come from
      * a native protocol request (i.e. it's been allocated locally or by CQL-over-thrift).
      */
-    virtual int get_protocol_version() const = 0;
+    int get_protocol_version() const {
+        return _protocol_version;
+    }
     serialization_format get_serialization_format() const { return _serialization_format; }
 
     // Mainly for the sake of BatchQueryOptions
-    virtual const specific_options& get_specific_options() const = 0;
+    const specific_options& get_specific_options() const {
+        return _options;
+    }
 
-    virtual void prepare(const std::vector<::shared_ptr<column_specification>>& specs) {
+    void prepare(const std::vector<::shared_ptr<column_specification>>& specs) {
+        if (!_names) {
+            return;
+        }
+
+        auto& names = *_names;
+        std::vector<bytes_opt> ordered_values;
+        ordered_values.reserve(specs.size());
+        for (auto&& spec : specs) {
+            auto& spec_name = spec->name->text();
+            for (size_t j = 0; j < names.size(); j++) {
+                if (names[j] == spec_name) {
+                    ordered_values.emplace_back(_values[j]);
+                    break;
+                }
+            }
+        }
+        _values = std::move(ordered_values);
     }
 
 #if 0
@@ -200,106 +241,6 @@ public:
         }
     }
 #endif
-};
-
-class default_query_options : public query_options {
-private:
-    const db::consistency_level _consistency;
-    const std::vector<bytes_opt> _values;
-    const bool _skip_metadata;
-    const specific_options _options;
-    const int32_t _protocol_version; // transient
-public:
-    default_query_options(db::consistency_level consistency, std::vector<bytes_opt> values, bool skip_metadata, specific_options options,
-        int32_t protocol_version, serialization_format sf)
-        : query_options(sf)
-        , _consistency(consistency)
-        , _values(std::move(values))
-        , _skip_metadata(skip_metadata)
-        , _options(std::move(options))
-        , _protocol_version(protocol_version)
-    { }
-    virtual db::consistency_level get_consistency() const override {
-        return _consistency;
-    }
-    virtual const std::vector<bytes_opt>& get_values() const override {
-        return _values;
-    }
-    virtual bool skip_metadata() const override {
-        return _skip_metadata;
-    }
-    virtual int32_t get_protocol_version() const override {
-        return _protocol_version;
-    }
-    virtual const specific_options& get_specific_options() const override {
-        return _options;
-    }
-};
-
-class query_options_wrapper : public query_options {
-protected:
-    std::unique_ptr<query_options> _wrapped;
-public:
-    query_options_wrapper(std::unique_ptr<query_options> wrapped)
-            : query_options(wrapped->get_serialization_format())
-            , _wrapped(std::move(wrapped)) {
-    }
-
-    virtual db::consistency_level get_consistency() const override {
-        return _wrapped->get_consistency();
-    }
-
-    virtual const std::vector<bytes_opt>& get_values() const override {
-        return _wrapped->get_values();
-    }
-
-    virtual bool skip_metadata() const override {
-        return _wrapped->skip_metadata();
-    }
-
-    virtual int get_protocol_version() const override {
-        return _wrapped->get_protocol_version();
-    }
-
-    virtual const specific_options& get_specific_options() const override {
-        return _wrapped->get_specific_options();
-    }
-
-    virtual void prepare(const std::vector<::shared_ptr<column_specification>>& specs) override {
-        _wrapped->prepare(specs);
-    }
-};
-
-class options_with_names : public query_options_wrapper {
-private:
-    std::vector<sstring> _names;
-    std::vector<bytes_opt> _ordered_values;
-public:
-    options_with_names(std::unique_ptr<query_options> wrapped, std::vector<sstring> names)
-        : query_options_wrapper(std::move(wrapped))
-        , _names(std::move(names))
-    { }
-
-    void prepare(const std::vector<::shared_ptr<column_specification>>& specs) override {
-        query_options::prepare(specs);
-
-        _ordered_values.resize(specs.size());
-        auto& wrapped_values = _wrapped->get_values();
-
-        for (auto&& spec : specs) {
-            auto& spec_name = spec->name->text();
-            for (size_t j = 0; j < _names.size(); j++) {
-                if (_names[j] == spec_name) {
-                    _ordered_values.emplace_back(wrapped_values[j]);
-                    break;
-                }
-            }
-        }
-    }
-
-    virtual const std::vector<bytes_opt>& get_values() const override {
-        return _ordered_values;
-    }
 };
 
 }
