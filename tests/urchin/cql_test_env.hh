@@ -47,6 +47,12 @@ public:
         return _qp->local().process(text, *qs, cql3::query_options::DEFAULT).finally([qs] {});
     }
 
+    auto execute_cql(const sstring& text, std::unique_ptr<cql3::query_options> qo) {
+        auto qs = make_query_state();
+        auto& lqo = *qo;
+        return _qp->local().process(text, *qs, lqo).finally([qs, qo = std::move(qo)] {});
+    }
+
     future<bytes> prepare(sstring query) {
         return _qp->invoke_on_all([query, this] (auto& local_qp) {
             auto qs = this->make_query_state();
