@@ -49,6 +49,7 @@ options {
 #include "cql3/maps.hh"
 #include "cql3/sets.hh"
 #include "cql3/lists.hh"
+#include "cql3/type_cast.hh"
 #include "cql3/functions/function_name.hh"
 #include "cql3/functions/function_call.hh"
 #include "core/sstring.hh"
@@ -1091,12 +1092,10 @@ functionArgs returns [std::vector<shared_ptr<cql3::term::raw>> a]
        ')'
     ;
 
-term returns [::shared_ptr<cql3::term::raw> term]
-    : v=value                          { $term = v; }
-    | f=functionName args=functionArgs { $term = ::make_shared<cql3::functions::function_call::raw>(std::move(f), std::move(args)); }
-#if 0
-    | '(' c=comparatorType ')' t=term  { $term = new TypeCast(c, t); }
-#endif
+term returns [::shared_ptr<cql3::term::raw> term1]
+    : v=value                          { $term1 = v; }
+    | f=functionName args=functionArgs { $term1 = ::make_shared<cql3::functions::function_call::raw>(std::move(f), std::move(args)); }
+    | '(' c=comparatorType ')' t=term  { $term1 = make_shared<cql3::type_cast>(c, t); }
     ;
 
 columnOperation[operations_type& operations]
