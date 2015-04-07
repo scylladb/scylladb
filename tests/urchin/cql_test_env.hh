@@ -151,14 +151,11 @@ static inline
 future<::shared_ptr<cql_test_env>> make_env_for_test() {
     auto db = ::make_shared<distributed<database>>();
     return db->start().then([db] {
-        engine().at_exit([db] { return db->stop(); });
         auto proxy = ::make_shared<service::storage_proxy>(std::ref(*db));
         auto qp = ::make_shared<distributed<cql3::query_processor>>();
         return qp->start(std::ref(*proxy), std::ref(*db)).then([db, proxy, qp] {
-            engine().at_exit([qp] { return qp->stop(); });
             auto env = ::make_shared<cql_test_env>(db, qp, proxy);
             return env->start().then([env] {
-                engine().at_exit([env] { return env->stop(); });
                 return env;
             });
         });

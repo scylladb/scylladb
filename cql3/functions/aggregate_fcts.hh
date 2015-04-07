@@ -41,10 +41,10 @@ public:
     virtual void reset() override {
         _count = 0;
     }
-    virtual opt_bytes compute(int protocol_version) override {
+    virtual opt_bytes compute(serialization_format sf) override {
         return long_type->decompose(_count);
     }
-    virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(serialization_format sf, const std::vector<opt_bytes>& values) override {
         ++_count;
     }
 };
@@ -66,10 +66,10 @@ public:
     virtual void reset() override {
         _sum = {};
     }
-    virtual opt_bytes compute(int protocol_version) override {
+    virtual opt_bytes compute(serialization_format sf) override {
         return data_type_for<Type>()->decompose(_sum);
     }
-    virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(serialization_format sf, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
@@ -103,14 +103,14 @@ public:
         _sum = {};
         _count = 0;
     }
-    virtual opt_bytes compute(int protocol_version) override {
+    virtual opt_bytes compute(serialization_format sf) override {
         Type ret = 0;
         if (_count) {
             ret = _sum / _count;
         }
         return data_type_for<Type>()->decompose(ret);
     }
-    virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(serialization_format sf, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
@@ -142,13 +142,13 @@ public:
     virtual void reset() override {
         _max = {};
     }
-    virtual opt_bytes compute(int protocol_version) override {
+    virtual opt_bytes compute(serialization_format sf) override {
         if (!_max) {
             return {};
         }
         return data_type_for<Type>()->decompose(*_max);
     }
-    virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(serialization_format sf, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
@@ -189,13 +189,13 @@ public:
     virtual void reset() override {
         _min = {};
     }
-    virtual opt_bytes compute(int protocol_version) override {
+    virtual opt_bytes compute(serialization_format sf) override {
         if (!_min) {
             return {};
         }
         return data_type_for<Type>()->decompose(*_min);
     }
-    virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(serialization_format sf, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }
@@ -238,10 +238,10 @@ public:
     virtual void reset() override {
         _count = 0;
     }
-    virtual opt_bytes compute(int protocol_version) override {
+    virtual opt_bytes compute(serialization_format sf) override {
         return long_type->decompose(_count);
     }
-    virtual void add_input(int protocol_version, const std::vector<opt_bytes>& values) override {
+    virtual void add_input(serialization_format sf, const std::vector<opt_bytes>& values) override {
         if (!values[0]) {
             return;
         }

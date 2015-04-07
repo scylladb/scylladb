@@ -20,6 +20,19 @@ import os, os.path, textwrap, argparse, sys, shlex, subprocess, tempfile, re
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:]])
 
+def get_flags():
+    with open('/proc/cpuinfo') as f:
+        for line in f:
+            if line.strip():
+                if line.rstrip('\n').startswith('flags'):
+                    return re.sub(r'^flags\s+: ', '', line).split()
+
+def has_avx():
+    return 'avx' in get_flags()
+
+def has_avx2():
+    return 'avx2' in get_flags()
+
 def add_tristate(arg_parser, name, dest, help):
     arg_parser.add_argument('--enable-' + name, dest = dest, action = 'store_true', default = None,
                             help = 'Enable ' + help)
@@ -319,9 +332,12 @@ urchin_core = (['database.cc',
                  'cql3/query_options.cc',
                  'cql3/single_column_relation.cc',
                  'cql3/column_condition.cc',
+                 'cql3/selection/abstract_function_selector.cc',
                  'cql3/selection/simple_selector.cc',
+                 'cql3/selection/selectable.cc',
                  'cql3/selection/selector_factories.cc',
                  'cql3/selection/selection.cc',
+                 'cql3/selection/selector.cc',
                  'cql3/restrictions/statement_restrictions.cc',
                  'db/db.cc',
                  'db/system_keyspace.cc',
@@ -401,9 +417,11 @@ if args.with_osv:
 if args.dpdk_target:
     args.user_cflags = (args.user_cflags +
         ' -DHAVE_DPDK -I' +
-        args.dpdk_target + '/include -Wno-error=literal-suffix -Wno-literal-suffix -Wno-invalid-offsetof')
+        args.dpdk_target + '/include -Wno-error=literal-suffix -Wno-literal-suffix -Wno-invalid-offsetof -m64' +
+        ' -mavx' if has_avx() else '' +
+        ' -mavx2' if has_avx2() else '')
     libs += (' -L' + args.dpdk_target + '/lib ' +
-        '-Wl,--whole-archive -lrte_pmd_bond -lrte_pmd_vmxnet3_uio -lrte_pmd_virtio_uio -lrte_pmd_i40e -lrte_pmd_ixgbe -lrte_pmd_e1000 -lrte_pmd_ring -Wl,--no-whole-archive -lrte_distributor -lrte_kni -lrte_pipeline -lrte_table -lrte_port -lrte_timer -lrte_hash -lrte_lpm -lrte_power -lrte_acl -lrte_meter -lrte_sched -lrte_kvargs -lrte_mbuf -lrte_ip_frag -lethdev -lrte_eal -lrte_malloc -lrte_mempool -lrte_ring -lrte_cmdline -lrte_cfgfile -lrt -lm -ldl')
+        '-lintel_dpdk -lrt -lm -ldl')
 
 warnings = [w
             for w in warnings

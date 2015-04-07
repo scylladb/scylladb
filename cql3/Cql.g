@@ -64,36 +64,6 @@ using conditions_type = std::vector<std::pair<::shared_ptr<cql3::column_identifi
 using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>;
 }
 
-@header {
-#if 0
-    package org.apache.cassandra.cql3;
-
-    import java.util.ArrayList;
-    import java.util.Arrays;
-    import java.util.Collections;
-    import java.util.EnumSet;
-    import java.util.HashSet;
-    import java.util.HashMap;
-    import java.util.LinkedHashMap;
-    import java.util.List;
-    import java.util.Map;
-    import java.util.Set;
-
-    import org.apache.cassandra.auth.Permission;
-    import org.apache.cassandra.auth.DataResource;
-    import org.apache.cassandra.auth.IResource;
-    import org.apache.cassandra.cql3.*;
-    import org.apache.cassandra.cql3.statements.*;
-    import org.apache.cassandra.cql3.selection.*;
-    import org.apache.cassandra.cql3.functions.*;
-    import org.apache.cassandra.db.marshal.CollectionType;
-    import org.apache.cassandra.exceptions.ConfigurationException;
-    import org.apache.cassandra.exceptions.InvalidRequestException;
-    import org.apache.cassandra.exceptions.SyntaxException;
-    import org.apache.cassandra.utils.Pair;
-#endif
-}
-
 @context {
     using listener_type = cql3::error_listener<RecognizerType>;
     listener_type* listener;
@@ -220,32 +190,9 @@ using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifi
 @lexer::header {
 #pragma GCC diagnostic ignored "-Wunused-variable"
 #pragma GCC diagnostic ignored "-Wunused-function"
-#if 0
-    package org.apache.cassandra.cql3;
-
-    import org.apache.cassandra.exceptions.SyntaxException;
-#endif
 }
 
 @lexer::context {
-#if 0
-    List<Token> tokens = new ArrayList<Token>();
-
-    public void emit(Token token)
-    {
-        state.token = token;
-        tokens.add(token);
-    }
-
-    public Token nextToken()
-    {
-        super.nextToken();
-        if (tokens.size() == 0)
-            return new CommonToken(Token.EOF);
-        return tokens.remove(0);
-    }
-#endif
-
     using listener_type = cql3::error_listener<RecognizerType>;
 
     listener_type* listener;
@@ -332,9 +279,7 @@ selectStatement returns [shared_ptr<select_statement::raw_statement> expr]
     }
     : K_SELECT ( ( K_DISTINCT { is_distinct = true; } )?
                  sclause=selectClause
-#if 0
                | sclause=selectCountClause
-#endif
                )
       K_FROM cf=columnFamilyName
       ( K_WHERE wclause=whereClause )?
@@ -364,8 +309,8 @@ unaliasedSelector returns [shared_ptr<selectable::raw> s]
 #if 0
        | K_WRITETIME '(' c=cident ')'              { tmp = new Selectable.WritetimeOrTTL.Raw(c, true); }
        | K_TTL       '(' c=cident ')'              { tmp = new Selectable.WritetimeOrTTL.Raw(c, false); }
-       | f=functionName args=selectionFunctionArgs { tmp = new Selectable.WithFunction.Raw(f, args); }
 #endif
+       | f=functionName args=selectionFunctionArgs { tmp = ::make_shared<selectable::with_function::raw>(std::move(f), std::move(args)); }
        )
 #if 0
        ( '.' fi=cident { tmp = new Selectable.WithFieldSelection.Raw(tmp, fi); } )*
@@ -373,24 +318,29 @@ unaliasedSelector returns [shared_ptr<selectable::raw> s]
     { $s = tmp; }
     ;
 
-#if 0
-selectionFunctionArgs returns [List<Selectable.Raw> a]
-    : '(' ')' { $a = Collections.emptyList(); }
-    | '(' s1=unaliasedSelector { List<Selectable.Raw> args = new ArrayList<Selectable.Raw>(); args.add(s1); }
-          ( ',' sn=unaliasedSelector { args.add(sn); } )*
-      ')' { $a = args; }
+selectionFunctionArgs returns [std::vector<shared_ptr<selectable::raw>> a]
+    : '(' ')'
+    | '(' s1=unaliasedSelector { a.push_back(std::move(s1)); }
+          ( ',' sn=unaliasedSelector { a.push_back(std::move(sn)); } )*
+      ')'
     ;
 
-selectCountClause returns [List<RawSelector> expr]
-    @init{ ColumnIdentifier alias = new ColumnIdentifier("count", false); }
-    : K_COUNT '(' countArgument ')' (K_AS c=ident { alias = c; })? { $expr = new ArrayList<RawSelector>(); $expr.add( new RawSelector(new Selectable.WithFunction.Raw(FunctionName.nativeFunction("countRows"), Collections.<Selectable.Raw>emptyList()), alias));}
+selectCountClause returns [std::vector<shared_ptr<raw_selector>> expr]
+    @init{ auto alias = make_shared<cql3::column_identifier>("count", false); }
+    : K_COUNT '(' countArgument ')' (K_AS c=ident { alias = c; })? {
+        auto&& with_fn = ::make_shared<cql3::selection::selectable::with_function::raw>(
+     	    cql3::functions::function_name::native_function("countRows"),
+     	        std::vector<shared_ptr<cql3::selection::selectable::raw>>()); 
+     	$expr.push_back(make_shared<cql3::selection::raw_selector>(with_fn, alias));
+     }
     ;
 
 countArgument
-    : '\*'
-    | i=INTEGER { if (!i.getText().equals("1")) addRecognitionError("Only COUNT(1) is supported, got COUNT(" + i.getText() + ")");}
+    : '*'
+    | i=INTEGER { if (i->getText() != "1") {
+                    add_recognition_error("Only COUNT(1) is supported, got COUNT(" + i->getText() + ")");
+                } }
     ;
-#endif
 
 whereClause returns [std::vector<cql3::relation_ptr> clause]
     : relation[$clause] (K_AND relation[$clause])*

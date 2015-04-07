@@ -639,6 +639,31 @@ SEASTAR_TEST_CASE(test_functions) {
             // No boost::adaptors::sorted
             boost::sort(v.res);
             BOOST_REQUIRE_EQUAL(boost::distance(v.res | boost::adaptors::uniqued), 3);
+        }).then([&] {
+            return e.execute_cql("select sum(c1), count(c1) from cf where p1 = 'key1';");
+        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+            assert_that(msg).is_rows()
+                .with_size(1)
+                .with_row({
+                     {int32_type->decompose(6)},
+                     {long_type->decompose(3L)},
+                 });
+        }).then([&] {
+            return e.execute_cql("select count(*) from cf where p1 = 'key1';");
+        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+            assert_that(msg).is_rows()
+                .with_size(1)
+                .with_row({
+                     {long_type->decompose(3L)},
+                 });
+        }).then([&] {
+            return e.execute_cql("select count(1) from cf where p1 = 'key1';");
+        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+            assert_that(msg).is_rows()
+                .with_size(1)
+                .with_row({
+                     {long_type->decompose(3L)},
+                 });
         });
     });
 }

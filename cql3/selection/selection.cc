@@ -70,7 +70,7 @@ protected:
         }
 
         virtual void add_input_row(serialization_format sf, result_set_builder& rs) override {
-            _current = std::move(rs.current);
+            _current = std::move(*rs.current);
         }
 
         virtual bool is_aggregate() {
