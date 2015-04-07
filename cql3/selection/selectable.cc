@@ -3,13 +3,45 @@
  */
 
 #include "selectable.hh"
+#include "writetime_or_ttl.hh"
 #include "selector_factories.hh"
 #include "cql3/functions/functions.hh"
 #include "abstract_function_selector.hh"
+#include "writetime_or_ttl_selector.hh"
 
 namespace cql3 {
 
 namespace selection {
+
+shared_ptr<selector::factory>
+selectable::writetime_or_ttl::new_selector_factory(schema_ptr s, std::vector<const column_definition*>& defs) {
+    auto&& def = s->get_column_definition(_id->name());
+    if (!def) {
+        throw exceptions::invalid_request_exception(sprint("Undefined name %s in selection clause", _id));
+    }
+    if (def->is_primary_key()) {
+        throw exceptions::invalid_request_exception(
+                sprint("Cannot use selection function %s on PRIMARY KEY part %s",
+                              _is_writetime ? "writeTime" : "ttl",
+                              def->name()));
+    }
+    if (def->type->is_collection()) {
+        throw exceptions::invalid_request_exception(sprint("Cannot use selection function %s on collections",
+                                                        _is_writetime ? "writeTime" : "ttl"));
+    }
+
+    return writetime_or_ttl_selector::new_factory(def->name_as_text(), add_and_get_index(*def, defs), _is_writetime);
+}
+
+shared_ptr<selectable>
+selectable::writetime_or_ttl::raw::prepare(schema_ptr s) {
+    return make_shared<writetime_or_ttl>(_id->prepare_column_identifier(s), _is_writetime);
+}
+
+bool
+selectable::writetime_or_ttl::raw::processes_selection() const {
+    return true;
+}
 
 shared_ptr<selector::factory>
 selectable::with_function::new_selector_factory(schema_ptr s, std::vector<const column_definition*>& defs) {

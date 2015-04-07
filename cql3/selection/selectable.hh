@@ -77,65 +77,7 @@ public:
         virtual bool processes_selection() const = 0;
     };
 
-#if 0
-    public static class WritetimeOrTTL extends Selectable
-    {
-        public final ColumnIdentifier id;
-        public final boolean isWritetime;
-
-        public WritetimeOrTTL(ColumnIdentifier id, boolean isWritetime)
-        {
-            this.id = id;
-            this.isWritetime = isWritetime;
-        }
-
-        @Override
-        public String toString()
-        {
-            return (isWritetime ? "writetime" : "ttl") + "(" + id + ")";
-        }
-
-        public Selector.Factory newSelectorFactory(CFMetaData cfm,
-                                                   List<ColumnDefinition> defs) throws InvalidRequestException
-        {
-            ColumnDefinition def = cfm.getColumnDefinition(id);
-            if (def == null)
-                throw new InvalidRequestException(String.format("Undefined name %s in selection clause", id));
-            if (def.isPrimaryKeyColumn())
-                throw new InvalidRequestException(
-                        String.format("Cannot use selection function %s on PRIMARY KEY part %s",
-                                      isWritetime ? "writeTime" : "ttl",
-                                      def.name));
-            if (def.type.isCollection())
-                throw new InvalidRequestException(String.format("Cannot use selection function %s on collections",
-                                                                isWritetime ? "writeTime" : "ttl"));
-
-            return WritetimeOrTTLSelector.newFactory(def.name.toString(), addAndGetIndex(def, defs), isWritetime);
-        }
-
-        public static class Raw implements Selectable.Raw
-        {
-            private final ColumnIdentifier.Raw id;
-            private final boolean isWritetime;
-
-            public Raw(ColumnIdentifier.Raw id, boolean isWritetime)
-            {
-                this.id = id;
-                this.isWritetime = isWritetime;
-            }
-
-            public WritetimeOrTTL prepare(CFMetaData cfm)
-            {
-                return new WritetimeOrTTL(id.prepare(cfm), isWritetime);
-            }
-
-            public boolean processesSelection()
-            {
-                return true;
-            }
-        }
-    }
-#endif
+    class writetime_or_ttl;
 
     class with_function;
 
