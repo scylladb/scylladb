@@ -47,7 +47,7 @@ public:
     explicit query_options(serialization_format sf) : _serialization_format(sf) {}
     // Options that are likely to not be present in most queries
     struct specific_options final {
-        static const specific_options DEFAULT;
+        static thread_local const specific_options DEFAULT;
 
         const int32_t page_size;
         const ::shared_ptr<service::pager::paging_state> state;
@@ -56,7 +56,7 @@ public:
     };
 
     // It can't be const because of prepare()
-    static default_query_options DEFAULT;
+    static thread_local default_query_options DEFAULT;
 
     virtual ~query_options() {}
 
