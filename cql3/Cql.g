@@ -1278,8 +1278,8 @@ inMarkerForTuple returns [Tuples.INRaw marker]
 
 comparatorType returns [shared_ptr<cql3_type::raw> t]
     : n=native_type     { $t = cql3_type::raw::from(n); }
-#if 0
     | c=collection_type { $t = c; }
+#if 0
     | tt=tuple_type     { $t = tt; }
     | id=userTypeName   { $t = CQL3Type.Raw.userType(id); }
     | K_FROZEN '<' f=comparatorType '>'
@@ -1326,20 +1326,21 @@ native_type returns [shared_ptr<cql3_type> t]
     | K_TIMEUUID  { $t = cql3_type::timeuuid; }
     ;
 
-#if 0
-collection_type returns [CQL3Type.Raw pt]
+collection_type returns [shared_ptr<cql3::cql3_type::raw> pt]
     : K_MAP  '<' t1=comparatorType ',' t2=comparatorType '>'
         {
             // if we can't parse either t1 or t2, antlr will "recover" and we may have t1 or t2 null.
-            if (t1 != null && t2 != null)
-                $pt = CQL3Type.Raw.map(t1, t2);
+            if (t1 && t2) {
+                $pt = cql3::cql3_type::raw::map(t1, t2);
+            }
         }
     | K_LIST '<' t=comparatorType '>'
-        { if (t != null) $pt = CQL3Type.Raw.list(t); }
+        { if (t) { $pt = cql3::cql3_type::raw::list(t); } }
     | K_SET  '<' t=comparatorType '>'
-        { if (t != null) $pt = CQL3Type.Raw.set(t); }
+        { if (t) { $pt = cql3::cql3_type::raw::set(t); } }
     ;
 
+#if 0
 tuple_type returns [CQL3Type.Raw t]
     : K_TUPLE '<' { List<CQL3Type.Raw> types = new ArrayList<>(); }
          t1=comparatorType { types.add(t1); } (',' tn=comparatorType { types.add(tn); })*
