@@ -666,6 +666,17 @@ SEASTAR_TEST_CASE(test_functions) {
                 .with_row({
                      {long_type->decompose(3L)},
                  });
+        }).then([&e] {
+            // Inane, casting to own type, but couldn't find more interesting example
+            return e.execute_cql("insert into cf (p1, c1) values ((text)'key2', 7);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select c1 from cf where p1 = 'key2';");
+        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+            assert_that(msg).is_rows()
+                .with_size(1)
+                .with_row({
+                     {int32_type->decompose(7)},
+                 });
         });
     });
 }
