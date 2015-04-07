@@ -23,6 +23,8 @@
  */
 
 #include "db/consistency_level.hh"
+#include "db/commitlog/commitlog.hh"
+#include "db/serializer.hh"
 #include "storage_proxy.hh"
 #include "unimplemented.hh"
 #include "query_result_merger.hh"
@@ -469,14 +471,8 @@ namespace service {
 future<>
 storage_proxy::mutate_locally(const mutation& m) {
     auto shard = _db.local().shard_of(m);
-    return _db.invoke_on(shard, [&m] (database& db) -> void {
-        try {
-            auto& cf = db.find_column_family(m.column_family_id());
-            cf.apply(m);
-        } catch (no_such_column_family&) {
-            // TODO: log a warning
-            // FIXME: load keyspace meta-data from storage
-        }
+    return _db.invoke_on(shard, [&m] (database& db) -> future<> {
+        return db.apply(m);
     });
 }
 

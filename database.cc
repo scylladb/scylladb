@@ -8,6 +8,8 @@
 #include "core/future-util.hh"
 #include "db/system_keyspace.hh"
 #include "db/consistency_level.hh"
+#include "db/serializer.hh"
+#include "db/commitlog/commitlog.hh"
 #include "to_string.hh"
 #include "query-result-writer.hh"
 
@@ -243,6 +245,9 @@ database::database() {
     db::system_keyspace::make(*this);
 }
 
+database::~database() {
+}
+
 future<> database::populate(sstring datadir) {
     return lister::scan_dir(datadir, directory_entry_type::directory, [this, datadir] (directory_entry de) {
         auto& ks_name = de.name;
@@ -280,7 +285,35 @@ future<> database::populate(sstring datadir) {
 
 future<>
 database::init_from_data_directory(sstring datadir) {
-    return populate(datadir);
+    return populate(datadir).then([this, datadir]() {
+        return init_commitlog(datadir);
+    });
+}
+
+future<>
+database::init_commitlog(sstring datadir) {
+    auto logdir = datadir + "/work" + std::to_string(engine().cpu_id());
+
+    return engine().file_type(logdir).then([this, logdir](auto type) {
+        if (type && type.value() != directory_entry_type::directory) {
+            throw std::runtime_error("Not a directory " + logdir);
+        }
+        if (!type && ::mkdir(logdir.c_str(), S_IRWXU) != 0) {
+            throw std::runtime_error("Could not create directory " + logdir);
+        }
+
+        db::commitlog::config cfg;
+        cfg.commit_log_location = logdir;
+        // TODO: real config. Real logging.
+        // Right now we just set this up to use a single segment
+        // and discard everything left on disk (not filling it)
+        // with no hope of actually retrieving stuff...
+        cfg.commitlog_total_space_in_mb = 1;
+
+        return db::commitlog::create_commitlog(cfg).then([this](db::commitlog&& log) {
+            _commitlog = std::make_unique<db::commitlog>(std::move(log));
+        });
+    });
 }
 
 unsigned
@@ -572,6 +605,31 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     return out;
 }
 
+future<> database::apply_in_memory(const mutation& m) {
+    try {
+        auto& cf = find_column_family(m.schema());
+        cf.apply(m);
+    } catch (no_such_column_family&) {
+        // TODO: log a warning
+        // FIXME: load keyspace meta-data from storage
+    }
+    return make_ready_future<>();
+}
+
+future<> database::apply(const mutation& m) {
+    // I'm doing a nullcheck here since the init code path for db etc
+    // is a little in flux and commitlog is created only when db is
+    // initied from datadir.
+    if (_commitlog != nullptr) {
+        db::serializer<mutation> ms(*this, m);
+        auto uuid = m.schema()->id();
+        return _commitlog->add_mutation(uuid, ms.size(), ms).then([&m, this](auto rp) {
+            return this->apply_in_memory(m);
+        });
+    }
+    return apply_in_memory(m);
+}
+
 namespace db {
 
 std::ostream& operator<<(std::ostream& os, db::consistency_level cl) {
@@ -618,7 +676,3 @@ database::stop() {
     return make_ready_future<>();
 }
 
-void
-database::assign(database&& db) {
-    *this = std::move(db);
-}

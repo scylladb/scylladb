@@ -296,8 +296,7 @@ public:
                 }
                 auto shard = _db.local().shard_of(m_to_apply);
                 return _db.invoke_on(shard, [this, cf_name, m_to_apply = std::move(m_to_apply)] (database& db) {
-                    auto& cf = db.find_column_family(_ks_name, cf_name);
-                    cf.apply(m_to_apply);
+                    return db.apply(m_to_apply);
                 });
             });
         }).then_wrapped([this, cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<> ret) {

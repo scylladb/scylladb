@@ -157,6 +157,8 @@ public:
     size_t max_record_size() const;
 
     future<> clear();
+
+    const config& active_config() const;
 private:
     commitlog(config);
 };

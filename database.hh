@@ -45,6 +45,13 @@ class sstable;
 
 }
 
+namespace db {
+template<typename T>
+class serializer;
+
+class commitlog;
+}
+
 struct column_family {
     column_family(schema_ptr schema);
     column_family(column_family&&) = default;
@@ -98,8 +105,18 @@ class database {
     std::unordered_map<sstring, keyspace> _keyspaces;
     std::unordered_map<utils::UUID, column_family> _column_families;
     std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
+    std::unique_ptr<db::commitlog> _commitlog;
+
+    future<> init_commitlog(sstring datadir);
+    future<> apply_in_memory(const mutation&);
 public:
     database();
+    database(database&&) = default;
+    ~database();
+
+    db::commitlog* commitlog() const {
+        return _commitlog.get();
+    }
 
     future<> init_from_data_directory(sstring datadir);
     future<> populate(sstring datadir);
@@ -127,10 +144,10 @@ public:
     schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family);
     schema_ptr find_schema(const utils::UUID&) const throw (no_such_column_family);
     future<> stop();
-    void assign(database&& db);
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
+    future<> apply(const mutation&);
     friend std::ostream& operator<<(std::ostream& out, const database& db);
 };
 

@@ -579,3 +579,7 @@ size_t db::commitlog::max_record_size() const {
 future<> db::commitlog::clear() {
     return _segment_manager->clear();
 }
+
+const db::commitlog::config& db::commitlog::active_config() const {
+    return _segment_manager->cfg;
+}
