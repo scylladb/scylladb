@@ -667,3 +667,33 @@ SEASTAR_TEST_CASE(test_functions) {
         });
     });
 }
+
+static const api::timestamp_type the_timestamp = 123456789;
+SEASTAR_TEST_CASE(test_writetime_and_ttl) {
+    return do_with_cql_env([] (auto&& e) {
+        return e.create_table([](auto ks_name) {
+            // CQL: create table cf (p1 varchar primary key, u uuid, tu timeuuid);
+            return schema(ks_name, "cf",
+                {{"p1", utf8_type}}, {}, {{"i", int32_type}}, {}, utf8_type);
+        }).then([&e] {
+            auto qo = std::make_unique<cql3::default_query_options>(
+                    db::consistency_level::ONE,
+                    std::vector<bytes_opt>(),
+                    false,
+                    cql3::query_options::specific_options{100, make_shared<service::pager::paging_state>(),
+                            {db::consistency_level::ONE}, the_timestamp},
+                    3,
+                    serialization_format::use_32_bit()
+                    );
+            return e.execute_cql("insert into cf (p1, i) values ('key1', 1);", std::move(qo)).discard_result();
+        }).then([&e] {
+            return e.execute_cql("select writetime(i) from cf where p1 in ('key1');");
+        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+            assert_that(msg).is_rows()
+                .with_size(1)
+                .with_row({
+                     {long_type->decompose(int64_t(the_timestamp))},
+                 });
+        });
+    });
+}

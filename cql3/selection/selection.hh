@@ -288,6 +288,13 @@ public:
         return std::move(_result_set);
     }
 
+    api::timestamp_type timestamp_of(size_t idx) {
+        return _timestamps[idx];
+    }
+
+    int32_t ttl_of(size_t idx) {
+        return _ttls[idx];
+    }
 private:
     bytes_opt get_value(data_type t, atomic_cell_view c) {
         if (c.is_dead()) {
