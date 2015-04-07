@@ -30,6 +30,7 @@ options {
 }
 
 @parser::includes {
+#include "cql3/selection/writetime_or_ttl.hh"
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/property_definitions.hh"
@@ -306,10 +307,8 @@ selector returns [shared_ptr<raw_selector> s]
 unaliasedSelector returns [shared_ptr<selectable::raw> s]
     @init { shared_ptr<selectable::raw> tmp; }
     :  ( c=cident                                  { tmp = c; }
-#if 0
-       | K_WRITETIME '(' c=cident ')'              { tmp = new Selectable.WritetimeOrTTL.Raw(c, true); }
-       | K_TTL       '(' c=cident ')'              { tmp = new Selectable.WritetimeOrTTL.Raw(c, false); }
-#endif
+       | K_WRITETIME '(' c=cident ')'              { tmp = make_shared<selectable::writetime_or_ttl::raw>(c, true); }
+       | K_TTL       '(' c=cident ')'              { tmp = make_shared<selectable::writetime_or_ttl::raw>(c, false); }
        | f=functionName args=selectionFunctionArgs { tmp = ::make_shared<selectable::with_function::raw>(std::move(f), std::move(args)); }
        )
 #if 0
