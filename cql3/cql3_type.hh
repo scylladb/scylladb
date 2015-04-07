@@ -46,11 +46,10 @@ public:
     // For UserTypes, we need to know the current keyspace to resolve the
     // actual type used, so Raw is a "not yet prepared" CQL3Type.
     class raw {
-    protected:
-        bool _frozen = false;
-
-        virtual bool supports_freezing() const = 0;
     public:
+        bool _frozen = false;
+        virtual bool supports_freezing() const = 0;
+
         virtual bool is_collection() const {
             return false;
         }
@@ -79,22 +78,21 @@ public:
         {
             return new RawUT(name);
         }
+#endif
 
-        public static Raw map(CQL3Type.Raw t1, CQL3Type.Raw t2)
-        {
-            return new RawCollection(CollectionType.Kind.MAP, t1, t2);
+        static shared_ptr<raw> map(shared_ptr<raw> t1, shared_ptr<raw> t2) {
+            return make_shared(raw_collection(&collection_type_impl::kind::map, std::move(t1), std::move(t2)));
         }
 
-        public static Raw list(CQL3Type.Raw t)
-        {
-            return new RawCollection(CollectionType.Kind.LIST, null, t);
+        static shared_ptr<raw> list(shared_ptr<raw> t) {
+            return make_shared(raw_collection(&collection_type_impl::kind::list, {}, std::move(t)));
         }
 
-        public static Raw set(CQL3Type.Raw t)
-        {
-            return new RawCollection(CollectionType.Kind.SET, null, t);
+        static shared_ptr<raw> set(shared_ptr<raw> t) {
+            return make_shared(raw_collection(&collection_type_impl::kind::set, {}, std::move(t)));
         }
 
+#if 0
         public static Raw tuple(List<CQL3Type.Raw> ts)
         {
             return new RawTuple(ts);
@@ -108,6 +106,8 @@ public:
 #endif
 
         virtual sstring to_string() const = 0;
+
+        friend std::ostream& operator<<(std::ostream& os, const raw& r);
     };
 
 private:
@@ -139,82 +139,75 @@ private:
         }
     };
 
-#if 0
-        private static class RawCollection extends Raw
-        {
-            private final CollectionType.Kind kind;
-            private final CQL3Type.Raw keys;
-            private final CQL3Type.Raw values;
-
-            private RawCollection(CollectionType.Kind kind, CQL3Type.Raw keys, CQL3Type.Raw values)
-            {
-                this.kind = kind;
-                this.keys = keys;
-                this.values = values;
-            }
-
-            public void freeze() throws InvalidRequestException
-            {
-                if (keys != null && keys.supportsFreezing())
-                    keys.freeze();
-                if (values != null && values.supportsFreezing())
-                    values.freeze();
-                frozen = true;
-            }
-
-            protected boolean supportsFreezing()
-            {
-                return true;
-            }
-
-            public boolean isCollection()
-            {
-                return true;
-            }
-
-            public CQL3Type prepare(String keyspace) throws InvalidRequestException
-            {
-                assert values != null : "Got null values type for a collection";
-
-                if (!frozen && values.supportsFreezing() && !values.frozen)
-                    throw new InvalidRequestException("Non-frozen collections are not allowed inside collections: " + this);
-                if (values.isCounter())
-                    throw new InvalidRequestException("Counters are not allowed inside collections: " + this);
-
-                if (keys != null)
-                {
-                    if (!frozen && keys.supportsFreezing() && !keys.frozen)
-                        throw new InvalidRequestException("Non-frozen collections are not allowed inside collections: " + this);
-                }
-
-                switch (kind)
-                {
-                    case LIST:
-                        return new Collection(ListType.getInstance(values.prepare(keyspace).getType(), !frozen));
-                    case SET:
-                        return new Collection(SetType.getInstance(values.prepare(keyspace).getType(), !frozen));
-                    case MAP:
-                        assert keys != null : "Got null keys type for a collection";
-                        return new Collection(MapType.getInstance(keys.prepare(keyspace).getType(), values.prepare(keyspace).getType(), !frozen));
-                }
-                throw new AssertionError();
-            }
-
-            @Override
-            public String toString()
-            {
-                String start = frozen? "frozen<" : "";
-                String end = frozen ? ">" : "";
-                switch (kind)
-                {
-                    case LIST: return start + "list<" + values + ">" + end;
-                    case SET:  return start + "set<" + values + ">" + end;
-                    case MAP:  return start + "map<" + keys + ", " + values + ">" + end;
-                }
-                throw new AssertionError();
-            }
+    class raw_collection : public raw {
+        const collection_type_impl::kind* _kind;
+        shared_ptr<raw> _keys;
+        shared_ptr<raw> _values;
+    public:
+        raw_collection(const collection_type_impl::kind* kind, shared_ptr<raw> keys, shared_ptr<raw> values)
+                : _kind(kind), _keys(std::move(keys)), _values(std::move(values)) {
         }
 
+        virtual void freeze() override {
+            if (_keys && _keys->supports_freezing()) {
+                _keys->freeze();
+            }
+            if (_values && _values->supports_freezing()) {
+                _values->freeze();
+            }
+            _frozen = true;
+        }
+
+        virtual bool supports_freezing() const override {
+            return true;
+        }
+
+        virtual bool is_collection() const override {
+            return true;
+        }
+
+        virtual shared_ptr<cql3_type> prepare(const sstring& keyspace) override {
+            assert(_values); // "Got null values type for a collection";
+
+            if (!_frozen && _values->supports_freezing() && !_values->_frozen) {
+                throw exceptions::invalid_request_exception(sprint("Non-frozen collections are not allowed inside collections: %s", *this));
+            }
+            if (_values->is_counter()) {
+                throw exceptions::invalid_request_exception(sprint("Counters are not allowed inside collections: %s", *this));
+            }
+
+            if (_keys) {
+                if (!_frozen && _keys->supports_freezing() && !_keys->_frozen) {
+                    throw exceptions::invalid_request_exception(sprint("Non-frozen collections are not allowed inside collections: %s", *this));
+                }
+            }
+
+            if (_kind == &collection_type_impl::kind::list) {
+                return make_shared(cql3_type(to_string(), list_type_impl::get_instance(_values->prepare(keyspace)->get_type(), !_frozen), false));
+            } else if (_kind == &collection_type_impl::kind::set) {
+                return make_shared(cql3_type(to_string(), set_type_impl::get_instance(_values->prepare(keyspace)->get_type(), !_frozen), false));
+            } else if (_kind == &collection_type_impl::kind::map) {
+                assert(_keys); // "Got null keys type for a collection";
+                return make_shared(cql3_type(to_string(), map_type_impl::get_instance(_keys->prepare(keyspace)->get_type(), _values->prepare(keyspace)->get_type(), !_frozen), false));
+            }
+            abort();
+        }
+
+        virtual sstring to_string() const override {
+            sstring start = _frozen ? "frozen<" : "";
+            sstring end = _frozen ? ">" : "";
+            if (_kind == &collection_type_impl::kind::list) {
+                return sprint("%slist<%s>%s", start, _values, end);
+            } else if (_kind == &collection_type_impl::kind::set) {
+                return sprint("%sset<%s>%s", start, _values, end);
+            } else if (_kind == &collection_type_impl::kind::map) {
+                return sprint("%smap<%s, %s>%s", start, _keys, _values, end);
+            }
+            abort();
+        }
+    };
+
+#if 0
         private static class RawUT extends Raw
         {
             private final UTName name;
