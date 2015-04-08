@@ -261,6 +261,8 @@ http = ['http/transformers.cc',
         ]
 
 api = ['api/api.cc',
+       'api/api-doc/storage_service.json',
+       'api/storage_service.cc',
        ]
 defines = []
 libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt'
