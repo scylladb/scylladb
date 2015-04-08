@@ -381,6 +381,15 @@ xenfront_qp::xenfront_qp(xenfront_device* dev, boost::program_options::variables
         _dev->_xenstore->write<int>(path("state"), 4, t);
     }
 
+    // Register Rx error statistics
+    _collectd_regs.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("network"
+                    , scollectd::per_cpu_plugin_instance
+                    , "requests", "rx-errors")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                    , _stats.rx.bad.total)
+    ));
+
     keep_doing([this] {
         return alloc_rx_references();
     });

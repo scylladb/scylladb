@@ -1438,6 +1438,23 @@ dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid)
             rte_eth_dev_socket_id(_dev->port_idx()), _dev->def_tx_conf()) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot initialize tx queue\n");
     }
+
+    // Register error statistics: Rx total and checksum errors
+    _collectd_regs.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("network"
+                    , scollectd::per_cpu_plugin_instance
+                    , "requests", "rx-csum-errors")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                    , _stats.rx.bad.csum)
+    ));
+
+    _collectd_regs.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("network"
+                    , scollectd::per_cpu_plugin_instance
+                    , "requests", "rx-errors")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                    , _stats.rx.bad.total)
+    ));
 }
 
 template <bool HugetlbfsMemBackend>
