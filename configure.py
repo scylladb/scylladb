@@ -143,6 +143,7 @@ urchin_tests = [
     'tests/cartesian_product_test',
     'tests/urchin/hash_test',
     'tests/urchin/serializer_test',
+    'tests/message',
 ]
 
 tests = [
@@ -357,6 +358,7 @@ urchin_core = (['database.cc',
                  'locator/abstract_replication_strategy.cc',
                  'locator/simple_strategy.cc',
                  'locator/token_metadata.cc',
+                 'message/messaging_service.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
@@ -396,6 +398,7 @@ deps = {
     'tests/fstream_test': ['tests/fstream_test.cc'] + core,
     'tests/distributed_test': ['tests/distributed_test.cc'] + core,
     'tests/rpc': ['tests/rpc.cc'] + core + libnet,
+    'tests/message': ['tests/message.cc', 'message/messaging_service.cc'] + core + libnet,
 }
 
 for t in urchin_tests:
