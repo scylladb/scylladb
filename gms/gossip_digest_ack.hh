@@ -36,8 +36,8 @@ namespace gms {
 class gossip_digest_ack {
 private:
     using inet_address = gms::inet_address;
-    const std::vector<gossip_digest> _digests;
-    const std::map<inet_address, endpoint_state> _map;
+    std::vector<gossip_digest> _digests;
+    std::map<inet_address, endpoint_state> _map;
 public:
     gossip_digest_ack(std::vector<gossip_digest> d, std::map<inet_address, endpoint_state> m)
         : _digests(std::move(d))
