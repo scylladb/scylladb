@@ -29,7 +29,7 @@ using namespace std;
 
 void content_replace::transform(sstring& content, const request& req,
         const sstring& extension) {
-    std::experimental::string_view host = req.get_header("Host");
+    sstring host = req.get_header("Host");
     if (host == "" || (this->extension != "" && extension != this->extension)) {
         return;
     }
