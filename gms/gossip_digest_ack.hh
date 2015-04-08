@@ -39,6 +39,9 @@ private:
     std::vector<gossip_digest> _digests;
     std::map<inet_address, endpoint_state> _map;
 public:
+    gossip_digest_ack() {
+    }
+
     gossip_digest_ack(std::vector<gossip_digest> d, std::map<inet_address, endpoint_state> m)
         : _digests(std::move(d))
         , _map(std::move(m)) {
