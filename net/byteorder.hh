@@ -58,13 +58,9 @@ inline int32_t hton(int32_t x) { return htonl(x); }
 inline int64_t ntoh(int64_t x) { return ntohq(x); }
 inline int64_t hton(int64_t x) { return htonq(x); }
 
-// Define net::packed<> using unaligned<> from unaligned.hh.
-template <typename T>
-struct packed : public unaligned<T> {
-    using unaligned<T>::unaligned; // inherit constructors
-    template <typename Adjuster>
-    void adjust_endianness(Adjuster a) { a(this->raw); }
-} __attribute__((packed));
+// Deprecated alias net::packed<> for unaligned<> from unaligned.hh.
+// TODO: get rid of this alias.
+template <typename T> using packed = unaligned<T>;
 
 template <typename T>
 inline T ntoh(const packed<T>& x) {

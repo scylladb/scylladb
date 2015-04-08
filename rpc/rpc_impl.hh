@@ -439,7 +439,7 @@ void protocol<Serializer, MsgType>::server::accept(server_socket&& ss) {
 
 template<typename Serializer, typename MsgType>
 protocol<Serializer, MsgType>::server::connection::connection(protocol<Serializer, MsgType>::server& s, connected_socket&& fd, socket_address&& addr, protocol<Serializer, MsgType>& proto)
-                                     : protocol<Serializer, MsgType>::connection(std::move(fd), proto), _server(s) {
+    : protocol<Serializer, MsgType>::connection(std::move(fd), proto), _server(s) {
     _info.addr = std::move(addr);
 }
 
