@@ -294,12 +294,12 @@ public:
 
     keyspace& add_keyspace(sstring name, keyspace k);
     /** Adds cf with auto-generated UUID. */
-    void add_column_family(column_family);
-    void add_column_family(const utils::UUID&, column_family);
+    void add_column_family(column_family&&);
+    void add_column_family(const utils::UUID&, column_family&&);
 
     /* throws std::out_of_range if missing */
-    const utils::UUID& find_uuid(sstring ks, sstring cf) const throw (std::out_of_range);
-    const utils::UUID& find_uuid(schema_ptr) const throw (std::out_of_range);
+    const utils::UUID& find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range);
+    const utils::UUID& find_uuid(const schema_ptr&) const throw (std::out_of_range);
 
     /* below, find* throws no_such_<type> on fail */
     keyspace& find_or_create_keyspace(const sstring& name);
@@ -310,8 +310,8 @@ public:
     const column_family& find_column_family(const sstring& ks, const sstring& name) const throw (no_such_column_family);
     column_family& find_column_family(const utils::UUID&) throw (no_such_column_family);
     const column_family& find_column_family(const utils::UUID&) const throw (no_such_column_family);
-    column_family& find_column_family(schema_ptr) throw (no_such_column_family);
-    const column_family& find_column_family(schema_ptr) const throw (no_such_column_family);
+    column_family& find_column_family(const schema_ptr&) throw (no_such_column_family);
+    const column_family& find_column_family(const schema_ptr&) const throw (no_such_column_family);
     schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family);
     schema_ptr find_schema(const utils::UUID&) const throw (no_such_column_family);
     future<> stop() { return make_ready_future<>(); }

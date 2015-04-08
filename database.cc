@@ -392,7 +392,7 @@ keyspace& database::add_keyspace(sstring name, keyspace k) {
     return _keyspaces.emplace(std::move(name), std::move(k)).first->second;
 }
 
-void database::add_column_family(const utils::UUID& uuid, column_family cf) {
+void database::add_column_family(const utils::UUID& uuid, column_family&& cf) {
     if (_keyspaces.count(cf._schema->ks_name) == 0) {
         throw std::invalid_argument("Keyspace " + cf._schema->ks_name + " not defined");
     }
@@ -407,15 +407,15 @@ void database::add_column_family(const utils::UUID& uuid, column_family cf) {
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
 }
 
-void database::add_column_family(column_family cf) {
+void database::add_column_family(column_family&& cf) {
     add_column_family(utils::UUID_gen::get_time_UUID(), std::move(cf));
 }
 
-const utils::UUID& database::find_uuid(sstring ks, sstring cf) const throw (std::out_of_range) {
+const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range) {
     return _ks_cf_to_uuid.at(std::make_pair(ks, cf));
 }
 
-const utils::UUID& database::find_uuid(schema_ptr schema) const throw (std::out_of_range) {
+const utils::UUID& database::find_uuid(const schema_ptr& schema) const throw (std::out_of_range) {
     return find_uuid(schema->ks_name, schema->cf_name);
 }
 
@@ -493,11 +493,11 @@ keyspace::get_replication_strategy() {
     return *_replication_strategy;
 }
 
-column_family& database::find_column_family(schema_ptr schema) throw (no_such_column_family) {
+column_family& database::find_column_family(const schema_ptr& schema) throw (no_such_column_family) {
     return find_column_family(schema->ks_name, schema->cf_name);
 }
 
-const column_family& database::find_column_family(schema_ptr schema) const throw (no_such_column_family) {
+const column_family& database::find_column_family(const schema_ptr& schema) const throw (no_such_column_family) {
     return find_column_family(schema->ks_name, schema->cf_name);
 }
 
