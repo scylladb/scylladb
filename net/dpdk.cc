@@ -161,6 +161,38 @@ static constexpr const char* pktmbuf_pool_name   = "dpdk_net_pktmbuf_pool";
 static constexpr uint8_t packet_read_size        = 32;
 /******************************************************************************/
 
+struct port_stats {
+    port_stats() {
+        std::memset(&rx, 0, sizeof(rx));
+        std::memset(&tx, 0, sizeof(tx));
+    }
+
+    struct {
+        struct {
+            uint64_t mcast;        // number of received multicast packets
+            uint64_t pause_xon;    // number of received PAUSE XON frames
+            uint64_t pause_xoff;   // number of received PAUSE XOFF frames
+        } good;
+
+        struct {
+            uint64_t dropped;      // missed packets (e.g. full FIFO)
+            uint64_t crc;          // packets with CRC error
+            uint64_t len;          // packets with a bad length
+            uint64_t total;        // total number of erroneous received packets
+        } bad;
+    } rx;
+
+    struct {
+        struct {
+            uint64_t pause_xon;   // number of sent PAUSE XON frames
+            uint64_t pause_xoff;  // number of sent PAUSE XOFF frames
+        } good;
+
+        struct {
+            uint64_t total;   // total number of failed transmitted packets
+        } bad;
+    } tx;
+};
 
 class dpdk_device : public device {
     uint8_t _port_idx;
@@ -174,6 +206,8 @@ class dpdk_device : public device {
     struct rte_eth_rxconf _rx_conf_default = {};
     struct rte_eth_txconf _tx_conf_default = {};
 #endif
+    port_stats _stats;
+    timer<> _stats_collector;
 
 public:
     rte_eth_dev_info _dev_info = {};
@@ -226,7 +260,35 @@ public:
         if (ret != 0) {
             rte_exit(EXIT_FAILURE, "Cannot initialise port %u\n", _port_idx);
         }
+
+        _stats_collector.set_callback([&] {
+            rte_eth_stats rte_stats = {};
+            int rc = rte_eth_stats_get(_port_idx, &rte_stats);
+
+            if (rc) {
+                printf("Failed to get port statistics: %s\n", strerror(rc));
+            }
+
+            _stats.rx.good.mcast      = rte_stats.imcasts;
+            _stats.rx.good.pause_xon  = rte_stats.rx_pause_xon;
+            _stats.rx.good.pause_xoff = rte_stats.rx_pause_xoff;
+
+            _stats.rx.bad.crc         = rte_stats.ibadcrc;
+            _stats.rx.bad.dropped     = rte_stats.imissed;
+            _stats.rx.bad.len         = rte_stats.ibadlen;
+            _stats.rx.bad.total       = rte_stats.ierrors;
+
+            _stats.tx.good.pause_xon  = rte_stats.tx_pause_xon;
+            _stats.tx.good.pause_xoff = rte_stats.tx_pause_xoff;
+
+            _stats.tx.bad.total       = rte_stats.oerrors;
+        });
     }
+
+    ~dpdk_device() {
+        _stats_collector.cancel();
+    }
+
     ethernet_address hw_address() override {
         struct ether_addr mac;
         rte_eth_macaddr_get(_port_idx, &mac);
@@ -1397,6 +1459,9 @@ void dpdk_device::check_port_link_status()
                           ("full-duplex") : ("half-duplex\n")) <<
                 std::endl;
             _link_ready_promise.set_value();
+
+            // We may start collecting statistics only after the Link is UP.
+            _stats_collector.arm_periodic(2s);
         } else if (count++ < max_check_time) {
              std::cout << "." << std::flush;
              return;
