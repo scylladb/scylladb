@@ -8,6 +8,8 @@
 #include "core/distributed.hh"
 #include "thrift/server.hh"
 #include "transport/server.hh"
+#include "http/httpd.hh"
+#include "api/api.hh"
 
 namespace bpo = boost::program_options;
 
@@ -16,18 +18,21 @@ int main(int ac, char** av) {
     app.add_options()
         ("cql-port", bpo::value<uint16_t>()->default_value(9042), "CQL port")
         ("thrift-port", bpo::value<uint16_t>()->default_value(9160), "Thrift port")
+        ("api-port", bpo::value<uint16_t>()->default_value(10000), "Http Rest API port")
         ("datadir", bpo::value<std::string>()->default_value("/var/lib/cassandra/data"), "data directory");
 
     auto server = std::make_unique<distributed<thrift_server>>();
     distributed<database> db;
     distributed<cql3::query_processor> qp;
     service::storage_proxy proxy{db};
+    api::http_context ctx;
 
     return app.run(ac, av, [&] {
         auto&& config = app.configuration();
         uint16_t thrift_port = config["thrift-port"].as<uint16_t>();
         uint16_t cql_port = config["cql-port"].as<uint16_t>();
         sstring datadir = config["datadir"].as<std::string>();
+        uint16_t api_port = config["api-port"].as<uint16_t>();
 
         return db.start().then([datadir, &db] {
             engine().at_exit([&db] { return db.stop(); });
@@ -48,6 +53,14 @@ int main(int ac, char** av) {
                     server->invoke_on_all(&thrift_server::listen, ipv4_addr{thrift_port});
             }).then([thrift_port] {
                 std::cout << "Thrift server listening on port " << thrift_port << " ...\n";
+            });
+        }).then([&db, api_port, &ctx]{
+            ctx.http_server.start().then([api_port, &ctx] {
+                return set_server(ctx);
+            }).then([&ctx, api_port] {
+                ctx.http_server.listen(api_port);
+            }).then([api_port] {
+                std::cout << "Seastar HTTP server listening on port " << api_port << " ...\n";
             });
         }).or_terminate();
     });
