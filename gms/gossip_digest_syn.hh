@@ -38,6 +38,9 @@ private:
     sstring _partioner;
     std::vector<gossip_digest> _digests;
 public:
+    gossip_digest_syn() {
+    }
+
     gossip_digest_syn(sstring id, sstring p, std::vector<gossip_digest> digests)
         : _cluster_id(id)
         , _partioner(p)
