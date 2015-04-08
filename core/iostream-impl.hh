@@ -32,10 +32,10 @@ future<> output_stream<CharType>::write(const char_type* buf) {
 }
 
 template<typename CharType>
-template<typename SizeType, SizeType MaxSize>
+template<typename StringChar, typename SizeType, SizeType MaxSize>
 inline
-future<> output_stream<CharType>::write(const basic_sstring<CharType, SizeType, MaxSize>& s) {
-    return write(s.c_str(), s.size());
+future<> output_stream<CharType>::write(const basic_sstring<StringChar, SizeType, MaxSize>& s) {
+    return write(reinterpret_cast<const CharType *>(s.c_str()), s.size());
 }
 
 template<typename CharType>
