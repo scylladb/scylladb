@@ -200,5 +200,9 @@ public:
         static bool contains(prepared e) {
             return mask & e.mask;
         }
+
+        static enum_set<Enum> unfreeze() {
+            return enum_set<Enum>(mask);
+        }
     };
 };
