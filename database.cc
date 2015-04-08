@@ -873,7 +873,7 @@ query::result::partition
 column_family::get_partition_slice(mutation_partition& partition, const query::partition_slice& slice, uint32_t limit) {
     query::result::partition result;
 
-    auto regular_column_resolver = [this] (column_id id) {
+    auto regular_column_resolver = [this] (column_id id) -> const column_definition& {
         return _schema->regular_column_at(id);
     };
 
@@ -913,7 +913,7 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
         // When there are no clustered rows, static row counts as one row with respect to row limit
         if (!result.rows.empty() || limit > 0) {
             result.static_row = get_row_slice(partition.static_row(), slice.static_columns, partition.tombstone_for_static_row(),
-                [this] (column_id id) { return _schema->static_column_at(id); });
+                [this] (column_id id) -> const column_definition& { return _schema->static_column_at(id); });
         }
     }
 
