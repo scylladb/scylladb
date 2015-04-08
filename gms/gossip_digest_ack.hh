@@ -95,6 +95,8 @@ public:
         }
         return size;
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const gossip_digest_ack& ack);
 };
 
 }

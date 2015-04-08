@@ -33,4 +33,17 @@ std::ostream& operator<<(std::ostream& os, const gossip_digest_syn& syn) {
     return os << "}";
 }
 
+std::ostream& operator<<(std::ostream& os, const gossip_digest_ack& ack) {
+    os << "digests:{";
+    for (auto& d : ack._digests) {
+        os << d << " ";
+    }
+    os << "} ";
+    os << "endpoint_state:{";
+    for (auto& d : ack._map) {
+        os << "[" << d.first << "->" << d.second << "]";
+    }
+    return os << "}";
+}
+
 }
