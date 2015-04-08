@@ -91,6 +91,11 @@ public:
 private:
     mask_type _mask;
     constexpr enum_set(mask_type mask) : _mask(mask) {}
+
+    template<enum_type Elem>
+    static constexpr unsigned shift_for() {
+        return Enum::template sequence_for<Elem>();
+    }
 public:
     constexpr enum_set() : _mask(0) {}
 
@@ -104,8 +109,7 @@ public:
 
     template<enum_type Elem>
     static constexpr mask_type mask_for() {
-        // FIXME: for some reason Enum::sequence_for<Elem>() does not compile
-        return mask_type(1) << static_cast<typename Enum::sequence_type>(Elem);
+        return mask_type(1) << shift_for<Elem>();
     }
 
     struct prepared {
@@ -147,6 +151,11 @@ public:
     template<enum_type e>
     void set() {
         _mask |= mask_for<e>();
+    }
+
+    template<enum_type e>
+    void set_if(bool condition) {
+        _mask |= mask_type(condition) << shift_for<e>();
     }
 
     void set(enum_type e) {
