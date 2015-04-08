@@ -37,6 +37,9 @@ private:
     using inet_address = gms::inet_address;
     std::map<inet_address, endpoint_state> _map;
 public:
+    gossip_digest_ack2() {
+    }
+
     gossip_digest_ack2(std::map<inet_address, endpoint_state> m)
         : _map(std::move(m)) {
     }
