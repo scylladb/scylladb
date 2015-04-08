@@ -69,6 +69,8 @@ public:
         return serialize_string_size(_cluster_id) + serialize_string_size(_partioner) +
                gossip_digest_serialization_helper::serialized_size(_digests);
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const gossip_digest_syn& syn);
 };
 
 }
