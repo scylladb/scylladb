@@ -205,4 +205,9 @@ public:
             return enum_set<Enum>(mask);
         }
     };
+
+    template<enum_type... items>
+    static enum_set<Enum> of() {
+        return frozen<items...>::unfreeze();
+    }
 };
