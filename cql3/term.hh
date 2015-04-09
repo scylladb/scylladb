@@ -182,7 +182,7 @@ public:
 
 class multi_item_terminal : public terminal {
 public:
-    virtual std::vector<bytes> get_elements() = 0;
+    virtual std::vector<bytes_opt> get_elements() = 0;
 };
 
 class collection_terminal {
