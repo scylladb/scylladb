@@ -221,14 +221,15 @@ future<> write(output_stream<char>& out, double d) {
 }
 
 template <typename T>
-future<> parse(random_access_reader& in, T& len, sstring& s) {
+future<> parse(random_access_reader& in, T& len, bytes& s) {
     return in.read_exactly(len).then([&s, len] (auto buf) {
         check_buf_size(buf, len);
-        s = sstring(buf.get(), len);
+        // Likely a different type of char. Most bufs are unsigned, whereas the bytes type is signed.
+        s = bytes(reinterpret_cast<const bytes::value_type *>(buf.get()), len);
     });
 }
 
-future<> write(output_stream<char>& out, sstring& s) {
+future<> write(output_stream<char>& out, bytes& s) {
     return out.write(s).then([&out, &s] (...) -> future<> {
         // TODO: handle result
         return make_ready_future<>();

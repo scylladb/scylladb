@@ -16,7 +16,7 @@ namespace sstables {
 // once - it is already part of the type.
 template <typename Size>
 struct disk_string {
-    sstring value;
+    bytes value;
 };
 
 template <typename Size, typename Members>
