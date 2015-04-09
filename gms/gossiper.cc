@@ -3,13 +3,76 @@
 
 namespace gms {
 
-gossiper::gossiper() {
+gossiper::gossiper()
+    : _scheduled_gossip_task([this] { run(); }) {
     // half of QUARATINE_DELAY, to ensure _just_removed_endpoints has enough leeway to prevent re-gossip
     fat_client_timeout = (int64_t) (QUARANTINE_DELAY / 2);
     /* register with the Failure Detector for receiving Failure detector events */
     get_local_failure_detector().register_failure_detection_event_listener(this->shared_from_this());
-    fail(unimplemented::cause::GOSSIP);
     // Register this instance with JMX
+    init_messaging_service_handler();
+}
+
+void gossiper::init_messaging_service_handler() {
+    ms().register_handler(messaging_verb::ECHO, [] (empty_msg msg) {
+        return make_ready_future<empty_msg>();
+    });
+    ms().register_handler_oneway(messaging_verb::GOSSIP_SHUTDOWN, [] (inet_address from) {
+        // TODO: Implement processing of incoming SHUTDOWN message
+        get_local_failure_detector().force_conviction(from);
+        return messaging_service::no_wait();
+    });
+    ms().register_handler(messaging_verb::GOSSIP_DIGEST_SYN, [] (gossip_digest_syn msg) {
+        // TODO: Implement processing of incoming ACK2 message
+        print("gossiper: Server got syn msg = %s\n", msg);
+        auto ep = inet_address("2.2.2.2");
+        int32_t gen = 800;
+        int32_t ver = 900;
+        std::vector<gms::gossip_digest> digests{
+            {ep, gen++, ver++},
+        };
+        std::map<inet_address, endpoint_state> eps{
+            {ep, endpoint_state()},
+        };
+        gms::gossip_digest_ack ack(std::move(digests), std::move(eps));
+        return make_ready_future<gossip_digest_ack>(ack);
+    });
+    ms().register_handler_oneway(messaging_verb::GOSSIP_DIGEST_ACK2, [] (gossip_digest_ack2 msg) {
+        print("gossiper: Server got ack2 msg = %s\n", msg);
+        // TODO: Implement processing of incoming ACK2 message
+        return messaging_service::no_wait();
+    });
+}
+
+bool gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> epset) {
+    std::vector<inet_address> __live_endpoints(epset.begin(), epset.end());
+    size_t size = __live_endpoints.size();
+    if (size < 1) {
+        return false;
+    }
+    /* Generate a random number from 0 -> size */
+    std::uniform_int_distribution<int> dist(0, size - 1);
+    int index = dist(_random);
+    inet_address to = __live_endpoints[index];
+    // if (logger.isTraceEnabled())
+    //     logger.trace("Sending a GossipDigestSyn to {} ...", to);
+    using RetMsg = gossip_digest_ack;
+    auto id = get_shard_id(to);
+    print("send_gossip: Sending to shard %s\n", id);
+    ms().send_message<RetMsg>(messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), std::move(message)).then([this, id] (RetMsg ack) {
+        print("send_gossip: Client sent gossip_digest_syn got gossip_digest_ack reply = %s\n", ack);
+        // TODO: Implement processing of incoming ACK message
+        auto ep1 = inet_address("3.3.3.3");
+        std::map<inet_address, endpoint_state> eps{
+            {ep1, endpoint_state()},
+        };
+        gms::gossip_digest_ack2 ack2(std::move(eps));
+        return ms().send_message_oneway<void>(messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(ack2)).then([] () {
+            print("send_gossip: Client sent gossip_digest_ack2 got reply = void\n");
+            return make_ready_future<>();
+        });
+    });
+    return _seeds.count(to);
 }
 
 
@@ -198,6 +261,56 @@ void gossiper::do_status_check() {
         } else {
             it++;
         }
+    }
+}
+
+void gossiper::run() {
+    print("---> In Gossip::run() \n");
+    //wait on messaging service to start listening
+    // MessagingService.instance().waitUntilListening();
+
+
+    /* Update the local heartbeat counter. */
+    //endpoint_state_map.get(FBUtilities.getBroadcastAddress()).get_heart_beat_state().updateHeartBeat();
+    // if (logger.isTraceEnabled())
+    //     logger.trace("My heartbeat is now {}", endpoint_state_map.get(FBUtilities.getBroadcastAddress()).get_heart_beat_state().get_heart_beat_version());
+    std::vector<gossip_digest> g_digests;
+    this->make_random_gossip_digest(g_digests);
+
+    // FIXME: hack
+    if (g_digests.size() > 0 || true) {
+        sstring cluster_name("my cluster_name");
+        sstring partioner_name("my partioner name");
+        gossip_digest_syn message(cluster_name, partioner_name, g_digests);
+
+        /* Gossip to some random live member */
+        _live_endpoints.emplace(inet_address("127.0.0.1")); // FIXME: hack
+        bool gossiped_to_seed = do_gossip_to_live_member(message);
+
+        /* Gossip to some unreachable member with some probability to check if he is back up */
+        do_gossip_to_unreachable_member(message);
+
+        /* Gossip to a seed if we did not do so above, or we have seen less nodes
+           than there are seeds.  This prevents partitions where each group of nodes
+           is only gossiping to a subset of the seeds.
+
+           The most straightforward check would be to check that all the seeds have been
+           verified either as live or unreachable.  To avoid that computation each round,
+           we reason that:
+
+           either all the live nodes are seeds, in which case non-seeds that come online
+           will introduce themselves to a member of the ring by definition,
+
+           or there is at least one non-seed node in the list, in which case eventually
+           someone will gossip to it, and then do a gossip to a random seed from the
+           gossipedToSeed check.
+
+           See CASSANDRA-150 for more exposition. */
+        if (!gossiped_to_seed || _live_endpoints.size() < _seeds.size()) {
+            do_gossip_to_seed(message);
+        }
+
+        do_status_check();
     }
 }
 

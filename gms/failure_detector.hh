@@ -266,7 +266,7 @@ public:
     double get_phi_convict_threshold() {
         // FIXME
         // return DatabaseDescriptor.getPhiConvictThreshold();
-        fail(unimplemented::cause::GOSSIP);
+        warn(unimplemented::cause::GOSSIP);
         return 0;
     }
 
@@ -358,6 +358,9 @@ extern distributed<failure_detector> _the_failure_detector;
 inline failure_detector& get_local_failure_detector() {
     assert(engine().cpu_id() == 0);
     return _the_failure_detector.local();
+}
+inline distributed<failure_detector>& get_failure_detector() {
+    return _the_failure_detector;
 }
 
 } // namespace gms

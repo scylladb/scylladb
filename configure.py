@@ -144,6 +144,7 @@ urchin_tests = [
     'tests/urchin/hash_test',
     'tests/urchin/serializer_test',
     'tests/message',
+    'tests/urchin/gossip',
 ]
 
 tests = [
