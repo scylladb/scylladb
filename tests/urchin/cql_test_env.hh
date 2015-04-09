@@ -69,7 +69,7 @@ public:
         assert(stmt->get_bound_terms() == values.size());
 
         int32_t protocol_version = 3;
-        auto options = ::make_shared<cql3::default_query_options>(db::consistency_level::ONE, std::move(values), false,
+        auto options = ::make_shared<cql3::query_options>(db::consistency_level::ONE, std::experimental::nullopt, std::move(values), false,
             cql3::query_options::specific_options::DEFAULT, protocol_version, serialization_format::use_32_bit());
         options->prepare(prepared->bound_names);
 
