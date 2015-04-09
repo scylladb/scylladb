@@ -34,10 +34,13 @@ namespace gms {
  */
 class gossip_digest_syn {
 private:
-    const sstring _cluster_id;
-    const sstring _partioner;
-    const std::vector<gossip_digest> _digests;
+    sstring _cluster_id;
+    sstring _partioner;
+    std::vector<gossip_digest> _digests;
 public:
+    gossip_digest_syn() {
+    }
+
     gossip_digest_syn(sstring id, sstring p, std::vector<gossip_digest> digests)
         : _cluster_id(id)
         , _partioner(p)
@@ -66,6 +69,8 @@ public:
         return serialize_string_size(_cluster_id) + serialize_string_size(_partioner) +
                gossip_digest_serialization_helper::serialized_size(_digests);
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const gossip_digest_syn& syn);
 };
 
 }

@@ -23,6 +23,9 @@ public:
     inet_address(const sstring& addr)
         : _addr(addr) {
     }
+    uint32_t raw_addr() const {
+        return _addr.ip;
+    }
     bool is_broadcast_address() {
         return _addr == net::ipv4::broadcast_address();
     }
