@@ -131,7 +131,7 @@ public:
 
     class multi_column_raw : public virtual raw {
     public:
-        virtual ::shared_ptr<term> prepare(const sstring& keyspace, const std::vector<column_specification>& receiver) = 0;
+        virtual ::shared_ptr<term> prepare(const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receiver) = 0;
     };
 };
 
