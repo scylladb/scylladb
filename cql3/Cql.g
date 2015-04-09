@@ -50,6 +50,7 @@ options {
 #include "cql3/sets.hh"
 #include "cql3/lists.hh"
 #include "cql3/type_cast.hh"
+#include "cql3/tuples.hh"
 #include "cql3/functions/function_name.hh"
 #include "cql3/functions/function_call.hh"
 #include "core/sstring.hh"
@@ -1046,21 +1047,21 @@ usertypeLiteral returns [UserTypes.Literal ut]
     // We don't allow empty literals because that conflicts with sets/maps and is currently useless since we don't allow empty user types
     : '{' k1=ident ':' v1=term { m.put(k1, v1); } ( ',' kn=ident ':' vn=term { m.put(kn, vn); } )* '}'
     ;
-
-tupleLiteral returns [Tuples.Literal tt]
-    @init{ List<Term.Raw> l = new ArrayList<Term.Raw>(); }
-    @after{ $tt = new Tuples.Literal(l); }
-    : '(' t1=term { l.add(t1); } ( ',' tn=term { l.add(tn); } )* ')'
-    ;
 #endif
+
+tupleLiteral returns [shared_ptr<cql3::tuples::literal> tt]
+    @init{ std::vector<shared_ptr<cql3::term::raw>> l; }
+    @after{ $tt = ::make_shared<cql3::tuples::literal>(std::move(l)); }
+    : '(' t1=term { l.push_back(t1); } ( ',' tn=term { l.push_back(tn); } )* ')'
+    ;
 
 value returns [::shared_ptr<cql3::term::raw> value]
     : c=constant           { $value = c; }
     | l=collectionLiteral  { $value = l; }
 #if 0
     | u=usertypeLiteral    { $value = u; }
-    | t=tupleLiteral       { $value = t; }
 #endif
+    | t=tupleLiteral       { $value = t; }
     | K_NULL               { $value = cql3::constants::NULL_LITERAL; }
     | ':' id=ident         { $value = new_bind_variables(id); }
     | QMARK                { $value = new_bind_variables(shared_ptr<cql3::column_identifier>{}); }
@@ -1278,8 +1279,8 @@ inMarkerForTuple returns [Tuples.INRaw marker]
 comparatorType returns [shared_ptr<cql3_type::raw> t]
     : n=native_type     { $t = cql3_type::raw::from(n); }
     | c=collection_type { $t = c; }
-#if 0
     | tt=tuple_type     { $t = tt; }
+#if 0
     | id=userTypeName   { $t = CQL3Type.Raw.userType(id); }
     | K_FROZEN '<' f=comparatorType '>'
       {
@@ -1339,13 +1340,14 @@ collection_type returns [shared_ptr<cql3::cql3_type::raw> pt]
         { if (t) { $pt = cql3::cql3_type::raw::set(t); } }
     ;
 
-#if 0
-tuple_type returns [CQL3Type.Raw t]
-    : K_TUPLE '<' { List<CQL3Type.Raw> types = new ArrayList<>(); }
-         t1=comparatorType { types.add(t1); } (',' tn=comparatorType { types.add(tn); })*
-      '>' { $t = CQL3Type.Raw.tuple(types); }
+tuple_type returns [shared_ptr<cql3::cql3_type::raw> t]
+        @init{ std::vector<shared_ptr<cql3::cql3_type::raw>> types; }
+    : K_TUPLE '<'
+         t1=comparatorType { types.push_back(t1); } (',' tn=comparatorType { types.push_back(tn); })*
+      '>' { $t = cql3::cql3_type::raw::tuple(std::move(types)); }
     ;
 
+#if 0
 username
     : IDENT
     | STRING_LITERAL
