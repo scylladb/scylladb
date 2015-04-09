@@ -55,6 +55,13 @@ struct index_entry {
 struct summary_entry {
     bytes key;
     uint64_t position;
+
+    bool operator==(const summary_entry& x) const {
+        return position ==  x.position && key == x.key;
+    }
+
+    template <typename Describer>
+    future<> describe_type(Describer f) { return f(key, position); }
 };
 
 // Note: Sampling level is present in versions ka and higher. We ATM only support la,
@@ -86,6 +93,16 @@ struct summary_la {
 
     disk_string<uint32_t> first_key;
     disk_string<uint32_t> last_key;
+
+    // NOTE4: There is a structure written by Cassandra into the end of the Summary
+    // file, after the field last_key, that we haven't understand yet, but we know
+    // that its content isn't related to the summary itself.
+    // The structure is basically as follow:
+    // struct { disk_string<uint16_t>; uint32_t; uint64_t; disk_string<uint16_t>; }
+    // Another interesting fact about this structure is that it is apparently always
+    // filled with the same data. It's too early to judge that the data is useless.
+    // However, it was tested that Cassandra loads successfully a Summary file with
+    // this structure removed from it. Anyway, let's pay attention to it.
 };
 using summary = summary_la;
 

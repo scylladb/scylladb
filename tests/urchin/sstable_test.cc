@@ -42,6 +42,15 @@ public:
     statistics& get_statistics() {
         return _sst->_statistics;
     }
+
+    future<> read_summary() {
+        return _sst->read_summary();
+    }
+
+    summary& get_summary() {
+        return _sst->_summary;
+    }
+
 #define IMPORT(name) \
         template<typename... Args> \
         future<> name(Args&&... args) { \
@@ -277,6 +286,22 @@ static future<> check_component_integrity(sstring component) {
 
 SEASTAR_TEST_CASE(check_compressed_info_func) {
     return check_component_integrity("CompressionInfo.db");
+}
+
+SEASTAR_TEST_CASE(check_summary_func) {
+    return do_write_sst("tests/urchin/sstables/compressed", 1).then([] (auto sst1) {
+        auto sst2 = make_lw_shared<sstable>("tests/urchin/sstables/compressed", 2, la, big);
+        return sstables::test(sst2).read_summary().then([sst1, sst2] {
+            summary& sst1_s = sstables::test(sst1).get_summary();
+            summary& sst2_s = sstables::test(sst2).get_summary();
+
+            BOOST_REQUIRE(::memcmp(&sst1_s.header, &sst2_s.header, sizeof(summary::header)) == 0);
+            BOOST_REQUIRE(sst1_s.positions == sst2_s.positions);
+            BOOST_REQUIRE(sst1_s.entries == sst2_s.entries);
+            BOOST_REQUIRE(sst1_s.first_key.value == sst2_s.first_key.value);
+            BOOST_REQUIRE(sst1_s.last_key.value == sst2_s.last_key.value);
+        });
+    });
 }
 
 SEASTAR_TEST_CASE(check_filter_func) {

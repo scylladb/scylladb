@@ -91,6 +91,9 @@ private:
     future<> read_summary() {
         return read_simple<summary, component_type::Summary, &sstable::_summary>();
     }
+    future<> write_summary() {
+        return write_simple<summary, component_type::Summary, &sstable::_summary>();
+    }
 
     future<> read_statistics();
     future<> write_statistics();

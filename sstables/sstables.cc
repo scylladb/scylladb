@@ -473,11 +473,28 @@ future<> parse(random_access_reader& in, summary& s) {
                     return make_ready_future<>();
                 });
             }).then([&s] {
-                // Since we've made the decision of reading the whole entries array upfront, we can
-                // actually get rid of the positions. We won't need it anymore.
-                std::vector<typename decltype(s.positions)::value_type>().swap(s.positions);
+                // Delete last element which isn't part of the on-disk format.
+                s.positions.pop_back();
             });
         });
+    });
+}
+
+future<> write(output_stream<char>& out, summary& s) {
+    using pos_type = typename decltype(summary::positions)::value_type;
+
+    return write(out, s.header.min_index_interval,
+                      s.header.size,
+                      s.header.memory_size,
+                      s.header.sampling_level,
+                      s.header.size_at_full_sampling).then([&out, &s] {
+        // NOTE: s.positions must be stored in NATIVE BYTE ORDER, not BIG-ENDIAN.
+        auto p = reinterpret_cast<const char*>(s.positions.data());
+        return out.write(p, sizeof(pos_type) * s.positions.size());
+    }).then([&out, &s] {
+        return write(out, s.entries);
+    }).then([&out, &s] {
+        return write(out, s.first_key, s.last_key);
     });
 }
 
@@ -774,6 +791,8 @@ future<> sstable::store() {
         return write_compression();
     }).then([this] {
         return write_filter();
+    }).then([this] {
+        return write_summary();
     });
 }
 
