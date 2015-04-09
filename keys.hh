@@ -141,14 +141,16 @@ public:
         { }
 
         bool operator()(const prefix_view_on_full_tuple& k1, const PrefixTopLevel& k2) const {
-            return lexicographical_tri_compare(prefix_type->types().begin(),
+            return lexicographical_tri_compare(
+                prefix_type->types().begin(), prefix_type->types().end(),
                 k1.begin(), k1.end(),
                 prefix_type->begin(k2), prefix_type->end(k2),
                 tri_compare) < 0;
         }
 
         bool operator()(const PrefixTopLevel& k1, const prefix_view_on_full_tuple& k2) const {
-            return lexicographical_tri_compare(prefix_type->types().begin(),
+            return lexicographical_tri_compare(
+                prefix_type->types().begin(), prefix_type->types().end(),
                 prefix_type->begin(k1), prefix_type->end(k1),
                 k2.begin(), k2.end(),
                 tri_compare) < 0;
@@ -183,14 +185,16 @@ public:
         { }
 
         bool operator()(const TopLevel& k1, const PrefixTopLevel& k2) const {
-            return lexicographical_tri_compare(prefix_type->types().begin(),
+            return lexicographical_tri_compare(
+                prefix_type->types().begin(), prefix_type->types().end(),
                 full_type->begin(k1), full_type->end(k1),
                 prefix_type->begin(k2), prefix_type->end(k2),
                 tri_compare) < 0;
         }
 
         bool operator()(const PrefixTopLevel& k1, const TopLevel& k2) const {
-            return lexicographical_tri_compare(prefix_type->types().begin(),
+            return lexicographical_tri_compare(
+                prefix_type->types().begin(), prefix_type->types().end(),
                 prefix_type->begin(k1), prefix_type->end(k1),
                 full_type->begin(k2), full_type->end(k2),
                 tri_compare) < 0;

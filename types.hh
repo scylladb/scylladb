@@ -55,16 +55,18 @@ bool lexicographical_compare(TypesIterator types, InputIt1 first1, InputIt1 last
 // than zero when the first value is respectively smaller, equal or greater
 // than the second value.
 template <typename TypesIterator, typename InputIt1, typename InputIt2, typename Compare>
-int lexicographical_tri_compare(TypesIterator types, InputIt1 first1, InputIt1 last1,
-        InputIt2 first2, InputIt2 last2, Compare comp) {
-    while (first1 != last1 && first2 != last2) {
-        auto c = comp(*types, *first1, *first2);
+int lexicographical_tri_compare(TypesIterator types_first, TypesIterator types_last,
+        InputIt1 first1, InputIt1 last1,
+        InputIt2 first2, InputIt2 last2,
+        Compare comp) {
+    while (types_first != types_last && first1 != last1 && first2 != last2) {
+        auto c = comp(*types_first, *first1, *first2);
         if (c) {
             return c;
         }
         ++first1;
         ++first2;
-        ++types;
+        ++types_first;
     }
     bool e1 = first1 == last1;
     bool e2 = first2 == last2;
