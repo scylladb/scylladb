@@ -26,10 +26,13 @@
 #include <boost/range/numeric.hpp>
 #include <boost/range/combine.hpp>
 
+class tuple_type_impl;
+
 namespace cql3 {
 
 class cql3_type;
 class column_specification;
+shared_ptr<cql3_type> make_cql3_tuple_type(shared_ptr<tuple_type_impl> t);
 
 }
 

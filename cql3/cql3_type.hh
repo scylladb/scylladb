@@ -92,12 +92,11 @@ public:
             return make_shared(raw_collection(&collection_type_impl::kind::set, {}, std::move(t)));
         }
 
-#if 0
-        public static Raw tuple(List<CQL3Type.Raw> ts)
-        {
-            return new RawTuple(ts);
+        static shared_ptr<raw> tuple(std::vector<shared_ptr<raw>> ts) {
+            return make_shared(raw_tuple(std::move(ts)));
         }
 
+#if 0
         public static Raw frozen(CQL3Type.Raw t) throws InvalidRequestException
         {
             t.freeze();
@@ -267,68 +266,45 @@ private:
                 return name.toString();
             }
         }
+#endif
 
-        private static class RawTuple extends Raw
-        {
-            private final List<CQL3Type.Raw> types;
-
-            private RawTuple(List<CQL3Type.Raw> types)
-            {
-                this.types = types;
+        class raw_tuple : public raw {
+            std::vector<shared_ptr<raw>> _types;
+        public:
+            raw_tuple(std::vector<shared_ptr<raw>> types)
+                    : _types(std::move(types)) {
             }
-
-            protected boolean supportsFreezing()
-            {
+            virtual bool supports_freezing() const override {
                 return true;
             }
-
-            public boolean isCollection()
-            {
+            virtual bool is_collection() const override {
                 return false;
             }
-
-            public void freeze() throws InvalidRequestException
-            {
-                for (CQL3Type.Raw t : types)
-                {
-                    if (t.supportsFreezing())
-                        t.freeze();
+            virtual void freeze() override {
+                for (auto&& t : _types) {
+                    if (t->supports_freezing()) {
+                        t->freeze();
+                    }
                 }
-                frozen = true;
+                _frozen = true;
             }
-
-            public CQL3Type prepare(String keyspace) throws InvalidRequestException
-            {
-                if (!frozen)
+            virtual shared_ptr<cql3_type> prepare(const sstring& keyspace) override {
+                if (!_frozen) {
                     freeze();
-
-                List<AbstractType<?>> ts = new ArrayList<>(types.size());
-                for (CQL3Type.Raw t : types)
-                {
-                    if (t.isCounter())
-                        throw new InvalidRequestException("Counters are not allowed inside tuples");
-
-                    ts.add(t.prepare(keyspace).getType());
                 }
-                return new Tuple(new TupleType(ts));
-            }
-
-            @Override
-            public String toString()
-            {
-                StringBuilder sb = new StringBuilder();
-                sb.append("tuple<");
-                for (int i = 0; i < types.size(); i++)
-                {
-                    if (i > 0)
-                        sb.append(", ");
-                    sb.append(types.get(i));
+                std::vector<data_type> ts;
+                for (auto&& t : _types) {
+                    if (t->is_counter()) {
+                        throw exceptions::invalid_request_exception("Counters are not allowed inside tuples");
+                    }
+                    ts.push_back(t->prepare(keyspace)->get_type());
                 }
-                sb.append(">");
-                return sb.toString();
+                return make_cql3_tuple_type(tuple_type_impl::get_instance(std::move(ts)));
             }
-        }
-#endif
+            virtual sstring to_string() const override {
+                return sprint("tuple<%s>", join(", ", _types));
+            }
+        };
 
     friend std::ostream& operator<<(std::ostream& os, const cql3_type& t) {
         return os << t.to_string();
@@ -391,6 +367,8 @@ public:
         return *_kind;
     }
 };
+
+shared_ptr<cql3_type> make_cql3_tuple_type(shared_ptr<tuple_type_impl> t);
 
 #if 0
     public static class Custom implements CQL3Type
