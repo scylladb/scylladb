@@ -20,6 +20,8 @@ public:
     static serialization_format use_32_bit() { return serialization_format(true); }
     static serialization_format internal() { return use_32_bit(); }
     bool using_32_bits_for_collections() const { return _use_32_bit; }
+    bool operator==(serialization_format x) const { return _use_32_bit == x._use_32_bit; }
+    bool operator!=(serialization_format x) const { return !operator==(x); }
 };
 
 
