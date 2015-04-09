@@ -165,7 +165,11 @@ public:
     output_stream& operator=(output_stream&&) = default;
     future<> write(const char_type* buf, size_t n);
     future<> write(const char_type* buf);
-    future<> write(const sstring& s);
+
+    template <typename StringChar, typename SizeType, SizeType MaxSize>
+    future<> write(const basic_sstring<StringChar, SizeType, MaxSize>& s);
+    future<> write(const std::basic_string<char_type>& s);
+
     future<> write(net::packet p);
     future<> write(scattered_message<char_type> msg);
     future<> flush();

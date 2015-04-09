@@ -55,8 +55,10 @@
 #define rte_mbuf_buf_physaddr(m) ((m)->buf_physaddr)
 #define rte_mbuf_buf_len(m)  ((m)->buf_len)
 #else
+#if (RTE_VERSION < RTE_VERSION_NUM(2,0,0,0))
 #if defined(RTE_MBUF_REFCNT)
 #error "RTE_MBUF_REFCNT should be disabled in DPDK's config/common_linuxapp"
+#endif
 #endif
 #define rte_mbuf_vlan_tci(m) ((m)->vlan_tci)
 #define rte_mbuf_rss_hash(m) ((m)->hash.rss)

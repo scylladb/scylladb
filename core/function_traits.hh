@@ -30,6 +30,7 @@ template<typename Ret, typename... Args>
 struct function_traits<Ret(Args...)>
 {
     using return_type = Ret;
+    using args_as_tuple = std::tuple<Args...>;
  
     static constexpr std::size_t arity = sizeof...(Args);
  

@@ -82,7 +82,7 @@ public:
     public:
         class connection : public protocol::connection, public enable_lw_shared_from_this<connection> {
             server& _server;
-            MsgType _type = 0;
+            MsgType _type;
             client_info _info;
         public:
             connection(server& s, connected_socket&& fd, socket_address&& addr, protocol& proto);

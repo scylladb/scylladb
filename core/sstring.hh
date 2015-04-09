@@ -165,7 +165,7 @@ public:
         }
         return *this;
     }
-    operator std::string() const {
+    operator std::basic_string<char_type>() const {
         return { str(), size() };
     }
     size_t size() const noexcept {
