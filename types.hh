@@ -20,6 +20,11 @@
 #include "atomic_cell.hh"
 #include "serialization_format.hh"
 #include "tombstone.hh"
+#include "to_string.hh"
+#include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/algorithm/for_each.hpp>
+#include <boost/range/numeric.hpp>
+#include <boost/range/combine.hpp>
 
 namespace cql3 {
 
@@ -767,3 +772,118 @@ collection_type_impl::pack(BytesViewIterator start, BytesViewIterator finish, in
     return out;
 }
 
+struct tuple_deserializing_iterator : public std::iterator<std::input_iterator_tag, const bytes_view_opt> {
+    bytes_view _v;
+    bytes_view_opt _current;
+public:
+    struct end_tag {};
+    tuple_deserializing_iterator(bytes_view v) : _v(v) {
+        parse();
+    }
+    tuple_deserializing_iterator(end_tag, bytes_view v) : _v(v) {
+        _v.remove_prefix(_v.size());
+    }
+    static tuple_deserializing_iterator start(bytes_view v) {
+        return tuple_deserializing_iterator(v);
+    }
+    static tuple_deserializing_iterator finish(bytes_view v) {
+        return tuple_deserializing_iterator(end_tag(), v);
+    }
+    const bytes_view_opt& operator*() const {
+        return _current;
+    }
+    const bytes_view_opt* operator->() const {
+        return &_current;
+    }
+    tuple_deserializing_iterator& operator++() {
+        skip();
+        parse();
+        return *this;
+    }
+    void operator++(int) {
+        skip();
+        parse();
+    }
+    bool operator==(const tuple_deserializing_iterator& x) const {
+        return _v == x._v;
+    }
+    bool operator!=(const tuple_deserializing_iterator& x) const {
+        return !operator==(x);
+    }
+private:
+    void parse() {
+        _current = std::experimental::nullopt;
+        if (_v.empty()) {
+            return;
+        }
+        // we don't consume _v, otherwise operator==
+        // or the copy constructor immediately after
+        // parse() yields the wrong results.
+        auto tmp = _v;
+        auto s = read_simple<int32_t>(tmp);
+        if (s < 0) {
+            return;
+        }
+        _current = read_simple_bytes(tmp, s);
+    }
+    void skip() {
+        _v.remove_prefix(4 + (_current ? _current->size() : 0));
+    }
+};
+
+class tuple_type_impl : public abstract_type {
+protected:
+    std::vector<data_type> _types;
+    static boost::iterator_range<tuple_deserializing_iterator> make_range(bytes_view v) {
+        return { tuple_deserializing_iterator::start(v), tuple_deserializing_iterator::finish(v) };
+    }
+public:
+    using native_type = std::vector<boost::any>;
+    tuple_type_impl(std::vector<data_type> types);
+    static shared_ptr<tuple_type_impl> get_instance(std::vector<data_type> types);
+    data_type type(size_t i) const {
+        return _types[i];
+    }
+    size_t size() const {
+        return _types.size();
+    }
+    const std::vector<data_type>& all_types() const {
+        return _types;
+    }
+    virtual int32_t compare(bytes_view v1, bytes_view v2) override;
+    virtual bool less(bytes_view v1, bytes_view v2) override;
+    virtual size_t serialized_size(const boost::any& value) override;
+    virtual void serialize(const boost::any& value, bytes::iterator& out) override;
+    virtual boost::any deserialize(bytes_view v) override;
+    std::vector<bytes_view_opt> split(bytes_view v) const;
+    template <typename RangeOf_bytes_opt>  // also accepts bytes_view_opt
+    static bytes build_value(RangeOf_bytes_opt&& range) {
+        auto item_size = [] (auto&& v) { return 4 + (v ? v->size() : 0); };
+        auto size = boost::accumulate(range | boost::adaptors::transformed(item_size), 0);
+        auto ret = bytes(bytes::initialized_later(), size);
+        auto out = ret.begin();
+        auto put = [&out] (auto&& v) {
+            if (v) {
+                write(out, int32_t(v->size()));
+                out = std::copy(v->begin(), v->end(), out);
+            } else {
+                write(out, int32_t(-1));
+            }
+        };
+        boost::range::for_each(range, put);
+        return ret;
+    }
+    virtual size_t hash(bytes_view v) override;
+    virtual bytes from_string(sstring_view s) override;
+    virtual sstring to_string(const bytes& b) override;
+    virtual bool equals(const abstract_type& other) const override;
+    virtual bool is_compatible_with(abstract_type& previous) override;
+    virtual bool is_value_compatible_with_internal(abstract_type& previous) override;
+    virtual shared_ptr<cql3::cql3_type> as_cql3_type() override;
+private:
+    bool check_compatibility(abstract_type& previous, bool (abstract_type::*predicate)(abstract_type&)) const;
+    static sstring make_name(const std::vector<data_type>& types);
+};
+
+// FIXME: conflicts with another tuple_type
+using db_tuple_type = shared_ptr<tuple_type_impl>;
