@@ -430,7 +430,7 @@ reactor::file_type(sstring name) {
         return wrap_syscall(ret, st);
     }).then([] (syscall_result_extra<struct stat> sr) {
         if (long(sr.result) == -1) {
-            if (sr.result != ENOENT && sr.result != ENOTDIR) {
+            if (sr.error != ENOENT && sr.error != ENOTDIR) {
                 sr.throw_if_error();
             }
             return make_ready_future<std::experimental::optional<directory_entry_type> >
