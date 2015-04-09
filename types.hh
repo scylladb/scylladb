@@ -360,6 +360,8 @@ public:
     collection_mutation::one serialize_mutation_form(mutation_view mut);
     collection_mutation::one serialize_mutation_form_only_live(mutation_view mut);
     collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b);
+    virtual void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) = 0;
+    virtual boost::any deserialize(bytes_view v, serialization_format sf) = 0;
 };
 
 using collection_type = shared_ptr<collection_type_impl>;
@@ -436,10 +438,10 @@ public:
                         bytes_view o1, bytes_view o2);
     virtual bool is_byte_order_comparable() const override { return false; }
     virtual void serialize(const boost::any& value, bytes::iterator& out) override;
-    void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf);
+    virtual void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) override;
     virtual size_t serialized_size(const boost::any& value);
     virtual boost::any deserialize(bytes_view v) override;
-    boost::any deserialize(bytes_view v, serialization_format sf);
+    virtual boost::any deserialize(bytes_view v, serialization_format sf) override;
     virtual sstring to_string(const bytes& b) override;
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
@@ -474,10 +476,10 @@ public:
     virtual bool less(bytes_view o1, bytes_view o2) override;
     virtual bool is_byte_order_comparable() const override { return _elements->is_byte_order_comparable(); }
     virtual void serialize(const boost::any& value, bytes::iterator& out) override;
-    void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf);
+    virtual void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) override;
     virtual size_t serialized_size(const boost::any& value) override;
     virtual boost::any deserialize(bytes_view v) override;
-    boost::any deserialize(bytes_view v, serialization_format sf);
+    virtual boost::any deserialize(bytes_view v, serialization_format sf) override;
     virtual sstring to_string(const bytes& b) override;
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
@@ -513,10 +515,10 @@ public:
     virtual bool less(bytes_view o1, bytes_view o2) override;
     // FIXME: origin doesn't override is_byte_order_comparable().  Why?
     virtual void serialize(const boost::any& value, bytes::iterator& out) override;
-    void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf);
+    virtual void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) override;
     virtual size_t serialized_size(const boost::any& value) override;
     virtual boost::any deserialize(bytes_view v) override;
-    boost::any deserialize(bytes_view v, serialization_format sf);
+    virtual boost::any deserialize(bytes_view v, serialization_format sf) override;
     virtual sstring to_string(const bytes& b) override;
     virtual size_t hash(bytes_view v) override;
     virtual bytes from_string(sstring_view text) override;
