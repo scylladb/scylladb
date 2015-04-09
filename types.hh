@@ -287,6 +287,16 @@ int tri_compare(data_type t, bytes_view e1, bytes_view e2) {
     return t->compare(e1, e2);
 }
 
+inline
+int
+tri_compare_opt(data_type t, bytes_view_opt v1, bytes_view_opt v2) {
+    if (!v1 || !v2) {
+        return int(bool(v1)) - int(bool(v2));
+    } else {
+        return tri_compare(std::move(t), *v1, *v2);
+    }
+}
+
 static inline
 bool equal(data_type t, bytes_view e1, bytes_view e2) {
     return t->equal(e1, e2);
