@@ -1103,6 +1103,18 @@ collection_type_impl::merge(collection_mutation::view a, collection_mutation::vi
     return serialize_mutation_form(merged);
 }
 
+bytes_opt
+collection_type_impl::reserialize(serialization_format from, serialization_format to, bytes_view_opt v) {
+    if (!v) {
+        return std::experimental::nullopt;
+    }
+    auto val = deserialize(*v, from);
+    bytes ret(bytes::initialized_later(), serialized_size(v));  // FIXME: serialized_size want @to
+    auto out = ret.begin();
+    serialize(std::move(val), out, to);
+    return ret;
+}
+
 // iterator that takes a set or list in serialized form, and emits
 // each element, still in serialized form
 class listlike_partial_deserializing_iterator

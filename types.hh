@@ -362,6 +362,7 @@ public:
     collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b);
     virtual void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) = 0;
     virtual boost::any deserialize(bytes_view v, serialization_format sf) = 0;
+    bytes_opt reserialize(serialization_format from, serialization_format to, bytes_view_opt v);
 };
 
 using collection_type = shared_ptr<collection_type_impl>;
