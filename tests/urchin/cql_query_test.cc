@@ -701,3 +701,23 @@ SEASTAR_TEST_CASE(test_writetime_and_ttl) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_tuples) {
+    auto tt = tuple_type_impl::get_instance({int32_type, long_type, utf8_type});
+    return do_with_cql_env([tt] (auto& e) {
+        return e.create_table([tt](auto ks_name) {
+            // CQL: "create table cf (id int primary key, t tuple<int, bigint, text>);
+            return schema(ks_name, "cf",
+                {{"id", int32_type}}, {}, {{"t", tt}}, {}, utf8_type);
+        }).then([&e] {
+            return e.execute_cql("insert into cf (id, t) values (1, (1001, 2001, 'abc1'));").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select t from cf where id = 1;");
+        }).then([&e, tt] (shared_ptr<transport::messages::result_message> msg) {
+            assert_that(msg).is_rows()
+                .with_rows({{
+                     {tt->decompose(tuple_type_impl::native_type({int32_t(1001), int64_t(2001), sstring("abc1")}))},
+                }});
+        });
+    });
+}
