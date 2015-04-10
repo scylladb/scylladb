@@ -35,7 +35,6 @@ private:
     bool _done = false;
 private:
     void start(std::function<void()> pre_start);
-    void stop();
 public:
     static test_runner& launch_or_get(std::function<void()> pre_start);
     ~test_runner();

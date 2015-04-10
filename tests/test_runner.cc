@@ -27,9 +27,11 @@
 
 static test_runner instance;
 
+struct stop_execution : public std::exception {};
+
 test_runner::~test_runner() {
     if (_thread) {
-        stop();
+        _task.interrupt(stop_execution());
         _thread->join();
     }
 }
@@ -51,23 +53,20 @@ test_runner::start(std::function<void()> pre_start) {
         auto exit_code = app.run(ac, av, [&] {
             return do_until([this] { return _done; }, [this] {
                 // this will block the reactor briefly, but we don't care
-                auto func = _task.take();
-                return func();
+                try {
+                    auto func = _task.take();
+                    return func();
+                } catch (const stop_execution&) {
+                    _done = true;
+                    engine().exit(0);
+                    return make_ready_future<>();
+                }
             });
         });
+
         if (exit_code) {
             exit(exit_code);
         }
-    });
-}
-
-void
-test_runner::stop() {
-    assert(_started.load());
-    _task.give([this] {
-        _done = true;
-        engine().exit(0);
-        return now();
     });
 }
 
