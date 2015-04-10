@@ -70,13 +70,15 @@ private:
     const bool has_component(component_type f);
 
     const sstring filename(component_type f);
-    future<> read_toc();
 
     template <typename T, sstable::component_type Type, T sstable::* Comptr>
     future<> read_simple();
 
     template <typename T, sstable::component_type Type, T sstable::* Comptr>
     future<> write_simple();
+
+    future<> read_toc();
+    future<> write_toc();
 
     future<> read_compression();
     future<> write_compression();

@@ -51,6 +51,14 @@ public:
         return _sst->_summary;
     }
 
+    future<> read_toc() {
+        return _sst->read_toc();
+    }
+
+    auto& get_components() {
+        return _sst->_components;
+    }
+
 #define IMPORT(name) \
         template<typename... Args> \
         future<> name(Args&&... args) { \
@@ -324,6 +332,18 @@ SEASTAR_TEST_CASE(check_statistics_func) {
                 return make_ready_future<>();
             });
             // TODO: compare the field contents from both sstables.
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(check_toc_func) {
+    return do_write_sst("tests/urchin/sstables/compressed", 1).then([] (auto sst1) {
+        auto sst2 = make_lw_shared<sstable>("tests/urchin/sstables/compressed", 2, la, big);
+        return sstables::test(sst2).read_toc().then([sst1, sst2] {
+            auto& sst1_c = sstables::test(sst1).get_components();
+            auto& sst2_c = sstables::test(sst2).get_components();
+
+            BOOST_REQUIRE(sst1_c == sst2_c);
         });
     });
 }

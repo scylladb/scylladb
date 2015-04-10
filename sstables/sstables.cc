@@ -630,6 +630,28 @@ future<> sstable::read_toc() {
 
 }
 
+future<> sstable::write_toc() {
+    auto file_path = filename(sstable::component_type::TOC);
+
+    sstlog.debug("Writing TOC file {} ", file_path);
+
+    return engine().open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).then([this] (file f) {
+        auto out = make_file_output_stream(make_lw_shared<file>(std::move(f)), 4096);
+        auto w = make_shared<output_stream<char>>(std::move(out));
+
+        return do_for_each(_components, [this, w] (auto key) {
+            // new line character is appended to the end of each component name.
+            auto value = _component_map[key] + "\n";
+            bytes b = bytes(reinterpret_cast<const bytes::value_type *>(value.c_str()), value.size());
+            return write(*w, b);
+        }).then([w] {
+            return w->flush().then([w] {
+                return w->close().then([w] {});
+            });
+        });
+    });
+}
+
 future<index_list> sstable::read_indexes(uint64_t position, uint64_t quantity) {
     struct reader {
         uint64_t count = 0;
@@ -787,7 +809,9 @@ future<> sstable::load() {
 
 future<> sstable::store() {
     // TODO: write other components as well.
-    return write_statistics().then([this] {
+    return write_toc().then([this] {
+        return write_statistics();
+    }).then([this] {
         return write_compression();
     }).then([this] {
         return write_filter();
