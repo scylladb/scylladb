@@ -15,21 +15,19 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 /*
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
-#ifndef _TEST_UTILS_HH
-#define _TEST_UTILS_HH
+#pragma once
 
-#include <iostream>
-#include <boost/test/included/unit_test.hpp>
+#define BOOST_TEST_DYN_LINK
+
+#include <boost/test/unit_test.hpp>
+
 #include "core/future.hh"
-#include "core/reactor.hh"
-#include "core/app-template.hh"
 #include "test_runner.hh"
-
-using namespace boost::unit_test;
 
 class seastar_test {
 public:
@@ -38,34 +36,8 @@ public:
     virtual const char* get_test_file() = 0;
     virtual const char* get_name() = 0;
     virtual future<> run_test_case() = 0;
-
-    void run() {
-        test_runner::launch_or_get([] {
-            // HACK: please see https://github.com/cloudius-systems/seastar/issues/10
-            BOOST_REQUIRE(true);
-
-            // HACK: please see https://github.com/cloudius-systems/seastar/issues/10
-            boost::program_options::variables_map()["dummy"];
-        }).run_sync([this] {
-            BOOST_REQUIRE(true);
-            return run_test_case();
-        });
-    }
+    void run();
 };
-
-static std::vector<seastar_test*> tests;
-
-seastar_test::seastar_test() {
-    tests.push_back(this);
-}
-
-test_suite* init_unit_test_suite(int argc, char* argv[]) {
-    test_suite* ts = BOOST_TEST_SUITE(tests.size() ? tests[0]->get_test_file() : "seastar-tests");
-    for (seastar_test* test : tests) {
-        ts->add(boost::unit_test::make_test_case([test] { test->run(); }, test->get_name()));
-    }
-    return ts;
-}
 
 #define SEASTAR_TEST_CASE(name) \
     struct name : public seastar_test { \
@@ -76,4 +48,3 @@ test_suite* init_unit_test_suite(int argc, char* argv[]) {
     static name name ## _instance; \
     future<> name::run_test_case()
 
-#endif

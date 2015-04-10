@@ -37,21 +37,16 @@ test_runner::~test_runner() {
 }
 
 void
-test_runner::start(std::function<void()> pre_start) {
+test_runner::start(int ac, char** av) {
     bool expected = false;
     if (!_started.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
         return;
     }
 
-    _thread = std::make_unique<posix_thread>([this, pre_start = std::move(pre_start)]() mutable {
-        char* av[] = {};
-        int ac = 0;
-
-        pre_start();
-
+    _thread = std::make_unique<posix_thread>([this, ac, av]() mutable {
         app_template app;
-        auto exit_code = app.run(ac, av, [&] {
-            return do_until([this] { return _done; }, [this] {
+        auto exit_code = app.run(ac, av, [this] {
+            do_until([this] { return _done; }, [this] {
                 // this will block the reactor briefly, but we don't care
                 try {
                     auto func = _task.take();
@@ -61,7 +56,7 @@ test_runner::start(std::function<void()> pre_start) {
                     engine().exit(0);
                     return make_ready_future<>();
                 }
-            });
+            }).or_terminate();
         });
 
         if (exit_code) {
@@ -94,8 +89,6 @@ test_runner::run_sync(std::function<future<>()> task) {
     }
 }
 
-test_runner&
-test_runner::launch_or_get(std::function<void()> pre_start) {
-    instance.start(std::move(pre_start));
+test_runner& global_test_runner() {
     return instance;
 }
