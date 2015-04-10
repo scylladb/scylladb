@@ -1310,8 +1310,10 @@ native_type returns [shared_ptr<cql3_type> t]
 #if 0
     | K_COUNTER   { $t = CQL3Type.Native.COUNTER; }
     | K_DECIMAL   { $t = CQL3Type.Native.DECIMAL; }
-    | K_DOUBLE    { $t = CQL3Type.Native.DOUBLE; }
-    | K_FLOAT     { $t = CQL3Type.Native.FLOAT; }
+#endif
+    | K_DOUBLE    { $t = cql3_type::double_; }
+    | K_FLOAT     { $t = cql3_type::float_; }
+#if 0
     | K_INET      { $t = CQL3Type.Native.INET;}
 #endif
     | K_INT       { $t = cql3_type::int_; }
