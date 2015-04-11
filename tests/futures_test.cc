@@ -19,10 +19,10 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
-#include "core/app-template.hh"
+#include "tests/test-utils.hh"
+
 #include "core/shared_ptr.hh"
 #include "core/semaphore.hh"
-#include "test-utils.hh"
 #include "core/future-util.hh"
 
 class expected_exception : std::runtime_error {

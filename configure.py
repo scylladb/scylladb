@@ -183,7 +183,6 @@ core = [
     'util/conversions.cc',
     'net/packet.cc',
     'net/posix-stack.cc',
-    'tests/test_runner.cc',
     'net/net.cc',
     'rpc/rpc.cc',
     ]
@@ -202,6 +201,12 @@ http = ['http/transformers.cc',
         'http/request_parser.rl',
         'http/api_docs.cc',
         ]
+
+boost_test_lib = [
+   'tests/test-utils.cc',
+   'tests/test_runner.cc',
+]
+
 defines = []
 libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
@@ -243,7 +248,7 @@ deps = {
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['apps/httpd/demo.json', 'apps/httpd/main.cc'] + http + libnet + core,
     'apps/memcached/memcached': ['apps/memcached/memcache.cc'] + memcache_base,
-    'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base,
+    'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base + boost_test_lib,
     'tests/fileiotest': ['tests/fileiotest.cc'] + core,
     'tests/directory_test': ['tests/directory_test.cc'] + core,
     'tests/linecount': ['tests/linecount.cc'] + core,
@@ -252,7 +257,7 @@ deps = {
     'tests/ip_test': ['tests/ip_test.cc'] + core + libnet,
     'tests/tcp_test': ['tests/tcp_test.cc'] + core + libnet,
     'tests/timertest': ['tests/timertest.cc'] + core,
-    'tests/futures_test': ['tests/futures_test.cc'] + core,
+    'tests/futures_test': ['tests/futures_test.cc'] + core + boost_test_lib,
     'tests/smp_test': ['tests/smp_test.cc'] + core,
     'tests/udp_server': ['tests/udp_server.cc'] + core + libnet,
     'tests/udp_client': ['tests/udp_client.cc'] + core + libnet,
@@ -263,11 +268,11 @@ deps = {
     'tests/sstring_test': ['tests/sstring_test.cc'] + core,
     'tests/httpd': ['tests/httpd.cc'] + http + core,
     'tests/allocator_test': ['tests/allocator_test.cc', 'core/memory.cc', 'core/posix.cc'],
-    'tests/output_stream_test': ['tests/output_stream_test.cc'] + core + libnet,
+    'tests/output_stream_test': ['tests/output_stream_test.cc'] + core + libnet + boost_test_lib,
     'tests/udp_zero_copy': ['tests/udp_zero_copy.cc'] + core + libnet,
     'tests/shared_ptr_test': ['tests/shared_ptr_test.cc'] + core,
     'tests/slab_test': ['tests/slab_test.cc'] + core,
-    'tests/fstream_test': ['tests/fstream_test.cc'] + core,
+    'tests/fstream_test': ['tests/fstream_test.cc'] + core + boost_test_lib,
     'tests/distributed_test': ['tests/distributed_test.cc'] + core,
     'tests/rpc': ['tests/rpc.cc'] + core + libnet,
 }
