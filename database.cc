@@ -107,6 +107,10 @@ column_family::column_family(schema_ptr schema)
     , partitions(partition_key::less_compare(*_schema)) {
 }
 
+// define in .cc, since sstable is forward-declared in .hh
+column_family::~column_family() {
+}
+
 mutation_partition*
 column_family::find_partition(const partition_key& key) {
     auto i = partitions.find(key);

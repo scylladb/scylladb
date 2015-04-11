@@ -40,7 +40,12 @@
 #include "keys.hh"
 #include <boost/intrusive/set.hpp>
 #include <boost/range/iterator_range.hpp>
-#include "sstables/sstables.hh"
+
+namespace sstables {
+
+class sstable;
+
+}
 
 using row = std::map<column_id, atomic_cell_or_collection>;
 
@@ -239,6 +244,7 @@ private:
 struct column_family {
     column_family(schema_ptr schema);
     column_family(column_family&&) = default;
+    ~column_family();
     mutation_partition& find_or_create_partition(const partition_key& key);
     row& find_or_create_row(const partition_key& partition_key, const clustering_key& clustering_key);
     mutation_partition* find_partition(const partition_key& key);
