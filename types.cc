@@ -1483,6 +1483,6 @@ thread_local const shared_ptr<abstract_type> timeuuid_type(make_shared<timeuuid_
 thread_local const shared_ptr<abstract_type> timestamp_type(make_shared<timestamp_type_impl>());
 thread_local const shared_ptr<abstract_type> uuid_type(make_shared<uuid_type_impl>());
 thread_local const shared_ptr<abstract_type> inet_addr_type(make_shared<inet_addr_type_impl>());
-thread_local const shared_ptr<abstract_type> float_type(make_shared<double_type_impl>());
+thread_local const shared_ptr<abstract_type> float_type(make_shared<float_type_impl>());
 thread_local const shared_ptr<abstract_type> double_type(make_shared<double_type_impl>());
 thread_local const data_type empty_type(make_shared<empty_type_impl>());
