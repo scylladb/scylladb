@@ -3,6 +3,11 @@
  */
 
 #include "functions.hh"
+#include "function_call.hh"
+#include "cql3/maps.hh"
+#include "cql3/sets.hh"
+#include "cql3/lists.hh"
+#include "cql3/constants.hh"
 
 namespace cql3 {
 namespace functions {
@@ -252,6 +257,178 @@ functions::type_equals(const std::vector<data_type>& t1, const std::vector<data_
 #endif
     abort();
 }
+
+bool
+function_call::uses_function(const sstring& ks_name, const sstring& function_name) const {
+    return _fun->uses_function(ks_name, function_name);
+}
+
+void
+function_call::collect_marker_specification(shared_ptr<variable_specifications> bound_names) {
+    for (auto&& t : _terms) {
+        t->collect_marker_specification(bound_names);
+    }
+}
+
+shared_ptr<terminal>
+function_call::bind(const query_options& options) {
+    return make_terminal(_fun, bind_and_get(options), options.get_serialization_format());
+}
+
+bytes_opt
+function_call::bind_and_get(const query_options& options) {
+    std::vector<bytes_opt> buffers;
+    buffers.reserve(_terms.size());
+    for (auto&& t : _terms) {
+        // For now, we don't allow nulls as argument as no existing function needs it and it
+        // simplify things.
+        bytes_opt val = t->bind_and_get(options);
+        if (!val) {
+            throw exceptions::invalid_request_exception(sprint("Invalid null value for argument to %s", *_fun));
+        }
+        buffers.push_back(std::move(val));
+    }
+    return execute_internal(options.get_serialization_format(), *_fun, std::move(buffers));
+}
+
+bytes_opt
+function_call::execute_internal(serialization_format sf, scalar_function& fun, std::vector<bytes_opt> params) {
+    bytes_opt result = fun.execute(sf, params);
+    try {
+        // Check the method didn't lied on it's declared return type
+        if (result) {
+            fun.return_type()->validate(*result);
+        }
+        return result;
+    } catch (marshal_exception e) {
+        throw runtime_exception(sprint("Return of function %s (%s) is not a valid value for its declared return type %s",
+                                       fun, to_hex(result),
+                                       *fun.return_type()->as_cql3_type()
+                                       ));
+    }
+}
+
+bool
+function_call::contains_bind_marker() const {
+    for (auto&& t : _terms) {
+        if (t->contains_bind_marker()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+shared_ptr<terminal>
+function_call::make_terminal(shared_ptr<function> fun, bytes_opt result, serialization_format sf)  {
+    if (!dynamic_pointer_cast<shared_ptr<db::marshal::collection_type>>(fun->return_type())) {
+        return ::make_shared<constants::value>(std::move(result));
+    }
+
+    auto ctype = static_pointer_cast<collection_type_impl>(fun->return_type());
+    bytes_view res;
+    if (result) {
+        res = *result;
+    }
+    if (&ctype->_kind == &collection_type_impl::kind::list) {
+        return make_shared(lists::value::from_serialized(std::move(res), static_pointer_cast<list_type_impl>(ctype), sf));
+    } else if (&ctype->_kind == &collection_type_impl::kind::set) {
+        return make_shared(sets::value::from_serialized(std::move(res), static_pointer_cast<set_type_impl>(ctype), sf));
+    } else if (&ctype->_kind == &collection_type_impl::kind::map) {
+        return make_shared(maps::value::from_serialized(std::move(res), static_pointer_cast<map_type_impl>(ctype), sf));
+    }
+    abort();
+}
+
+::shared_ptr<term>
+function_call::raw::prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) {
+    std::vector<shared_ptr<assignment_testable>> args;
+    args.reserve(_terms.size());
+    std::transform(_terms.begin(), _terms.end(), std::back_inserter(args),
+            [] (auto&& x) -> shared_ptr<assignment_testable> {
+        return x;
+    });
+    auto&& fun = functions::functions::get(keyspace, _name, args, receiver->ks_name, receiver->cf_name);
+    if (!fun) {
+        throw exceptions::invalid_request_exception(sprint("Unknown function %s called", _name));
+    }
+    if (fun->is_aggregate()) {
+        throw exceptions::invalid_request_exception("Aggregation function are not supported in the where clause");
+    }
+
+    // Can't use static_pointer_cast<> because function is a virtual base class of scalar_function
+    auto&& scalar_fun = dynamic_pointer_cast<scalar_function>(fun);
+
+    // Functions.get() will complain if no function "name" type check with the provided arguments.
+    // We still have to validate that the return type matches however
+    if (!receiver->type->is_value_compatible_with(*scalar_fun->return_type())) {
+        throw exceptions::invalid_request_exception(sprint("Type error: cannot assign result of function %s (type %s) to %s (type %s)",
+                                                    fun->name(), fun->return_type()->as_cql3_type(),
+                                                    receiver->name, receiver->type->as_cql3_type()));
+    }
+
+    if (scalar_fun->arg_types().size() != _terms.size()) {
+        throw exceptions::invalid_request_exception(sprint("Incorrect number of arguments specified for function %s (expected %d, found %d)",
+                                                    fun->name(), fun->arg_types().size(), _terms.size()));
+    }
+
+    std::vector<shared_ptr<term>> parameters;
+    parameters.reserve(_terms.size());
+    bool all_terminal = true;
+    for (size_t i = 0; i < _terms.size(); ++i) {
+        auto&& t = _terms[i]->prepare(keyspace, functions::make_arg_spec(receiver->ks_name, receiver->cf_name, *scalar_fun, i));
+        if (dynamic_cast<non_terminal*>(t.get())) {
+            all_terminal = false;
+        }
+        parameters.push_back(t);
+    }
+
+    // If all parameters are terminal and the function is pure, we can
+    // evaluate it now, otherwise we'd have to wait execution time
+    if (all_terminal && scalar_fun->is_pure()) {
+        return make_terminal(scalar_fun, execute(*scalar_fun, parameters), query_options::DEFAULT.get_serialization_format());
+    } else {
+        return ::make_shared<function_call>(scalar_fun, parameters);
+    }
+}
+
+bytes_opt
+function_call::raw::execute(scalar_function& fun, std::vector<shared_ptr<term>> parameters) {
+    std::vector<bytes_opt> buffers;
+    buffers.reserve(parameters.size());
+    for (auto&& t : parameters) {
+        assert(dynamic_cast<terminal*>(t.get()));
+        auto&& param = static_cast<terminal*>(t.get())->get(query_options::DEFAULT);
+        buffers.push_back(std::move(param));
+    }
+
+    return execute_internal(serialization_format::internal(), fun, buffers);
+}
+
+assignment_testable::test_result
+function_call::raw::test_assignment(const sstring& keyspace, shared_ptr<column_specification> receiver) {
+    // Note: Functions.get() will return null if the function doesn't exist, or throw is no function matching
+    // the arguments can be found. We may get one of those if an undefined/wrong function is used as argument
+    // of another, existing, function. In that case, we return true here because we'll throw a proper exception
+    // later with a more helpful error message that if we were to return false here.
+    try {
+        auto&& fun = functions::get(keyspace, _name, _terms, receiver->ks_name, receiver->cf_name);
+        if (fun && receiver->type->equals(fun->return_type())) {
+            return assignment_testable::test_result::EXACT_MATCH;
+        } else if (!fun || receiver->type->is_value_compatible_with(*fun->return_type())) {
+            return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+        } else {
+            return assignment_testable::test_result::NOT_ASSIGNABLE;
+        }
+    } catch (exceptions::invalid_request_exception& e) {
+        return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+    }
+}
+
+sstring
+function_call::raw::to_string() const {
+    return sprint("%s(%s)", _name, join(", ", _terms));
+}
+
 
 }
 }
