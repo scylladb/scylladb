@@ -1160,7 +1160,7 @@ set_type_impl::get_instance(data_type elements, bool is_multi_cell) {
 }
 
 set_type_impl::set_type_impl(data_type elements, bool is_multi_cell)
-        : collection_type_impl("sey<" + elements->name() + ">", kind::set)
+        : collection_type_impl("set<" + elements->name() + ">", kind::set)
         , _elements(std::move(elements))
         , _is_multi_cell(is_multi_cell) {
 }
