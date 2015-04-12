@@ -188,4 +188,30 @@ operation::set_value::is_compatible_with(::shared_ptr <raw_update> other) {
     return false;
 }
 
+shared_ptr<column_identifier::raw>
+operation::element_deletion::affected_column() {
+    return _id;
+}
+
+shared_ptr<operation>
+operation::element_deletion::prepare(const sstring& keyspace, const column_definition& receiver) {
+    if (!receiver.type->is_collection()) {
+        throw exceptions::invalid_request_exception(sprint("Invalid deletion operation for non collection column %s", receiver.name()));
+    } else if (!receiver.type->is_multi_cell()) {
+        throw exceptions::invalid_request_exception(sprint("Invalid deletion operation for frozen collection column %s", receiver.name()));
+    }
+    auto ctype = static_pointer_cast<collection_type_impl>(receiver.type);
+    if (&ctype->_kind == &collection_type_impl::kind::list) {
+        auto&& idx = _element->prepare(keyspace, lists::index_spec_of(receiver.column_specification));
+        return make_shared<lists::discarder_by_index>(receiver, std::move(idx));
+    } else if (&ctype->_kind == &collection_type_impl::kind::set) {
+        auto&& elt = _element->prepare(keyspace, sets::value_spec_of(receiver.column_specification));
+        return make_shared<sets::discarder>(receiver, std::move(elt));
+    } else if (&ctype->_kind == &collection_type_impl::kind::map) {
+        auto&& key = _element->prepare(keyspace, maps::key_spec_of(*receiver.column_specification));
+        return make_shared<maps::discarder_by_key>(receiver, std::move(key));
+    }
+    abort();
+}
+
 }
