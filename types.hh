@@ -685,12 +685,11 @@ T read_simple(bytes_view& v) {
 }
 
 template<typename T>
-T read_simple_exactly(bytes_view& v) {
+T read_simple_exactly(bytes_view v) {
     if (v.size() != sizeof(T)) {
         throw marshal_exception();
     }
     auto p = v.begin();
-    v.remove_prefix(sizeof(T));
     return net::ntoh(*reinterpret_cast<const net::packed<T>*>(p));
 }
 
