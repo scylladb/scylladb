@@ -455,9 +455,7 @@ deleteSelection returns [std::vector<::shared_ptr<cql3::operation::raw_deletion>
 
 deleteOp returns [::shared_ptr<cql3::operation::raw_deletion> op]
     : c=cident                { $op = ::make_shared<cql3::operation::column_deletion>(std::move(c)); }
-#if 0
-    | c=cident '[' t=term ']' { $op = ::make_shared<cql3::operation::element_deletion(std::move(c), std::move(t)); }
-#endif
+    | c=cident '[' t=term ']' { $op = ::make_shared<cql3::operation::element_deletion>(std::move(c), std::move(t)); }
     ;
 
 usingClauseDelete[::shared_ptr<cql3::attributes::raw> attrs]
