@@ -432,15 +432,12 @@ deleteStatement returns [::shared_ptr<delete_statement::parsed> expr]
         auto attrs = ::make_shared<cql3::attributes::raw>();
         std::vector<::shared_ptr<cql3::operation::raw_deletion>> column_deletions;
         bool if_exists = false;
-        delete_statement::parsed::conditions_vector conditions;
     }
     : K_DELETE ( dels=deleteSelection { column_deletions = std::move(dels); } )?
       K_FROM cf=columnFamilyName
       ( usingClauseDelete[attrs] )?
       K_WHERE wclause=whereClause
-#if 0
       ( K_IF ( K_EXISTS { if_exists = true; } | conditions=updateConditions ))?
-#endif
       {
           return ::make_shared<delete_statement::parsed>(cf,
                                             std::move(attrs),
