@@ -261,39 +261,14 @@ public:
         virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
     };
 
-#if 0
-    public static class DiscarderByIndex extends Operation
-    {
-        public DiscarderByIndex(ColumnDefinition column, Term idx)
-        {
-            super(column, idx);
+    class discarder_by_index : public operation {
+    public:
+        discarder_by_index(const column_definition& column, shared_ptr<term> idx)
+                : operation(column, std::move(idx)) {
         }
-
-        @Override
-        public boolean requiresRead()
-        {
-            return true;
-        }
-
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            assert column.type.isMultiCell() : "Attempted to delete an item by index from a frozen list";
-            Term.Terminal index = t.bind(params.options);
-            if (index == null)
-                throw new InvalidRequestException("Invalid null value for list index");
-
-            assert index instanceof Constants.Value;
-
-            List<Cell> existingList = params.getPrefetchedList(rowKey, column.name);
-            int idx = ByteBufferUtil.toInt(((Constants.Value)index).bytes);
-            if (idx < 0 || idx >= existingList.size())
-                throw new InvalidRequestException(String.format("List index %d out of bound, list has size %d", idx, existingList.size()));
-
-            CellName elementName = existingList.get(idx).name();
-            cf.addColumn(params.makeTombstone(elementName));
-        }
-    }
-#endif
+        virtual bool requires_read() override;
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params);
+    };
 };
 
 }

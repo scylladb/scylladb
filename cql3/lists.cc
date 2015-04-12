@@ -6,6 +6,7 @@
 #include "update_parameters.hh"
 #include "column_identifier.hh"
 #include "cql3_type.hh"
+#include "constants.hh"
 
 namespace cql3 {
 
@@ -350,6 +351,38 @@ lists::discarder::execute(mutation& m, const exploded_clustering_prefix& prefix,
     }
     auto mnew_ser = ltype->serialize_mutation_form(mnew);
     m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(mnew_ser)));
+}
+
+bool
+lists::discarder_by_index::requires_read() {
+    return true;
+}
+
+void
+lists::discarder_by_index::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+    assert(column.type->is_multi_cell()); // "Attempted to delete an item by index from a frozen list";
+    auto&& index = _t->bind(params._options);
+    if (!index) {
+        throw exceptions::invalid_request_exception("Invalid null value for list index");
+    }
+
+    auto ltype = static_pointer_cast<list_type_impl>(column.type);
+    auto cvalue = dynamic_pointer_cast<constants::value>(index);
+    assert(cvalue);
+
+    auto row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
+    auto&& existing_list = params.get_prefetched_list(m.key, row_key, column);
+    int32_t idx = read_simple_exactly<int32_t>(*cvalue->_bytes);
+    if (!existing_list) {
+        throw exceptions::invalid_request_exception("List does  not exist");
+    }
+    auto&& deserialized = ltype->deserialize_mutation_form(*existing_list);
+    if (idx < 0 || size_t(idx) >= deserialized.cells.size()) {
+        throw exceptions::invalid_request_exception(sprint("List index %d out of bound, list has size %d", idx, deserialized.cells.size()));
+    }
+    collection_type_impl::mutation mut;
+    mut.cells.emplace_back(to_bytes(deserialized.cells[idx].first), params.make_dead_cell());
+    m.set_cell(prefix, column, ltype->serialize_mutation_form(mut));
 }
 
 }
