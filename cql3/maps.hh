@@ -352,7 +352,6 @@ public:
 
     static void do_put(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params,
             shared_ptr<term> t, const column_definition& column, tombstone ts = {}) {
-    {
         auto value = t->bind(params._options);
         auto map_value = dynamic_pointer_cast<maps::value>(value);
         if (column.type->is_multi_cell()) {
@@ -402,8 +401,6 @@ public:
         }
     }
 #endif
-};
-
 };
 
 }
