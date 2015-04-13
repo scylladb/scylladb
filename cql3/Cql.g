@@ -38,6 +38,7 @@ options {
 #include "cql3/statements/update_statement.hh"
 #include "cql3/statements/delete_statement.hh"
 #include "cql3/statements/use_statement.hh"
+#include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/constants.hh"
@@ -223,9 +224,7 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     : st1= selectStatement             { $stmt = st1; }
     | st2= insertStatement             { $stmt = st2; }
     | st3= updateStatement             { $stmt = st3; }
-#if 0
     | st4= batchStatement              { $stmt = st4; }
-#endif
     | st5= deleteStatement             { $stmt = st5; }
     | st6= useStatement                { $stmt = st6; }
 #if 0
@@ -464,7 +463,6 @@ usingClauseDelete[::shared_ptr<cql3::attributes::raw> attrs]
     : K_USING K_TIMESTAMP ts=intValue { attrs->timestamp = ts; }
     ;
 
-#if 0
 /**
  * BEGIN BATCH
  *   UPDATE <CF> SET name1 = value1 WHERE KEY = keyname1;
@@ -489,28 +487,30 @@ usingClauseDelete[::shared_ptr<cql3::attributes::raw> attrs]
  *   ...
  * APPLY BATCH
  */
-batchStatement returns [BatchStatement.Parsed expr]
+batchStatement returns [shared_ptr<cql3::statements::batch_statement::parsed> expr]
     @init {
-        BatchStatement.Type type = BatchStatement.Type.LOGGED;
-        List<ModificationStatement.Parsed> statements = new ArrayList<ModificationStatement.Parsed>();
-        Attributes.Raw attrs = new Attributes.Raw();
+        using btype = cql3::statements::batch_statement::type; 
+        btype type = btype::LOGGED;
+        std::vector<shared_ptr<cql3::statements::modification_statement::parsed>> statements;
+        auto attrs = make_shared<cql3::attributes::raw>();
     }
     : K_BEGIN
-      ( K_UNLOGGED { type = BatchStatement.Type.UNLOGGED; } | K_COUNTER { type = BatchStatement.Type.COUNTER; } )?
+      ( K_UNLOGGED { type = btype::UNLOGGED; } | K_COUNTER { type = btype::COUNTER; } )?
       K_BATCH ( usingClause[attrs] )?
-          ( s=batchStatementObjective ';'? { statements.add(s); } )*
+          ( s=batchStatementObjective ';'? { statements.push_back(std::move(s)); } )*
       K_APPLY K_BATCH
       {
-          return new BatchStatement.Parsed(type, attrs, statements);
+          $expr = ::make_shared<cql3::statements::batch_statement::parsed>(type, std::move(attrs), std::move(statements));
       }
     ;
 
-batchStatementObjective returns [ModificationStatement.Parsed statement]
+batchStatementObjective returns [shared_ptr<cql3::statements::modification_statement::parsed> statement]
     : i=insertStatement  { $statement = i; }
     | u=updateStatement  { $statement = u; }
     | d=deleteStatement  { $statement = d; }
     ;
 
+#if 0
 createAggregateStatement returns [CreateAggregateStatement expr]
     @init {
         boolean orReplace = false;
