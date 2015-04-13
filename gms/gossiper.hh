@@ -87,6 +87,14 @@ private:
     }
     void do_sort(std::vector<gossip_digest>& g_digest_list);
     timer<lowres_clock> _scheduled_gossip_task;
+    sstring get_cluster_name() {
+        // FIXME: DatabaseDescriptor.getClusterName()
+        return "my_cluster_name";
+    }
+    sstring get_partitioner_name() {
+        // FIXME: DatabaseDescriptor.getPartitionerName()
+        return "my_partitioner_name";
+    }
 private:
     inet_address get_broadcast_address() {
         // FIXME: Helper for FBUtilities.getBroadcastAddress
