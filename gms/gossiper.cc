@@ -70,18 +70,14 @@ void gossiper::init_messaging_service_handler() {
         }
 
         /* If the message is from a different cluster throw it away. */
-        // FIXME: DatabaseDescriptor.getClusterName and DatabaseDescriptor.getPartitionerName()
-#if 0
-        if (!syn_msg.cluster_id().equals(DatabaseDescriptor.getClusterName())) {
-            //logger.warn("ClusterName mismatch from {} {}!={}", from, syn_msg.clusterId, DatabaseDescriptor.getClusterName());
-            return;
+        if (syn_msg.cluster_id() != get_cluster_name()) {
+            return make_ready_future<gossip_digest_ack>(gossip_digest_ack());
         }
 
-        if (syn_msg.partioner() != "" && !syn_msg.partioner.equals(DatabaseDescriptor.getPartitionerName())) {
-            logger.warn("Partitioner mismatch from {} {}!={}", from, syn_msg.partioner, DatabaseDescriptor.getPartitionerName());
-            return;
+        if (syn_msg.partioner() != "" && syn_msg.partioner() != get_partitioner_name()) {
+            return make_ready_future<gossip_digest_ack>(gossip_digest_ack());
         }
-#endif
+
         auto g_digest_list = syn_msg.get_gossip_digests();
         do_sort(g_digest_list);
         std::vector<gossip_digest> delta_gossip_digest_list;
