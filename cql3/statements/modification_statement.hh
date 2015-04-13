@@ -382,7 +382,7 @@ private:
     }
 #endif
 
-private:
+public:
     /**
      * Convert statement into a list of mutations to apply on the server
      *
