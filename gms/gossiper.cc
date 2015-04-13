@@ -37,9 +37,12 @@ void gossiper::init_messaging_service_handler() {
         gms::gossip_digest_ack ack(std::move(digests), std::move(eps));
         return make_ready_future<gossip_digest_ack>(ack);
     });
-    ms().register_handler_oneway(messaging_verb::GOSSIP_DIGEST_ACK2, [] (gossip_digest_ack2 msg) {
+    ms().register_handler_oneway(messaging_verb::GOSSIP_DIGEST_ACK2, [this] (gossip_digest_ack2 msg) {
         print("gossiper: Server got ack2 msg = %s\n", msg);
-        // TODO: Implement processing of incoming ACK2 message
+        auto& remote_ep_state_map = msg.get_endpoint_state_map();
+        /* Notify the Failure Detector */
+        this->notify_failure_detector(remote_ep_state_map);
+        this->apply_state_locally(remote_ep_state_map);
         return messaging_service::no_wait();
     });
 }
