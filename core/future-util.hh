@@ -152,10 +152,6 @@ future<> do_for_each(Container& c, AsyncAction&& action) {
     return do_for_each(std::begin(c), std::end(c), std::forward<AsyncAction>(action));
 }
 
-template <typename... Future>
-future<std::tuple<Future...>> when_all(Future&&... fut);
-
-template <>
 inline
 future<std::tuple<>>
 when_all() {
