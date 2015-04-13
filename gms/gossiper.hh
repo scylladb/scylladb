@@ -703,24 +703,7 @@ private:
         // }
 
         local_state.mark_dead();
-
-#if 0
-        MessageOut<EchoMessage> echoMessage = new MessageOut<EchoMessage>(MessagingService.Verb.ECHO, new EchoMessage(), EchoMessage.serializer);
-        logger.trace("Sending a EchoMessage to {}", addr);
-        IAsyncCallback echoHandler = new IAsyncCallback()
-        {
-            public boolean isLatencyForSnitch()
-            {
-                return false;
-            }
-
-            public void response(MessageIn msg)
-            {
-                real_mark_alive(addr, local_state);
-            }
-        };
-        MessagingService.instance().sendRR(echoMessage, addr, echoHandler);
-#endif
+        //logger.trace("Sending a EchoMessage to {}", addr);
         shard_id id = get_shard_id(addr);
         ms().send_message<empty_msg>(messaging_verb::ECHO, id).then([this, addr, local_state = std::move(local_state)] (empty_msg msg) mutable {
             this->real_mark_alive(addr, local_state);
