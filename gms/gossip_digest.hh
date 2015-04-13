@@ -35,9 +35,9 @@ namespace gms {
 class gossip_digest { // implements Comparable<GossipDigest>
 private:
     using inet_address = gms::inet_address;
-    const inet_address _endpoint;
-    const int32_t _generation;
-    const int32_t _max_version;
+    inet_address _endpoint;
+    int32_t _generation;
+    int32_t _max_version;
 public:
     gossip_digest(inet_address ep, int32_t gen, int32_t version)
         : _endpoint(ep)
