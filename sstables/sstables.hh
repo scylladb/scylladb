@@ -113,15 +113,28 @@ private:
     // for iteration through all the rows.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len);
 
-    // Caller needs to ensure that the "consumer" object will be alive until
-    // the future completes. It is therefore recommended to use the do_with()
-    // idiom.
-    // If the given range contains more than one row, more than one row can be
-    // consumed. However, this implementation reads the entire range into,
-    // memory, so should not be used to iterate over the entire sstable.
-    future<> data_consume_row(uint64_t pos, size_t len, row_consumer& consumer);
 
 public:
+    // Read one or few rows at the given byte range from the data file,
+    // feeding them into the consumer. This function reads the entire given
+    // byte range at once into memory, so it should not be used for iterating
+    // over all the rows in the data file (see the next function for that.
+    // The function returns a future which completes after all the data has
+    // been fed into the consumer. The caller needs to ensure the "consumer"
+    // object lives until then (e.g., using the do_with() idiom).
+    future<> data_consume_rows_at_once(row_consumer& consumer,
+            uint64_t pos, uint64_t end);
+
+    // Iterate over all rows in the data file (or rows in a particular range),
+    // feeding them into the consumer. The iteration is done as efficiently as
+    // possible - reading only the data file (not the summary or index files)
+    // and reading data in batches.
+    // The function returns a future which completes after all the data has
+    // been fed into the consumer. The caller needs to ensure the "consumer"
+    // object lives until then (e.g., using the do_with() idiom).
+    future<> data_consume_rows(row_consumer& consumer,
+            uint64_t start = 0, uint64_t end = 0);
+
     sstable(sstring dir, unsigned long generation, version_types v, format_types f) : _dir(dir), _generation(generation), _version(v), _format(f) {}
     sstable& operator=(const sstable&) = delete;
     sstable(const sstable&) = delete;

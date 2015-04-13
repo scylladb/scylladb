@@ -39,6 +39,11 @@ public:
     // to be deserialized according to the schema.
     virtual void consume_cell(bytes_view col_name, bytes_view value, uint64_t timestamp) = 0;
 
+    // Consume one range tombstone.
+    virtual void consume_range_tombstone(
+            bytes_view start_col, bytes_view end_col,
+            sstables::deletion_time deltime) = 0;
+
     // Called at the end of the row, after all cells.
     virtual void consume_row_end() = 0;
 

@@ -59,12 +59,6 @@ public:
         return _sst->_components;
     }
 
-#define IMPORT(name) \
-        template<typename... Args> \
-        future<> name(Args&&... args) { \
-            return _sst->name(std::forward<Args>(args)...); \
-        }
-    IMPORT(data_consume_row);
 };
 }
 
@@ -374,6 +368,7 @@ public:
     test_row_consumer(uint64_t t) : desired_timestamp(t) { }
     int count_row_start = 0;
     int count_cell = 0;
+    int count_range_tombstone = 0;
     int count_row_end = 0;
     virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
         BOOST_REQUIRE(key == as_bytes("vinna"));
@@ -382,7 +377,7 @@ public:
         count_row_start++;
     }
 
-    virtual void consume_cell(bytes_view col_name, bytes_view value, uint64_t timestamp) {
+    virtual void consume_cell(bytes_view col_name, bytes_view value, uint64_t timestamp) override {
         switch (count_cell) {
         case 0:
             // The silly "cql marker" column
@@ -410,32 +405,152 @@ public:
         }
         count_cell++;
     }
+    virtual void consume_range_tombstone(
+            bytes_view start_col, bytes_view end_col,
+            sstables::deletion_time deltime) override {
+        count_range_tombstone++;
+    }
     virtual void consume_row_end() override {
         count_row_end++;
     }
 };
 
-SEASTAR_TEST_CASE(uncompressed_row_read) {
+SEASTAR_TEST_CASE(uncompressed_row_read_at_once) {
     return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([] (auto sstp) {
         return do_with(test_row_consumer(1418656871665302), [sstp] (auto& c) {
-            return sstables::test(sstp).data_consume_row(0, 95, c).then([sstp, &c] {
+            return sstp->data_consume_rows_at_once(c, 0, 95).then([sstp, &c] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 3);
                 BOOST_REQUIRE(c.count_row_end == 1);
+                BOOST_REQUIRE(c.count_range_tombstone == 0);
                 return make_ready_future<>();
             });
         });
     });
 }
 
-SEASTAR_TEST_CASE(compressed_row_read) {
+SEASTAR_TEST_CASE(compressed_row_read_at_once) {
     return reusable_sst("tests/urchin/sstables/compressed", 1).then([] (auto sstp) {
         return do_with(test_row_consumer(1418654707438005), [sstp] (auto& c) {
-            return sstables::test(sstp).data_consume_row(0, 95, c).then([sstp, &c] {
+            return sstp->data_consume_rows_at_once(c, 0, 95).then([sstp, &c] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 3);
                 BOOST_REQUIRE(c.count_row_end == 1);
+                BOOST_REQUIRE(c.count_range_tombstone == 0);
                 return make_ready_future<>();
+            });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
+    return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([] (auto sstp) {
+        return do_with(test_row_consumer(1418656871665302), [sstp] (auto& c) {
+            return sstp->data_consume_rows(c, 0, 95).then([sstp, &c] {
+                BOOST_REQUIRE(c.count_row_start == 1);
+                BOOST_REQUIRE(c.count_cell == 3);
+                BOOST_REQUIRE(c.count_row_end == 1);
+                BOOST_REQUIRE(c.count_range_tombstone == 0);
+                return make_ready_future<>();
+            });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(compressed_rows_read_one) {
+    return reusable_sst("tests/urchin/sstables/compressed", 1).then([] (auto sstp) {
+        return do_with(test_row_consumer(1418654707438005), [sstp] (auto& c) {
+            return sstp->data_consume_rows(c, 0, 95).then([sstp, &c] {
+                BOOST_REQUIRE(c.count_row_start == 1);
+                BOOST_REQUIRE(c.count_cell == 3);
+                BOOST_REQUIRE(c.count_row_end == 1);
+                BOOST_REQUIRE(c.count_range_tombstone == 0);
+                return make_ready_future<>();
+            });
+        });
+    });
+}
+
+// Tests for iterating over all rows.
+
+class count_row_consumer : public row_consumer {
+public:
+    int count_row_start = 0;
+    int count_cell = 0;
+    int count_row_end = 0;
+    int count_range_tombstone = 0;
+    virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
+        count_row_start++;
+    }
+    virtual void consume_cell(bytes_view col_name, bytes_view value, uint64_t timestamp) override {
+        count_cell++;
+    }
+    virtual void consume_row_end() override {
+        count_row_end++;
+    }
+    virtual void consume_range_tombstone(
+            bytes_view start_col, bytes_view end_col,
+            sstables::deletion_time deltime) override {
+        count_range_tombstone++;
+    }
+
+};
+
+
+SEASTAR_TEST_CASE(uncompressed_rows_read_all) {
+    return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([] (auto sstp) {
+        return do_with(count_row_consumer(), [sstp] (auto& c) {
+            return sstp->data_consume_rows(c).then([sstp, &c] {
+                BOOST_REQUIRE(c.count_row_start == 4);
+                BOOST_REQUIRE(c.count_row_end == 4);
+                BOOST_REQUIRE(c.count_cell == 4*3);
+                BOOST_REQUIRE(c.count_range_tombstone == 0);
+                return make_ready_future<>();
+            });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(compressed_rows_read_all) {
+    return reusable_sst("tests/urchin/sstables/compressed", 1).then([] (auto sstp) {
+        return do_with(count_row_consumer(), [sstp] (auto& c) {
+            return sstp->data_consume_rows(c).then([sstp, &c] {
+                BOOST_REQUIRE(c.count_row_start == 4);
+                BOOST_REQUIRE(c.count_row_end == 4);
+                BOOST_REQUIRE(c.count_cell == 4*3);
+                BOOST_REQUIRE(c.count_range_tombstone == 0);
+                return make_ready_future<>();
+            });
+        });
+    });
+}
+
+// Test reading range tombstone (which we we have in collections such as set)
+class set_consumer : public count_row_consumer {
+public:
+    virtual void consume_range_tombstone(
+            bytes_view start_col, bytes_view end_col,
+            sstables::deletion_time deltime) override {
+        count_row_consumer::consume_range_tombstone(start_col, end_col, deltime);
+        // Note the unique end-of-component markers -1 and 1, specifying a
+        // range between start and end of row.
+        BOOST_REQUIRE(start_col == bytes({0, 9, 'f', 'a', 'v', 'o', 'r', 'i', 't', 'e', 's', -1}));
+        BOOST_REQUIRE(end_col == as_bytes({0, 9, 'f', 'a', 'v', 'o', 'r', 'i', 't', 'e', 's', 1}));
+        // Note the range tombstone have an interesting, not default, deltime.
+        BOOST_REQUIRE(deltime.local_deletion_time == 1297062948U);
+        BOOST_REQUIRE(deltime.marked_for_delete_at == 1428855312063525UL);
+    }
+};
+
+SEASTAR_TEST_CASE(read_set) {
+    return reusable_sst("tests/urchin/sstables/set", 1).then([] (auto sstp) {
+        return do_with(set_consumer(), [sstp] (auto& c) {
+            return sstp->data_consume_rows(c).then([sstp, &c] {
+                BOOST_REQUIRE(c.count_row_start == 1);
+                BOOST_REQUIRE(c.count_row_end == 1);
+                BOOST_REQUIRE(c.count_cell == 3);
+                BOOST_REQUIRE(c.count_range_tombstone == 1);
+               return make_ready_future<>();
             });
         });
     });
