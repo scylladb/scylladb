@@ -62,19 +62,42 @@ bool gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> eps
     using RetMsg = gossip_digest_ack;
     auto id = get_shard_id(to);
     print("send_gossip: Sending to shard %s\n", id);
-    ms().send_message<RetMsg>(messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), std::move(message)).then([this, id] (RetMsg ack) {
-        print("send_gossip: Client sent gossip_digest_syn got gossip_digest_ack reply = %s\n", ack);
-        // TODO: Implement processing of incoming ACK message
-        auto ep1 = inet_address("3.3.3.3");
-        std::map<inet_address, endpoint_state> eps{
-            {ep1, endpoint_state()},
-        };
-        gms::gossip_digest_ack2 ack2(std::move(eps));
-        return ms().send_message_oneway<void>(messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(ack2)).then([] () {
+    ms().send_message<RetMsg>(messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), std::move(message)).then([this, id] (RetMsg ack_msg) {
+        print("send_gossip: Client sent gossip_digest_syn got gossip_digest_ack reply = %s\n", ack_msg);
+        if (!this->is_enabled() && !this->is_in_shadow_round()) {
+            return make_ready_future<>();
+        }
+
+        auto g_digest_list = ack_msg.get_gossip_digest_list();
+        auto ep_state_map = ack_msg.get_endpoint_state_map();
+
+        if (ep_state_map.size() > 0) {
+            /* Notify the Failure Detector */
+            this->notify_failure_detector(ep_state_map);
+            this->apply_state_locally(ep_state_map);
+        }
+
+        if (this->is_in_shadow_round()) {
+            this->finish_shadow_round();
+            return make_ready_future<>(); // don't bother doing anything else, we have what we came for
+        }
+
+        /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
+        std::map<inet_address, endpoint_state> delta_ep_state_map;
+        for (auto g_digest : g_digest_list) {
+            inet_address addr = g_digest.get_endpoint();
+            auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, g_digest.get_max_version());
+            if (!local_ep_state_ptr) {
+                delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
+            }
+        }
+        gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
+        return ms().send_message_oneway<void>(messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(ack2_msg)).then([] () {
             print("send_gossip: Client sent gossip_digest_ack2 got reply = void\n");
             return make_ready_future<>();
         });
     });
+
     return _seeds.count(to);
 }
 

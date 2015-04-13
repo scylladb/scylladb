@@ -1074,14 +1074,13 @@ public:
         }
     }
 
-#if 0
-    public boolean isEnabled()
-    {
-        return (scheduledGossipTask != null) && (!scheduledGossipTask.isCancelled());
-    }
-#endif
-
 public:
+    bool is_enabled() {
+        //return (scheduledGossipTask != null) && (!scheduledGossipTask.isCancelled());
+        warn(unimplemented::cause::GOSSIP);
+        return true;
+    }
+
     void finish_shadow_round() {
         if (_in_shadow_round) {
             _in_shadow_round = false;
