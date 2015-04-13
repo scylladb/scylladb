@@ -85,6 +85,7 @@ private:
     shard_id get_shard_id(inet_address to) {
         return shard_id{to, _default_cpuid};
     }
+    void do_sort(std::vector<gossip_digest>& g_digest_list);
     timer<lowres_clock> _scheduled_gossip_task;
 private:
     inet_address get_broadcast_address() {
