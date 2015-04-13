@@ -58,6 +58,7 @@ private:
     const specific_options _options;
     const int32_t _protocol_version; // transient
     serialization_format _serialization_format;
+    std::experimental::optional<std::vector<query_options>> _batch_options;
 public:
     explicit query_options(db::consistency_level consistency,
             std::experimental::optional<std::vector<sstring>> names, std::vector<bytes_opt> values,
@@ -148,6 +149,14 @@ public:
     // Mainly for the sake of BatchQueryOptions
     const specific_options& get_specific_options() const {
         return _options;
+    }
+
+    const query_options& for_statement(size_t i) const {
+        if (!_batch_options) {
+            // No per-statement options supplied, so use the "global" options
+            return *this;
+        }
+        return _batch_options->at(i);
     }
 
     void prepare(const std::vector<::shared_ptr<column_specification>>& specs) {
