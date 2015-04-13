@@ -259,6 +259,11 @@ http = ['http/transformers.cc',
         'http/request_parser.rl',
         'http/api_docs.cc',
         ]
+
+api = ['api/api.cc',
+       'api/api-doc/storage_service.json',
+       'api/storage_service.cc',
+       ]
 defines = []
 libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
@@ -370,7 +375,7 @@ urchin_core = (['database.cc',
 deps = {
     'libseastar.a' : core + libnet,
     'seastar.pc': [],
-    'seastar': ['main.cc'] + urchin_core,
+    'seastar': ['main.cc'] + http + api + urchin_core,
     'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['apps/httpd/demo.json', 'apps/httpd/main.cc'] + http + libnet + core,
     'apps/memcached/memcached': ['apps/memcached/memcache.cc'] + memcache_base,

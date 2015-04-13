@@ -1,0 +1,29 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/storage_service",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/storage_service/hostid/local",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns the local host id",
+               "type":"string",
+               "nickname":"local_hostid",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                  }
+               ]
+            }
+         ]
+      }
+   ]
+}
