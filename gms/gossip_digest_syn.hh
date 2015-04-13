@@ -47,6 +47,14 @@ public:
         , _digests(digests) {
     }
 
+    sstring cluster_id() const {
+        return _cluster_id;
+    }
+
+    sstring partioner() const {
+        return _partioner;
+    }
+
     std::vector<gossip_digest> get_gossip_digests() {
         return _digests;
     }
