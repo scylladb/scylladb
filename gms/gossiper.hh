@@ -33,7 +33,10 @@
 #include "gms/gossip_digest.hh"
 #include "utils/UUID.hh"
 #include "gms/gossip_digest_syn.hh"
+#include "gms/gossip_digest_ack.hh"
+#include "gms/gossip_digest_ack2.hh"
 #include "gms/versioned_value.hh"
+#include "message/messaging_service.hh"
 
 #include <boost/algorithm/string.hpp>
 #include <experimental/optional>
@@ -42,11 +45,20 @@
 namespace gms {
 
 
-// FIXME: Stub
-template<typename T>
-class MessageOut {
-    T _msg;
+struct empty_msg {
+    void serialize(bytes::iterator& out) const {
+    }
+    static empty_msg deserialize(bytes_view& v) {
+        return empty_msg();
+    }
+    size_t serialized_size() const {
+        return 0;
+    }
+    friend inline std::ostream& operator<<(std::ostream& os, const empty_msg& ack) {
+        return os << "empty_msg";
+    }
 };
+
 
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
@@ -60,7 +72,29 @@ class MessageOut {
  * Upon hearing a GossipShutdownMessage, this module will instantly mark the remote node as down in
  * the Failure Detector.
  */
-class gossiper : public i_failure_detection_event_listener {
+class gossiper : public i_failure_detection_event_listener, public enable_shared_from_this<gossiper> {
+private:
+    using messaging_verb = net::messaging_verb;
+    using messaging_service = net::messaging_service;
+    using shard_id = net::messaging_service::shard_id;
+    net::messaging_service& ms() {
+        return net::get_local_messaging_service();
+    }
+    void init_messaging_service_handler();
+    static constexpr const uint32_t _default_cpuid = 0;
+    shard_id get_shard_id(inet_address to) {
+        return shard_id{to, _default_cpuid};
+    }
+    void do_sort(std::vector<gossip_digest>& g_digest_list);
+    timer<lowres_clock> _scheduled_gossip_task;
+    sstring get_cluster_name() {
+        // FIXME: DatabaseDescriptor.getClusterName()
+        return "my_cluster_name";
+    }
+    sstring get_partitioner_name() {
+        // FIXME: DatabaseDescriptor.getPartitionerName()
+        return "my_partitioner_name";
+    }
 private:
     inet_address get_broadcast_address() {
         // FIXME: Helper for FBUtilities.getBroadcastAddress
@@ -113,87 +147,9 @@ private:
 
     int64_t _last_processed_message_at = now_millis();
 
-#if 0
-    private class GossipTask implements Runnable
-    {
-        public void run()
-        {
-            try
-            {
-                //wait on messaging service to start listening
-                MessagingService.instance().waitUntilListening();
-
-                taskLock.lock();
-
-                /* Update the local heartbeat counter. */
-                endpoint_state_map.get(FBUtilities.getBroadcastAddress()).get_heart_beat_state().updateHeartBeat();
-                if (logger.isTraceEnabled())
-                    logger.trace("My heartbeat is now {}", endpoint_state_map.get(FBUtilities.getBroadcastAddress()).get_heart_beat_state().get_heart_beat_version());
-                final List<GossipDigest> g_digests = new ArrayList<GossipDigest>();
-                Gossiper.instance.make_random_gossip_digest(g_digests);
-
-                if (g_digests.size() > 0)
-                {
-                    GossipDigestSyn digestSynMessage = new GossipDigestSyn(DatabaseDescriptor.getClusterName(),
-                                                                           DatabaseDescriptor.getPartitionerName(),
-                                                                           g_digests);
-                    MessageOut<GossipDigestSyn> message = new MessageOut<GossipDigestSyn>(MessagingService.Verb.GOSSIP_DIGEST_SYN,
-                                                                                          digestSynMessage,
-                                                                                          GossipDigestSyn.serializer);
-                    /* Gossip to some random live member */
-                    boolean gossipedToSeed = do_gossip_to_live_member(message);
-
-                    /* Gossip to some unreachable member with some probability to check if he is back up */
-                    do_gossip_to_unreachable_member(message);
-
-                    /* Gossip to a seed if we did not do so above, or we have seen less nodes
-                       than there are seeds.  This prevents partitions where each group of nodes
-                       is only gossiping to a subset of the seeds.
-
-                       The most straightforward check would be to check that all the seeds have been
-                       verified either as live or unreachable.  To avoid that computation each round,
-                       we reason that:
-
-                       either all the live nodes are seeds, in which case non-seeds that come online
-                       will introduce themselves to a member of the ring by definition,
-
-                       or there is at least one non-seed node in the list, in which case eventually
-                       someone will gossip to it, and then do a gossip to a random seed from the
-                       gossipedToSeed check.
-
-                       See CASSANDRA-150 for more exposition. */
-                    if (!gossipedToSeed || _live_endpoints.size() < _seeds.size())
-                        do_gossip_to_seed(message);
-
-                    do_status_check();
-                }
-            }
-            catch (Exception e)
-            {
-                JVMStabilityInspector.inspectThrowable(e);
-                logger.error("Gossip error", e);
-            }
-            finally
-            {
-                taskLock.unlock();
-            }
-        }
-    }
-#endif
-
+    void run();
 public:
-     gossiper() {
-        // half of QUARATINE_DELAY, to ensure _just_removed_endpoints has enough leeway to prevent re-gossip
-        fat_client_timeout = (int64_t) (QUARANTINE_DELAY / 2);
-        /* register with the Failure Detector for receiving Failure detector events */
-        // FIXME: FailureDetector includes Gossiper!!!
-        //
-        //FailureDetector.instance.registerFailureDetectionEventListener(this);
-        fail(unimplemented::cause::GOSSIP);
-
-        // Register this instance with JMX
-    }
-
+    gossiper();
     void set_last_processed_message_at(int64_t time_in_millis) {
         _last_processed_message_at = time_in_millis;
     }
@@ -341,30 +297,7 @@ public:
     /**
      * Removes the endpoint from Gossip but retains endpoint state
      */
-    void remove_endpoint(inet_address endpoint) {
-        // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
-        for (shared_ptr<i_endpoint_state_change_subscriber>& subscriber : _subscribers) {
-            subscriber->on_remove(endpoint);
-        }
-
-        if(_seeds.count(endpoint)) {
-            build_seeds_list();
-            _seeds.erase(endpoint);
-            //logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
-        }
-
-        _live_endpoints.erase(endpoint);
-        _unreachable_endpoints.erase(endpoint);
-        // do not remove endpointState until the quarantine expires
-        // FIXME
-        //FailureDetector.instance.remove(endpoint);
-        //MessagingService.instance().resetVersion(endpoint);
-        fail(unimplemented::cause::GOSSIP);
-        quarantine_endpoint(endpoint);
-        //MessagingService.instance().destroyConnectionPool(endpoint);
-        // if (logger.isDebugEnabled())
-        //     logger.debug("removing endpoint {}", endpoint);
-    }
+    void remove_endpoint(inet_address endpoint);
 private:
     /**
      * Quarantines the endpoint for QUARANTINE_DELAY
@@ -415,7 +348,7 @@ private:
      *
      * @param g_digests list of Gossip Digests.
      */
-    void make_random_gossip_digest(std::list<gossip_digest>& g_digests) {
+    void make_random_gossip_digest(std::vector<gossip_digest>& g_digests) {
         int generation = 0;
         int max_version = 0;
 
@@ -582,25 +515,10 @@ private:
      * @param epSet   a set of endpoint from which a random endpoint is chosen.
      * @return true if the chosen endpoint is also a seed.
      */
-    bool send_gossip(MessageOut<gossip_digest_syn> message, std::set<inet_address> epset) {
-        std::vector<inet_address> _live_endpoints(epset.begin(), epset.end());
-        size_t size = _live_endpoints.size();
-        if (size < 1) {
-            return false;
-        }
-        /* Generate a random number from 0 -> size */
-        std::uniform_int_distribution<int> dist(0, size - 1);
-        int index = dist(_random);
-        inet_address to = _live_endpoints[index];
-        // if (logger.isTraceEnabled())
-        //     logger.trace("Sending a GossipDigestSyn to {} ...", to);
-        // FIXME: Add MessagingService.instance().sendOneWay
-        // MessagingService.instance().sendOneWay(message, to);
-        return _seeds.count(to);
-    }
+    bool send_gossip(gossip_digest_syn message, std::set<inet_address> epset);
 
     /* Sends a Gossip message to a live member and returns true if the recipient was a seed */
-    bool do_gossip_to_live_member(MessageOut<gossip_digest_syn> message) {
+    bool do_gossip_to_live_member(gossip_digest_syn message) {
         size_t size = _live_endpoints.size();
         if (size == 0) {
             return false;
@@ -609,7 +527,7 @@ private:
     }
 
     /* Sends a Gossip message to an unreachable member */
-    void do_gossip_to_unreachable_member(MessageOut<gossip_digest_syn> message) {
+    void do_gossip_to_unreachable_member(gossip_digest_syn message) {
         double live_endpoint_count = _live_endpoints.size();
         double unreachable_endpoint_count = _unreachable_endpoints.size();
         if (unreachable_endpoint_count > 0) {
@@ -628,7 +546,7 @@ private:
     }
 
     /* Gossip to a seed for facilitating partition healing */
-    void do_gossip_to_seed(MessageOut<gossip_digest_syn> prod) {
+    void do_gossip_to_seed(gossip_digest_syn prod) {
         size_t size = _seeds.size();
         if (size > 0) {
             // FIXME: FBUtilities.getBroadcastAddress
@@ -660,73 +578,7 @@ private:
         return !is_dead_state(eps) /* && !StorageService.instance.getTokenMetadata().isMember(endpoint); */;
     }
 
-    void do_status_check() {
-        // if (logger.isTraceEnabled())
-        //     logger.trace("Performing status check ...");
-
-        int64_t now = now_millis();
-
-        // FIXME: 
-        // int64_t pending = ((JMXEnabledThreadPoolExecutor) StageManager.getStage(Stage.GOSSIP)).getPendingTasks();
-        int64_t pending = 1;
-        if (pending > 0 && _last_processed_message_at < now - 1000) {
-            // FIXME: SLEEP
-            // if some new messages just arrived, give the executor some time to work on them
-            //Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
-
-            // still behind?  something's broke
-            if (_last_processed_message_at < now - 1000) {
-                // logger.warn("Gossip stage has {} pending tasks; skipping status check (no nodes will be marked down)", pending);
-                return;
-            }
-        }
-
-        for (auto& entry : endpoint_state_map) {
-            const inet_address& endpoint = entry.first;
-            if (endpoint == get_broadcast_address()) {
-                continue;
-            }
-
-            // FIXME: FailureDetector.instance
-            // FailureDetector.instance.interpret(endpoint);
-            fail(unimplemented::cause::GOSSIP);
- 
-            auto it = endpoint_state_map.find(endpoint);
-            if (it != endpoint_state_map.end()) {
-                endpoint_state& ep_state = it->second;
-                // check if this is a fat client. fat clients are removed automatically from
-                // gossip after FatClientTimeout.  Do not remove dead states here.
-                if (is_gossip_only_member(endpoint)
-                    && !_just_removed_endpoints.count(endpoint)
-                    && ((now - ep_state.get_update_timestamp().time_since_epoch().count()) > fat_client_timeout)) {
-                    // logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, FatClientTimeout);
-                    remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
-                    evict_from_membershipg(endpoint); // can get rid of the state immediately
-                }
-
-                // check for dead state removal
-                int64_t expire_time = get_expire_time_for_endpoint(endpoint);
-                if (!ep_state.is_alive() && (now > expire_time)) {
-                    /* && (!StorageService.instance.getTokenMetadata().isMember(endpoint))) */
-                    // if (logger.isDebugEnabled()) {
-                    //     logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time);
-                    // }
-                    evict_from_membershipg(endpoint);
-                }
-            }
-        }
-
-        for (auto it = _just_removed_endpoints.begin(); it != _just_removed_endpoints.end();) {
-            auto& t= it->second;
-            if ((now - t) > QUARANTINE_DELAY) {
-                // if (logger.isDebugEnabled())
-                //     logger.debug("{} elapsed, {} gossip quarantine over", QUARANTINE_DELAY, entry.getKey());
-                it = _just_removed_endpoints.erase(it);
-            } else {
-                it++;
-            }
-        }
-    }
+    void do_status_check();
 
 public:
     int64_t get_expire_time_for_endpoint(inet_address endpoint) {
@@ -839,44 +691,7 @@ public:
     }
 
 
-    void notify_failure_detector(inet_address endpoint, endpoint_state remote_endpoint_state) {
-        /*
-         * If the local endpoint state exists then report to the FD only
-         * if the versions workout.
-        */
-        auto it = endpoint_state_map.find(endpoint);
-        if (it != endpoint_state_map.end()) {
-            auto& local_endpoint_state = it->second;
-            // FIXME: i_failure_detector!!!!
-            // i_failure_detector& fd = the_failure_detector();
-            int local_generation = local_endpoint_state.get_heart_beat_state().get_generation();
-            int remote_generation = remote_endpoint_state.get_heart_beat_state().get_generation();
-            if (remote_generation > local_generation) {
-                local_endpoint_state.update_timestamp();
-                // this node was dead and the generation changed, this indicates a reboot, or possibly a takeover
-                // we will clean the fd intervals for it and relearn them
-                if (!local_endpoint_state.is_alive()) {
-                    //logger.debug("Clearing interval times for {} due to generation change", endpoint);
-                    // FIXME: i_failure_detector!!!!
-                    // fd.remove(endpoint);
-                }
-                // FIXME: i_failure_detector!!!!
-                //fd.report(endpoint);
-                return;
-            }
-
-            if (remote_generation == local_generation) {
-                int local_version = get_max_endpoint_state_version(local_endpoint_state);
-                int remote_version = remote_endpoint_state.get_heart_beat_state().get_heart_beat_version();
-                if (remote_version > local_version) {
-                    local_endpoint_state.update_timestamp();
-                    // just a version change, report to the fd
-                    // fd.report(endpoint);
-                }
-            }
-        }
-
-    }
+    void notify_failure_detector(inet_address endpoint, endpoint_state remote_endpoint_state);
 
 private:
     void mark_alive(inet_address addr, endpoint_state local_state) {
@@ -888,24 +703,11 @@ private:
         // }
 
         local_state.mark_dead();
-
-#if 0
-        MessageOut<EchoMessage> echoMessage = new MessageOut<EchoMessage>(MessagingService.Verb.ECHO, new EchoMessage(), EchoMessage.serializer);
-        logger.trace("Sending a EchoMessage to {}", addr);
-        IAsyncCallback echoHandler = new IAsyncCallback()
-        {
-            public boolean isLatencyForSnitch()
-            {
-                return false;
-            }
-
-            public void response(MessageIn msg)
-            {
-                real_mark_alive(addr, local_state);
-            }
-        };
-        MessagingService.instance().sendRR(echoMessage, addr, echoHandler);
-#endif
+        //logger.trace("Sending a EchoMessage to {}", addr);
+        shard_id id = get_shard_id(addr);
+        ms().send_message<empty_msg>(messaging_verb::ECHO, id).then([this, addr, local_state = std::move(local_state)] (empty_msg msg) mutable {
+            this->real_mark_alive(addr, local_state);
+        });
     }
 
     void real_mark_alive(inet_address addr, endpoint_state local_state) {
@@ -989,66 +791,7 @@ public:
         return false;
     }
 
-    void apply_state_locally(std::map<inet_address, endpoint_state>& map) {
-        for (auto& entry : map) {
-            auto& ep = entry.first;
-            if (ep == get_broadcast_address() && !is_in_shadow_round()) {
-                continue;
-            }
-            if (_just_removed_endpoints.count(ep)) {
-                // if (logger.isTraceEnabled())
-                //     logger.trace("Ignoring gossip for {} because it is quarantined", ep);
-                continue;
-            }
-            /*
-                If state does not exist just add it. If it does then add it if the remote generation is greater.
-                If there is a generation tie, attempt to break it by heartbeat version.
-            */
-            endpoint_state& remote_state = entry.second;
-            auto it = endpoint_state_map.find(ep);
-            if (it != endpoint_state_map.end() ) {
-                endpoint_state& local_ep_state_ptr = it->second;
-                int local_generation = local_ep_state_ptr.get_heart_beat_state().get_generation();
-                int remote_generation = remote_state.get_heart_beat_state().get_generation();
-                // if (logger.isTraceEnabled()) {
-                //     logger.trace("{} local generation {}, remote generation {}", ep, local_generation, remote_generation);
-                // }
-                if (local_generation != 0 && remote_generation > local_generation + MAX_GENERATION_DIFFERENCE) {
-                    // assume some peer has corrupted memory and is broadcasting an unbelievable generation about another peer (or itself)
-                    // logger.warn("received an invalid gossip generation for peer {}; local generation = {}, received generation = {}",
-                    //         ep, local_generation, remote_generation);
-                } else if (remote_generation > local_generation) {
-                    // if (logger.isTraceEnabled())
-                    //     logger.trace("Updating heartbeat state generation to {} from {} for {}", remote_generation, local_generation, ep);
-                    // major state change will handle the update by inserting the remote state directly
-                    handle_major_state_change(ep, remote_state);
-                } else if (remote_generation == local_generation)  { // generation has not changed, apply new states
-                    /* find maximum state */
-                    int local_max_version = get_max_endpoint_state_version(local_ep_state_ptr);
-                    int remote_max_version = get_max_endpoint_state_version(remote_state);
-                    if (remote_max_version > local_max_version) {
-                        // apply states, but do not notify since there is no major change
-                        apply_new_states(ep, local_ep_state_ptr, remote_state);
-                    } else {
-                        // if (logger.isTraceEnabled()) {
-                        //     logger.trace("Ignoring remote version {} <= {} for {}", remote_max_version, local_max_version, ep);
-                    }
-                    if (!local_ep_state_ptr.is_alive() && !is_dead_state(local_ep_state_ptr)) { // unless of course, it was dead
-                        mark_alive(ep, local_ep_state_ptr);
-                    }
-                } else {
-                    // if (logger.isTraceEnabled())
-                    //     logger.trace("Ignoring remote generation {} < {}", remote_generation, local_generation);
-                }
-            } else {
-                // this is a new node, report it to the FD in case it is the first time we are seeing it AND it's not alive
-                // FIXME: failure_detector !!!
-                // FailureDetector.instance.report(ep);
-                handle_major_state_change(ep, remote_state);
-                fail(unimplemented::cause::GOSSIP);
-            }
-        }
-    }
+    void apply_state_locally(std::map<inet_address, endpoint_state>& map);
 
 private:
     void apply_new_states(inet_address addr, endpoint_state local_state, endpoint_state remote_state) {
@@ -1172,59 +915,59 @@ public:
             }
         }
     }
-#if 0
+
 public:
-    void start(int generationNumber) {
-        start(generationNumber, new HashMap<ApplicationState, VersionedValue>());
+    void start(int generation_number) {
+        start(generation_number, std::map<application_state, versioned_value>());
     }
 
     /**
      * Start the gossiper with the generation number, preloading the map of application states before starting
      */
-    void start(int generation_nbr, Map<ApplicationState, VersionedValue> preloadLocalStates) {
+    void start(int generation_nbr, std::map<application_state, versioned_value> preload_local_states) {
         build_seeds_list();
         /* initialize the heartbeat state for this localEndpoint */
         maybe_initialize_local_state(generation_nbr);
-        endpoint_state local_state = endpoint_state_map.get(FBUtilities.getBroadcastAddress());
-        for (Map.Entry<ApplicationState, VersionedValue> entry : preloadLocalStates.entrySet())
-            local_state.add_application_state(entry.getKey(), entry.getValue());
+        endpoint_state& local_state = endpoint_state_map[get_broadcast_address()];
+        for (auto& entry : preload_local_states) {
+            local_state.add_application_state(entry.first, entry.second);
+        }
 
         //notify snitches that Gossiper is about to start
+#if 0
         DatabaseDescriptor.getEndpointSnitch().gossiperStarting();
         if (logger.isTraceEnabled())
             logger.trace("gossip started with generation {}", local_state.get_heart_beat_state().get_generation());
-
-        scheduledGossipTask = executor.scheduleWithFixedDelay(new GossipTask(),
-                                                              Gossiper.INTERVAL_IN_MILLIS,
-                                                              Gossiper.INTERVAL_IN_MILLIS,
-                                                              TimeUnit.MILLISECONDS);
-    }
 #endif
+        std::chrono::milliseconds period(INTERVAL_IN_MILLIS);
+        _scheduled_gossip_task.arm_periodic(period);
+    }
 
-#if 0
+public:
     /**
      *  Do a single 'shadow' round of gossip, where we do not modify any state
      *  Only used when replacing a node, to get and assume its states
      */
-    public void doShadowRound()
-    {
+    void do_shadow_round() {
         build_seeds_list();
         // send a completely empty syn
-        List<GossipDigest> g_digests = new ArrayList<GossipDigest>();
-        GossipDigestSyn digestSynMessage = new GossipDigestSyn(DatabaseDescriptor.getClusterName(),
-                DatabaseDescriptor.getPartitionerName(),
-                g_digests);
-        MessageOut<GossipDigestSyn> message = new MessageOut<GossipDigestSyn>(MessagingService.Verb.GOSSIP_DIGEST_SYN,
-                digestSynMessage,
-                GossipDigestSyn.serializer);
+        std::vector<gossip_digest> g_digests;
+        gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests);
         _in_shadow_round = true;
-        for (inet_address seed : _seeds)
-            MessagingService.instance().sendOneWay(message, seed);
+        for (inet_address seed : _seeds) {
+            auto id = get_shard_id(seed);
+            ms().send_message<gossip_digest_ack>(messaging_verb::GOSSIP_DIGEST_SYN,
+                    std::move(id), std::move(message)).then([this, id] (gossip_digest_ack ack_msg) {
+                if (this->is_in_shadow_round()) {
+                    this->finish_shadow_round();
+                }
+            });
+        }
+        // FIXME: Implemnt the wait logic below
+#if 0
         int slept = 0;
-        try
-        {
-            while (true)
-            {
+        try {
+            while (true) {
                 Thread.sleep(1000);
                 if (!_in_shadow_round)
                     break;
@@ -1232,13 +975,12 @@ public:
                 if (slept > StorageService.RING_DELAY)
                     throw new RuntimeException("Unable to gossip with any _seeds");
             }
-        }
-        catch (InterruptedException wtf)
-        {
+        } catch (InterruptedException wtf) {
             throw new RuntimeException(wtf);
         }
-    }
 #endif
+    }
+
 private:
     void build_seeds_list() {
         // for (inet_address seed : DatabaseDescriptor.getSeeds())
@@ -1312,25 +1054,25 @@ public:
         }
     }
 
-#if 0
-    public void stop()
-    {
-    	if (scheduledGossipTask != null)
-    		scheduledGossipTask.cancel(false);
-        logger.info("Announcing shutdown");
-        Uninterruptibles.sleepUninterruptibly(INTERVAL_IN_MILLIS * 2, TimeUnit.MILLISECONDS);
-        MessageOut message = new MessageOut(MessagingService.Verb.GOSSIP_SHUTDOWN);
-        for (inet_address ep : _live_endpoints)
-            MessagingService.instance().sendOneWay(message, ep);
+    void stop() {
+        fail(unimplemented::cause::GOSSIP);
+        // if (scheduledGossipTask != null)
+        // 	scheduledGossipTask.cancel(false);
+        // logger.info("Announcing shutdown");
+        // Uninterruptibles.sleepUninterruptibly(INTERVAL_IN_MILLIS * 2, TimeUnit.MILLISECONDS);
+        for (inet_address ep : _live_endpoints) {
+            ms().send_message_oneway<void>(messaging_verb::GOSSIP_SHUTDOWN, get_shard_id(ep), ep).then([]{
+            });
+        }
     }
-
-    public boolean isEnabled()
-    {
-        return (scheduledGossipTask != null) && (!scheduledGossipTask.isCancelled());
-    }
-#endif
 
 public:
+    bool is_enabled() {
+        //return (scheduledGossipTask != null) && (!scheduledGossipTask.isCancelled());
+        warn(unimplemented::cause::GOSSIP);
+        return true;
+    }
+
     void finish_shadow_round() {
         if (_in_shadow_round) {
             _in_shadow_round = false;
@@ -1391,6 +1133,9 @@ extern distributed<gossiper> _the_gossiper;
 inline gossiper& get_local_gossiper() {
     assert(engine().cpu_id() == 0);
     return _the_gossiper.local();
+}
+inline distributed<gossiper>& get_gossiper() {
+    return _the_gossiper;
 }
 
 } // namespace gms

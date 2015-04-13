@@ -144,6 +144,7 @@ urchin_tests = [
     'tests/urchin/hash_test',
     'tests/urchin/serializer_test',
     'tests/message',
+    'tests/urchin/gossip',
 ]
 
 tests = [
@@ -350,6 +351,7 @@ urchin_core = (['database.cc',
                  'utils/utils.cc',
                  'utils/UUID_gen.cc',
                  'gms/version_generator.cc',
+                 'gms/gossiper.cc',
                  'gms/gms.cc',
                  'dht/dht.cc',
                  'dht/i_partitioner.cc',

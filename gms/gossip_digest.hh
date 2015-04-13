@@ -35,10 +35,16 @@ namespace gms {
 class gossip_digest { // implements Comparable<GossipDigest>
 private:
     using inet_address = gms::inet_address;
-    const inet_address _endpoint;
-    const int32_t _generation;
-    const int32_t _max_version;
+    inet_address _endpoint;
+    int32_t _generation;
+    int32_t _max_version;
 public:
+    gossip_digest()
+        : _endpoint(0)
+        , _generation(0)
+        , _max_version(0) {
+    }
+
     gossip_digest(inet_address ep, int32_t gen, int32_t version)
         : _endpoint(ep)
         , _generation(gen)
@@ -62,6 +68,13 @@ public:
             return (_generation - d.get_generation());
         }
         return (_max_version - d.get_max_version());
+    }
+
+    friend bool operator<(const gossip_digest& x, const gossip_digest& y) {
+        if (x._generation != y._generation) {
+            return x._generation < y._generation;
+        }
+        return x._max_version <  y._max_version;
     }
 
     friend inline std::ostream& operator<<(std::ostream& os, const gossip_digest& d) {
