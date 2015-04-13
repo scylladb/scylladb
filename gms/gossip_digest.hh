@@ -39,6 +39,12 @@ private:
     int32_t _generation;
     int32_t _max_version;
 public:
+    gossip_digest()
+        : _endpoint(0)
+        , _generation(0)
+        , _max_version(0) {
+    }
+
     gossip_digest(inet_address ep, int32_t gen, int32_t version)
         : _endpoint(ep)
         , _generation(gen)
