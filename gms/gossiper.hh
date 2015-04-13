@@ -960,30 +960,31 @@ public:
         _scheduled_gossip_task.arm_periodic(period);
     }
 
-#if 0
+public:
     /**
      *  Do a single 'shadow' round of gossip, where we do not modify any state
      *  Only used when replacing a node, to get and assume its states
      */
-    public void doShadowRound()
-    {
+    void do_shadow_round() {
         build_seeds_list();
         // send a completely empty syn
-        List<GossipDigest> g_digests = new ArrayList<GossipDigest>();
-        GossipDigestSyn digestSynMessage = new GossipDigestSyn(DatabaseDescriptor.getClusterName(),
-                DatabaseDescriptor.getPartitionerName(),
-                g_digests);
-        MessageOut<GossipDigestSyn> message = new MessageOut<GossipDigestSyn>(MessagingService.Verb.GOSSIP_DIGEST_SYN,
-                digestSynMessage,
-                GossipDigestSyn.serializer);
+        std::vector<gossip_digest> g_digests;
+        gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests);
         _in_shadow_round = true;
-        for (inet_address seed : _seeds)
-            MessagingService.instance().sendOneWay(message, seed);
+        for (inet_address seed : _seeds) {
+            auto id = get_shard_id(seed);
+            ms().send_message<gossip_digest_ack>(messaging_verb::GOSSIP_DIGEST_SYN,
+                    std::move(id), std::move(message)).then([this, id] (gossip_digest_ack ack_msg) {
+                if (this->is_in_shadow_round()) {
+                    this->finish_shadow_round();
+                }
+            });
+        }
+        // FIXME: Implemnt the wait logic below
+#if 0
         int slept = 0;
-        try
-        {
-            while (true)
-            {
+        try {
+            while (true) {
                 Thread.sleep(1000);
                 if (!_in_shadow_round)
                     break;
@@ -991,13 +992,12 @@ public:
                 if (slept > StorageService.RING_DELAY)
                     throw new RuntimeException("Unable to gossip with any _seeds");
             }
-        }
-        catch (InterruptedException wtf)
-        {
+        } catch (InterruptedException wtf) {
             throw new RuntimeException(wtf);
         }
-    }
 #endif
+    }
+
 private:
     void build_seeds_list() {
         // for (inet_address seed : DatabaseDescriptor.getSeeds())
