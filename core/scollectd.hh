@@ -349,13 +349,13 @@ public:
     }
     void types(data_type * p) const override {
         unpack(_values, [p](Args... args) {
-            const std::array<data_type, sizeof...(args)> tmp = { {args}...};
+            const std::array<data_type, num_values> tmp = { (args)... };
             std::copy(tmp.begin(), tmp.end(), p);
         });
     }
     void values(net::packed<uint64_t> * p) const override {
         unpack(_values, [p](Args... args) {
-            std::array<uint64_t, num_values> tmp = { {args}...};
+            std::array<uint64_t, num_values> tmp = { (args)... };
             std::copy(tmp.begin(), tmp.end(), p);
         });
     }

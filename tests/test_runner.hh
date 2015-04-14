@@ -22,10 +22,12 @@
 #pragma once
 
 #include <memory>
-
-#include "core/reactor.hh"
+#include <functional>
+#include <atomic>
 #include "core/future.hh"
 #include "exchanger.hh"
+
+class posix_thread;
 
 class test_runner {
 private:
@@ -33,11 +35,10 @@ private:
     std::atomic<bool> _started{false};
     exchanger<std::function<future<>()>> _task;
     bool _done = false;
-private:
-    void start(std::function<void()> pre_start);
-    void stop();
 public:
-    static test_runner& launch_or_get(std::function<void()> pre_start);
+    void start(int argc, char** argv);
     ~test_runner();
     void run_sync(std::function<future<>()> task);
 };
+
+test_runner& global_test_runner();

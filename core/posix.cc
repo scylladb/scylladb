@@ -47,7 +47,12 @@ mmap_area mmap_anonymous(void* addr, size_t length, int prot, int flags) {
 
 void* posix_thread::start_routine(void* arg) {
     auto pfunc = reinterpret_cast<std::function<void ()>*>(arg);
-    (*pfunc)();
+    try {
+        (*pfunc)();
+    } catch (...) {
+        // We're in POSIX thread callback, so all exceptions need to be handled.
+        std::terminate();
+    }
     return nullptr;
 }
 

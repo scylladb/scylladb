@@ -152,10 +152,6 @@ future<> do_for_each(Container& c, AsyncAction&& action) {
     return do_for_each(std::begin(c), std::end(c), std::forward<AsyncAction>(action));
 }
 
-template <typename... Future>
-future<std::tuple<Future...>> when_all(Future&&... fut);
-
-template <>
 inline
 future<std::tuple<>>
 when_all() {
@@ -286,6 +282,37 @@ map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Reducer&& r)
         });
     }
     return reducer_traits<Reducer>::maybe_call_get(std::move(ret), r_ptr);
+}
+
+// Variant of map_reduce() that accepts an initial value
+// and binary function instead of a reducer object
+// (equivalent to a left fold, or std::accumulate).
+//
+// Requirements:
+//   Iterator: InputIterator.
+//   Mapper: unary function taking Iterator::value_type and producing a future<...>.
+//   Initial: any value type
+//   Reduce: a binary function taking two Initial values and returning an Initial
+// Returns:
+//   Initial
+template <typename Iterator, typename Mapper, typename Initial, typename Reduce>
+inline
+Initial
+map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Initial initial, Reduce reduce) {
+    struct state {
+        Initial result;
+        Reduce reduce;
+    };
+    auto s = make_lw_shared(state{std::move(initial), std::move(reduce)});
+    future<> ret = make_ready_future<>();
+    while (begin != end) {
+        ret = mapper(*begin++).then([s = s.get()] (auto&& value) mutable {
+            s->result = s->reduce(std::move(s->result), std::move(value));
+        });
+    }
+    return ret.then([s] {
+        return std::move(s->result);
+    });
 }
 
 // Implements @Reducer concept. Calculates the result by
