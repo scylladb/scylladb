@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cql3/result_set.hh"
+#include "cql3/statements/parsed_statement.hh"
 
 #include "transport/event.hh"
 
