@@ -1198,17 +1198,19 @@ private:
      * Translate rte_mbuf into the "packet".
      * @param m mbuf to translate
      *
-     * @return a "packet" object representing the newly received data
+     * @return a "optional" object representing the newly received data if in an
+     *         "engaged" state or an error if in a "disengaged" state.
      */
-    packet from_mbuf(rte_mbuf* m);
+    std::experimental::optional<packet> from_mbuf(rte_mbuf* m);
 
     /**
      * Transform an LRO rte_mbuf cluster into the "packet" object.
      * @param m HEAD of the mbufs' cluster to transform
      *
-     * @return a "packet" object representing the newly received LRO packet.
+     * @return a "optional" object representing the newly received LRO packet if
+     *         in an "engaged" state or an error if in a "disengaged" state.
      */
-    packet from_mbuf_lro(rte_mbuf* m);
+    std::experimental::optional<packet> from_mbuf_lro(rte_mbuf* m);
 
 private:
     dpdk_device* _dev;
@@ -1688,7 +1690,8 @@ void dpdk_qp<HugetlbfsMemBackend>::rx_start() {
 }
 
 template<>
-inline packet dpdk_qp<false>::from_mbuf_lro(rte_mbuf* m)
+inline std::experimental::optional<packet>
+dpdk_qp<false>::from_mbuf_lro(rte_mbuf* m)
 {
     //
     // Try to allocate a buffer for the whole packet's data.
@@ -1698,17 +1701,7 @@ inline packet dpdk_qp<false>::from_mbuf_lro(rte_mbuf* m)
     //
     auto pkt_len = rte_pktmbuf_pkt_len(m);
     char* buf = (char*)malloc(pkt_len);
-    if (!buf) {
-        _frags.clear();
-
-        for (rte_mbuf* m1 = m; m1 != nullptr; m1 = m1->next) {
-            char* data = rte_pktmbuf_mtod(m1, char*);
-            _frags.emplace_back(fragment{data, rte_pktmbuf_data_len(m1)});
-        }
-
-        return packet(_frags.begin(), _frags.end(),
-                      make_deleter(deleter(), [m] { rte_pktmbuf_free(m); }));
-    } else {
+    if (buf) {
         // Copy the contents of the packet into the buffer we've just allocated
         size_t offset = 0;
         for (rte_mbuf* m1 = m; m1 != nullptr; m1 = m1->next) {
@@ -1723,10 +1716,16 @@ inline packet dpdk_qp<false>::from_mbuf_lro(rte_mbuf* m)
 
         return packet(fragment{buf, pkt_len}, make_free_deleter(buf));
     }
+
+    // Drop if allocation failed
+    rte_pktmbuf_free(m);
+
+    return std::experimental::nullopt;
 }
 
 template<>
-inline packet dpdk_qp<false>::from_mbuf(rte_mbuf* m)
+inline std::experimental::optional<packet>
+dpdk_qp<false>::from_mbuf(rte_mbuf* m)
 {
     if (!_dev->hw_features_ref().rx_lro || rte_pktmbuf_is_contiguous(m)) {
         //
@@ -1737,10 +1736,12 @@ inline packet dpdk_qp<false>::from_mbuf(rte_mbuf* m)
         //
         auto len = rte_pktmbuf_data_len(m);
         char* buf = (char*)malloc(len);
+
         if (!buf) {
-            return packet(fragment{rte_pktmbuf_mtod(m, char*), len},
-                          make_deleter(deleter(),
-                                       [m] { rte_pktmbuf_free(m); }));
+            // Drop if allocation failed
+            rte_pktmbuf_free(m);
+
+            return std::experimental::nullopt;
         } else {
             rte_memcpy(buf, rte_pktmbuf_mtod(m, char*), len);
             rte_pktmbuf_free(m);
@@ -1753,7 +1754,8 @@ inline packet dpdk_qp<false>::from_mbuf(rte_mbuf* m)
 }
 
 template<>
-inline packet dpdk_qp<true>::from_mbuf_lro(rte_mbuf* m)
+inline std::experimental::optional<packet>
+dpdk_qp<true>::from_mbuf_lro(rte_mbuf* m)
 {
     _frags.clear();
     _bufs.clear();
@@ -1775,7 +1777,7 @@ inline packet dpdk_qp<true>::from_mbuf_lro(rte_mbuf* m)
 }
 
 template<>
-inline packet dpdk_qp<true>::from_mbuf(rte_mbuf* m)
+inline std::experimental::optional<packet> dpdk_qp<true>::from_mbuf(rte_mbuf* m)
 {
     _rx_free_pkts.push_back(m);
     _num_rx_free_segs += rte_mbuf_nb_segs(m);
@@ -1857,10 +1859,16 @@ void dpdk_qp<HugetlbfsMemBackend>::process_packets(
         struct rte_mbuf *m = bufs[i];
         offload_info oi;
 
+        std::experimental::optional<packet> p = from_mbuf(m);
+
+        // Drop the packet if translation above has failed
+        if (!p) {
+            // TODO: Increase error counters here
+            continue;
+        }
+
         nr_frags += rte_mbuf_nb_segs(m);
         bytes    += rte_mbuf_pkt_len(m);
-
-        packet p = from_mbuf(m);
 
         // Set stipped VLAN value if available
         if ((_dev->_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_STRIP) &&
@@ -1880,12 +1888,12 @@ void dpdk_qp<HugetlbfsMemBackend>::process_packets(
             // the checksum again, because we did this here.
         }
 
-        p.set_offload_info(oi);
+        (*p).set_offload_info(oi);
         if (m->ol_flags & PKT_RX_RSS_HASH) {
-            p.set_rss_hash(rte_mbuf_rss_hash(m));
+            (*p).set_rss_hash(rte_mbuf_rss_hash(m));
         }
 
-        _dev->l2receive(std::move(p));
+        _dev->l2receive(std::move(*p));
     }
 
     _stats.rx.good.update_pkts_bunch(count);
