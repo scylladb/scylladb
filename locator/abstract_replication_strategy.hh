@@ -33,18 +33,4 @@ public:
     std::vector<inet_address> get_natural_endpoints(token& search_token);
 };
 
-using strategy_creator_type = std::function<std::unique_ptr<abstract_replication_strategy>(const sstring&, token_metadata&, std::unordered_map<sstring, sstring>&)>;
-
-class replication_strategy_registry {
-    static std::unordered_map<sstring, strategy_creator_type> _strategies;
-public:
-    static void register_strategy(sstring name, strategy_creator_type creator);
-    static std::unique_ptr<abstract_replication_strategy> create(const sstring& name, const sstring& keyspace_name, token_metadata& token_metadata, std::unordered_map<sstring, sstring>& config_options);
-};
-
-class replication_strategy_registrator {
-public:
-    explicit replication_strategy_registrator(sstring name, strategy_creator_type creator);
-};
-
 }

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include "simple_strategy.hh"
+#include "utils/class_registrator.hh"
 
 namespace locator {
 
@@ -45,9 +46,7 @@ size_t simple_strategy::get_replication_factor() const {
     return std::stol(it->second);
 }
 
-static replication_strategy_registrator registerator("org.apache.cassandra.locator.SimpleStrategy",
-        [] (const sstring& keyspace_name, token_metadata& token_metadata, std::unordered_map<sstring, sstring>& config_options) {
-   return std::make_unique<simple_strategy>(keyspace_name, token_metadata, config_options);
-});
+using registry = class_registrator<abstract_replication_strategy, simple_strategy, const sstring&, token_metadata&, std::unordered_map<sstring, sstring>&>;
+static registry registrator("org.apache.cassandra.locator.SimpleStrategy");
 
 }
