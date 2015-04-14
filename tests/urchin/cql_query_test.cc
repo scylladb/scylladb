@@ -2,6 +2,8 @@
  * Copyright 2015 Cloudius Systems
  */
 
+#define BOOST_TEST_DYN_LINK
+
 #include <boost/range/irange.hpp>
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
