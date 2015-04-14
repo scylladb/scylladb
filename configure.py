@@ -378,6 +378,11 @@ urchin_core = (['database.cc',
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
                 + core + libnet)
 
+urchin_tests_dependencies = urchin_core + [
+    'tests/urchin/cql_test_env.cc',
+    'tests/urchin/cql_assertions.cc',
+]
+
 deps = {
     'libseastar.a' : core + libnet,
     'seastar.pc': [],
@@ -416,7 +421,7 @@ deps = {
 }
 
 for t in urchin_tests:
-    deps[t] = urchin_core + [t + '.cc']
+    deps[t] = urchin_tests_dependencies + [t + '.cc']
 
 
 deps['tests/urchin/cql_query_test'] += boost_test_lib

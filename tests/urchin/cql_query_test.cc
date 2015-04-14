@@ -5,15 +5,16 @@
 #define BOOST_TEST_DYN_LINK
 
 #include <boost/range/irange.hpp>
-#include "cql3/query_processor.hh"
-#include "cql3/query_options.hh"
-#include "core/distributed.hh"
+#include <boost/range/adaptors.hpp>
+#include <boost/range/algorithm.hpp>
+#include <boost/test/unit_test.hpp>
+
 #include "tests/test-utils.hh"
 #include "tests/urchin/cql_test_env.hh"
 #include "tests/urchin/cql_assertions.hh"
-#include "to_string.hh"
-#include <boost/range/adaptors.hpp>
-#include <boost/range/algorithm.hpp>
+
+#include "core/future-util.hh"
+#include "transport/messages/result_message.hh"
 
 SEASTAR_TEST_CASE(test_create_keyspace_statement) {
     return do_with_cql_env([] (auto& e) {

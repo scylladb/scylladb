@@ -1,7 +1,9 @@
 #pragma once
 
 #include "cql3/result_set.hh"
+#include "cql3/statements/parsed_statement.hh"
 
+#include "transport/messages/result_message_base.hh"
 #include "transport/event.hh"
 
 #include "core/shared_ptr.hh"
@@ -10,24 +12,6 @@
 namespace transport {
 
 namespace messages {
-
-class result_message {
-public:
-    class visitor;
-
-    virtual ~result_message() {}
-
-    virtual void accept(visitor&) = 0;
-
-    //
-    // Message types:
-    //
-    class void_message;
-    class set_keyspace;
-    class prepared;
-    class schema_change;
-    class rows;
-};
 
 class result_message::visitor {
 public:
