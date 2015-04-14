@@ -549,8 +549,7 @@ private:
     void do_gossip_to_seed(gossip_digest_syn prod) {
         size_t size = _seeds.size();
         if (size > 0) {
-            // FIXME: FBUtilities.getBroadcastAddress
-            if (size == 1 /* && _seeds.contains(FBUtilities.getBroadcastAddress())*/) {
+            if (size == 1 && _seeds.count(get_broadcast_address())) {
                 return;
             }
 
