@@ -24,6 +24,7 @@
 #include "core/shared_ptr.hh"
 #include "core/semaphore.hh"
 #include "core/future-util.hh"
+#include <boost/iterator/counting_iterator.hpp>
 
 class expected_exception : std::runtime_error {
 public:
@@ -275,5 +276,15 @@ SEASTAR_TEST_CASE(test_when_all_iterator_range) {
     return when_all(p->begin(), p->end()).then([p] (std::vector<future<size_t>> ret) {
         BOOST_REQUIRE(std::all_of(ret.begin(), ret.end(), [] (auto& f) { return f.available(); }));
         BOOST_REQUIRE(std::all_of(ret.begin(), ret.end(), [&ret] (auto& f) { return std::get<0>(f.get()) == size_t(&f - ret.data()); }));
+    });
+}
+
+SEASTAR_TEST_CASE(test_map_reduce) {
+    auto square = [] (long x) { return make_ready_future<long>(x*x); };
+    long n = 1000;
+    return map_reduce(boost::make_counting_iterator<long>(0), boost::make_counting_iterator<long>(n),
+            square, long(0), std::plus<long>()).then([n] (auto result) {
+        auto m = n - 1; // counting does not include upper bound
+        BOOST_REQUIRE_EQUAL(result, (m * (m + 1) * (2*m + 1)) / 6);
     });
 }
