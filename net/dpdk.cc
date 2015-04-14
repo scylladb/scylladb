@@ -208,6 +208,9 @@ class dpdk_device : public device {
 #endif
     port_stats _stats;
     timer<> _stats_collector;
+    const std::string _stats_plugin_name;
+    const std::string _stats_plugin_inst;
+    std::vector<scollectd::registration> _collectd_regs;
 
 public:
     rte_eth_dev_info _dev_info = {};
@@ -253,7 +256,10 @@ public:
         : _port_idx(port_idx)
         , _num_queues(num_queues)
         , _home_cpu(engine().cpu_id())
-        , _use_lro(use_lro) {
+        , _use_lro(use_lro)
+        , _stats_plugin_name("network")
+        , _stats_plugin_inst(std::string("port") + std::to_string(_port_idx))
+    {
 
         /* now initialise the port we will use */
         int ret = init_port_start();
@@ -283,6 +289,78 @@ public:
 
             _stats.tx.bad.total       = rte_stats.oerrors;
         });
+
+        // Register port statistics collectd pollers
+        // Rx Good
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_multicast", _stats_plugin_inst + " Rx Multicast")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.good.mcast)
+        ));
+
+        // Rx Errors
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_rx_errors", "Bad CRC")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.bad.crc)
+        ));
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_rx_errors", "Dropped")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.bad.dropped)
+        ));
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_rx_errors", "Bad Length")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.bad.len)
+        ));
+
+        // Coupled counters:
+        // Good
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_packets", _stats_plugin_inst + " Pause XON")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.good.pause_xon)
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.tx.good.pause_xon)
+        ));
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_packets", _stats_plugin_inst + " Pause XOFF")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.good.pause_xoff)
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.tx.good.pause_xoff)
+        ));
+
+        // Errors
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_errors", _stats_plugin_inst)
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.bad.total)
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.tx.bad.total)
+        ));
     }
 
     ~dpdk_device() {
@@ -949,7 +1027,8 @@ class dpdk_qp : public net::qp {
     };
 
 public:
-    explicit dpdk_qp(dpdk_device* dev, uint8_t qid);
+    explicit dpdk_qp(dpdk_device* dev, uint8_t qid,
+                     const std::string stats_plugin_name);
 
     virtual void rx_start() override;
     virtual future<> send(packet p) override {
@@ -1475,8 +1554,9 @@ void dpdk_device::check_port_link_status()
 }
 
 template <bool HugetlbfsMemBackend>
-dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid)
-     : qp(true, "network", qid), _dev(dev), _qid(qid),
+dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid,
+                                      const std::string stats_plugin_name)
+     : qp(true, stats_plugin_name, qid), _dev(dev), _qid(qid),
        _rx_gc_poller([&] { return rx_gc(); }),
        _tx_buf_factory(qid),
        _tx_gc_poller([&] { return _tx_buf_factory.gc(); })
@@ -1506,7 +1586,8 @@ dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid)
 
     // Register error statistics: Rx total and checksum errors
     _collectd_regs.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("network"
+        scollectd::add_polled_metric(scollectd::type_instance_id(
+                      _stats_plugin_name
                     , scollectd::per_cpu_plugin_instance
                     , "requests", "rx-csum-errors")
                     , scollectd::make_typed(scollectd::data_type::GAUGE
@@ -1514,7 +1595,8 @@ dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid)
     ));
 
     _collectd_regs.push_back(
-        scollectd::add_polled_metric(scollectd::type_instance_id("network"
+        scollectd::add_polled_metric(scollectd::type_instance_id(
+                      _stats_plugin_name
                     , scollectd::per_cpu_plugin_instance
                     , "requests", "rx-errors")
                     , scollectd::make_typed(scollectd::data_type::GAUGE
@@ -1799,9 +1881,11 @@ std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variab
 
     std::unique_ptr<qp> qp;
     if (opts.count("hugepages")) {
-        qp = std::make_unique<dpdk_qp<true>>(this, qid);
+        qp = std::make_unique<dpdk_qp<true>>(this, qid,
+                                 _stats_plugin_name + "-" + _stats_plugin_inst);
     } else {
-        qp = std::make_unique<dpdk_qp<false>>(this, qid);
+        qp = std::make_unique<dpdk_qp<false>>(this, qid,
+                                 _stats_plugin_name + "-" + _stats_plugin_inst);
     }
 
     smp::submit_to(_home_cpu, [this] () mutable {
