@@ -254,46 +254,16 @@ public:
 
     class column_deletion;
 
-#if 0
-    public static class ElementDeletion implements RawDeletion
-    {
-        private final ColumnIdentifier.Raw id;
-        private final Term.Raw element;
-
-        public ElementDeletion(ColumnIdentifier.Raw id, Term.Raw element)
-        {
-            this.id = id;
-            this.element = element;
+    class element_deletion : public raw_deletion {
+        shared_ptr<column_identifier::raw> _id;
+        shared_ptr<term::raw> _element;
+    public:
+        element_deletion(shared_ptr<column_identifier::raw> id, shared_ptr<term::raw> element)
+                : _id(std::move(id)), _element(std::move(element)) {
         }
-
-        public ColumnIdentifier.Raw affectedColumn()
-        {
-            return id;
-        }
-
-        public Operation prepare(String keyspace, ColumnDefinition receiver) throws InvalidRequestException
-        {
-            if (!(receiver.type.isCollection()))
-                throw new InvalidRequestException(String.format("Invalid deletion operation for non collection column %s", receiver.name));
-            else if (!(receiver.type.isMultiCell()))
-                throw new InvalidRequestException(String.format("Invalid deletion operation for frozen collection column %s", receiver.name));
-
-            switch (((CollectionType)receiver.type).kind)
-            {
-                case LIST:
-                    Term idx = element.prepare(keyspace, Lists.indexSpecOf(receiver));
-                    return new Lists.DiscarderByIndex(receiver, idx);
-                case SET:
-                    Term elt = element.prepare(keyspace, Sets.valueSpecOf(receiver));
-                    return new Sets.Discarder(receiver, elt);
-                case MAP:
-                    Term key = element.prepare(keyspace, Maps.keySpecOf(receiver));
-                    return new Maps.DiscarderByKey(receiver, key);
-            }
-            throw new AssertionError();
-        }
-    }
-#endif
+        virtual shared_ptr<column_identifier::raw> affected_column() override;
+        virtual shared_ptr<operation> prepare(const sstring& keyspace, const column_definition& receiver) override;
+    };
 };
 
 }

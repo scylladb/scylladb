@@ -515,6 +515,15 @@ SEASTAR_TEST_CASE(test_map_insert_update) {
                                   {my_map_type->decompose(map_type_impl::native_type{{{1002, 5002}}})},
                               });
             });
+        }).then([&e] {
+            // overwrite an element
+            return e.execute_cql("update cf set map1[1009] = 5009 where p1 = 'key1';").discard_result();
+        }).then([&e] {
+            // delete a key
+            return e.execute_cql("delete map1[1002] from cf where p1 = 'key1';").discard_result();
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {},
+                                              "map1", map_type_impl::native_type({{{1009, 5009}}}));
         });
     });
 }
@@ -564,6 +573,13 @@ SEASTAR_TEST_CASE(test_set_insert_update) {
                                   {my_set_type->decompose(set_type_impl::native_type{{1019}})},
                               });
             });
+        }).then([&e] {
+            return e.execute_cql("update cf set set1 = set1 + { 1009 } where p1 = 'key1';").discard_result();
+        }).then([&e] {
+            return e.execute_cql("delete set1[1019] from cf where p1 = 'key1';").discard_result();
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {},
+                                            "set1", set_type_impl::native_type({1009}));
         });
     });
 }
@@ -605,6 +621,13 @@ SEASTAR_TEST_CASE(test_list_insert_update) {
                          {my_list_type->decompose(list_type_impl::native_type{{2003}})},
                      });
             });
+        }).then([&e] {
+            return e.execute_cql("update cf set list1 = [2008, 2009, 2010] where p1 = 'key1';").discard_result();
+        }).then([&e] {
+            return e.execute_cql("delete list1[1] from cf where p1 = 'key1';").discard_result();
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {},
+                    "list1", list_type_impl::native_type({2008, 2010}));
         });
     });
 }

@@ -31,6 +31,7 @@
 #include "update_parameters.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/cql3_type.hh"
+#include "constants.hh"
 
 namespace cql3 {
 
@@ -352,7 +353,6 @@ public:
 
     static void do_put(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params,
             shared_ptr<term> t, const column_definition& column, tombstone ts = {}) {
-    {
         auto value = t->bind(params._options);
         auto map_value = dynamic_pointer_cast<maps::value>(value);
         if (column.type->is_multi_cell()) {
@@ -381,29 +381,25 @@ public:
         }
     }
 
-#if 0
-    public static class DiscarderByKey extends Operation
-    {
-        public DiscarderByKey(ColumnDefinition column, Term k)
-        {
-            super(column, k);
+    class discarder_by_key : public operation {
+    public:
+        discarder_by_key(const column_definition& column, shared_ptr<term> k)
+                : operation(column, std::move(k)) {
         }
-
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            assert column.type.isMultiCell() : "Attempted to delete a single key in a frozen map";
-            Term.Terminal key = t.bind(params.options);
-            if (key == null)
-                throw new InvalidRequestException("Invalid null map key");
-            assert key instanceof Constants.Value;
-
-            CellName cellName = cf.getComparator().create(prefix, column, ((Constants.Value)key).bytes);
-            cf.addColumn(params.makeTombstone(cellName));
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override {
+            assert(column.type->is_multi_cell()); // "Attempted to delete a single key in a frozen map";
+            auto&& key = _t->bind(params._options);
+            if (!key) {
+                throw exceptions::invalid_request_exception("Invalid null map key");
+            }
+            auto ckey = dynamic_pointer_cast<constants::value>(std::move(key));
+            assert(ckey);
+            collection_type_impl::mutation mut;
+            mut.cells.emplace_back(*ckey->_bytes, params.make_dead_cell());
+            auto mtype = static_cast<map_type_impl*>(column.type.get());
+            m.set_cell(prefix, column, mtype->serialize_mutation_form(mut));
         }
-    }
-#endif
-};
-
+    };
 };
 
 }
