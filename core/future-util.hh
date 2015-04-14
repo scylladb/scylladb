@@ -297,7 +297,7 @@ map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Reducer&& r)
 //   Initial
 template <typename Iterator, typename Mapper, typename Initial, typename Reduce>
 inline
-Initial
+future<Initial>
 map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Initial initial, Reduce reduce) {
     struct state {
         Initial result;
@@ -311,7 +311,7 @@ map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Initial initial, Reduc
         });
     }
     return ret.then([s] {
-        return std::move(s->result);
+        return make_ready_future<Initial>(std::move(s->result));
     });
 }
 
