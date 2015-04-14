@@ -306,8 +306,9 @@ map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Initial initial, Reduc
     auto s = make_lw_shared(state{std::move(initial), std::move(reduce)});
     future<> ret = make_ready_future<>();
     while (begin != end) {
-        ret = mapper(*begin++).then([s = s.get()] (auto&& value) mutable {
+        ret = mapper(*begin++).then([s = s.get(), ret = std::move(ret)] (auto&& value) mutable {
             s->result = s->reduce(std::move(s->result), std::move(value));
+            return std::move(ret);
         });
     }
     return ret.then([s] {
