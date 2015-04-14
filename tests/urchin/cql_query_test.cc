@@ -703,3 +703,24 @@ SEASTAR_TEST_CASE(test_writetime_and_ttl) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_batch) {
+    return do_with_cql_env([] (auto&& e) {
+        return e.create_table([](auto ks_name) {
+            // CQL: create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));
+            return schema(ks_name, "cf",
+                          {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
+        }).then([&e] {
+            return e.execute_cql(
+                    "begin unlogged batch \n"
+                    "  insert into cf (p1, c1, r1) values ('key1', 1, 100); \n"
+                    "  insert into cf (p1, c1, r1) values ('key1', 2, 200); \n"
+                    "apply batch;"
+                    ).discard_result();
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {1}, "r1", 100);
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {2}, "r1", 200);
+        });
+    });
+}
