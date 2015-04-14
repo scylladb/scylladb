@@ -379,6 +379,7 @@ urchin_core = (['database.cc',
                 + core + libnet)
 
 urchin_tests_dependencies = urchin_core + [
+    'tests/urchin/cql_test_env.cc',
     'tests/urchin/cql_assertions.cc',
 ]
 
