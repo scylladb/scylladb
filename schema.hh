@@ -83,7 +83,8 @@ public:
 };
 
 /*
- * Keep this effectively immutable.
+ * Effectively immutable.
+ * Not safe to access across cores because of shared_ptr's.
  */
 class schema final : public raw_schema {
 private:
