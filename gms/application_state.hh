@@ -21,6 +21,8 @@
 
 #pragma once
 
+namespace gms {
+
 enum class application_state
 {
     STATUS = 0,
@@ -49,3 +51,5 @@ enum class application_state
     X9,
     X10,
 };
+
+}
