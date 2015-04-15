@@ -7,6 +7,7 @@
 #include "column_identifier.hh"
 #include "cql3_type.hh"
 #include "constants.hh"
+#include <boost/iterator/transform_iterator.hpp>
 
 namespace cql3 {
 
@@ -95,12 +96,11 @@ lists::value::from_serialized(bytes_view v, shared_ptr<list_type_impl> type, ser
         // but compose does the validation (so we're fine).
         // FIXME: deserializeForNativeProtocol()?!
         auto&& l = boost::any_cast<list_type_impl::native_type>(type->deserialize(v, sf));
-        std::vector<bytes> elements;
+        std::vector<bytes_opt> elements;
         elements.reserve(l.size());
         for (auto&& element : l) {
             // elements can be null in lists that represent a set of IN values
-            // FIXME: assumes that empty bytes is equivalent to null element
-            elements.push_back(element.empty() ? bytes() : type->get_elements_type()->decompose(element));
+            elements.push_back(element.empty() ? bytes_opt() : bytes_opt(type->get_elements_type()->decompose(element)));
         }
         return value(std::move(elements));
     } catch (marshal_exception& e) {
@@ -115,7 +115,12 @@ lists::value::get(const query_options& options) {
 
 bytes
 lists::value::get_with_protocol_version(serialization_format sf) {
-    return collection_type_impl::pack(_elements.begin(), _elements.end(), _elements.size(), sf);
+    // Can't use boost::indirect_iterator, because optional is not an iterator
+    auto deref = [] (bytes_opt& x) { return *x; };
+    return collection_type_impl::pack(
+            boost::make_transform_iterator(_elements.begin(), deref),
+            boost::make_transform_iterator( _elements.end(), deref),
+            _elements.size(), sf);
 }
 
 bool
@@ -125,10 +130,10 @@ lists::value::equals(shared_ptr<list_type_impl> lt, const value& v) {
     }
     return std::equal(_elements.begin(), _elements.end(),
             v._elements.begin(),
-            [t = lt->get_elements_type()] (bytes_view e1, bytes_view e2) { return t->equal(e1, e2); });
+            [t = lt->get_elements_type()] (const bytes_opt& e1, const bytes_opt& e2) { return t->equal(*e1, *e2); });
 }
 
-std::vector<bytes>
+std::vector<bytes_opt>
 lists::value::get_elements() {
     return _elements;
 }
@@ -161,7 +166,7 @@ lists::delayed_value::collect_marker_specification(shared_ptr<variable_specifica
 
 shared_ptr<terminal>
 lists::delayed_value::bind(const query_options& options) {
-    std::vector<bytes> buffers;
+    std::vector<bytes_opt> buffers;
     buffers.reserve(_elements.size());
     for (auto&& t : _elements) {
         bytes_opt bo = t->bind_and_get(options);
@@ -285,7 +290,8 @@ lists::do_append(shared_ptr<term> t,
         for (auto&& e : to_add) {
             auto uuid1 = utils::UUID_gen::get_time_UUID_bytes();
             auto uuid = bytes(reinterpret_cast<const int8_t*>(uuid1.data()), uuid1.size());
-            appended.cells.emplace_back(std::move(uuid), params.make_cell(e));
+            // FIXME: can e be empty?
+            appended.cells.emplace_back(std::move(uuid), params.make_cell(*e));
         }
         m.set_cell(prefix, column, ltype->serialize_mutation_form(appended));
     } else {
@@ -294,8 +300,11 @@ lists::do_append(shared_ptr<term> t,
             m.set_cell(prefix, column, params.make_dead_cell());
         } else {
             auto&& to_add = list_value->_elements;
-            auto&& newv = collection_mutation::one{list_type_impl::pack(to_add.begin(), to_add.end(), to_add.size(),
-                                                                        serialization_format::internal())};
+            auto deref = [] (const bytes_opt& v) { return *v; };
+            auto&& newv = collection_mutation::one{list_type_impl::pack(
+                    boost::make_transform_iterator(to_add.begin(), deref),
+                    boost::make_transform_iterator(to_add.end(), deref),
+                    to_add.size(), serialization_format::internal())};
             m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(newv)));
         }
     }
@@ -342,7 +351,7 @@ lists::discarder::execute(mutation& m, const exploded_clustering_prefix& prefix,
     for (auto&& cell : elist.cells) {
         auto have_value = [&] (bytes_view value) {
             return std::find_if(to_discard.begin(), to_discard.end(),
-                                [ltype, value] (auto&& v) { return ltype->get_elements_type()->equal(v, value); })
+                                [ltype, value] (auto&& v) { return ltype->get_elements_type()->equal(*v, value); })
                                          != to_discard.end();
         };
         if (cell.second.is_live() && have_value(cell.second.value())) {

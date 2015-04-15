@@ -131,7 +131,7 @@ public:
 
     class multi_column_raw : public virtual raw {
     public:
-        virtual ::shared_ptr<term> prepare(const sstring& keyspace, const std::vector<column_specification>& receiver) = 0;
+        virtual ::shared_ptr<term> prepare(const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receiver) = 0;
     };
 };
 
@@ -182,7 +182,7 @@ public:
 
 class multi_item_terminal : public terminal {
 public:
-    virtual std::vector<bytes> get_elements() = 0;
+    virtual std::vector<bytes_opt> get_elements() = 0;
 };
 
 class collection_terminal {

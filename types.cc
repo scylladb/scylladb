@@ -1103,6 +1103,18 @@ collection_type_impl::merge(collection_mutation::view a, collection_mutation::vi
     return serialize_mutation_form(merged);
 }
 
+bytes_opt
+collection_type_impl::reserialize(serialization_format from, serialization_format to, bytes_view_opt v) {
+    if (!v) {
+        return std::experimental::nullopt;
+    }
+    auto val = deserialize(*v, from);
+    bytes ret(bytes::initialized_later(), serialized_size(v));  // FIXME: serialized_size want @to
+    auto out = ret.begin();
+    serialize(std::move(val), out, to);
+    return ret;
+}
+
 // iterator that takes a set or list in serialized form, and emits
 // each element, still in serialized form
 class listlike_partial_deserializing_iterator
@@ -1470,6 +1482,153 @@ list_type_impl::to_value(mutation_view mut, serialization_format sf) {
 sstring
 list_type_impl::cql3_type_name() const {
     return sprint("list<%s>", _elements->as_cql3_type());
+}
+
+tuple_type_impl::tuple_type_impl(std::vector<data_type> types)
+        : abstract_type(make_name(types)), _types(std::move(types)) {
+    for (auto& t : _types) {
+        t = t->freeze();
+    }
+}
+
+shared_ptr<tuple_type_impl>
+tuple_type_impl::get_instance(std::vector<data_type> types) {
+    return ::make_shared<tuple_type_impl>(std::move(types));
+}
+
+int32_t
+tuple_type_impl::compare(bytes_view v1, bytes_view v2) {
+    return lexicographical_tri_compare(_types.begin(), _types.end(),
+            tuple_deserializing_iterator::start(v1), tuple_deserializing_iterator::finish(v1),
+            tuple_deserializing_iterator::start(v2), tuple_deserializing_iterator::finish(v2),
+            tri_compare_opt);
+}
+
+bool
+tuple_type_impl::less(bytes_view v1, bytes_view v2) {
+    return tuple_type_impl::compare(v1, v2) < 0;
+}
+
+size_t
+tuple_type_impl::serialized_size(const boost::any& value) {
+    size_t size = 0;
+    if (value.empty()) {
+        return size;
+    }
+    auto&& v = boost::any_cast<const native_type&>(value);
+    auto find_serialized_size = [] (auto&& t_v) {
+        const data_type& t = boost::get<0>(t_v);
+        const boost::any& v = boost::get<1>(t_v);
+        return 4 + (v.empty() ? 0 : t->serialized_size(v));
+    };
+    return boost::accumulate(boost::combine(_types, v) | boost::adaptors::transformed(find_serialized_size), 0);
+}
+
+void
+tuple_type_impl::serialize(const boost::any& value, bytes::iterator& out) {
+    if (value.empty()) {
+        return;
+    }
+    auto&& v = boost::any_cast<const native_type&>(value);
+    auto do_serialize = [&out] (auto&& t_v) {
+        const data_type& t = boost::get<0>(t_v);
+        const boost::any& v = boost::get<1>(t_v);
+        if (v.empty()) {
+            write(out, int32_t(-1));
+        } else {
+            write(out, int32_t(t->serialized_size(v)));
+            t->serialize(v, out);
+        }
+    };
+    boost::range::for_each(boost::combine(_types, v), do_serialize);
+}
+
+boost::any
+tuple_type_impl::deserialize(bytes_view v) {
+    native_type ret;
+    ret.reserve(_types.size());
+    auto ti = _types.begin();
+    auto vi = tuple_deserializing_iterator::start(v);
+    while (ti != _types.end() && vi != tuple_deserializing_iterator::finish(v)) {
+        boost::any obj;
+        if (*vi) {
+            obj = (*ti)->deserialize(**vi);
+        }
+        ret.push_back(std::move(obj));
+        ++ti;
+        ++vi;
+    }
+    ret.resize(_types.size());
+    return { ret };
+}
+
+std::vector<bytes_view_opt>
+tuple_type_impl::split(bytes_view v) const {
+    return { tuple_deserializing_iterator::start(v), tuple_deserializing_iterator::finish(v) };
+}
+
+bytes
+tuple_type_impl::from_string(sstring_view s) {
+    throw std::runtime_error("not implemented");
+}
+
+sstring
+tuple_type_impl::to_string(const bytes& b) {
+    throw std::runtime_error("not implemented");
+}
+
+bool
+tuple_type_impl::equals(const abstract_type& other) const {
+    auto x = dynamic_cast<const tuple_type_impl*>(&other);
+    return x && std::equal(_types.begin(), _types.end(), x->_types.begin(), x->_types.end(),
+            [] (auto&& a, auto&& b) { return a->equals(b); });
+}
+
+bool
+tuple_type_impl::is_compatible_with(abstract_type& previous) {
+    return check_compatibility(previous, &abstract_type::is_compatible_with);
+}
+
+bool
+tuple_type_impl::is_value_compatible_with_internal(abstract_type& previous) {
+    return check_compatibility(previous, &abstract_type::is_value_compatible_with);
+}
+
+bool
+tuple_type_impl::check_compatibility(abstract_type& previous, bool (abstract_type::*predicate)(abstract_type&)) const {
+    auto* x = dynamic_cast<tuple_type_impl*>(&previous);
+    if (!x) {
+        return false;
+    }
+    auto c = std::mismatch(
+                _types.begin(), _types.end(),
+                x->_types.begin(), x->_types.end(),
+                [predicate] (data_type a, data_type b) { return ((*a).*predicate)(*b); });
+    return c.first == _types.end();  // previous allowed to be longer
+}
+
+size_t
+tuple_type_impl::hash(bytes_view v) {
+    auto apply_hash = [] (auto&& type_value) {
+        auto&& type = boost::get<0>(type_value);
+        auto&& value = boost::get<1>(type_value);
+        return value ? type->hash(*value) : 0;
+    };
+    // FIXME: better accumulation function
+    return boost::accumulate(combine(_types, make_range(v))
+                             | boost::adaptors::transformed(apply_hash),
+                             0,
+                             std::bit_xor<>());
+}
+
+shared_ptr<cql3::cql3_type>
+tuple_type_impl::as_cql3_type() {
+    return cql3::make_cql3_tuple_type(static_pointer_cast<tuple_type_impl>(shared_from_this()));
+}
+
+sstring
+tuple_type_impl::make_name(const std::vector<data_type>& types) {
+    return sprint("tuple<%s>", ::join(", ", types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name))));
 }
 
 thread_local const shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());

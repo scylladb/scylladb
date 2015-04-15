@@ -233,7 +233,7 @@ public:
         if (_byte_order_comparable) {
             return compare_unsigned(b1, b2);
         }
-        return lexicographical_tri_compare(_types.begin(),
+        return lexicographical_tri_compare(_types.begin(), _types.end(),
             begin(b1), end(b1), begin(b2), end(b2), [] (auto&& type, auto&& v1, auto&& v2) {
                 return type->compare(v1, v2);
             });

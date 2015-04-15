@@ -15,219 +15,206 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.cql3;
+/*
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
+ */
 
-import java.nio.ByteBuffer;
-import java.util.*;
+#pragma once
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import org.apache.cassandra.cql3.Term.MultiColumnRaw;
-import org.apache.cassandra.db.marshal.*;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.serializers.MarshalException;
+namespace cql3 {
 
 /**
  * Static helper methods and classes for tuples.
  */
-public class Tuples
-{
-    private static final Logger logger = LoggerFactory.getLogger(Tuples.class);
-
-    private Tuples() {}
-
-    public static ColumnSpecification componentSpecOf(ColumnSpecification column, int component)
-    {
-        return new ColumnSpecification(column.ksName,
-                                       column.cfName,
-                                       new ColumnIdentifier(String.format("%s[%d]", column.name, component), true),
-                                       ((TupleType)column.type).type(component));
+class tuples {
+public:
+    static shared_ptr<column_specification> component_spec_of(shared_ptr<column_specification> column, size_t component) {
+        return ::make_shared<column_specification>(
+                column->ks_name,
+                column->cf_name,
+                ::make_shared<column_identifier>(sprint("%s[%d]", column->name, component), true),
+                static_pointer_cast<tuple_type_impl>(column->type)->type(component));
     }
 
     /**
      * A raw, literal tuple.  When prepared, this will become a Tuples.Value or Tuples.DelayedValue, depending
      * on whether the tuple holds NonTerminals.
      */
-    public static class Literal implements Term.MultiColumnRaw
-    {
-        private final List<Term.Raw> elements;
-
-        public Literal(List<Term.Raw> elements)
-        {
-            this.elements = elements;
+    class literal : public term::multi_column_raw {
+        std::vector<shared_ptr<term::raw>> _elements;
+    public:
+        literal(std::vector<shared_ptr<raw>> elements)
+                : _elements(std::move(elements)) {
         }
-
-        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
-            validateAssignableTo(keyspace, receiver);
-
-            List<Term> values = new ArrayList<>(elements.size());
-            boolean allTerminal = true;
-            for (int i = 0; i < elements.size(); i++)
-            {
-                Term value = elements.get(i).prepare(keyspace, componentSpecOf(receiver, i));
-                if (value instanceof Term.NonTerminal)
-                    allTerminal = false;
-
-                values.add(value);
+        virtual shared_ptr<term> prepare(const sstring& keyspace, shared_ptr<column_specification> receiver) override {
+            validate_assignable_to(keyspace, receiver);
+            std::vector<shared_ptr<term>> values;
+            bool all_terminal = true;
+            for (size_t i = 0; i < _elements.size(); ++i) {
+                auto&& value = _elements[i]->prepare(keyspace, component_spec_of(receiver, i));
+                if (dynamic_pointer_cast<non_terminal>(value)) {
+                    all_terminal = false;
+                }
+                values.push_back(std::move(value));
             }
-            DelayedValue value = new DelayedValue((TupleType)receiver.type, values);
-            return allTerminal ? value.bind(QueryOptions.DEFAULT) : value;
-        }
-
-        public Term prepare(String keyspace, List<? extends ColumnSpecification> receivers) throws InvalidRequestException
-        {
-            if (elements.size() != receivers.size())
-                throw new InvalidRequestException(String.format("Expected %d elements in value tuple, but got %d: %s", receivers.size(), elements.size(), this));
-
-            List<Term> values = new ArrayList<>(elements.size());
-            List<AbstractType<?>> types = new ArrayList<>(elements.size());
-            boolean allTerminal = true;
-            for (int i = 0; i < elements.size(); i++)
-            {
-                Term t = elements.get(i).prepare(keyspace, receivers.get(i));
-                if (t instanceof Term.NonTerminal)
-                    allTerminal = false;
-
-                values.add(t);
-                types.add(receivers.get(i).type);
-            }
-            DelayedValue value = new DelayedValue(new TupleType(types), values);
-            return allTerminal ? value.bind(QueryOptions.DEFAULT) : value;
-        }
-
-        private void validateAssignableTo(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
-            if (!(receiver.type instanceof TupleType))
-                throw new InvalidRequestException(String.format("Invalid tuple type literal for %s of type %s", receiver.name, receiver.type.asCQL3Type()));
-
-            TupleType tt = (TupleType)receiver.type;
-            for (int i = 0; i < elements.size(); i++)
-            {
-                if (i >= tt.size())
-                    throw new InvalidRequestException(String.format("Invalid tuple literal for %s: too many elements. Type %s expects %d but got %d",
-                                                                    receiver.name, tt.asCQL3Type(), tt.size(), elements.size()));
-
-                Term.Raw value = elements.get(i);
-                ColumnSpecification spec = componentSpecOf(receiver, i);
-                if (!value.testAssignment(keyspace, spec).isAssignable())
-                    throw new InvalidRequestException(String.format("Invalid tuple literal for %s: component %d is not of type %s", receiver.name, i, spec.type.asCQL3Type()));
+            delayed_value value(static_pointer_cast<tuple_type_impl>(receiver->type), values);
+            if (all_terminal) {
+                return value.bind(query_options::DEFAULT);
+            } else {
+                return make_shared(std::move(value));
             }
         }
 
-        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver)
-        {
-            try
-            {
-                validateAssignableTo(keyspace, receiver);
-                return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
+        virtual shared_ptr<term> prepare(const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) override {
+            if (_elements.size() != receivers.size()) {
+                throw exceptions::invalid_request_exception(sprint("Expected %d elements in value tuple, but got %d: %s", receivers.size(), _elements.size(), *this));
             }
-            catch (InvalidRequestException e)
-            {
-                return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
+
+            std::vector<shared_ptr<term>> values;
+            std::vector<data_type> types;
+            bool all_terminal = true;
+            for (size_t i = 0; i < _elements.size(); ++i) {
+                auto&& t = _elements[i]->prepare(keyspace, receivers[i]);
+                if (dynamic_pointer_cast<non_terminal>(t)) {
+                    all_terminal = false;
+                }
+                values.push_back(t);
+                types.push_back(receivers[i]->type);
+            }
+            delayed_value value(tuple_type_impl::get_instance(std::move(types)), std::move(values));
+            if (all_terminal) {
+                return value.bind(query_options::DEFAULT);
+            } else {
+                return make_shared(std::move(value));
             }
         }
 
-        @Override
-        public String toString()
-        {
-            return tupleToString(elements);
+    private:
+        void validate_assignable_to(const sstring& keyspace, shared_ptr<column_specification> receiver) {
+            auto tt = dynamic_pointer_cast<tuple_type_impl>(receiver->type);
+            if (!tt) {
+                throw exceptions::invalid_request_exception(sprint("Invalid tuple type literal for %s of type %s", receiver->name, receiver->type->as_cql3_type()));
+            }
+            for (size_t i = 0; i < _elements.size(); ++i) {
+                if (i >= tt->size()) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid tuple literal for %s: too many elements. Type %s expects %d but got %d",
+                                                                    receiver->name, tt->as_cql3_type(), tt->size(), _elements.size()));
+                }
+
+                auto&& value = _elements[i];
+                auto&& spec = component_spec_of(receiver, i);
+                if (!assignment_testable::is_assignable(value->test_assignment(keyspace, spec))) {
+                    throw exceptions::invalid_request_exception(sprint("Invalid tuple literal for %s: component %d is not of type %s", receiver->name, i, spec->type->as_cql3_type()));
+                }
+            }
         }
-    }
+    public:
+        virtual assignment_testable::test_result test_assignment(const sstring& keyspace, shared_ptr<column_specification> receiver) override {
+            try {
+                validate_assignable_to(keyspace, receiver);
+                return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
+            } catch (exceptions::invalid_request_exception e) {
+                return assignment_testable::test_result::NOT_ASSIGNABLE;
+            }
+        }
+
+        virtual sstring to_string() const override {
+            return tuple_to_string(_elements);
+        }
+    };
 
     /**
      * A tuple of terminal values (e.g (123, 'abc')).
      */
-    public static class Value extends Term.MultiItemTerminal
-    {
-        public final ByteBuffer[] elements;
-
-        public Value(ByteBuffer[] elements)
-        {
-            this.elements = elements;
+    class value : public multi_item_terminal {
+    public:
+        std::vector<bytes_opt> _elements;
+    public:
+        value(std::vector<bytes_opt> elements)
+                : _elements(std::move(elements)) {
+        }
+        value(std::vector<bytes_view_opt> elements) {
+            for (auto&& e : elements) {
+                _elements.push_back(e ? bytes_opt(bytes(e->begin(), e->size())) : bytes_opt());
+            }
+        }
+        static value from_serialized(bytes_view buffer, db_tuple_type type) {
+            return value(type->split(buffer));
+        }
+        virtual bytes_opt get(const query_options& options) override {
+            return tuple_type_impl::build_value(_elements);
         }
 
-        public static Value fromSerialized(ByteBuffer bytes, TupleType type)
-        {
-            return new Value(type.split(bytes));
+        virtual std::vector<bytes_opt> get_elements() override {
+            return _elements;
         }
-
-        public ByteBuffer get(QueryOptions options)
-        {
-            return TupleType.buildValue(elements);
+        virtual sstring to_string() const override {
+            return sprint("(%s)", join(", ", _elements));
         }
-
-        public List<ByteBuffer> getElements()
-        {
-            return Arrays.asList(elements);
-        }
-    }
+    };
 
     /**
      * Similar to Value, but contains at least one NonTerminal, such as a non-pure functions or bind marker.
      */
-    public static class DelayedValue extends Term.NonTerminal
-    {
-        public final TupleType type;
-        public final List<Term> elements;
-
-        public DelayedValue(TupleType type, List<Term> elements)
-        {
-            this.type = type;
-            this.elements = elements;
+    class delayed_value : public non_terminal {
+        db_tuple_type _type;
+        std::vector<shared_ptr<term>> _elements;
+    public:
+        delayed_value(db_tuple_type type, std::vector<shared_ptr<term>> elements)
+                : _type(std::move(type)), _elements(std::move(elements)) {
         }
 
-        public boolean containsBindMarker()
-        {
-            for (Term term : elements)
-                if (term.containsBindMarker())
-                    return true;
-
-            return false;
+        virtual bool contains_bind_marker() const override {
+            return std::all_of(_elements.begin(), _elements.end(), std::mem_fn(&term::contains_bind_marker));
         }
 
-        public void collectMarkerSpecification(VariableSpecifications boundNames)
-        {
-            for (Term term : elements)
-                term.collectMarkerSpecification(boundNames);
+        virtual void collect_marker_specification(shared_ptr<variable_specifications> bound_names) override {
+            for (auto&& term : _elements) {
+                term->collect_marker_specification(bound_names);
+            }
         }
-
-        private ByteBuffer[] bindInternal(QueryOptions options) throws InvalidRequestException
-        {
-            int version = options.getProtocolVersion();
-
-            ByteBuffer[] buffers = new ByteBuffer[elements.size()];
-            for (int i = 0; i < elements.size(); i++)
-            {
-                buffers[i] = elements.get(i).bindAndGet(options);
+    private:
+        std::vector<bytes_opt> bind_internal(const query_options& options) {
+            std::vector<bytes_opt> buffers;
+            buffers.resize(_elements.size());
+            for (size_t i = 0; i < _elements.size(); ++i) {
+                buffers[i] = _elements[i]->bind_and_get(options);
                 // Inside tuples, we must force the serialization of collections to v3 whatever protocol
                 // version is in use since we're going to store directly that serialized value.
-                if (version < 3 && type.type(i).isCollection())
-                    buffers[i] = ((CollectionType)type.type(i)).getSerializer().reserializeToV3(buffers[i]);
+                if (options.get_serialization_format() != serialization_format::internal()
+                        && _type->type(i)->is_collection()) {
+                    if (buffers[i]) {
+                        buffers[i] = static_pointer_cast<collection_type_impl>(_type->type(i))->reserialize(
+                                options.get_serialization_format(),
+                                serialization_format::internal(),
+                                bytes_view(*buffers[i]));
+                    }
+                }
             }
             return buffers;
         }
 
-        public Value bind(QueryOptions options) throws InvalidRequestException
-        {
-            return new Value(bindInternal(options));
+    public:
+        virtual shared_ptr<terminal> bind(const query_options& options) override {
+            return ::make_shared<value>(bind_internal(options));
         }
 
-        @Override
-        public ByteBuffer bindAndGet(QueryOptions options) throws InvalidRequestException
-        {
+        virtual bytes_opt bind_and_get(const query_options& options) override {
             // We don't "need" that override but it saves us the allocation of a Value object if used
-            return TupleType.buildValue(bindInternal(options));
+            return _type->build_value(bind_internal(options));
         }
 
+#if 0
         @Override
         public String toString()
         {
             return tupleToString(elements);
         }
-    }
+#endif
+    };
 
+#if 0
     /**
      * A terminal value for a list of IN values that are tuples. For example: "SELECT ... WHERE (a, b, c) IN ?"
      * This is similar to Lists.Value, but allows us to keep components of the tuples in the list separate.
@@ -397,17 +384,12 @@ public class Tuples
         }
     }
 
-    public static String tupleToString(List<?> items)
-    {
+#endif
 
-        StringBuilder sb = new StringBuilder("(");
-        for (int i = 0; i < items.size(); i++)
-        {
-            sb.append(items.get(i));
-            if (i < items.size() - 1)
-                sb.append(", ");
-        }
-        sb.append(')');
-        return sb.toString();
+    template <typename T>
+    static sstring tuple_to_string(const std::vector<T>& items) {
+        return sprint("(%s)", join(", ", items));
     }
+};
+
 }

@@ -82,16 +82,16 @@ public:
     };
 
     class value : public multi_item_terminal, collection_terminal {
-        std::vector<bytes> _elements;
+        std::vector<bytes_opt> _elements;
     public:
-        explicit value(std::vector<bytes> elements)
+        explicit value(std::vector<bytes_opt> elements)
             : _elements(std::move(elements)) {
         }
         static value from_serialized(bytes_view v, shared_ptr<list_type_impl> type, serialization_format sf);
         virtual bytes_opt get(const query_options& options) override;
         virtual bytes get_with_protocol_version(serialization_format sf) override;
         bool equals(shared_ptr<list_type_impl> lt, const value& v);
-        virtual std::vector<bytes> get_elements() override;
+        virtual std::vector<bytes_opt> get_elements() override;
         virtual sstring to_string() const;
         friend class lists;
     };
