@@ -144,7 +144,6 @@ public:
                                         serialization_format::internal());
             }
             assert(col_def->type->equal(actual, col_def->type->decompose(expected)));
-            row->find(col_def->id);
         });
     }
 
