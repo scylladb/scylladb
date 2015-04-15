@@ -45,35 +45,41 @@ public:
 
     const ::shared_ptr<ut_meta_data> user_types;
 
-#if 0
-    public KSMetaData(String name,
-                      Class<? extends AbstractReplicationStrategy> strategyClass,
-                      Map<String, String> strategyOptions,
-                      boolean durableWrites)
-    {
-        this(name, strategyClass, strategyOptions, durableWrites, Collections.<CFMetaData>emptyList(), new UTMetaData());
-    }
+    ks_meta_data(sstring name_,
+                 sstring strategy_name_,
+                 std::unordered_map<sstring, sstring> strategy_options_,
+                 bool durable_writes_)
+        : ks_meta_data{std::move(name_),
+                       std::move(strategy_name_),
+                       std::move(strategy_options_),
+                       durable_writes_,
+                       {}, ::make_shared<ut_meta_data>()}
+    { }
 
-    public KSMetaData(String name,
-                      Class<? extends AbstractReplicationStrategy> strategyClass,
-                      Map<String, String> strategyOptions,
-                      boolean durableWrites,
-                      Iterable<CFMetaData> cfDefs)
-    {
-        this(name, strategyClass, strategyOptions, durableWrites, cfDefs, new UTMetaData());
-    }
-#endif
+    ks_meta_data(sstring name_,
+                 sstring strategy_name_,
+                 std::unordered_map<sstring, sstring> strategy_options_,
+                 bool durable_writes_,
+                 std::vector<schema_ptr> cf_defs)
+            : ks_meta_data{std::move(name_),
+                           std::move(strategy_name_),
+                           std::move(strategy_options_),
+                           durable_writes_,
+                           std::move(cf_defs),
+                           ::make_shared<ut_meta_data>()}
+    { }
+
     ks_meta_data(sstring name_,
                        sstring strategy_name_,
                        std::unordered_map<sstring, sstring> strategy_options_,
                        bool durable_writes_,
                        std::vector<schema_ptr> cf_defs,
                        shared_ptr<ut_meta_data> user_types_)
-        : name{name_}
+        : name{std::move(name_)}
         , strategy_name{strategy_name_.empty() ? "NetworkTopologyStrategy" : strategy_name_}
         , strategy_options{std::move(strategy_options_)}
         , durable_writes{durable_writes_}
-        , user_types{user_types_}
+        , user_types{std::move(user_types_)}
     {
         for (auto&& s : cf_defs) {
             _cf_meta_data.emplace(s->cf_name(), s);
