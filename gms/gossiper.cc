@@ -384,14 +384,12 @@ void gossiper::run() {
     std::vector<gossip_digest> g_digests;
     this->make_random_gossip_digest(g_digests);
 
-    // FIXME: hack
-    if (g_digests.size() > 0 || true) {
+    if (g_digests.size() > 0) {
         sstring cluster_name("my cluster_name");
         sstring partioner_name("my partioner name");
         gossip_digest_syn message(cluster_name, partioner_name, g_digests);
 
         /* Gossip to some random live member */
-        _live_endpoints.emplace(inet_address("127.0.0.1")); // FIXME: hack
         bool gossiped_to_seed = do_gossip_to_live_member(message);
 
         /* Gossip to some unreachable member with some probability to check if he is back up */
