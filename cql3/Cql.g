@@ -95,14 +95,13 @@ using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifi
         return marker;
     }
 
-#if 0
-    public AbstractMarker.INRaw newINBindVariables(ColumnIdentifier name)
-    {
-        AbstractMarker.INRaw marker = new AbstractMarker.INRaw(bindVariables.size());
-        bindVariables.add(name);
+    shared_ptr<cql3::abstract_marker::in_raw> new_in_bind_variables(shared_ptr<cql3::column_identifier> name) {
+        auto marker = make_shared<cql3::abstract_marker::in_raw>(_bind_variables.size());
+        _bind_variables.push_back(std::move(name));
         return marker;
     }
 
+#if 0
     public Tuples.Raw newTupleBindVariables(ColumnIdentifier name)
     {
         Tuples.Raw marker = new Tuples.Raw(bindVariables.size());
@@ -1156,9 +1155,7 @@ columnCondition[conditions_type& conditions]
         ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::simple_condition(t, *op)); }
         | K_IN
             ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::simple_in_condition(values)); }
-#if 0
-            | marker=inMarker { conditions.add(Pair.create(key, ColumnCondition.Raw.simpleInCondition(marker))); }
-#endif
+            | marker=inMarker { conditions.emplace_back(key, cql3::column_condition::raw::simple_in_condition(marker)); }
             )
 #if 0
         | '[' element=term ']'
@@ -1200,9 +1197,9 @@ relation[std::vector<cql3::relation_ptr>& clauses]
 #if 0
     | K_TOKEN l=tupleOfIdentifiers type=relationType t=term
         { $clauses.add(new TokenRelation(l, type, t)); }
-    | name=cident K_IN marker=inMarker
-        { $clauses.add(new SingleColumnRelation(name, Operator.IN, marker)); }
 #endif
+    | name=cident K_IN marker=inMarker
+        { $clauses.emplace_back(make_shared<cql3::single_column_relation>(std::move(name), cql3::operator_type::IN, std::move(marker))); }
     | name=cident K_IN in_values=singleColumnInValues
         { $clauses.emplace_back(cql3::single_column_relation::create_in_relation(std::move(name), std::move(in_values))); }
 #if 0
@@ -1233,12 +1230,12 @@ relation[std::vector<cql3::relation_ptr>& clauses]
     | '(' relation[$clauses] ')'
     ;
 
-#if 0
-inMarker returns [AbstractMarker.INRaw marker]
-    : QMARK { $marker = newINBindVariables(null); }
-    | ':' name=ident { $marker = newINBindVariables(name); }
+inMarker returns [shared_ptr<cql3::abstract_marker::in_raw> marker]
+    : QMARK { $marker = new_in_bind_variables(nullptr); }
+    | ':' name=ident { $marker = new_in_bind_variables(name); }
     ;
 
+#if 0
 tupleOfIdentifiers returns [List<ColumnIdentifier.Raw> ids]
     @init { $ids = new ArrayList<ColumnIdentifier.Raw>(); }
     : '(' n1=cident { $ids.add(n1); } (',' ni=cident { $ids.add(ni); })* ')'
