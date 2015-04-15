@@ -170,7 +170,7 @@ public:
      * @throws InvalidRequestException on failure to validate parsed parameters
      */
     schema_ptr get_cf_meta_data() {
-        auto s = make_lw_shared(schema(keyspace(), column_family(),
+        auto s = make_lw_shared(schema({}, keyspace(), column_family(),
             // partition key
             {},
             // clustering key

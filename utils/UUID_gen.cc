@@ -22,6 +22,7 @@
 #include "UUID_gen.hh"
 
 #include <stdlib.h>
+#include <atomic>
 
 namespace utils {
 
@@ -76,9 +77,14 @@ static int64_t make_node()
 
 static int64_t make_node()
 {
-    // FIXME: don't leave this constant zero! See the above commented-out code
+    // FIXME: Mix-in node's address. See the above commented-out code
     // which is what Cassandra's UUIDGen.java did. We can also get the MAC address.
-    return 0;
+
+    // We should take current core number under consideration
+    // because create_time_safe() doesn't synchronize across cores and
+    // it's easy to get duplicates.
+    static std::atomic<unsigned> core_counter;
+    return core_counter.fetch_add(1);
 }
 
 
@@ -98,7 +104,7 @@ static int64_t make_clock_seq_and_node()
     return lsb;
 }
 
-const int64_t UUID_gen::clock_seq_and_node = make_clock_seq_and_node();
+const thread_local int64_t UUID_gen::clock_seq_and_node = make_clock_seq_and_node();
 thread_local const std::unique_ptr<UUID_gen> UUID_gen::instance (new UUID_gen());
 
 

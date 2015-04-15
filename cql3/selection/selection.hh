@@ -26,14 +26,17 @@
 
 #include "bytes.hh"
 #include "schema.hh"
+#include "query-result-reader.hh"
 #include "cql3/column_specification.hh"
 #include "exceptions/exceptions.hh"
-#include "cql3/result_set.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/selection/selector_factories.hh"
 #include "unimplemented.hh"
 
 namespace cql3 {
+
+class result_set;
+class metadata;
 
 namespace selection {
 
@@ -63,15 +66,14 @@ private:
     ::shared_ptr<metadata> _metadata;
     const bool _collect_timestamps;
     const bool _collect_TTLs;
+    const bool _contains_static_columns;
 protected:
-    selection(schema_ptr schema, std::vector<const column_definition*> columns, std::vector<::shared_ptr<column_specification>> metadata_,
-            bool collect_timestamps, bool collect_TTLs)
-        : _schema(std::move(schema))
-        , _columns(std::move(columns))
-        , _metadata(::make_shared<metadata>(std::move(metadata_)))
-        , _collect_timestamps(collect_timestamps)
-        , _collect_TTLs(collect_TTLs)
-    { }
+    selection(schema_ptr schema,
+        std::vector<const column_definition*> columns,
+        std::vector<::shared_ptr<column_specification>> metadata_,
+        bool collect_timestamps,
+        bool collect_TTLs);
+
     virtual ~selection() {}
 public:
     // Overriden by SimpleSelection when appropriate.
@@ -84,15 +86,7 @@ public:
      * @return <code>true</code> if this selection contains static columns, <code>false</code> otherwise;
      */
     bool contains_static_columns() const {
-        if (!_schema->has_static_columns()) {
-            return false;
-        }
-
-        if (is_wildcard()) {
-            return true;
-        }
-
-        return std::any_of(_columns.begin(), _columns.end(), [] (auto&& def) { return def->is_static(); });
+        return _contains_static_columns;
     }
 
     /**
@@ -162,6 +156,8 @@ public:
     virtual bool uses_function(const sstring &ks_name, const sstring& function_name) const {
         return false;
     }
+
+    query::partition_slice::option_set get_query_options();
 private:
     static bool processes_selection(const std::vector<::shared_ptr<raw_selector>>& raw_selectors) {
         return std::any_of(raw_selectors.begin(), raw_selectors.end(),
@@ -184,10 +180,6 @@ public:
 
     uint32_t get_column_count() {
         return _columns.size();
-    }
-
-    ::shared_ptr<result_set_builder> make_result_set_builder(db_clock::time_point now, serialization_format sf) {
-        return ::make_shared<result_set_builder>(*this, now, sf);
     }
 
     virtual bool is_aggregate() const = 0;
@@ -230,84 +222,16 @@ private:
     serialization_format _serialization_format;
 public:
     result_set_builder(selection& s, db_clock::time_point now, serialization_format sf);
-
-    void add_empty() {
-        current->emplace_back();
-    }
-
-    void add(bytes_opt value) {
-        current->emplace_back(std::move(value));
-    }
-
-    void add(const column_definition& def, atomic_cell_view c) {
-        current->emplace_back(get_value(def.type, c));
-        if (!_timestamps.empty()) {
-            _timestamps[current->size() - 1] = c.is_dead() ? api::min_timestamp : c.timestamp();
-        }
-        if (!_ttls.empty()) {
-            gc_clock::duration ttl(-1);
-            if (c.is_live_and_has_ttl()) {
-                ttl = *c.ttl() - to_gc_clock(_now);
-            }
-            _ttls[current->size() - 1] = ttl.count();
-        }
-    }
-
-    void add(const column_definition& def, collection_mutation::view c) {
-        auto&& ctype = static_cast<collection_type_impl*>(def.type.get());
-        current->emplace_back(ctype->to_value(c, _serialization_format));
-        // timestamps, ttls meaningless for collections
-    }
-
-    void new_row() {
-        if (current) {
-            _selectors->add_input_row(_serialization_format, *this);
-            if (!_selectors->is_aggregate()) {
-                _result_set->add_row(_selectors->get_output_row(_serialization_format));
-                _selectors->reset();
-            }
-            current->clear();
-        } else {
-            // FIXME: we use optional<> here because we don't have an end_row() signal
-            //        instead, !current means that new_row has never been called, so this
-            //        call to new_row() does not end a previous row.
-            current.emplace();
-        }
-    }
-
-    std::unique_ptr<result_set> build() {
-        if (current) {
-            _selectors->add_input_row(_serialization_format, *this);
-            _result_set->add_row(_selectors->get_output_row(_serialization_format));
-            _selectors->reset();
-            current = std::experimental::nullopt;
-        }
-        if (_result_set->empty() && _selectors->is_aggregate()) {
-            _result_set->add_row(_selectors->get_output_row(_serialization_format));
-        }
-        return std::move(_result_set);
-    }
-
-    api::timestamp_type timestamp_of(size_t idx) {
-        return _timestamps[idx];
-    }
-
-    int32_t ttl_of(size_t idx) {
-        return _ttls[idx];
-    }
+    void add_empty();
+    void add(bytes_opt value);
+    void add(const column_definition& def, const query::result_atomic_cell_view& c);
+    void add(const column_definition& def, collection_mutation::view c);
+    void new_row();
+    std::unique_ptr<result_set> build();
+    api::timestamp_type timestamp_of(size_t idx);
+    int32_t ttl_of(size_t idx);
 private:
-    bytes_opt get_value(data_type t, atomic_cell_view c) {
-        if (c.is_dead()) {
-            return {};
-        }
-        if (t->is_counter()) {
-            fail(unimplemented::cause::COUNTERS);
-#if 0
-                ByteBufferUtil.bytes(CounterContext.instance().total(c.value()))
-#endif
-        }
-        return {to_bytes(c.value())};
-    }
+    bytes_opt get_value(data_type t, query::result_atomic_cell_view c);
 };
 
 }

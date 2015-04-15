@@ -31,4 +31,8 @@ make_random_uuid() {
     return UUID(net::hton(v.w.msb), net::hton(v.w.lsb));
 }
 
+std::ostream& operator<<(std::ostream& out, const UUID& uuid) {
+    return out << uuid.to_sstring();
+}
+
 }

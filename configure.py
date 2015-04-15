@@ -177,6 +177,11 @@ tests = [
     'tests/rpc',
     ]
 
+# urchin
+tests += [
+    'tests/urchin/bytes_ostream_test',
+]
+
 apps = [
     'apps/httpd/httpd',
     'seastar',
@@ -331,6 +336,7 @@ urchin_core = (['database.cc',
                  'cql3/statements/batch_statement.cc',
                  'cql3/statements/select_statement.cc',
                  'cql3/statements/use_statement.cc',
+                 'cql3/update_parameters.cc',
                  'thrift/handler.cc',
                  'thrift/server.cc',
                  'thrift/thrift_validation.cc',
@@ -425,12 +431,13 @@ deps = {
 for t in urchin_tests:
     deps[t] = urchin_tests_dependencies + [t + '.cc']
 
-
 deps['tests/urchin/cql_query_test'] += boost_test_lib
 deps['tests/urchin/commitlog_test'] += boost_test_lib
 deps['tests/urchin/sstable_test'] += boost_test_lib
 deps['tests/urchin/hash_test'] += boost_test_lib
 deps['tests/urchin/serializer_test'] += boost_test_lib
+
+deps['tests/urchin/bytes_ostream_test'] = ['tests/urchin/bytes_ostream_test.cc']
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only

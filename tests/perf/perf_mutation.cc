@@ -6,7 +6,7 @@ static atomic_cell make_atomic_cell(bytes value) {
 };
 
 int main(int argc, char* argv[]) {
-    auto s = make_lw_shared(schema("ks", "cf",
+    auto s = make_lw_shared(schema({}, "ks", "cf",
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
     column_family cf(s);

@@ -24,10 +24,40 @@
 
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/selector_factories.hh"
+#include "cql3/result_set.hh"
 
 namespace cql3 {
 
 namespace selection {
+
+selection::selection(schema_ptr schema,
+    std::vector<const column_definition*> columns,
+    std::vector<::shared_ptr<column_specification>> metadata_,
+    bool collect_timestamps,
+    bool collect_TTLs)
+        : _schema(std::move(schema))
+        , _columns(std::move(columns))
+        , _metadata(::make_shared<metadata>(std::move(metadata_)))
+        , _collect_timestamps(collect_timestamps)
+        , _collect_TTLs(collect_TTLs)
+        , _contains_static_columns(std::any_of(_columns.begin(), _columns.end(), std::mem_fn(&column_definition::is_static)))
+{ }
+
+query::partition_slice::option_set selection::get_query_options() {
+    query::partition_slice::option_set opts;
+
+    opts.set_if<query::partition_slice::option::send_timestamp_and_ttl>(_collect_timestamps || _collect_TTLs);
+
+    opts.set_if<query::partition_slice::option::send_partition_key>(
+        std::any_of(_columns.begin(), _columns.end(),
+            std::mem_fn(&column_definition::is_partition_key)));
+
+    opts.set_if<query::partition_slice::option::send_clustering_key>(
+        std::any_of(_columns.begin(), _columns.end(),
+            std::mem_fn(&column_definition::is_clustering_key)));
+
+    return opts;
+}
 
 // Special cased selection for when no function is used (this save some allocations).
 class simple_selection : public selection {
@@ -209,6 +239,88 @@ result_set_builder::result_set_builder(selection& s, db_clock::time_point now, s
     if (s._collect_TTLs) {
         _ttls.resize(s._columns.size(), 0);
     }
+}
+
+void result_set_builder::add_empty() {
+    current->emplace_back();
+    if (!_timestamps.empty()) {
+        _timestamps[current->size() - 1] = api::min_timestamp;
+    }
+    if (!_ttls.empty()) {
+        _ttls[current->size() - 1] = -1;
+    }
+}
+
+void result_set_builder::add(bytes_opt value) {
+    current->emplace_back(std::move(value));
+}
+
+void result_set_builder::add(const column_definition& def, const query::result_atomic_cell_view& c) {
+    current->emplace_back(get_value(def.type, c));
+    if (!_timestamps.empty()) {
+        _timestamps[current->size() - 1] = c.timestamp();
+    }
+    if (!_ttls.empty()) {
+        gc_clock::duration ttl(-1);
+        auto maybe_ttl = c.ttl();
+        if (maybe_ttl) {
+            ttl = *maybe_ttl - to_gc_clock(_now);
+        }
+        _ttls[current->size() - 1] = ttl.count();
+    }
+}
+
+void result_set_builder::add(const column_definition& def, collection_mutation::view c) {
+    auto&& ctype = static_cast<collection_type_impl*>(def.type.get());
+    current->emplace_back(ctype->to_value(c, _serialization_format));
+    // timestamps, ttls meaningless for collections
+}
+
+void result_set_builder::new_row() {
+    if (current) {
+        _selectors->add_input_row(_serialization_format, *this);
+        if (!_selectors->is_aggregate()) {
+            _result_set->add_row(_selectors->get_output_row(_serialization_format));
+            _selectors->reset();
+        }
+        current->clear();
+    } else {
+        // FIXME: we use optional<> here because we don't have an end_row() signal
+        //        instead, !current means that new_row has never been called, so this
+        //        call to new_row() does not end a previous row.
+        current.emplace();
+    }
+}
+
+std::unique_ptr<result_set> result_set_builder::build() {
+    if (current) {
+        _selectors->add_input_row(_serialization_format, *this);
+        _result_set->add_row(_selectors->get_output_row(_serialization_format));
+        _selectors->reset();
+        current = std::experimental::nullopt;
+    }
+    if (_result_set->empty() && _selectors->is_aggregate()) {
+        _result_set->add_row(_selectors->get_output_row(_serialization_format));
+    }
+    return std::move(_result_set);
+}
+
+api::timestamp_type result_set_builder::timestamp_of(size_t idx) {
+    return _timestamps[idx];
+}
+
+int32_t result_set_builder::ttl_of(size_t idx) {
+    return _ttls[idx];
+}
+
+bytes_opt result_set_builder::get_value(data_type t, query::result_atomic_cell_view c) {
+    if (t->is_counter()) {
+        fail(unimplemented::cause::COUNTERS);
+#if 0
+                ByteBufferUtil.bytes(CounterContext.instance().total(c.value()))
+#endif
+    }
+    return {to_bytes(c.value())};
 }
 
 }

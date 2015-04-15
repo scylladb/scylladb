@@ -38,7 +38,7 @@ namespace system_keyspace {
 // functions will solve this problem. So we use functions right now.
 
 schema_ptr hints() {
-    static thread_local auto hints = make_lw_shared(schema(NAME, HINTS,
+    static thread_local auto hints = make_lw_shared(schema(generate_legacy_id(NAME, HINTS), NAME, HINTS,
         // partition key
         {{"target_id", uuid_type}},
         // clustering key
@@ -62,7 +62,7 @@ schema_ptr hints() {
 }
 
 schema_ptr batchlog() {
-    static thread_local auto batchlog = make_lw_shared(schema(NAME, BATCHLOG,
+    static thread_local auto batchlog = make_lw_shared(schema(generate_legacy_id(NAME, BATCHLOG), NAME, BATCHLOG,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -84,7 +84,7 @@ schema_ptr batchlog() {
 }
 
 /*static*/ schema_ptr paxos() {
-    static thread_local auto paxos = make_lw_shared(schema(NAME, PAXOS,
+    static thread_local auto paxos = make_lw_shared(schema(generate_legacy_id(NAME, PAXOS), NAME, PAXOS,
         // partition key
         {{"row_key", bytes_type}},
         // clustering key
@@ -105,7 +105,7 @@ schema_ptr batchlog() {
 }
 
 schema_ptr built_indexes() {
-    static thread_local auto built_indexes = make_lw_shared(schema(NAME, BUILT_INDEXES,
+    static thread_local auto built_indexes = make_lw_shared(schema(generate_legacy_id(NAME, BUILT_INDEXES), NAME, BUILT_INDEXES,
         // partition key
         {{"table_name", utf8_type}},
         // clustering key
@@ -126,7 +126,7 @@ schema_ptr built_indexes() {
 }
 
 /*static*/ schema_ptr local() {
-    static thread_local auto local = make_lw_shared(schema(NAME, LOCAL,
+    static thread_local auto local = make_lw_shared(schema(generate_legacy_id(NAME, LOCAL), NAME, LOCAL,
         // partition key
         {{"key", utf8_type}},
         // clustering key
@@ -159,7 +159,7 @@ schema_ptr built_indexes() {
 }
 
 /*static*/ schema_ptr peers() {
-    static thread_local auto peers = make_lw_shared(schema(NAME, PEERS,
+    static thread_local auto peers = make_lw_shared(schema(generate_legacy_id(NAME, PEERS), NAME, PEERS,
         // partition key
         {{"peer", inet_addr_type}},
         // clustering key
@@ -186,7 +186,7 @@ schema_ptr built_indexes() {
 }
 
 /*static*/ schema_ptr peer_events() {
-    static thread_local auto peer_events = make_lw_shared(schema(NAME, PEER_EVENTS,
+    static thread_local auto peer_events = make_lw_shared(schema(generate_legacy_id(NAME, PEER_EVENTS), NAME, PEER_EVENTS,
         // partition key
         {{"peer", inet_addr_type}},
         // clustering key
@@ -206,7 +206,7 @@ schema_ptr built_indexes() {
 }
 
 /*static*/ schema_ptr range_xfers() {
-    static thread_local auto range_xfers = make_lw_shared(schema(NAME, RANGE_XFERS,
+    static thread_local auto range_xfers = make_lw_shared(schema(generate_legacy_id(NAME, RANGE_XFERS), NAME, RANGE_XFERS,
         // partition key
         {{"token_bytes", bytes_type}},
         // clustering key
@@ -224,7 +224,7 @@ schema_ptr built_indexes() {
 }
 
 /*static*/ schema_ptr compactions_in_progress() {
-    static thread_local auto compactions_in_progress = make_lw_shared(schema(NAME, COMPACTIONS_IN_PROGRESS,
+    static thread_local auto compactions_in_progress = make_lw_shared(schema(generate_legacy_id(NAME, COMPACTIONS_IN_PROGRESS), NAME, COMPACTIONS_IN_PROGRESS,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -246,7 +246,7 @@ schema_ptr built_indexes() {
 }
 
 /*static*/ schema_ptr compaction_history() {
-    static thread_local auto compaction_history = make_lw_shared(schema(NAME, COMPACTION_HISTORY,
+    static thread_local auto compaction_history = make_lw_shared(schema(generate_legacy_id(NAME, COMPACTION_HISTORY), NAME, COMPACTION_HISTORY,
         // partition key
         {{"id", uuid_type}},
         // clustering key
@@ -273,7 +273,7 @@ schema_ptr built_indexes() {
 }
 
 /*static*/ schema_ptr sstable_activity() {
-    static thread_local auto sstable_activity = make_lw_shared(schema(NAME, SSTABLE_ACTIVITY,
+    static thread_local auto sstable_activity = make_lw_shared(schema(generate_legacy_id(NAME, SSTABLE_ACTIVITY), NAME, SSTABLE_ACTIVITY,
         // partition key
         {
             {"keyspace_name", utf8_type},
@@ -284,7 +284,6 @@ schema_ptr built_indexes() {
         {},
         // regular columns
         {
-            // FIXME: Cassandra also had two additional columns here:
             {"rate_120m", double_type},
             {"rate_15m", double_type},
         },

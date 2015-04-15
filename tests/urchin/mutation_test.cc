@@ -18,7 +18,7 @@ static atomic_cell make_atomic_cell(bytes value) {
 };
 
 BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
-    auto s = make_lw_shared(schema(some_keyspace, some_column_family,
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
     column_family cf(s);
@@ -40,7 +40,7 @@ BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
 }
 
 BOOST_AUTO_TEST_CASE(test_multi_level_row_tombstones) {
-    auto s = make_lw_shared(schema(some_keyspace, some_column_family,
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}},
         {{"c1", int32_type}, {"c2", int32_type}, {"c3", int32_type}},
         {{"r1", int32_type}}, {}, utf8_type));
@@ -74,7 +74,7 @@ BOOST_AUTO_TEST_CASE(test_multi_level_row_tombstones) {
 }
 
 BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
-    auto s = make_lw_shared(schema(some_keyspace, some_column_family,
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}, {"c2", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
     column_family cf(s);
@@ -100,7 +100,7 @@ BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
 
 BOOST_AUTO_TEST_CASE(test_map_mutations) {
     auto my_map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
-    auto s = make_lw_shared(schema(some_keyspace, some_column_family,
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_map_type}}, utf8_type));
     column_family cf(s);
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -133,7 +133,7 @@ BOOST_AUTO_TEST_CASE(test_map_mutations) {
 
 BOOST_AUTO_TEST_CASE(test_set_mutations) {
     auto my_set_type = set_type_impl::get_instance(int32_type, true);
-    auto s = make_lw_shared(schema(some_keyspace, some_column_family,
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_set_type}}, utf8_type));
     column_family cf(s);
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -166,7 +166,7 @@ BOOST_AUTO_TEST_CASE(test_set_mutations) {
 
 BOOST_AUTO_TEST_CASE(test_list_mutations) {
     auto my_list_type = list_type_impl::get_instance(int32_type, true);
-    auto s = make_lw_shared(schema(some_keyspace, some_column_family,
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {}, {{"s1", my_list_type}}, utf8_type));
     column_family cf(s);
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});

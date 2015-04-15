@@ -33,7 +33,7 @@
 #include "cql3/restrictions/restriction.hh"
 #include "cql3/restrictions/abstract_restriction.hh"
 #include "types.hh"
-#include "query.hh"
+#include "query-request.hh"
 #include "core/shared_ptr.hh"
 
 namespace cql3 {

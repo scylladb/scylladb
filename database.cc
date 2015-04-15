@@ -10,6 +10,7 @@
 #include "db/consistency_level.hh"
 #include "utils/UUID_gen.hh"
 #include "to_string.hh"
+#include "query-result-writer.hh"
 
 #include "cql3/column_identifier.hh"
 #include <boost/algorithm/string/classification.hpp>
@@ -61,13 +62,21 @@ void schema::rehash_columns() {
     }
 }
 
-schema::schema(sstring ks_name, sstring cf_name, std::vector<column> partition_key,
+raw_schema::raw_schema(utils::UUID id)
+    : _id(id)
+{ }
+
+schema::schema(std::experimental::optional<utils::UUID> id,
+    sstring ks_name,
+    sstring cf_name,
+    std::vector<column> partition_key,
     std::vector<column> clustering_key,
     std::vector<column> regular_columns,
     std::vector<column> static_columns,
     data_type regular_column_name_type,
     sstring comment)
-        : _regular_columns_by_name(serialized_compare(regular_column_name_type))
+        : raw_schema(id ? *id : utils::UUID_gen::get_time_UUID())
+        , _regular_columns_by_name(serialized_compare(regular_column_name_type))
 {
     this->_comment = std::move(comment);
     this->ks_name = std::move(ks_name);
@@ -412,7 +421,8 @@ void database::add_column_family(const utils::UUID& uuid, column_family&& cf) {
 }
 
 void database::add_column_family(column_family&& cf) {
-    add_column_family(utils::UUID_gen::get_time_UUID(), std::move(cf));
+    auto id = cf._schema->id();
+    add_column_family(id, std::move(cf));
 }
 
 const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range) {
@@ -720,18 +730,10 @@ bool column_definition::is_compact_value() const {
     return false;
 }
 
-std::ostream& operator<<(std::ostream& os, const mutation& m) {
-    return fprint(os, "{mutation: schema %p key %s data %s}", m.schema.get(), static_cast<bytes_view>(m.key), m.p);
-}
-
-std::ostream& operator<<(std::ostream& os, const mutation_partition& mp) {
-    return fprint(os, "{mutation_partition: ...}");
-}
-
-boost::iterator_range<mutation_partition::rows_type::iterator>
-mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) {
+boost::iterator_range<mutation_partition::rows_type::const_iterator>
+mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) const {
     if (r.is_full()) {
-        return boost::make_iterator_range(_rows.begin(), _rows.end());
+        return boost::make_iterator_range(_rows.cbegin(), _rows.cend());
     }
     auto cmp = rows_entry::key_comparator(clustering_key::prefix_equality_less_compare(schema));
     if (r.is_singular()) {
@@ -740,10 +742,10 @@ mutation_partition::range(const schema& schema, const query::range<clustering_ke
     }
     auto i1 = r.start() ? (r.start()->is_inclusive()
             ? _rows.lower_bound(r.start()->value(), cmp)
-            : _rows.upper_bound(r.start()->value(), cmp)) : _rows.begin();
+            : _rows.upper_bound(r.start()->value(), cmp)) : _rows.cbegin();
     auto i2 = r.end() ? (r.end()->is_inclusive()
             ? _rows.upper_bound(r.end()->value(), cmp)
-            : _rows.lower_bound(r.end()->value(), cmp)) : _rows.end();
+            : _rows.lower_bound(r.end()->value(), cmp)) : _rows.cend();
     return boost::make_iterator_range(i1, i2);
 }
 
@@ -812,22 +814,20 @@ void mutation::update_column(row& row, const column_definition& def, atomic_cell
 }
 
 template <typename ColumnDefResolver>
-static query::result::row get_row_slice(const row& cells, const std::vector<column_id>& columns, tombstone tomb,
-        ColumnDefResolver&& id_to_def) {
-    query::result::row result_row;
-    result_row.cells.reserve(columns.size());
+static void get_row_slice(const row& cells, const std::vector<column_id>& columns, tombstone tomb,
+        ColumnDefResolver&& id_to_def, query::result::row_writer& writer) {
     for (auto id : columns) {
         auto i = cells.find(id);
         if (i == cells.end()) {
-            result_row.cells.emplace_back();
+            writer.add_empty();
         } else {
-            auto def = id_to_def(id);
+            auto&& def = id_to_def(id);
             if (def.is_atomic()) {
                 auto c = i->second.as_atomic_cell();
                 if (!c.is_live(tomb)) {
-                    result_row.cells.emplace_back();
+                    writer.add_empty();
                 } else {
-                    result_row.cells.emplace_back(std::experimental::make_optional(i->second));
+                    writer.add(i->second.as_atomic_cell());
                 }
             } else {
                 auto&& cell = i->second.as_collection_mutation();
@@ -836,15 +836,13 @@ static query::result::row get_row_slice(const row& cells, const std::vector<colu
                 m_view.tomb.apply(tomb);
                 auto m_ser = ctype->serialize_mutation_form_only_live(m_view);
                 if (ctype->is_empty(m_ser)) {
-                    result_row.cells.emplace_back();
+                    writer.add_empty();
                 } else {
-                    result_row.cells.emplace_back(std::experimental::make_optional(
-                        atomic_cell_or_collection::from_collection_mutation(std::move(m_ser))));
+                    writer.add(m_ser);
                 }
             }
         }
     }
-    return result_row;
 }
 
 template <typename ColumnDefResolver>
@@ -868,13 +866,28 @@ bool has_any_live_data(const row& cells, tombstone tomb, ColumnDefResolver&& id_
     return false;
 }
 
-query::result::partition
-column_family::get_partition_slice(mutation_partition& partition, const query::partition_slice& slice, uint32_t limit) {
-    query::result::partition result;
-
-    auto regular_column_resolver = [this] (column_id id) {
+void
+column_family::get_partition_slice(mutation_partition& partition,
+                                   const query::partition_slice& slice,
+                                   uint32_t limit,
+                                   query::result::partition_writer& pw) {
+    auto regular_column_resolver = [this] (column_id id) -> const column_definition& {
         return _schema->regular_column_at(id);
     };
+
+    // So that we can always add static row before we know how many clustered rows there will be,
+    // without exceeding the limit.
+    assert(limit > 0);
+
+    if (!slice.static_columns.empty()) {
+        auto static_column_resolver = [this] (column_id id) -> const column_definition& {
+            return _schema->static_column_at(id);
+        };
+        auto row_builder = pw.add_static_row();
+        get_row_slice(partition.static_row(), slice.static_columns, partition.tombstone_for_static_row(),
+            static_column_resolver, row_builder);
+        row_builder.finish();
+    }
 
     for (auto&& range : slice.row_ranges) {
         if (limit == 0) {
@@ -889,7 +902,6 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
             auto&& cells = row.cells;
 
             auto row_tombstone = partition.tombstone_for_row(*_schema, e);
-            auto result_row = get_row_slice(cells, slice.regular_columns, row_tombstone, regular_column_resolver);
             auto row_is_live = row.created_at > row_tombstone.timestamp;
 
             // row_is_live is true for rows created using 'insert' statement
@@ -899,60 +911,55 @@ column_family::get_partition_slice(mutation_partition& partition, const query::p
             // we've got no live cell in the results we still have to check if
             // any of the row's cell is live and we should return the row in
             // such case.
-            if (row_is_live || !result_row.all_cells_empty() || has_any_live_data(cells, row_tombstone, regular_column_resolver)) {
-                result.rows.emplace_back(e.key(), std::move(result_row));
+            if (row_is_live || has_any_live_data(cells, row_tombstone, regular_column_resolver)) {
+                auto row_builder = pw.add_row(e.key());
+                get_row_slice(cells, slice.regular_columns, row_tombstone, regular_column_resolver, row_builder);
+                row_builder.finish();
                 if (--limit == 0) {
                     break;
                 }
             }
         }
     }
-
-    if (!slice.static_columns.empty()) {
-        // When there are no clustered rows, static row counts as one row with respect to row limit
-        if (!result.rows.empty() || limit > 0) {
-            result.static_row = get_row_slice(partition.static_row(), slice.static_columns, partition.tombstone_for_static_row(),
-                [this] (column_id id) { return _schema->static_column_at(id); });
-        }
-    }
-
-    return result;
 }
 
 future<lw_shared_ptr<query::result>>
 column_family::query(const query::read_command& cmd) {
-    auto result = make_lw_shared<query::result>();
+    query::result::builder builder(cmd.slice);
 
     uint32_t limit = cmd.row_limit;
     for (auto&& range : cmd.partition_ranges) {
+        if (limit == 0) {
+            break;
+        }
         if (range.is_singular()) {
             auto& key = range.start_value();
             auto partition = find_partition(key);
             if (!partition) {
-                return make_ready_future<lw_shared_ptr<query::result>>(result);
+                break;
             }
-            result->partitions.emplace_back(key,
-                get_partition_slice(*partition, cmd.slice, limit));
-            limit -= result->partitions.back().second.row_count();
-            if (limit == 0) {
-                return make_ready_future<lw_shared_ptr<query::result>>(result);
-            }
+            auto p_builder = builder.add_partition(key);
+            get_partition_slice(*partition, cmd.slice, limit, p_builder);
+            p_builder.finish();
+            limit -= p_builder.row_count();
         } else if (range.is_full()) {
             for (auto&& e : partitions) {
                 auto& key = e.first;
                 auto& partition = e.second;
-                result->partitions.emplace_back(key,
-                    get_partition_slice(partition, cmd.slice, limit));
-                limit -= result->partitions.back().second.row_count();
+                auto p_builder = builder.add_partition(key);
+                get_partition_slice(partition, cmd.slice, limit, p_builder);
+                p_builder.finish();
+                limit -= p_builder.row_count();
                 if (limit == 0) {
-                    return make_ready_future<lw_shared_ptr<query::result>>(result);
+                    break;
                 }
             }
         } else {
             fail(unimplemented::cause::RANGE_QUERIES);
         }
     }
-    return make_ready_future<lw_shared_ptr<query::result>>(result);
+    return make_ready_future<lw_shared_ptr<query::result>>(
+            make_lw_shared<query::result>(builder.build()));
 }
 
 future<lw_shared_ptr<query::result>>
@@ -962,12 +969,57 @@ database::query(const query::read_command& cmd) {
     };
 
     try {
-        auto& cf = find_column_family(cmd.keyspace, cmd.column_family);
+        column_family& cf = find_column_family(cmd.cf_id);
         return cf.query(cmd);
     } catch (...) {
         // FIXME: load from sstables
         return make_empty();
     }
+}
+
+std::ostream& operator<<(std::ostream& out, const atomic_cell_or_collection& c) {
+    return out << to_hex(c._data);
+}
+
+void print_partition(std::ostream& out, const schema& s, const mutation_partition& mp) {
+    out << "{rows={\n";
+    for (auto&& e : mp.range(s, query::range<clustering_key_prefix>())) {
+        out << e.key() << " => ";
+        for (auto&& cell_e : e.row().cells) {
+            out << cell_e.first << ":";
+            out << cell_e.second << " ";
+        }
+        out << "\n";
+    }
+    out << "}}";
+}
+
+std::ostream& operator<<(std::ostream& os, const mutation& m) {
+    fprint(os, "{mutation: schema %p key %s data ", m.schema.get(), static_cast<bytes_view>(m.key));
+    print_partition(os, *m.schema, m.p);
+    os << "}";
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& out, const column_family& cf) {
+    out << "{\n";
+    for (auto&& e : cf.partitions) {
+        out << e.first << " => ";
+        print_partition(out, *cf._schema, e.second);
+        out << "\n";
+    }
+    out << "}";
+    return out;
+}
+
+std::ostream& operator<<(std::ostream& out, const database& db) {
+    out << "{\n";
+    for (auto&& e : db._column_families) {
+        auto&& cf = e.second;
+        out << "(" << e.first.to_sstring() << ", " << cf._schema->cf_name << ", " << cf._schema->ks_name << "): " << cf << "\n";
+    }
+    out << "}";
+    return out;
 }
 
 namespace db {
@@ -1009,4 +1061,9 @@ operator<<(std::ostream& os, const atomic_cell_view& acv) {
 std::ostream&
 operator<<(std::ostream& os, const atomic_cell& ac) {
     return os << atomic_cell_view(ac);
+}
+
+utils::UUID generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
+    // FIXME: generate it like org.apache.cassandra.config.CFMetaData#generateLegacyCfId() does
+    return utils::UUID_gen::get_time_UUID();
 }

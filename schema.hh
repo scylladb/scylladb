@@ -15,6 +15,7 @@
 #include "tuple.hh"
 #include "gc_clock.hh"
 #include "unimplemented.hh"
+#include "utils/UUID.hh"
 
 using column_id = uint32_t;
 
@@ -66,11 +67,14 @@ struct thrift_schema {
 // FIXME: encapsulate public fields so that we can make this a private inner structure of schema
 class raw_schema {
 protected:
+    utils::UUID _id;
     std::vector<column_definition> _partition_key;
     std::vector<column_definition> _clustering_key;
     std::vector<column_definition> _regular_columns; // sorted by name
     std::vector<column_definition> _static_columns; // sorted by name, present only when there's any clustering column
     sstring _comment;
+protected:
+    raw_schema(utils::UUID id);
 public:
     gc_clock::duration default_time_to_live = gc_clock::duration::zero();
     sstring ks_name;
@@ -83,7 +87,8 @@ public:
 };
 
 /*
- * Keep this effectively immutable.
+ * Effectively immutable.
+ * Not safe to access across cores because of shared_ptr's.
  */
 class schema final : public raw_schema {
 private:
@@ -106,7 +111,9 @@ private:
     ::shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def);
     void rehash_columns();
 public:
-    schema(sstring ks_name, sstring cf_name,
+    schema(std::experimental::optional<utils::UUID> id,
+        sstring ks_name,
+        sstring cf_name,
         std::vector<column> partition_key,
         std::vector<column> clustering_key,
         std::vector<column> regular_columns,
@@ -114,8 +121,14 @@ public:
         shared_ptr<abstract_type> regular_column_name_type,
         sstring comment = {});
     schema(const schema&);
+    const utils::UUID& id() const {
+        return _id;
+    }
     void set_comment(const sstring& comment) {
         _comment = comment;
+    }
+    void set_id(utils::UUID new_id) {
+        _id = new_id;
     }
     bool is_dense() const {
         return false;
@@ -202,3 +215,5 @@ public:
 };
 
 using schema_ptr = lw_shared_ptr<schema>;
+
+utils::UUID generate_legacy_id(const sstring& ks_name, const sstring& cf_name);

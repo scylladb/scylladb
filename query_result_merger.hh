@@ -1,5 +1,11 @@
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
+#pragma once
+
 #include "core/distributed.hh"
-#include "query.hh"
+#include "query-result.hh"
 
 namespace query {
 
@@ -16,21 +22,25 @@ public:
         _partial.emplace_back(std::move(r));
     }
 
+    // FIXME: Eventually we should return a composite_query_result here
+    // which holds the vector of query results and which can be quickly turned
+    // into packet fragments by the transport layer without copying the data.
     foreign_ptr<lw_shared_ptr<query::result>> get() && {
         auto merged = make_lw_shared<query::result>();
 
-        size_t partition_count = 0;
+        size_t total_size = 0;
         for (auto&& r : _partial) {
-            partition_count += r->partitions.size();
+            total_size += r->_w.size();
         }
 
-        merged->partitions.reserve(partition_count);
+        bytes_ostream w;
+        w.reserve(total_size);
 
         for (auto&& r : _partial) {
-            std::copy(r->partitions.begin(), r->partitions.end(), std::back_inserter(merged->partitions));
+            w.append(r->_w);
         }
 
-        return make_foreign(std::move(merged));
+        return make_foreign(make_lw_shared<query::result>(std::move(w)));
     }
 };
 

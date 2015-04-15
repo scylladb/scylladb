@@ -21,6 +21,7 @@
  * Copyright 2015 Cloudius Systems
  */
 
+#include "utils/UUID_gen.hh"
 #include "legacy_schema_tables.hh"
 #include "system_keyspace.hh"
 #include "database.hh"
@@ -38,7 +39,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 #endif
 
 /* static */ schema_ptr keyspaces() {
-    static thread_local auto keyspaces = make_lw_shared(schema(NAME, KEYSPACES,
+    static thread_local auto keyspaces = make_lw_shared(schema(generate_legacy_id(NAME, KEYSPACES), NAME, KEYSPACES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -65,7 +66,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 }
 
 /* static */ schema_ptr columnfamilies() {
-    static thread_local auto columnfamilies = make_lw_shared(schema(NAME, COLUMNFAMILIES,
+    static thread_local auto columnfamilies = make_lw_shared(schema(generate_legacy_id(NAME, COLUMNFAMILIES), NAME, COLUMNFAMILIES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -111,7 +112,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 }
 
 /* static */ schema_ptr columns() {
-    static thread_local auto columns = make_lw_shared(schema(NAME, COLUMNS,
+    static thread_local auto columns = make_lw_shared(schema(generate_legacy_id(NAME, COLUMNS), NAME, COLUMNS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -139,7 +140,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 }
 
 /* static */ schema_ptr triggers() {
-    static thread_local auto triggers = make_lw_shared(schema(NAME, TRIGGERS,
+    static thread_local auto triggers = make_lw_shared(schema(generate_legacy_id(NAME, TRIGGERS), NAME, TRIGGERS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -163,7 +164,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 }
 
 /* static */ schema_ptr usertypes() {
-    static thread_local auto usertypes = make_lw_shared(schema(NAME, USERTYPES,
+    static thread_local auto usertypes = make_lw_shared(schema(generate_legacy_id(NAME, USERTYPES), NAME, USERTYPES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -188,7 +189,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 }
 
 /* static */ schema_ptr functions() {
-    static thread_local auto functions = make_lw_shared(schema(NAME, FUNCTIONS,
+    static thread_local auto functions = make_lw_shared(schema(generate_legacy_id(NAME, FUNCTIONS), NAME, FUNCTIONS,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key
@@ -217,7 +218,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 }
 
 /* static */ schema_ptr aggregates() {
-    static thread_local auto aggregates = make_lw_shared(schema(NAME, AGGREGATES,
+    static thread_local auto aggregates = make_lw_shared(schema(generate_legacy_id(NAME, AGGREGATES), NAME, AGGREGATES,
         // partition key
         {{"keyspace_name", utf8_type}},
         // clustering key

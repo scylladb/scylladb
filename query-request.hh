@@ -1,10 +1,8 @@
 #pragma once
 
 #include <experimental/optional>
-#include "schema.hh"
-#include "types.hh"
-#include "atomic_cell.hh"
 #include "keys.hh"
+#include "enum_set.hh"
 
 namespace query {
 
@@ -40,6 +38,7 @@ public:
         , _end()
         , _singular(true)
     { }
+    range() : range({}, {}) {}
 public:
     static range make(bound start, bound end) {
         return range({std::move(start)}, {std::move(end)});
@@ -120,77 +119,39 @@ std::ostream& operator<<(std::ostream& out, const range<U>& r) {
 using partition_range = range<partition_key>;
 using clustering_range = range<clustering_key_prefix>;
 
-class result {
-public:
-    class partition;
-    class row;
-
-    // TODO: Optimize for singular partition range. In such case the caller
-    // knows the partition key, no need to send it back.
-    std::vector<std::pair<partition_key, partition>> partitions;
-};
-
-class result::row {
-public:
-    // Contains cells in the same order as requested by partition_slice.
-    // Contains only live cells.
-    std::vector<std::experimental::optional<atomic_cell_or_collection>> cells;
-public:
-    bool empty() const { return cells.empty(); }
-    explicit operator bool() const { return !empty(); }
-
-    bool all_cells_empty() const {
-        for (auto&& c : cells) {
-            if (c) {
-                return false;
-            }
-        }
-        return true;
-    }
-};
-
-class result::partition {
-public:
-    row static_row; // when serializing, make present only when queried for static columns
-
-    // TODO: for some queries we could avoid sending keys back, because the client knows
-    // what the key is (single row query for instance).
-    std::vector<std::pair<clustering_key, row>> rows;
-public:
-    // Returns row count in this result. If there is a static row and no clustering rows, that counts as one row.
-    // Otherwise, if there are some clustering rows, the static row doesn't count.
-    size_t row_count() {
-        return rows.empty() ? !static_row.empty() : rows.size();
-    }
-};
-
 class partition_slice {
+public:
+    enum class option { send_clustering_key, send_partition_key, send_timestamp_and_ttl };
+    using option_set = enum_set<super_enum<option,
+        option::send_clustering_key,
+        option::send_partition_key,
+        option::send_timestamp_and_ttl>>;
 public:
     std::vector<clustering_range> row_ranges;
     std::vector<column_id> static_columns; // TODO: consider using bitmap
     std::vector<column_id> regular_columns;  // TODO: consider using bitmap
+    option_set options;
 public:
     partition_slice(std::vector<clustering_range> row_ranges, std::vector<column_id> static_columns,
-            std::vector<column_id> regular_columns)
+        std::vector<column_id> regular_columns, option_set options)
         : row_ranges(std::move(row_ranges))
         , static_columns(std::move(static_columns))
         , regular_columns(std::move(regular_columns))
+        , options(options)
     { }
     friend std::ostream& operator<<(std::ostream& out, const partition_slice& ps);
 };
 
 class read_command {
 public:
-    sstring keyspace;
-    sstring column_family;
+    utils::UUID cf_id;
     std::vector<partition_range> partition_ranges; // ranges must be non-overlapping
     partition_slice slice;
     uint32_t row_limit;
 public:
-    read_command(const sstring& keyspace, const sstring& column_family, std::vector<partition_range> partition_ranges,
-            partition_slice slice, uint32_t row_limit)
-        : keyspace(keyspace)
-        , column_family(column_family)
+    read_command(const utils::UUID& cf_id, std::vector<partition_range> partition_ranges,
+        partition_slice slice, uint32_t row_limit)
+        : cf_id(cf_id)
         , partition_ranges(std::move(partition_ranges))
         , slice(std::move(slice))
         , row_limit(row_limit)

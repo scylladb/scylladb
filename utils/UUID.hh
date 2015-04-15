@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <cassert>
 #include <array>
+#include <iostream>
 
 #include "core/sstring.hh"
 #include "core/print.hh"
@@ -59,6 +60,8 @@ public:
                 ((uint64_t)least_sig_bits >> 48 & 0xffff),
                 ((uint64_t)least_sig_bits & 0xffffffffffffLL));
     }
+
+    friend std::ostream& operator<<(std::ostream& out, const UUID& uuid);
 
     bool operator==(const UUID& v) const {
         return most_sig_bits == v.most_sig_bits

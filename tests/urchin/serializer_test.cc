@@ -162,7 +162,7 @@ inline bool operator!=(const rows_entry& r1, const rows_entry& r2) {
 
 // TODO: not complete... meh...
 inline bool operator==(const mutation_partition& cp1, const mutation_partition& cp2) {
-    static schema dummy("", "", {}, {}, {}, {}, utf8_type);
+    static schema dummy({}, "", "", {}, {}, {}, {}, utf8_type);
     auto& p1 = const_cast<mutation_partition&>(cp1);
     auto& p2 = const_cast<mutation_partition&>(cp2);
     return p1.static_row() == p2.static_row()
@@ -179,7 +179,7 @@ inline bool operator==(const mutation& m1, const mutation& m2) {
 }
 
 SEASTAR_TEST_CASE(test_mutation){
-    auto s = make_lw_shared(schema(some_keyspace, some_column_family,
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
     database db;

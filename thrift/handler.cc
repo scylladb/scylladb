@@ -436,9 +436,9 @@ public:
                     // FIXME: look at all fields, not just name
                     regular_columns.push_back({to_bytes(col_def.name), bytes_type});
                 }
-                auto s = make_lw_shared<schema>(ks_def.name, cf_def.name,
+                auto s = make_lw_shared(schema({}, ks_def.name, cf_def.name,
                     std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
-                    std::vector<schema::column>(), column_name_type);
+                    std::vector<schema::column>(), column_name_type));
                 column_family cf(s);
                 db.add_column_family(std::move(cf));
                 cf_defs.push_back(s);

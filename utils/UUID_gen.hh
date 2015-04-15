@@ -39,7 +39,7 @@ class UUID_gen
 private:
     // A grand day! millis at 00:00:00.000 15 Oct 1582.
     static constexpr int64_t START_EPOCH = -12219292800000L;
-    static const int64_t clock_seq_and_node;
+    static thread_local const int64_t clock_seq_and_node;
 
     /*
      * The min and max possible lsb for a UUID.

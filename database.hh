@@ -36,7 +36,8 @@
 #include "timestamp.hh"
 #include "tombstone.hh"
 #include "atomic_cell.hh"
-#include "query.hh"
+#include "query-request.hh"
+#include "query-result.hh"
 #include "keys.hh"
 #include <boost/intrusive/set.hpp>
 #include <boost/range/iterator_range.hpp>
@@ -214,7 +215,7 @@ public:
     tombstone tombstone_for_row(const schema& schema, const clustering_key& key);
     tombstone tombstone_for_row(const schema& schema, const rows_entry& e);
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
-    boost::iterator_range<rows_type::iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r);
+    boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r) const;
 };
 
 class mutation final {
@@ -261,9 +262,9 @@ private:
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
     future<> probe_file(sstring sstdir, sstring fname);
-    // Returns at most "limit" rows
-    query::result::partition get_partition_slice(mutation_partition& partition,
-        const query::partition_slice& slice, uint32_t limit);
+    // Returns at most "limit" rows. The limit must be greater than 0.
+    void get_partition_slice(mutation_partition& partition, const query::partition_slice& slice,
+        uint32_t limit, query::result::partition_writer&);
 };
 
 class keyspace {
@@ -326,6 +327,7 @@ public:
     }
     unsigned shard_of(const dht::token& t);
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
+    friend std::ostream& operator<<(std::ostream& out, const database& db);
 };
 
 // FIXME: stub

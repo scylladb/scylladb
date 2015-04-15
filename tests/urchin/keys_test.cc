@@ -11,7 +11,7 @@
 #include "types.hh"
 
 BOOST_AUTO_TEST_CASE(test_key_is_prefixed_by) {
-    schema s("", "", {{"c1", bytes_type}}, {{"c2", bytes_type}, {"c3", bytes_type}, {"c4", bytes_type}}, {}, {}, utf8_type);
+    schema s({}, "", "", {{"c1", bytes_type}}, {{"c2", bytes_type}, {"c3", bytes_type}, {"c4", bytes_type}}, {}, {}, utf8_type);
 
     auto key = clustering_key::from_exploded(s, {bytes("a"), bytes("b"), bytes("c")});
 
