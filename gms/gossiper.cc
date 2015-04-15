@@ -1104,12 +1104,12 @@ void gossiper::do_shadow_round() {
 }
 
 void gossiper::build_seeds_list() {
-    // for (inet_address seed : DatabaseDescriptor.getSeeds())
-    // {
-    //     if (seed.equals(FBUtilities.getBroadcastAddress()))
-    //         continue;
-    //     _seeds.add(seed);
-    // }
+    for (inet_address seed : get_seeds() ) {
+        if (seed == get_broadcast_address()) {
+            continue;
+        }
+        _seeds.emplace(seed);
+    }
 }
 
 void gossiper::maybe_initialize_local_state(int generation_nbr) {

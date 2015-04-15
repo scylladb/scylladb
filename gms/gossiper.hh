@@ -100,6 +100,15 @@ private:
         // FIXME: Helper for FBUtilities.getBroadcastAddress
         return inet_address(0xffffff);
     }
+    std::set<inet_address> _seeds_from_config;
+public:
+    std::set<inet_address> get_seeds() {
+        // FIXME: DatabaseDescriptor.getSeeds()
+        return _seeds_from_config;
+    }
+    void set_seeds(std::set<inet_address> _seeds) {
+        _seeds_from_config = _seeds;
+    }
 public:
     static int64_t now_millis() {
         return db_clock::now().time_since_epoch().count();
