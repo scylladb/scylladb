@@ -26,7 +26,7 @@
 
 #include "bytes.hh"
 #include "schema.hh"
-#include "query.hh"
+#include "query-result-reader.hh"
 #include "cql3/column_specification.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/result_set.hh"

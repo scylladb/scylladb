@@ -25,7 +25,6 @@
 #ifndef CQL3_UPDATE_PARAMETERS_HH
 #define CQL3_UPDATE_PARAMETERS_HH
 
-#include "query.hh"
 #include "gc_clock.hh"
 #include "timestamp.hh"
 #include "schema.hh"

@@ -27,6 +27,7 @@
 #include "cql3/single_column_relation.hh"
 #include "validation.hh"
 #include "core/shared_ptr.hh"
+#include "query-result-reader.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/filtered.hpp>

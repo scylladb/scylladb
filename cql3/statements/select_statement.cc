@@ -27,7 +27,7 @@
 #include "transport/messages/result_message.hh"
 #include "cql3/selection/selection.hh"
 #include "core/shared_ptr.hh"
-#include "query.hh"
+#include "query-result-reader.hh"
 
 namespace cql3 {
 

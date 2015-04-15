@@ -36,7 +36,8 @@
 #include "timestamp.hh"
 #include "tombstone.hh"
 #include "atomic_cell.hh"
-#include "query.hh"
+#include "query-request.hh"
+#include "query-result.hh"
 #include "keys.hh"
 #include <boost/intrusive/set.hpp>
 #include <boost/range/iterator_range.hpp>

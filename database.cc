@@ -10,6 +10,7 @@
 #include "db/consistency_level.hh"
 #include "utils/UUID_gen.hh"
 #include "to_string.hh"
+#include "query-result-writer.hh"
 
 #include "cql3/column_identifier.hh"
 #include <boost/algorithm/string/classification.hpp>

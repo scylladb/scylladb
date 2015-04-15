@@ -2,7 +2,7 @@
  * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
-#include "query.hh"
+#include "query-request.hh"
 #include "to_string.hh"
 #include "bytes.hh"
 

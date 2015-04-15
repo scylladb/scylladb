@@ -25,7 +25,8 @@
 #pragma once
 
 #include "database.hh"
-#include "query.hh"
+#include "query-request.hh"
+#include "query-result.hh"
 #include "core/distributed.hh"
 #include "db/consistency_level.hh"
 

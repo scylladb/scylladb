@@ -1,5 +1,11 @@
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
+#pragma once
+
 #include "core/distributed.hh"
-#include "query.hh"
+#include "query-result.hh"
 
 namespace query {
 
