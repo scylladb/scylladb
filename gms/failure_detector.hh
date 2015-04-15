@@ -23,21 +23,20 @@
 
 #include "unimplemented.hh"
 #include "db_clock.hh"
-#include "gms/inet_address.hh"
-#include "gms/i_failure_detector.hh"
-#include "gms/application_state.hh"
-#include "gms/endpoint_state.hh"
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
 #include "core/distributed.hh"
-#include "gms/gossiper.hh"
 #include "utils/bounded_stats_deque.hh"
+#include "gms/i_failure_detector.hh"
 #include <iostream>
 #include <cmath>
 #include <list>
 #include <map>
 
 namespace gms {
+class inet_address;
+class i_failure_detection_event_listener;
+class endpoint_state;
 
 class failure_detector_helper {
 public:

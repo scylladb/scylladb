@@ -20,6 +20,12 @@
  */
 
 #include "gms/failure_detector.hh"
+#include "gms/gossiper.hh"
+#include "gms/i_failure_detector.hh"
+#include "gms/i_failure_detection_event_listener.hh"
+#include "gms/endpoint_state.hh"
+#include "gms/application_state.hh"
+#include "gms/inet_address.hh"
 #include <iostream>
 
 namespace gms {
