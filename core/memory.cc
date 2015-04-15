@@ -799,9 +799,9 @@ void* allocate_aligned(size_t align, size_t size) {
     if (size <= sizeof(free_object)) {
         size = sizeof(free_object);
     }
-    if (size <= max_small_allocation) {
+    if (size <= max_small_allocation && align <= page_size) {
         // Our small allocator only guarantees alignment for power-of-two
-        // allocations.
+        // allocations which are not larger than a page.
         size = 1 << log2(size);
         return cpu_mem.allocate_small(size);
     } else {
