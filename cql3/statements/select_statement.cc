@@ -35,6 +35,113 @@ namespace statements {
 
 const shared_ptr<select_statement::parameters> select_statement::_default_parameters = ::make_shared<select_statement::parameters>();
 
+select_statement::select_statement(schema_ptr schema,
+    uint32_t bound_terms,
+    ::shared_ptr<parameters> parameters,
+    ::shared_ptr<selection::selection> selection,
+    ::shared_ptr<restrictions::statement_restrictions> restrictions,
+    bool is_reversed,
+    ordering_comparator_type ordering_comparator,
+    ::shared_ptr<term> limit)
+        : _schema(schema)
+        , _bound_terms(bound_terms)
+        , _parameters(std::move(parameters))
+        , _selection(std::move(selection))
+        , _restrictions(std::move(restrictions))
+        , _is_reversed(is_reversed)
+        , _limit(std::move(limit))
+        , _ordering_comparator(std::move(ordering_comparator))
+{
+    _opts = _selection->get_query_options();
+}
+
+bool select_statement::uses_function(const sstring& ks_name, const sstring& function_name) const {
+    return _selection->uses_function(ks_name, function_name)
+        || _restrictions->uses_function(ks_name, function_name)
+        || (_limit && _limit->uses_function(ks_name, function_name));
+}
+
+::shared_ptr<select_statement>
+select_statement::for_selection(schema_ptr schema, ::shared_ptr<selection::selection> selection) {
+    return ::make_shared<select_statement>(schema,
+        0,
+        _default_parameters,
+        selection,
+        ::make_shared<restrictions::statement_restrictions>(schema),
+        false,
+        ordering_comparator_type{},
+        ::shared_ptr<term>{});
+}
+
+uint32_t select_statement::get_bound_terms() {
+    return _bound_terms;
+}
+
+void select_statement::check_access(const service::client_state& state) {
+    warn(unimplemented::cause::PERMISSIONS);
+#if 0
+        state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.SELECT);
+#endif
+}
+
+void select_statement::validate(const service::client_state& state) {
+    // Nothing to do, all validation has been done by raw_statemet::prepare()
+}
+
+query::partition_slice
+select_statement::make_partition_slice(const query_options& options) {
+    std::vector<column_id> static_columns;
+    std::vector<column_id> regular_columns;
+
+    if (_selection->contains_static_columns()) {
+        static_columns.reserve(_selection->get_column_count());
+    }
+
+    regular_columns.reserve(_selection->get_column_count());
+
+    for (auto&& col : _selection->get_columns()) {
+        if (col->is_static()) {
+            static_columns.push_back(col->id);
+        } else if (col->is_regular()) {
+            regular_columns.push_back(col->id);
+        }
+    }
+
+    if (_parameters->is_distinct()) {
+        return query::partition_slice({}, std::move(static_columns), {}, _opts);
+    }
+
+    return query::partition_slice(_restrictions->get_clustering_bounds(options),
+        std::move(static_columns), std::move(regular_columns), _opts);
+}
+
+int32_t select_statement::get_limit(const query_options& options) const {
+    if (!_limit) {
+        return std::numeric_limits<int32_t>::max();
+    }
+
+    auto val = _limit->bind_and_get(options);
+    if (!val) {
+        throw exceptions::invalid_request_exception("Invalid null value of limit");
+    }
+
+    try {
+        int32_type->validate(*val);
+        auto l = boost::any_cast<int32_t>(int32_type->deserialize(*val));
+        if (l <= 0) {
+            throw exceptions::invalid_request_exception("LIMIT must be strictly positive");
+        }
+        return l;
+    } catch (const marshal_exception& e) {
+        throw exceptions::invalid_request_exception("Invalid limit value");
+    }
+}
+
+bool select_statement::needs_post_query_ordering() const {
+    // We need post-query ordering only for queries with IN on the partition key and an ORDER BY.
+    return _restrictions->key_is_in_relation() && !_parameters->orderings().empty();
+}
+
 future<shared_ptr<transport::messages::result_message>>
 select_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) {
     auto cl = options.get_consistency();
@@ -215,6 +322,252 @@ select_statement::process_results(foreign_ptr<lw_shared_ptr<query::result>> resu
     }
     rs->trim(cmd->row_limit);
     return ::make_shared<transport::messages::result_message::rows>(std::move(rs));
+}
+
+::shared_ptr<parsed_statement::prepared>
+select_statement::raw_statement::prepare(database& db) {
+    schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
+    auto bound_names = get_bound_variables();
+
+    auto selection = _select_clause.empty()
+                     ? selection::selection::wildcard(schema)
+                     : selection::selection::from_selectors(schema, _select_clause);
+
+    auto restrictions = prepare_restrictions(schema, bound_names, selection);
+
+    if (_parameters->is_distinct()) {
+        validate_distinct_selection(schema, selection, restrictions);
+    }
+
+    select_statement::ordering_comparator_type ordering_comparator;
+    bool is_reversed_ = false;
+
+    if (!_parameters->orderings().empty()) {
+        verify_ordering_is_allowed(restrictions);
+        ordering_comparator = get_ordering_comparator(schema, selection, restrictions);
+        is_reversed_ = is_reversed(schema);
+    }
+
+    if (is_reversed_) {
+        restrictions->reverse();
+    }
+
+    check_needs_filtering(restrictions);
+
+    auto stmt = ::make_shared<select_statement>(schema,
+        bound_names->size(),
+        _parameters,
+        std::move(selection),
+        std::move(restrictions),
+        is_reversed_,
+        std::move(ordering_comparator),
+        prepare_limit(bound_names));
+
+    return ::make_shared<parsed_statement::prepared>(std::move(stmt), std::move(*bound_names));
+}
+
+::shared_ptr<restrictions::statement_restrictions>
+select_statement::raw_statement::prepare_restrictions(schema_ptr schema,
+    ::shared_ptr<variable_specifications> bound_names,
+    ::shared_ptr<selection::selection> selection)
+{
+    try {
+        return ::make_shared<restrictions::statement_restrictions>(schema, std::move(_where_clause), bound_names,
+            selection->contains_only_static_columns(), selection->contains_a_collection());
+    } catch (const exceptions::unrecognized_entity_exception& e) {
+        if (contains_alias(e.entity)) {
+            throw exceptions::invalid_request_exception(sprint("Aliases aren't allowed in the where clause ('%s')", e.relation->to_string()));
+        }
+        throw;
+    }
+}
+
+/** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
+::shared_ptr<term>
+select_statement::raw_statement::prepare_limit(::shared_ptr<variable_specifications> bound_names) {
+    if (!_limit) {
+        return {};
+    }
+
+    auto prep_limit = _limit->prepare(keyspace(), limit_receiver());
+    prep_limit->collect_marker_specification(bound_names);
+    return prep_limit;
+}
+
+void select_statement::raw_statement::verify_ordering_is_allowed(
+    ::shared_ptr<restrictions::statement_restrictions> restrictions)
+{
+    if (restrictions->uses_secondary_indexing()) {
+        throw exceptions::invalid_request_exception("ORDER BY with 2ndary indexes is not supported.");
+    }
+    if (restrictions->is_key_range()) {
+        throw exceptions::invalid_request_exception("ORDER BY is only supported when the partition key is restricted by an EQ or an IN.");
+    }
+}
+
+void select_statement::raw_statement::validate_distinct_selection(schema_ptr schema,
+    ::shared_ptr<selection::selection> selection,
+    ::shared_ptr<restrictions::statement_restrictions> restrictions)
+{
+    for (auto&& def : selection->get_columns()) {
+        if (!def->is_partition_key() && !def->is_static()) {
+            throw exceptions::invalid_request_exception(sprint(
+                "SELECT DISTINCT queries must only request partition key columns and/or static columns (not %s)",
+                def->name_as_text()));
+        }
+    }
+
+    // If it's a key range, we require that all partition key columns are selected so we don't have to bother
+    // with post-query grouping.
+    if (!restrictions->is_key_range()) {
+        return;
+    }
+
+    for (auto&& def : schema->partition_key_columns()) {
+        if (!selection->has_column(def)) {
+            throw exceptions::invalid_request_exception(sprint(
+                "SELECT DISTINCT queries must request all the partition key columns (missing %s)", def.name_as_text()));
+        }
+    }
+}
+
+void select_statement::raw_statement::handle_unrecognized_ordering_column(
+    ::shared_ptr<column_identifier> column)
+{
+    if (contains_alias(column)) {
+        throw exceptions::invalid_request_exception(sprint("Aliases are not allowed in order by clause ('%s')", *column));
+    }
+    throw exceptions::invalid_request_exception(sprint("Order by on unknown column %s", *column));
+}
+
+select_statement::ordering_comparator_type
+select_statement::raw_statement::get_ordering_comparator(schema_ptr schema,
+    ::shared_ptr<selection::selection> selection,
+    ::shared_ptr<restrictions::statement_restrictions> restrictions)
+{
+    if (!restrictions->key_is_in_relation()) {
+        return {};
+    }
+
+    std::vector<std::pair<uint32_t, data_type>> sorters;
+    sorters.reserve(_parameters->orderings().size());
+
+    // If we order post-query (see orderResults), the sorted column needs to be in the ResultSet for sorting,
+    // even if we don't
+    // ultimately ship them to the client (CASSANDRA-4911).
+    for (auto&& e : _parameters->orderings()) {
+        auto&& raw = e.first;
+        ::shared_ptr<column_identifier> column = raw->prepare_column_identifier(schema);
+        const column_definition* def = schema->get_column_definition(column->name());
+        if (!def) {
+            handle_unrecognized_ordering_column(column);
+        }
+        auto index = selection->index_of(*def);
+        if (index < 0) {
+            index = selection->add_column_for_ordering(*def);
+        }
+
+        sorters.emplace_back(index, def->type);
+    }
+
+    return [sorters = std::move(sorters)] (const result_row_type& r1, const result_row_type& r2) mutable {
+        for (auto&& e : sorters) {
+            auto& c1 = r1[e.first];
+            auto& c2 = r2[e.first];
+            auto type = e.second;
+
+            if (bool(c1) != bool(c2)) {
+                return bool(c2);
+            }
+            if (c1) {
+                int result = type->compare(*c1, *c2);
+                if (result != 0) {
+                    return result < 0;
+                }
+            }
+        }
+        return false;
+    };
+}
+
+bool select_statement::raw_statement::is_reversed(schema_ptr schema) {
+    std::experimental::optional<bool> reversed_map[schema->clustering_key_size()];
+
+    uint32_t i = 0;
+    for (auto&& e : _parameters->orderings()) {
+        ::shared_ptr<column_identifier> column = e.first->prepare_column_identifier(schema);
+        bool reversed = e.second;
+
+        auto def = schema->get_column_definition(column->name());
+        if (!def) {
+            handle_unrecognized_ordering_column(column);
+        }
+
+        if (!def->is_clustering_key()) {
+            throw exceptions::invalid_request_exception(sprint(
+                "Order by is currently only supported on the clustered columns of the PRIMARY KEY, got %s", *column));
+        }
+
+        if (i != def->component_index()) {
+            throw exceptions::invalid_request_exception(
+                "Order by currently only support the ordering of columns following their declared order in the PRIMARY KEY");
+        }
+
+        reversed_map[i] = std::experimental::make_optional(reversed != def->type->is_reversed());
+        ++i;
+    }
+
+    // GCC incorrenctly complains about "*is_reversed_" below
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+
+    // Check that all bool in reversedMap, if set, agrees
+    std::experimental::optional<bool> is_reversed_{};
+    for (auto&& b : reversed_map) {
+        if (b) {
+            if (!is_reversed_) {
+                is_reversed_ = b;
+            } else {
+                if ((*is_reversed_) != *b) {
+                    throw exceptions::invalid_request_exception("Unsupported order by relation");
+                }
+            }
+        }
+    }
+
+    assert(is_reversed_);
+    return *is_reversed_;
+
+#pragma GCC diagnostic pop
+}
+
+/** If ALLOW FILTERING was not specified, this verifies that it is not needed */
+void select_statement::raw_statement::check_needs_filtering(
+    ::shared_ptr<restrictions::statement_restrictions> restrictions)
+{
+    // non-key-range non-indexed queries cannot involve filtering underneath
+    if (!_parameters->allow_filtering() && (restrictions->is_key_range() || restrictions->uses_secondary_indexing())) {
+        // We will potentially filter data if either:
+        //  - Have more than one IndexExpression
+        //  - Have no index expression and the column filter is not the identity
+        if (restrictions->need_filtering()) {
+            throw exceptions::invalid_request_exception(
+                "Cannot execute this query as it might involve data filtering and "
+                    "thus may have unpredictable performance. If you want to execute "
+                    "this query despite the performance unpredictability, use ALLOW FILTERING");
+        }
+    }
+}
+
+bool select_statement::raw_statement::contains_alias(::shared_ptr<column_identifier> name) {
+    return std::any_of(_select_clause.begin(), _select_clause.end(), [name] (auto raw) {
+        return *name == *raw->alias;
+    });
+}
+
+::shared_ptr<column_specification> select_statement::raw_statement::limit_receiver() {
+    return ::make_shared<column_specification>(keyspace(), column_family(), ::make_shared<column_identifier>("[limit]", true),
+        int32_type);
 }
 
 }
