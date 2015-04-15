@@ -284,7 +284,6 @@ schema_ptr built_indexes() {
         {},
         // regular columns
         {
-            // FIXME: Cassandra also had two additional columns here:
             {"rate_120m", double_type},
             {"rate_15m", double_type},
         },
