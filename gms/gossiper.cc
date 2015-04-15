@@ -385,9 +385,7 @@ void gossiper::run() {
     this->make_random_gossip_digest(g_digests);
 
     if (g_digests.size() > 0) {
-        sstring cluster_name("my cluster_name");
-        sstring partioner_name("my partioner name");
-        gossip_digest_syn message(cluster_name, partioner_name, g_digests);
+        gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests);
 
         /* Gossip to some random live member */
         bool gossiped_to_seed = do_gossip_to_live_member(message);
