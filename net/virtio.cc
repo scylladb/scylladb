@@ -87,11 +87,18 @@ private:
         }
         if (!(_opts.count("tso") && _opts["tso"].as<std::string>() == "off")) {
             seastar_supported_features |= VIRTIO_NET_F_HOST_TSO4;
-            seastar_supported_features |= VIRTIO_NET_F_GUEST_TSO4;
             _hw_features.tx_tso = true;
         } else {
             _hw_features.tx_tso = false;
         }
+
+        if (!(_opts.count("lro") && _opts["lro"].as<std::string>() == "off")) {
+            seastar_supported_features |= VIRTIO_NET_F_GUEST_TSO4;
+            _hw_features.rx_lro = true;
+        } else {
+            _hw_features.rx_lro = false;
+        }
+
         if (!(_opts.count("ufo") && _opts["ufo"].as<std::string>() == "off")) {
             seastar_supported_features |= VIRTIO_NET_F_HOST_UFO;
             seastar_supported_features |= VIRTIO_NET_F_GUEST_UFO;
