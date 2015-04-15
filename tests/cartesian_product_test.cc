@@ -22,7 +22,7 @@
 #define BOOST_TEST_DYN_LINK
 #define BOOST_TEST_MODULE core
 
-#include <boost/test/included/unit_test.hpp>
+#include <boost/test/unit_test.hpp>
 #include <boost/range/algorithm/copy.hpp>
 #include "cartesian_product.hh"
 

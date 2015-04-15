@@ -5,7 +5,7 @@
 #define BOOST_TEST_DYN_LINK
 #define BOOST_TEST_MODULE core
 
-#include <boost/test/included/unit_test.hpp>
+#include <boost/test/unit_test.hpp>
 #include "core/sstring.hh"
 #include "database.hh"
 #include "utils/UUID_gen.hh"
