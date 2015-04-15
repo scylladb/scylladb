@@ -50,6 +50,19 @@ uncompress_func uncompress_lz4;
 uncompress_func uncompress_snappy;
 uncompress_func uncompress_deflate;
 
+typedef size_t compress_func(const char* input, size_t input_len,
+        char* output, size_t output_len);
+
+compress_func compress_lz4;
+compress_func compress_snappy;
+compress_func compress_deflate;
+
+enum class compressor {
+    lz4,
+    snappy,
+    deflate,
+};
+
 uint32_t checksum_adler32(const char* input, size_t input_len);
 
 namespace sstables {
@@ -67,9 +80,12 @@ struct compression {
 private:
     // Variables determined from the above deserialized values, held for convenience:
     uncompress_func *_uncompress = nullptr;
+    compress_func *_compress = nullptr;
     // Variables *not* found in the "Compression Info" file (added by update()):
     uint64_t _compressed_file_length;
 public:
+    // Set the compressor algorithm, please check the definition of enum compressor.
+    void set_compressor(compressor c);
     // After changing _compression, update() must be called to update
     // additional variables depending on it.
     void update(uint64_t compressed_file_length);
@@ -97,7 +113,18 @@ public:
     size_t uncompress(
             const char* input, size_t input_len,
             char* output, size_t output_len) const {
+        if (!_uncompress) {
+            throw std::runtime_error("uncompress is not supported");
+        }
         return _uncompress(input, input_len, output, output_len);
+    }
+    size_t compress(
+            const char* input, size_t input_len,
+            char* output, size_t output_len) const {
+        if (!_compress) {
+            throw std::runtime_error("compress is not supported");
+        }
+        return _compress(input, input_len, output, output_len);
     }
 };
 

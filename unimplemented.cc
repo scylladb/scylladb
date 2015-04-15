@@ -32,6 +32,7 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::THRIFT: return out << "THRIFT";
         case cause::VALIDATION: return out << "VALIDATION";
         case cause::REVERSED: return out << "REVERSED";
+        case cause::COMPRESSION: return out << "COMPRESSION";
     }
     assert(0);
 }

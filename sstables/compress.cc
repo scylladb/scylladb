@@ -14,6 +14,8 @@
 #include <zlib.h>
 #include <snappy-c.h>
 
+#include "unimplemented.hh"
+
 namespace sstables {
 
 void compression::update(uint64_t compressed_file_length) {
@@ -29,6 +31,21 @@ void compression::update(uint64_t compressed_file_length) {
      }
 
      _compressed_file_length = compressed_file_length;
+}
+
+void compression::set_compressor(compressor c) {
+     if (c == compressor::lz4) {
+         _compress = compress_lz4;
+         name.value = "LZ4Compressor";
+     } else if (c == compressor::snappy) {
+         _compress = compress_snappy;
+         name.value = "SnappyCompressor";
+     } else if (c == compressor::deflate) {
+         _compress = compress_deflate;
+         name.value = "DeflateCompressor";
+     } else {
+         throw std::runtime_error("unsupported compressor type");
+     }
 }
 
 compression::chunk_and_offset
@@ -71,6 +88,23 @@ size_t uncompress_lz4(const char* input, size_t input_len,
     return ret;
 }
 
+size_t compress_lz4(const char* input, size_t input_len,
+        char* output, size_t output_len) {
+    if (output_len < LZ4_COMPRESSBOUND(input_len) + 4) {
+        throw std::runtime_error("LZ4 compression failure: length of output is too small");
+    }
+    // Write input_len (32-bit data) to beginning of output in little-endian representation.
+    output[0] = input_len & 0xFF;
+    output[1] = (input_len >> 8) & 0xFF;
+    output[2] = (input_len >> 16) & 0xFF;
+    output[3] = (input_len >> 24) & 0xFF;
+    auto ret = LZ4_compress(input, output + 4, input_len);
+    if (ret == 0) {
+        throw std::runtime_error("LZ4 compression failure: LZ4_compress() failed");
+    }
+    return ret;
+}
+
 size_t uncompress_deflate(const char* input, size_t input_len,
         char* output, size_t output_len) {
     z_stream zs;
@@ -96,6 +130,12 @@ size_t uncompress_deflate(const char* input, size_t input_len,
     }
 }
 
+size_t compress_deflate(const char* input, size_t input_len,
+        char* output, size_t output_len) {
+    // FIXME: implement.
+    fail(unimplemented::cause::COMPRESSION);
+}
+
 size_t uncompress_snappy(const char* input, size_t input_len,
         char* output, size_t output_len) {
     if (snappy_uncompress(input, input_len, output, &output_len)
@@ -104,6 +144,12 @@ size_t uncompress_snappy(const char* input, size_t input_len,
     } else {
         throw std::runtime_error("deflate uncompression failure");
     }
+}
+
+size_t compress_snappy(const char* input, size_t input_len,
+        char* output, size_t output_len) {
+    // FIXME: implement.
+    fail(unimplemented::cause::COMPRESSION);
 }
 
 uint32_t checksum_adler32(const char* input, size_t input_len) {

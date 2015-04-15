@@ -31,6 +31,7 @@ enum class cause {
     THRIFT,
     VALIDATION,
     REVERSED,
+    COMPRESSION,
 };
 
 void fail(cause what) __attribute__((noreturn));
