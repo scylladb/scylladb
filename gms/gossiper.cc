@@ -966,14 +966,15 @@ void gossiper::do_on_change_notifications(inet_address addr, const application_s
     }
 }
 
-void gossiper::request_all(gossip_digest g_digest, std::vector<gossip_digest> delta_gossip_digest_list, int remote_generation) {
+void gossiper::request_all(gossip_digest& g_digest,
+    std::vector<gossip_digest>& delta_gossip_digest_list, int remote_generation) {
     /* We are here since we have no data for this endpoint locally so request everthing. */
     delta_gossip_digest_list.emplace_back(g_digest.get_endpoint(), remote_generation, 0);
     // if (logger.isTraceEnabled())
     //     logger.trace("request_all for {}", g_digest.get_endpoint());
 }
 
-void gossiper::send_all(gossip_digest g_digest,
+void gossiper::send_all(gossip_digest& g_digest,
     std::map<inet_address, endpoint_state>& delta_ep_state_map,
     int max_remote_version) {
     auto ep = g_digest.get_endpoint();
