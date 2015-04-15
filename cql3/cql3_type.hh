@@ -49,53 +49,22 @@ public:
     public:
         bool _frozen = false;
         virtual bool supports_freezing() const = 0;
-
-        virtual bool is_collection() const {
-            return false;
-        }
-
-        virtual bool is_counter() const {
-            return false;
-        }
-
-        virtual std::experimental::optional<sstring> keyspace() const {
-            return std::experimental::optional<sstring>{};
-        }
-
-        virtual void freeze() {
-            sstring message = sprint("frozen<> is only allowed on collections, tuples, and user-defined types (got %s)", to_string());
-            throw exceptions::invalid_request_exception(message);
-        }
-
+        virtual bool is_collection() const;
+        virtual bool is_counter() const;
+        virtual std::experimental::optional<sstring> keyspace() const;
+        virtual void freeze();
         virtual shared_ptr<cql3_type> prepare(const sstring& keyspace) = 0;
-
-        static shared_ptr<raw> from(shared_ptr<cql3_type> type) {
-            return ::make_shared<raw_type>(type);
-        }
-
+        static shared_ptr<raw> from(shared_ptr<cql3_type> type);
 #if 0
         public static Raw userType(UTName name)
         {
             return new RawUT(name);
         }
 #endif
-
-        static shared_ptr<raw> map(shared_ptr<raw> t1, shared_ptr<raw> t2) {
-            return make_shared(raw_collection(&collection_type_impl::kind::map, std::move(t1), std::move(t2)));
-        }
-
-        static shared_ptr<raw> list(shared_ptr<raw> t) {
-            return make_shared(raw_collection(&collection_type_impl::kind::list, {}, std::move(t)));
-        }
-
-        static shared_ptr<raw> set(shared_ptr<raw> t) {
-            return make_shared(raw_collection(&collection_type_impl::kind::set, {}, std::move(t)));
-        }
-
-        static shared_ptr<raw> tuple(std::vector<shared_ptr<raw>> ts) {
-            return make_shared(raw_tuple(std::move(ts)));
-        }
-
+        static shared_ptr<raw> map(shared_ptr<raw> t1, shared_ptr<raw> t2);
+        static shared_ptr<raw> list(shared_ptr<raw> t);
+        static shared_ptr<raw> set(shared_ptr<raw> t);
+        static shared_ptr<raw> tuple(std::vector<shared_ptr<raw>> ts);
 #if 0
         public static Raw frozen(CQL3Type.Raw t) throws InvalidRequestException
         {
@@ -103,109 +72,13 @@ public:
             return t;
         }
 #endif
-
         virtual sstring to_string() const = 0;
-
         friend std::ostream& operator<<(std::ostream& os, const raw& r);
     };
 
 private:
-    class raw_type : public raw {
-    private:
-        shared_ptr<cql3_type> _type;
-    public:
-        raw_type(shared_ptr<cql3_type> type)
-            : _type{type}
-        { }
-    public:
-        virtual shared_ptr<cql3_type> prepare(const sstring& keyspace) {
-            return _type;
-        }
-
-        virtual bool supports_freezing() const {
-            return false;
-        }
-
-        virtual bool is_counter() const {
-            throw std::runtime_error("not implemented");
-#if 0
-            return type == Native.COUNTER;
-#endif
-        }
-
-        virtual sstring to_string() const {
-            return _type->to_string();
-        }
-    };
-
-    class raw_collection : public raw {
-        const collection_type_impl::kind* _kind;
-        shared_ptr<raw> _keys;
-        shared_ptr<raw> _values;
-    public:
-        raw_collection(const collection_type_impl::kind* kind, shared_ptr<raw> keys, shared_ptr<raw> values)
-                : _kind(kind), _keys(std::move(keys)), _values(std::move(values)) {
-        }
-
-        virtual void freeze() override {
-            if (_keys && _keys->supports_freezing()) {
-                _keys->freeze();
-            }
-            if (_values && _values->supports_freezing()) {
-                _values->freeze();
-            }
-            _frozen = true;
-        }
-
-        virtual bool supports_freezing() const override {
-            return true;
-        }
-
-        virtual bool is_collection() const override {
-            return true;
-        }
-
-        virtual shared_ptr<cql3_type> prepare(const sstring& keyspace) override {
-            assert(_values); // "Got null values type for a collection";
-
-            if (!_frozen && _values->supports_freezing() && !_values->_frozen) {
-                throw exceptions::invalid_request_exception(sprint("Non-frozen collections are not allowed inside collections: %s", *this));
-            }
-            if (_values->is_counter()) {
-                throw exceptions::invalid_request_exception(sprint("Counters are not allowed inside collections: %s", *this));
-            }
-
-            if (_keys) {
-                if (!_frozen && _keys->supports_freezing() && !_keys->_frozen) {
-                    throw exceptions::invalid_request_exception(sprint("Non-frozen collections are not allowed inside collections: %s", *this));
-                }
-            }
-
-            if (_kind == &collection_type_impl::kind::list) {
-                return make_shared(cql3_type(to_string(), list_type_impl::get_instance(_values->prepare(keyspace)->get_type(), !_frozen), false));
-            } else if (_kind == &collection_type_impl::kind::set) {
-                return make_shared(cql3_type(to_string(), set_type_impl::get_instance(_values->prepare(keyspace)->get_type(), !_frozen), false));
-            } else if (_kind == &collection_type_impl::kind::map) {
-                assert(_keys); // "Got null keys type for a collection";
-                return make_shared(cql3_type(to_string(), map_type_impl::get_instance(_keys->prepare(keyspace)->get_type(), _values->prepare(keyspace)->get_type(), !_frozen), false));
-            }
-            abort();
-        }
-
-        virtual sstring to_string() const override {
-            sstring start = _frozen ? "frozen<" : "";
-            sstring end = _frozen ? ">" : "";
-            if (_kind == &collection_type_impl::kind::list) {
-                return sprint("%slist<%s>%s", start, _values, end);
-            } else if (_kind == &collection_type_impl::kind::set) {
-                return sprint("%sset<%s>%s", start, _values, end);
-            } else if (_kind == &collection_type_impl::kind::map) {
-                return sprint("%smap<%s, %s>%s", start, _keys, _values, end);
-            }
-            abort();
-        }
-    };
-
+    class raw_type;
+    class raw_collection;
 #if 0
         private static class RawUT extends Raw
         {
@@ -267,45 +140,7 @@ private:
             }
         }
 #endif
-
-        class raw_tuple : public raw {
-            std::vector<shared_ptr<raw>> _types;
-        public:
-            raw_tuple(std::vector<shared_ptr<raw>> types)
-                    : _types(std::move(types)) {
-            }
-            virtual bool supports_freezing() const override {
-                return true;
-            }
-            virtual bool is_collection() const override {
-                return false;
-            }
-            virtual void freeze() override {
-                for (auto&& t : _types) {
-                    if (t->supports_freezing()) {
-                        t->freeze();
-                    }
-                }
-                _frozen = true;
-            }
-            virtual shared_ptr<cql3_type> prepare(const sstring& keyspace) override {
-                if (!_frozen) {
-                    freeze();
-                }
-                std::vector<data_type> ts;
-                for (auto&& t : _types) {
-                    if (t->is_counter()) {
-                        throw exceptions::invalid_request_exception("Counters are not allowed inside tuples");
-                    }
-                    ts.push_back(t->prepare(keyspace)->get_type());
-                }
-                return make_cql3_tuple_type(tuple_type_impl::get_instance(std::move(ts)));
-            }
-            virtual sstring to_string() const override {
-                return sprint("tuple<%s>", join(", ", _types));
-            }
-        };
-
+    class raw_tuple;
     friend std::ostream& operator<<(std::ostream& os, const cql3_type& t) {
         return os << t.to_string();
     }
