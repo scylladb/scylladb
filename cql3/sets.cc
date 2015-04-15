@@ -4,6 +4,7 @@
 
 #include "sets.hh"
 #include "constants.hh"
+#include "cql3_type.hh"
 
 namespace cql3 {
 
