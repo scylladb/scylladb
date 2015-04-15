@@ -25,7 +25,7 @@
 #pragma once
 
 #include <vector>
-#include <cql3/restrictions/single_column_restriction.hh>
+#include "cql3/restrictions/single_column_restriction.hh"
 
 #include "core/shared_ptr.hh"
 #include "to_string.hh"
