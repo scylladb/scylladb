@@ -25,6 +25,8 @@
 #include "db_clock.hh"
 #include "gms/inet_address.hh"
 #include "gms/i_failure_detector.hh"
+#include "gms/application_state.hh"
+#include "gms/endpoint_state.hh"
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
 #include "core/distributed.hh"

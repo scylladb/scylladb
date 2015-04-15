@@ -1,5 +1,16 @@
+#include "gms/inet_address.hh"
+#include "gms/endpoint_state.hh"
+#include "gms/gossip_digest.hh"
+#include "gms/gossip_digest_syn.hh"
+#include "gms/gossip_digest_ack.hh"
+#include "gms/gossip_digest_ack2.hh"
+#include "gms/versioned_value.hh"
 #include "gms/gossiper.hh"
+#include "gms/application_state.hh"
 #include "gms/failure_detector.hh"
+#include "gms/i_failure_detection_event_listener.hh"
+#include "gms/i_endpoint_state_change_subscriber.hh"
+#include "gms/i_failure_detector.hh"
 
 namespace gms {
 
@@ -401,6 +412,14 @@ bool gossiper::seen_any_seed() {
         }
     }
     return false;
+}
+
+void gossiper::register_(shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+    _subscribers.push_back(std::move(subscriber));
+}
+
+void gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+    _subscribers.remove(subscriber);
 }
 
 std::set<inet_address> gossiper::get_live_members() {

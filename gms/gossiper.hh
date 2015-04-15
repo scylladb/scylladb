@@ -21,29 +21,29 @@
 
 #pragma once
 
+#include "unimplemented.hh"
 #include "core/distributed.hh"
 #include "core/shared_ptr.hh"
 #include "core/print.hh"
-#include "unimplemented.hh"
-#include "gms/inet_address.hh"
-#include "gms/endpoint_state.hh"
-#include "gms/i_failure_detection_event_listener.hh"
-#include "gms/i_endpoint_state_change_subscriber.hh"
-#include "gms/i_failure_detector.hh"
-#include "gms/gossip_digest.hh"
 #include "utils/UUID.hh"
-#include "gms/gossip_digest_syn.hh"
-#include "gms/gossip_digest_ack.hh"
-#include "gms/gossip_digest_ack2.hh"
+#include "gms/i_failure_detection_event_listener.hh"
 #include "gms/versioned_value.hh"
+#include "gms/application_state.hh"
 #include "message/messaging_service.hh"
-
 #include <boost/algorithm/string.hpp>
 #include <experimental/optional>
 #include <algorithm>
 
 namespace gms {
 
+class gossip_digest_syn;
+class gossip_digest_ack;
+class gossip_digest_ack2;
+class gossip_digest;
+class endpoint_state;
+class inet_address;
+class i_endpoint_state_change_subscriber;
+class i_failure_detector;
 
 struct empty_msg {
     void serialize(bytes::iterator& out) const {
@@ -161,18 +161,14 @@ public:
      *
      * @param subscriber module which implements the IEndpointStateChangeSubscriber
      */
-    void register_(shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        _subscribers.push_back(std::move(subscriber));
-    }
+    void register_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
 
     /**
      * Unregister interest for state changes.
      *
      * @param subscriber module which implements the IEndpointStateChangeSubscriber
      */
-    void unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        _subscribers.remove(subscriber);
-    }
+    void unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
 
     std::set<inet_address> get_live_members();
 
@@ -197,7 +193,6 @@ public:
      * @param endpoint end point that is convicted.
      */
     virtual void convict(inet_address endpoint, double phi) override;
-
 
     /**
      * Return either: the greatest heartbeat or application state
