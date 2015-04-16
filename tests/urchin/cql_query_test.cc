@@ -750,9 +750,12 @@ SEASTAR_TEST_CASE(test_batch) {
 }
 
 SEASTAR_TEST_CASE(test_tuples) {
-    auto tt = tuple_type_impl::get_instance({int32_type, long_type, utf8_type});
-    return do_with_cql_env([tt] (auto& e) {
-        return e.create_table([tt](auto ks_name) {
+    auto make_tt = [] { return tuple_type_impl::get_instance({int32_type, long_type, utf8_type}); };
+    auto tt = make_tt();
+    return do_with_cql_env([tt, make_tt] (auto& e) {
+        return e.create_table([make_tt] (auto ks_name) {
+            // this runs on all cores, so create a local tt for each core:
+            auto tt = make_tt();
             // CQL: "create table cf (id int primary key, t tuple<int, bigint, text>);
             return schema({}, ks_name, "cf",
                 {{"id", int32_type}}, {}, {{"t", tt}}, {}, utf8_type);
