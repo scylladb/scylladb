@@ -472,6 +472,8 @@ public:
     void add_expire_time_for_endpoint(inet_address endpoint, int64_t expire_time);
 
     static int64_t compute_expire_time();
+public:
+    void dump_endpoint_state_map();
 };
 
 extern distributed<gossiper> _the_gossiper;

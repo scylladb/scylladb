@@ -1201,4 +1201,12 @@ int64_t gossiper::compute_expire_time() {
     return now_millis() + A_VERY_LONG_TIME;
 }
 
+void gossiper::dump_endpoint_state_map() {
+    print("----------- endpoint_state_map dump beg -----------\n");
+    for (auto& x : endpoint_state_map) {
+        print("ep=%s, eps=%s\n", x.first, x.second);
+    }
+    print("----------- endpoint_state_map dump end -----------\n");
+}
+
 } // namespace gms
