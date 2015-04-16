@@ -839,6 +839,7 @@ protected:
     static boost::iterator_range<tuple_deserializing_iterator> make_range(bytes_view v) {
         return { tuple_deserializing_iterator::start(v), tuple_deserializing_iterator::finish(v) };
     }
+    tuple_type_impl(sstring name, std::vector<data_type> types);
 public:
     using native_type = std::vector<boost::any>;
     tuple_type_impl(std::vector<data_type> types);
@@ -889,3 +890,31 @@ private:
 
 // FIXME: conflicts with another tuple_type
 using db_tuple_type = shared_ptr<tuple_type_impl>;
+
+class user_type_impl : public tuple_type_impl {
+public:
+    const sstring _keyspace;
+    const bytes _name;
+private:
+    std::vector<bytes> _field_names;
+public:
+    user_type_impl(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types)
+            : tuple_type_impl(make_name(keyspace, name, field_names, field_types), field_types)
+            , _keyspace(keyspace)
+            , _name(name)
+            , _field_names(field_names) {
+    }
+    static shared_ptr<user_type_impl> get_instance(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types) {
+        return ::make_shared<user_type_impl>(std::move(keyspace), std::move(name), std::move(field_names), std::move(field_types));
+    }
+    data_type field_type(size_t i) const { return type(i); }
+    const std::vector<data_type>& field_types() const { return _types; }
+    bytes_view field_name(size_t i) const { return _field_names[i]; }
+    const std::vector<bytes>& field_names() const { return _field_names; }
+    sstring get_name_as_string() const;
+    virtual shared_ptr<cql3::cql3_type> as_cql3_type() override;
+private:
+    static sstring make_name(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types);
+};
+
+using user_type = shared_ptr<user_type_impl>;

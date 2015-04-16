@@ -1484,11 +1484,15 @@ list_type_impl::cql3_type_name() const {
     return sprint("list<%s>", _elements->as_cql3_type());
 }
 
-tuple_type_impl::tuple_type_impl(std::vector<data_type> types)
-        : abstract_type(make_name(types)), _types(std::move(types)) {
+tuple_type_impl::tuple_type_impl(sstring name, std::vector<data_type> types)
+        : abstract_type(std::move(name)), _types(std::move(types)) {
     for (auto& t : _types) {
         t = t->freeze();
     }
+}
+
+tuple_type_impl::tuple_type_impl(std::vector<data_type> types)
+        : tuple_type_impl(make_name(types), std::move(types)) {
 }
 
 shared_ptr<tuple_type_impl>
@@ -1629,6 +1633,29 @@ tuple_type_impl::as_cql3_type() {
 sstring
 tuple_type_impl::make_name(const std::vector<data_type>& types) {
     return sprint("tuple<%s>", ::join(", ", types | boost::adaptors::transformed(std::mem_fn(&abstract_type::name))));
+}
+
+sstring
+user_type_impl::get_name_as_string() const {
+    return boost::any_cast<sstring>(utf8_type->compose(_name));
+}
+
+shared_ptr<cql3::cql3_type>
+user_type_impl::as_cql3_type() {
+    throw "not yet";
+}
+
+sstring
+user_type_impl::make_name(sstring keyspace, bytes name, std::vector<bytes> field_names, std::vector<data_type> field_types) {
+    std::ostringstream os;
+    os << "(" << keyspace << "," << to_hex(name);
+    for (size_t i = 0; i < field_names.size(); ++i) {
+        os << ",";
+        os << to_hex(field_names[i]) << ":";
+        os << field_types[i]->name(); // FIXME: ignore frozen<>
+    }
+    os << ")";
+    return os.str();
 }
 
 thread_local const shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
