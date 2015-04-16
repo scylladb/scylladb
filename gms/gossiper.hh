@@ -98,7 +98,7 @@ private:
 private:
     inet_address get_broadcast_address() {
         // FIXME: Helper for FBUtilities.getBroadcastAddress
-        return inet_address(0xffffff);
+        return ms().listen_address();
     }
     std::set<inet_address> _seeds_from_config;
 public:
