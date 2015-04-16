@@ -98,7 +98,7 @@ private:
 private:
     inet_address get_broadcast_address() {
         // FIXME: Helper for FBUtilities.getBroadcastAddress
-        return inet_address(0xffffff);
+        return ms().listen_address();
     }
     std::set<inet_address> _seeds_from_config;
 public:
@@ -472,6 +472,8 @@ public:
     void add_expire_time_for_endpoint(inet_address endpoint, int64_t expire_time);
 
     static int64_t compute_expire_time();
+public:
+    void dump_endpoint_state_map();
 };
 
 extern distributed<gossiper> _the_gossiper;

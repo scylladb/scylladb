@@ -168,7 +168,7 @@ bool gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> eps
         for (auto g_digest : g_digest_list) {
             inet_address addr = g_digest.get_endpoint();
             auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, g_digest.get_max_version());
-            if (!local_ep_state_ptr) {
+            if (local_ep_state_ptr) {
                 delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
             }
         }
@@ -273,7 +273,6 @@ void gossiper::apply_state_locally(std::map<inet_address, endpoint_state>& map) 
             // this is a new node, report it to the FD in case it is the first time we are seeing it AND it's not alive
             get_local_failure_detector().report(ep);
             handle_major_state_change(ep, remote_state);
-            fail(unimplemented::cause::GOSSIP);
         }
     }
 }
@@ -838,8 +837,6 @@ void gossiper::notify_failure_detector(std::map<inet_address, endpoint_state> re
 }
 
 void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
-    fail(unimplemented::cause::GOSSIP);
-
     // if (MessagingService.instance().getVersion(addr) < MessagingService.VERSION_20) {
     //     real_mark_alive(addr, local_state);
     //     return;
@@ -1113,8 +1110,6 @@ void gossiper::maybe_initialize_local_state(int generation_nbr) {
     heart_beat_state hb_state(generation_nbr);
     endpoint_state local_state(hb_state);
     local_state.mark_alive();
-    // FIXME
-    // endpoint_state_map.putIfAbsent(FBUtilities.getBroadcastAddress(), local_state);
     inet_address ep = get_broadcast_address();
     auto it = endpoint_state_map.find(ep);
     if (it == endpoint_state_map.end()) {
@@ -1204,6 +1199,14 @@ void gossiper::add_expire_time_for_endpoint(inet_address endpoint, int64_t expir
 
 int64_t gossiper::compute_expire_time() {
     return now_millis() + A_VERY_LONG_TIME;
+}
+
+void gossiper::dump_endpoint_state_map() {
+    print("----------- endpoint_state_map dump beg -----------\n");
+    for (auto& x : endpoint_state_map) {
+        print("ep=%s, eps=%s\n", x.first, x.second);
+    }
+    print("----------- endpoint_state_map dump end -----------\n");
 }
 
 } // namespace gms
