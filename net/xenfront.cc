@@ -119,6 +119,7 @@ public:
     ~xenfront_qp();
     virtual void rx_start() override;
     virtual future<> send(packet p) override;
+    void inc_rx_error_count() { ++_stats.rx.bad.total; }
 };
 
 std::unordered_map<std::string, std::string>
@@ -148,6 +149,10 @@ xenfront_qp::send(packet _p) {
     // use a pre-determined page for data.
     //
     // In-kernel should be fine
+
+    if (_p.nr_frags() > 1) {
+        _stats.tx.good.update_copy_stats(_p.nr_frags(), _p.len());
+    }
 
     // FIXME: negotiate and use scatter/gather
     _p.linearize();
@@ -180,14 +185,15 @@ xenfront_qp::send(packet _p) {
 
         _tx_ring.req_prod_pvt = idx;
         _tx_ring._sring->req_prod = req_prod + 1;
-
         _tx_ring._sring->req_event++;
+
         if ((frag + 1) == p.nr_frags()) {
             _tx_evtchn.notify();
-            return make_ready_future<>();
-        } else {
-            return make_ready_future<>();
         }
+
+        _stats.tx.good.update_frags_stats(1, f.size);
+
+        return make_ready_future<>();
     });
 
     // FIXME: Don't forget to clear all grant refs when frontend closes. Or is it automatic?
@@ -212,7 +218,7 @@ unsigned front_ring<T>::entries::get_index() {
 }
 
 template <typename T>
-future<> front_ring<T>::process_ring(std::function<bool (gntref &entry, T& el)> func, grant_head *refs)
+void front_ring<T>::process_ring(std::function<bool (gntref &entry, T& el)> func, grant_head *refs)
 {
     auto prod = _sring->rsp_prod;
     rmb();
@@ -222,6 +228,7 @@ future<> front_ring<T>::process_ring(std::function<bool (gntref &entry, T& el)> 
 
         if (el.rsp.status < 0) {
             dump("Packet error", el.rsp);
+            _dev.inc_rx_error_count();
             continue;
         }
 
@@ -240,20 +247,32 @@ future<> front_ring<T>::process_ring(std::function<bool (gntref &entry, T& el)> 
     }
     rsp_cons = prod;
     _sring->rsp_event = prod + 1;
-
-    return make_ready_future<>();
 }
 
 future<> xenfront_qp::queue_rx_packet()
 {
-    uint64_t bunch;
-    return _rx_ring.process_ring([this, &bunch] (gntref &entry, rx &rx) mutable {
+    uint64_t bunch = 0;
+    uint64_t bytes = 0;
+
+    _rx_ring.process_ring([this, &bunch, &bytes] (gntref &entry, rx &rx) mutable {
         packet p(static_cast<char *>(entry.page) + rx.rsp.offset, rx.rsp.status);
+
         _dev->l2receive(std::move(p));
+
+        bytes += rx.rsp.status;
         bunch++;
+
         return true;
     }, _rx_refs);
-    update_rx_count(bunch);
+
+    _stats.rx.good.update_pkts_bunch(bunch);
+    //
+    // Our XEN implementation only supports packets with a single fragment
+    // at the moment.
+    //
+    _stats.rx.good.update_frags_stats(bunch, bytes);
+
+    return make_ready_future<>();
 }
 
 void xenfront_qp::alloc_one_rx_reference(unsigned index) {
@@ -283,7 +302,7 @@ future<> xenfront_qp::alloc_rx_references() {
 
 future<> xenfront_qp::handle_tx_completions() {
 
-    return _tx_ring.process_ring([this] (gntref &entry, tx &tx) {
+    _tx_ring.process_ring([this] (gntref &entry, tx &tx) {
         if (tx.rsp.status == 1) {
             return false;
         }
@@ -295,6 +314,8 @@ future<> xenfront_qp::handle_tx_completions() {
 
         return true;
     }, _tx_refs);
+
+    return make_ready_future<>();
 }
 
 port xenfront_qp::bind_tx_evtchn(bool split) {
@@ -310,13 +331,13 @@ port xenfront_qp::bind_rx_evtchn(bool split) {
 }
 
 xenfront_qp::xenfront_qp(xenfront_device* dev, boost::program_options::variables_map opts)
-    : _dev(dev)
+    : qp(true), _dev(dev)
     , _otherend(_dev->_xenstore->read<int>(path("backend-id")))
     , _backend(_dev->_xenstore->read(path("backend")))
     , _gntalloc(gntalloc::instance(_dev->_userspace, _otherend))
     , _evtchn(evtchn::instance(_dev->_userspace, _otherend))
-    , _tx_ring(_gntalloc->alloc_ref())
-    , _rx_ring(_gntalloc->alloc_ref())
+    , _tx_ring(_gntalloc->alloc_ref(), *this)
+    , _rx_ring(_gntalloc->alloc_ref(), *this)
     , _tx_refs(_gntalloc->alloc_ref(front_ring<tx>::nr_ents))
     , _rx_refs(_gntalloc->alloc_ref(front_ring<rx>::nr_ents)) {
 
@@ -359,6 +380,15 @@ xenfront_qp::xenfront_qp(xenfront_device* dev, boost::program_options::variables
         _dev->_xenstore->write<int>(path("rx-ring-ref"), _rx_ring.ref, t);
         _dev->_xenstore->write<int>(path("state"), 4, t);
     }
+
+    // Register Rx error statistics
+    _collectd_regs.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id("network"
+                    , scollectd::per_cpu_plugin_instance
+                    , "requests", "rx-errors")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                    , _stats.rx.bad.total)
+    ));
 
     keep_doing([this] {
         return alloc_rx_references();

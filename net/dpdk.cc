@@ -161,6 +161,38 @@ static constexpr const char* pktmbuf_pool_name   = "dpdk_net_pktmbuf_pool";
 static constexpr uint8_t packet_read_size        = 32;
 /******************************************************************************/
 
+struct port_stats {
+    port_stats() {
+        std::memset(&rx, 0, sizeof(rx));
+        std::memset(&tx, 0, sizeof(tx));
+    }
+
+    struct {
+        struct {
+            uint64_t mcast;        // number of received multicast packets
+            uint64_t pause_xon;    // number of received PAUSE XON frames
+            uint64_t pause_xoff;   // number of received PAUSE XOFF frames
+        } good;
+
+        struct {
+            uint64_t dropped;      // missed packets (e.g. full FIFO)
+            uint64_t crc;          // packets with CRC error
+            uint64_t len;          // packets with a bad length
+            uint64_t total;        // total number of erroneous received packets
+        } bad;
+    } rx;
+
+    struct {
+        struct {
+            uint64_t pause_xon;   // number of sent PAUSE XON frames
+            uint64_t pause_xoff;  // number of sent PAUSE XOFF frames
+        } good;
+
+        struct {
+            uint64_t total;   // total number of failed transmitted packets
+        } bad;
+    } tx;
+};
 
 class dpdk_device : public device {
     uint8_t _port_idx;
@@ -174,6 +206,11 @@ class dpdk_device : public device {
     struct rte_eth_rxconf _rx_conf_default = {};
     struct rte_eth_txconf _tx_conf_default = {};
 #endif
+    port_stats _stats;
+    timer<> _stats_collector;
+    const std::string _stats_plugin_name;
+    const std::string _stats_plugin_inst;
+    std::vector<scollectd::registration> _collectd_regs;
 
 public:
     rte_eth_dev_info _dev_info = {};
@@ -219,14 +256,117 @@ public:
         : _port_idx(port_idx)
         , _num_queues(num_queues)
         , _home_cpu(engine().cpu_id())
-        , _use_lro(use_lro) {
+        , _use_lro(use_lro)
+        , _stats_plugin_name("network")
+        , _stats_plugin_inst(std::string("port") + std::to_string(_port_idx))
+    {
 
         /* now initialise the port we will use */
         int ret = init_port_start();
         if (ret != 0) {
             rte_exit(EXIT_FAILURE, "Cannot initialise port %u\n", _port_idx);
         }
+
+        _stats_collector.set_callback([&] {
+            rte_eth_stats rte_stats = {};
+            int rc = rte_eth_stats_get(_port_idx, &rte_stats);
+
+            if (rc) {
+                printf("Failed to get port statistics: %s\n", strerror(rc));
+            }
+
+            _stats.rx.good.mcast      = rte_stats.imcasts;
+            _stats.rx.good.pause_xon  = rte_stats.rx_pause_xon;
+            _stats.rx.good.pause_xoff = rte_stats.rx_pause_xoff;
+
+            _stats.rx.bad.crc         = rte_stats.ibadcrc;
+            _stats.rx.bad.dropped     = rte_stats.imissed;
+            _stats.rx.bad.len         = rte_stats.ibadlen;
+            _stats.rx.bad.total       = rte_stats.ierrors;
+
+            _stats.tx.good.pause_xon  = rte_stats.tx_pause_xon;
+            _stats.tx.good.pause_xoff = rte_stats.tx_pause_xoff;
+
+            _stats.tx.bad.total       = rte_stats.oerrors;
+        });
+
+        // Register port statistics collectd pollers
+        // Rx Good
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_multicast", _stats_plugin_inst + " Rx Multicast")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.good.mcast)
+        ));
+
+        // Rx Errors
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_rx_errors", "Bad CRC")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.bad.crc)
+        ));
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_rx_errors", "Dropped")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.bad.dropped)
+        ));
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_rx_errors", "Bad Length")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.bad.len)
+        ));
+
+        // Coupled counters:
+        // Good
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_packets", _stats_plugin_inst + " Pause XON")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.good.pause_xon)
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.tx.good.pause_xon)
+        ));
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_packets", _stats_plugin_inst + " Pause XOFF")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.good.pause_xoff)
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.tx.good.pause_xoff)
+        ));
+
+        // Errors
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_errors", _stats_plugin_inst)
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.bad.total)
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.tx.bad.total)
+        ));
     }
+
+    ~dpdk_device() {
+        _stats_collector.cancel();
+    }
+
     ethernet_address hw_address() override {
         struct ether_addr mac;
         rte_eth_macaddr_get(_port_idx, &mac);
@@ -288,38 +428,36 @@ class dpdk_qp : public net::qp {
          * way.
          *
          * @param p packet to translate
-         * @param dev Parent dpdk_device
-         * @param fc Buffers' factory to use
+         * @param qp dpdk_qp handle
          *
          * @return the HEAD tx_buf of the cluster or nullptr in case of a
          *         failure
          */
         static tx_buf* from_packet_zc(
-            packet&& p, dpdk_device& dev, tx_buf_factory& fc) {
+            packet&& p, dpdk_qp& qp) {
 
             return from_packet(check_frag0, translate_one_frag, copy_one_frag,
                 [](packet&& _p, tx_buf& _last_seg) {
                     _last_seg.set_packet(std::move(_p));
-                }, std::move(p), dev, fc);
+                }, std::move(p), qp);
         }
 
         /**
          * Creates a tx_buf cluster representing a given packet in a "copy" way.
          *
          * @param p packet to translate
-         * @param dev Parent dpdk_device
-         * @param fc Buffers' factory to use
+         * @param qp dpdk_qp handle
          *
          * @return the HEAD tx_buf of the cluster or nullptr in case of a
          *         failure
          */
         static tx_buf* from_packet_copy(
-            packet&& p, dpdk_device& dev, tx_buf_factory& fc) {
+            packet&& p, dpdk_qp& qp) {
 
             return from_packet([](packet& _p) { return true; },
                                copy_one_frag, copy_one_frag,
                                [](packet&& _p, tx_buf& _last_seg) {},
-                               std::move(p), dev, fc);
+                               std::move(p), qp);
         }
     private:
         /**
@@ -330,8 +468,7 @@ class dpdk_qp : public net::qp {
          * @param do_one_frag Functor that handles a single frag translation
          * @param fin Functor that performs a cluster finalization
          * @param p packet to translate
-         * @param dev Parent dpdk_device object
-         * @param fc Buffers' factory to use
+         * @param qp dpdk_qp handle
          *
          * @return the HEAD tx_buf of the cluster or nullptr in case of a
          *         failure
@@ -341,7 +478,7 @@ class dpdk_qp : public net::qp {
         static tx_buf* from_packet(
             FirstFragCheck frag0_check, TrOneFunc do_one_frag,
             CopyOneFunc copy_one_frag, FinalizeFunc fin,
-            packet&& p, dpdk_device& dev, tx_buf_factory& fc) {
+            packet&& p, dpdk_qp& qp) {
 
             // Too fragmented - linearize
             if (p.nr_frags() > max_frags) {
@@ -356,10 +493,10 @@ class dpdk_qp : public net::qp {
             // copied and if yes - send it in a copy way
             //
             if (!frag0_check(p)) {
-                if (!copy_one_frag(fc, p.frag(0), head, last_seg, nsegs)) {
+                if (!copy_one_frag(qp, p.frag(0), head, last_seg, nsegs)) {
                     return nullptr;
                 }
-            } else if (!do_one_frag(fc, p.frag(0), head, last_seg, nsegs)) {
+            } else if (!do_one_frag(qp, p.frag(0), head, last_seg, nsegs)) {
                 return nullptr;
             }
 
@@ -367,7 +504,7 @@ class dpdk_qp : public net::qp {
 
             for (unsigned i = 1; i < p.nr_frags(); i++) {
                 rte_mbuf *h = nullptr, *new_last_seg = nullptr;
-                if (!do_one_frag(fc, p.frag(i), h, new_last_seg, nsegs)) {
+                if (!do_one_frag(qp, p.frag(i), h, new_last_seg, nsegs)) {
                     me(head)->recycle();
                     return nullptr;
                 }
@@ -391,7 +528,7 @@ class dpdk_qp : public net::qp {
                 rte_mbuf_l2_len(head) = sizeof(struct ether_hdr);
                 rte_mbuf_l3_len(head) = oi.ip_hdr_len;
             }
-            if (dev.hw_features().tx_csum_l4_offload) {
+            if (qp.port().hw_features().tx_csum_l4_offload) {
                 if (oi.protocol == ip_protocol_num::tcp) {
                     head->ol_flags |= PKT_TX_TCP_CKSUM;
                     // TODO: Take a VLAN header into an account here
@@ -424,7 +561,7 @@ class dpdk_qp : public net::qp {
          *
          * @param do_one_buf Functor responsible for a single rte_mbuf
          *                   handling
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param frag Fragment to copy (in)
          * @param head Head of the cluster (out)
          * @param last_seg Last segment of the cluster (out)
@@ -433,7 +570,7 @@ class dpdk_qp : public net::qp {
          * @return TRUE in case of success
          */
         template <class DoOneBufFunc>
-        static bool do_one_frag(DoOneBufFunc do_one_buf, tx_buf_factory& fc,
+        static bool do_one_frag(DoOneBufFunc do_one_buf, dpdk_qp& qp,
                                 fragment& frag, rte_mbuf*& head,
                                 rte_mbuf*& last_seg, unsigned& nsegs) {
             //
@@ -450,7 +587,7 @@ class dpdk_qp : public net::qp {
             assert(frag.size);
 
             // Create a HEAD of mbufs' cluster and set the first bytes into it
-            len = do_one_buf(fc, head, base, left_to_set);
+            len = do_one_buf(qp, head, base, left_to_set);
             if (!len) {
                 return false;
             }
@@ -465,7 +602,7 @@ class dpdk_qp : public net::qp {
             //
             rte_mbuf* prev_seg = head;
             while (left_to_set) {
-                len = do_one_buf(fc, m, base, left_to_set);
+                len = do_one_buf(qp, m, base, left_to_set);
                 if (!len) {
                     me(head)->recycle();
                     return false;
@@ -488,7 +625,7 @@ class dpdk_qp : public net::qp {
         /**
          * Zero-copy handling of a single net::fragment.
          *
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param frag Fragment to copy (in)
          * @param head Head of the cluster (out)
          * @param last_seg Last segment of the cluster (out)
@@ -496,17 +633,17 @@ class dpdk_qp : public net::qp {
          *
          * @return TRUE in case of success
          */
-        static bool translate_one_frag(tx_buf_factory& fc, fragment& frag,
+        static bool translate_one_frag(dpdk_qp& qp, fragment& frag,
                                        rte_mbuf*& head, rte_mbuf*& last_seg,
                                        unsigned& nsegs) {
-            return do_one_frag(set_one_data_buf, fc, frag, head,
+            return do_one_frag(set_one_data_buf, qp, frag, head,
                                last_seg, nsegs);
         }
 
         /**
          * Copies one net::fragment into the cluster of rte_mbuf's.
          *
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param frag Fragment to copy (in)
          * @param head Head of the cluster (out)
          * @param last_seg Last segment of the cluster (out)
@@ -517,10 +654,10 @@ class dpdk_qp : public net::qp {
          *
          * @return TRUE in case of success
          */
-        static bool copy_one_frag(tx_buf_factory& fc, fragment& frag,
+        static bool copy_one_frag(dpdk_qp& qp, fragment& frag,
                                   rte_mbuf*& head, rte_mbuf*& last_seg,
                                   unsigned& nsegs) {
-            return do_one_frag(copy_one_data_buf, fc, frag, head,
+            return do_one_frag(copy_one_data_buf, qp, frag, head,
                                last_seg, nsegs);
         }
 
@@ -528,7 +665,7 @@ class dpdk_qp : public net::qp {
          * Allocates a single rte_mbuf and sets it to point to a given data
          * buffer.
          *
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param m New allocated rte_mbuf (out)
          * @param va virtual address of a data buffer (in)
          * @param buf_len length of the data to copy (in)
@@ -536,7 +673,7 @@ class dpdk_qp : public net::qp {
          * @return The actual number of bytes that has been set in the mbuf
          */
         static size_t set_one_data_buf(
-            tx_buf_factory& fc, rte_mbuf*& m, char* va, size_t buf_len) {
+            dpdk_qp& qp, rte_mbuf*& m, char* va, size_t buf_len) {
 
             using namespace memory;
             translation tr = translate(va, buf_len);
@@ -551,10 +688,10 @@ class dpdk_qp : public net::qp {
             phys_addr_t pa = tr.addr;
 
             if (!tr.size) {
-                return copy_one_data_buf(fc, m, va, buf_len);
+                return copy_one_data_buf(qp, m, va, buf_len);
             }
 
-            tx_buf* buf = fc.get();
+            tx_buf* buf = qp.get_tx_buf();
             if (!buf) {
                 return 0;
             }
@@ -571,7 +708,7 @@ class dpdk_qp : public net::qp {
         /**
          *  Allocates a single rte_mbuf and copies a given data into it.
          *
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param m New allocated rte_mbuf (out)
          * @param data Data to copy from (in)
          * @param buf_len length of the data to copy (in)
@@ -579,9 +716,9 @@ class dpdk_qp : public net::qp {
          * @return The actual number of bytes that has been copied
          */
         static size_t copy_one_data_buf(
-            tx_buf_factory& fc, rte_mbuf*& m, char* data, size_t buf_len)
+            dpdk_qp& qp, rte_mbuf*& m, char* data, size_t buf_len)
         {
-            tx_buf* buf = fc.get();
+            tx_buf* buf = qp.get_tx_buf();
             if (!buf) {
                 return 0;
             }
@@ -594,6 +731,7 @@ class dpdk_qp : public net::qp {
             rte_mbuf_data_len(m) = len;
             rte_mbuf_pkt_len(m)  = len;
 
+            qp._stats.tx.good.update_copy_stats(1, len);
 
             rte_memcpy(rte_pktmbuf_mtod(m, void*), data, len);
 
@@ -889,7 +1027,8 @@ class dpdk_qp : public net::qp {
     };
 
 public:
-    explicit dpdk_qp(dpdk_device* dev, uint8_t qid);
+    explicit dpdk_qp(dpdk_device* dev, uint8_t qid,
+                     const std::string stats_plugin_name);
 
     virtual void rx_start() override;
     virtual future<> send(packet p) override {
@@ -901,17 +1040,18 @@ public:
         if (HugetlbfsMemBackend) {
             // Zero-copy send
             return _send(pb, [&] (packet&& p) {
-                return tx_buf::from_packet_zc(
-                                        std::move(p), *_dev, _tx_buf_factory);
+                return tx_buf::from_packet_zc(std::move(p), *this);
             });
         } else {
             // "Copy"-send
             return _send(pb, [&](packet&& p) {
-                return tx_buf::from_packet_copy(
-                                        std::move(p), *_dev, _tx_buf_factory);
+                return tx_buf::from_packet_copy(std::move(p), *this);
             });
         }
     }
+
+    dpdk_device& port() const { return *_dev; }
+    tx_buf* get_tx_buf() { return _tx_buf_factory.get(); }
 private:
 
     template <class Func>
@@ -934,9 +1074,16 @@ private:
                                          _tx_burst.data() + _tx_burst_idx,
                                          _tx_burst.size() - _tx_burst_idx);
 
+        uint64_t nr_frags = 0, bytes = 0;
+
         for (int i = 0; i < sent; i++) {
+            rte_mbuf* m = _tx_burst[_tx_burst_idx + i];
+            bytes    += rte_mbuf_pkt_len(m);
+            nr_frags += rte_mbuf_nb_segs(m);
             pb.pop_front();
         }
+
+        _stats.tx.good.update_frags_stats(nr_frags, bytes);
 
         _tx_burst_idx += sent;
 
@@ -1391,6 +1538,9 @@ void dpdk_device::check_port_link_status()
                           ("full-duplex") : ("half-duplex\n")) <<
                 std::endl;
             _link_ready_promise.set_value();
+
+            // We may start collecting statistics only after the Link is UP.
+            _stats_collector.arm_periodic(2s);
         } else if (count++ < max_check_time) {
              std::cout << "." << std::flush;
              return;
@@ -1404,8 +1554,9 @@ void dpdk_device::check_port_link_status()
 }
 
 template <bool HugetlbfsMemBackend>
-dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid)
-     : _dev(dev), _qid(qid),
+dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid,
+                                      const std::string stats_plugin_name)
+     : qp(true, stats_plugin_name, qid), _dev(dev), _qid(qid),
        _rx_gc_poller([&] { return rx_gc(); }),
        _tx_buf_factory(qid),
        _tx_gc_poller([&] { return _tx_buf_factory.gc(); })
@@ -1432,6 +1583,25 @@ dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid)
             rte_eth_dev_socket_id(_dev->port_idx()), _dev->def_tx_conf()) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot initialize tx queue\n");
     }
+
+    // Register error statistics: Rx total and checksum errors
+    _collectd_regs.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id(
+                      _stats_plugin_name
+                    , scollectd::per_cpu_plugin_instance
+                    , "requests", "rx-csum-errors")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                    , _stats.rx.bad.csum)
+    ));
+
+    _collectd_regs.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id(
+                      _stats_plugin_name
+                    , scollectd::per_cpu_plugin_instance
+                    , "requests", "rx-errors")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                    , _stats.rx.bad.total)
+    ));
 }
 
 template <bool HugetlbfsMemBackend>
@@ -1603,10 +1773,14 @@ template <bool HugetlbfsMemBackend>
 void dpdk_qp<HugetlbfsMemBackend>::process_packets(
     struct rte_mbuf **bufs, uint16_t count)
 {
-    update_rx_count(count);
+    uint64_t nr_frags = 0, bytes = 0;
+
     for (uint16_t i = 0; i < count; i++) {
         struct rte_mbuf *m = bufs[i];
         offload_info oi;
+
+        nr_frags += rte_mbuf_nb_segs(m);
+        bytes    += rte_mbuf_pkt_len(m);
 
         packet p = from_mbuf(m);
 
@@ -1620,6 +1794,7 @@ void dpdk_qp<HugetlbfsMemBackend>::process_packets(
         if (_dev->hw_features().rx_csum_offload) {
             if (m->ol_flags & (PKT_RX_IP_CKSUM_BAD | PKT_RX_L4_CKSUM_BAD)) {
                 // Packet with bad checksum, just drop it.
+                _stats.rx.bad.inc_csum_err();
                 continue;
             }
             // Note that when _hw_features.rx_csum_offload is on, the receive
@@ -1633,6 +1808,14 @@ void dpdk_qp<HugetlbfsMemBackend>::process_packets(
         }
 
         _dev->l2receive(std::move(p));
+    }
+
+    _stats.rx.good.update_pkts_bunch(count);
+    _stats.rx.good.update_frags_stats(nr_frags, bytes);
+
+    if (!HugetlbfsMemBackend) {
+        _stats.rx.good.copy_frags = _stats.rx.good.nr_frags;
+        _stats.rx.good.copy_bytes = _stats.rx.good.bytes;
     }
 }
 
@@ -1698,9 +1881,11 @@ std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variab
 
     std::unique_ptr<qp> qp;
     if (opts.count("hugepages")) {
-        qp = std::make_unique<dpdk_qp<true>>(this, qid);
+        qp = std::make_unique<dpdk_qp<true>>(this, qid,
+                                 _stats_plugin_name + "-" + _stats_plugin_inst);
     } else {
-        qp = std::make_unique<dpdk_qp<false>>(this, qid);
+        qp = std::make_unique<dpdk_qp<false>>(this, qid,
+                                 _stats_plugin_name + "-" + _stats_plugin_inst);
     }
 
     smp::submit_to(_home_cpu, [this] () mutable {
