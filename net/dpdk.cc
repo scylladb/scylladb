@@ -201,6 +201,7 @@ class dpdk_device : public device {
     uint8_t _queues_ready = 0;
     unsigned _home_cpu;
     bool _use_lro;
+    bool _enable_fc;
     std::vector<uint8_t> _redir_table;
 #ifdef RTE_VERSION_1_7
     struct rte_eth_rxconf _rx_conf_default = {};
@@ -251,12 +252,19 @@ private:
      */
     void check_port_link_status();
 
+    /**
+     * Configures the HW Flow Control
+     */
+    void set_hw_flow_control();
+
 public:
-    dpdk_device(uint8_t port_idx, uint16_t num_queues, bool use_lro)
+    dpdk_device(uint8_t port_idx, uint16_t num_queues, bool use_lro,
+                bool enable_fc)
         : _port_idx(port_idx)
         , _num_queues(num_queues)
         , _home_cpu(engine().cpu_id())
         , _use_lro(use_lro)
+        , _enable_fc(enable_fc)
         , _stats_plugin_name("network")
         , _stats_plugin_inst(std::string("port") + std::to_string(_port_idx))
     {
@@ -1383,8 +1391,35 @@ int dpdk_device::init_port_start()
     return 0;
 }
 
+void dpdk_device::set_hw_flow_control()
+{
+    // Read the port's current/default flow control settings
+    struct rte_eth_fc_conf fc_conf;
+    auto ret = rte_eth_dev_flow_ctrl_get(_port_idx, &fc_conf);
+    if (ret < 0) {
+        rte_exit(EXIT_FAILURE, "Port %u: failed to get hardware flow control settings: (error %d)\n", _port_idx, ret);
+    }
+
+    if (_enable_fc) {
+        fc_conf.mode = RTE_FC_FULL;
+    } else {
+        fc_conf.mode = RTE_FC_NONE;
+    }
+
+    printf("Port %u: %s HW FC\n", _port_idx,
+                                  (_enable_fc ? "Enabling" : "Disabling"));
+
+    ret = rte_eth_dev_flow_ctrl_set(_port_idx, &fc_conf);
+    if (ret < 0) {
+        rte_exit(EXIT_FAILURE, "Port %u: failed to set hardware flow control (error %d)\n", _port_idx, ret);
+    }
+}
+
 void dpdk_device::init_port_fini()
 {
+    // Changing FC requires HW reset, so set it before the port is initialized.
+    set_hw_flow_control();
+
     if (rte_eth_dev_start(_port_idx) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
     }
@@ -1902,7 +1937,8 @@ std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variab
 std::unique_ptr<net::device> create_dpdk_net_device(
                                     uint8_t port_idx,
                                     uint8_t num_queues,
-                                    bool use_lro)
+                                    bool use_lro,
+                                    bool enable_fc)
 {
     static bool called = false;
 
@@ -1918,7 +1954,8 @@ std::unique_ptr<net::device> create_dpdk_net_device(
         printf("ports number: %d\n", rte_eth_dev_count());
     }
 
-    return std::make_unique<dpdk::dpdk_device>(port_idx, num_queues, use_lro);
+    return std::make_unique<dpdk::dpdk_device>(port_idx, num_queues, use_lro,
+                                               enable_fc);
 }
 
 boost::program_options::options_description
@@ -1926,6 +1963,11 @@ get_dpdk_net_options_description()
 {
     boost::program_options::options_description opts(
             "DPDK net options");
+
+    opts.add_options()
+        ("hw-fc",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable HW Flow Control (on / off)");
 #if 0
     opts.add_options()
         ("csum-offload",

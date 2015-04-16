@@ -31,7 +31,8 @@
 std::unique_ptr<net::device> create_dpdk_net_device(
                                     uint8_t port_idx = 0,
                                     uint8_t num_queues = 1,
-                                    bool use_lro = true);
+                                    bool use_lro = true,
+                                    bool enable_fc = true);
 
 boost::program_options::options_description get_dpdk_net_options_description();
 
