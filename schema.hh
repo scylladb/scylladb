@@ -122,6 +122,9 @@ public:
     const utils::UUID& id() const {
         return _raw._id;
     }
+    const sstring& comment() const {
+        return _raw._comment;
+    }
     void set_comment(const sstring& comment) {
         _raw._comment = comment;
     }
