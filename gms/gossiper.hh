@@ -133,7 +133,7 @@ public:
 private:
     std::random_device _random;
     /* subscribers for interest in EndpointState change */
-    std::list<shared_ptr<i_endpoint_state_change_subscriber>> _subscribers;
+    std::list<i_endpoint_state_change_subscriber*> _subscribers;
 
     /* live member set */
     std::set<inet_address> _live_endpoints;
@@ -170,14 +170,14 @@ public:
      *
      * @param subscriber module which implements the IEndpointStateChangeSubscriber
      */
-    void register_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
+    void register_(i_endpoint_state_change_subscriber* subscriber);
 
     /**
      * Unregister interest for state changes.
      *
      * @param subscriber module which implements the IEndpointStateChangeSubscriber
      */
-    void unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber);
+    void unregister_(i_endpoint_state_change_subscriber* subscriber);
 
     std::set<inet_address> get_live_members();
 
