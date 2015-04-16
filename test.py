@@ -29,7 +29,7 @@ boost_tests = [
     'sstring_test',
     'output_stream_test',
     'httpd',
-    'urchin/scattered_buffer_test',
+    'urchin/bytes_ostream_test',
     'urchin/types_test',
     'urchin/keys_test',
     'urchin/mutation_test',
