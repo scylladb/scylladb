@@ -81,9 +81,9 @@ public:
         size_t n_left = _types.size();
         for (auto&& wrapped : values) {
             auto&& val = value_traits<Wrapped>::unwrap(wrapped);
-            assert(val.size() <= std::numeric_limits<int32_t>::max());
+            assert(val.size() <= std::numeric_limits<uint16_t>::max());
             if (--n_left) {
-                write<uint32_t>(out, uint32_t(val.size()));
+                write<uint16_t>(out, uint16_t(val.size()));
             }
             out = std::copy(val.begin(), val.end(), out);
         }
@@ -94,9 +94,9 @@ public:
         size_t n_left = _types.size();
         for (auto&& wrapped : values) {
             auto&& val = value_traits<Wrapped>::unwrap(wrapped);
-            assert(val.size() <= std::numeric_limits<int32_t>::max());
+            assert(val.size() <= std::numeric_limits<uint16_t>::max());
             if (--n_left) {
-                len += sizeof(uint32_t);
+                len += sizeof(uint16_t);
             }
             len += val.size();
         }
@@ -170,11 +170,11 @@ public:
                     throw marshal_exception();
                 }
             }
-            uint32_t len;
+            uint16_t len;
             if (_types_left == 1) {
                 len = _v.size();
             } else {
-                len = read_simple<uint32_t>(_v);
+                len = read_simple<uint16_t>(_v);
                 if (_v.size() < len) {
                     throw marshal_exception();
                 }
