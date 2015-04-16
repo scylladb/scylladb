@@ -168,7 +168,7 @@ bool gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> eps
         for (auto g_digest : g_digest_list) {
             inet_address addr = g_digest.get_endpoint();
             auto local_ep_state_ptr = this->get_state_for_version_bigger_than(addr, g_digest.get_max_version());
-            if (!local_ep_state_ptr) {
+            if (local_ep_state_ptr) {
                 delta_ep_state_map.emplace(addr, *local_ep_state_ptr);
             }
         }
