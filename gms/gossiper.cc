@@ -1113,8 +1113,6 @@ void gossiper::maybe_initialize_local_state(int generation_nbr) {
     heart_beat_state hb_state(generation_nbr);
     endpoint_state local_state(hb_state);
     local_state.mark_alive();
-    // FIXME
-    // endpoint_state_map.putIfAbsent(FBUtilities.getBroadcastAddress(), local_state);
     inet_address ep = get_broadcast_address();
     auto it = endpoint_state_map.find(ep);
     if (it == endpoint_state_map.end()) {
