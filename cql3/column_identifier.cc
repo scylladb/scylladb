@@ -31,7 +31,7 @@ std::ostream& operator<<(std::ostream& out, const column_identifier::raw& id) {
 }
 
 ::shared_ptr<selection::selector::factory>
-column_identifier::new_selector_factory(schema_ptr schema, std::vector<const column_definition*>& defs) {
+column_identifier::new_selector_factory(database& db, schema_ptr schema, std::vector<const column_definition*>& defs) {
     auto def = get_column_definition(schema, *this);
     if (!def) {
         throw exceptions::invalid_request_exception(sprint("Undefined name %s in selection clause", _text));

@@ -49,7 +49,7 @@ public:
     }
 #endif
 
-    virtual shared_ptr<selector::factory> new_selector_factory(schema_ptr s, std::vector<const column_definition*>& defs) override;
+    virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
 
     class raw : public selectable::raw {
         shared_ptr<column_identifier::raw> _id;

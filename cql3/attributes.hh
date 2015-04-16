@@ -126,9 +126,9 @@ public:
         ::shared_ptr<term::raw> timestamp;
         ::shared_ptr<term::raw> time_to_live;
 
-        std::unique_ptr<attributes> prepare(const sstring& ks_name, const sstring& cf_name) {
-            auto ts = !timestamp ? ::shared_ptr<term>{} : timestamp->prepare(ks_name, timestamp_receiver(ks_name, cf_name));
-            auto ttl = !time_to_live ? ::shared_ptr<term>{} : time_to_live->prepare(ks_name, time_to_live_receiver(ks_name, cf_name));
+        std::unique_ptr<attributes> prepare(database& db, const sstring& ks_name, const sstring& cf_name) {
+            auto ts = !timestamp ? ::shared_ptr<term>{} : timestamp->prepare(db, ks_name, timestamp_receiver(ks_name, cf_name));
+            auto ttl = !time_to_live ? ::shared_ptr<term>{} : time_to_live->prepare(db, ks_name, time_to_live_receiver(ks_name, cf_name));
             return std::unique_ptr<attributes>{new attributes{std::move(ts), std::move(ttl)}};
         }
 

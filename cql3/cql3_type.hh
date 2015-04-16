@@ -29,6 +29,8 @@
 #include <iosfwd>
 #include "enum_set.hh"
 
+class database;
+
 namespace cql3 {
 
 class cql3_type final {
@@ -53,7 +55,7 @@ public:
         virtual bool is_counter() const;
         virtual std::experimental::optional<sstring> keyspace() const;
         virtual void freeze();
-        virtual shared_ptr<cql3_type> prepare(const sstring& keyspace) = 0;
+        virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace) = 0;
         static shared_ptr<raw> from(shared_ptr<cql3_type> type);
 #if 0
         public static Raw userType(UTName name)

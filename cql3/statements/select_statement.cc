@@ -331,9 +331,9 @@ select_statement::raw_statement::prepare(database& db) {
 
     auto selection = _select_clause.empty()
                      ? selection::selection::wildcard(schema)
-                     : selection::selection::from_selectors(schema, _select_clause);
+                     : selection::selection::from_selectors(db, schema, _select_clause);
 
-    auto restrictions = prepare_restrictions(schema, bound_names, selection);
+    auto restrictions = prepare_restrictions(db, schema, bound_names, selection);
 
     if (_parameters->is_distinct()) {
         validate_distinct_selection(schema, selection, restrictions);
@@ -361,18 +361,18 @@ select_statement::raw_statement::prepare(database& db) {
         std::move(restrictions),
         is_reversed_,
         std::move(ordering_comparator),
-        prepare_limit(bound_names));
+        prepare_limit(db, bound_names));
 
     return ::make_shared<parsed_statement::prepared>(std::move(stmt), std::move(*bound_names));
 }
 
 ::shared_ptr<restrictions::statement_restrictions>
-select_statement::raw_statement::prepare_restrictions(schema_ptr schema,
+select_statement::raw_statement::prepare_restrictions(database& db, schema_ptr schema,
     ::shared_ptr<variable_specifications> bound_names,
     ::shared_ptr<selection::selection> selection)
 {
     try {
-        return ::make_shared<restrictions::statement_restrictions>(schema, std::move(_where_clause), bound_names,
+        return ::make_shared<restrictions::statement_restrictions>(db, schema, std::move(_where_clause), bound_names,
             selection->contains_only_static_columns(), selection->contains_a_collection());
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
@@ -384,12 +384,12 @@ select_statement::raw_statement::prepare_restrictions(schema_ptr schema,
 
 /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
 ::shared_ptr<term>
-select_statement::raw_statement::prepare_limit(::shared_ptr<variable_specifications> bound_names) {
+select_statement::raw_statement::prepare_limit(database& db, ::shared_ptr<variable_specifications> bound_names) {
     if (!_limit) {
         return {};
     }
 
-    auto prep_limit = _limit->prepare(keyspace(), limit_receiver());
+    auto prep_limit = _limit->prepare(db, keyspace(), limit_receiver());
     prep_limit->collect_marker_specification(bound_names);
     return prep_limit;
 }

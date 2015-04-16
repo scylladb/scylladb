@@ -223,7 +223,7 @@ private:
 
 public:
     void add_key_value(const column_definition& def, ::shared_ptr<term> value);
-    void process_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
+    void process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names);
     std::vector<partition_key> build_partition_keys(const query_options& options);
 
 private:
@@ -437,7 +437,7 @@ public:
         virtual ::shared_ptr<parsed_statement::prepared> prepare(database& db) override;
         ::shared_ptr<modification_statement> prepare(database& db, ::shared_ptr<variable_specifications> bound_names);;
     protected:
-        virtual ::shared_ptr<modification_statement> prepare_internal(schema_ptr schema,
+        virtual ::shared_ptr<modification_statement> prepare_internal(database& db, schema_ptr schema,
             ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs) = 0;
     };
 };

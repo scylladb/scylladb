@@ -35,24 +35,24 @@ public:
             : _type(std::move(type)), _term(std::move(term)) {
     }
 
-    virtual shared_ptr<term> prepare(const sstring& keyspace, shared_ptr<column_specification> receiver) override {
-        if (!is_assignable(_term->test_assignment(keyspace, casted_spec_of(keyspace, receiver)))) {
+    virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override {
+        if (!is_assignable(_term->test_assignment(db, keyspace, casted_spec_of(db, keyspace, receiver)))) {
             throw exceptions::invalid_request_exception(sprint("Cannot cast value %s to type %s", _term, _type));
         }
-        if (!is_assignable(test_assignment(keyspace, receiver))) {
+        if (!is_assignable(test_assignment(db, keyspace, receiver))) {
             throw exceptions::invalid_request_exception(sprint("Cannot assign value %s to %s of type %s", *this, receiver->name, receiver->type->as_cql3_type()));
         }
-        return _term->prepare(keyspace, receiver);
+        return _term->prepare(db, keyspace, receiver);
     }
 private:
-    shared_ptr<column_specification> casted_spec_of(const sstring& keyspace, shared_ptr<column_specification> receiver) {
+    shared_ptr<column_specification> casted_spec_of(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
         return make_shared<column_specification>(receiver->ks_name, receiver->cf_name,
-                make_shared<column_identifier>(to_string(), true), _type->prepare(keyspace)->get_type());
+                make_shared<column_identifier>(to_string(), true), _type->prepare(db, keyspace)->get_type());
     }
 public:
-    virtual assignment_testable::test_result test_assignment(const sstring& keyspace, shared_ptr<column_specification> receiver) override {
+    virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override {
         try {
-            auto&& casted_type = _type->prepare(keyspace)->get_type();
+            auto&& casted_type = _type->prepare(db, keyspace)->get_type();
             if (receiver->type->equals(casted_type)) {
                 return assignment_testable::test_result::EXACT_MATCH;
             } else if (receiver->type->is_value_compatible_with(*casted_type)) {

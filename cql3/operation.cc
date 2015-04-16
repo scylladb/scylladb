@@ -30,7 +30,7 @@ namespace cql3 {
 
 
 shared_ptr<operation>
-operation::set_element::prepare(const sstring& keyspace, const column_definition& receiver) {
+operation::set_element::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     using exceptions::invalid_request_exception;
     auto rtype = dynamic_pointer_cast<collection_type_impl>(receiver.type);
     if (!rtype) {
@@ -40,14 +40,14 @@ operation::set_element::prepare(const sstring& keyspace, const column_definition
     }
 
     if (&rtype->_kind == &collection_type_impl::kind::list) {
-        auto&& idx = _selector->prepare(keyspace, lists::index_spec_of(receiver.column_specification));
-        auto&& lval = _value->prepare(keyspace, lists::value_spec_of(receiver.column_specification));
+        auto&& idx = _selector->prepare(db, keyspace, lists::index_spec_of(receiver.column_specification));
+        auto&& lval = _value->prepare(db, keyspace, lists::value_spec_of(receiver.column_specification));
         return make_shared<lists::setter_by_index>(receiver, idx, lval);
     } else if (&rtype->_kind == &collection_type_impl::kind::set) {
         throw invalid_request_exception(sprint("Invalid operation (%s) for set column %s", receiver, receiver.name()));
     } else if (&rtype->_kind == &collection_type_impl::kind::map) {
-        auto key = _selector->prepare(keyspace, maps::key_spec_of(*receiver.column_specification));
-        auto mval = _value->prepare(keyspace, maps::value_spec_of(*receiver.column_specification));
+        auto key = _selector->prepare(db, keyspace, maps::key_spec_of(*receiver.column_specification));
+        auto mval = _value->prepare(db, keyspace, maps::value_spec_of(*receiver.column_specification));
         return make_shared<maps::setter_by_key>(receiver, key, mval);
     }
     abort();
@@ -61,8 +61,8 @@ operation::set_element::is_compatible_with(shared_ptr<raw_update> other) {
 }
 
 shared_ptr<operation>
-operation::addition::prepare(const sstring& keyspace, const column_definition& receiver) {
-    auto v = _value->prepare(keyspace, receiver.column_specification);
+operation::addition::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
+    auto v = _value->prepare(db, keyspace, receiver.column_specification);
 
     auto ctype = dynamic_pointer_cast<collection_type_impl>(receiver.type);
     if (!ctype) {
@@ -97,7 +97,7 @@ operation::addition::is_compatible_with(shared_ptr<raw_update> other) {
 }
 
 shared_ptr<operation>
-operation::subtraction::prepare(const sstring& keyspace, const column_definition& receiver) {
+operation::subtraction::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     auto ctype = dynamic_pointer_cast<collection_type_impl>(receiver.type);
     if (!ctype) {
         fail(unimplemented::cause::COUNTERS);
@@ -113,9 +113,9 @@ operation::subtraction::prepare(const sstring& keyspace, const column_definition
     }
 
     if (&ctype->_kind == &collection_type_impl::kind::list) {
-        return make_shared<lists::discarder>(receiver, _value->prepare(keyspace, receiver.column_specification));
+        return make_shared<lists::discarder>(receiver, _value->prepare(db, keyspace, receiver.column_specification));
     } else if (&ctype->_kind == &collection_type_impl::kind::set) {
-        return make_shared<sets::discarder>(receiver, _value->prepare(keyspace, receiver.column_specification));
+        return make_shared<sets::discarder>(receiver, _value->prepare(db, keyspace, receiver.column_specification));
     } else if (&ctype->_kind == &collection_type_impl::kind::map) {
         auto&& mtype = dynamic_pointer_cast<map_type_impl>(ctype);
         // The value for a map subtraction is actually a set
@@ -124,7 +124,7 @@ operation::subtraction::prepare(const sstring& keyspace, const column_definition
                 receiver.column_specification->cf_name,
                 receiver.column_specification->name,
                 set_type_impl::get_instance(mtype->get_keys_type(), false));
-        return make_shared<sets::discarder>(receiver, _value->prepare(keyspace, std::move(vr)));
+        return make_shared<sets::discarder>(receiver, _value->prepare(db, keyspace, std::move(vr)));
     }
     abort();
 }
@@ -135,7 +135,7 @@ operation::subtraction::is_compatible_with(shared_ptr<raw_update> other) {
 }
 
 shared_ptr<operation>
-operation::prepend::prepare(const sstring& keyspace, const column_definition& receiver) {
+operation::prepend::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     warn(unimplemented::cause::COLLECTIONS);
     throw exceptions::invalid_request_exception("unimplemented, go away");
     // FIXME:
@@ -158,8 +158,8 @@ operation::prepend::is_compatible_with(shared_ptr<raw_update> other) {
 
 
 ::shared_ptr <operation>
-operation::set_value::prepare(const sstring& keyspace, const column_definition& receiver) {
-    auto v = _value->prepare(keyspace, receiver.column_specification);
+operation::set_value::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
+    auto v = _value->prepare(db, keyspace, receiver.column_specification);
 
     if (receiver.type->is_counter()) {
         throw exceptions::invalid_request_exception(sprint("Cannot set the value of counter column %s (counters can only be incremented/decremented, not set)", receiver.name_as_text()));
@@ -194,7 +194,7 @@ operation::element_deletion::affected_column() {
 }
 
 shared_ptr<operation>
-operation::element_deletion::prepare(const sstring& keyspace, const column_definition& receiver) {
+operation::element_deletion::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     if (!receiver.type->is_collection()) {
         throw exceptions::invalid_request_exception(sprint("Invalid deletion operation for non collection column %s", receiver.name()));
     } else if (!receiver.type->is_multi_cell()) {
@@ -202,13 +202,13 @@ operation::element_deletion::prepare(const sstring& keyspace, const column_defin
     }
     auto ctype = static_pointer_cast<collection_type_impl>(receiver.type);
     if (&ctype->_kind == &collection_type_impl::kind::list) {
-        auto&& idx = _element->prepare(keyspace, lists::index_spec_of(receiver.column_specification));
+        auto&& idx = _element->prepare(db, keyspace, lists::index_spec_of(receiver.column_specification));
         return make_shared<lists::discarder_by_index>(receiver, std::move(idx));
     } else if (&ctype->_kind == &collection_type_impl::kind::set) {
-        auto&& elt = _element->prepare(keyspace, sets::value_spec_of(receiver.column_specification));
+        auto&& elt = _element->prepare(db, keyspace, sets::value_spec_of(receiver.column_specification));
         return make_shared<sets::discarder>(receiver, std::move(elt));
     } else if (&ctype->_kind == &collection_type_impl::kind::map) {
-        auto&& key = _element->prepare(keyspace, maps::key_spec_of(*receiver.column_specification));
+        auto&& key = _element->prepare(db, keyspace, maps::key_spec_of(*receiver.column_specification));
         return make_shared<maps::discarder_by_key>(receiver, std::move(key));
     }
     abort();

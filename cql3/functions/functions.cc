@@ -92,7 +92,8 @@ functions::get_overload_count(const function_name& name) {
 }
 
 shared_ptr<function>
-functions::get(const sstring& keyspace,
+functions::get(database& db,
+        const sstring& keyspace,
         const function_name& name,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
         const sstring& receiver_ks,
@@ -128,13 +129,13 @@ functions::get(const sstring& keyspace,
     // Fast path if there is only one choice
     if (candidates.size() == 1) {
         auto fun = std::move(candidates[0]);
-        validate_types(keyspace, fun, provided_args, receiver_ks, receiver_cf);
+        validate_types(db, keyspace, fun, provided_args, receiver_ks, receiver_cf);
         return fun;
     }
 
     std::vector<shared_ptr<function>> compatibles;
     for (auto&& to_test : candidates) {
-        auto r = match_arguments(keyspace, to_test, provided_args, receiver_ks, receiver_cf);
+        auto r = match_arguments(db, keyspace, to_test, provided_args, receiver_ks, receiver_cf);
         switch (r) {
             case assignment_testable::test_result::EXACT_MATCH:
                 // We always favor exact matches
@@ -186,7 +187,8 @@ functions::find(const function_name& name, const std::vector<data_type>& arg_typ
 // This method and matchArguments are somewhat duplicate, but this method allows us to provide more precise errors in the common
 // case where there is no override for a given function. This is thus probably worth the minor code duplication.
 void
-functions::validate_types(const sstring& keyspace,
+functions::validate_types(database& db,
+                          const sstring& keyspace,
                           shared_ptr<function> fun,
                           const std::vector<shared_ptr<assignment_testable>>& provided_args,
                           const sstring& receiver_ks,
@@ -207,7 +209,7 @@ functions::validate_types(const sstring& keyspace,
         }
 
         auto&& expected = make_arg_spec(receiver_ks, receiver_cf, *fun, i);
-        if (!is_assignable(provided->test_assignment(keyspace, expected))) {
+        if (!is_assignable(provided->test_assignment(db, keyspace, expected))) {
             throw exceptions::invalid_request_exception(
                     sprint("Type error: %s cannot be passed as argument %d of function %s of type %s",
                             provided, i, fun->name(), expected->type->as_cql3_type()));
@@ -216,7 +218,7 @@ functions::validate_types(const sstring& keyspace,
 }
 
 assignment_testable::test_result
-functions::match_arguments(const sstring& keyspace,
+functions::match_arguments(database& db, const sstring& keyspace,
         shared_ptr<function> fun,
         const std::vector<shared_ptr<assignment_testable>>& provided_args,
         const sstring& receiver_ks,
@@ -234,7 +236,7 @@ functions::match_arguments(const sstring& keyspace,
             continue;
         }
         auto&& expected = make_arg_spec(receiver_ks, receiver_cf, *fun, i);
-        auto arg_res = provided->test_assignment(keyspace, expected);
+        auto arg_res = provided->test_assignment(db, keyspace, expected);
         if (arg_res == assignment_testable::test_result::NOT_ASSIGNABLE) {
             return assignment_testable::test_result::NOT_ASSIGNABLE;
         }
@@ -340,14 +342,14 @@ function_call::make_terminal(shared_ptr<function> fun, bytes_opt result, seriali
 }
 
 ::shared_ptr<term>
-function_call::raw::prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) {
+function_call::raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) {
     std::vector<shared_ptr<assignment_testable>> args;
     args.reserve(_terms.size());
     std::transform(_terms.begin(), _terms.end(), std::back_inserter(args),
             [] (auto&& x) -> shared_ptr<assignment_testable> {
         return x;
     });
-    auto&& fun = functions::functions::get(keyspace, _name, args, receiver->ks_name, receiver->cf_name);
+    auto&& fun = functions::functions::get(db, keyspace, _name, args, receiver->ks_name, receiver->cf_name);
     if (!fun) {
         throw exceptions::invalid_request_exception(sprint("Unknown function %s called", _name));
     }
@@ -375,7 +377,7 @@ function_call::raw::prepare(const sstring& keyspace, ::shared_ptr<column_specifi
     parameters.reserve(_terms.size());
     bool all_terminal = true;
     for (size_t i = 0; i < _terms.size(); ++i) {
-        auto&& t = _terms[i]->prepare(keyspace, functions::make_arg_spec(receiver->ks_name, receiver->cf_name, *scalar_fun, i));
+        auto&& t = _terms[i]->prepare(db, keyspace, functions::make_arg_spec(receiver->ks_name, receiver->cf_name, *scalar_fun, i));
         if (dynamic_cast<non_terminal*>(t.get())) {
             all_terminal = false;
         }
@@ -405,13 +407,13 @@ function_call::raw::execute(scalar_function& fun, std::vector<shared_ptr<term>> 
 }
 
 assignment_testable::test_result
-function_call::raw::test_assignment(const sstring& keyspace, shared_ptr<column_specification> receiver) {
+function_call::raw::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
     // Note: Functions.get() will return null if the function doesn't exist, or throw is no function matching
     // the arguments can be found. We may get one of those if an undefined/wrong function is used as argument
     // of another, existing, function. In that case, we return true here because we'll throw a proper exception
     // later with a more helpful error message that if we were to return false here.
     try {
-        auto&& fun = functions::get(keyspace, _name, _terms, receiver->ks_name, receiver->cf_name);
+        auto&& fun = functions::get(db, keyspace, _name, _terms, receiver->ks_name, receiver->cf_name);
         if (fun && receiver->type->equals(fun->return_type())) {
             return assignment_testable::test_result::EXACT_MATCH;
         } else if (!fun || receiver->type->is_value_compatible_with(*fun->return_type())) {

@@ -99,7 +99,7 @@ public:
             , _where_clause(std::move(where_clause))
         { }
     protected:
-        virtual ::shared_ptr<modification_statement> prepare_internal(schema_ptr schema,
+        virtual ::shared_ptr<modification_statement> prepare_internal(database& db, schema_ptr schema,
             ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs);
     };
 };

@@ -127,7 +127,7 @@ public:
     }
 #endif
 
-    virtual ::shared_ptr<selection::selector::factory> new_selector_factory(schema_ptr schema,
+    virtual ::shared_ptr<selection::selector::factory> new_selector_factory(database& db, schema_ptr schema,
         std::vector<const column_definition*>& defs) override;
 
     /**

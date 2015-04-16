@@ -350,7 +350,7 @@ public:
                 statements.push_back(parsed->prepare(db, bound_names));
             }
 
-            auto&& prep_attrs = _attrs->prepare("[batch]", "[batch]");
+            auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
             prep_attrs->collect_marker_specification(bound_names);
 
             batch_statement batch_statement_(bound_names->size(), _type, std::move(statements), std::move(prep_attrs));

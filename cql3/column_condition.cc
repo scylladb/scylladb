@@ -58,7 +58,7 @@ void column_condition::collect_marker_specificaton(::shared_ptr<variable_specifi
 }
 
 ::shared_ptr<column_condition>
-column_condition::raw::prepare(const sstring& keyspace, const column_definition& receiver) {
+column_condition::raw::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     if (receiver.type->is_counter()) {
         throw exceptions::invalid_request_exception("Conditions on counters are not supported");
     }
@@ -66,16 +66,16 @@ column_condition::raw::prepare(const sstring& keyspace, const column_definition&
     if (!_collection_element) {
         if (_op == operator_type::IN) {
             if (_in_values.empty()) { // ?
-                return column_condition::in_condition(receiver, _in_marker->prepare(keyspace, receiver.column_specification));
+                return column_condition::in_condition(receiver, _in_marker->prepare(db, keyspace, receiver.column_specification));
             }
 
             std::vector<::shared_ptr<term>> terms;
             for (auto&& value : _in_values) {
-                terms.push_back(value->prepare(keyspace, receiver.column_specification));
+                terms.push_back(value->prepare(db, keyspace, receiver.column_specification));
             }
             return column_condition::in_condition(receiver, std::move(terms));
         } else {
-            return column_condition::condition(receiver, _value->prepare(keyspace, receiver.column_specification), _op);
+            return column_condition::condition(receiver, _value->prepare(db, keyspace, receiver.column_specification), _op);
         }
     }
 

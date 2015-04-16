@@ -95,7 +95,7 @@ public:
     }
 protected:
     virtual ::shared_ptr<term> to_term(const std::vector<::shared_ptr<column_specification>>& receivers,
-                          ::shared_ptr<term::raw> raw, const sstring& keyspace,
+                          ::shared_ptr<term::raw> raw, database& db, const sstring& keyspace,
                           ::shared_ptr<variable_specifications> bound_names) override;
 
 #if 0
@@ -124,22 +124,22 @@ protected:
     }
 
 protected:
-    virtual ::shared_ptr<restrictions::restriction> new_EQ_restriction(schema_ptr schema,
+    virtual ::shared_ptr<restrictions::restriction> new_EQ_restriction(database& db, schema_ptr schema,
                                            ::shared_ptr<variable_specifications> bound_names);
 
-    virtual ::shared_ptr<restrictions::restriction> new_IN_restriction(schema_ptr schema,
+    virtual ::shared_ptr<restrictions::restriction> new_IN_restriction(database& db, schema_ptr schema,
                                            ::shared_ptr<variable_specifications> bound_names) override;
 
-    virtual ::shared_ptr<restrictions::restriction> new_slice_restriction(schema_ptr schema,
+    virtual ::shared_ptr<restrictions::restriction> new_slice_restriction(database& db, schema_ptr schema,
             ::shared_ptr<variable_specifications> bound_names,
             statements::bound bound,
             bool inclusive) override {
         auto&& column_def = to_column_definition(schema, _entity);
-        auto term = to_term(to_receivers(schema, column_def), _value, schema->ks_name, std::move(bound_names));
+        auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name, std::move(bound_names));
         return ::make_shared<restrictions::single_column_restriction::slice>(column_def, bound, inclusive, std::move(term));
     }
 
-    virtual shared_ptr<restrictions::restriction> new_contains_restriction(schema_ptr schema,
+    virtual shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
                                                  ::shared_ptr<variable_specifications> bound_names,
                                                  bool is_key) override {
         throw std::runtime_error("not implemented");

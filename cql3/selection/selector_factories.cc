@@ -30,7 +30,8 @@ namespace cql3 {
 
 namespace selection {
 
-selector_factories::selector_factories(std::vector<::shared_ptr<selectable>> selectables, schema_ptr schema,
+selector_factories::selector_factories(std::vector<::shared_ptr<selectable>> selectables,
+        database& db, schema_ptr schema,
         std::vector<const column_definition*>& defs)
     : _contains_write_time_factory(false)
     , _contains_ttl_factory(false)
@@ -39,7 +40,7 @@ selector_factories::selector_factories(std::vector<::shared_ptr<selectable>> sel
     _factories.reserve(selectables.size());
 
     for (auto&& selectable : selectables) {
-        auto factory = selectable->new_selector_factory(schema, defs);
+        auto factory = selectable->new_selector_factory(db, schema, defs);
         _contains_write_time_factory |= factory->is_write_time_selector_factory();
         _contains_ttl_factory |= factory->is_ttl_selector_factory();
         if (factory->is_aggregate_selector_factory()) {

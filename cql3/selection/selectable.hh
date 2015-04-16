@@ -54,7 +54,7 @@ import org.apache.commons.lang3.text.StrBuilder;
 class selectable {
 public:
     virtual ~selectable() {}
-    virtual ::shared_ptr<selector::factory> new_selector_factory(schema_ptr schema, std::vector<const column_definition*>& defs) = 0;
+    virtual ::shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr schema, std::vector<const column_definition*>& defs) = 0;
 protected:
     static size_t add_and_get_index(const column_definition& def, std::vector<const column_definition*>& defs) {
         auto i = std::find(defs.begin(), defs.end(), &def);
@@ -168,7 +168,7 @@ public:
     }
 #endif
 
-    virtual shared_ptr<selector::factory> new_selector_factory(schema_ptr s, std::vector<const column_definition*>& defs) override;
+    virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
     class raw : public selectable::raw {
         functions::function_name _function_name;
         std::vector<shared_ptr<selectable::raw>> _args;

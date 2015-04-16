@@ -14,7 +14,7 @@ namespace cql3 {
 namespace selection {
 
 shared_ptr<selector::factory>
-selectable::writetime_or_ttl::new_selector_factory(schema_ptr s, std::vector<const column_definition*>& defs) {
+selectable::writetime_or_ttl::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
     auto&& def = s->get_column_definition(_id->name());
     if (!def) {
         throw exceptions::invalid_request_exception(sprint("Undefined name %s in selection clause", _id));
@@ -44,11 +44,11 @@ selectable::writetime_or_ttl::raw::processes_selection() const {
 }
 
 shared_ptr<selector::factory>
-selectable::with_function::new_selector_factory(schema_ptr s, std::vector<const column_definition*>& defs) {
-    auto&& factories = selector_factories::create_factories_and_collect_column_definitions(_args, s, defs);
+selectable::with_function::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
+    auto&& factories = selector_factories::create_factories_and_collect_column_definitions(_args, db, s, defs);
 
     // resolve built-in functions before user defined functions
-    auto&& fun = functions::functions::get(s->ks_name, _function_name, factories->new_instances(), s->ks_name, s->cf_name);
+    auto&& fun = functions::functions::get(db, s->ks_name, _function_name, factories->new_instances(), s->ks_name, s->cf_name);
     if (!fun) {
         throw exceptions::invalid_request_exception(sprint("Unknown function '%s'", _function_name));
     }

@@ -198,12 +198,12 @@ uint32_t selection::add_column_for_ordering(const column_definition& c) {
     return _columns.size() - 1;
 }
 
-::shared_ptr<selection> selection::from_selectors(schema_ptr schema, const std::vector<::shared_ptr<raw_selector>>& raw_selectors) {
+::shared_ptr<selection> selection::from_selectors(database& db, schema_ptr schema, const std::vector<::shared_ptr<raw_selector>>& raw_selectors) {
     std::vector<const column_definition*> defs;
 
     ::shared_ptr<selector_factories> factories =
         selector_factories::create_factories_and_collect_column_definitions(
-            raw_selector::to_selectables(raw_selectors, schema), schema, defs);
+            raw_selector::to_selectables(raw_selectors, schema), db, schema, defs);
 
     auto metadata = collect_metadata(schema, raw_selectors, *factories);
     if (processes_selection(raw_selectors)) {

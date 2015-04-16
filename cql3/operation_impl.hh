@@ -38,7 +38,7 @@ private:
 public:
     set_value(::shared_ptr<term::raw> value) : _value(std::move(value)) {}
 
-    virtual ::shared_ptr <operation> prepare(const sstring& keyspace, const column_definition& receiver) override;
+    virtual ::shared_ptr <operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver) override;
 
 #if 0
         protected String toString(ColumnSpecification column)
@@ -62,7 +62,7 @@ public:
         return _id;
     }
 
-    ::shared_ptr<operation> prepare(const sstring& keyspace, const column_definition& receiver) {
+    ::shared_ptr<operation> prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
         // No validation, deleting a column is always "well typed"
         return ::make_shared<constants::deleter>(receiver);
     }

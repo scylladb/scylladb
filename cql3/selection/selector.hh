@@ -87,7 +87,7 @@ public:
      */
     virtual void reset() = 0;
 
-    virtual assignment_testable::test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
+    virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
         if (receiver->type == get_type()) {
             return assignment_testable::test_result::EXACT_MATCH;
         } else if (receiver->type->is_value_compatible_with(*get_type())) {
