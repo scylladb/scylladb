@@ -109,6 +109,16 @@ public:
     operator bytes_view() const {
         return _bytes;
     }
+
+    // begin() and end() return iterators over components of this tuple. The iterator yields a bytes_view to the component.
+    auto begin(const schema& s) const {
+        return get_tuple_type(s)->begin(_bytes);
+    }
+
+    // See begin()
+    auto end(const schema& s) const {
+        return get_tuple_type(s)->end(_bytes);
+    }
 };
 
 template <typename TopLevel, typename PrefixTopLevel>

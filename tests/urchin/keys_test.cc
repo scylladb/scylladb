@@ -25,3 +25,32 @@ BOOST_AUTO_TEST_CASE(test_key_is_prefixed_by) {
     BOOST_REQUIRE(!key.is_prefixed_by(s, clustering_key_prefix::from_exploded(s, {bytes("abc")})));
     BOOST_REQUIRE(!key.is_prefixed_by(s, clustering_key_prefix::from_exploded(s, {bytes("ab")})));
 }
+
+BOOST_AUTO_TEST_CASE(test_key_component_iterator) {
+    schema s({}, "", "",
+        {
+            {"c1", bytes_type}
+        }, {
+            {"c2", bytes_type}, {"c3", bytes_type}, {"c4", bytes_type}
+        },
+        {}, {}, utf8_type);
+
+    auto key = clustering_key::from_exploded(s, {bytes("a"), bytes("b"), bytes("c")});
+
+    auto i = key.begin(s);
+    auto end = key.end(s);
+
+    BOOST_REQUIRE(i != end);
+    BOOST_REQUIRE(*i == bytes_view(bytes("a")));
+    ++i;
+
+    BOOST_REQUIRE(i != end);
+    BOOST_REQUIRE(*i == bytes_view(bytes("b")));
+    ++i;
+
+    BOOST_REQUIRE(i != end);
+    BOOST_REQUIRE(*i == bytes_view(bytes("c")));
+    ++i;
+
+    BOOST_REQUIRE(i == end);
+}
