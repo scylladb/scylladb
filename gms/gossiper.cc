@@ -273,7 +273,6 @@ void gossiper::apply_state_locally(std::map<inet_address, endpoint_state>& map) 
             // this is a new node, report it to the FD in case it is the first time we are seeing it AND it's not alive
             get_local_failure_detector().report(ep);
             handle_major_state_change(ep, remote_state);
-            fail(unimplemented::cause::GOSSIP);
         }
     }
 }
@@ -838,8 +837,6 @@ void gossiper::notify_failure_detector(std::map<inet_address, endpoint_state> re
 }
 
 void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
-    fail(unimplemented::cause::GOSSIP);
-
     // if (MessagingService.instance().getVersion(addr) < MessagingService.VERSION_20) {
     //     real_mark_alive(addr, local_state);
     //     return;
