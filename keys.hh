@@ -114,7 +114,7 @@ public:
 template <typename TopLevel, typename PrefixTopLevel>
 class prefix_view_on_full_tuple {
 public:
-    using iterator = typename tuple_type<false>::iterator;
+    using iterator = typename tuple_type<allow_prefixes::no>::iterator;
 private:
     bytes_view _b;
     unsigned _prefix_len;
@@ -262,7 +262,7 @@ class partition_key : public tuple_wrapper<partition_key> {
 public:
     partition_key(bytes&& b) : tuple_wrapper<partition_key>(std::move(b)) {}
 public:
-    using tuple = lw_shared_ptr<tuple_type<false>>;
+    using tuple = lw_shared_ptr<tuple_type<allow_prefixes::no>>;
 
     static partition_key from_bytes(bytes b) { return partition_key(std::move(b)); }
     static auto get_tuple_type(const schema& s) { return s.partition_key_type; }
@@ -292,7 +292,7 @@ class clustering_key : public prefixable_full_tuple<clustering_key, clustering_k
 public:
     clustering_key(bytes&& b) : prefixable_full_tuple<clustering_key, clustering_key_prefix>(std::move(b)) {}
 public:
-    using tuple = lw_shared_ptr<tuple_type<false>>;
+    using tuple = lw_shared_ptr<tuple_type<allow_prefixes::no>>;
 
     static clustering_key from_bytes(bytes b) { return clustering_key(std::move(b)); }
     static auto get_tuple_type(const schema& s) { return s.clustering_key_type; }
@@ -306,7 +306,7 @@ public:
 class clustering_key_prefix : public prefix_tuple_wrapper<clustering_key_prefix, clustering_key> {
     clustering_key_prefix(bytes&& b) : prefix_tuple_wrapper<clustering_key_prefix, clustering_key>(std::move(b)) {}
 public:
-    using tuple = lw_shared_ptr<tuple_type<true>>;
+    using tuple = lw_shared_ptr<tuple_type<allow_prefixes::yes>>;
 
     static clustering_key_prefix from_bytes(bytes b) { return clustering_key_prefix(std::move(b)); }
     static auto get_tuple_type(const schema& s) { return s.clustering_key_prefix_type; }

@@ -32,14 +32,16 @@ struct value_traits<bytes_opt> {
     }
 };
 
-template<bool AllowPrefixes = false>
+enum class allow_prefixes { yes, no };
+
+template<allow_prefixes AllowPrefixes = allow_prefixes::no>
 class tuple_type final {
 private:
     const std::vector<shared_ptr<abstract_type>> _types;
     const bool _byte_order_equal;
     const bool _byte_order_comparable;
 public:
-    using prefix_type = tuple_type<true>;
+    using prefix_type = tuple_type<allow_prefixes::yes>;
     using value_type = std::vector<bytes>;
 
     tuple_type(std::vector<shared_ptr<abstract_type>> types)
@@ -72,7 +74,7 @@ public:
      */
     template<typename Wrapped>
     void serialize_value(const std::vector<Wrapped>& values, bytes::iterator& out) {
-        if (AllowPrefixes) {
+        if (AllowPrefixes == allow_prefixes::yes) {
             assert(values.size() <= _types.size());
         } else {
             assert(values.size() == _types.size());
@@ -103,7 +105,7 @@ public:
         return len;
     }
     bytes serialize_single(bytes&& v) {
-        if (!AllowPrefixes) {
+        if (AllowPrefixes == allow_prefixes::no) {
             assert(_types.size() == 1);
         } else {
             if (_types.size() > 1) {
@@ -163,7 +165,7 @@ public:
                 return;
             }
             if (_v.empty()) {
-                if (AllowPrefixes) {
+                if (AllowPrefixes == allow_prefixes::yes) {
                     _v = bytes_view(nullptr, 0);
                     return;
                 } else {
@@ -246,7 +248,7 @@ public:
     }
     // Retruns true iff given prefix has no missing components
     bool is_full(bytes_view v) const {
-        assert(AllowPrefixes);
+        assert(AllowPrefixes == allow_prefixes::yes);
         return std::distance(begin(v), end(v)) == (ssize_t)_types.size();
     }
     void validate(bytes_view v) {
@@ -262,4 +264,4 @@ public:
     }
 };
 
-using tuple_prefix = tuple_type<true>;
+using tuple_prefix = tuple_type<allow_prefixes::yes>;
