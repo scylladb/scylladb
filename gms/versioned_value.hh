@@ -139,7 +139,7 @@ public:
         }
 #endif
 
-        versioned_value load(double load)
+        static inline versioned_value load(double load)
         {
             return versioned_value(to_sstring_sprintf(load, "%g"));
         }
