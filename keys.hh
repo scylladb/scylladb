@@ -109,6 +109,16 @@ public:
     operator bytes_view() const {
         return _bytes;
     }
+
+    // begin() and end() return iterators over components of this tuple. The iterator yields a bytes_view to the component.
+    auto begin(const schema& s) const {
+        return get_tuple_type(s)->begin(_bytes);
+    }
+
+    // See begin()
+    auto end(const schema& s) const {
+        return get_tuple_type(s)->end(_bytes);
+    }
 };
 
 template <typename TopLevel, typename PrefixTopLevel>
@@ -264,8 +274,13 @@ public:
 public:
     using tuple = lw_shared_ptr<tuple_type<allow_prefixes::no>>;
 
-    static partition_key from_bytes(bytes b) { return partition_key(std::move(b)); }
-    static auto get_tuple_type(const schema& s) { return s.partition_key_type; }
+    static partition_key from_bytes(bytes b) {
+        return partition_key(std::move(b));
+    }
+
+    static const tuple& get_tuple_type(const schema& s) {
+        return s.partition_key_type;
+    }
 };
 
 class exploded_clustering_prefix {
@@ -294,8 +309,13 @@ public:
 public:
     using tuple = lw_shared_ptr<tuple_type<allow_prefixes::no>>;
 
-    static clustering_key from_bytes(bytes b) { return clustering_key(std::move(b)); }
-    static auto get_tuple_type(const schema& s) { return s.clustering_key_type; }
+    static clustering_key from_bytes(bytes b) {
+        return clustering_key(std::move(b));
+    }
+
+    static const tuple& get_tuple_type(const schema& s) {
+        return s.clustering_key_type;
+    }
 
     static clustering_key from_clustering_prefix(const schema& s, const exploded_clustering_prefix& prefix) {
         assert(prefix.is_full(s));
@@ -308,8 +328,13 @@ class clustering_key_prefix : public prefix_tuple_wrapper<clustering_key_prefix,
 public:
     using tuple = lw_shared_ptr<tuple_type<allow_prefixes::yes>>;
 
-    static clustering_key_prefix from_bytes(bytes b) { return clustering_key_prefix(std::move(b)); }
-    static auto get_tuple_type(const schema& s) { return s.clustering_key_prefix_type; }
+    static clustering_key_prefix from_bytes(bytes b) {
+        return clustering_key_prefix(std::move(b));
+    }
+
+    static const tuple& get_tuple_type(const schema& s) {
+        return s.clustering_key_prefix_type;
+    }
 
     static clustering_key_prefix from_clustering_prefix(const schema& s, const exploded_clustering_prefix& prefix) {
         return from_exploded(s, prefix.components());
