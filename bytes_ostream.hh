@@ -211,6 +211,10 @@ public:
         return _size;
     }
 
+    bool empty() const {
+        return _size == 0;
+    }
+
     void reserve(size_t size) {
         // FIXME: implement
     }
