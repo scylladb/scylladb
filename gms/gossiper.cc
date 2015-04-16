@@ -384,14 +384,10 @@ void gossiper::run() {
     std::vector<gossip_digest> g_digests;
     this->make_random_gossip_digest(g_digests);
 
-    // FIXME: hack
-    if (g_digests.size() > 0 || true) {
-        sstring cluster_name("my cluster_name");
-        sstring partioner_name("my partioner name");
-        gossip_digest_syn message(cluster_name, partioner_name, g_digests);
+    if (g_digests.size() > 0) {
+        gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests);
 
         /* Gossip to some random live member */
-        _live_endpoints.emplace(inet_address("127.0.0.1")); // FIXME: hack
         bool gossiped_to_seed = do_gossip_to_live_member(message);
 
         /* Gossip to some unreachable member with some probability to check if he is back up */
@@ -966,14 +962,15 @@ void gossiper::do_on_change_notifications(inet_address addr, const application_s
     }
 }
 
-void gossiper::request_all(gossip_digest g_digest, std::vector<gossip_digest> delta_gossip_digest_list, int remote_generation) {
+void gossiper::request_all(gossip_digest& g_digest,
+    std::vector<gossip_digest>& delta_gossip_digest_list, int remote_generation) {
     /* We are here since we have no data for this endpoint locally so request everthing. */
     delta_gossip_digest_list.emplace_back(g_digest.get_endpoint(), remote_generation, 0);
     // if (logger.isTraceEnabled())
     //     logger.trace("request_all for {}", g_digest.get_endpoint());
 }
 
-void gossiper::send_all(gossip_digest g_digest,
+void gossiper::send_all(gossip_digest& g_digest,
     std::map<inet_address, endpoint_state>& delta_ep_state_map,
     int max_remote_version) {
     auto ep = g_digest.get_endpoint();
@@ -1104,12 +1101,12 @@ void gossiper::do_shadow_round() {
 }
 
 void gossiper::build_seeds_list() {
-    // for (inet_address seed : DatabaseDescriptor.getSeeds())
-    // {
-    //     if (seed.equals(FBUtilities.getBroadcastAddress()))
-    //         continue;
-    //     _seeds.add(seed);
-    // }
+    for (inet_address seed : get_seeds() ) {
+        if (seed == get_broadcast_address()) {
+            continue;
+        }
+        _seeds.emplace(seed);
+    }
 }
 
 void gossiper::maybe_initialize_local_state(int generation_nbr) {

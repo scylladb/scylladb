@@ -224,16 +224,18 @@ public:
     };
 private:
     static constexpr const uint16_t _port_base = 7000;
+    gms::inet_address _listen_address;
     uint16_t _port;
     rpc::protocol<serializer, messaging_verb> _rpc;
     rpc::protocol<serializer, messaging_verb>::server _server;
     std::unordered_map<shard_id, shard_info, shard_id::hash> _clients;
     std::unordered_map<messaging_verb, std::unique_ptr<handler_base>> _handlers;
 public:
-    messaging_service()
-        : _port(_port_base + engine().cpu_id())
+    messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"))
+        : _listen_address(ip)
+        , _port(_port_base + engine().cpu_id())
         , _rpc(serializer{})
-        , _server(_rpc, ipv4_addr{_port}) {
+        , _server(_rpc, ipv4_addr{_listen_address.raw_addr(), _port}) {
     }
 public:
     uint16_t port_min() {
@@ -241,6 +243,9 @@ public:
     }
     uint16_t port_max() {
         return _port_base + smp::count - 1;
+    }
+    auto listen_address() {
+        return _listen_address;
     }
     future<> stop() {
         return make_ready_future<>();

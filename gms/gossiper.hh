@@ -100,6 +100,15 @@ private:
         // FIXME: Helper for FBUtilities.getBroadcastAddress
         return inet_address(0xffffff);
     }
+    std::set<inet_address> _seeds_from_config;
+public:
+    std::set<inet_address> get_seeds() {
+        // FIXME: DatabaseDescriptor.getSeeds()
+        return _seeds_from_config;
+    }
+    void set_seeds(std::set<inet_address> _seeds) {
+        _seeds_from_config = _seeds;
+    }
 public:
     static int64_t now_millis() {
         return db_clock::now().time_since_epoch().count();
@@ -372,10 +381,10 @@ private:
     void do_on_change_notifications(inet_address addr, const application_state& state, versioned_value& value);
     /* Request all the state for the endpoint in the g_digest */
 
-    void request_all(gossip_digest g_digest, std::vector<gossip_digest> delta_gossip_digest_list, int remote_generation);
+    void request_all(gossip_digest& g_digest, std::vector<gossip_digest>& delta_gossip_digest_list, int remote_generation);
 
     /* Send all the data with version greater than max_remote_version */
-    void send_all(gossip_digest g_digest, std::map<inet_address, endpoint_state>& delta_ep_state_map, int max_remote_version);
+    void send_all(gossip_digest& g_digest, std::map<inet_address, endpoint_state>& delta_ep_state_map, int max_remote_version);
 
 public:
     /*
