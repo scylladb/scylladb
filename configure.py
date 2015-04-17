@@ -180,6 +180,7 @@ tests = [
 # urchin
 tests += [
     'tests/urchin/bytes_ostream_test',
+    'tests/urchin/UUID_test',
 ]
 
 apps = [
@@ -438,6 +439,7 @@ deps['tests/urchin/hash_test'] += boost_test_lib
 deps['tests/urchin/serializer_test'] += boost_test_lib
 
 deps['tests/urchin/bytes_ostream_test'] = ['tests/urchin/bytes_ostream_test.cc']
+deps['tests/urchin/UUID_test'] = ['utils/UUID_gen.cc', 'tests/urchin/UUID_test.cc']
 
 warnings = [
     '-Wno-mismatched-tags',  # clang-only
