@@ -1063,7 +1063,7 @@ operator<<(std::ostream& os, const atomic_cell& ac) {
     return os << atomic_cell_view(ac);
 }
 
+// Based on org.apache.cassandra.config.CFMetaData#generateLegacyCfId
 utils::UUID generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
-    // FIXME: generate it like org.apache.cassandra.config.CFMetaData#generateLegacyCfId() does
-    return utils::UUID_gen::get_time_UUID();
+    return utils::UUID_gen::get_name_UUID(ks_name + cf_name);
 }
