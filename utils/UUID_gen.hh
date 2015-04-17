@@ -92,7 +92,7 @@ public:
         return UUID(create_time(from_unix_timestamp(when)), clock_seq_and_node);
     }
 
-    /** creates a type 1 uuid from raw bytes. */
+    /** creates uuid from raw bytes. */
     static UUID get_UUID(bytes raw) {
         assert(raw.size() == 16);
         struct tmp { uint64_t msb, lsb; } t;
