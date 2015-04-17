@@ -311,7 +311,8 @@ if args.with_osv:
     args.hwloc = False
     args.user_cflags = (args.user_cflags +
         ' -DDEFAULT_ALLOCATOR -fvisibility=default -DHAVE_OSV -I' +
-        args.with_osv + '/include')
+        args.with_osv + ' -I' + args.with_osv + '/include -I' +
+        args.with_osv + '/arch/x64')
 
 if args.dpdk_target:
     args.user_cflags = (args.user_cflags +
