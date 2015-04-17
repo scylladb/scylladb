@@ -508,11 +508,11 @@ keyspace::get_replication_strategy() {
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) throw (no_such_column_family) {
-    return find_column_family(schema->ks_name, schema->cf_name);
+    return find_column_family(schema->id());
 }
 
 const column_family& database::find_column_family(const schema_ptr& schema) const throw (no_such_column_family) {
-    return find_column_family(schema->ks_name, schema->cf_name);
+    return find_column_family(schema->id());
 }
 
 schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family) {

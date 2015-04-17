@@ -470,9 +470,8 @@ future<>
 storage_proxy::mutate_locally(const mutation& m, dht::decorated_key& dk) {
     auto shard = _db.local().shard_of(dk._token);
     return _db.invoke_on(shard, [&m] (database& db) -> void {
-        // FIXME: lookup column_family by UUID
         try {
-            auto& cf = db.find_column_family(m.schema);
+            auto& cf = db.find_column_family(m.schema->id());
             cf.apply(m);
         } catch (no_such_column_family&) {
             // TODO: log a warning
