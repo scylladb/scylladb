@@ -95,10 +95,20 @@ public:
     /** creates uuid from raw bytes. */
     static UUID get_UUID(bytes raw) {
         assert(raw.size() == 16);
+        return get_UUID(raw.begin());
+    }
+
+    /** creates uuid from raw bytes. src must point to a region of 16 bytes*/
+    static UUID get_UUID(int8_t* src) {
         struct tmp { uint64_t msb, lsb; } t;
-        std::copy(raw.begin(), raw.end(), reinterpret_cast<char*>(&t));
+        std::copy(src, src + 16, reinterpret_cast<char*>(&t));
         return UUID(net::ntoh(t.msb), net::ntoh(t.lsb));
     }
+
+    /**
+     * Creates a type 3 (name based) UUID based on the specified byte array.
+     */
+    static UUID get_name_UUID(sstring_view str);
 
     /** decomposes a uuid into raw bytes. */
     static std::array<int8_t, 16> decompose(const UUID& uuid)
