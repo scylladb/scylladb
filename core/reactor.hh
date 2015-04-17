@@ -65,6 +65,9 @@
 #include "core/enum.hh"
 
 #ifdef HAVE_OSV
+#include <osv/sched.hh>
+#include <osv/mutex.h>
+#include <osv/condvar.h>
 #include <osv/newpoll.hh>
 #endif
 
@@ -638,6 +641,11 @@ private:
     // FIXME: make _backend a unique_ptr<reactor_backend>, not a compile-time #ifdef.
 #ifdef HAVE_OSV
     reactor_backend_osv _backend;
+    sched::thread _timer_thread;
+    sched::thread *_engine_thread;
+    mutable mutex _timer_mutex;
+    condvar _timer_cond;
+    s64 _timer_due = 0;
 #else
     reactor_backend_epoll _backend;
 #endif
@@ -782,6 +790,11 @@ public:
             });
         }
     }
+
+#ifdef HAVE_OSV
+    void timer_thread_func();
+    void set_timer(sched::timer &tmr, s64 t);
+#endif
 private:
     /**
      * Add a new "poller" - a non-blocking function returning a boolean, that

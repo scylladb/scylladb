@@ -175,6 +175,11 @@ void reactor::signals::action(int signo, siginfo_t* siginfo, void* ignore) {
 
 reactor::reactor()
     : _backend()
+#ifdef HAVE_OSV
+    , _timer_thread(
+        [&] { timer_thread_func(); }, sched::thread::attr().stack(4096).name("timer_thread").pin(sched::cpu::current()))
+    , _engine_thread(sched::thread::current())
+#endif
     , _exit_future(_exit_promise.get_future())
     , _cpu_started(0)
     , _io_context(0)
@@ -183,12 +188,16 @@ reactor::reactor()
 
     auto r = ::io_setup(max_aio, &_io_context);
     assert(r >= 0);
+#ifdef HAVE_OSV
+    _timer_thread.start();
+#else
     struct sigevent sev;
     sev.sigev_notify = SIGEV_THREAD_ID;
     sev._sigev_un._tid = syscall(SYS_gettid);
     sev.sigev_signo = SIGALRM;
     r = timer_create(CLOCK_REALTIME, &sev, &_timer);
     assert(r >= 0);
+#endif
     memory::set_reclaim_hook([this] (std::function<void ()> reclaim_fn) {
         // push it in the front of the queue so we reclaim memory quickly
         _pending_tasks.push_front(make_task([fn = std::move(reclaim_fn)] {
@@ -196,6 +205,41 @@ reactor::reactor()
         }));
     });
 }
+
+#ifdef HAVE_OSV
+void reactor::timer_thread_func() {
+    sched::timer tmr(*sched::thread::current());
+    WITH_LOCK(_timer_mutex) {
+        while (!_stopped) {
+            if (_timer_due != 0) {
+                set_timer(tmr, _timer_due);
+                _timer_cond.wait(_timer_mutex, &tmr);
+                if (tmr.expired()) {
+                    _timer_due = 0;
+                    _engine_thread->unsafe_stop();
+                    _pending_tasks.push_front(make_task([this] {
+                        complete_timers(_timers, _expired_timers, [this] {
+                            if (!_timers.empty()) {
+                                enable_timer(_timers.get_next_timeout());
+                            }
+                        });
+                    }));
+                    _engine_thread->wake();
+                } else {
+                    tmr.cancel();
+                }
+            } else {
+                _timer_cond.wait(_timer_mutex);
+            }
+        }
+    }
+}
+
+void reactor::set_timer(sched::timer &tmr, s64 t) {
+    using namespace osv::clock;
+    tmr.set(wall::time_point(std::chrono::nanoseconds(t)));
+}
+#endif
 
 void reactor::configure(boost::program_options::variables_map vm) {
     auto network_stack_ready = vm.count("network-stack")
@@ -620,11 +664,19 @@ posix_file_impl::list_directory(std::function<future<> (directory_entry de)> nex
 
 void reactor::enable_timer(clock_type::time_point when)
 {
+#ifndef HAVE_OSV
     itimerspec its;
     its.it_interval = {};
     its.it_value = to_timespec(when);
     auto ret = timer_settime(_timer, TIMER_ABSTIME, &its, NULL);
     throw_system_error_on(ret == -1);
+#else
+    using ns = std::chrono::nanoseconds;
+    WITH_LOCK(_timer_mutex) {
+        _timer_due = std::chrono::duration_cast<ns>(when.time_since_epoch()).count();
+        _timer_cond.wake_one();
+    }
+#endif
 }
 
 void reactor::add_timer(timer<>* tmr) {
@@ -810,6 +862,7 @@ int reactor::run() {
         smp_poller = poller(smp::poll_queues);
     }
 
+#ifndef HAVE_OSV
     _signals.handle_signal(SIGALRM, [this] {
         complete_timers(_timers, _expired_timers, [this] {
             if (!_timers.empty()) {
@@ -817,6 +870,7 @@ int reactor::run() {
             }
         });
     });
+#endif
 
     poller drain_cross_cpu_freelist([] {
         return memory::drain_cross_cpu_freelist();
