@@ -12,6 +12,7 @@
 #include "database.hh"
 #include "core/sstring.hh"
 #include "core/print.hh"
+#include "utils/UUID_gen.hh"
 #include <thrift/protocol/TBinaryProtocol.h>
 
 using namespace ::apache::thrift;
@@ -419,10 +420,16 @@ public:
             ire.why = sprint("Keyspace %s already exists", ks_def.name);
             exn_cob(TDelayedException::delayException(ire));
         }
-        _db.invoke_on_all([this, ks_def = std::move(ks_def)] (database& db) {
+        std::vector<utils::UUID> cf_ids;
+        cf_ids.reserve(ks_def.cf_defs.size());
+        boost::for_each(ks_def.cf_defs, [&cf_ids] (auto&&) {
+            cf_ids.push_back(utils::UUID_gen::get_time_UUID());
+        });
+        _db.invoke_on_all([this, ks_def = std::move(ks_def), cf_ids = std::move(cf_ids)] (database& db) {
             keyspace& ks = db.add_keyspace(ks_def.name, keyspace());
             std::vector<schema_ptr> cf_defs;
             cf_defs.reserve(ks_def.cf_defs.size());
+            auto id_iterator = cf_ids.begin();
             for (const CfDef& cf_def : ks_def.cf_defs) {
                 std::vector<schema::column> partition_key;
                 std::vector<schema::column> clustering_key;
@@ -436,7 +443,8 @@ public:
                     // FIXME: look at all fields, not just name
                     regular_columns.push_back({to_bytes(col_def.name), bytes_type});
                 }
-                auto s = make_lw_shared(schema({}, ks_def.name, cf_def.name,
+                auto id = *id_iterator++;
+                auto s = make_lw_shared(schema(id, ks_def.name, cf_def.name,
                     std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
                     std::vector<schema::column>(), column_name_type));
                 column_family cf(s);
@@ -454,7 +462,6 @@ public:
             return make_ready_future<std::string>(std::move(schema_id));
         }).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<std::string> result) {
             complete(result, cob, exn_cob);
-            return make_ready_future<>();
         });
     }
 
