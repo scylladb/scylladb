@@ -29,9 +29,6 @@
 #include "cql3/column_specification.hh"
 #include "cql3/term.hh"
 
-#include "db/marshal/collection_type.hh"
-#include "db/marshal/list_type.hh"
-
 namespace cql3 {
 
 /**
@@ -94,7 +91,7 @@ public:
     private:
         static ::shared_ptr<column_specification> make_in_receiver(::shared_ptr<column_specification> receiver) {
             auto in_name = ::make_shared<column_identifier>(sstring("in(") + receiver->name->to_string() + sstring(")"), true);
-            return ::make_shared<column_specification>(receiver->ks_name, receiver->cf_name, in_name, db::marshal::list_type::get_instance(receiver->type, false));
+            return ::make_shared<column_specification>(receiver->ks_name, receiver->cf_name, in_name, list_type_impl::get_instance(receiver->type, false));
         }
 
     public:

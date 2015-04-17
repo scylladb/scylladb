@@ -37,10 +37,12 @@ namespace cql3 {
     if (receiver_type == nullptr) {
         return ::make_shared<constants::marker>(_bind_index, receiver);
     }
-    switch (receiver_type->kind) {
-        case db::marshal::collection_type::collection_kind::LIST: return ::make_shared<lists::marker>(_bind_index, receiver);
-        case db::marshal::collection_type::collection_kind::SET:  return ::make_shared<sets::marker>(_bind_index, receiver);
-        case db::marshal::collection_type::collection_kind::MAP:  return ::make_shared<maps::marker>(_bind_index, receiver);
+    if (&receiver_type->_kind == &collection_type_impl::kind::list) {
+        return ::make_shared<lists::marker>(_bind_index, receiver);
+    } else if (&receiver_type->_kind == &collection_type_impl::kind::set) {
+        return ::make_shared<sets::marker>(_bind_index, receiver);
+    } else if (&receiver_type->_kind == &collection_type_impl::kind::map) {
+        return ::make_shared<maps::marker>(_bind_index, receiver);
     }
     assert(0);
 }
