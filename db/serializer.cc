@@ -229,7 +229,7 @@ db::serializer<mutation>::serializer(const context& ctxt, const mutation & m)
 
     // schema == null cannot happen (yet). But why not.
     if (_item.schema) {
-        s += uuid_serializer(ctxt, utils::UUID(0, 0)).size(); // cf UUID
+        s += uuid_serializer(ctxt, _item.schema->id()).size(); // cf UUID
         s += mutation_partition_serializer(ctxt, _item.p).size();
     }
     _size = s;
