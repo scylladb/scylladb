@@ -99,7 +99,9 @@ public:
         return std::move(_deleter);
     }
     static temporary_buffer aligned(size_t alignment, size_t size) {
-        auto buf = static_cast<CharType*>(::memalign(alignment, size * sizeof(CharType)));
+        void *ptr = nullptr;
+        ::posix_memalign(&ptr, alignment, size * sizeof(CharType));
+        auto buf = static_cast<CharType*>(ptr);
         if (size && !buf) {
             throw std::bad_alloc();
         }
