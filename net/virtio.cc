@@ -170,11 +170,8 @@ public:
     virtual void notify() override {
         _virtio.kick(_q_index);
     }
-    virtual void wake_wait() override {
-        _notified->signal();
-    }
     notifier_osv(osv::assigned_virtio &virtio, uint16_t q_index)
-        , _q_index(q_index)
+        : _q_index(q_index)
         , _virtio(virtio)
     {
     }
@@ -903,16 +900,13 @@ private:
     ethernet_address _mac;
     osv::assigned_virtio &_virtio;
 public:
-    qp_osv(osv::assigned_virtio &virtio,
+    qp_osv(device *dev, osv::assigned_virtio &virtio,
             boost::program_options::variables_map opts);
-    virtual ethernet_address hw_address() override {
-        return _mac;
-    }
 };
 
-qp_osv::qp_osv(osv::assigned_virtio &virtio,
+qp_osv::qp_osv(device *dev, osv::assigned_virtio &virtio,
         boost::program_options::variables_map opts)
-        : qp(opts, virtio.queue_size(0), virtio.queue_size(1))
+        : qp(dev, virtio.queue_size(0), virtio.queue_size(1))
         , _virtio(virtio)
 {
     // Read the host's virtio supported feature bitmask, AND it with the
@@ -963,8 +957,6 @@ qp_osv::qp_osv(osv::assigned_virtio &virtio,
     _virtio.set_queue_pfn(
             1, virt_to_phys(_txq.getconfig().descs));
 
-    _txq.run();
-
     // Set up interrupts
     // FIXME: in OSv, the first thing we do in the handler is to call
     // _rqx.disable_interrupts(). Here in seastar, we only do it much later
@@ -987,7 +979,7 @@ std::unique_ptr<net::qp> device::init_local_queue(boost::program_options::variab
 #ifdef HAVE_OSV
     if (osv::assigned_virtio::get && osv::assigned_virtio::get()) {
         std::cout << "In OSv and assigned host's virtio device\n";
-        return std::make_unique<qp_osv>(*osv::assigned_virtio::get(), opts);
+        return std::make_unique<qp_osv>(this, *osv::assigned_virtio::get(), opts);
     }
 #endif
     return std::make_unique<qp_vhost>(this, opts);
