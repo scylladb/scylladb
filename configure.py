@@ -64,7 +64,8 @@ def dpdk_cflags (dpdk_target):
         sfile.file.write(bytes('@echo $(MACHINE_CFLAGS)' + "\n", 'utf-8'))
         sfile.file.flush()
 
-        dpdk_cflags = subprocess.check_output(['make', '-f', sfile.name,
+        dpdk_cflags = subprocess.check_output(['make', '--no-print-directory',
+                                             '-f', sfile.name,
                                              'RTE_SDK=' + dpdk_sdk_path,
                                              'RTE_TARGET=' + dpdk_target_name,
                                              'RTE_ARCH=' + dpdk_arch])
