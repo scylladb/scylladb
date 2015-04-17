@@ -122,7 +122,7 @@ public:
     bool cancel();
     time_point get_timeout();
     friend class reactor;
-    friend class timer_set<timer, &timer::_link>;
+    friend class seastar::timer_set<timer, &timer::_link>;
 };
 
 class lowres_clock {
@@ -654,10 +654,10 @@ private:
     promise<> _start_promise;
     semaphore _cpu_started;
     uint64_t _tasks_processed = 0;
-    timer_set<timer<>, &timer<>::_link> _timers;
-    timer_set<timer<>, &timer<>::_link>::timer_list_t _expired_timers;
-    timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link> _lowres_timers;
-    timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link>::timer_list_t _expired_lowres_timers;
+    seastar::timer_set<timer<>, &timer<>::_link> _timers;
+    seastar::timer_set<timer<>, &timer<>::_link>::timer_list_t _expired_timers;
+    seastar::timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link> _lowres_timers;
+    seastar::timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link>::timer_list_t _expired_lowres_timers;
     io_context_t _io_context;
     semaphore _io_context_available;
     circular_buffer<std::unique_ptr<task>> _pending_tasks;

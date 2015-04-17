@@ -336,7 +336,7 @@ private:
     size_t _resize_up_threshold = load_factor * initial_bucket_count;
     cache_type::bucket_type* _buckets;
     cache_type _cache;
-    timer_set<item, &item::_timer_link> _alive;
+    seastar::timer_set<item, &item::_timer_link> _alive;
     timer<> _timer;
     cache_stats _stats;
     timer<> _flush_timer;
