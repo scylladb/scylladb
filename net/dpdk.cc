@@ -1421,8 +1421,10 @@ void dpdk_device::set_hw_flow_control()
 
 void dpdk_device::init_port_fini()
 {
+#ifndef HAVE_OSV
     // Changing FC requires HW reset, so set it before the port is initialized.
     set_hw_flow_control();
+#endif
 
     if (rte_eth_dev_start(_port_idx) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
