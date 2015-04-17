@@ -33,7 +33,7 @@ namespace cql3 {
 
 ::shared_ptr<term> abstract_marker::raw::prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver)
 {
-    auto receiver_type = ::dynamic_pointer_cast<db::marshal::collection_type>(receiver->type);
+    auto receiver_type = ::dynamic_pointer_cast<collection_type_impl>(receiver->type);
     if (receiver_type == nullptr) {
         return ::make_shared<constants::marker>(_bind_index, receiver);
     }
