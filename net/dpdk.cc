@@ -1249,7 +1249,11 @@ int dpdk_device::init_port_start()
     _tx_conf_default.tx_rs_thresh   = 0; /* Use PMD default values */
 #else
     // Clear txq_flags - we want to support all available offload features.
+#ifndef HAVE_OSV
     _dev_info.default_txconf.txq_flags = 0;
+#else
+    _dev_info.default_txconf.txq_flags = ETH_TXQ_FLAGS_NOOFFLOADS;
+#endif
 #endif
 
     /* for port configuration all features are off by default */
