@@ -39,8 +39,6 @@ namespace db {
  */
 class expiring_cell : public cell {
 public:
-    static const int32_t MAX_TTL = 20 * 365 * 24 * 60 * 60; // 20 years in seconds
-
     virtual int32_t get_time_to_live() = 0;
 
     virtual shared_ptr<cell> local_copy(CFMetaData metadata, AbstractAllocator allocator) = 0;
