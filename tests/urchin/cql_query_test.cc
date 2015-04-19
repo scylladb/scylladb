@@ -771,3 +771,27 @@ SEASTAR_TEST_CASE(test_tuples) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_user_type) {
+    auto make_user_type = [] {
+        return user_type_impl::get_instance("ks", to_bytes("ut1"),
+                {to_bytes("my_int"), to_bytes("my_bigint"), to_bytes("my_text")},
+                {int32_type, long_type, utf8_type});
+    };
+    return do_with_cql_env([make_user_type] (cql_test_env& e) {
+        return e.create_table([make_user_type] (auto ks_name) {
+            // CQL: "create table cf (id int primary key, t tuple<int, bigint, text>);
+            return schema({}, ks_name, "cf",
+                {{"id", int32_type}}, {}, {{"t", make_user_type()}}, {}, utf8_type);
+        }).then([&e] {
+            return e.execute_cql("insert into cf (id, t) values (1, (1001, 2001, 'abc1'));").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select t.my_int, t.my_bigint, t.my_text from cf where id = 1;");
+        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+            assert_that(msg).is_rows()
+                .with_rows({
+                     {int32_type->decompose(int32_t(1001)), long_type->decompose(int64_t(2001)), utf8_type->decompose(sstring("abc1"))},
+                });
+        });
+    });
+}
