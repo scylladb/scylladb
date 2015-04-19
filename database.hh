@@ -25,7 +25,7 @@
 #include <experimental/optional>
 #include <string.h>
 #include "types.hh"
-#include "tuple.hh"
+#include "compound.hh"
 #include "core/future.hh"
 #include "cql3/column_specification.hh"
 #include <limits>

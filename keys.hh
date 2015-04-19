@@ -34,107 +34,107 @@ class partition_key;
 class clustering_key;
 class clustering_key_prefix;
 
-// Abstracts serialized tuple, managed by tuple_type.
+// Abstracts serialized compound, managed by compound_type.
 template <typename TopLevel>
-class tuple_wrapper {
+class compound_wrapper {
 protected:
     bytes _bytes;
 protected:
-    tuple_wrapper(bytes&& b) : _bytes(std::move(b)) {}
+    compound_wrapper(bytes&& b) : _bytes(std::move(b)) {}
 
-    static inline const auto& get_tuple_type(const schema& s) {
-        return TopLevel::get_tuple_type(s);
+    static inline const auto& get_compound_type(const schema& s) {
+        return TopLevel::get_compound_type(s);
     }
 public:
     static TopLevel make_empty(const schema& s) {
         std::vector<bytes> v;
-        v.resize(get_tuple_type(s)->types().size());
+        v.resize(get_compound_type(s)->types().size());
         return from_exploded(s, v);
     }
 
     static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {
-        return TopLevel::from_bytes(get_tuple_type(s)->serialize_value(v));
+        return TopLevel::from_bytes(get_compound_type(s)->serialize_value(v));
     }
 
     static TopLevel from_exploded(const schema& s, std::vector<bytes>&& v) {
-        return TopLevel::from_bytes(get_tuple_type(s)->serialize_value(std::move(v)));
+        return TopLevel::from_bytes(get_compound_type(s)->serialize_value(std::move(v)));
     }
 
     // We don't allow optional values, but provide this method as an efficient adaptor
     static TopLevel from_optional_exploded(const schema& s, const std::vector<bytes_opt>& v) {
-        return TopLevel::from_bytes(get_tuple_type(s)->serialize_optionals(v));
+        return TopLevel::from_bytes(get_compound_type(s)->serialize_optionals(v));
     }
 
     static TopLevel from_deeply_exploded(const schema& s, const std::vector<boost::any>& v) {
-        return TopLevel::from_bytes(get_tuple_type(s)->serialize_value_deep(v));
+        return TopLevel::from_bytes(get_compound_type(s)->serialize_value_deep(v));
     }
 
     static TopLevel from_single_value(const schema& s, bytes v) {
-        return TopLevel::from_bytes(get_tuple_type(s)->serialize_single(std::move(v)));
+        return TopLevel::from_bytes(get_compound_type(s)->serialize_single(std::move(v)));
     }
 
     // FIXME: return views
     std::vector<bytes> explode(const schema& s) const {
-        return get_tuple_type(s)->deserialize_value(_bytes);
+        return get_compound_type(s)->deserialize_value(_bytes);
     }
 
     struct less_compare {
-        typename TopLevel::tuple _t;
-        less_compare(const schema& s) : _t(get_tuple_type(s)) {}
+        typename TopLevel::compound _t;
+        less_compare(const schema& s) : _t(get_compound_type(s)) {}
         bool operator()(const TopLevel& k1, const TopLevel& k2) const {
             return _t->less(k1, k2);
         }
     };
 
     struct hashing {
-        typename TopLevel::tuple _t;
-        hashing(const schema& s) : _t(get_tuple_type(s)) {}
+        typename TopLevel::compound _t;
+        hashing(const schema& s) : _t(get_compound_type(s)) {}
         size_t operator()(const TopLevel& o) const {
             return _t->hash(o);
         }
     };
 
     struct equality {
-        typename TopLevel::tuple _t;
-        equality(const schema& s) : _t(get_tuple_type(s)) {}
+        typename TopLevel::compound _t;
+        equality(const schema& s) : _t(get_compound_type(s)) {}
         bool operator()(const TopLevel& o1, const TopLevel& o2) const {
             return _t->equal(o1, o2);
         }
     };
 
     bool equal(const schema& s, const TopLevel& other) const {
-        return get_tuple_type(s)->equal(*this, other);
+        return get_compound_type(s)->equal(*this, other);
     }
 
     operator bytes_view() const {
         return _bytes;
     }
 
-    // begin() and end() return iterators over components of this tuple. The iterator yields a bytes_view to the component.
+    // begin() and end() return iterators over components of this compound. The iterator yields a bytes_view to the component.
     auto begin(const schema& s) const {
-        return get_tuple_type(s)->begin(_bytes);
+        return get_compound_type(s)->begin(_bytes);
     }
 
     // See begin()
     auto end(const schema& s) const {
-        return get_tuple_type(s)->end(_bytes);
+        return get_compound_type(s)->end(_bytes);
     }
 };
 
 template <typename TopLevel, typename PrefixTopLevel>
-class prefix_view_on_full_tuple {
+class prefix_view_on_full_compound {
 public:
-    using iterator = typename tuple_type<allow_prefixes::no>::iterator;
+    using iterator = typename compound_type<allow_prefixes::no>::iterator;
 private:
     bytes_view _b;
     unsigned _prefix_len;
     iterator _begin;
     iterator _end;
 public:
-    prefix_view_on_full_tuple(const schema& s, bytes_view b, unsigned prefix_len)
+    prefix_view_on_full_compound(const schema& s, bytes_view b, unsigned prefix_len)
         : _b(b)
         , _prefix_len(prefix_len)
-        , _begin(TopLevel::get_tuple_type(s)->begin(_b))
+        , _begin(TopLevel::get_compound_type(s)->begin(_b))
         , _end(_begin)
     {
         std::advance(_end, prefix_len);
@@ -144,13 +144,13 @@ public:
     iterator end() const { return _end; }
 
     struct less_compare_with_prefix {
-        typename PrefixTopLevel::tuple prefix_type;
+        typename PrefixTopLevel::compound prefix_type;
 
         less_compare_with_prefix(const schema& s)
-            : prefix_type(PrefixTopLevel::get_tuple_type(s))
+            : prefix_type(PrefixTopLevel::get_compound_type(s))
         { }
 
-        bool operator()(const prefix_view_on_full_tuple& k1, const PrefixTopLevel& k2) const {
+        bool operator()(const prefix_view_on_full_compound& k1, const PrefixTopLevel& k2) const {
             return lexicographical_tri_compare(
                 prefix_type->types().begin(), prefix_type->types().end(),
                 k1.begin(), k1.end(),
@@ -158,7 +158,7 @@ public:
                 tri_compare) < 0;
         }
 
-        bool operator()(const PrefixTopLevel& k1, const prefix_view_on_full_tuple& k2) const {
+        bool operator()(const PrefixTopLevel& k1, const prefix_view_on_full_compound& k2) const {
             return lexicographical_tri_compare(
                 prefix_type->types().begin(), prefix_type->types().end(),
                 prefix_type->begin(k1), prefix_type->end(k1),
@@ -169,16 +169,16 @@ public:
 };
 
 template <typename TopLevel, typename PrefixTopLevel>
-class prefixable_full_tuple : public tuple_wrapper<TopLevel> {
-    using base = tuple_wrapper<TopLevel>;
+class prefixable_full_compound : public compound_wrapper<TopLevel> {
+    using base = compound_wrapper<TopLevel>;
 protected:
-    prefixable_full_tuple(bytes&& b) : base(std::move(b)) {}
+    prefixable_full_compound(bytes&& b) : base(std::move(b)) {}
 public:
-    using prefix_view_type = prefix_view_on_full_tuple<TopLevel, PrefixTopLevel>;
+    using prefix_view_type = prefix_view_on_full_compound<TopLevel, PrefixTopLevel>;
 
     bool is_prefixed_by(const schema& s, const PrefixTopLevel& prefix) const {
-        auto t = base::get_tuple_type(s);
-        auto prefix_type = PrefixTopLevel::get_tuple_type(s);
+        auto t = base::get_compound_type(s);
+        auto prefix_type = PrefixTopLevel::get_compound_type(s);
         return ::is_prefixed_by(t->types().begin(),
             t->begin(*this), t->end(*this),
             prefix_type->begin(prefix), prefix_type->end(prefix),
@@ -186,12 +186,12 @@ public:
     }
 
     struct less_compare_with_prefix {
-        typename PrefixTopLevel::tuple prefix_type;
-        typename TopLevel::tuple full_type;
+        typename PrefixTopLevel::compound prefix_type;
+        typename TopLevel::compound full_type;
 
         less_compare_with_prefix(const schema& s)
-            : prefix_type(PrefixTopLevel::get_tuple_type(s))
-            , full_type(TopLevel::get_tuple_type(s))
+            : prefix_type(PrefixTopLevel::get_compound_type(s))
+            , full_type(TopLevel::get_compound_type(s))
         { }
 
         bool operator()(const TopLevel& k1, const PrefixTopLevel& k2) const {
@@ -213,15 +213,15 @@ public:
 
     // In prefix equality two sequences are equal if any of them is a prefix
     // of the other. Otherwise lexicographical ordering is applied.
-    // Note: full tuples sorted according to lexicographical ordering are also
+    // Note: full compounds sorted according to lexicographical ordering are also
     // sorted according to prefix equality ordering.
     struct prefix_equality_less_compare {
-        typename PrefixTopLevel::tuple prefix_type;
-        typename TopLevel::tuple full_type;
+        typename PrefixTopLevel::compound prefix_type;
+        typename TopLevel::compound full_type;
 
         prefix_equality_less_compare(const schema& s)
-            : prefix_type(PrefixTopLevel::get_tuple_type(s))
-            , full_type(TopLevel::get_tuple_type(s))
+            : prefix_type(PrefixTopLevel::get_compound_type(s))
+            , full_type(TopLevel::get_compound_type(s))
         { }
 
         bool operator()(const TopLevel& k1, const PrefixTopLevel& k2) const {
@@ -245,13 +245,13 @@ public:
 };
 
 template <typename TopLevel, typename FullTopLevel>
-class prefix_tuple_wrapper : public tuple_wrapper<TopLevel> {
-    using base = tuple_wrapper<TopLevel>;
+class prefix_compound_wrapper : public compound_wrapper<TopLevel> {
+    using base = compound_wrapper<TopLevel>;
 protected:
-    prefix_tuple_wrapper(bytes&& b) : base(std::move(b)) {}
+    prefix_compound_wrapper(bytes&& b) : base(std::move(b)) {}
 public:
     bool is_full(const schema& s) const {
-        return TopLevel::get_tuple_type(s)->is_full(base::_bytes);
+        return TopLevel::get_compound_type(s)->is_full(base::_bytes);
     }
 
     // Can be called only if is_full()
@@ -260,7 +260,7 @@ public:
     }
 
     bool is_prefixed_by(const schema& s, const TopLevel& prefix) const {
-        auto t = base::get_tuple_type(s);
+        auto t = base::get_compound_type(s);
         return ::is_prefixed_by(t->types().begin(),
             t->begin(*this), t->end(*this),
             t->begin(prefix), t->end(prefix),
@@ -268,17 +268,17 @@ public:
     }
 };
 
-class partition_key : public tuple_wrapper<partition_key> {
+class partition_key : public compound_wrapper<partition_key> {
 public:
-    partition_key(bytes&& b) : tuple_wrapper<partition_key>(std::move(b)) {}
+    partition_key(bytes&& b) : compound_wrapper<partition_key>(std::move(b)) {}
 public:
-    using tuple = lw_shared_ptr<tuple_type<allow_prefixes::no>>;
+    using compound = lw_shared_ptr<compound_type<allow_prefixes::no>>;
 
     static partition_key from_bytes(bytes b) {
         return partition_key(std::move(b));
     }
 
-    static const tuple& get_tuple_type(const schema& s) {
+    static const compound& get_compound_type(const schema& s) {
         return s.partition_key_type();
     }
 
@@ -305,17 +305,17 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const exploded_clustering_prefix& ecp);
 };
 
-class clustering_key : public prefixable_full_tuple<clustering_key, clustering_key_prefix> {
+class clustering_key : public prefixable_full_compound<clustering_key, clustering_key_prefix> {
 public:
-    clustering_key(bytes&& b) : prefixable_full_tuple<clustering_key, clustering_key_prefix>(std::move(b)) {}
+    clustering_key(bytes&& b) : prefixable_full_compound<clustering_key, clustering_key_prefix>(std::move(b)) {}
 public:
-    using tuple = lw_shared_ptr<tuple_type<allow_prefixes::no>>;
+    using compound = lw_shared_ptr<compound_type<allow_prefixes::no>>;
 
     static clustering_key from_bytes(bytes b) {
         return clustering_key(std::move(b));
     }
 
-    static const tuple& get_tuple_type(const schema& s) {
+    static const compound& get_compound_type(const schema& s) {
         return s.clustering_key_type();
     }
 
@@ -327,16 +327,16 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const clustering_key& ck);
 };
 
-class clustering_key_prefix : public prefix_tuple_wrapper<clustering_key_prefix, clustering_key> {
-    clustering_key_prefix(bytes&& b) : prefix_tuple_wrapper<clustering_key_prefix, clustering_key>(std::move(b)) {}
+class clustering_key_prefix : public prefix_compound_wrapper<clustering_key_prefix, clustering_key> {
+    clustering_key_prefix(bytes&& b) : prefix_compound_wrapper<clustering_key_prefix, clustering_key>(std::move(b)) {}
 public:
-    using tuple = lw_shared_ptr<tuple_type<allow_prefixes::yes>>;
+    using compound = lw_shared_ptr<compound_type<allow_prefixes::yes>>;
 
     static clustering_key_prefix from_bytes(bytes b) {
         return clustering_key_prefix(std::move(b));
     }
 
-    static const tuple& get_tuple_type(const schema& s) {
+    static const compound& get_compound_type(const schema& s) {
         return s.clustering_key_prefix_type();
     }
 

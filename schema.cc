@@ -37,8 +37,8 @@ schema::build_columns(const std::vector<column>& columns, column_definition::col
 }
 
 void schema::rebuild() {
-    _partition_key_type = make_lw_shared<tuple_type<>>(get_column_types(_raw._partition_key));
-    _clustering_key_type = make_lw_shared<tuple_type<>>(get_column_types(_raw._clustering_key));
+    _partition_key_type = make_lw_shared<compound_type<>>(get_column_types(_raw._partition_key));
+    _clustering_key_type = make_lw_shared<compound_type<>>(get_column_types(_raw._clustering_key));
     _clustering_key_prefix_type = make_lw_shared(_clustering_key_type->as_prefix());
 
     _thrift = thrift_schema();

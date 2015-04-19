@@ -7,7 +7,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include "types.hh"
-#include "tuple.hh"
+#include "compound.hh"
 
 BOOST_AUTO_TEST_CASE(test_bytes_type_string_conversions) {
     BOOST_REQUIRE(bytes_type->equal(bytes_type->from_string("616263646566"), bytes_type->decompose(bytes{"abcdef"})));
@@ -52,8 +52,8 @@ BOOST_AUTO_TEST_CASE(test_int32_type_string_conversions) {
     BOOST_REQUIRE_EQUAL(int32_type->to_string(bytes()), "");
 }
 
-BOOST_AUTO_TEST_CASE(test_tuple_type_compare) {
-    tuple_type<> type({utf8_type, utf8_type, utf8_type});
+BOOST_AUTO_TEST_CASE(test_compound_type_compare) {
+    compound_type<> type({utf8_type, utf8_type, utf8_type});
 
     BOOST_REQUIRE(type.compare(
         type.serialize_value({bytes("a"), bytes("b"), bytes("c")}),
@@ -99,7 +99,7 @@ unextract(std::experimental::optional<T> v) {
 template <typename T>
 using opt = std::experimental::optional<T>;
 
-BOOST_AUTO_TEST_CASE(test_the_real_tuple) {
+BOOST_AUTO_TEST_CASE(test_tuple) {
     auto t = tuple_type_impl::get_instance({int32_type, long_type, utf8_type});
     using native_type = tuple_type_impl::native_type;
     using c_type = std::tuple<opt<int32_t>, opt<int64_t>, opt<sstring>>;

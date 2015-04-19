@@ -12,7 +12,7 @@
 #include "cql3/column_specification.hh"
 #include "core/shared_ptr.hh"
 #include "types.hh"
-#include "tuple.hh"
+#include "compound.hh"
 #include "gc_clock.hh"
 #include "unimplemented.hh"
 #include "utils/UUID.hh"
@@ -88,9 +88,9 @@ private:
 private:
     std::unordered_map<bytes, const column_definition*> _columns_by_name;
     std::map<bytes, const column_definition*, serialized_compare> _regular_columns_by_name;
-    lw_shared_ptr<tuple_type<allow_prefixes::no>> _partition_key_type;
-    lw_shared_ptr<tuple_type<allow_prefixes::no>> _clustering_key_type;
-    lw_shared_ptr<tuple_type<allow_prefixes::yes>> _clustering_key_prefix_type;
+    lw_shared_ptr<compound_type<allow_prefixes::no>> _partition_key_type;
+    lw_shared_ptr<compound_type<allow_prefixes::no>> _clustering_key_type;
+    lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_prefix_type;
     thrift_schema _thrift;
 public:
     struct column {
@@ -219,13 +219,13 @@ public:
     const sstring& cf_name() const {
         return _raw._cf_name;
     }
-    const lw_shared_ptr<tuple_type<allow_prefixes::no>>& partition_key_type() const {
+    const lw_shared_ptr<compound_type<allow_prefixes::no>>& partition_key_type() const {
         return _partition_key_type;
     }
-    const lw_shared_ptr<tuple_type<allow_prefixes::no>>& clustering_key_type() const {
+    const lw_shared_ptr<compound_type<allow_prefixes::no>>& clustering_key_type() const {
         return _clustering_key_type;
     }
-    const lw_shared_ptr<tuple_type<allow_prefixes::yes>>& clustering_key_prefix_type() const {
+    const lw_shared_ptr<compound_type<allow_prefixes::yes>>& clustering_key_prefix_type() const {
         return _clustering_key_prefix_type;
     }
     const data_type& regular_column_name_type() const {

@@ -35,16 +35,16 @@ struct value_traits<bytes_opt> {
 enum class allow_prefixes { yes, no };
 
 template<allow_prefixes AllowPrefixes = allow_prefixes::no>
-class tuple_type final {
+class compound_type final {
 private:
     const std::vector<shared_ptr<abstract_type>> _types;
     const bool _byte_order_equal;
     const bool _byte_order_comparable;
 public:
-    using prefix_type = tuple_type<allow_prefixes::yes>;
+    using prefix_type = compound_type<allow_prefixes::yes>;
     using value_type = std::vector<bytes>;
 
-    tuple_type(std::vector<shared_ptr<abstract_type>> types)
+    compound_type(std::vector<shared_ptr<abstract_type>> types)
         : _types(std::move(types))
         , _byte_order_equal(std::all_of(_types.begin(), _types.end(), [] (auto t) {
                 return t->is_byte_order_equal();
@@ -52,7 +52,7 @@ public:
         , _byte_order_comparable(_types.size() == 1 && _types[0]->is_byte_order_comparable())
     { }
 
-    tuple_type(tuple_type&&) = default;
+    compound_type(compound_type&&) = default;
 
     auto const& types() {
         return _types;
@@ -70,7 +70,7 @@ public:
      * its length is deduced from the input range.
      *
      * serialize_value() and serialize_optionals() for single element rely on the fact that for a single-element
-     * tuples their serialized form is equal to the serialized form of the component.
+     * compounds their serialized form is equal to the serialized form of the component.
      */
     template<typename Wrapped>
     void serialize_value(const std::vector<Wrapped>& values, bytes::iterator& out) {
@@ -186,7 +186,7 @@ public:
         }
     public:
         struct end_iterator_tag {};
-        iterator(const tuple_type& t, const bytes_view& v) : _types_left(t._types.size()), _v(v) {
+        iterator(const compound_type& t, const bytes_view& v) : _types_left(t._types.size()), _v(v) {
             read_current();
         }
         iterator(end_iterator_tag, const bytes_view& v) : _v(nullptr, 0) {}
@@ -264,4 +264,4 @@ public:
     }
 };
 
-using tuple_prefix = tuple_type<allow_prefixes::yes>;
+using compound_prefix = compound_type<allow_prefixes::yes>;
