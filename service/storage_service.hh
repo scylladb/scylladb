@@ -14,107 +14,40 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
+ *
  */
-package org.apache.cassandra.service;
 
-import java.io.ByteArrayInputStream;
-import java.io.DataInputStream;
-import java.io.File;
-import java.io.IOException;
-import java.lang.management.ManagementFactory;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.nio.ByteBuffer;
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
+#pragma once
 
-import javax.management.JMX;
-import javax.management.MBeanServer;
-import javax.management.Notification;
-import javax.management.NotificationBroadcasterSupport;
-import javax.management.ObjectName;
-import javax.management.openmbean.TabularData;
-import javax.management.openmbean.TabularDataSupport;
+#include "gms/i_endpoint_state_change_subscriber.hh"
+#include "locator/token_metadata.hh"
+#include "gms/gossiper.hh"
 
-import ch.qos.logback.classic.LoggerContext;
-import ch.qos.logback.classic.jmx.JMXConfiguratorMBean;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.Appender;
-
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Predicate;
-import com.google.common.collect.*;
-import com.google.common.util.concurrent.*;
-import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.lang3.time.DurationFormatUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import org.apache.cassandra.auth.Auth;
-import org.apache.cassandra.concurrent.*;
-import org.apache.cassandra.config.*;
-import org.apache.cassandra.cql3.UntypedResultSet;
-import org.apache.cassandra.cql3.QueryOptions;
-import org.apache.cassandra.cql3.QueryProcessor;
-import org.apache.cassandra.cql3.statements.SelectStatement;
-import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.commitlog.CommitLog;
-import org.apache.cassandra.db.compaction.CompactionManager;
-import org.apache.cassandra.db.index.SecondaryIndex;
-import org.apache.cassandra.dht.*;
-import org.apache.cassandra.dht.Range;
-import org.apache.cassandra.exceptions.ConfigurationException;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.exceptions.UnavailableException;
-import org.apache.cassandra.gms.*;
-import org.apache.cassandra.io.sstable.SSTableDeletingTask;
-import org.apache.cassandra.io.sstable.SSTableLoader;
-import org.apache.cassandra.io.util.FileUtils;
-import org.apache.cassandra.locator.*;
-import org.apache.cassandra.metrics.StorageMetrics;
-import org.apache.cassandra.net.AsyncOneResponse;
-import org.apache.cassandra.net.MessageOut;
-import org.apache.cassandra.net.MessagingService;
-import org.apache.cassandra.net.ResponseVerbHandler;
-import org.apache.cassandra.repair.RepairMessageVerbHandler;
-import org.apache.cassandra.repair.RepairSessionResult;
-import org.apache.cassandra.repair.messages.RepairOption;
-import org.apache.cassandra.repair.RepairSession;
-import org.apache.cassandra.repair.RepairParallelism;
-import org.apache.cassandra.service.paxos.CommitVerbHandler;
-import org.apache.cassandra.service.paxos.PrepareVerbHandler;
-import org.apache.cassandra.service.paxos.ProposeVerbHandler;
-import org.apache.cassandra.streaming.*;
-import org.apache.cassandra.thrift.EndpointDetails;
-import org.apache.cassandra.thrift.TokenRange;
-import org.apache.cassandra.thrift.cassandraConstants;
-import org.apache.cassandra.tracing.TraceKeyspace;
-import org.apache.cassandra.tracing.TraceState;
-import org.apache.cassandra.tracing.Tracing;
-import org.apache.cassandra.transport.messages.ResultMessage;
-import org.apache.cassandra.utils.*;
-
-import static java.nio.charset.StandardCharsets.ISO_8859_1;
-
+namespace service {
 /**
  * This abstraction contains the token/identifier of this node
  * on the identifier space. This token gets gossiped around.
  * This class will also maintain histograms of the load information
  * of other nodes in the cluster.
  */
-public class StorageService extends NotificationBroadcasterSupport implements IEndpointStateChangeSubscriber, StorageServiceMBean
+class storage_service : public gms::i_endpoint_state_change_subscriber
 {
+#if 0
     private static final Logger logger = LoggerFactory.getLogger(StorageService.class);
-
-    public static final int RING_DELAY = getRingDelay(); // delay after which we assume ring has stablized
 
     /* JMX notification serial number counter */
     private final AtomicLong notificationSerialNumber = new AtomicLong();
+#endif
+public:
+    static int RING_DELAY; // delay after which we assume ring has stablized
 
-    private static int getRingDelay()
+private:
+    static int getRingDelay()
     {
+#if 0
         String newdelay = System.getProperty("cassandra.ring_delay_ms");
         if (newdelay != null)
         {
@@ -122,12 +55,12 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             return Integer.parseInt(newdelay);
         }
         else
+#endif
             return 30 * 1000;
     }
-
     /* This abstraction maintains the token/endpoint metadata information */
-    private TokenMetadata tokenMetadata = new TokenMetadata();
-
+    locator::token_metadata tokenMetadata;
+#if 0
     public volatile VersionedValue.VersionedValueFactory valueFactory = new VersionedValue.VersionedValueFactory(getPartitioner());
 
     private Thread drainOnShutdown = null;
@@ -164,10 +97,13 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
 
     /* we bootstrap but do NOT join the ring unless told to do so */
     private boolean isSurveyMode= Boolean.parseBoolean(System.getProperty("cassandra.write_survey", "false"));
+#endif
+private:
+    bool initialized;
 
-    private boolean initialized;
-    private volatile boolean joined = false;
+    bool joined = false;
 
+#if 0
     /* the probability for tracing any particular request, 0 disables tracing and 1 enables for all */
     private double traceProbability = 0.0;
 
@@ -477,20 +413,22 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         if (!MessagingService.instance().isListening())
             MessagingService.instance().listen(FBUtilities.getLocalAddress());
     }
-
-    public synchronized void initServer() throws ConfigurationException
+#endif
+public:
+    void init_server()
     {
-        initServer(RING_DELAY);
+        init_server(RING_DELAY);
     }
 
-    public synchronized void initServer(int delay) throws ConfigurationException
+    void init_server(int delay)
     {
+#if 0
         logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
         logger.info("Thrift API version: {}", cassandraConstants.VERSION);
         logger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
-
+#endif
         initialized = true;
-
+#if 0
         try
         {
             // Ensure StorageProxy is initialized on start-up; see CASSANDRA-3797.
@@ -580,9 +518,9 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             }
         }, "StorageServiceShutdownHook");
         Runtime.getRuntime().addShutdownHook(drainOnShutdown);
-
-        prepareToJoin();
-
+#endif
+        prepare_to_join();
+#if 0
         // Has to be called after the host id has potentially changed in prepareToJoin().
         for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
             if (cfs.metadata.isCounter())
@@ -606,8 +544,9 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             }
             logger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
         }
+#endif
     }
-
+#if 0
     /**
      * In the event of forceful termination we need to remove the shutdown hook to prevent hanging (OOM for instance)
      */
@@ -621,13 +560,14 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
     {
         return DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && !DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress());
     }
-
-    private void prepareToJoin() throws ConfigurationException
+#endif
+private:
+    void prepare_to_join()
     {
         if (!joined)
         {
-            Map<ApplicationState, VersionedValue> appStates = new HashMap<>();
-
+            std::map<gms::application_state, gms::versioned_value> app_state;
+#if 0
             if (DatabaseDescriptor.isReplacing() && !(Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true"))))
                 throw new ConfigurationException("Cannot set both join_ring=false and attempt to replace a node");
             if (DatabaseDescriptor.getReplaceTokens().size() > 0 || DatabaseDescriptor.getReplaceNode() != null)
@@ -658,8 +598,11 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             appStates.put(ApplicationState.RPC_ADDRESS, valueFactory.rpcaddress(DatabaseDescriptor.getBroadcastRpcAddress()));
             appStates.put(ApplicationState.RELEASE_VERSION, valueFactory.releaseVersion());
             logger.info("Starting up server gossip");
-            Gossiper.instance.register(this);
-            Gossiper.instance.start(SystemKeyspace.incrementAndGetGeneration(), appStates); // needed for node-ring gathering.
+#endif
+            auto& gossiper = gms::get_local_gossiper();
+            gossiper.register_(this);
+            gossiper.start(0/*SystemKeyspace.incrementAndGetGeneration()*/, app_state);
+#if 0
             // gossip snitch infos (local DC and rack)
             gossipSnitchInfo();
             // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
@@ -671,9 +614,11 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
 
             HintedHandOffManager.instance.start();
             BatchlogManager.instance.start();
+#endif
         }
-    }
 
+    }
+#if 0
     private void joinTokenRing(int delay) throws ConfigurationException
     {
         joined = true;
@@ -1282,8 +1227,9 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         }
         return rangeToEndpointMap;
     }
-
-    public void beforeChange(InetAddress endpoint, EndpointState currentState, ApplicationState newStateKey, VersionedValue newValue)
+#endif
+public:
+    void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, gms::versioned_value new_value) override
     {
         // no-op
     }
@@ -1320,8 +1266,9 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
      * Note: Any time a node state changes from STATUS_NORMAL, it will not be visible to new nodes. So it follows that
      * you should never bootstrap a new node during a removenode, decommission or move.
      */
-    public void onChange(InetAddress endpoint, ApplicationState state, VersionedValue value)
+    void on_change(gms::inet_address endpoint, gms::application_state state, gms::versioned_value value) override
     {
+#if 0
         if (state == ApplicationState.STATUS)
         {
             String apStateValue = value.value;
@@ -1392,8 +1339,9 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
                     break;
             }
         }
+#endif
     }
-
+#if 0
     private void updatePeerInfo(InetAddress endpoint)
     {
         EndpointState epState = Gossiper.instance.getEndpointStateForEndpoint(endpoint);
@@ -1950,18 +1898,22 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
 
         return changedRanges;
     }
-
-    public void onJoin(InetAddress endpoint, EndpointState epState)
+#endif
+public:
+    void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override
     {
+#if 0
         for (Map.Entry<ApplicationState, VersionedValue> entry : epState.getApplicationStateMap().entrySet())
         {
             onChange(endpoint, entry.getKey(), entry.getValue());
         }
         MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
+#endif
     }
 
-    public void onAlive(InetAddress endpoint, EndpointState state)
+    void on_alive(gms::inet_address endpoint, gms::endpoint_state state) override
     {
+#if 0
         MigrationManager.instance.scheduleSchemaPull(endpoint, state);
 
         if (tokenMetadata.isMember(endpoint))
@@ -1970,28 +1922,35 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
             for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
                 subscriber.onUp(endpoint);
         }
+#endif
     }
 
-    public void onRemove(InetAddress endpoint)
+    void on_remove(gms::inet_address endpoint) override
     {
+#if 0
         tokenMetadata.removeEndpoint(endpoint);
         PendingRangeCalculatorService.instance.update();
+#endif
     }
 
-    public void onDead(InetAddress endpoint, EndpointState state)
+    void on_dead(gms::inet_address endpoint, gms::endpoint_state state) override
     {
+#if 0
         MessagingService.instance().convict(endpoint);
         for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
             subscriber.onDown(endpoint);
+#endif
     }
 
-    public void onRestart(InetAddress endpoint, EndpointState state)
+    void on_restart(gms::inet_address endpoint, gms::endpoint_state state) override
     {
+#if 0
         // If we have restarted before the node was even marked down, we need to reset the connection pool
         if (state.isAlive())
             onDead(endpoint, state);
+#endif
     }
-
+#if 0
     /** raw load value */
     public double getLoad()
     {
@@ -4205,4 +4164,8 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
         DatabaseDescriptor.setHintedHandoffThrottleInKB(throttleInKB);
         logger.info(String.format("Updated hinted_handoff_throttle_in_kb to %d", throttleInKB));
     }
+#endif
+};
+
+extern storage_service storage_service_instance;
 }
