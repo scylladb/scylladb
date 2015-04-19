@@ -41,6 +41,7 @@ options {
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
+#include "cql3/selection/selectable_with_field_selection.hh"
 #include "cql3/constants.hh"
 #include "cql3/operation_impl.hh"
 #include "cql3/error_listener.hh"
@@ -311,9 +312,7 @@ unaliasedSelector returns [shared_ptr<selectable::raw> s]
        | K_TTL       '(' c=cident ')'              { tmp = make_shared<selectable::writetime_or_ttl::raw>(c, false); }
        | f=functionName args=selectionFunctionArgs { tmp = ::make_shared<selectable::with_function::raw>(std::move(f), std::move(args)); }
        )
-#if 0
-       ( '.' fi=cident { tmp = new Selectable.WithFieldSelection.Raw(tmp, fi); } )*
-#endif
+       ( '.' fi=cident { tmp = make_shared<selectable::with_field_selection::raw>(std::move(tmp), std::move(fi)); } )*
     { $s = tmp; }
     ;
 
