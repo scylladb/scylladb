@@ -1248,12 +1248,38 @@ int dpdk_device::init_port_start()
     _tx_conf_default.tx_free_thresh = 0; /* Use PMD default values */
     _tx_conf_default.tx_rs_thresh   = 0; /* Use PMD default values */
 #else
-    // Clear txq_flags - we want to support all available offload features.
-#ifndef HAVE_OSV
-    _dev_info.default_txconf.txq_flags = 0;
-#else
-    _dev_info.default_txconf.txq_flags = ETH_TXQ_FLAGS_NOOFFLOADS;
-#endif
+    // Clear txq_flags - we want to support all available offload features
+    // except for multi-mempool and refcnt'ing which we don't need
+    _dev_info.default_txconf.txq_flags =
+        ETH_TXQ_FLAGS_NOMULTMEMP | ETH_TXQ_FLAGS_NOREFCOUNT;
+
+    //
+    // Disable features that are not supported by port's HW
+    //
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_CKSUM)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOXSUMUDP;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOXSUMTCP;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_SCTP_CKSUM)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOXSUMSCTP;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_VLAN_INSERT)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOVLANOFFL;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_VLAN_INSERT)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOVLANOFFL;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_TSO) &&
+        !(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_TSO)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOMULTSEGS;
+    }
 #endif
 
     /* for port configuration all features are off by default */
