@@ -1400,6 +1400,11 @@ void dpdk_device::set_hw_flow_control()
     // Read the port's current/default flow control settings
     struct rte_eth_fc_conf fc_conf;
     auto ret = rte_eth_dev_flow_ctrl_get(_port_idx, &fc_conf);
+
+    if (ret == -ENOTSUP) {
+        goto not_supported;
+    }
+
     if (ret < 0) {
         rte_exit(EXIT_FAILURE, "Port %u: failed to get hardware flow control settings: (error %d)\n", _port_idx, ret);
     }
@@ -1410,21 +1415,27 @@ void dpdk_device::set_hw_flow_control()
         fc_conf.mode = RTE_FC_NONE;
     }
 
-    printf("Port %u: %s HW FC\n", _port_idx,
-                                  (_enable_fc ? "Enabling" : "Disabling"));
-
     ret = rte_eth_dev_flow_ctrl_set(_port_idx, &fc_conf);
+    if (ret == -ENOTSUP) {
+        goto not_supported;
+    }
+
     if (ret < 0) {
         rte_exit(EXIT_FAILURE, "Port %u: failed to set hardware flow control (error %d)\n", _port_idx, ret);
     }
+
+    printf("Port %u: %s HW FC\n", _port_idx,
+                                  (_enable_fc ? "Enabling" : "Disabling"));
+    return;
+
+not_supported:
+    printf("Port %u: Changing HW FC settings is not supported\n", _port_idx);
 }
 
 void dpdk_device::init_port_fini()
 {
-#ifndef HAVE_OSV
     // Changing FC requires HW reset, so set it before the port is initialized.
     set_hw_flow_control();
-#endif
 
     if (rte_eth_dev_start(_port_idx) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
