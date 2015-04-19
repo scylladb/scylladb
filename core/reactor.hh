@@ -65,6 +65,9 @@
 #include "core/enum.hh"
 
 #ifdef HAVE_OSV
+#include <osv/sched.hh>
+#include <osv/mutex.h>
+#include <osv/condvar.h>
 #include <osv/newpoll.hh>
 #endif
 
@@ -122,7 +125,7 @@ public:
     bool cancel();
     time_point get_timeout();
     friend class reactor;
-    friend class timer_set<timer, &timer::_link>;
+    friend class seastar::timer_set<timer, &timer::_link>;
 };
 
 class lowres_clock {
@@ -585,12 +588,13 @@ private:
 public:
     reactor_backend_osv();
     virtual ~reactor_backend_osv() override { }
-    virtual void wait_and_process() override;
+    virtual bool wait_and_process() override;
     virtual future<> readable(pollable_fd_state& fd) override;
     virtual future<> writeable(pollable_fd_state& fd) override;
     virtual void forget(pollable_fd_state& fd) override;
     virtual future<> notified(reactor_notifier *n) override;
     virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
+    void enable_timer(clock_type::time_point when);
     friend class reactor_notifier_osv;
 };
 #endif /* HAVE_OSV */
@@ -637,6 +641,11 @@ private:
     // FIXME: make _backend a unique_ptr<reactor_backend>, not a compile-time #ifdef.
 #ifdef HAVE_OSV
     reactor_backend_osv _backend;
+    sched::thread _timer_thread;
+    sched::thread *_engine_thread;
+    mutable mutex _timer_mutex;
+    condvar _timer_cond;
+    s64 _timer_due = 0;
 #else
     reactor_backend_epoll _backend;
 #endif
@@ -653,10 +662,10 @@ private:
     promise<> _start_promise;
     semaphore _cpu_started;
     uint64_t _tasks_processed = 0;
-    timer_set<timer<>, &timer<>::_link> _timers;
-    timer_set<timer<>, &timer<>::_link>::timer_list_t _expired_timers;
-    timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link> _lowres_timers;
-    timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link>::timer_list_t _expired_lowres_timers;
+    seastar::timer_set<timer<>, &timer<>::_link> _timers;
+    seastar::timer_set<timer<>, &timer<>::_link>::timer_list_t _expired_timers;
+    seastar::timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link> _lowres_timers;
+    seastar::timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link>::timer_list_t _expired_lowres_timers;
     io_context_t _io_context;
     semaphore _io_context_available;
     circular_buffer<std::unique_ptr<task>> _pending_tasks;
@@ -781,6 +790,11 @@ public:
             });
         }
     }
+
+#ifdef HAVE_OSV
+    void timer_thread_func();
+    void set_timer(sched::timer &tmr, s64 t);
+#endif
 private:
     /**
      * Add a new "poller" - a non-blocking function returning a boolean, that
