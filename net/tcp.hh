@@ -1481,9 +1481,7 @@ void tcp<InetTraits>::tcb::output_one(bool data_retransmit) {
         // segment length set to 0. All the rest is the same as for a TCP Tx
         // CSUM offload case.
         //
-        if (_tcp.hw_features().tx_tso &&
-            p.len() > _snd.mss + sizeof(eth_hdr) + oi.ip_hdr_len +
-                      oi.tcp_hdr_len) {
+        if (_tcp.hw_features().tx_tso && len > _snd.mss) {
             oi.tso_seg_size = _snd.mss;
         } else {
             pseudo_hdr_seg_len = sizeof(*th) + options_size + len;
