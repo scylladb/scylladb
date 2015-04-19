@@ -320,7 +320,7 @@ function_call::contains_bind_marker() const {
 
 shared_ptr<terminal>
 function_call::make_terminal(shared_ptr<function> fun, bytes_opt result, serialization_format sf)  {
-    if (!dynamic_pointer_cast<shared_ptr<db::marshal::collection_type>>(fun->return_type())) {
+    if (!dynamic_pointer_cast<collection_type_impl>(fun->return_type())) {
         return ::make_shared<constants::value>(std::move(result));
     }
 

@@ -27,7 +27,6 @@
 
 
 #include "exceptions/exceptions.hh"
-#include "db/expiring_cell.hh"
 #include "cql3/term.hh"
 #include <experimental/optional>
 
@@ -105,8 +104,9 @@ public:
             throw exceptions::invalid_request_exception("A TTL must be greater or equal to 0");
         }
 
-        if (ttl > db::expiring_cell::MAX_TTL) {
-            throw exceptions::invalid_request_exception("ttl is too large. requested (" + std::to_string(ttl) +") maximum (" + std::to_string(db::expiring_cell::MAX_TTL) + ")");
+        if (ttl > max_ttl.time_since_epoch().count()) {
+            throw exceptions::invalid_request_exception("ttl is too large. requested (" + std::to_string(ttl) +
+                ") maximum (" + std::to_string(max_ttl.time_since_epoch().count()) + ")");
         }
 
         return ttl;
