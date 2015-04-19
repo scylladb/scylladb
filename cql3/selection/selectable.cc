@@ -3,6 +3,8 @@
  */
 
 #include "selectable.hh"
+#include "selectable_with_field_selection.hh"
+#include "field_selector.hh"
 #include "writetime_or_ttl.hh"
 #include "selector_factories.hh"
 #include "cql3/functions/functions.hh"
@@ -71,6 +73,39 @@ selectable::with_function::raw::prepare(schema_ptr s) {
 
 bool
 selectable::with_function::raw::processes_selection() const {
+    return true;
+}
+
+shared_ptr<selector::factory>
+selectable::with_field_selection::new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) {
+    auto&& factory = _selected->new_selector_factory(db, s, defs);
+    auto&& type = factory->new_instance()->get_type();
+    auto&& ut = dynamic_pointer_cast<user_type_impl>(std::move(type));
+    if (!ut) {
+        throw exceptions::invalid_request_exception(
+                sprint("Invalid field selection: %s of type %s is not a user type",
+                       "FIXME: selectable" /* FIMXME: _selected */, ut->as_cql3_type()));
+    }
+    for (size_t i = 0; i < ut->size(); ++i) {
+        if (ut->field_name(i) != _field->bytes_) {
+            continue;
+        }
+        return field_selector::new_factory(std::move(ut), i, std::move(factory));
+    }
+    throw exceptions::invalid_request_exception(sprint("%s of type %s has no field %s",
+                                                       "FIXME: selectable" /* FIXME: _selected */, ut->as_cql3_type(), _field));
+}
+
+shared_ptr<selectable>
+selectable::with_field_selection::raw::prepare(schema_ptr s) {
+    // static_pointer_cast<> needed due to lack of covariant return type
+    // support with smart pointers
+    return make_shared<with_field_selection>(_selected->prepare(s),
+            static_pointer_cast<column_identifier>(_field->prepare(s)));
+}
+
+bool
+selectable::with_field_selection::raw::processes_selection() const {
     return true;
 }
 

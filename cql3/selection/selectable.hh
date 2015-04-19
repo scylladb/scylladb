@@ -81,71 +81,7 @@ public:
 
     class with_function;
 
-#if 0
-    public static class WithFieldSelection extends Selectable
-    {
-        public final Selectable selected;
-        public final ColumnIdentifier field;
-
-        public WithFieldSelection(Selectable selected, ColumnIdentifier field)
-        {
-            this.selected = selected;
-            this.field = field;
-        }
-
-        @Override
-        public String toString()
-        {
-            return String.format("%s.%s", selected, field);
-        }
-
-        public Selector.Factory newSelectorFactory(CFMetaData cfm,
-                                                   List<ColumnDefinition> defs) throws InvalidRequestException
-        {
-            Selector.Factory factory = selected.newSelectorFactory(cfm, defs);
-            AbstractType<?> type = factory.newInstance().getType();
-            if (!(type instanceof UserType))
-                throw new InvalidRequestException(
-                        String.format("Invalid field selection: %s of type %s is not a user type",
-                                      selected,
-                                      type.asCQL3Type()));
-
-            UserType ut = (UserType) type;
-            for (int i = 0; i < ut.size(); i++)
-            {
-                if (!ut.fieldName(i).equals(field.bytes))
-                    continue;
-                return FieldSelector.newFactory(ut, i, factory);
-            }
-            throw new InvalidRequestException(String.format("%s of type %s has no field %s",
-                                                            selected,
-                                                            type.asCQL3Type(),
-                                                            field));
-        }
-
-        public static class Raw implements Selectable.Raw
-        {
-            private final Selectable.Raw selected;
-            private final ColumnIdentifier.Raw field;
-
-            public Raw(Selectable.Raw selected, ColumnIdentifier.Raw field)
-            {
-                this.selected = selected;
-                this.field = field;
-            }
-
-            public WithFieldSelection prepare(CFMetaData cfm)
-            {
-                return new WithFieldSelection(selected.prepare(cfm), field.prepare(cfm));
-            }
-
-            public boolean processesSelection()
-            {
-                return true;
-            }
-        }
-    }
-#endif
+    class with_field_selection;
 };
 
 class selectable::with_function : public selectable {
