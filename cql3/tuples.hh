@@ -139,7 +139,7 @@ public:
                 _elements.push_back(e ? bytes_opt(bytes(e->begin(), e->size())) : bytes_opt());
             }
         }
-        static value from_serialized(bytes_view buffer, db_tuple_type type) {
+        static value from_serialized(bytes_view buffer, tuple_type type) {
             return value(type->split(buffer));
         }
         virtual bytes_opt get(const query_options& options) override {
@@ -158,10 +158,10 @@ public:
      * Similar to Value, but contains at least one NonTerminal, such as a non-pure functions or bind marker.
      */
     class delayed_value : public non_terminal {
-        db_tuple_type _type;
+        tuple_type _type;
         std::vector<shared_ptr<term>> _elements;
     public:
-        delayed_value(db_tuple_type type, std::vector<shared_ptr<term>> elements)
+        delayed_value(tuple_type type, std::vector<shared_ptr<term>> elements)
                 : _type(std::move(type)), _elements(std::move(elements)) {
         }
 

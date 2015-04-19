@@ -888,9 +888,6 @@ private:
     static sstring make_name(const std::vector<data_type>& types);
 };
 
-// FIXME: conflicts with another tuple_type
-using db_tuple_type = shared_ptr<tuple_type_impl>;
-
 class user_type_impl : public tuple_type_impl {
 public:
     const sstring _keyspace;
@@ -918,3 +915,4 @@ private:
 };
 
 using user_type = shared_ptr<user_type_impl>;
+using tuple_type = shared_ptr<tuple_type_impl>;
