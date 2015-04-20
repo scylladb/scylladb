@@ -122,23 +122,23 @@ public:
      * @return the <code>Restriction</code> corresponding to this <code>Relation</code>
      * @throws InvalidRequestException if this <code>Relation</code> is not valid
      */
-    virtual ::shared_ptr<restrictions::restriction> to_restriction(schema_ptr schema, ::shared_ptr<variable_specifications> bound_names) final {
+    virtual ::shared_ptr<restrictions::restriction> to_restriction(database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names) final {
         if (_relation_type == operator_type::EQ) {
-            return new_EQ_restriction(schema, bound_names);
+            return new_EQ_restriction(db, schema, bound_names);
         } else if (_relation_type == operator_type::LT) {
-            return new_slice_restriction(schema, bound_names, statements::bound::END, false);
+            return new_slice_restriction(db, schema, bound_names, statements::bound::END, false);
         } else if (_relation_type == operator_type::LTE) {
-            return new_slice_restriction(schema, bound_names, statements::bound::END, true);
+            return new_slice_restriction(db, schema, bound_names, statements::bound::END, true);
         } else if (_relation_type == operator_type::GTE) {
-            return new_slice_restriction(schema, bound_names, statements::bound::START, true);
+            return new_slice_restriction(db, schema, bound_names, statements::bound::START, true);
         } else if (_relation_type == operator_type::GT) {
-            return new_slice_restriction(schema, bound_names, statements::bound::START, false);
+            return new_slice_restriction(db, schema, bound_names, statements::bound::START, false);
         } else if (_relation_type == operator_type::IN) {
-            return new_IN_restriction(schema, bound_names);
+            return new_IN_restriction(db, schema, bound_names);
         } else if (_relation_type == operator_type::CONTAINS) {
-            return new_contains_restriction(schema, bound_names, false);
+            return new_contains_restriction(db, schema, bound_names, false);
         } else if (_relation_type == operator_type::CONTAINS_KEY) {
-            return new_contains_restriction(schema, bound_names, true);
+            return new_contains_restriction(db, schema, bound_names, true);
         } else {
             throw exceptions::invalid_request_exception(sprint("Unsupported \"!=\" relation: %s", to_string()));
         }
@@ -158,7 +158,7 @@ public:
      * @return a new EQ restriction instance.
      * @throws InvalidRequestException if the relation cannot be converted into an EQ restriction.
      */
-    virtual ::shared_ptr<restrictions::restriction> new_EQ_restriction(schema_ptr schema,
+    virtual ::shared_ptr<restrictions::restriction> new_EQ_restriction(database& db, schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names) = 0;
 
     /**
@@ -169,7 +169,7 @@ public:
      * @return a new IN restriction instance
      * @throws InvalidRequestException if the relation cannot be converted into an IN restriction.
      */
-    virtual ::shared_ptr<restrictions::restriction> new_IN_restriction(schema_ptr schema,
+    virtual ::shared_ptr<restrictions::restriction> new_IN_restriction(database& db, schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names) = 0;
 
     /**
@@ -182,7 +182,7 @@ public:
      * @return a new slice restriction instance
      * @throws InvalidRequestException if the <code>Relation</code> is not valid
      */
-    virtual ::shared_ptr<restrictions::restriction> new_slice_restriction(schema_ptr schema,
+    virtual ::shared_ptr<restrictions::restriction> new_slice_restriction(database& db, schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names,
         statements::bound bound,
         bool inclusive) = 0;
@@ -196,7 +196,7 @@ public:
      * @return a new Contains <code>::shared_ptr<restrictions::restriction></code> instance
      * @throws InvalidRequestException if the <code>Relation</code> is not valid
      */
-    virtual ::shared_ptr<restrictions::restriction> new_contains_restriction(schema_ptr schema,
+    virtual ::shared_ptr<restrictions::restriction> new_contains_restriction(database& db, schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names, bool isKey) = 0;
 
 protected:
@@ -213,6 +213,7 @@ protected:
      */
     virtual ::shared_ptr<term> to_term(const std::vector<::shared_ptr<column_specification>>& receivers,
                                        ::shared_ptr<term::raw> raw,
+                                       database& db,
                                        const sstring& keyspace,
                                        ::shared_ptr<variable_specifications> boundNames) = 0;
 
@@ -228,11 +229,12 @@ protected:
      */
     std::vector<::shared_ptr<term>> to_terms(const std::vector<::shared_ptr<column_specification>>& receivers,
                                              const std::vector<::shared_ptr<term::raw>>& raws,
+                                             database& db,
                                              const sstring& keyspace,
                                              ::shared_ptr<variable_specifications> boundNames) {
         std::vector<::shared_ptr<term>> terms;
         for (auto&& r : raws) {
-            terms.emplace_back(to_term(receivers, r, keyspace, boundNames));
+            terms.emplace_back(to_term(receivers, r, db, keyspace, boundNames));
         }
         return terms;
     }

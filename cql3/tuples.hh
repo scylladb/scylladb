@@ -47,12 +47,12 @@ public:
         literal(std::vector<shared_ptr<raw>> elements)
                 : _elements(std::move(elements)) {
         }
-        virtual shared_ptr<term> prepare(const sstring& keyspace, shared_ptr<column_specification> receiver) override {
-            validate_assignable_to(keyspace, receiver);
+        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override {
+            validate_assignable_to(db, keyspace, receiver);
             std::vector<shared_ptr<term>> values;
             bool all_terminal = true;
             for (size_t i = 0; i < _elements.size(); ++i) {
-                auto&& value = _elements[i]->prepare(keyspace, component_spec_of(receiver, i));
+                auto&& value = _elements[i]->prepare(db, keyspace, component_spec_of(receiver, i));
                 if (dynamic_pointer_cast<non_terminal>(value)) {
                     all_terminal = false;
                 }
@@ -66,7 +66,7 @@ public:
             }
         }
 
-        virtual shared_ptr<term> prepare(const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) override {
+        virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, const std::vector<shared_ptr<column_specification>>& receivers) override {
             if (_elements.size() != receivers.size()) {
                 throw exceptions::invalid_request_exception(sprint("Expected %d elements in value tuple, but got %d: %s", receivers.size(), _elements.size(), *this));
             }
@@ -75,7 +75,7 @@ public:
             std::vector<data_type> types;
             bool all_terminal = true;
             for (size_t i = 0; i < _elements.size(); ++i) {
-                auto&& t = _elements[i]->prepare(keyspace, receivers[i]);
+                auto&& t = _elements[i]->prepare(db, keyspace, receivers[i]);
                 if (dynamic_pointer_cast<non_terminal>(t)) {
                     all_terminal = false;
                 }
@@ -91,7 +91,7 @@ public:
         }
 
     private:
-        void validate_assignable_to(const sstring& keyspace, shared_ptr<column_specification> receiver) {
+        void validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
             auto tt = dynamic_pointer_cast<tuple_type_impl>(receiver->type);
             if (!tt) {
                 throw exceptions::invalid_request_exception(sprint("Invalid tuple type literal for %s of type %s", receiver->name, receiver->type->as_cql3_type()));
@@ -104,15 +104,15 @@ public:
 
                 auto&& value = _elements[i];
                 auto&& spec = component_spec_of(receiver, i);
-                if (!assignment_testable::is_assignable(value->test_assignment(keyspace, spec))) {
+                if (!assignment_testable::is_assignable(value->test_assignment(db, keyspace, spec))) {
                     throw exceptions::invalid_request_exception(sprint("Invalid tuple literal for %s: component %d is not of type %s", receiver->name, i, spec->type->as_cql3_type()));
                 }
             }
         }
     public:
-        virtual assignment_testable::test_result test_assignment(const sstring& keyspace, shared_ptr<column_specification> receiver) override {
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override {
             try {
-                validate_assignable_to(keyspace, receiver);
+                validate_assignable_to(db, keyspace, receiver);
                 return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
             } catch (exceptions::invalid_request_exception e) {
                 return assignment_testable::test_result::NOT_ASSIGNABLE;

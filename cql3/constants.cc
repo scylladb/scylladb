@@ -63,7 +63,7 @@ constants::literal::parsed_value(::shared_ptr<abstract_type> validator)
 }
 
 assignment_testable::test_result
-constants::literal::test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver)
+constants::literal::test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver)
 {
     auto receiver_type = receiver->type->as_cql3_type();
     if (receiver_type->is_collection()) {
@@ -127,9 +127,9 @@ constants::literal::test_assignment(const sstring& keyspace, ::shared_ptr<column
 }
 
 ::shared_ptr<term>
-constants::literal::prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver)
+constants::literal::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver)
 {
-    if (!is_assignable(test_assignment(keyspace, receiver))) {
+    if (!is_assignable(test_assignment(db, keyspace, receiver))) {
         throw exceptions::invalid_request_exception(sprint("Invalid %s constant (%s) for \"%s\" of type %s",
             _type, _text, *receiver->name, receiver->type->as_cql3_type()->to_string()));
     }

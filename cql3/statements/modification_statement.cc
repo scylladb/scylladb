@@ -411,7 +411,7 @@ modification_statement::add_key_value(const column_definition& def, ::shared_ptr
 }
 
 void
-modification_statement::process_where_clause(std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
+modification_statement::process_where_clause(database& db, std::vector<relation_ptr> where_clause, ::shared_ptr<variable_specifications> names) {
     for (auto&& relation : where_clause) {
         if (relation->is_multi_column()) {
             throw exceptions::invalid_request_exception(sprint("Multi-column relations cannot be used in WHERE clauses for UPDATE and DELETE statements: %s", relation->to_string()));
@@ -430,7 +430,7 @@ modification_statement::process_where_clause(std::vector<relation_ptr> where_cla
 
         if (def->is_primary_key()) {
             if (rel->is_EQ() || (def->is_partition_key() && rel->is_IN())) {
-                add_key_values(*def, rel->to_restriction(s, std::move(names)));
+                add_key_values(*def, rel->to_restriction(db, s, std::move(names)));
             } else {
                 throw exceptions::invalid_request_exception(sprint("Invalid operator %s for PRIMARY KEY part %s", rel->get_operator(), def->name_as_text()));
             }
@@ -451,10 +451,10 @@ modification_statement::parsed::prepare(database& db) {
 modification_statement::parsed::prepare(database& db, ::shared_ptr<variable_specifications> bound_names) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
 
-    auto prepared_attributes = _attrs->prepare(keyspace(), column_family());
+    auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
     prepared_attributes->collect_marker_specification(bound_names);
 
-    ::shared_ptr<modification_statement> stmt = prepare_internal(schema, bound_names, std::move(prepared_attributes));
+    ::shared_ptr<modification_statement> stmt = prepare_internal(db, schema, bound_names, std::move(prepared_attributes));
 
     if (_if_not_exists || _if_exists || !_conditions.empty()) {
         if (stmt->is_counter()) {
@@ -482,7 +482,7 @@ modification_statement::parsed::prepare(database& db, ::shared_ptr<variable_spec
                     throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *id));
                 }
 
-                auto condition = entry.second->prepare(keyspace(), *def);
+                auto condition = entry.second->prepare(db, keyspace(), *def);
                 condition->collect_marker_specificaton(bound_names);
 
                 if (def->is_primary_key()) {

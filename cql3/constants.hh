@@ -90,14 +90,15 @@ public:
         };
         static const ::shared_ptr<terminal> NULL_VALUE;
     public:
-        virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
-            if (!is_assignable(test_assignment(keyspace, receiver))) {
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
+            if (!is_assignable(test_assignment(db, keyspace, receiver))) {
                 throw exceptions::invalid_request_exception("Invalid null value for counter increment/decrement");
             }
             return NULL_VALUE;
         }
 
-        virtual assignment_testable::test_result test_assignment(const sstring& keyspace,
+        virtual assignment_testable::test_result test_assignment(database& db,
+            const sstring& keyspace,
             ::shared_ptr<column_specification> receiver) override {
                 return receiver->type->is_counter()
                     ? assignment_testable::test_result::NOT_ASSIGNABLE
@@ -145,7 +146,7 @@ public:
             return ::make_shared<literal>(type::HEX, text);
         }
 
-        virtual ::shared_ptr<term> prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver);
+        virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver);
     private:
         bytes parsed_value(::shared_ptr<abstract_type> validator);
     public:
@@ -153,7 +154,7 @@ public:
             return _text;
         }
 
-        virtual assignment_testable::test_result test_assignment(const sstring& keyspace, ::shared_ptr<column_specification> receiver);
+        virtual assignment_testable::test_result test_assignment(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver);
 
         virtual sstring to_string() const override {
             return _type == type::STRING ? sstring(sprint("'%s'", _text)) : _text;

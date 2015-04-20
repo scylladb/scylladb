@@ -89,7 +89,8 @@ public:
         , _nonprimary_key_restrictions(::make_shared<single_column_restrictions>(schema))
     { }
 
-    statement_restrictions(schema_ptr schema,
+    statement_restrictions(database& db,
+            schema_ptr schema,
             const std::vector<::shared_ptr<relation>>& where_clause,
             ::shared_ptr<variable_specifications> bound_names,
             bool selects_only_static_columns,
@@ -105,7 +106,7 @@ public:
          */
         if (!where_clause.empty()) {
             for (auto&& relation : where_clause) {
-                add_restriction(relation->to_restriction(schema, bound_names));
+                add_restriction(relation->to_restriction(db, schema, bound_names));
             }
         }
 

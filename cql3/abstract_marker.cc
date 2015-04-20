@@ -31,7 +31,7 @@
 
 namespace cql3 {
 
-::shared_ptr<term> abstract_marker::raw::prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver)
+::shared_ptr<term> abstract_marker::raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver)
 {
     auto receiver_type = ::dynamic_pointer_cast<collection_type_impl>(receiver->type);
     if (receiver_type == nullptr) {
@@ -47,7 +47,7 @@ namespace cql3 {
     assert(0);
 }
 
-::shared_ptr<term> abstract_marker::in_raw::prepare(const sstring& keyspace, ::shared_ptr<column_specification> receiver) {
+::shared_ptr<term> abstract_marker::in_raw::prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) {
     return ::make_shared<lists::marker>(_bind_index, make_in_receiver(receiver));
 }
 

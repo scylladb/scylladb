@@ -25,15 +25,15 @@ lists::value_spec_of(shared_ptr<column_specification> column) {
 }
 
 shared_ptr<term>
-lists::literal::prepare(const sstring& keyspace, shared_ptr<column_specification> receiver) {
-    validate_assignable_to(keyspace, receiver);
+lists::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
+    validate_assignable_to(db, keyspace, receiver);
 
     auto&& value_spec = value_spec_of(receiver);
     std::vector<shared_ptr<term>> values;
     values.reserve(_elements.size());
     bool all_terminal = true;
     for (auto rt : _elements) {
-        auto&& t = rt->prepare(keyspace, value_spec);
+        auto&& t = rt->prepare(db, keyspace, value_spec);
 
         if (t->contains_bind_marker()) {
             throw exceptions::invalid_request_exception(sprint("Invalid list literal for %s: bind variables are not supported inside collection literals", *receiver->name));
@@ -52,14 +52,14 @@ lists::literal::prepare(const sstring& keyspace, shared_ptr<column_specification
 }
 
 void
-lists::literal::validate_assignable_to(const sstring keyspace, shared_ptr<column_specification> receiver) {
+lists::literal::validate_assignable_to(database& db, const sstring keyspace, shared_ptr<column_specification> receiver) {
     if (!dynamic_pointer_cast<list_type_impl>(receiver->type)) {
         throw exceptions::invalid_request_exception(sprint("Invalid list literal for %s of type %s",
                 *receiver->name, *receiver->type->as_cql3_type()));
     }
     auto&& value_spec = value_spec_of(receiver);
     for (auto rt : _elements) {
-        if (!is_assignable(rt->test_assignment(keyspace, value_spec))) {
+        if (!is_assignable(rt->test_assignment(db, keyspace, value_spec))) {
             throw exceptions::invalid_request_exception(sprint("Invalid list literal for %s: value %s is not of type %s",
                     *receiver->name, *rt, *value_spec->type->as_cql3_type()));
         }
@@ -67,7 +67,7 @@ lists::literal::validate_assignable_to(const sstring keyspace, shared_ptr<column
 }
 
 assignment_testable::test_result
-lists::literal::test_assignment(const sstring& keyspace, shared_ptr<column_specification> receiver) {
+lists::literal::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
     if (!dynamic_pointer_cast<list_type_impl>(receiver->type)) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
@@ -81,7 +81,7 @@ lists::literal::test_assignment(const sstring& keyspace, shared_ptr<column_speci
     std::vector<shared_ptr<assignment_testable>> to_test;
     to_test.reserve(_elements.size());
     std::copy(_elements.begin(), _elements.end(), std::back_inserter(to_test));
-    return assignment_testable::test_all(keyspace, value_spec, to_test);
+    return assignment_testable::test_all(db, keyspace, value_spec, to_test);
 }
 
 sstring

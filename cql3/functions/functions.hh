@@ -58,31 +58,34 @@ public:
             const function& fun, size_t i);
     static int get_overload_count(const function_name& name);
 public:
-    static shared_ptr<function> get(const sstring& keyspace,
+    static shared_ptr<function> get(database& db,
+                                    const sstring& keyspace,
                                     const function_name& name,
                                     const std::vector<shared_ptr<assignment_testable>>& provided_args,
                                     const sstring& receiver_ks,
                                     const sstring& receiver_cf);
     template <typename AssignmentTestablePtrRange>
-    static shared_ptr<function> get(const sstring& keyspace,
+    static shared_ptr<function> get(database& db,
+                                    const sstring& keyspace,
                                     const function_name& name,
                                     AssignmentTestablePtrRange&& provided_args,
                                     const sstring& receiver_ks,
                                     const sstring& receiver_cf) {
         const std::vector<shared_ptr<assignment_testable>> args(std::begin(provided_args), std::end(provided_args));
-        return get(keyspace, name, args, receiver_ks, receiver_cf);
+        return get(db, keyspace, name, args, receiver_ks, receiver_cf);
     }
     static std::vector<shared_ptr<function>> find(const function_name& name);
     static shared_ptr<function> find(const function_name& name, const std::vector<data_type>& arg_types);
 private:
     // This method and matchArguments are somewhat duplicate, but this method allows us to provide more precise errors in the common
     // case where there is no override for a given function. This is thus probably worth the minor code duplication.
-    static void validate_types(const sstring& keyspace,
+    static void validate_types(database& db,
+                              const sstring& keyspace,
                               shared_ptr<function> fun,
                               const std::vector<shared_ptr<assignment_testable>>& provided_args,
                               const sstring& receiver_ks,
                               const sstring& receiver_cf);
-    static assignment_testable::test_result match_arguments(const sstring& keyspace,
+    static assignment_testable::test_result match_arguments(database& db, const sstring& keyspace,
             shared_ptr<function> fun,
             const std::vector<shared_ptr<assignment_testable>>& provided_args,
             const sstring& receiver_ks,

@@ -456,12 +456,13 @@ public:
     virtual ::shared_ptr<prepared> prepare(database& db) override;
 private:
     ::shared_ptr<restrictions::statement_restrictions> prepare_restrictions(
+        database& db,
         schema_ptr schema,
         ::shared_ptr<variable_specifications> bound_names,
         ::shared_ptr<selection::selection> selection);
 
     /** Returns a ::shared_ptr<term> for the limit or null if no limit is set */
-    ::shared_ptr<term> prepare_limit(::shared_ptr<variable_specifications> bound_names);
+    ::shared_ptr<term> prepare_limit(database& db, ::shared_ptr<variable_specifications> bound_names);
 
     static void verify_ordering_is_allowed(::shared_ptr<restrictions::statement_restrictions> restrictions);
 

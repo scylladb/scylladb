@@ -52,7 +52,7 @@ void delete_statement::add_update_for_key(mutation& m, const exploded_clustering
 }
 
 ::shared_ptr<modification_statement>
-delete_statement::parsed::prepare_internal(schema_ptr schema, ::shared_ptr<variable_specifications> bound_names,
+delete_statement::parsed::prepare_internal(database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names,
         std::unique_ptr<attributes> attrs) {
 
     auto stmt = ::make_shared<delete_statement>(statement_type::DELETE, bound_names->size(), schema, std::move(attrs));
@@ -70,12 +70,12 @@ delete_statement::parsed::prepare_internal(schema_ptr schema, ::shared_ptr<varia
             throw exceptions::invalid_request_exception(sprint("Invalid identifier %s for deletion (should not be a PRIMARY KEY part)", def->name_as_text()));
         }
 
-        auto&& op = deletion->prepare(schema->ks_name, *def);
+        auto&& op = deletion->prepare(db, schema->ks_name, *def);
         op->collect_marker_specification(bound_names);
         stmt->add_operation(op);
     }
 
-    stmt->process_where_clause(_where_clause, std::move(bound_names));
+    stmt->process_where_clause(db, _where_clause, std::move(bound_names));
     return stmt;
 }
 

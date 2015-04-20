@@ -14,7 +14,7 @@ public:
         : _type{type}
     { }
 public:
-    virtual shared_ptr<cql3_type> prepare(const sstring& keyspace) {
+    virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace) {
         return _type;
     }
 
@@ -61,7 +61,7 @@ public:
         return true;
     }
 
-    virtual shared_ptr<cql3_type> prepare(const sstring& keyspace) override {
+    virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace) override {
         assert(_values); // "Got null values type for a collection";
 
         if (!_frozen && _values->supports_freezing() && !_values->_frozen) {
@@ -78,12 +78,12 @@ public:
         }
 
         if (_kind == &collection_type_impl::kind::list) {
-            return make_shared(cql3_type(to_string(), list_type_impl::get_instance(_values->prepare(keyspace)->get_type(), !_frozen), false));
+            return make_shared(cql3_type(to_string(), list_type_impl::get_instance(_values->prepare(db, keyspace)->get_type(), !_frozen), false));
         } else if (_kind == &collection_type_impl::kind::set) {
-            return make_shared(cql3_type(to_string(), set_type_impl::get_instance(_values->prepare(keyspace)->get_type(), !_frozen), false));
+            return make_shared(cql3_type(to_string(), set_type_impl::get_instance(_values->prepare(db, keyspace)->get_type(), !_frozen), false));
         } else if (_kind == &collection_type_impl::kind::map) {
             assert(_keys); // "Got null keys type for a collection";
-            return make_shared(cql3_type(to_string(), map_type_impl::get_instance(_keys->prepare(keyspace)->get_type(), _values->prepare(keyspace)->get_type(), !_frozen), false));
+            return make_shared(cql3_type(to_string(), map_type_impl::get_instance(_keys->prepare(db, keyspace)->get_type(), _values->prepare(db, keyspace)->get_type(), !_frozen), false));
         }
         abort();
     }
@@ -122,7 +122,7 @@ public:
         }
         _frozen = true;
     }
-    virtual shared_ptr<cql3_type> prepare(const sstring& keyspace) override {
+    virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace) override {
         if (!_frozen) {
             freeze();
         }
@@ -131,7 +131,7 @@ public:
             if (t->is_counter()) {
                 throw exceptions::invalid_request_exception("Counters are not allowed inside tuples");
             }
-            ts.push_back(t->prepare(keyspace)->get_type());
+            ts.push_back(t->prepare(db, keyspace)->get_type());
         }
         return make_cql3_tuple_type(tuple_type_impl::get_instance(std::move(ts)));
     }

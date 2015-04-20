@@ -69,12 +69,13 @@ public:
      */
     static ::shared_ptr<selector_factories> create_factories_and_collect_column_definitions(
                 std::vector<::shared_ptr<selectable>> selectables,
-                schema_ptr schema,
+                database& db, schema_ptr schema,
                 std::vector<const column_definition*>& defs) {
-        return ::make_shared<selector_factories>(std::move(selectables), std::move(schema), defs);
+        return ::make_shared<selector_factories>(std::move(selectables), db, std::move(schema), defs);
     }
 
-    selector_factories(std::vector<::shared_ptr<selectable>> selectables, schema_ptr schema, std::vector<const column_definition*>& defs);
+    selector_factories(std::vector<::shared_ptr<selectable>> selectables,
+            database& db, schema_ptr schema, std::vector<const column_definition*>& defs);
 public:
     bool uses_function(const sstring& ks_name, const sstring& function_name) const;
 

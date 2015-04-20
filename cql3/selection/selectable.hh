@@ -54,7 +54,7 @@ import org.apache.commons.lang3.text.StrBuilder;
 class selectable {
 public:
     virtual ~selectable() {}
-    virtual ::shared_ptr<selector::factory> new_selector_factory(schema_ptr schema, std::vector<const column_definition*>& defs) = 0;
+    virtual ::shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr schema, std::vector<const column_definition*>& defs) = 0;
 protected:
     static size_t add_and_get_index(const column_definition& def, std::vector<const column_definition*>& defs) {
         auto i = std::find(defs.begin(), defs.end(), &def);
@@ -81,71 +81,7 @@ public:
 
     class with_function;
 
-#if 0
-    public static class WithFieldSelection extends Selectable
-    {
-        public final Selectable selected;
-        public final ColumnIdentifier field;
-
-        public WithFieldSelection(Selectable selected, ColumnIdentifier field)
-        {
-            this.selected = selected;
-            this.field = field;
-        }
-
-        @Override
-        public String toString()
-        {
-            return String.format("%s.%s", selected, field);
-        }
-
-        public Selector.Factory newSelectorFactory(CFMetaData cfm,
-                                                   List<ColumnDefinition> defs) throws InvalidRequestException
-        {
-            Selector.Factory factory = selected.newSelectorFactory(cfm, defs);
-            AbstractType<?> type = factory.newInstance().getType();
-            if (!(type instanceof UserType))
-                throw new InvalidRequestException(
-                        String.format("Invalid field selection: %s of type %s is not a user type",
-                                      selected,
-                                      type.asCQL3Type()));
-
-            UserType ut = (UserType) type;
-            for (int i = 0; i < ut.size(); i++)
-            {
-                if (!ut.fieldName(i).equals(field.bytes))
-                    continue;
-                return FieldSelector.newFactory(ut, i, factory);
-            }
-            throw new InvalidRequestException(String.format("%s of type %s has no field %s",
-                                                            selected,
-                                                            type.asCQL3Type(),
-                                                            field));
-        }
-
-        public static class Raw implements Selectable.Raw
-        {
-            private final Selectable.Raw selected;
-            private final ColumnIdentifier.Raw field;
-
-            public Raw(Selectable.Raw selected, ColumnIdentifier.Raw field)
-            {
-                this.selected = selected;
-                this.field = field;
-            }
-
-            public WithFieldSelection prepare(CFMetaData cfm)
-            {
-                return new WithFieldSelection(selected.prepare(cfm), field.prepare(cfm));
-            }
-
-            public boolean processesSelection()
-            {
-                return true;
-            }
-        }
-    }
-#endif
+    class with_field_selection;
 };
 
 class selectable::with_function : public selectable {
@@ -168,7 +104,7 @@ public:
     }
 #endif
 
-    virtual shared_ptr<selector::factory> new_selector_factory(schema_ptr s, std::vector<const column_definition*>& defs) override;
+    virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
     class raw : public selectable::raw {
         functions::function_name _function_name;
         std::vector<shared_ptr<selectable::raw>> _args;

@@ -88,7 +88,7 @@ void update_statement::add_update_for_key(mutation& m, const exploded_clustering
 }
 
 ::shared_ptr<modification_statement>
-update_statement::parsed_insert::prepare_internal(schema_ptr schema,
+update_statement::parsed_insert::prepare_internal(database& db, schema_ptr schema,
     ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs)
 {
     auto stmt = ::make_shared<update_statement>(statement_type::INSERT, bound_names->size(), schema, std::move(attrs));
@@ -123,11 +123,11 @@ update_statement::parsed_insert::prepare_internal(schema_ptr schema,
         auto&& value = _column_values[i];
 
         if (def->is_primary_key()) {
-            auto t = value->prepare(keyspace(), def->column_specification);
+            auto t = value->prepare(db, keyspace(), def->column_specification);
             t->collect_marker_specification(bound_names);
             stmt->add_key_value(*def, std::move(t));
         } else {
-            auto operation = operation::set_value(value).prepare(keyspace(), *def);
+            auto operation = operation::set_value(value).prepare(db, keyspace(), *def);
             operation->collect_marker_specification(bound_names);
             stmt->add_operation(std::move(operation));
         };
@@ -136,7 +136,7 @@ update_statement::parsed_insert::prepare_internal(schema_ptr schema,
 }
 
 ::shared_ptr<modification_statement>
-update_statement::parsed_update::prepare_internal(schema_ptr schema,
+update_statement::parsed_update::prepare_internal(database& db, schema_ptr schema,
     ::shared_ptr<variable_specifications> bound_names, std::unique_ptr<attributes> attrs)
 {
     auto stmt = ::make_shared<update_statement>(statement_type::UPDATE, bound_names->size(), schema, std::move(attrs));
@@ -148,7 +148,7 @@ update_statement::parsed_update::prepare_internal(schema_ptr schema,
             throw exceptions::invalid_request_exception(sprint("Unknown identifier %s", *entry.first));
         }
 
-        auto operation = entry.second->prepare(keyspace(), *def);
+        auto operation = entry.second->prepare(db, keyspace(), *def);
         operation->collect_marker_specification(bound_names);
 
         if (def->is_primary_key()) {
@@ -157,7 +157,7 @@ update_statement::parsed_update::prepare_internal(schema_ptr schema,
         stmt->add_operation(std::move(operation));
     }
 
-    stmt->process_where_clause(_where_clause, bound_names);
+    stmt->process_where_clause(db, _where_clause, bound_names);
     return stmt;
 }
 

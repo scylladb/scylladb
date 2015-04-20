@@ -23,6 +23,7 @@
  * Modified by Cloudius Systems
  */
 
+
 #pragma once
 
 #include "selectable.hh"
@@ -32,31 +33,31 @@ namespace cql3 {
 
 namespace selection {
 
-class selectable::writetime_or_ttl : public selectable {
+class selectable::with_field_selection : public selectable {
 public:
-    shared_ptr<column_identifier> _id;
-    bool _is_writetime;
-
-    writetime_or_ttl(shared_ptr<column_identifier> id, bool is_writetime)
-            : _id(std::move(id)), _is_writetime(is_writetime) {
+    shared_ptr<selectable> _selected;
+    shared_ptr<column_identifier> _field;
+public:
+    with_field_selection(shared_ptr<selectable> selected, shared_ptr<column_identifier> field)
+            : _selected(std::move(selected)), _field(std::move(field)) {
     }
 
 #if 0
     @Override
     public String toString()
     {
-        return (isWritetime ? "writetime" : "ttl") + "(" + id + ")";
+        return String.format("%s.%s", selected, field);
     }
 #endif
 
     virtual shared_ptr<selector::factory> new_selector_factory(database& db, schema_ptr s, std::vector<const column_definition*>& defs) override;
 
     class raw : public selectable::raw {
-        shared_ptr<column_identifier::raw> _id;
-        bool _is_writetime;
+        shared_ptr<selectable::raw> _selected;
+        shared_ptr<column_identifier::raw> _field;
     public:
-        raw(shared_ptr<column_identifier::raw> id, bool is_writetime)
-            : _id(std::move(id)), _is_writetime(is_writetime) {
+        raw(shared_ptr<selectable::raw> selected, shared_ptr<column_identifier::raw> field)
+                : _selected(std::move(selected)), _field(std::move(field)) {
         }
         virtual shared_ptr<selectable> prepare(schema_ptr s) override;
         virtual bool processes_selection() const override;
