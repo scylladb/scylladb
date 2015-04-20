@@ -202,9 +202,9 @@ public:
     }
     // Returns a range of column definitions
     auto all_columns_in_select_order() const {
-        return boost::join(partition_key_columns(),
-            boost::join(clustering_key_columns(),
-            boost::join(static_columns(), regular_columns())));
+        return boost::range::join(partition_key_columns(),
+            boost::range::join(clustering_key_columns(),
+            boost::range::join(static_columns(), regular_columns())));
     }
     uint32_t position(const column_definition& column) const {
         if (column.is_primary_key()) {
