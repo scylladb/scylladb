@@ -39,6 +39,7 @@
 #include <experimental/optional>
 #include <random>
 #include <stdexcept>
+#include <system_error>
 
 #define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
 #include <cryptopp/md5.h>
@@ -49,24 +50,20 @@ namespace net {
 
 class tcp_hdr;
 
-class tcp_error : public std::runtime_error {
-public:
-    tcp_error(const std::string& msg) : std::runtime_error(msg) {}
+inline auto tcp_error(int err) {
+    return std::system_error(err, std::system_category());
+}
+
+inline auto tcp_reset_error() {
+    return tcp_error(ECONNRESET);
 };
 
-class tcp_reset_error : public tcp_error {
-public:
-    tcp_reset_error() : tcp_error("connection is reset") {}
-};
+inline auto tcp_connect_error() {
+    return tcp_error(ECONNABORTED);
+}
 
-class tcp_connect_error : public tcp_error {
-public:
-    tcp_connect_error() : tcp_error("fail to connect") {}
-};
-
-class tcp_refused_error : public tcp_error {
-public:
-    tcp_refused_error() : tcp_error("connection refused") {}
+inline auto tcp_refused_error() {
+    return tcp_error(ECONNREFUSED);
 };
 
 enum class tcp_state : uint16_t {
