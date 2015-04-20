@@ -2,6 +2,7 @@
 
 #include "core/enum.hh"
 #include "bytes.hh"
+#include "sstables/key.hh"
 
 namespace sstables {
 
