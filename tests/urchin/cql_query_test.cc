@@ -792,6 +792,15 @@ SEASTAR_TEST_CASE(test_user_type) {
                 .with_rows({
                      {int32_type->decompose(int32_t(1001)), long_type->decompose(int64_t(2001)), utf8_type->decompose(sstring("abc1"))},
                 });
+        }).then([&e] {
+            return e.execute_cql("update cf set t = { my_int: 1002, my_bigint: 2002, my_text: 'abc2' } where id = 1;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select t.my_int, t.my_bigint, t.my_text from cf where id = 1;");
+        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+            assert_that(msg).is_rows()
+                .with_rows({
+                     {int32_type->decompose(int32_t(1002)), long_type->decompose(int64_t(2002)), utf8_type->decompose(sstring("abc2"))},
+                });
         });
     });
 }
