@@ -143,7 +143,7 @@ urchin_tests = [
     'tests/cartesian_product_test',
     'tests/urchin/hash_test',
     'tests/urchin/serializer_test',
-    'tests/message',
+    'tests/urchin/message',
     'tests/urchin/gossip',
 ]
 
@@ -426,7 +426,6 @@ deps = {
     'tests/fstream_test': ['tests/fstream_test.cc'] + core + boost_test_lib,
     'tests/distributed_test': ['tests/distributed_test.cc'] + core,
     'tests/rpc': ['tests/rpc.cc'] + core + libnet,
-    'tests/message': ['tests/message.cc', 'message/messaging_service.cc'] + core + libnet,
 }
 
 for t in urchin_tests:
