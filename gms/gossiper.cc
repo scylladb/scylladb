@@ -279,7 +279,7 @@ void gossiper::apply_state_locally(std::map<inet_address, endpoint_state>& map) 
 
 void gossiper::remove_endpoint(inet_address endpoint) {
     // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
-    for (shared_ptr<i_endpoint_state_change_subscriber>& subscriber : _subscribers) {
+    for (auto& subscriber : _subscribers) {
         subscriber->on_remove(endpoint);
     }
 
@@ -430,11 +430,11 @@ bool gossiper::seen_any_seed() {
     return false;
 }
 
-void gossiper::register_(shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-    _subscribers.push_back(std::move(subscriber));
+void gossiper::register_(i_endpoint_state_change_subscriber* subscriber) {
+    _subscribers.push_back(subscriber);
 }
 
-void gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+void gossiper::unregister_(i_endpoint_state_change_subscriber* subscriber) {
     _subscribers.remove(subscriber);
 }
 
@@ -860,7 +860,7 @@ void gossiper::real_mark_alive(inet_address addr, endpoint_state local_state) {
     _expire_time_endpoint_map.erase(addr);
     // logger.debug("removing expire time for endpoint : {}", addr);
     // logger.info("inet_address {} is now UP", addr);
-    for (shared_ptr<i_endpoint_state_change_subscriber>& subscriber : _subscribers)
+    for (auto& subscriber : _subscribers)
         subscriber->on_alive(addr, local_state);
     // if (logger.isTraceEnabled())
     //     logger.trace("Notified {}", _subscribers);
@@ -873,7 +873,7 @@ void gossiper::mark_dead(inet_address addr, endpoint_state local_state) {
     _live_endpoints.erase(addr);
     _unreachable_endpoints[addr] = now_nanos();
     // logger.info("inet_address {} is now DOWN", addr);
-    for (shared_ptr<i_endpoint_state_change_subscriber>& subscriber : _subscribers)
+    for (auto& subscriber : _subscribers)
         subscriber->on_dead(addr, local_state);
     // if (logger.isTraceEnabled())
     //     logger.trace("Notified {}", _subscribers);

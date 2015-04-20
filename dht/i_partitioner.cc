@@ -144,6 +144,16 @@ bool operator==(const decorated_key& lht, const decorated_key& rht) {
     return false;
 }
 
+std::ostream& operator<<(std::ostream& out, const token& t) {
+    auto flags = out.flags();
+    for (auto c : t._data) {
+        unsigned char x = c;
+        out << std::hex << +x << " ";
+    }
+    out.flags(flags);
+    return out;
+}
+
 // FIXME: get from global config
 // FIXME: make it per-keyspace
 murmur3_partitioner default_partitioner;

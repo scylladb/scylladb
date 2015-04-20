@@ -380,6 +380,7 @@ urchin_core = (['database.cc',
                  'locator/simple_strategy.cc',
                  'locator/token_metadata.cc',
                  'message/messaging_service.cc',
+                 'service/storage_service.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
