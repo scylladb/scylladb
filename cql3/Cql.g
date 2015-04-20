@@ -53,6 +53,7 @@ options {
 #include "cql3/lists.hh"
 #include "cql3/type_cast.hh"
 #include "cql3/tuples.hh"
+#include "cql3/user_types.hh"
 #include "cql3/functions/function_name.hh"
 #include "cql3/functions/function_call.hh"
 #include "core/sstring.hh"
@@ -1032,15 +1033,12 @@ collectionLiteral returns [shared_ptr<cql3::term::raw> value]
     | '{' '}' { $value = make_shared(cql3::sets::literal({})); }
     ;
 
-#if 0
-
-usertypeLiteral returns [UserTypes.Literal ut]
-    @init{ Map<ColumnIdentifier, Term.Raw> m = new HashMap<ColumnIdentifier, Term.Raw>(); }
-    @after{ $ut = new UserTypes.Literal(m); }
+usertypeLiteral returns [shared_ptr<cql3::user_types::literal> ut]
+    @init{ cql3::user_types::literal::elements_map_type m; }
+    @after{ $ut = ::make_shared<cql3::user_types::literal>(std::move(m)); }
     // We don't allow empty literals because that conflicts with sets/maps and is currently useless since we don't allow empty user types
-    : '{' k1=ident ':' v1=term { m.put(k1, v1); } ( ',' kn=ident ':' vn=term { m.put(kn, vn); } )* '}'
+    : '{' k1=ident ':' v1=term { m.emplace(std::move(*k1), std::move(v1)); } ( ',' kn=ident ':' vn=term { m.emplace(std::move(*kn), std::move(vn)); } )* '}'
     ;
-#endif
 
 tupleLiteral returns [shared_ptr<cql3::tuples::literal> tt]
     @init{ std::vector<shared_ptr<cql3::term::raw>> l; }
@@ -1051,9 +1049,7 @@ tupleLiteral returns [shared_ptr<cql3::tuples::literal> tt]
 value returns [::shared_ptr<cql3::term::raw> value]
     : c=constant           { $value = c; }
     | l=collectionLiteral  { $value = l; }
-#if 0
     | u=usertypeLiteral    { $value = u; }
-#endif
     | t=tupleLiteral       { $value = t; }
     | K_NULL               { $value = cql3::constants::NULL_LITERAL; }
     | ':' id=ident         { $value = new_bind_variables(id); }
