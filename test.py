@@ -40,6 +40,7 @@ boost_tests = [
     'urchin/serializer_test',
     'test-serialization',
     'cartesian_product_test',
+    'urchin/UUID_test',
 ]
 
 other_tests = [

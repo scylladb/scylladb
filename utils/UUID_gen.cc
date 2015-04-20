@@ -24,6 +24,9 @@
 #include <stdlib.h>
 #include <atomic>
 
+#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
+#include <cryptopp/md5.h>
+
 namespace utils {
 
 
@@ -102,6 +105,28 @@ static int64_t make_clock_seq_and_node()
     lsb |= (clock & 0x0000000000003FFFL) << 48; // clock sequence (14 bits)
     lsb |= make_node();                          // 6 bytes
     return lsb;
+}
+
+
+UUID UUID_gen::get_name_UUID(sstring_view str) {
+    static_assert(CryptoPP::Weak1::MD5::DIGESTSIZE == 16, "MD5 digests should be 16 bytes long");
+    int8_t digest[16];
+
+    CryptoPP::Weak::MD5 hash;
+    static_assert(sizeof(char) == sizeof(sstring_view::value_type), "Assumed that str.size() counts in chars");
+    static_assert(sizeof(char) == sizeof(int8_t), "Assumed that chars are bytes");
+    hash.CalculateDigest(reinterpret_cast<unsigned char*>(digest),
+        reinterpret_cast<const unsigned char*>(str.begin()), str.size());
+
+    // set version to 3
+    digest[6] &= 0x0f;
+    digest[6] |= 0x30;
+
+    // set variant to IETF variant
+    digest[8] &= 0x3f;
+    digest[8] |= 0x80;
+
+    return get_UUID(digest);
 }
 
 const thread_local int64_t UUID_gen::clock_seq_and_node = make_clock_seq_and_node();

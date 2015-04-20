@@ -508,11 +508,11 @@ keyspace::get_replication_strategy() {
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) throw (no_such_column_family) {
-    return find_column_family(schema->ks_name, schema->cf_name);
+    return find_column_family(schema->id());
 }
 
 const column_family& database::find_column_family(const schema_ptr& schema) const throw (no_such_column_family) {
-    return find_column_family(schema->ks_name, schema->cf_name);
+    return find_column_family(schema->id());
 }
 
 schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family) {
@@ -1063,7 +1063,7 @@ operator<<(std::ostream& os, const atomic_cell& ac) {
     return os << atomic_cell_view(ac);
 }
 
+// Based on org.apache.cassandra.config.CFMetaData#generateLegacyCfId
 utils::UUID generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
-    // FIXME: generate it like org.apache.cassandra.config.CFMetaData#generateLegacyCfId() does
-    return utils::UUID_gen::get_time_UUID();
+    return utils::UUID_gen::get_name_UUID(ks_name + cf_name);
 }
