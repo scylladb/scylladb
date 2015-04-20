@@ -101,6 +101,7 @@ private:
     future<> write_statistics();
 
     future<> open_data();
+    future<> create_data();
 
     future<index_list> read_indexes(uint64_t position, uint64_t quantity);
 

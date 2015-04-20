@@ -787,6 +787,15 @@ future<> sstable::open_data() {
     });
 }
 
+future<> sstable::create_data() {
+    auto oflags = open_flags::wo | open_flags::create | open_flags::truncate;
+    return when_all(engine().open_file_dma(filename(component_type::Index), oflags),
+                    engine().open_file_dma(filename(component_type::Data), oflags)).then([this] (auto files) {
+        _index_file = make_lw_shared<file>(std::move(std::get<file>(std::get<0>(files).get())));
+        _data_file  = make_lw_shared<file>(std::move(std::get<file>(std::get<1>(files).get())));
+    });
+}
+
 future<> sstable::load() {
     return read_toc().then([this] {
         return read_statistics();
