@@ -1195,11 +1195,10 @@ int64_t gossiper::compute_expire_time() {
 }
 
 void gossiper::dump_endpoint_state_map() {
-    print("----------- endpoint_state_map dump beg -----------\n");
+    print("----------- endpoint_state_map:  -----------\n");
     for (auto& x : endpoint_state_map) {
         print("ep=%s, eps=%s\n", x.first, x.second);
     }
-    print("----------- endpoint_state_map dump end -----------\n");
 }
 
 } // namespace gms
