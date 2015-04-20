@@ -223,7 +223,7 @@ public:
         handler(std::function<Func>&& rpc_handler_) : rpc_handler(std::move(rpc_handler_)) {}
     };
 private:
-    static constexpr const uint16_t _port_base = 7000;
+    static constexpr const uint16_t _default_port = 7000;
     gms::inet_address _listen_address;
     uint16_t _port;
     rpc::protocol<serializer, messaging_verb> _rpc;
@@ -233,16 +233,13 @@ private:
 public:
     messaging_service(gms::inet_address ip = gms::inet_address("0.0.0.0"))
         : _listen_address(ip)
-        , _port(_port_base + engine().cpu_id())
+        , _port(_default_port)
         , _rpc(serializer{})
         , _server(_rpc, ipv4_addr{_listen_address.raw_addr(), _port}) {
     }
 public:
-    uint16_t port_min() {
-        return _port_base;
-    }
-    uint16_t port_max() {
-        return _port_base + smp::count - 1;
+    uint16_t port() {
+        return _port;
     }
     auto listen_address() {
         return _listen_address;
@@ -325,7 +322,7 @@ private:
     rpc::protocol<serializer, messaging_verb>::client& get_rpc_client(shard_id id) {
         auto it = _clients.find(id);
         if (it == _clients.end()) {
-            auto remote_addr = ipv4_addr(id.addr.raw_addr(), _port_base + id.cpu_id);
+            auto remote_addr = ipv4_addr(id.addr.raw_addr(), _port);
             auto client = std::make_unique<rpc::protocol<serializer, messaging_verb>::client>(_rpc, remote_addr);
             it = _clients.emplace(id, shard_info(std::move(client))).first;
             return *it->second.rpc_client;

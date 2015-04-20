@@ -17,10 +17,9 @@ int main(int ac, char ** av) {
         auto listen = gms::inet_address(config["listen-address"].as<std::string>());
         net::get_messaging_service().start(std::ref(listen)).then([&] {
             auto& server = net::get_local_messaging_service();
-            auto min = server.port_min();
-            auto max = server.port_max();
+            auto port = server.port();
             auto listen = server.listen_address();
-            print("Messaging server listening on ip %s ports %d to %d ...\n", listen, min, max);
+            print("Messaging server listening on ip %s port %d ...\n", listen, port);
             gms::get_failure_detector().start_single().then([&] {
                 gms::get_gossiper().start_single().then([&] {
                     auto&& config = app.configuration();
@@ -44,6 +43,8 @@ int main(int ac, char ** av) {
                     reporter->set_callback ([reporter] {
                         auto& gossiper = gms::get_local_gossiper();
                         gossiper.dump_endpoint_state_map();
+                        auto& fd = gms::get_local_failure_detector();
+                        print("%s", fd);
                     });
                     reporter->arm_periodic(std::chrono::milliseconds(1000));
                 });

@@ -94,8 +94,6 @@ void gossiper::init_messaging_service_handler() {
         return messaging_service::no_wait();
     });
     ms().register_handler(messaging_verb::GOSSIP_DIGEST_SYN, [this] (gossip_digest_syn syn_msg) {
-        // TODO: Implement processing of incoming ACK2 message
-        print("gossiper: Server got syn msg = %s\n", syn_msg);
         inet_address from;
         if (!this->is_enabled()) {
             return make_ready_future<gossip_digest_ack>(gossip_digest_ack());
@@ -119,7 +117,6 @@ void gossiper::init_messaging_service_handler() {
         return make_ready_future<gossip_digest_ack>(std::move(ack_msg));
     });
     ms().register_handler_oneway(messaging_verb::GOSSIP_DIGEST_ACK2, [this] (gossip_digest_ack2 msg) {
-        print("gossiper: Server got ack2 msg = %s\n", msg);
         auto& remote_ep_state_map = msg.get_endpoint_state_map();
         /* Notify the Failure Detector */
         this->notify_failure_detector(remote_ep_state_map);
@@ -142,9 +139,7 @@ bool gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> eps
     //     logger.trace("Sending a GossipDigestSyn to {} ...", to);
     using RetMsg = gossip_digest_ack;
     auto id = get_shard_id(to);
-    print("send_gossip: Sending to shard %s\n", id);
     ms().send_message<RetMsg>(messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), std::move(message)).then([this, id] (RetMsg ack_msg) {
-        print("send_gossip: Client sent gossip_digest_syn got gossip_digest_ack reply = %s\n", ack_msg);
         if (!this->is_enabled() && !this->is_in_shadow_round()) {
             return make_ready_future<>();
         }
@@ -174,7 +169,6 @@ bool gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> eps
         }
         gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
         return ms().send_message_oneway<void>(messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(ack2_msg)).then([] () {
-            print("send_gossip: Client sent gossip_digest_ack2 got reply = void\n");
             return make_ready_future<>();
         });
     });
@@ -371,7 +365,6 @@ void gossiper::do_status_check() {
 }
 
 void gossiper::run() {
-    print("---> In Gossip::run() \n");
     //wait on messaging service to start listening
     // MessagingService.instance().waitUntilListening();
 
@@ -1202,11 +1195,10 @@ int64_t gossiper::compute_expire_time() {
 }
 
 void gossiper::dump_endpoint_state_map() {
-    print("----------- endpoint_state_map dump beg -----------\n");
+    print("----------- endpoint_state_map:  -----------\n");
     for (auto& x : endpoint_state_map) {
         print("ep=%s, eps=%s\n", x.first, x.second);
     }
-    print("----------- endpoint_state_map dump end -----------\n");
 }
 
 } // namespace gms

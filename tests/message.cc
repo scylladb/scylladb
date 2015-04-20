@@ -151,9 +151,8 @@ int main(int ac, char ** av) {
             auto testers = new distributed<tester>;
             testers->start().then([testers]{
                 auto& server = net::get_local_messaging_service();
-                auto min = server.port_min();
-                auto max = server.port_max();
-                std::cout << "Messaging server listening on ports " << min  << " to " << max << " ...\n";
+                auto port = server.port();
+                std::cout << "Messaging server listening on port " << port << " ...\n";
                 return testers->invoke_on_all(&tester::init_handler);
             }).then([testers, config] {
                 auto t = &testers->local();
