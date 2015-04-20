@@ -100,9 +100,9 @@ public:
     }
     static temporary_buffer aligned(size_t alignment, size_t size) {
         void *ptr = nullptr;
-        ::posix_memalign(&ptr, alignment, size * sizeof(CharType));
+        auto ret = ::posix_memalign(&ptr, alignment, size * sizeof(CharType));
         auto buf = static_cast<CharType*>(ptr);
-        if (size && !buf) {
+        if (ret) {
             throw std::bad_alloc();
         }
         return temporary_buffer(buf, size, make_free_deleter(buf));
