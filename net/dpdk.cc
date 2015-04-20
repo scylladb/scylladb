@@ -1682,6 +1682,15 @@ dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid,
                     , scollectd::make_typed(scollectd::data_type::GAUGE
                     , _stats.rx.bad.total)
     ));
+
+    _collectd_regs.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id(
+                      _stats_plugin_name
+                    , scollectd::per_cpu_plugin_instance
+                    , "requests", "rx-no-mem")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                    , _stats.rx.bad.no_mem)
+    ));
 }
 
 template <bool HugetlbfsMemBackend>
@@ -1863,7 +1872,7 @@ void dpdk_qp<HugetlbfsMemBackend>::process_packets(
 
         // Drop the packet if translation above has failed
         if (!p) {
-            // TODO: Increase error counters here
+            _stats.rx.bad.inc_no_mem();
             continue;
         }
 
