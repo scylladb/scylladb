@@ -1248,12 +1248,38 @@ int dpdk_device::init_port_start()
     _tx_conf_default.tx_free_thresh = 0; /* Use PMD default values */
     _tx_conf_default.tx_rs_thresh   = 0; /* Use PMD default values */
 #else
-    // Clear txq_flags - we want to support all available offload features.
-#ifndef HAVE_OSV
-    _dev_info.default_txconf.txq_flags = 0;
-#else
-    _dev_info.default_txconf.txq_flags = ETH_TXQ_FLAGS_NOOFFLOADS;
-#endif
+    // Clear txq_flags - we want to support all available offload features
+    // except for multi-mempool and refcnt'ing which we don't need
+    _dev_info.default_txconf.txq_flags =
+        ETH_TXQ_FLAGS_NOMULTMEMP | ETH_TXQ_FLAGS_NOREFCOUNT;
+
+    //
+    // Disable features that are not supported by port's HW
+    //
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_CKSUM)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOXSUMUDP;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOXSUMTCP;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_SCTP_CKSUM)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOXSUMSCTP;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_VLAN_INSERT)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOVLANOFFL;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_VLAN_INSERT)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOVLANOFFL;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_TSO) &&
+        !(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_TSO)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOMULTSEGS;
+    }
 #endif
 
     /* for port configuration all features are off by default */
@@ -1400,6 +1426,11 @@ void dpdk_device::set_hw_flow_control()
     // Read the port's current/default flow control settings
     struct rte_eth_fc_conf fc_conf;
     auto ret = rte_eth_dev_flow_ctrl_get(_port_idx, &fc_conf);
+
+    if (ret == -ENOTSUP) {
+        goto not_supported;
+    }
+
     if (ret < 0) {
         rte_exit(EXIT_FAILURE, "Port %u: failed to get hardware flow control settings: (error %d)\n", _port_idx, ret);
     }
@@ -1410,21 +1441,27 @@ void dpdk_device::set_hw_flow_control()
         fc_conf.mode = RTE_FC_NONE;
     }
 
-    printf("Port %u: %s HW FC\n", _port_idx,
-                                  (_enable_fc ? "Enabling" : "Disabling"));
-
     ret = rte_eth_dev_flow_ctrl_set(_port_idx, &fc_conf);
+    if (ret == -ENOTSUP) {
+        goto not_supported;
+    }
+
     if (ret < 0) {
         rte_exit(EXIT_FAILURE, "Port %u: failed to set hardware flow control (error %d)\n", _port_idx, ret);
     }
+
+    printf("Port %u: %s HW FC\n", _port_idx,
+                                  (_enable_fc ? "Enabling" : "Disabling"));
+    return;
+
+not_supported:
+    printf("Port %u: Changing HW FC settings is not supported\n", _port_idx);
 }
 
 void dpdk_device::init_port_fini()
 {
-#ifndef HAVE_OSV
     // Changing FC requires HW reset, so set it before the port is initialized.
     set_hw_flow_control();
-#endif
 
     if (rte_eth_dev_start(_port_idx) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
