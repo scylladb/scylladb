@@ -192,6 +192,12 @@ struct qp_stats {
                 ++total;
             }
 
+            void inc_no_mem() {
+                ++no_mem;
+                ++total;
+            }
+
+            uint64_t no_mem;       // Packets dropped due to allocation failure
             uint64_t total;        // total number of erroneous packets
             uint64_t csum;         // packets with bad checksum
         } bad;
