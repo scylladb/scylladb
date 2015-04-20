@@ -1669,8 +1669,8 @@ dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid,
         scollectd::add_polled_metric(scollectd::type_instance_id(
                       _stats_plugin_name
                     , scollectd::per_cpu_plugin_instance
-                    , "requests", "rx-csum-errors")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                    , "if_rx_errors", "Bad CSUM")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
                     , _stats.rx.bad.csum)
     ));
 
@@ -1678,8 +1678,8 @@ dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid,
         scollectd::add_polled_metric(scollectd::type_instance_id(
                       _stats_plugin_name
                     , scollectd::per_cpu_plugin_instance
-                    , "requests", "rx-errors")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                    , "if_rx_errors", "Total")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
                     , _stats.rx.bad.total)
     ));
 
@@ -1687,8 +1687,8 @@ dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid,
         scollectd::add_polled_metric(scollectd::type_instance_id(
                       _stats_plugin_name
                     , scollectd::per_cpu_plugin_instance
-                    , "requests", "rx-no-mem")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                    , "if_rx_errors", "No Memory")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
                     , _stats.rx.bad.no_mem)
     ));
 }
