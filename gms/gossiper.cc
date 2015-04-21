@@ -85,15 +85,19 @@ void gossiper::do_sort(std::vector<gossip_digest>& g_digest_list) {
 }
 
 void gossiper::init_messaging_service_handler() {
-    ms().register_handler(messaging_verb::ECHO, [] (empty_msg msg) {
+    ms().register_handler(messaging_verb::ECHO, [this] (empty_msg msg) {
+        // TODO: Use time_point instead of long for timing.
+        this->set_last_processed_message_at(now_millis());
         return make_ready_future<empty_msg>();
     });
-    ms().register_handler_oneway(messaging_verb::GOSSIP_SHUTDOWN, [] (inet_address from) {
+    ms().register_handler_oneway(messaging_verb::GOSSIP_SHUTDOWN, [this] (inet_address from) {
+        this->set_last_processed_message_at(now_millis());
         // TODO: Implement processing of incoming SHUTDOWN message
         get_local_failure_detector().force_conviction(from);
         return messaging_service::no_wait();
     });
     ms().register_handler(messaging_verb::GOSSIP_DIGEST_SYN, [this] (gossip_digest_syn syn_msg) {
+        this->set_last_processed_message_at(now_millis());
         inet_address from;
         if (!this->is_enabled()) {
             return make_ready_future<gossip_digest_ack>(gossip_digest_ack());
@@ -117,6 +121,7 @@ void gossiper::init_messaging_service_handler() {
         return make_ready_future<gossip_digest_ack>(std::move(ack_msg));
     });
     ms().register_handler_oneway(messaging_verb::GOSSIP_DIGEST_ACK2, [this] (gossip_digest_ack2 msg) {
+        this->set_last_processed_message_at(now_millis());
         auto& remote_ep_state_map = msg.get_endpoint_state_map();
         /* Notify the Failure Detector */
         this->notify_failure_detector(remote_ep_state_map);
@@ -140,6 +145,7 @@ bool gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> eps
     using RetMsg = gossip_digest_ack;
     auto id = get_shard_id(to);
     ms().send_message<RetMsg>(messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), std::move(message)).then([this, id] (RetMsg ack_msg) {
+        this->set_last_processed_message_at(now_millis());
         if (!this->is_enabled() && !this->is_in_shadow_round()) {
             return make_ready_future<>();
         }
@@ -837,6 +843,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
     //logger.trace("Sending a EchoMessage to {}", addr);
     shard_id id = get_shard_id(addr);
     ms().send_message<empty_msg>(messaging_verb::ECHO, id).then([this, addr, local_state = std::move(local_state)] (empty_msg msg) mutable {
+        this->set_last_processed_message_at(now_millis());
         this->real_mark_alive(addr, local_state);
     });
 }
@@ -1065,6 +1072,7 @@ void gossiper::do_shadow_round() {
         auto id = get_shard_id(seed);
         ms().send_message<gossip_digest_ack>(messaging_verb::GOSSIP_DIGEST_SYN,
                                              std::move(id), std::move(message)).then([this, id] (gossip_digest_ack ack_msg) {
+            this->set_last_processed_message_at(now_millis());
             if (this->is_in_shadow_round()) {
                 this->finish_shadow_round();
             }
