@@ -24,6 +24,7 @@ class bytes_ostream {
         std::unique_ptr<chunk> next;
         size_type offset; // Also means "size" after chunk is closed
         value_type data[0];
+        void operator delete(void* ptr) { free(ptr); }
     };
     // FIXME: consider increasing chunk size as the buffer grows
     static constexpr size_type chunk_size{512};
