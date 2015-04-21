@@ -284,7 +284,7 @@ public:
                 add_param(req, url.substr(curr, end_param - curr) );
                 curr = end_param + 1;
             }
-            add_param(req, url.substr(pos + 1));
+            add_param(req, url.substr(curr));
             return req._url.substr(0, pos);
         }
 
