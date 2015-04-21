@@ -8,8 +8,8 @@
 
 namespace locator {
 
-simple_strategy::simple_strategy(const sstring& keyspace_name, token_metadata& token_metadata, std::unordered_map<sstring, sstring>& config_options) :
-        abstract_replication_strategy(keyspace_name, token_metadata, config_options) {}
+simple_strategy::simple_strategy(const sstring& keyspace_name, token_metadata& token_metadata, i_endpoint_snitch& snitch, std::unordered_map<sstring, sstring>& config_options) :
+        abstract_replication_strategy(keyspace_name, token_metadata, snitch, config_options) {}
 
 std::vector<inet_address> simple_strategy::calculate_natural_endpoints(const token& t) {
     size_t replicas = get_replication_factor();
@@ -46,7 +46,7 @@ size_t simple_strategy::get_replication_factor() const {
     return std::stol(it->second);
 }
 
-using registry = class_registrator<abstract_replication_strategy, simple_strategy, const sstring&, token_metadata&, std::unordered_map<sstring, sstring>&>;
+using registry = class_registrator<abstract_replication_strategy, simple_strategy, const sstring&, token_metadata&, i_endpoint_snitch&, std::unordered_map<sstring, sstring>&>;
 static registry registrator("org.apache.cassandra.locator.SimpleStrategy");
 
 }
