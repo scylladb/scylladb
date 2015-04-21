@@ -915,7 +915,7 @@ bool gossiper::is_dead_state(endpoint_state eps) {
     return false;
 }
 
-void gossiper::apply_new_states(inet_address addr, endpoint_state local_state, endpoint_state remote_state) {
+void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, endpoint_state& remote_state) {
     // don't assert here, since if the node restarts the version will go back to zero
     //int oldVersion = local_state.get_heart_beat_state().get_heart_beat_version();
 

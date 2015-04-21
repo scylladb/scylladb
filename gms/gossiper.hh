@@ -372,7 +372,7 @@ public:
     void apply_state_locally(std::map<inet_address, endpoint_state>& map);
 
 private:
-    void apply_new_states(inet_address addr, endpoint_state local_state, endpoint_state remote_state);
+    void apply_new_states(inet_address addr, endpoint_state& local_state, endpoint_state& remote_state);
 
     // notify that a local application state is going to change (doesn't get triggered for remote changes)
     void do_before_change_notifications(inet_address addr, endpoint_state& ep_state, application_state& ap_state, versioned_value& new_value);
