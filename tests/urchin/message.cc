@@ -81,6 +81,12 @@ public:
             std::tuple<int, long> ret(x*x, y*y);
             return make_ready_future<decltype(ret)>(std::move(ret));
         });
+        ms.register_handler(messaging_verb::UNUSED_1, [] (int x, long y) {
+            print("Server got echo msg = (%d, %ld) \n", x, y);
+            throw std::runtime_error("I'm throwing runtime_error exception");
+            long ret = x + y;
+            return make_ready_future<decltype(ret)>(ret);
+        });
     }
 
 public:
@@ -129,11 +135,34 @@ public:
         int msg1 = 30;
         int msg2 = 60;
         using RetMsg = std::tuple<int, long>;
-        return ms.send_message<RetMsg>(messaging_verb::ECHO, id, msg1, msg2).then([] (RetMsg msg) {
-            print("Client sent echo got reply = (%d , %ld)\n", std::get<0>(msg), std::get<1>(msg));
-            return sleep(100ms).then([]{
+        return ms.send_message<RetMsg>(messaging_verb::ECHO, id, msg1, msg2).then_wrapped([] (future<RetMsg> f) {
+            try {
+                auto msg = std::get<0>(f.get());
+                print("Client sent echo got reply = (%d , %ld)\n", std::get<0>(msg), std::get<1>(msg));
+                return sleep(100ms).then([]{
+                    return make_ready_future<>();
+                });
+            } catch (std::runtime_error& e) {
+                print("test_echo: %s\n", e.what());
+            }
+            return make_ready_future<>();
+        });
+    }
+
+    future<> test_exception() {
+        print("=== %s ===\n", __func__);
+        auto id = get_shard_id();
+        int msg1 = 3;
+        int msg2 = 6;
+        return ms.send_message<long>(messaging_verb::UNUSED_1, id, msg1, msg2).then_wrapped([] (future<long> f) {
+            try {
+                auto ret = std::get<0>(f.get());
+                print("Client sent UNUSED_1 got reply = %ld\n", ret);
                 return make_ready_future<>();
-            });
+            } catch (std::runtime_error& e) {
+                print("Client sent UNUSED_1 got exception: %s\n", e.what());
+            }
+            return make_ready_future<>();
         });
     }
 };
@@ -172,6 +201,8 @@ int main(int ac, char ** av) {
                     return t->test_gossip_shutdown();
                 }).then([testers, t] {
                     return t->test_echo();
+                }).then([testers, t] {
+                    return t->test_exception();
                 }).then([testers, t] {
                     print("=============TEST DONE===========\n");
                     testers->stop().then([testers] {
