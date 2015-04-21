@@ -367,9 +367,8 @@ void gossiper::run() {
     //wait on messaging service to start listening
     // MessagingService.instance().waitUntilListening();
 
-
     /* Update the local heartbeat counter. */
-    //endpoint_state_map.get(FBUtilities.getBroadcastAddress()).get_heart_beat_state().updateHeartBeat();
+    endpoint_state_map[get_broadcast_address()].get_heart_beat_state().update_heart_beat();
     // if (logger.isTraceEnabled())
     //     logger.trace("My heartbeat is now {}", endpoint_state_map.get(FBUtilities.getBroadcastAddress()).get_heart_beat_state().get_heart_beat_version());
     std::vector<gossip_digest> g_digests;

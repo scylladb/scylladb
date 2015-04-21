@@ -55,7 +55,7 @@ public:
         , _is_alive(true) {
     }
 
-    heart_beat_state get_heart_beat_state() {
+    heart_beat_state& get_heart_beat_state() {
         return _heart_beat_state;
     }
 
