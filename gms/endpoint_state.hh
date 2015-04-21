@@ -82,7 +82,7 @@ public:
     }
 
     void add_application_state(application_state key, versioned_value value) {
-        _application_state.emplace(key, value);
+        _application_state[key] = value;
     }
 
     /* getters and setters */

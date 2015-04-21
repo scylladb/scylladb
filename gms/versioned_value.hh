@@ -65,8 +65,13 @@ public:
     // values for ApplicationState.REMOVAL_COORDINATOR
     static constexpr const char *REMOVAL_COORDINATOR = "REMOVER";
 
-    const int version;
-    const sstring value;
+    int version;
+    sstring value;
+public:
+    versioned_value()
+        : version(version_generator::get_next_version())
+        , value("") {
+    }
 
 private:
     versioned_value(const sstring& value, int version = version_generator::get_next_version())
