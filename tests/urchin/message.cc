@@ -144,9 +144,12 @@ int main(int ac, char ** av) {
     app_template app;
     app.add_options()
         ("server", bpo::value<std::string>(), "Server ip")
+        ("listen-address", bpo::value<std::string>()->default_value("0.0.0.0"), "IP address to listen")
         ("cpuid", bpo::value<uint32_t>()->default_value(0), "Server cpuid");
     return app.run(ac, av, [&] {
-        net::get_messaging_service().start().then([&] () {
+        auto&& config = app.configuration();
+        auto listen = gms::inet_address(config["listen-address"].as<std::string>());
+        net::get_messaging_service().start(std::ref(listen)).then([&] () {
             auto&& config = app.configuration();
             auto testers = new distributed<tester>;
             testers->start().then([testers]{
