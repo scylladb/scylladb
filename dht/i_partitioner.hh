@@ -162,6 +162,12 @@ protected:
     friend bool operator<(const token& t1, const token& t2);
 };
 
+bool operator<(const decorated_key& lht, const decorated_key& rht);
+
+bool operator==(const decorated_key& lht, const decorated_key& rht);
+
+std::ostream& operator<<(std::ostream& out, const token& t);
+
 i_partitioner& global_partitioner();
 
 } // dht
