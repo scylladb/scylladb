@@ -309,21 +309,6 @@ void gossiper::do_status_check() {
 
     int64_t now = now_millis();
 
-    // FIXME:
-    // int64_t pending = ((JMXEnabledThreadPoolExecutor) StageManager.getStage(Stage.GOSSIP)).getPendingTasks();
-    int64_t pending = 1;
-    if (pending > 0 && _last_processed_message_at < now - 1000) {
-        // FIXME: SLEEP
-        // if some new messages just arrived, give the executor some time to work on them
-        //Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
-
-        // still behind?  something's broke
-        if (_last_processed_message_at < now - 1000) {
-            // logger.warn("Gossip stage has {} pending tasks; skipping status check (no nodes will be marked down)", pending);
-            return;
-        }
-    }
-
     for (auto& entry : endpoint_state_map) {
         const inet_address& endpoint = entry.first;
         if (endpoint == get_broadcast_address()) {
