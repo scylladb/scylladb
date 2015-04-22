@@ -18,6 +18,9 @@ namespace sstables {
 template <typename Size>
 struct disk_string {
     bytes value;
+    explicit operator bytes_view() const {
+        return value;
+    }
 };
 
 template <typename Size, typename Members>
@@ -51,11 +54,19 @@ struct index_entry {
     disk_string<uint16_t> key;
     uint64_t position;
     disk_string<uint32_t> promoted_index;
+
+    explicit operator bytes_view() const {
+        return bytes_view(key);
+    }
 };
 
 struct summary_entry {
     bytes key;
     uint64_t position;
+
+    explicit operator bytes_view() const {
+        return key;
+    }
 
     bool operator==(const summary_entry& x) const {
         return position ==  x.position && key == x.key;
