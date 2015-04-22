@@ -111,9 +111,11 @@ struct serializer {
 
     // For sstring
     inline auto operator()(output_stream<char>& out, sstring& v) {
-        auto sz = serialize_int16_size + v.size();
+        auto serialize_string_size = serialize_int16_size + v.size();
+        auto sz = serialize_int16_size + serialize_string_size;
         bytes b(bytes::initialized_later(), sz);
         auto _out = b.begin();
+        serialize_int16(_out, serialize_string_size);
         serialize_string(_out, v);
         return out.write(reinterpret_cast<const char*>(b.c_str()), sz);
     }
@@ -122,12 +124,13 @@ struct serializer {
             if (buf.size() != serialize_int16_size) {
                 throw rpc::closed_error();
             }
-            size_t sz = net::ntoh(*reinterpret_cast<const net::packed<int16_t>*>(buf.get()));
-            return in.read_exactly(sz).then([sz, &v] (temporary_buffer<char> buf) mutable {
-                if (buf.size() != sz) {
+            size_t serialize_string_size = net::ntoh(*reinterpret_cast<const net::packed<int16_t>*>(buf.get()));
+            return in.read_exactly(serialize_string_size).then([serialize_string_size, &v]
+                (temporary_buffer<char> buf) mutable {
+                if (buf.size() != serialize_string_size) {
                     throw rpc::closed_error();
                 }
-                bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), sz);
+                bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), serialize_string_size);
                 v = read_simple_short_string(bv);
                 return make_ready_future<>();
             });
