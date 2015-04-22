@@ -601,8 +601,8 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
         }
     };
 
-    auto find_static_column_def = [schema] (auto col) -> column_definition& { return schema->static_column_at(col); };
-    auto find_regular_column_def = [schema] (auto col) -> column_definition& { return schema->regular_column_at(col); };
+    auto find_static_column_def = [schema] (auto col) -> const column_definition& { return schema->static_column_at(col); };
+    auto find_regular_column_def = [schema] (auto col) -> const column_definition& { return schema->regular_column_at(col); };
 
     merge_cells(_static_row, p._static_row, find_static_column_def);
 
