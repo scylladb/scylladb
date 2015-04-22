@@ -340,6 +340,7 @@ memcache_base = [
 cassandra_interface = Thrift(source = 'interface/cassandra.thrift', service = 'Cassandra')
 
 urchin_core = (['database.cc',
+                 'schema.cc',
                  'mutation.cc',
                  'mutation_partition.cc',
                  'keys.cc',
