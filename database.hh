@@ -217,6 +217,7 @@ public:
     tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
     boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r) const;
+    void query(const schema& s, const query::partition_slice& slice, uint32_t limit, query::result::partition_writer& pw) const;
 };
 
 class mutation final {

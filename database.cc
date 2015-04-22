@@ -867,12 +867,13 @@ bool has_any_live_data(const row& cells, tombstone tomb, ColumnDefResolver&& id_
 }
 
 void
-column_family::get_partition_slice(mutation_partition& partition,
-                                   const query::partition_slice& slice,
-                                   uint32_t limit,
-                                   query::result::partition_writer& pw) {
-    auto regular_column_resolver = [this] (column_id id) -> const column_definition& {
-        return _schema->regular_column_at(id);
+mutation_partition::query(const schema& s,
+    const query::partition_slice& slice,
+    uint32_t limit,
+    query::result::partition_writer& pw) const
+{
+    auto regular_column_resolver = [&s] (column_id id) -> const column_definition& {
+        return s.regular_column_at(id);
     };
 
     // So that we can always add static row before we know how many clustered rows there will be,
@@ -880,16 +881,16 @@ column_family::get_partition_slice(mutation_partition& partition,
     assert(limit > 0);
 
     if (!slice.static_columns.empty()) {
-        auto static_column_resolver = [this] (column_id id) -> const column_definition& {
-            return _schema->static_column_at(id);
+        auto static_column_resolver = [&s] (column_id id) -> const column_definition& {
+            return s.static_column_at(id);
         };
         auto row_builder = pw.add_static_row();
-        get_row_slice(partition.static_row(), slice.static_columns, partition.tombstone_for_static_row(),
+        get_row_slice(static_row(), slice.static_columns, tombstone_for_static_row(),
             static_column_resolver, row_builder);
         row_builder.finish();
     }
 
-    for (auto&& range : slice.row_ranges) {
+    for (auto&& row_range : slice.row_ranges) {
         if (limit == 0) {
             break;
         }
@@ -897,11 +898,11 @@ column_family::get_partition_slice(mutation_partition& partition,
         // FIXME: Optimize for a full-tuple singular range. mutation_partition::range()
         // does two lookups to form a range, even for singular range. We need
         // only one lookup for a full-tuple singular range though.
-        for (auto&& e : partition.range(*_schema, range)) {
+        for (const rows_entry& e : range(s, row_range)) {
             auto& row = e.row();
             auto&& cells = row.cells;
 
-            auto row_tombstone = partition.tombstone_for_row(*_schema, e);
+            auto row_tombstone = tombstone_for_row(s, e);
             auto row_is_live = row.created_at > row_tombstone.timestamp;
 
             // row_is_live is true for rows created using 'insert' statement
@@ -939,7 +940,7 @@ column_family::query(const query::read_command& cmd) {
                 break;
             }
             auto p_builder = builder.add_partition(key);
-            get_partition_slice(*partition, cmd.slice, limit, p_builder);
+            partition->query(*_schema, cmd.slice, limit, p_builder);
             p_builder.finish();
             limit -= p_builder.row_count();
         } else if (range.is_full()) {
@@ -947,7 +948,7 @@ column_family::query(const query::read_command& cmd) {
                 auto& key = e.first;
                 auto& partition = e.second;
                 auto p_builder = builder.add_partition(key);
-                get_partition_slice(partition, cmd.slice, limit, p_builder);
+                partition.query(*_schema, cmd.slice, limit, p_builder);
                 p_builder.finish();
                 limit -= p_builder.row_count();
                 if (limit == 0) {
