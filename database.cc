@@ -621,7 +621,7 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
 }
 
 tombstone
-mutation_partition::range_tombstone_for_row(const schema& schema, const clustering_key& key) {
+mutation_partition::range_tombstone_for_row(const schema& schema, const clustering_key& key) const {
     tombstone t = _tombstone;
 
     if (_row_tombstones.empty()) {
@@ -643,7 +643,7 @@ mutation_partition::range_tombstone_for_row(const schema& schema, const clusteri
 }
 
 tombstone
-mutation_partition::tombstone_for_row(const schema& schema, const clustering_key& key) {
+mutation_partition::tombstone_for_row(const schema& schema, const clustering_key& key) const {
     tombstone t = range_tombstone_for_row(schema, key);
 
     auto j = _rows.find(key, rows_entry::compare(schema));
@@ -655,7 +655,7 @@ mutation_partition::tombstone_for_row(const schema& schema, const clustering_key
 }
 
 tombstone
-mutation_partition::tombstone_for_row(const schema& schema, const rows_entry& e) {
+mutation_partition::tombstone_for_row(const schema& schema, const rows_entry& e) const {
     tombstone t = range_tombstone_for_row(schema, e.key());
     t.apply(e.row().t);
     return t;
