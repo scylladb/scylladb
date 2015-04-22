@@ -62,47 +62,136 @@ bool qp::poll_tx() {
                 }
             }
         } while (work && _tx_packetq.size() < 128);
-
     }
     if (!_tx_packetq.empty()) {
-        _last_tx_bunch = send(_tx_packetq);
-        _packets_snt += _last_tx_bunch;
+        _stats.tx.good.update_pkts_bunch(send(_tx_packetq));
         return true;
     }
 
     return false;
 }
 
-qp::qp()
+qp::qp(bool register_copy_stats,
+       const std::string stats_plugin_name, uint8_t qid)
         : _tx_poller([this] { return poll_tx(); })
+        , _stats_plugin_name(stats_plugin_name)
+        , _queue_name(std::string("queue") + std::to_string(qid))
         , _collectd_regs({
-            // queue_length     value:GAUGE:0:U
-            // Absolute value of num packets in last tx bunch.
-            scollectd::add_polled_metric(scollectd::type_instance_id("network"
+
+            //
+            // Packets rate: DERIVE:0:u
+            //
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                    _stats_plugin_name
+                    , scollectd::per_cpu_plugin_instance
+                    , "if_packets", _queue_name)
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
+                    , _stats.rx.good.packets)
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
+                    , _stats.tx.good.packets)
+            ),
+            //
+            // Bytes rate: DERIVE:0:U
+            //
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                    _stats_plugin_name
+                    , scollectd::per_cpu_plugin_instance
+                    , "if_octets", _queue_name)
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
+                    , _stats.rx.good.bytes)
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
+                    , _stats.tx.good.bytes)
+            ),
+
+            //
+            // Queue length: GAUGE:0:U
+            //
+            // Tx
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                    _stats_plugin_name
                     , scollectd::per_cpu_plugin_instance
                     , "queue_length", "tx-packet-queue")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE, _last_tx_bunch)
+                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                    , std::bind(&decltype(_tx_packetq)::size, &_tx_packetq))
             ),
-            // total_operations value:DERIVE:0:U
-            scollectd::add_polled_metric(scollectd::type_instance_id("network"
+
+            //
+            // Number of packets in last bunch: GAUGE:0:U
+            //
+            // Tx
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                    _stats_plugin_name
                     , scollectd::per_cpu_plugin_instance
-                    , "total_operations", "tx-packets")
-                    , scollectd::make_typed(scollectd::data_type::DERIVE, _packets_snt)
+                    , "requests", "tx-packet-queue-last-bunch")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                    , _stats.tx.good.last_bunch)
             ),
-            // queue_length     value:GAUGE:0:U
-            // Absolute value of num packets in last rx bunch.
-            scollectd::add_polled_metric(scollectd::type_instance_id("network"
+            // Rx
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                    _stats_plugin_name
                     , scollectd::per_cpu_plugin_instance
-                    , "queue_length", "rx-packet-queue")
-                    , scollectd::make_typed(scollectd::data_type::GAUGE, _last_rx_bunch)
+                    , "requests", "rx-packet-queue-last-bunch")
+                    , scollectd::make_typed(scollectd::data_type::GAUGE
+                    , _stats.rx.good.last_bunch)
             ),
-            // total_operations value:DERIVE:0:U
-            scollectd::add_polled_metric(scollectd::type_instance_id("network"
+
+            //
+            // Fragments rate: DERIVE:0:U
+            //
+            // Tx
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                    _stats_plugin_name
                     , scollectd::per_cpu_plugin_instance
-                    , "total_operations", "rx-packets")
-                    , scollectd::make_typed(scollectd::data_type::DERIVE, _packets_rcv)
+                    , "total_operations", "tx-frags")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
+                    , _stats.tx.good.nr_frags)
             ),
-    }) {
+            // Rx
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                    _stats_plugin_name
+                    , scollectd::per_cpu_plugin_instance
+                    , "total_operations", "rx-frags")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
+                    , _stats.rx.good.nr_frags)
+            ),
+    })
+{
+    if (register_copy_stats) {
+        //
+        // Non-zero-copy data bytes rate: DERIVE:0:u
+        //
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                    _stats_plugin_name
+                    , scollectd::per_cpu_plugin_instance
+                    , "if_octets", _queue_name + " Copy Bytes")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
+                    , _stats.rx.good.copy_bytes)
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
+                    , _stats.tx.good.copy_bytes)
+            ));
+        //
+        // Non-zero-copy data fragments rate: DERIVE:0:u
+        //
+        // Tx
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                    _stats_plugin_name
+                    , scollectd::per_cpu_plugin_instance
+                    , "total_operations", "tx-frags-copy")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
+                    , _stats.tx.good.copy_frags)
+            ));
+        // Rx
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                    _stats_plugin_name
+                    , scollectd::per_cpu_plugin_instance
+                    , "total_operations", "rx-frags-copy")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
+                    , _stats.rx.good.copy_frags)
+            ));
+    }
 }
 
 qp::~qp() {

@@ -11,8 +11,8 @@
  * BSD license as described in the LICENSE file in the top-level directory.
  */
 
-#ifndef __OSV_TIMER_SET_HH
-#define __OSV_TIMER_SET_HH
+#ifndef __TIMER_SET_HH
+#define __TIMER_SET_HH
 
 #include <chrono>
 #include <limits>
@@ -23,6 +23,7 @@
 
 namespace bi = boost::intrusive;
 
+namespace seastar {
 /**
  * A data structure designed for holding and expiring timers. It's
  * optimized for timer non-delivery by deferring sorting cost until
@@ -250,6 +251,7 @@ public:
     time_point now() {
         return Timer::clock::now();
     }
+};
 };
 
 #endif

@@ -27,12 +27,6 @@ def get_flags():
                 if line.rstrip('\n').startswith('flags'):
                     return re.sub(r'^flags\s+: ', '', line).split()
 
-def has_avx():
-    return 'avx' in get_flags()
-
-def has_avx2():
-    return 'avx2' in get_flags()
-
 def add_tristate(arg_parser, name, dest, help):
     arg_parser.add_argument('--enable-' + name, dest = dest, action = 'store_true', default = None,
                             help = 'Enable ' + help)
@@ -50,6 +44,36 @@ def apply_tristate(var, test, note, missing):
             print(note)
             return False
     return False
+
+#
+# dpdk_cflags - fetch the DPDK specific CFLAGS
+#
+# Run a simple makefile that "includes" the DPDK main makefile and prints the
+# MACHINE_CFLAGS value
+#
+def dpdk_cflags (dpdk_target):
+    with tempfile.NamedTemporaryFile() as sfile:
+        dpdk_target = os.path.abspath(dpdk_target)
+        dpdk_target = re.sub(r'\/+$', '', dpdk_target)
+        dpdk_sdk_path = os.path.dirname(dpdk_target)
+        dpdk_target_name = os.path.basename(dpdk_target)
+        dpdk_arch = dpdk_target_name.split('-')[0]
+
+        sfile.file.write(bytes('include ' + dpdk_sdk_path + '/mk/rte.vars.mk' + "\n", 'utf-8'))
+        sfile.file.write(bytes('all:' + "\n\t", 'utf-8'))
+        sfile.file.write(bytes('@echo $(MACHINE_CFLAGS)' + "\n", 'utf-8'))
+        sfile.file.flush()
+
+        dpdk_cflags = subprocess.check_output(['make', '--no-print-directory',
+                                             '-f', sfile.name,
+                                             'RTE_SDK=' + dpdk_sdk_path,
+                                             'RTE_TARGET=' + dpdk_target_name,
+                                             'RTE_ARCH=' + dpdk_arch])
+        dpdk_cflags_str = dpdk_cflags.decode('utf-8')
+        dpdk_cflags_str = re.sub(r'\n+$', '', dpdk_cflags_str)
+        dpdk_cflags_final = ''
+
+        return dpdk_cflags_str
 
 def try_compile(compiler, source = '', flags = []):
     with tempfile.NamedTemporaryFile() as sfile:
@@ -452,16 +476,19 @@ if args.with_osv:
     args.hwloc = False
     args.user_cflags = (args.user_cflags +
         ' -DDEFAULT_ALLOCATOR -fvisibility=default -DHAVE_OSV -I' +
-        args.with_osv + '/include')
+        args.with_osv + ' -I' + args.with_osv + '/include -I' +
+        args.with_osv + '/arch/x64')
 
 if args.dpdk_target:
     args.user_cflags = (args.user_cflags +
-        ' -DHAVE_DPDK -I' +
-        args.dpdk_target + '/include -Wno-error=literal-suffix -Wno-literal-suffix -Wno-invalid-offsetof -m64' +
-        ' -mavx' if has_avx() else '' +
-        ' -mavx2' if has_avx2() else '')
-    libs += (' -L' + args.dpdk_target + '/lib ' +
-        '-Wl,--whole-archive -lrte_pmd_bond -lrte_pmd_vmxnet3_uio -lrte_pmd_virtio_uio -lrte_pmd_i40e -lrte_pmd_ixgbe -lrte_pmd_e1000 -lrte_pmd_ring -Wl,--no-whole-archive -lrte_distributor -lrte_kni -lrte_pipeline -lrte_table -lrte_port -lrte_timer -lrte_hash -lrte_lpm -lrte_power -lrte_acl -lrte_meter -lrte_sched -lrte_kvargs -lrte_mbuf -lrte_ip_frag -lethdev -lrte_eal -lrte_malloc -lrte_mempool -lrte_ring -lrte_cmdline -lrte_cfgfile -lrt -lm -ldl')
+        ' -DHAVE_DPDK -I' + args.dpdk_target + '/include ' +
+        dpdk_cflags(args.dpdk_target) +
+        ' -Wno-error=literal-suffix -Wno-literal-suffix -Wno-invalid-offsetof')
+    libs += (' -L' + args.dpdk_target + '/lib ')
+    if args.with_osv:
+        libs += '-lintel_dpdk -lrt -lm -ldl'
+    else:
+        libs += '-Wl,--whole-archive -lrte_pmd_bond -lrte_pmd_vmxnet3_uio -lrte_pmd_virtio_uio -lrte_pmd_i40e -lrte_pmd_ixgbe -lrte_pmd_e1000 -lrte_pmd_ring -Wl,--no-whole-archive -lrte_distributor -lrte_kni -lrte_pipeline -lrte_table -lrte_port -lrte_timer -lrte_hash -lrte_lpm -lrte_power -lrte_acl -lrte_meter -lrte_sched -lrte_kvargs -lrte_mbuf -lrte_ip_frag -lethdev -lrte_eal -lrte_malloc -lrte_mempool -lrte_ring -lrte_cmdline -lrte_cfgfile -lrt -lm -ldl'
 
 warnings = [w
             for w in warnings

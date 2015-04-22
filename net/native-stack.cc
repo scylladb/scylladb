@@ -85,7 +85,9 @@ void create_native_net_device(boost::program_options::variables_map opts) {
     if (opts.count("dpdk-pmd")) {
         // Hardcoded port index 0.
         // TODO: Inherit it from the opts
-        dev = create_dpdk_net_device(0, smp::count);
+        dev = create_dpdk_net_device(0, smp::count,
+            !(opts.count("lro") && opts["lro"].as<std::string>() == "off"),
+            !(opts.count("hw-fc") && opts["hw-fc"].as<std::string>() == "off"));
     } else
 #endif
     dev = create_virtio_net_device(opts);
@@ -325,6 +327,9 @@ boost::program_options::options_description nns_options() {
 #ifdef HAVE_DPDK
         ("dpdk-pmd", "Use DPDK PMD drivers")
 #endif
+        ("lro",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable LRO")
         ;
 
     add_native_net_options_description(opts);

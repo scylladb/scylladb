@@ -71,6 +71,8 @@ struct hw_features {
     bool tx_csum_l4_offload = false;
     // Enable rx checksum offload
     bool rx_csum_offload = false;
+    // LRO is enabled
+    bool rx_lro = false;
     // Enable tx TCP segment offload
     bool tx_tso = false;
     // Enable tx UDP fragmentation offload
@@ -131,6 +133,81 @@ public:
     friend class l3_protocol;
 };
 
+struct qp_stats_good {
+    /**
+     * Update the packets bunch related statistics.
+     *
+     * Update the last packets bunch size and the total packets counter.
+     *
+     * @param count Number of packets in the last packets bunch.
+     */
+    void update_pkts_bunch(uint64_t count) {
+        last_bunch = count;
+        packets   += count;
+    }
+
+    /**
+     * Increment the appropriate counters when a few fragments have been
+     * processed in a copy-way.
+     *
+     * @param nr_frags Number of copied fragments
+     * @param bytes    Number of copied bytes
+     */
+    void update_copy_stats(uint64_t nr_frags, uint64_t bytes) {
+        copy_frags += nr_frags;
+        copy_bytes += bytes;
+    }
+
+    /**
+     * Increment total fragments and bytes statistics
+     *
+     * @param nfrags Number of processed fragments
+     * @param nbytes Number of bytes in the processed fragments
+     */
+    void update_frags_stats(uint64_t nfrags, uint64_t nbytes) {
+        nr_frags += nfrags;
+        bytes    += nbytes;
+    }
+
+    uint64_t bytes;      // total number of bytes
+    uint64_t nr_frags;   // total number of fragments
+    uint64_t copy_frags; // fragments that were copied on L2 level
+    uint64_t copy_bytes; // bytes that were copied on L2 level
+    uint64_t packets;    // total number of packets
+    uint64_t last_bunch; // number of packets in the last sent/received bunch
+};
+
+struct qp_stats {
+    qp_stats() {
+        std::memset(&rx, 0, sizeof(rx));
+        std::memset(&tx, 0, sizeof(tx));
+    }
+
+    struct {
+        struct qp_stats_good good;
+
+        struct {
+            void inc_csum_err() {
+                ++csum;
+                ++total;
+            }
+
+            void inc_no_mem() {
+                ++no_mem;
+                ++total;
+            }
+
+            uint64_t no_mem;       // Packets dropped due to allocation failure
+            uint64_t total;        // total number of erroneous packets
+            uint64_t csum;         // packets with bad checksum
+        } bad;
+    } rx;
+
+    struct {
+        struct qp_stats_good good;
+    } tx;
+};
+
 class qp {
     using packet_provider_type = std::function<std::experimental::optional<packet> ()>;
     std::vector<packet_provider_type> _pkt_providers;
@@ -139,18 +216,17 @@ class qp {
     stream<packet> _rx_stream;
     reactor::poller _tx_poller;
     circular_buffer<packet> _tx_packetq;
-    uint64_t _packets_snt = 0;
-    uint64_t _packets_rcv = 0;
-    uint64_t _last_tx_bunch = 0;
-    uint64_t _last_rx_bunch = 0;
-    std::vector<scollectd::registration> _collectd_regs;
+
 protected:
-    void update_rx_count(uint64_t count) {
-        _last_rx_bunch = count;
-        _packets_rcv += count;
-    }
+    const std::string _stats_plugin_name;
+    const std::string _queue_name;
+    std::vector<scollectd::registration> _collectd_regs;
+    qp_stats _stats;
+
 public:
-    qp();
+    qp(bool register_copy_stats = false,
+       const std::string stats_plugin_name = std::string("network"),
+       uint8_t qid = 0);
     virtual ~qp();
     virtual future<> send(packet p) = 0;
     virtual uint32_t send(circular_buffer<packet>& p) {

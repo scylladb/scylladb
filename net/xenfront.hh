@@ -90,6 +90,7 @@ public:
 };
 
 using phys = uint64_t;
+class xenfront_qp;
 
 template <typename T>
 class front_ring {
@@ -118,14 +119,14 @@ public:
     uint32_t rsp_cons = 0;
     int32_t  ref = -1;
 
-    front_ring(gntref r)
+    front_ring(gntref r, xenfront_qp& dev)
         : ref(r.xen_id), entries(this)
-        , _sring(new (r.page) sring<T>()) {
+        , _sring(new (r.page) sring<T>()), _dev(dev) {
     }
 
     entries entries;
 
-    future<> process_ring(std::function<bool (gntref &entry, T& el)> func, grant_head *refs);
+    void process_ring(std::function<bool (gntref &entry, T& el)> func, grant_head *refs);
 
     void dump() {
         _sring->dump();
@@ -145,6 +146,8 @@ public:
 
     sring<T> *_sring;
     T& operator[](std::size_t i) { return _sring->_ring[idx(i)]; }
+private:
+    xenfront_qp& _dev;
 };
 
 }

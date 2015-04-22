@@ -161,6 +161,38 @@ static constexpr const char* pktmbuf_pool_name   = "dpdk_net_pktmbuf_pool";
 static constexpr uint8_t packet_read_size        = 32;
 /******************************************************************************/
 
+struct port_stats {
+    port_stats() {
+        std::memset(&rx, 0, sizeof(rx));
+        std::memset(&tx, 0, sizeof(tx));
+    }
+
+    struct {
+        struct {
+            uint64_t mcast;        // number of received multicast packets
+            uint64_t pause_xon;    // number of received PAUSE XON frames
+            uint64_t pause_xoff;   // number of received PAUSE XOFF frames
+        } good;
+
+        struct {
+            uint64_t dropped;      // missed packets (e.g. full FIFO)
+            uint64_t crc;          // packets with CRC error
+            uint64_t len;          // packets with a bad length
+            uint64_t total;        // total number of erroneous received packets
+        } bad;
+    } rx;
+
+    struct {
+        struct {
+            uint64_t pause_xon;   // number of sent PAUSE XON frames
+            uint64_t pause_xoff;  // number of sent PAUSE XOFF frames
+        } good;
+
+        struct {
+            uint64_t total;   // total number of failed transmitted packets
+        } bad;
+    } tx;
+};
 
 class dpdk_device : public device {
     uint8_t _port_idx;
@@ -168,11 +200,18 @@ class dpdk_device : public device {
     net::hw_features _hw_features;
     uint8_t _queues_ready = 0;
     unsigned _home_cpu;
+    bool _use_lro;
+    bool _enable_fc;
     std::vector<uint8_t> _redir_table;
 #ifdef RTE_VERSION_1_7
     struct rte_eth_rxconf _rx_conf_default = {};
     struct rte_eth_txconf _tx_conf_default = {};
 #endif
+    port_stats _stats;
+    timer<> _stats_collector;
+    const std::string _stats_plugin_name;
+    const std::string _stats_plugin_inst;
+    std::vector<scollectd::registration> _collectd_regs;
 
 public:
     rte_eth_dev_info _dev_info = {};
@@ -213,18 +252,129 @@ private:
      */
     void check_port_link_status();
 
+    /**
+     * Configures the HW Flow Control
+     */
+    void set_hw_flow_control();
+
 public:
-    dpdk_device(uint8_t port_idx, uint16_t num_queues)
+    dpdk_device(uint8_t port_idx, uint16_t num_queues, bool use_lro,
+                bool enable_fc)
         : _port_idx(port_idx)
         , _num_queues(num_queues)
-        , _home_cpu(engine().cpu_id()) {
+        , _home_cpu(engine().cpu_id())
+        , _use_lro(use_lro)
+        , _enable_fc(enable_fc)
+        , _stats_plugin_name("network")
+        , _stats_plugin_inst(std::string("port") + std::to_string(_port_idx))
+    {
 
         /* now initialise the port we will use */
         int ret = init_port_start();
         if (ret != 0) {
             rte_exit(EXIT_FAILURE, "Cannot initialise port %u\n", _port_idx);
         }
+
+        _stats_collector.set_callback([&] {
+            rte_eth_stats rte_stats = {};
+            int rc = rte_eth_stats_get(_port_idx, &rte_stats);
+
+            if (rc) {
+                printf("Failed to get port statistics: %s\n", strerror(rc));
+            }
+
+            _stats.rx.good.mcast      = rte_stats.imcasts;
+            _stats.rx.good.pause_xon  = rte_stats.rx_pause_xon;
+            _stats.rx.good.pause_xoff = rte_stats.rx_pause_xoff;
+
+            _stats.rx.bad.crc         = rte_stats.ibadcrc;
+            _stats.rx.bad.dropped     = rte_stats.imissed;
+            _stats.rx.bad.len         = rte_stats.ibadlen;
+            _stats.rx.bad.total       = rte_stats.ierrors;
+
+            _stats.tx.good.pause_xon  = rte_stats.tx_pause_xon;
+            _stats.tx.good.pause_xoff = rte_stats.tx_pause_xoff;
+
+            _stats.tx.bad.total       = rte_stats.oerrors;
+        });
+
+        // Register port statistics collectd pollers
+        // Rx Good
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_multicast", _stats_plugin_inst + " Rx Multicast")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.good.mcast)
+        ));
+
+        // Rx Errors
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_rx_errors", "Bad CRC")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.bad.crc)
+        ));
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_rx_errors", "Dropped")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.bad.dropped)
+        ));
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_rx_errors", "Bad Length")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.bad.len)
+        ));
+
+        // Coupled counters:
+        // Good
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_packets", _stats_plugin_inst + " Pause XON")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.good.pause_xon)
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.tx.good.pause_xon)
+        ));
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_packets", _stats_plugin_inst + " Pause XOFF")
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.good.pause_xoff)
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.tx.good.pause_xoff)
+        ));
+
+        // Errors
+        _collectd_regs.push_back(
+            scollectd::add_polled_metric(scollectd::type_instance_id(
+                          _stats_plugin_name
+                        , _stats_plugin_inst
+                        , "if_errors", _stats_plugin_inst)
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.rx.bad.total)
+                        , scollectd::make_typed(scollectd::data_type::DERIVE
+                        , _stats.tx.bad.total)
+        ));
     }
+
+    ~dpdk_device() {
+        _stats_collector.cancel();
+    }
+
     ethernet_address hw_address() override {
         struct ether_addr mac;
         rte_eth_macaddr_get(_port_idx, &mac);
@@ -234,6 +384,8 @@ public:
     net::hw_features hw_features() override {
         return _hw_features;
     }
+
+    net::hw_features& hw_features_ref() { return _hw_features; }
 
     const rte_eth_rxconf* def_rx_conf() const {
 #ifdef RTE_VERSION_1_7
@@ -284,38 +436,36 @@ class dpdk_qp : public net::qp {
          * way.
          *
          * @param p packet to translate
-         * @param dev Parent dpdk_device
-         * @param fc Buffers' factory to use
+         * @param qp dpdk_qp handle
          *
          * @return the HEAD tx_buf of the cluster or nullptr in case of a
          *         failure
          */
         static tx_buf* from_packet_zc(
-            packet&& p, dpdk_device& dev, tx_buf_factory& fc) {
+            packet&& p, dpdk_qp& qp) {
 
             return from_packet(check_frag0, translate_one_frag, copy_one_frag,
                 [](packet&& _p, tx_buf& _last_seg) {
                     _last_seg.set_packet(std::move(_p));
-                }, std::move(p), dev, fc);
+                }, std::move(p), qp);
         }
 
         /**
          * Creates a tx_buf cluster representing a given packet in a "copy" way.
          *
          * @param p packet to translate
-         * @param dev Parent dpdk_device
-         * @param fc Buffers' factory to use
+         * @param qp dpdk_qp handle
          *
          * @return the HEAD tx_buf of the cluster or nullptr in case of a
          *         failure
          */
         static tx_buf* from_packet_copy(
-            packet&& p, dpdk_device& dev, tx_buf_factory& fc) {
+            packet&& p, dpdk_qp& qp) {
 
             return from_packet([](packet& _p) { return true; },
                                copy_one_frag, copy_one_frag,
                                [](packet&& _p, tx_buf& _last_seg) {},
-                               std::move(p), dev, fc);
+                               std::move(p), qp);
         }
     private:
         /**
@@ -326,8 +476,7 @@ class dpdk_qp : public net::qp {
          * @param do_one_frag Functor that handles a single frag translation
          * @param fin Functor that performs a cluster finalization
          * @param p packet to translate
-         * @param dev Parent dpdk_device object
-         * @param fc Buffers' factory to use
+         * @param qp dpdk_qp handle
          *
          * @return the HEAD tx_buf of the cluster or nullptr in case of a
          *         failure
@@ -337,7 +486,7 @@ class dpdk_qp : public net::qp {
         static tx_buf* from_packet(
             FirstFragCheck frag0_check, TrOneFunc do_one_frag,
             CopyOneFunc copy_one_frag, FinalizeFunc fin,
-            packet&& p, dpdk_device& dev, tx_buf_factory& fc) {
+            packet&& p, dpdk_qp& qp) {
 
             // Too fragmented - linearize
             if (p.nr_frags() > max_frags) {
@@ -352,10 +501,10 @@ class dpdk_qp : public net::qp {
             // copied and if yes - send it in a copy way
             //
             if (!frag0_check(p)) {
-                if (!copy_one_frag(fc, p.frag(0), head, last_seg, nsegs)) {
+                if (!copy_one_frag(qp, p.frag(0), head, last_seg, nsegs)) {
                     return nullptr;
                 }
-            } else if (!do_one_frag(fc, p.frag(0), head, last_seg, nsegs)) {
+            } else if (!do_one_frag(qp, p.frag(0), head, last_seg, nsegs)) {
                 return nullptr;
             }
 
@@ -363,7 +512,7 @@ class dpdk_qp : public net::qp {
 
             for (unsigned i = 1; i < p.nr_frags(); i++) {
                 rte_mbuf *h = nullptr, *new_last_seg = nullptr;
-                if (!do_one_frag(fc, p.frag(i), h, new_last_seg, nsegs)) {
+                if (!do_one_frag(qp, p.frag(i), h, new_last_seg, nsegs)) {
                     me(head)->recycle();
                     return nullptr;
                 }
@@ -387,7 +536,7 @@ class dpdk_qp : public net::qp {
                 rte_mbuf_l2_len(head) = sizeof(struct ether_hdr);
                 rte_mbuf_l3_len(head) = oi.ip_hdr_len;
             }
-            if (dev.hw_features().tx_csum_l4_offload) {
+            if (qp.port().hw_features().tx_csum_l4_offload) {
                 if (oi.protocol == ip_protocol_num::tcp) {
                     head->ol_flags |= PKT_TX_TCP_CKSUM;
                     // TODO: Take a VLAN header into an account here
@@ -420,7 +569,7 @@ class dpdk_qp : public net::qp {
          *
          * @param do_one_buf Functor responsible for a single rte_mbuf
          *                   handling
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param frag Fragment to copy (in)
          * @param head Head of the cluster (out)
          * @param last_seg Last segment of the cluster (out)
@@ -429,7 +578,7 @@ class dpdk_qp : public net::qp {
          * @return TRUE in case of success
          */
         template <class DoOneBufFunc>
-        static bool do_one_frag(DoOneBufFunc do_one_buf, tx_buf_factory& fc,
+        static bool do_one_frag(DoOneBufFunc do_one_buf, dpdk_qp& qp,
                                 fragment& frag, rte_mbuf*& head,
                                 rte_mbuf*& last_seg, unsigned& nsegs) {
             //
@@ -446,7 +595,7 @@ class dpdk_qp : public net::qp {
             assert(frag.size);
 
             // Create a HEAD of mbufs' cluster and set the first bytes into it
-            len = do_one_buf(fc, head, base, left_to_set);
+            len = do_one_buf(qp, head, base, left_to_set);
             if (!len) {
                 return false;
             }
@@ -461,7 +610,7 @@ class dpdk_qp : public net::qp {
             //
             rte_mbuf* prev_seg = head;
             while (left_to_set) {
-                len = do_one_buf(fc, m, base, left_to_set);
+                len = do_one_buf(qp, m, base, left_to_set);
                 if (!len) {
                     me(head)->recycle();
                     return false;
@@ -484,7 +633,7 @@ class dpdk_qp : public net::qp {
         /**
          * Zero-copy handling of a single net::fragment.
          *
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param frag Fragment to copy (in)
          * @param head Head of the cluster (out)
          * @param last_seg Last segment of the cluster (out)
@@ -492,17 +641,17 @@ class dpdk_qp : public net::qp {
          *
          * @return TRUE in case of success
          */
-        static bool translate_one_frag(tx_buf_factory& fc, fragment& frag,
+        static bool translate_one_frag(dpdk_qp& qp, fragment& frag,
                                        rte_mbuf*& head, rte_mbuf*& last_seg,
                                        unsigned& nsegs) {
-            return do_one_frag(set_one_data_buf, fc, frag, head,
+            return do_one_frag(set_one_data_buf, qp, frag, head,
                                last_seg, nsegs);
         }
 
         /**
          * Copies one net::fragment into the cluster of rte_mbuf's.
          *
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param frag Fragment to copy (in)
          * @param head Head of the cluster (out)
          * @param last_seg Last segment of the cluster (out)
@@ -513,10 +662,10 @@ class dpdk_qp : public net::qp {
          *
          * @return TRUE in case of success
          */
-        static bool copy_one_frag(tx_buf_factory& fc, fragment& frag,
+        static bool copy_one_frag(dpdk_qp& qp, fragment& frag,
                                   rte_mbuf*& head, rte_mbuf*& last_seg,
                                   unsigned& nsegs) {
-            return do_one_frag(copy_one_data_buf, fc, frag, head,
+            return do_one_frag(copy_one_data_buf, qp, frag, head,
                                last_seg, nsegs);
         }
 
@@ -524,7 +673,7 @@ class dpdk_qp : public net::qp {
          * Allocates a single rte_mbuf and sets it to point to a given data
          * buffer.
          *
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param m New allocated rte_mbuf (out)
          * @param va virtual address of a data buffer (in)
          * @param buf_len length of the data to copy (in)
@@ -532,7 +681,7 @@ class dpdk_qp : public net::qp {
          * @return The actual number of bytes that has been set in the mbuf
          */
         static size_t set_one_data_buf(
-            tx_buf_factory& fc, rte_mbuf*& m, char* va, size_t buf_len) {
+            dpdk_qp& qp, rte_mbuf*& m, char* va, size_t buf_len) {
 
             using namespace memory;
             translation tr = translate(va, buf_len);
@@ -547,10 +696,10 @@ class dpdk_qp : public net::qp {
             phys_addr_t pa = tr.addr;
 
             if (!tr.size) {
-                return copy_one_data_buf(fc, m, va, buf_len);
+                return copy_one_data_buf(qp, m, va, buf_len);
             }
 
-            tx_buf* buf = fc.get();
+            tx_buf* buf = qp.get_tx_buf();
             if (!buf) {
                 return 0;
             }
@@ -567,7 +716,7 @@ class dpdk_qp : public net::qp {
         /**
          *  Allocates a single rte_mbuf and copies a given data into it.
          *
-         * @param fc Buffers' factory to allocate the tx_buf from (in)
+         * @param qp dpdk_qp handle (in)
          * @param m New allocated rte_mbuf (out)
          * @param data Data to copy from (in)
          * @param buf_len length of the data to copy (in)
@@ -575,9 +724,9 @@ class dpdk_qp : public net::qp {
          * @return The actual number of bytes that has been copied
          */
         static size_t copy_one_data_buf(
-            tx_buf_factory& fc, rte_mbuf*& m, char* data, size_t buf_len)
+            dpdk_qp& qp, rte_mbuf*& m, char* data, size_t buf_len)
         {
-            tx_buf* buf = fc.get();
+            tx_buf* buf = qp.get_tx_buf();
             if (!buf) {
                 return 0;
             }
@@ -590,6 +739,7 @@ class dpdk_qp : public net::qp {
             rte_mbuf_data_len(m) = len;
             rte_mbuf_pkt_len(m)  = len;
 
+            qp._stats.tx.good.update_copy_stats(1, len);
 
             rte_memcpy(rte_pktmbuf_mtod(m, void*), data, len);
 
@@ -885,7 +1035,8 @@ class dpdk_qp : public net::qp {
     };
 
 public:
-    explicit dpdk_qp(dpdk_device* dev, uint8_t qid);
+    explicit dpdk_qp(dpdk_device* dev, uint8_t qid,
+                     const std::string stats_plugin_name);
 
     virtual void rx_start() override;
     virtual future<> send(packet p) override {
@@ -897,17 +1048,18 @@ public:
         if (HugetlbfsMemBackend) {
             // Zero-copy send
             return _send(pb, [&] (packet&& p) {
-                return tx_buf::from_packet_zc(
-                                        std::move(p), *_dev, _tx_buf_factory);
+                return tx_buf::from_packet_zc(std::move(p), *this);
             });
         } else {
             // "Copy"-send
             return _send(pb, [&](packet&& p) {
-                return tx_buf::from_packet_copy(
-                                        std::move(p), *_dev, _tx_buf_factory);
+                return tx_buf::from_packet_copy(std::move(p), *this);
             });
         }
     }
+
+    dpdk_device& port() const { return *_dev; }
+    tx_buf* get_tx_buf() { return _tx_buf_factory.get(); }
 private:
 
     template <class Func>
@@ -930,9 +1082,16 @@ private:
                                          _tx_burst.data() + _tx_burst_idx,
                                          _tx_burst.size() - _tx_burst_idx);
 
+        uint64_t nr_frags = 0, bytes = 0;
+
         for (int i = 0; i < sent; i++) {
+            rte_mbuf* m = _tx_burst[_tx_burst_idx + i];
+            bytes    += rte_mbuf_pkt_len(m);
+            nr_frags += rte_mbuf_nb_segs(m);
             pb.pop_front();
         }
+
+        _stats.tx.good.update_frags_stats(nr_frags, bytes);
 
         _tx_burst_idx += sent;
 
@@ -1039,9 +1198,19 @@ private:
      * Translate rte_mbuf into the "packet".
      * @param m mbuf to translate
      *
-     * @return a "packet" object representing the newly received data
+     * @return a "optional" object representing the newly received data if in an
+     *         "engaged" state or an error if in a "disengaged" state.
      */
-    packet from_mbuf(rte_mbuf* m);
+    std::experimental::optional<packet> from_mbuf(rte_mbuf* m);
+
+    /**
+     * Transform an LRO rte_mbuf cluster into the "packet" object.
+     * @param m HEAD of the mbufs' cluster to transform
+     *
+     * @return a "optional" object representing the newly received LRO packet if
+     *         in an "engaged" state or an error if in a "disengaged" state.
+     */
+    std::experimental::optional<packet> from_mbuf_lro(rte_mbuf* m);
 
 private:
     dpdk_device* _dev;
@@ -1049,6 +1218,8 @@ private:
     rte_mempool *_pktmbuf_pool_rx;
     std::vector<rte_mbuf*> _rx_free_pkts;
     std::vector<rte_mbuf*> _rx_free_bufs;
+    std::vector<fragment> _frags;
+    std::vector<char*> _bufs;
     size_t _num_rx_free_segs = 0;
     reactor::poller _rx_gc_poller;
     std::unique_ptr<void, free_deleter> _rx_xmem;
@@ -1079,8 +1250,38 @@ int dpdk_device::init_port_start()
     _tx_conf_default.tx_free_thresh = 0; /* Use PMD default values */
     _tx_conf_default.tx_rs_thresh   = 0; /* Use PMD default values */
 #else
-    // Clear txq_flags - we want to support all available offload features.
-    _dev_info.default_txconf.txq_flags = 0;
+    // Clear txq_flags - we want to support all available offload features
+    // except for multi-mempool and refcnt'ing which we don't need
+    _dev_info.default_txconf.txq_flags =
+        ETH_TXQ_FLAGS_NOMULTMEMP | ETH_TXQ_FLAGS_NOREFCOUNT;
+
+    //
+    // Disable features that are not supported by port's HW
+    //
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_CKSUM)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOXSUMUDP;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_CKSUM)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOXSUMTCP;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_SCTP_CKSUM)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOXSUMSCTP;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_VLAN_INSERT)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOVLANOFFL;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_VLAN_INSERT)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOVLANOFFL;
+    }
+
+    if (!(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_TCP_TSO) &&
+        !(_dev_info.tx_offload_capa & DEV_TX_OFFLOAD_UDP_TSO)) {
+        _dev_info.default_txconf.txq_flags |= ETH_TXQ_FLAGS_NOMULTSEGS;
+    }
 #endif
 
     /* for port configuration all features are off by default */
@@ -1132,6 +1333,19 @@ int dpdk_device::init_port_start()
     if (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_STRIP) {
         port_conf.rxmode.hw_vlan_strip = 1;
     }
+
+    // Enable HW CRC stripping
+    port_conf.rxmode.hw_strip_crc = 1;
+
+#ifdef RTE_ETHDEV_HAS_LRO_SUPPORT
+    // Enable LRO
+    if (_use_lro && (_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_TCP_LRO)) {
+        printf("LRO is on\n");
+        port_conf.rxmode.enable_lro = 1;
+        _hw_features.rx_lro = true;
+    } else
+#endif
+        printf("LRO is off\n");
 
     // Check that all CSUM features are either all set all together or not set
     // all together. If this assumption breaks we need to rework the below logic
@@ -1209,8 +1423,48 @@ int dpdk_device::init_port_start()
     return 0;
 }
 
+void dpdk_device::set_hw_flow_control()
+{
+    // Read the port's current/default flow control settings
+    struct rte_eth_fc_conf fc_conf;
+    auto ret = rte_eth_dev_flow_ctrl_get(_port_idx, &fc_conf);
+
+    if (ret == -ENOTSUP) {
+        goto not_supported;
+    }
+
+    if (ret < 0) {
+        rte_exit(EXIT_FAILURE, "Port %u: failed to get hardware flow control settings: (error %d)\n", _port_idx, ret);
+    }
+
+    if (_enable_fc) {
+        fc_conf.mode = RTE_FC_FULL;
+    } else {
+        fc_conf.mode = RTE_FC_NONE;
+    }
+
+    ret = rte_eth_dev_flow_ctrl_set(_port_idx, &fc_conf);
+    if (ret == -ENOTSUP) {
+        goto not_supported;
+    }
+
+    if (ret < 0) {
+        rte_exit(EXIT_FAILURE, "Port %u: failed to set hardware flow control (error %d)\n", _port_idx, ret);
+    }
+
+    printf("Port %u: %s HW FC\n", _port_idx,
+                                  (_enable_fc ? "Enabling" : "Disabling"));
+    return;
+
+not_supported:
+    printf("Port %u: Changing HW FC settings is not supported\n", _port_idx);
+}
+
 void dpdk_device::init_port_fini()
 {
+    // Changing FC requires HW reset, so set it before the port is initialized.
+    set_hw_flow_control();
+
     if (rte_eth_dev_start(_port_idx) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot start port %d\n", _port_idx);
     }
@@ -1364,6 +1618,9 @@ void dpdk_device::check_port_link_status()
                           ("full-duplex") : ("half-duplex\n")) <<
                 std::endl;
             _link_ready_promise.set_value();
+
+            // We may start collecting statistics only after the Link is UP.
+            _stats_collector.arm_periodic(2s);
         } else if (count++ < max_check_time) {
              std::cout << "." << std::flush;
              return;
@@ -1377,8 +1634,9 @@ void dpdk_device::check_port_link_status()
 }
 
 template <bool HugetlbfsMemBackend>
-dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid)
-     : _dev(dev), _qid(qid),
+dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid,
+                                      const std::string stats_plugin_name)
+     : qp(true, stats_plugin_name, qid), _dev(dev), _qid(qid),
        _rx_gc_poller([&] { return rx_gc(); }),
        _tx_buf_factory(qid),
        _tx_gc_poller([&] { return _tx_buf_factory.gc(); })
@@ -1405,6 +1663,34 @@ dpdk_qp<HugetlbfsMemBackend>::dpdk_qp(dpdk_device* dev, uint8_t qid)
             rte_eth_dev_socket_id(_dev->port_idx()), _dev->def_tx_conf()) < 0) {
         rte_exit(EXIT_FAILURE, "Cannot initialize tx queue\n");
     }
+
+    // Register error statistics: Rx total and checksum errors
+    _collectd_regs.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id(
+                      _stats_plugin_name
+                    , scollectd::per_cpu_plugin_instance
+                    , "if_rx_errors", "Bad CSUM")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
+                    , _stats.rx.bad.csum)
+    ));
+
+    _collectd_regs.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id(
+                      _stats_plugin_name
+                    , scollectd::per_cpu_plugin_instance
+                    , "if_rx_errors", "Total")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
+                    , _stats.rx.bad.total)
+    ));
+
+    _collectd_regs.push_back(
+        scollectd::add_polled_metric(scollectd::type_instance_id(
+                      _stats_plugin_name
+                    , scollectd::per_cpu_plugin_instance
+                    , "if_rx_errors", "No Memory")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE
+                    , _stats.rx.bad.no_mem)
+    ));
 }
 
 template <bool HugetlbfsMemBackend>
@@ -1413,47 +1699,112 @@ void dpdk_qp<HugetlbfsMemBackend>::rx_start() {
 }
 
 template<>
-inline packet dpdk_qp<false>::from_mbuf(rte_mbuf* m)
+inline std::experimental::optional<packet>
+dpdk_qp<false>::from_mbuf_lro(rte_mbuf* m)
 {
     //
-    // Try to allocate a buffer for packet's data. If we fail - give the
-    // application an mbuf itself. If we succeed - copy the data into this
-    // buffer, create a packet based on this buffer and return the mbuf to its
-    // pool.
+    // Try to allocate a buffer for the whole packet's data.
+    // If we fail - construct the packet from mbufs.
+    // If we succeed - copy the data into this buffer, create a packet based on
+    // this buffer and return the mbuf to its pool.
     //
-    auto len = rte_pktmbuf_data_len(m);
-    char* buf = (char*)malloc(len);
-    if (!buf) {
-        fragment f{rte_pktmbuf_mtod(m, char*), len};
-        return packet(f, make_deleter(deleter(), [m] { rte_pktmbuf_free(m); }));
-    } else {
-        rte_memcpy(buf, rte_pktmbuf_mtod(m, char*), len);
+    auto pkt_len = rte_pktmbuf_pkt_len(m);
+    char* buf = (char*)malloc(pkt_len);
+    if (buf) {
+        // Copy the contents of the packet into the buffer we've just allocated
+        size_t offset = 0;
+        for (rte_mbuf* m1 = m; m1 != nullptr; m1 = m1->next) {
+            char* data = rte_pktmbuf_mtod(m1, char*);
+            auto len = rte_pktmbuf_data_len(m1);
+
+            rte_memcpy(buf + offset, data, len);
+            offset += len;
+        }
+
         rte_pktmbuf_free(m);
 
-        fragment f{buf, len};
-        return packet(f, make_free_deleter(buf));
+        return packet(fragment{buf, pkt_len}, make_free_deleter(buf));
+    }
+
+    // Drop if allocation failed
+    rte_pktmbuf_free(m);
+
+    return std::experimental::nullopt;
+}
+
+template<>
+inline std::experimental::optional<packet>
+dpdk_qp<false>::from_mbuf(rte_mbuf* m)
+{
+    if (!_dev->hw_features_ref().rx_lro || rte_pktmbuf_is_contiguous(m)) {
+        //
+        // Try to allocate a buffer for packet's data. If we fail - give the
+        // application an mbuf itself. If we succeed - copy the data into this
+        // buffer, create a packet based on this buffer and return the mbuf to
+        // its pool.
+        //
+        auto len = rte_pktmbuf_data_len(m);
+        char* buf = (char*)malloc(len);
+
+        if (!buf) {
+            // Drop if allocation failed
+            rte_pktmbuf_free(m);
+
+            return std::experimental::nullopt;
+        } else {
+            rte_memcpy(buf, rte_pktmbuf_mtod(m, char*), len);
+            rte_pktmbuf_free(m);
+
+            return packet(fragment{buf, len}, make_free_deleter(buf));
+        }
+    } else {
+        return from_mbuf_lro(m);
     }
 }
 
 template<>
-inline packet dpdk_qp<true>::from_mbuf(rte_mbuf* m)
+inline std::experimental::optional<packet>
+dpdk_qp<true>::from_mbuf_lro(rte_mbuf* m)
 {
-    char* data = rte_pktmbuf_mtod(m, char*);
+    _frags.clear();
+    _bufs.clear();
 
-    fragment f{data, rte_pktmbuf_data_len(m)};
-    packet p(f, make_free_deleter(data));
+    for (; m != nullptr; m = m->next) {
+        char* data = rte_pktmbuf_mtod(m, char*);
 
+        _frags.emplace_back(fragment{data, rte_pktmbuf_data_len(m)});
+        _bufs.push_back(data);
+    }
+
+    return packet(_frags.begin(), _frags.end(),
+                  make_deleter(deleter(),
+                          [bufs_vec = std::move(_bufs)] {
+                              for (auto&& b : bufs_vec) {
+                                  free(b);
+                              }
+                          }));
+}
+
+template<>
+inline std::experimental::optional<packet> dpdk_qp<true>::from_mbuf(rte_mbuf* m)
+{
     _rx_free_pkts.push_back(m);
     _num_rx_free_segs += rte_mbuf_nb_segs(m);
 
-    return p;
+    if (!_dev->hw_features_ref().rx_lro || rte_pktmbuf_is_contiguous(m)) {
+        char* data = rte_pktmbuf_mtod(m, char*);
+
+        return packet(fragment{data, rte_pktmbuf_data_len(m)},
+                      make_free_deleter(data));
+    } else {
+        return from_mbuf_lro(m);
+    }
 }
 
 template <bool HugetlbfsMemBackend>
 inline bool dpdk_qp<HugetlbfsMemBackend>::refill_one_cluster(rte_mbuf* head)
 {
-    while (head != NULL) {
-        struct rte_mbuf *m_next = head->next;
+    for (; head != nullptr; head = head->next) {
         if (!refill_rx_mbuf(head)) {
             //
             // If we failed to allocate a new buffer - push the rest of the
@@ -1463,7 +1814,6 @@ inline bool dpdk_qp<HugetlbfsMemBackend>::refill_one_cluster(rte_mbuf* head)
             return false;
         }
         _rx_free_bufs.push_back(head);
-        head = m_next;
     }
 
     return true;
@@ -1512,18 +1862,22 @@ template <bool HugetlbfsMemBackend>
 void dpdk_qp<HugetlbfsMemBackend>::process_packets(
     struct rte_mbuf **bufs, uint16_t count)
 {
-    update_rx_count(count);
+    uint64_t nr_frags = 0, bytes = 0;
+
     for (uint16_t i = 0; i < count; i++) {
         struct rte_mbuf *m = bufs[i];
         offload_info oi;
 
-        // TODO: Remove this when implement LRO support
-        if (!rte_pktmbuf_is_contiguous(m)) {
-            rte_exit(EXIT_FAILURE,
-                     "DPDK-Rx: Have got a fragmented buffer - not supported\n");
+        std::experimental::optional<packet> p = from_mbuf(m);
+
+        // Drop the packet if translation above has failed
+        if (!p) {
+            _stats.rx.bad.inc_no_mem();
+            continue;
         }
 
-        packet p = from_mbuf(m);
+        nr_frags += rte_mbuf_nb_segs(m);
+        bytes    += rte_mbuf_pkt_len(m);
 
         // Set stipped VLAN value if available
         if ((_dev->_dev_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_STRIP) &&
@@ -1535,6 +1889,7 @@ void dpdk_qp<HugetlbfsMemBackend>::process_packets(
         if (_dev->hw_features().rx_csum_offload) {
             if (m->ol_flags & (PKT_RX_IP_CKSUM_BAD | PKT_RX_L4_CKSUM_BAD)) {
                 // Packet with bad checksum, just drop it.
+                _stats.rx.bad.inc_csum_err();
                 continue;
             }
             // Note that when _hw_features.rx_csum_offload is on, the receive
@@ -1542,12 +1897,20 @@ void dpdk_qp<HugetlbfsMemBackend>::process_packets(
             // the checksum again, because we did this here.
         }
 
-        p.set_offload_info(oi);
+        (*p).set_offload_info(oi);
         if (m->ol_flags & PKT_RX_RSS_HASH) {
-            p.set_rss_hash(rte_mbuf_rss_hash(m));
+            (*p).set_rss_hash(rte_mbuf_rss_hash(m));
         }
 
-        _dev->l2receive(std::move(p));
+        _dev->l2receive(std::move(*p));
+    }
+
+    _stats.rx.good.update_pkts_bunch(count);
+    _stats.rx.good.update_frags_stats(nr_frags, bytes);
+
+    if (!HugetlbfsMemBackend) {
+        _stats.rx.good.copy_frags = _stats.rx.good.nr_frags;
+        _stats.rx.good.copy_bytes = _stats.rx.good.bytes;
     }
 }
 
@@ -1613,9 +1976,11 @@ std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variab
 
     std::unique_ptr<qp> qp;
     if (opts.count("hugepages")) {
-        qp = std::make_unique<dpdk_qp<true>>(this, qid);
+        qp = std::make_unique<dpdk_qp<true>>(this, qid,
+                                 _stats_plugin_name + "-" + _stats_plugin_inst);
     } else {
-        qp = std::make_unique<dpdk_qp<false>>(this, qid);
+        qp = std::make_unique<dpdk_qp<false>>(this, qid,
+                                 _stats_plugin_name + "-" + _stats_plugin_inst);
     }
 
     smp::submit_to(_home_cpu, [this] () mutable {
@@ -1631,7 +1996,9 @@ std::unique_ptr<qp> dpdk_device::init_local_queue(boost::program_options::variab
 
 std::unique_ptr<net::device> create_dpdk_net_device(
                                     uint8_t port_idx,
-                                    uint8_t num_queues)
+                                    uint8_t num_queues,
+                                    bool use_lro,
+                                    bool enable_fc)
 {
     static bool called = false;
 
@@ -1647,7 +2014,8 @@ std::unique_ptr<net::device> create_dpdk_net_device(
         printf("ports number: %d\n", rte_eth_dev_count());
     }
 
-    return std::make_unique<dpdk::dpdk_device>(port_idx, num_queues);
+    return std::make_unique<dpdk::dpdk_device>(port_idx, num_queues, use_lro,
+                                               enable_fc);
 }
 
 boost::program_options::options_description
@@ -1655,6 +2023,11 @@ get_dpdk_net_options_description()
 {
     boost::program_options::options_description opts(
             "DPDK net options");
+
+    opts.add_options()
+        ("hw-fc",
+                boost::program_options::value<std::string>()->default_value("on"),
+                "Enable HW Flow Control (on / off)");
 #if 0
     opts.add_options()
         ("csum-offload",

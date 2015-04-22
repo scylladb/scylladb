@@ -85,6 +85,10 @@ BOOST_AUTO_TEST_CASE(test_decode_url) {
     sstring url = http_server::connection::set_query_param(req);
     BOOST_REQUIRE_EQUAL(url, "/a");
     BOOST_REQUIRE_EQUAL(req.get_query_param("q"), "#$#");
+    req._url = "/a?a=%23%24%23&b=%22%26%22";
+    http_server::connection::set_query_param(req);
+    BOOST_REQUIRE_EQUAL(req.get_query_param("a"), "#$#");
+    BOOST_REQUIRE_EQUAL(req.get_query_param("b"), "\"&\"");
 }
 
 BOOST_AUTO_TEST_CASE(test_routes) {
