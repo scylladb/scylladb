@@ -73,7 +73,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         {{"columnfamily_name", utf8_type}},
         // regular columns
         {
-            // {"bloom_filter_fp_chance", double_type}, // FIXME: add this type
+            {"bloom_filter_fp_chance", double_type},
             {"caching", utf8_type},
             {"cf_id", uuid_type},
             {"comment", utf8_type},
@@ -87,13 +87,13 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
             {"gc_grace_seconds", int32_type},
             {"is_dense", boolean_type},
             {"key_validator", utf8_type},
-            //{"local_read_repair_chance", double_type}, // FIXME: add this type
+            {"local_read_repair_chance", double_type},
             {"max_compaction_threshold", int32_type},
             {"max_index_interval", int32_type},
             {"memtable_flush_period_in_ms", int32_type},
             {"min_compaction_threshold", int32_type},
             {"min_index_interval", int32_type},
-            //{"read_repair_chance", double_type}, // FIXME: add this type
+            {"read_repair_chance", double_type},
             {"speculative_retry", utf8_type},
             {"subcomparator", utf8_type},
             {"type", utf8_type},
