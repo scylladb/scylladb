@@ -279,7 +279,7 @@ public:
     }
 
     static const tuple& get_tuple_type(const schema& s) {
-        return s.partition_key_type;
+        return s.partition_key_type();
     }
 
     friend std::ostream& operator<<(std::ostream& out, const partition_key& pk);
@@ -316,7 +316,7 @@ public:
     }
 
     static const tuple& get_tuple_type(const schema& s) {
-        return s.clustering_key_type;
+        return s.clustering_key_type();
     }
 
     static clustering_key from_clustering_prefix(const schema& s, const exploded_clustering_prefix& prefix) {
@@ -337,7 +337,7 @@ public:
     }
 
     static const tuple& get_tuple_type(const schema& s) {
-        return s.clustering_key_prefix_type;
+        return s.clustering_key_prefix_type();
     }
 
     static clustering_key_prefix from_clustering_prefix(const schema& s, const exploded_clustering_prefix& prefix) {

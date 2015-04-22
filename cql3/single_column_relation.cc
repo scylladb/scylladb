@@ -47,7 +47,7 @@ single_column_relation::to_term(const std::vector<::shared_ptr<column_specificat
 single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names) {
     const column_definition& column_def = to_column_definition(schema, _entity);
     if (!_map_key) {
-        auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name, bound_names);
+        auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name(), bound_names);
         return ::make_shared<single_column_restriction::EQ>(column_def, std::move(term));
     }
     fail(unimplemented::cause::COLLECTIONS);
@@ -63,7 +63,7 @@ single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, ::sh
 single_column_relation::new_IN_restriction(database& db, schema_ptr schema, ::shared_ptr<variable_specifications> bound_names) {
     const column_definition& column_def = to_column_definition(schema, _entity);
     auto receivers = to_receivers(schema, column_def);
-    auto terms = to_terms(receivers, _in_values, db, schema->ks_name, bound_names);
+    auto terms = to_terms(receivers, _in_values, db, schema->ks_name(), bound_names);
     if (terms.empty()) {
         fail(unimplemented::cause::COLLECTIONS);
 #if 0

@@ -113,7 +113,7 @@ public:
         auto ttl = _ttl;
 
         if (ttl.count() <= 0) {
-            ttl = _schema->default_time_to_live;
+            ttl = _schema->default_time_to_live();
         }
 
         return atomic_cell::make_live(_timestamp,

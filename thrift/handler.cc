@@ -273,7 +273,7 @@ public:
                                 ttl = std::chrono::duration_cast<gc_clock::duration>(std::chrono::seconds(col.ttl));
                             }
                             if (ttl.count() <= 0) {
-                                ttl = cf._schema->default_time_to_live;
+                                ttl = cf._schema->default_time_to_live();
                             }
                             auto ttl_option = ttl.count() > 0 ? ttl_opt(gc_clock::now() + ttl) : ttl_opt();
                             m_to_apply.set_clustered_cell(empty_clustering_key, *def,

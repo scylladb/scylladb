@@ -290,15 +290,15 @@ keyspace& database::add_keyspace(sstring name, keyspace k) {
 }
 
 void database::add_column_family(const utils::UUID& uuid, column_family&& cf) {
-    if (_keyspaces.count(cf._schema->ks_name) == 0) {
-        throw std::invalid_argument("Keyspace " + cf._schema->ks_name + " not defined");
+    if (_keyspaces.count(cf._schema->ks_name()) == 0) {
+        throw std::invalid_argument("Keyspace " + cf._schema->ks_name() + " not defined");
     }
     if (_column_families.count(uuid) != 0) {
         throw std::invalid_argument("UUID " + uuid.to_sstring() + " already mapped");
     }
-    auto kscf = std::make_pair(cf._schema->ks_name, cf._schema->cf_name);
+    auto kscf = std::make_pair(cf._schema->ks_name(), cf._schema->cf_name());
     if (_ks_cf_to_uuid.count(kscf) != 0) {
-        throw std::invalid_argument("Column family " + cf._schema->cf_name + " exists");
+        throw std::invalid_argument("Column family " + cf._schema->cf_name() + " exists");
     }
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
@@ -314,7 +314,7 @@ const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) con
 }
 
 const utils::UUID& database::find_uuid(const schema_ptr& schema) const throw (std::out_of_range) {
-    return find_uuid(schema->ks_name, schema->cf_name);
+    return find_uuid(schema->ks_name(), schema->cf_name());
 }
 
 keyspace& database::find_keyspace(const sstring& name) throw (no_such_keyspace) {
@@ -552,7 +552,7 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     out << "{\n";
     for (auto&& e : db._column_families) {
         auto&& cf = e.second;
-        out << "(" << e.first.to_sstring() << ", " << cf._schema->cf_name << ", " << cf._schema->ks_name << "): " << cf << "\n";
+        out << "(" << e.first.to_sstring() << ", " << cf._schema->cf_name() << ", " << cf._schema->ks_name() << "): " << cf << "\n";
     }
     out << "}";
     return out;

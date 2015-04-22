@@ -135,7 +135,7 @@ protected:
             statements::bound bound,
             bool inclusive) override {
         auto&& column_def = to_column_definition(schema, _entity);
-        auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name, std::move(bound_names));
+        auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name(), std::move(bound_names));
         return ::make_shared<restrictions::single_column_restriction::slice>(column_def, bound, inclusive, std::move(term));
     }
 

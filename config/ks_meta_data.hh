@@ -76,7 +76,7 @@ public:
         , user_types{user_types_}
     {
         for (auto&& s : cf_defs) {
-            _cf_meta_data.emplace(s->cf_name, s);
+            _cf_meta_data.emplace(s->cf_name(), s);
         }
     }
 

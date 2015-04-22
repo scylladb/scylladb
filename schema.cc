@@ -20,7 +20,7 @@ get_column_types(const Sequence& column_definitions) {
 ::shared_ptr<cql3::column_specification>
 schema::make_column_specification(const column_definition& def) {
     auto id = ::make_shared<cql3::column_identifier>(def.name(), column_name_type(def));
-    return ::make_shared<cql3::column_specification>(ks_name, cf_name, std::move(id), def.type);
+    return ::make_shared<cql3::column_specification>(_raw._ks_name, _raw._cf_name, std::move(id), def.type);
 }
 
 void
@@ -36,7 +36,19 @@ schema::build_columns(const std::vector<column>& columns, column_definition::col
     }
 }
 
-void schema::rehash_columns() {
+void schema::rebuild() {
+    _partition_key_type = make_lw_shared<tuple_type<>>(get_column_types(_raw._partition_key));
+    _clustering_key_type = make_lw_shared<tuple_type<>>(get_column_types(_raw._clustering_key));
+    _clustering_key_prefix_type = make_lw_shared(_clustering_key_type->as_prefix());
+
+    _thrift = thrift_schema();
+    if (_raw._partition_key.size() == 1) {
+        _thrift.partition_key_type = _raw._partition_key[0].type;
+    } else {
+        // TODO: the type should be composite_type
+        warn(unimplemented::cause::LEGACY_COMPOSITE_KEYS);
+    }
+
     _columns_by_name.clear();
     _regular_columns_by_name.clear();
 
@@ -44,12 +56,12 @@ void schema::rehash_columns() {
         _columns_by_name[def.name()] = &def;
     }
 
-    for (const column_definition& def : _regular_columns) {
+    for (const column_definition& def : regular_columns()) {
         _regular_columns_by_name[def.name()] = &def;
     }
 }
 
-raw_schema::raw_schema(utils::UUID id)
+schema::raw_schema::raw_schema(utils::UUID id)
     : _id(id)
 { }
 
@@ -62,40 +74,31 @@ schema::schema(std::experimental::optional<utils::UUID> id,
     std::vector<column> static_columns,
     data_type regular_column_name_type,
     sstring comment)
-        : raw_schema(id ? *id : utils::UUID_gen::get_time_UUID())
+        : _raw(id ? *id : utils::UUID_gen::get_time_UUID())
         , _regular_columns_by_name(serialized_compare(regular_column_name_type))
 {
-    this->_comment = std::move(comment);
-    this->ks_name = std::move(ks_name);
-    this->cf_name = std::move(cf_name);
-    this->partition_key_type = ::make_lw_shared<tuple_type<>>(get_column_types(partition_key));
-    this->clustering_key_type = ::make_lw_shared<tuple_type<>>(get_column_types(clustering_key));
-    this->clustering_key_prefix_type = ::make_lw_shared(clustering_key_type->as_prefix());
-    this->regular_column_name_type = regular_column_name_type;
+    _raw._comment = std::move(comment);
+    _raw._ks_name = std::move(ks_name);
+    _raw._cf_name = std::move(cf_name);
+    _raw._regular_column_name_type = regular_column_name_type;
 
-    if (partition_key.size() == 1) {
-        thrift.partition_key_type = partition_key[0].type;
-    } else {
-        // TODO: the type should be composite_type
-        warn(unimplemented::cause::LEGACY_COMPOSITE_KEYS);
-    }
-
-    build_columns(partition_key, column_definition::column_kind::PARTITION, _partition_key);
-    build_columns(clustering_key, column_definition::column_kind::CLUSTERING, _clustering_key);
+    build_columns(partition_key, column_definition::column_kind::PARTITION, _raw._partition_key);
+    build_columns(clustering_key, column_definition::column_kind::CLUSTERING, _raw._clustering_key);
 
     std::sort(regular_columns.begin(), regular_columns.end(), column::name_compare(regular_column_name_type));
-    build_columns(regular_columns, column_definition::column_kind::REGULAR, _regular_columns);
+    build_columns(regular_columns, column_definition::column_kind::REGULAR, _raw._regular_columns);
 
     std::sort(static_columns.begin(), static_columns.end(), column::name_compare(utf8_type));
-    build_columns(static_columns, column_definition::column_kind::STATIC, _static_columns);
+    build_columns(static_columns, column_definition::column_kind::STATIC, _raw._static_columns);
 
-    rehash_columns();
+    rebuild();
 }
 
 schema::schema(const schema& o)
-    : raw_schema(o)
-    , _regular_columns_by_name(serialized_compare(regular_column_name_type)) {
-    rehash_columns();
+    : _raw(o._raw)
+    , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
+{
+    rebuild();
 }
 
 column_definition::column_definition(bytes name, data_type type, column_id id, column_kind kind)

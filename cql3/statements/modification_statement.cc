@@ -354,7 +354,7 @@ modification_statement::execute_without_condition(service::storage_proxy& proxy,
     if (is_counter()) {
         db::validate_counter_for_write(s, cl);
     } else {
-        db::validate_for_write(s->ks_name, cl);
+        db::validate_for_write(s->ks_name(), cl);
     }
 
     return get_mutations(proxy, options, false, options.get_timestamp(qs)).then([cl, &proxy] (auto mutations) {

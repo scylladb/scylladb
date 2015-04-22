@@ -504,7 +504,7 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
     return parallel_for_each(pmut->begin(), pmut->end(), [this, pmut] (const mutation& m) {
         auto dk = dht::global_partitioner().decorate_key(m.key);
         try {
-            keyspace& ks = _db.local().find_keyspace(m.schema->ks_name);
+            keyspace& ks = _db.local().find_keyspace(m.schema->ks_name());
             std::vector<gms::inet_address> natural_endpoints = ks.get_replication_strategy().get_natural_endpoints(dk._token);
             // FIXME: send it to replicas instead of applying locally
             return mutate_locally(m, dk);

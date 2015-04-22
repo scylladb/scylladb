@@ -146,7 +146,7 @@ future<shared_ptr<transport::messages::result_message>>
 select_statement::execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) {
     auto cl = options.get_consistency();
 
-    validate_for_read(_schema->ks_name, cl);
+    validate_for_read(_schema->ks_name(), cl);
 
     int32_t limit = get_limit(options);
     auto now = db_clock::now();

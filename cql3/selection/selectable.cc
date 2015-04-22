@@ -50,7 +50,7 @@ selectable::with_function::new_selector_factory(database& db, schema_ptr s, std:
     auto&& factories = selector_factories::create_factories_and_collect_column_definitions(_args, db, s, defs);
 
     // resolve built-in functions before user defined functions
-    auto&& fun = functions::functions::get(db, s->ks_name, _function_name, factories->new_instances(), s->ks_name, s->cf_name);
+    auto&& fun = functions::functions::get(db, s->ks_name(), _function_name, factories->new_instances(), s->ks_name(), s->cf_name());
     if (!fun) {
         throw exceptions::invalid_request_exception(sprint("Unknown function '%s'", _function_name));
     }
