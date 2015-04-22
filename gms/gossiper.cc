@@ -289,7 +289,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
     get_local_failure_detector().remove(endpoint);
     // FIXME: MessagingService
     //MessagingService.instance().resetVersion(endpoint);
-    fail(unimplemented::cause::GOSSIP);
+    warn(unimplemented::cause::GOSSIP);
     quarantine_endpoint(endpoint);
     // FIXME: MessagingService
     //MessagingService.instance().destroyConnectionPool(endpoint);
@@ -325,7 +325,6 @@ void gossiper::do_status_check() {
         }
 
         get_local_failure_detector().interpret(endpoint);
-        fail(unimplemented::cause::GOSSIP);
 
         auto it = endpoint_state_map.find(endpoint);
         if (it != endpoint_state_map.end()) {
@@ -447,7 +446,7 @@ std::set<inet_address> gossiper::get_live_token_owners() {
         if (it != endpoint_state_map.end() && !is_dead_state(it->second) /* && StorageService.instance.getTokenMetadata().isMember(member) */) {
             token_owners.insert(member);
         }
-        fail(unimplemented::cause::GOSSIP);
+        warn(unimplemented::cause::GOSSIP);
     }
     return token_owners;
 }
@@ -456,7 +455,7 @@ std::set<inet_address> gossiper::get_unreachable_token_owners() {
     std::set<inet_address> token_owners;
     for (auto&& x : _unreachable_endpoints) {
         auto& endpoint = x.first;
-        fail(unimplemented::cause::GOSSIP);
+        warn(unimplemented::cause::GOSSIP);
         if (true /* StorageService.instance.getTokenMetadata().isMember(endpoint) */) {
             token_owners.insert(endpoint);
         }
@@ -572,7 +571,7 @@ void gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id, ut
     // logger.info("Removing host: {}", host_id);
     // logger.info("Sleeping for {}ms to ensure {} does not change", StorageService.RING_DELAY, endpoint);
     // FIXME: sleep
-    fail(unimplemented::cause::GOSSIP);
+    warn(unimplemented::cause::GOSSIP);
     // Uninterruptibles.sleepUninterruptibly(StorageService.RING_DELAY, TimeUnit.MILLISECONDS);
     // make sure it did not change
     auto& eps = endpoint_state_map.at(endpoint);
@@ -603,7 +602,7 @@ void gossiper::advertise_token_removed(inet_address endpoint, utils::UUID host_i
     // ensure at least one gossip round occurs before returning
     // FIXME: sleep
     //Uninterruptibles.sleepUninterruptibly(INTERVAL_IN_MILLIS * 2, TimeUnit.MILLISECONDS);
-    fail(unimplemented::cause::GOSSIP);
+    warn(unimplemented::cause::GOSSIP);
 }
 
 void gossiper::unsafe_assassinate_endpoint(sstring address) {
@@ -620,7 +619,7 @@ void gossiper::assassinate_endpoint(sstring address) {
     // logger.warn("Assassinating {} via gossip", endpoint);
     if (is_exist) {
         // FIXME:
-        fail(unimplemented::cause::GOSSIP);
+        warn(unimplemented::cause::GOSSIP);
 #if 0
         try {
             tokens = StorageService.instance.getTokenMetadata().getTokens(endpoint);
@@ -757,7 +756,7 @@ std::map<inet_address, endpoint_state>&gms::gossiper::get_endpoint_states() {
 
 bool gossiper::uses_host_id(inet_address endpoint) {
     // FIXME
-    fail(unimplemented::cause::GOSSIP);
+    warn(unimplemented::cause::GOSSIP);
     if (true /* MessagingService.instance().knowsVersion(endpoint) */) {
         return true;
     } else if (get_endpoint_state_for_endpoint(endpoint)->get_application_state(application_state::NET_VERSION)) {
@@ -776,7 +775,7 @@ utils::UUID gossiper::get_host_id(inet_address endpoint) {
     }
     sstring uuid = get_endpoint_state_for_endpoint(endpoint)->get_application_state(application_state::HOST_ID)->value;
     // FIXME: Add UUID(const sstring& id) constructor
-    fail(unimplemented::cause::GOSSIP);
+    warn(unimplemented::cause::GOSSIP);
     return utils::UUID(0, 0);
 }
 
@@ -1156,7 +1155,7 @@ void gossiper::add_lccal_application_states(std::list<std::pair<application_stat
 }
 
 void gossiper::stop() {
-    fail(unimplemented::cause::GOSSIP);
+    warn(unimplemented::cause::GOSSIP);
     // if (scheduledGossipTask != null)
     // 	scheduledGossipTask.cancel(false);
     // logger.info("Announcing shutdown");
