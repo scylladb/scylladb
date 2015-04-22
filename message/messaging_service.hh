@@ -300,7 +300,9 @@ public:
                 auto ret = f.get();
                 return make_ready_future<MsgIn>(std::move(std::get<0>(ret)));
             } catch (std::runtime_error&) {
-                remove_rpc_client(id);
+                // FIXME: we need to distinguish between a transport error and
+                // a server error.
+                // remove_rpc_client(id);
                 throw;
             }
         });
@@ -315,7 +317,8 @@ public:
                 f.get();
                 return make_ready_future<>();
             } catch (std::runtime_error&) {
-                remove_rpc_client(id);
+                // FIXME: as above
+                // remove_rpc_client(id);
                 throw;
             }
         });
