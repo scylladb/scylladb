@@ -3,6 +3,7 @@
  */
 
 #include "serializer.hh"
+#include "database.hh"
 #include "types.hh"
 #include "util/serialization.hh"
 

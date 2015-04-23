@@ -29,7 +29,7 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/term.hh"
 
-#include "database.hh"
+#include "database_fwd.hh"
 
 #include <vector>
 #include "unimplemented.hh"

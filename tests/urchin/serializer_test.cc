@@ -13,6 +13,7 @@
 #include "core/future-util.hh"
 #include "utils/UUID_gen.hh"
 #include "db/serializer.hh"
+#include "database.hh"
 
 using namespace db;
 

@@ -8,7 +8,8 @@
 #include "utils/data_input.hh"
 #include "utils/data_output.hh"
 #include "bytes.hh"
-#include "database.hh"
+#include "mutation.hh"
+#include "database_fwd.hh"
 
 namespace db {
 /**

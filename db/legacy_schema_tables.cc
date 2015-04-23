@@ -24,7 +24,6 @@
 #include "utils/UUID_gen.hh"
 #include "legacy_schema_tables.hh"
 #include "system_keyspace.hh"
-#include "database.hh"
 
 using namespace db::system_keyspace;
 

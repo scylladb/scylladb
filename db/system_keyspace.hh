@@ -24,7 +24,6 @@
 #pragma once
 
 #include "schema.hh"
-#include "database.hh"
 #include "legacy_schema_tables.hh"
 
 namespace db {

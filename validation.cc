@@ -23,6 +23,7 @@
  */
 
 #include "validation.hh"
+#include "database.hh"
 #include "exceptions/exceptions.hh"
 
 namespace validation {

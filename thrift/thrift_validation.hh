@@ -24,7 +24,8 @@
 
 #pragma once
 
-#include "database.hh"
+#include "schema.hh"
+#include "bytes.hh"
 
 #if 0
 import java.nio.ByteBuffer;
