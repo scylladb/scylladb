@@ -26,6 +26,7 @@
 #include "core/shared_ptr.hh"
 #include "types.hh"
 #include "keys.hh"
+#include "sstables/key.hh"
 #include <memory>
 
 namespace dht {
@@ -122,6 +123,7 @@ public:
      * for that, use tokenFactory.fromString.)
      */
     virtual token get_token(const partition_key& key) = 0;
+    virtual token get_token(const sstables::key_view& key) = 0;
 
     /**
      * @return a randomly generated token
