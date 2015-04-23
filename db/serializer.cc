@@ -243,7 +243,7 @@ void db::serializer<mutation>::write(const context& ctxt, output& out,
     out.write(bool(t.schema()));
 
     if (t.schema()) {
-        uuid_serializer::write(ctxt, out, ctxt.find_uuid(t.schema()->ks_name(), t.schema()->cf_name()));
+        uuid_serializer::write(ctxt, out, t.schema()->id());
         mutation_partition_serializer::write(ctxt, out, t.partition());
     }
 }
