@@ -35,6 +35,8 @@ public:
     // Unfortunately, the _bytes field for the partition_key are not public. We can't move.
     static key from_partition_key(const schema& s, const partition_key& pk);
 
+    std::vector<bytes> explode(const schema& s) const;
+
     operator key_view() const {
         return key_view(_bytes);
     }
