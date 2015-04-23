@@ -124,10 +124,8 @@ public:
     const column_family& find_column_family(const schema_ptr&) const throw (no_such_column_family);
     schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family);
     schema_ptr find_schema(const utils::UUID&) const throw (no_such_column_family);
-    future<> stop() { return make_ready_future<>(); }
-    void assign(database&& db) {
-        *this = std::move(db);
-    }
+    future<> stop();
+    void assign(database&& db);
     unsigned shard_of(const dht::token& t);
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
     friend std::ostream& operator<<(std::ostream& out, const database& db);

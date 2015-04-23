@@ -598,3 +598,13 @@ std::ostream&
 operator<<(std::ostream& os, const atomic_cell& ac) {
     return os << atomic_cell_view(ac);
 }
+
+future<>
+database::stop() {
+    return make_ready_future<>();
+}
+
+void
+database::assign(database&& db) {
+    *this = std::move(db);
+}
