@@ -24,12 +24,12 @@ void db::serializer<utils::UUID>::write(const context&, output& out,
 
 template<>
 void db::serializer<utils::UUID>::read(const context& ctxt, utils::UUID& uuid,
-        input & in) {
+        input& in) {
     uuid = read(ctxt, in);
 }
 
 template<> utils::UUID db::serializer<utils::UUID>::read(const context&,
-        input & in) {
+        input& in) {
     auto msb = in.read<uint64_t>();
     auto lsb = in.read<uint64_t>();
     return utils::UUID(msb, lsb);
@@ -51,7 +51,7 @@ void db::serializer<bytes>::read(const context&, bytes& b, input& in) {
 }
 
 template<>
-db::serializer<bytes_view>::serializer(const context& ctxt, const bytes_view & v)
+db::serializer<bytes_view>::serializer(const context& ctxt, const bytes_view& v)
         : _ctxt(ctxt), _item(v), _size(output::serialized_size(v)) {
 }
 
@@ -61,7 +61,7 @@ void db::serializer<bytes_view>::write(const context&, output& out, const type& 
 }
 
 template<>
-db::serializer<sstring>::serializer(const context& ctxt, const sstring & s)
+db::serializer<sstring>::serializer(const context& ctxt, const sstring& s)
         : _ctxt(ctxt), _item(s), _size(output::serialized_size(s)) {
 }
 
@@ -76,7 +76,7 @@ void db::serializer<sstring>::read(const context&, sstring& s, input& in) {
 }
 
 template<>
-db::serializer<tombstone>::serializer(const context& ctxt, const tombstone & t)
+db::serializer<tombstone>::serializer(const context& ctxt, const tombstone& t)
         : _ctxt(ctxt), _item(t), _size(sizeof(t.timestamp) + sizeof(decltype(t.deletion_time.time_since_epoch().count()))) {
 }
 
@@ -112,12 +112,12 @@ void db::serializer<atomic_cell_or_collection>::read(const context& ctxt,
 }
 
 template<>
-db::serializer<row>::serializer(const context& ctxt, const row & r)
+db::serializer<row>::serializer(const context& ctxt, const row& r)
         : _ctxt(ctxt), _item(r) {
     size_t s = sizeof(count_type);
 
     s += r.size() * sizeof(column_id);
-    for (auto & e : r) {
+    for (auto& e : r) {
         s += atomic_cell_or_collection_serializer(ctxt, e.second).size();
     }
     _size = s;
@@ -126,7 +126,7 @@ db::serializer<row>::serializer(const context& ctxt, const row & r)
 template<>
 void db::serializer<row>::write(const context& ctxt, output& out, const type& t) {
     out.write(count_type(t.size()));
-    for (auto & e : t) {
+    for (auto& e : t) {
         out.write(e.first);
         atomic_cell_or_collection_serializer::write(ctxt, out, e.second);
     }
@@ -146,14 +146,14 @@ void db::serializer<row>::read(const context& ctxt, row& r, input& in) {
 
 template<>
 db::serializer<mutation_partition>::serializer(const context& ctxt,
-        const mutation_partition & p)
+        const mutation_partition& p)
         : _ctxt(ctxt), _item(p) {
     size_t s = tombstone_serializer(ctxt, p._tombstone).size();
 
     s += row_serializer(ctxt, p._static_row).size();
 
     s += sizeof(count_type); // # rows
-    for (auto & dr : p._rows) {
+    for (auto& dr : p._rows) {
         s += bytes_view_serializer(ctxt, dr.key()).size();
         s += tombstone_serializer(ctxt, dr.row().t).size();
         s += row_serializer(ctxt, dr.row().cells).size();
@@ -161,7 +161,7 @@ db::serializer<mutation_partition>::serializer(const context& ctxt,
     }
 
     s += sizeof(count_type); // # row_tombs
-    for (auto & e : p._row_tombstones) {
+    for (auto& e : p._row_tombstones) {
         s += bytes_view_serializer(ctxt, e.prefix()).size();
         s += tombstone_serializer(ctxt, e.t()).size();
     }
@@ -176,7 +176,7 @@ void db::serializer<mutation_partition>::write(const context& ctxt, output& out,
 
     out.write(count_type(t._rows.size()));
 
-    for (auto & dr : t._rows) {
+    for (auto& dr : t._rows) {
         bytes_view_serializer::write(ctxt, out, dr.key());
         tombstone_serializer::write(ctxt, out, dr.row().t);
         row_serializer::write(ctxt, out, dr.row().cells);
@@ -185,7 +185,7 @@ void db::serializer<mutation_partition>::write(const context& ctxt, output& out,
 
     out.write(count_type(t._row_tombstones.size()));
 
-    for (auto & e : t._row_tombstones) {
+    for (auto& e : t._row_tombstones) {
         bytes_view_serializer::write(ctxt, out, e.prefix());
         tombstone_serializer::write(ctxt, out, e.t());
     }
@@ -221,7 +221,7 @@ void db::serializer<mutation_partition>::read(const context& ctxt,
 }
 
 template<>
-db::serializer<mutation>::serializer(const context& ctxt, const mutation & m)
+db::serializer<mutation>::serializer(const context& ctxt, const mutation& m)
         : _ctxt(ctxt), _item(m) {
     size_t s = 0;
 
