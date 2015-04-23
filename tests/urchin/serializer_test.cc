@@ -173,9 +173,9 @@ inline bool operator==(const mutation_partition& cp1, const mutation_partition& 
 }
 
 inline bool operator==(const mutation& m1, const mutation& m2) {
-    return m1.schema.get() == m2.schema.get()
-            && m1.key == m2.key
-            && m1.p == m2.p
+    return m1.schema().get() == m2.schema().get()
+            && m1.key() == m2.key()
+            && m1.partition() == m2.partition()
             ;
 }
 

@@ -225,13 +225,13 @@ db::serializer<mutation>::serializer(const context& ctxt, const mutation & m)
         : _ctxt(ctxt), _item(m) {
     size_t s = 0;
 
-    s += bytes_view_serializer(ctxt, m.key).size();
+    s += bytes_view_serializer(ctxt, m.key()).size();
     s += sizeof(bool); // bool
 
     // schema == null cannot happen (yet). But why not.
-    if (_item.schema) {
-        s += uuid_serializer(ctxt, _item.schema->id()).size(); // cf UUID
-        s += mutation_partition_serializer(ctxt, _item.p).size();
+    if (_item.schema()) {
+        s += uuid_serializer(ctxt, _item.schema()->id()).size(); // cf UUID
+        s += mutation_partition_serializer(ctxt, _item.partition()).size();
     }
     _size = s;
 }
@@ -239,12 +239,12 @@ db::serializer<mutation>::serializer(const context& ctxt, const mutation & m)
 template<>
 void db::serializer<mutation>::write(const context& ctxt, output& out,
         const type& t) {
-    bytes_view_serializer::write(ctxt, out, t.key);
-    out.write(bool(t.schema));
+    bytes_view_serializer::write(ctxt, out, t.key());
+    out.write(bool(t.schema()));
 
-    if (t.schema) {
-        uuid_serializer::write(ctxt, out, ctxt.find_uuid(t.schema->ks_name(), t.schema->cf_name()));
-        mutation_partition_serializer::write(ctxt, out, t.p);
+    if (t.schema()) {
+        uuid_serializer::write(ctxt, out, ctxt.find_uuid(t.schema()->ks_name(), t.schema()->cf_name()));
+        mutation_partition_serializer::write(ctxt, out, t.partition());
     }
 }
 
@@ -254,7 +254,7 @@ mutation db::serializer<mutation>::read(const context& ctxt, input& in) {
     if (in.read<bool>()) {
         auto sp = ctxt.find_schema(uuid_serializer::read(ctxt, in));
         mutation m(key, sp);
-        mutation_partition_serializer::read(ctxt, m.p, in);
+        mutation_partition_serializer::read(ctxt, m.partition(), in);
         return std::move(m);
     }
     throw std::runtime_error("Should not reach here (yet)");

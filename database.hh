@@ -127,6 +127,7 @@ public:
     future<> stop();
     void assign(database&& db);
     unsigned shard_of(const dht::token& t);
+    unsigned shard_of(const mutation& m);
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
     friend std::ostream& operator<<(std::ostream& out, const database& db);
 };

@@ -294,8 +294,7 @@ public:
                         throw make_exception<InvalidRequestException>("Mutation must have either column or deletion");
                     }
                 }
-                auto dk = dht::global_partitioner().decorate_key(m_to_apply.key);
-                auto shard = _db.local().shard_of(dk._token);
+                auto shard = _db.local().shard_of(m_to_apply);
                 return _db.invoke_on(shard, [this, cf_name, m_to_apply = std::move(m_to_apply)] (database& db) {
                     auto& cf = db.find_column_family(_ks_name, cf_name);
                     cf.apply(m_to_apply);

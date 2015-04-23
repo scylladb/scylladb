@@ -236,7 +236,7 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
 
     auto idx = net::ntoh(int32_t(*unaligned_cast<int32_t>(index->begin())));
 
-    auto existing_list_opt = params.get_prefetched_list(m.key, row_key, column);
+    auto existing_list_opt = params.get_prefetched_list(m.key(), row_key, column);
     if (!existing_list_opt) {
         throw exceptions::invalid_request_exception(sprint("List index %d out of bound, list has size 0", idx));
     }
@@ -319,7 +319,7 @@ void
 lists::discarder::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
     assert(column.type->is_multi_cell()); // "Attempted to delete from a frozen list";
     auto&& row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
-    auto&& existing_list = params.get_prefetched_list(m.key, row_key, column);
+    auto&& existing_list = params.get_prefetched_list(m.key(), row_key, column);
     // We want to call bind before possibly returning to reject queries where the value provided is not a list.
     auto&& value = _t->bind(params._options);
 
@@ -380,7 +380,7 @@ lists::discarder_by_index::execute(mutation& m, const exploded_clustering_prefix
     assert(cvalue);
 
     auto row_key = clustering_key::from_clustering_prefix(*params._schema, prefix);
-    auto&& existing_list = params.get_prefetched_list(m.key, row_key, column);
+    auto&& existing_list = params.get_prefetched_list(m.key(), row_key, column);
     int32_t idx = read_simple_exactly<int32_t>(*cvalue->_bytes);
     if (!existing_list) {
         throw exceptions::invalid_request_exception("List does  not exist");

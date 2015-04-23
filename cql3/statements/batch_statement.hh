@@ -184,7 +184,7 @@ public:
         if (size > warn_threshold) {
             std::unordered_set<sstring> ks_cf_pairs;
             for (auto&& m : mutations) {
-                ks_cf_pairs.insert(m.schema->ks_name() + "." + m.schema->cf_name());
+                ks_cf_pairs.insert(m.schema()->ks_name() + "." + m.schema()->cf_name());
             }
             const char* format = "Batch of prepared statements for {} is of size {}, exceeding specified threshold of {} by {}.{}";
             if (size > fail_threshold) {

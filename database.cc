@@ -282,6 +282,12 @@ database::shard_of(const dht::token& t) {
     return uint8_t(t._data[0]) % smp::count;
 }
 
+unsigned
+database::shard_of(const mutation& m) {
+    auto dk = dht::global_partitioner().decorate_key(m.key());
+    return shard_of(dk._token);
+}
+
 keyspace& database::add_keyspace(sstring name, keyspace k) {
     if (_keyspaces.count(name) != 0) {
         throw std::invalid_argument("Keyspace " + name + " already exists");
@@ -419,8 +425,8 @@ database::find_or_create_keyspace(const sstring& name) {
 
 void
 column_family::apply(const mutation& m) {
-    mutation_partition& p = find_or_create_partition(m.key);
-    p.apply(_schema, m.p);
+    mutation_partition& p = find_or_create_partition(m.key());
+    p.apply(_schema, m.partition());
 }
 
 // Based on org.apache.cassandra.db.AbstractCell#reconcile()
@@ -531,8 +537,8 @@ void print_partition(std::ostream& out, const schema& s, const mutation_partitio
 }
 
 std::ostream& operator<<(std::ostream& os, const mutation& m) {
-    fprint(os, "{mutation: schema %p key %s data ", m.schema.get(), static_cast<bytes_view>(m.key));
-    print_partition(os, *m.schema, m.p);
+    fprint(os, "{mutation: schema %p key %s data ", m.schema().get(), m.key());
+    print_partition(os, *m.schema(), m.partition());
     os << "}";
     return os;
 }

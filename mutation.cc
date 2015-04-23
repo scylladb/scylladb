@@ -6,22 +6,22 @@
 
 
 void mutation::set_static_cell(const column_definition& def, atomic_cell_or_collection value) {
-    update_column(p.static_row(), def, std::move(value));
+    update_column(_p.static_row(), def, std::move(value));
 }
 
 void mutation::set_clustered_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value) {
-    auto& row = p.clustered_row(clustering_key::from_clustering_prefix(*schema, prefix)).cells;
+    auto& row = _p.clustered_row(clustering_key::from_clustering_prefix(*_schema, prefix)).cells;
     update_column(row, def, std::move(value));
 }
 
 void mutation::set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection value) {
-    auto& row = p.clustered_row(key).cells;
+    auto& row = _p.clustered_row(key).cells;
     update_column(row, def, std::move(value));
 }
 
 void mutation::set_cell(const exploded_clustering_prefix& prefix, const bytes& name, const boost::any& value,
         api::timestamp_type timestamp, ttl_opt ttl) {
-    auto column_def = schema->get_column_definition(name);
+    auto column_def = _schema->get_column_definition(name);
     if (!column_def) {
         throw std::runtime_error(sprint("no column definition found for '%s'", name));
     }
@@ -48,9 +48,9 @@ mutation::get_cell(const clustering_key& rkey, const column_definition& def) {
         return std::experimental::optional<atomic_cell_or_collection>{i->second};
     };
     if (def.is_static()) {
-        return find_cell(p.static_row());
+        return find_cell(_p.static_row());
     } else {
-        auto r = p.find_row(rkey);
+        auto r = _p.find_row(rkey);
         if (!r) {
             return {};
         }
