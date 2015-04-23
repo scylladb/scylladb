@@ -42,7 +42,7 @@ protected:
 protected:
     tuple_wrapper(bytes&& b) : _bytes(std::move(b)) {}
 
-    static inline auto get_tuple_type(const schema& s) {
+    static inline const auto& get_tuple_type(const schema& s) {
         return TopLevel::get_tuple_type(s);
     }
 public:
