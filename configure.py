@@ -166,6 +166,7 @@ urchin_tests = [
     'tests/urchin/cql_query_test',
     'tests/test-serialization',
     'tests/urchin/sstable_test',
+    'tests/urchin/sstable_mutation_test',
     'tests/urchin/commitlog_test',
     'tests/cartesian_product_test',
     'tests/urchin/hash_test',
@@ -483,6 +484,7 @@ deps['tests/urchin/cql_query_test'] += boost_test_lib
 deps['tests/urchin/commitlog_test'] += boost_test_lib
 deps['tests/urchin/config_test'] += boost_test_lib
 deps['tests/urchin/sstable_test'] += boost_test_lib + ['tests/urchin/sstable_datafile_test.cc']
+deps['tests/urchin/sstable_mutation_test'] += boost_test_lib
 deps['tests/urchin/hash_test'] += boost_test_lib
 deps['tests/urchin/serializer_test'] += boost_test_lib
 
