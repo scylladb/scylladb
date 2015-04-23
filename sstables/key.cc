@@ -139,4 +139,8 @@ std::vector<bytes> key::explode(const schema& s) const {
 
     return explode_composite(bytes_view(_bytes));
 }
+
+std::vector<bytes> composite_view::explode() const {
+    return explode_composite(_bytes);
+}
 }

@@ -45,4 +45,14 @@ public:
     }
 };
 
+class composite_view {
+    bytes_view _bytes;
+public:
+    composite_view(bytes_view b) : _bytes(b) {}
+
+    std::vector<bytes> explode() const;
+    explicit operator bytes_view() const {
+        return _bytes;
+    }
+};
 }
