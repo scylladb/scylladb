@@ -35,6 +35,12 @@
 
 namespace gms {
 
+// FIXME: StorageService.instance.valueFactory
+auto& storage_service_value_factory() {
+    static thread_local auto the_value_factory = versioned_value::versioned_value_factory();
+    return the_value_factory;
+}
+
 gossiper::gossiper()
     : _scheduled_gossip_task([this] { run(); }) {
     // half of QUARATINE_DELAY, to ensure _just_removed_endpoints has enough leeway to prevent re-gossip
@@ -588,9 +594,8 @@ void gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id, ut
     //logger.info("Advertising removal for {}", endpoint);
     eps.update_timestamp(); // make sure we don't evict it too soon
     eps.get_heart_beat_state().force_newer_generation_unsafe();
-    // FIXME:  StorageService.instance.valueFactory
-    // eps.add_application_state(application_state::STATUS, StorageService.instance.valueFactory.removingNonlocal(host_id));
-    // eps.add_application_state(application_state::REMOVAL_COORDINATOR, StorageService.instance.valueFactory.removalCoordinator(local_host_id));
+    eps.add_application_state(application_state::STATUS, storage_service_value_factory().removing_nonlocal(host_id));
+    eps.add_application_state(application_state::REMOVAL_COORDINATOR, storage_service_value_factory().removal_coordinator(local_host_id));
     endpoint_state_map[endpoint] = eps;
 }
 
@@ -599,8 +604,7 @@ void gossiper::advertise_token_removed(inet_address endpoint, utils::UUID host_i
     eps.update_timestamp(); // make sure we don't evict it too soon
     eps.get_heart_beat_state().force_newer_generation_unsafe();
     int64_t expire_time = compute_expire_time();
-    // FIXME: StorageService.instance.valueFactory.removedNonlocal
-    // eps.add_application_state(application_state::STATUS, StorageService.instance.valueFactory.removedNonlocal(host_id, expire_time));
+    eps.add_application_state(application_state::STATUS, storage_service_value_factory().removed_nonlocal(host_id, expire_time));
     //logger.info("Completing removal of {}", endpoint);
     add_expire_time_for_endpoint(endpoint, expire_time);
     endpoint_state_map[endpoint] = eps;
