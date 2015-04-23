@@ -47,8 +47,8 @@ public:
             auto removed = _deque.front();
             _deque.pop_front();
             _sum -= removed;
-            _deque.push_back(i);
         }
+        _deque.push_back(i);
         _sum += i;
     }
 

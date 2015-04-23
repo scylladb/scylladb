@@ -55,7 +55,7 @@ public:
         , _is_alive(true) {
     }
 
-    heart_beat_state get_heart_beat_state() {
+    heart_beat_state& get_heart_beat_state() {
         return _heart_beat_state;
     }
 
@@ -82,7 +82,7 @@ public:
     }
 
     void add_application_state(application_state key, versioned_value value) {
-        _application_state.emplace(key, value);
+        _application_state[key] = value;
     }
 
     /* getters and setters */

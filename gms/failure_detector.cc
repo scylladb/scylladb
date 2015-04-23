@@ -183,10 +183,10 @@ void failure_detector::set_phi_convict_threshold(double phi) {
 }
 
 double failure_detector::get_phi_convict_threshold() {
-    // FIXME
+    // FIXME: phi_convict_threshold must be between 5 and 16"
     // return DatabaseDescriptor.getPhiConvictThreshold();
     warn(unimplemented::cause::GOSSIP);
-    return 0;
+    return 8;
 }
 
 bool failure_detector::is_alive(inet_address ep) {

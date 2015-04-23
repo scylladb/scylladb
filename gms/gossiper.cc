@@ -85,15 +85,19 @@ void gossiper::do_sort(std::vector<gossip_digest>& g_digest_list) {
 }
 
 void gossiper::init_messaging_service_handler() {
-    ms().register_handler(messaging_verb::ECHO, [] (empty_msg msg) {
+    ms().register_handler(messaging_verb::ECHO, [this] (empty_msg msg) {
+        // TODO: Use time_point instead of long for timing.
+        this->set_last_processed_message_at(now_millis());
         return make_ready_future<empty_msg>();
     });
-    ms().register_handler_oneway(messaging_verb::GOSSIP_SHUTDOWN, [] (inet_address from) {
+    ms().register_handler_oneway(messaging_verb::GOSSIP_SHUTDOWN, [this] (inet_address from) {
+        this->set_last_processed_message_at(now_millis());
         // TODO: Implement processing of incoming SHUTDOWN message
         get_local_failure_detector().force_conviction(from);
         return messaging_service::no_wait();
     });
     ms().register_handler(messaging_verb::GOSSIP_DIGEST_SYN, [this] (gossip_digest_syn syn_msg) {
+        this->set_last_processed_message_at(now_millis());
         inet_address from;
         if (!this->is_enabled()) {
             return make_ready_future<gossip_digest_ack>(gossip_digest_ack());
@@ -117,6 +121,7 @@ void gossiper::init_messaging_service_handler() {
         return make_ready_future<gossip_digest_ack>(std::move(ack_msg));
     });
     ms().register_handler_oneway(messaging_verb::GOSSIP_DIGEST_ACK2, [this] (gossip_digest_ack2 msg) {
+        this->set_last_processed_message_at(now_millis());
         auto& remote_ep_state_map = msg.get_endpoint_state_map();
         /* Notify the Failure Detector */
         this->notify_failure_detector(remote_ep_state_map);
@@ -140,6 +145,7 @@ bool gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> eps
     using RetMsg = gossip_digest_ack;
     auto id = get_shard_id(to);
     ms().send_message<RetMsg>(messaging_verb::GOSSIP_DIGEST_SYN, std::move(id), std::move(message)).then([this, id] (RetMsg ack_msg) {
+        this->set_last_processed_message_at(now_millis());
         if (!this->is_enabled() && !this->is_in_shadow_round()) {
             return make_ready_future<>();
         }
@@ -289,7 +295,7 @@ void gossiper::remove_endpoint(inet_address endpoint) {
     get_local_failure_detector().remove(endpoint);
     // FIXME: MessagingService
     //MessagingService.instance().resetVersion(endpoint);
-    fail(unimplemented::cause::GOSSIP);
+    warn(unimplemented::cause::GOSSIP);
     quarantine_endpoint(endpoint);
     // FIXME: MessagingService
     //MessagingService.instance().destroyConnectionPool(endpoint);
@@ -303,21 +309,6 @@ void gossiper::do_status_check() {
 
     int64_t now = now_millis();
 
-    // FIXME:
-    // int64_t pending = ((JMXEnabledThreadPoolExecutor) StageManager.getStage(Stage.GOSSIP)).getPendingTasks();
-    int64_t pending = 1;
-    if (pending > 0 && _last_processed_message_at < now - 1000) {
-        // FIXME: SLEEP
-        // if some new messages just arrived, give the executor some time to work on them
-        //Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
-
-        // still behind?  something's broke
-        if (_last_processed_message_at < now - 1000) {
-            // logger.warn("Gossip stage has {} pending tasks; skipping status check (no nodes will be marked down)", pending);
-            return;
-        }
-    }
-
     for (auto& entry : endpoint_state_map) {
         const inet_address& endpoint = entry.first;
         if (endpoint == get_broadcast_address()) {
@@ -325,7 +316,6 @@ void gossiper::do_status_check() {
         }
 
         get_local_failure_detector().interpret(endpoint);
-        fail(unimplemented::cause::GOSSIP);
 
         auto it = endpoint_state_map.find(endpoint);
         if (it != endpoint_state_map.end()) {
@@ -368,9 +358,8 @@ void gossiper::run() {
     //wait on messaging service to start listening
     // MessagingService.instance().waitUntilListening();
 
-
     /* Update the local heartbeat counter. */
-    //endpoint_state_map.get(FBUtilities.getBroadcastAddress()).get_heart_beat_state().updateHeartBeat();
+    endpoint_state_map[get_broadcast_address()].get_heart_beat_state().update_heart_beat();
     // if (logger.isTraceEnabled())
     //     logger.trace("My heartbeat is now {}", endpoint_state_map.get(FBUtilities.getBroadcastAddress()).get_heart_beat_state().get_heart_beat_version());
     std::vector<gossip_digest> g_digests;
@@ -447,7 +436,7 @@ std::set<inet_address> gossiper::get_live_token_owners() {
         if (it != endpoint_state_map.end() && !is_dead_state(it->second) /* && StorageService.instance.getTokenMetadata().isMember(member) */) {
             token_owners.insert(member);
         }
-        fail(unimplemented::cause::GOSSIP);
+        warn(unimplemented::cause::GOSSIP);
     }
     return token_owners;
 }
@@ -456,7 +445,7 @@ std::set<inet_address> gossiper::get_unreachable_token_owners() {
     std::set<inet_address> token_owners;
     for (auto&& x : _unreachable_endpoints) {
         auto& endpoint = x.first;
-        fail(unimplemented::cause::GOSSIP);
+        warn(unimplemented::cause::GOSSIP);
         if (true /* StorageService.instance.getTokenMetadata().isMember(endpoint) */) {
             token_owners.insert(endpoint);
         }
@@ -572,7 +561,7 @@ void gossiper::advertise_removing(inet_address endpoint, utils::UUID host_id, ut
     // logger.info("Removing host: {}", host_id);
     // logger.info("Sleeping for {}ms to ensure {} does not change", StorageService.RING_DELAY, endpoint);
     // FIXME: sleep
-    fail(unimplemented::cause::GOSSIP);
+    warn(unimplemented::cause::GOSSIP);
     // Uninterruptibles.sleepUninterruptibly(StorageService.RING_DELAY, TimeUnit.MILLISECONDS);
     // make sure it did not change
     auto& eps = endpoint_state_map.at(endpoint);
@@ -603,7 +592,7 @@ void gossiper::advertise_token_removed(inet_address endpoint, utils::UUID host_i
     // ensure at least one gossip round occurs before returning
     // FIXME: sleep
     //Uninterruptibles.sleepUninterruptibly(INTERVAL_IN_MILLIS * 2, TimeUnit.MILLISECONDS);
-    fail(unimplemented::cause::GOSSIP);
+    warn(unimplemented::cause::GOSSIP);
 }
 
 void gossiper::unsafe_assassinate_endpoint(sstring address) {
@@ -620,7 +609,7 @@ void gossiper::assassinate_endpoint(sstring address) {
     // logger.warn("Assassinating {} via gossip", endpoint);
     if (is_exist) {
         // FIXME:
-        fail(unimplemented::cause::GOSSIP);
+        warn(unimplemented::cause::GOSSIP);
 #if 0
         try {
             tokens = StorageService.instance.getTokenMetadata().getTokens(endpoint);
@@ -757,7 +746,7 @@ std::map<inet_address, endpoint_state>&gms::gossiper::get_endpoint_states() {
 
 bool gossiper::uses_host_id(inet_address endpoint) {
     // FIXME
-    fail(unimplemented::cause::GOSSIP);
+    warn(unimplemented::cause::GOSSIP);
     if (true /* MessagingService.instance().knowsVersion(endpoint) */) {
         return true;
     } else if (get_endpoint_state_for_endpoint(endpoint)->get_application_state(application_state::NET_VERSION)) {
@@ -776,7 +765,7 @@ utils::UUID gossiper::get_host_id(inet_address endpoint) {
     }
     sstring uuid = get_endpoint_state_for_endpoint(endpoint)->get_application_state(application_state::HOST_ID)->value;
     // FIXME: Add UUID(const sstring& id) constructor
-    fail(unimplemented::cause::GOSSIP);
+    warn(unimplemented::cause::GOSSIP);
     return utils::UUID(0, 0);
 }
 
@@ -839,6 +828,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
     //logger.trace("Sending a EchoMessage to {}", addr);
     shard_id id = get_shard_id(addr);
     ms().send_message<empty_msg>(messaging_verb::ECHO, id).then([this, addr, local_state = std::move(local_state)] (empty_msg msg) mutable {
+        this->set_last_processed_message_at(now_millis());
         this->real_mark_alive(addr, local_state);
     });
 }
@@ -917,7 +907,7 @@ bool gossiper::is_dead_state(endpoint_state eps) {
     return false;
 }
 
-void gossiper::apply_new_states(inet_address addr, endpoint_state local_state, endpoint_state remote_state) {
+void gossiper::apply_new_states(inet_address addr, endpoint_state& local_state, endpoint_state& remote_state) {
     // don't assert here, since if the node restarts the version will go back to zero
     //int oldVersion = local_state.get_heart_beat_state().get_heart_beat_version();
 
@@ -1067,6 +1057,7 @@ void gossiper::do_shadow_round() {
         auto id = get_shard_id(seed);
         ms().send_message<gossip_digest_ack>(messaging_verb::GOSSIP_DIGEST_SYN,
                                              std::move(id), std::move(message)).then([this, id] (gossip_digest_ack ack_msg) {
+            this->set_last_processed_message_at(now_millis());
             if (this->is_in_shadow_round()) {
                 this->finish_shadow_round();
             }
@@ -1156,7 +1147,7 @@ void gossiper::add_lccal_application_states(std::list<std::pair<application_stat
 }
 
 void gossiper::stop() {
-    fail(unimplemented::cause::GOSSIP);
+    warn(unimplemented::cause::GOSSIP);
     // if (scheduledGossipTask != null)
     // 	scheduledGossipTask.cancel(false);
     // logger.info("Announcing shutdown");
