@@ -170,6 +170,8 @@ bool operator!=(const decorated_key& lht, const decorated_key& rht);
 
 std::ostream& operator<<(std::ostream& out, const token& t);
 
+std::ostream& operator<<(std::ostream& out, const decorated_key& t);
+
 i_partitioner& global_partitioner();
 
 } // dht

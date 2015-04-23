@@ -158,6 +158,10 @@ std::ostream& operator<<(std::ostream& out, const token& t) {
     return out;
 }
 
+std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
+    return out << "{key: " << dk._key << ", token:" << dk._token << "}";
+}
+
 // FIXME: get from global config
 // FIXME: make it per-keyspace
 murmur3_partitioner default_partitioner;
