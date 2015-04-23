@@ -4,6 +4,15 @@
 
 #include "mutation.hh"
 
+mutation::mutation(dht::decorated_key key, schema_ptr schema)
+    : _schema(std::move(schema))
+    , _dk(std::move(key))
+    , _p(_schema)
+{ }
+
+mutation::mutation(partition_key key_, schema_ptr schema_)
+    : mutation(dht::global_partitioner().decorate_key(std::move(key_)), std::move(schema_))
+{ }
 
 void mutation::set_static_cell(const column_definition& def, atomic_cell_or_collection value) {
     update_column(_p.static_row(), def, std::move(value));

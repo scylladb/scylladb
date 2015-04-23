@@ -49,13 +49,15 @@ struct column_family {
     column_family(schema_ptr schema);
     column_family(column_family&&) = default;
     ~column_family();
-    mutation_partition& find_or_create_partition(const partition_key& key);
-    row& find_or_create_row(const partition_key& partition_key, const clustering_key& clustering_key);
-    mutation_partition* find_partition(const partition_key& key);
-    row* find_row(const partition_key& partition_key, const clustering_key& clustering_key);
+    mutation_partition& find_or_create_partition(const dht::decorated_key& key);
+    mutation_partition& find_or_create_partition_slow(const partition_key& key);
+    mutation_partition* find_partition(const dht::decorated_key& key);
+    mutation_partition* find_partition_slow(const partition_key& key);
+    row& find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key);
+    row* find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key);
     schema_ptr _schema;
     // partition key -> partition
-    std::map<partition_key, mutation_partition, partition_key::less_compare> partitions;
+    std::map<dht::decorated_key, mutation_partition> partitions;
     void apply(const mutation& m);
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);

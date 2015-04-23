@@ -31,7 +31,7 @@ BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(3)));
     cf.apply(std::move(m));
 
-    row& r = cf.find_or_create_row(key, c_key);
+    row& r = cf.find_or_create_row_slow(key, c_key);
     auto i = r.find(r1_col.id);
     BOOST_REQUIRE(i != r.end());
     auto cell = i->second.as_atomic_cell();
@@ -122,7 +122,7 @@ BOOST_AUTO_TEST_CASE(test_map_mutations) {
     m2o.set_static_cell(column, my_map_type->serialize_mutation_form(mmut2o));
     cf.apply(m2o);
 
-    row& r = cf.find_or_create_partition(key).static_row();
+    row& r = cf.find_or_create_partition_slow(key).static_row();
     auto i = r.find(column.id);
     BOOST_REQUIRE(i != r.end());
     auto cell = i->second.as_collection_mutation();
@@ -155,7 +155,7 @@ BOOST_AUTO_TEST_CASE(test_set_mutations) {
     m2o.set_static_cell(column, my_set_type->serialize_mutation_form(mmut2o));
     cf.apply(m2o);
 
-    row& r = cf.find_or_create_partition(key).static_row();
+    row& r = cf.find_or_create_partition_slow(key).static_row();
     auto i = r.find(column.id);
     BOOST_REQUIRE(i != r.end());
     auto cell = i->second.as_collection_mutation();
@@ -189,7 +189,7 @@ BOOST_AUTO_TEST_CASE(test_list_mutations) {
     m2o.set_static_cell(column, my_list_type->serialize_mutation_form(mmut2o));
     cf.apply(m2o);
 
-    row& r = cf.find_or_create_partition(key).static_row();
+    row& r = cf.find_or_create_partition_slow(key).static_row();
     auto i = r.find(column.id);
     BOOST_REQUIRE(i != r.end());
     auto cell = i->second.as_collection_mutation();

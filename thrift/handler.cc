@@ -121,7 +121,7 @@ public:
         auto shard = _db.local().shard_of(dk._token);
 
         auto do_get = [this,
-                       pk = std::move(pk),
+                       dk = std::move(dk),
                        column_parent = std::move(column_parent),
                        predicate = std::move(predicate)] (database& db) {
             std::vector<ColumnOrSuperColumn> ret;
@@ -133,7 +133,7 @@ public:
                 throw unimplemented_exception();
             } else if (predicate.__isset.slice_range) {
                 auto&& range = predicate.slice_range;
-                row* rw = cf.find_row(pk, clustering_key::make_empty(*cf._schema));
+                row* rw = cf.find_row(dk, clustering_key::make_empty(*cf._schema));
                 if (rw) {
                     auto beg = cf._schema->regular_begin();
                     if (!range.start.empty()) {

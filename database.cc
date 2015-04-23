@@ -22,21 +22,25 @@ thread_local logging::logger dblog("database");
 
 column_family::column_family(schema_ptr schema)
     : _schema(std::move(schema))
-    , partitions(partition_key::less_compare(*_schema)) {
-}
+{ }
 
 // define in .cc, since sstable is forward-declared in .hh
 column_family::~column_family() {
 }
 
 mutation_partition*
-column_family::find_partition(const partition_key& key) {
+column_family::find_partition(const dht::decorated_key& key) {
     auto i = partitions.find(key);
     return i == partitions.end() ? nullptr : &i->second;
 }
 
+mutation_partition*
+column_family::find_partition_slow(const partition_key& key) {
+    return find_partition(dht::global_partitioner().decorate_key(key));
+}
+
 row*
-column_family::find_row(const partition_key& partition_key, const clustering_key& clustering_key) {
+column_family::find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) {
     mutation_partition* p = find_partition(partition_key);
     if (!p) {
         return nullptr;
@@ -45,18 +49,23 @@ column_family::find_row(const partition_key& partition_key, const clustering_key
 }
 
 mutation_partition&
-column_family::find_or_create_partition(const partition_key& key) {
+column_family::find_or_create_partition_slow(const partition_key& key) {
+    return find_or_create_partition(dht::global_partitioner().decorate_key(key));
+}
+
+mutation_partition&
+column_family::find_or_create_partition(const dht::decorated_key& key) {
     // call lower_bound so we have a hint for the insert, just in case.
     auto i = partitions.lower_bound(key);
-    if (i == partitions.end() || !key.equal(*_schema, i->first)) {
+    if (i == partitions.end() || key != i->first) {
         i = partitions.emplace_hint(i, std::make_pair(std::move(key), mutation_partition(_schema)));
     }
     return i->second;
 }
 
 row&
-column_family::find_or_create_row(const partition_key& partition_key, const clustering_key& clustering_key) {
-    mutation_partition& p = find_or_create_partition(partition_key);
+column_family::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
+    mutation_partition& p = find_or_create_partition_slow(partition_key);
     return p.clustered_row(clustering_key).cells;
 }
 
@@ -284,8 +293,7 @@ database::shard_of(const dht::token& t) {
 
 unsigned
 database::shard_of(const mutation& m) {
-    auto dk = dht::global_partitioner().decorate_key(m.key());
-    return shard_of(dk._token);
+    return shard_of(m.token());
 }
 
 keyspace& database::add_keyspace(sstring name, keyspace k) {
@@ -425,7 +433,7 @@ database::find_or_create_keyspace(const sstring& name) {
 
 void
 column_family::apply(const mutation& m) {
-    mutation_partition& p = find_or_create_partition(m.key());
+    mutation_partition& p = find_or_create_partition(m.decorated_key());
     p.apply(_schema, m.partition());
 }
 
@@ -476,7 +484,7 @@ column_family::query(const query::read_command& cmd) {
         }
         if (range.is_singular()) {
             auto& key = range.start_value();
-            auto partition = find_partition(key);
+            auto partition = find_partition_slow(key);
             if (!partition) {
                 break;
             }
@@ -486,9 +494,9 @@ column_family::query(const query::read_command& cmd) {
             limit -= p_builder.row_count();
         } else if (range.is_full()) {
             for (auto&& e : partitions) {
-                auto& key = e.first;
+                auto& dk = e.first;
                 auto& partition = e.second;
-                auto p_builder = builder.add_partition(key);
+                auto p_builder = builder.add_partition(dk._key);
                 partition.query(*_schema, cmd.slice, limit, p_builder);
                 p_builder.finish();
                 limit -= p_builder.row_count();
