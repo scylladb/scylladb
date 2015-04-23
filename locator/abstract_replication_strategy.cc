@@ -14,7 +14,7 @@ std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::cr
     return create_object<abstract_replication_strategy>(strategy_name, ks_name, tk_metadata, snitch, config_options);
 }
 
-std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(token& search_token) {
+std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(const token& search_token) {
     const token& key_token = _token_metadata.first_token(search_token);
     return calculate_natural_endpoints(key_token);
 }
