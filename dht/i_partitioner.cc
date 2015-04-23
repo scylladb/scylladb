@@ -144,6 +144,10 @@ bool operator==(const decorated_key& lht, const decorated_key& rht) {
     return false;
 }
 
+bool operator!=(const decorated_key& lht, const decorated_key& rht) {
+    return !(lht == rht);
+}
+
 std::ostream& operator<<(std::ostream& out, const token& t) {
     auto flags = out.flags();
     for (auto c : t._data) {
