@@ -281,6 +281,8 @@ public:
     static const tuple& get_tuple_type(const schema& s) {
         return s.partition_key_type;
     }
+
+    friend std::ostream& operator<<(std::ostream& out, const partition_key& pk);
 };
 
 class exploded_clustering_prefix {
@@ -321,6 +323,8 @@ public:
         assert(prefix.is_full(s));
         return from_exploded(s, prefix.components());
     }
+
+    friend std::ostream& operator<<(std::ostream& out, const clustering_key& ck);
 };
 
 class clustering_key_prefix : public prefix_tuple_wrapper<clustering_key_prefix, clustering_key> {
@@ -339,19 +343,6 @@ public:
     static clustering_key_prefix from_clustering_prefix(const schema& s, const exploded_clustering_prefix& prefix) {
         return from_exploded(s, prefix.components());
     }
+
+    friend std::ostream& operator<<(std::ostream& out, const clustering_key_prefix& ckp);
 };
-
-static inline
-std::ostream& operator<<(std::ostream& out, const partition_key& pk) {
-    return out << "pk{" << to_hex(pk) << "}";
-}
-
-static inline
-std::ostream& operator<<(std::ostream& out, const clustering_key& ck) {
-    return out << "ck{" << to_hex(ck) << "}";
-}
-
-static inline
-std::ostream& operator<<(std::ostream& out, const clustering_key_prefix& ckp) {
-    return out << "ckp{" << to_hex(ckp) << "}";
-}

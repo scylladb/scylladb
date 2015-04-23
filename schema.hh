@@ -164,11 +164,11 @@ public:
     data_type column_name_type(const column_definition& def) {
         return def.kind == column_definition::column_kind::REGULAR ? regular_column_name_type : utf8_type;
     }
-    column_definition& regular_column_at(column_id id) {
-        return _regular_columns[id];
+    const column_definition& regular_column_at(column_id id) const {
+        return _regular_columns.at(id);
     }
-    column_definition& static_column_at(column_id id) {
-        return _static_columns[id];
+    const column_definition& static_column_at(column_id id) const {
+        return _static_columns.at(id);
     }
     bool is_last_partition_key(const column_definition& def) {
         return &_partition_key[_partition_key.size() - 1] == &def;
