@@ -24,7 +24,9 @@
 
 #pragma once
 
-#include "database.hh"
+#include "database_fwd.hh"
+#include "schema.hh"
+#include "core/sstring.hh"
 
 namespace validation {
 

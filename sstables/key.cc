@@ -39,7 +39,7 @@ inline void serialize(data_type& t, const bytes_view& value, bytes::iterator& ou
 template <typename Iterator>
 inline
 key from_components(const schema& s, Iterator begin, Iterator end) {
-    auto types = s.partition_key_type->types();
+    auto types = s.partition_key_type()->types();
 
     bool composite = types.size() > 1;
 
@@ -102,7 +102,7 @@ key key::from_exploded(const schema& s, const std::vector<bytes>& v) {
 }
 
 key key::from_exploded(const schema& s, std::vector<bytes>&& v) {
-    if (s.partition_key_type->types().size() == 1) {
+    if (s.partition_key_type()->types().size() == 1) {
         return key(std::move(v[0]));
     }
     return from_components(s, v.begin(), v.end());

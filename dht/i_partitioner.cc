@@ -144,6 +144,10 @@ bool operator==(const decorated_key& lht, const decorated_key& rht) {
     return false;
 }
 
+bool operator!=(const decorated_key& lht, const decorated_key& rht) {
+    return !(lht == rht);
+}
+
 std::ostream& operator<<(std::ostream& out, const token& t) {
     auto flags = out.flags();
     for (auto c : t._data) {
@@ -152,6 +156,10 @@ std::ostream& operator<<(std::ostream& out, const token& t) {
     }
     out.flags(flags);
     return out;
+}
+
+std::ostream& operator<<(std::ostream& out, const decorated_key& dk) {
+    return out << "{key: " << dk._key << ", token:" << dk._token << "}";
 }
 
 // FIXME: get from global config

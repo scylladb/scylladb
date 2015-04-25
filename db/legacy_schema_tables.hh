@@ -25,7 +25,7 @@
 
 #include "service/storage_proxy.hh"
 #include "config/ks_meta_data.hh"
-#include "database.hh"
+#include "mutation.hh"
 #include "schema.hh"
 
 #include <vector>

@@ -24,7 +24,7 @@
 #include <cstdint>
 #include <array>
 
-#include "database.hh"
+#include "bytes.hh"
 
 /**
  * This is a very fast, non-cryptographic hash suitable for general hash-based

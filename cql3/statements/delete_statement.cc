@@ -30,7 +30,7 @@ namespace statements {
 
 void delete_statement::add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
     if (_column_operations.empty()) {
-        m.p.apply_delete(s, prefix, params.make_tombstone());
+        m.partition().apply_delete(s, prefix, params.make_tombstone());
         return;
     }
 
@@ -70,7 +70,7 @@ delete_statement::parsed::prepare_internal(database& db, schema_ptr schema, ::sh
             throw exceptions::invalid_request_exception(sprint("Invalid identifier %s for deletion (should not be a PRIMARY KEY part)", def->name_as_text()));
         }
 
-        auto&& op = deletion->prepare(db, schema->ks_name, *def);
+        auto&& op = deletion->prepare(db, schema->ks_name(), *def);
         op->collect_marker_specification(bound_names);
         stmt->add_operation(op);
     }

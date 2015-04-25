@@ -467,11 +467,11 @@ namespace service {
 
 
 future<>
-storage_proxy::mutate_locally(const mutation& m, dht::decorated_key& dk) {
-    auto shard = _db.local().shard_of(dk._token);
+storage_proxy::mutate_locally(const mutation& m) {
+    auto shard = _db.local().shard_of(m);
     return _db.invoke_on(shard, [&m] (database& db) -> void {
         try {
-            auto& cf = db.find_column_family(m.schema->id());
+            auto& cf = db.find_column_family(m.column_family_id());
             cf.apply(m);
         } catch (no_such_column_family&) {
             // TODO: log a warning
@@ -484,8 +484,7 @@ future<>
 storage_proxy::mutate_locally(std::vector<mutation> mutations) {
     auto pmut = make_lw_shared(std::move(mutations));
     return parallel_for_each(pmut->begin(), pmut->end(), [this, pmut] (const mutation& m) {
-        auto dk = dht::global_partitioner().decorate_key(m.key);
-        return mutate_locally(m, dk);
+        return mutate_locally(m);
     }).finally([pmut]{});
 }
 
@@ -502,12 +501,12 @@ future<>
 storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl) {
     auto pmut = make_lw_shared(std::move(mutations));
     return parallel_for_each(pmut->begin(), pmut->end(), [this, pmut] (const mutation& m) {
-        auto dk = dht::global_partitioner().decorate_key(m.key);
         try {
-            keyspace& ks = _db.local().find_keyspace(m.schema->ks_name);
-            std::vector<gms::inet_address> natural_endpoints = ks.get_replication_strategy().get_natural_endpoints(dk._token);
+            keyspace& ks = _db.local().find_keyspace(m.schema()->ks_name());
+            std::vector<gms::inet_address> natural_endpoints =
+                ks.get_replication_strategy().get_natural_endpoints(m.token());
             // FIXME: send it to replicas instead of applying locally
-            return mutate_locally(m, dk);
+            return mutate_locally(m);
         } catch (no_such_keyspace& ex) {
             assert(false);
         }

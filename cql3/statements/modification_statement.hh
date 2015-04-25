@@ -136,11 +136,11 @@ public:
     }
 
     virtual sstring keyspace() const {
-        return s->ks_name;
+        return s->ks_name();
     }
 
     virtual sstring column_family() const {
-        return s->cf_name;
+        return s->cf_name();
     }
 
     virtual bool is_counter() const {

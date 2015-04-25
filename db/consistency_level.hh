@@ -374,7 +374,7 @@ bool is_serial_consistency(consistency_level cl) {
 static inline
 void validate_counter_for_write(schema_ptr s, consistency_level cl) {
     if (cl == consistency_level::ANY) {
-        throw exceptions::invalid_request_exception(sprint("Consistency level ANY is not yet supported for counter table %s", s->cf_name));
+        throw exceptions::invalid_request_exception(sprint("Consistency level ANY is not yet supported for counter table %s", s->cf_name()));
     }
 
     if (is_serial_consistency(cl)) {

@@ -31,7 +31,7 @@ BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(3)));
     cf.apply(std::move(m));
 
-    row& r = cf.find_or_create_row(key, c_key);
+    row& r = cf.find_or_create_row_slow(key, c_key);
     auto i = r.find(r1_col.id);
     BOOST_REQUIRE(i != r.end());
     auto cell = i->second.as_atomic_cell();
@@ -56,21 +56,21 @@ BOOST_AUTO_TEST_CASE(test_multi_level_row_tombstones) {
         return clustering_key::from_deeply_exploded(*s, v);
     };
 
-    m.p.apply_row_tombstone(s, make_prefix({1, 2}), tombstone(9, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 2, 3})), tombstone(9, ttl));
+    m.partition().apply_row_tombstone(s, make_prefix({1, 2}), tombstone(9, ttl));
+    BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 2, 3})), tombstone(9, ttl));
 
-    m.p.apply_row_tombstone(s, make_prefix({1, 3}), tombstone(8, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 2, 0})), tombstone(9, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 3, 0})), tombstone(8, ttl));
+    m.partition().apply_row_tombstone(s, make_prefix({1, 3}), tombstone(8, ttl));
+    BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 2, 0})), tombstone(9, ttl));
+    BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 3, 0})), tombstone(8, ttl));
 
-    m.p.apply_row_tombstone(s, make_prefix({1}), tombstone(11, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 2, 0})), tombstone(11, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 3, 0})), tombstone(11, ttl));
+    m.partition().apply_row_tombstone(s, make_prefix({1}), tombstone(11, ttl));
+    BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 2, 0})), tombstone(11, ttl));
+    BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 3, 0})), tombstone(11, ttl));
 
-    m.p.apply_row_tombstone(s, make_prefix({1, 4}), tombstone(6, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 2, 0})), tombstone(11, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 3, 0})), tombstone(11, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, make_key({1, 4, 0})), tombstone(11, ttl));
+    m.partition().apply_row_tombstone(s, make_prefix({1, 4}), tombstone(6, ttl));
+    BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 2, 0})), tombstone(11, ttl));
+    BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 3, 0})), tombstone(11, ttl));
+    BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 4, 0})), tombstone(11, ttl));
 }
 
 BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
@@ -88,14 +88,14 @@ BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
     auto ttl = gc_clock::now() + std::chrono::seconds(1);
 
     mutation m(key, s);
-    m.p.apply_row_tombstone(s, c_key1_prefix, tombstone(1, ttl));
-    m.p.apply_row_tombstone(s, c_key2_prefix, tombstone(0, ttl));
+    m.partition().apply_row_tombstone(s, c_key1_prefix, tombstone(1, ttl));
+    m.partition().apply_row_tombstone(s, c_key2_prefix, tombstone(0, ttl));
 
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, c_key1), tombstone(1, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, c_key2), tombstone(0, ttl));
+    BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, c_key1), tombstone(1, ttl));
+    BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, c_key2), tombstone(0, ttl));
 
-    m.p.apply_row_tombstone(s, c_key2_prefix, tombstone(1, ttl));
-    BOOST_REQUIRE_EQUAL(m.p.tombstone_for_row(*s, c_key2), tombstone(1, ttl));
+    m.partition().apply_row_tombstone(s, c_key2_prefix, tombstone(1, ttl));
+    BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, c_key2), tombstone(1, ttl));
 }
 
 BOOST_AUTO_TEST_CASE(test_map_mutations) {
@@ -122,7 +122,7 @@ BOOST_AUTO_TEST_CASE(test_map_mutations) {
     m2o.set_static_cell(column, my_map_type->serialize_mutation_form(mmut2o));
     cf.apply(m2o);
 
-    row& r = cf.find_or_create_partition(key).static_row();
+    row& r = cf.find_or_create_partition_slow(key).static_row();
     auto i = r.find(column.id);
     BOOST_REQUIRE(i != r.end());
     auto cell = i->second.as_collection_mutation();
@@ -155,7 +155,7 @@ BOOST_AUTO_TEST_CASE(test_set_mutations) {
     m2o.set_static_cell(column, my_set_type->serialize_mutation_form(mmut2o));
     cf.apply(m2o);
 
-    row& r = cf.find_or_create_partition(key).static_row();
+    row& r = cf.find_or_create_partition_slow(key).static_row();
     auto i = r.find(column.id);
     BOOST_REQUIRE(i != r.end());
     auto cell = i->second.as_collection_mutation();
@@ -189,7 +189,7 @@ BOOST_AUTO_TEST_CASE(test_list_mutations) {
     m2o.set_static_cell(column, my_list_type->serialize_mutation_form(mmut2o));
     cf.apply(m2o);
 
-    row& r = cf.find_or_create_partition(key).static_row();
+    row& r = cf.find_or_create_partition_slow(key).static_row();
     auto i = r.find(column.id);
     BOOST_REQUIRE(i != r.end());
     auto cell = i->second.as_collection_mutation();

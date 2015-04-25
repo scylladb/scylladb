@@ -10,7 +10,7 @@ namespace cql3 {
 
 ::shared_ptr<column_identifier>
 column_identifier::raw::prepare_column_identifier(schema_ptr schema) {
-    if (schema->regular_column_name_type == utf8_type) {
+    if (schema->regular_column_name_type() == utf8_type) {
         return ::make_shared<column_identifier>(_text, true);
     }
 
@@ -23,7 +23,7 @@ column_identifier::raw::prepare_column_identifier(schema_ptr schema) {
         return ::make_shared<column_identifier>(std::move(text_bytes), _text);
     }
 
-    return ::make_shared<column_identifier>(schema->regular_column_name_type->from_string(_raw_text), _text);
+    return ::make_shared<column_identifier>(schema->regular_column_name_type()->from_string(_raw_text), _text);
 }
 
 std::ostream& operator<<(std::ostream& out, const column_identifier::raw& id) {

@@ -121,7 +121,7 @@ public:
         auto shard = _db.local().shard_of(dk._token);
 
         auto do_get = [this,
-                       pk = std::move(pk),
+                       dk = std::move(dk),
                        column_parent = std::move(column_parent),
                        predicate = std::move(predicate)] (database& db) {
             std::vector<ColumnOrSuperColumn> ret;
@@ -133,7 +133,7 @@ public:
                 throw unimplemented_exception();
             } else if (predicate.__isset.slice_range) {
                 auto&& range = predicate.slice_range;
-                row* rw = cf.find_row(pk, clustering_key::make_empty(*cf._schema));
+                row* rw = cf.find_row(dk, clustering_key::make_empty(*cf._schema));
                 if (rw) {
                     auto beg = cf._schema->regular_begin();
                     if (!range.start.empty()) {
@@ -273,7 +273,7 @@ public:
                                 ttl = std::chrono::duration_cast<gc_clock::duration>(std::chrono::seconds(col.ttl));
                             }
                             if (ttl.count() <= 0) {
-                                ttl = cf._schema->default_time_to_live;
+                                ttl = cf._schema->default_time_to_live();
                             }
                             auto ttl_option = ttl.count() > 0 ? ttl_opt(gc_clock::now() + ttl) : ttl_opt();
                             m_to_apply.set_clustered_cell(empty_clustering_key, *def,
@@ -294,8 +294,7 @@ public:
                         throw make_exception<InvalidRequestException>("Mutation must have either column or deletion");
                     }
                 }
-                auto dk = dht::global_partitioner().decorate_key(m_to_apply.key);
-                auto shard = _db.local().shard_of(dk._token);
+                auto shard = _db.local().shard_of(m_to_apply);
                 return _db.invoke_on(shard, [this, cf_name, m_to_apply = std::move(m_to_apply)] (database& db) {
                     auto& cf = db.find_column_family(_ks_name, cf_name);
                     cf.apply(m_to_apply);

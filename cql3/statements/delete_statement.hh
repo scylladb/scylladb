@@ -27,7 +27,7 @@
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/attributes.hh"
 #include "cql3/operation.hh"
-#include "database.hh"
+#include "database_fwd.hh"
 
 namespace cql3 {
 

@@ -124,7 +124,7 @@ public:
                                       table_name = std::move(table_name)] (database& db) {
             auto& cf = db.find_column_family(ks_name, table_name);
             auto schema = cf._schema;
-            auto p = cf.find_partition(pkey);
+            auto p = cf.find_partition_slow(pkey);
             assert(p != nullptr);
             auto row = p->find_row(clustering_key::from_deeply_exploded(*schema, ck));
             assert(row != nullptr);

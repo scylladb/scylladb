@@ -49,13 +49,15 @@ struct column_family {
     column_family(schema_ptr schema);
     column_family(column_family&&) = default;
     ~column_family();
-    mutation_partition& find_or_create_partition(const partition_key& key);
-    row& find_or_create_row(const partition_key& partition_key, const clustering_key& clustering_key);
-    mutation_partition* find_partition(const partition_key& key);
-    row* find_row(const partition_key& partition_key, const clustering_key& clustering_key);
+    mutation_partition& find_or_create_partition(const dht::decorated_key& key);
+    mutation_partition& find_or_create_partition_slow(const partition_key& key);
+    mutation_partition* find_partition(const dht::decorated_key& key);
+    mutation_partition* find_partition_slow(const partition_key& key);
+    row& find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key);
+    row* find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key);
     schema_ptr _schema;
     // partition key -> partition
-    std::map<partition_key, mutation_partition, partition_key::less_compare> partitions;
+    std::map<dht::decorated_key, mutation_partition> partitions;
     void apply(const mutation& m);
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
@@ -124,11 +126,10 @@ public:
     const column_family& find_column_family(const schema_ptr&) const throw (no_such_column_family);
     schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family);
     schema_ptr find_schema(const utils::UUID&) const throw (no_such_column_family);
-    future<> stop() { return make_ready_future<>(); }
-    void assign(database&& db) {
-        *this = std::move(db);
-    }
+    future<> stop();
+    void assign(database&& db);
     unsigned shard_of(const dht::token& t);
+    unsigned shard_of(const mutation& m);
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
     friend std::ostream& operator<<(std::ostream& out, const database& db);
 };

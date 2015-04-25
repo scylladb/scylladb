@@ -8,7 +8,6 @@
 #include "core/future-util.hh"
 #include "db/system_keyspace.hh"
 #include "db/consistency_level.hh"
-#include "utils/UUID_gen.hh"
 #include "to_string.hh"
 #include "query-result-writer.hh"
 
@@ -21,114 +20,27 @@
 
 thread_local logging::logger dblog("database");
 
-template<typename Sequence>
-std::vector<::shared_ptr<abstract_type>>
-get_column_types(const Sequence& column_definitions) {
-    std::vector<shared_ptr<abstract_type>> result;
-    for (auto&& col : column_definitions) {
-        result.push_back(col.type);
-    }
-    return result;
-}
-
-::shared_ptr<cql3::column_specification>
-schema::make_column_specification(const column_definition& def) {
-    auto id = ::make_shared<cql3::column_identifier>(def.name(), column_name_type(def));
-    return ::make_shared<cql3::column_specification>(ks_name, cf_name, std::move(id), def.type);
-}
-
-void
-schema::build_columns(const std::vector<column>& columns, column_definition::column_kind kind,
-    std::vector<column_definition>& dst)
-{
-    dst.reserve(columns.size());
-    for (column_id i = 0; i < columns.size(); i++) {
-        auto& col = columns[i];
-        dst.emplace_back(std::move(col.name), std::move(col.type), i, kind);
-        column_definition& def = dst.back();
-        def.column_specification = make_column_specification(def);
-    }
-}
-
-void schema::rehash_columns() {
-    _columns_by_name.clear();
-    _regular_columns_by_name.clear();
-
-    for (const column_definition& def : all_columns_in_select_order()) {
-        _columns_by_name[def.name()] = &def;
-    }
-
-    for (const column_definition& def : _regular_columns) {
-        _regular_columns_by_name[def.name()] = &def;
-    }
-}
-
-raw_schema::raw_schema(utils::UUID id)
-    : _id(id)
-{ }
-
-schema::schema(std::experimental::optional<utils::UUID> id,
-    sstring ks_name,
-    sstring cf_name,
-    std::vector<column> partition_key,
-    std::vector<column> clustering_key,
-    std::vector<column> regular_columns,
-    std::vector<column> static_columns,
-    data_type regular_column_name_type,
-    sstring comment)
-        : raw_schema(id ? *id : utils::UUID_gen::get_time_UUID())
-        , _regular_columns_by_name(serialized_compare(regular_column_name_type))
-{
-    this->_comment = std::move(comment);
-    this->ks_name = std::move(ks_name);
-    this->cf_name = std::move(cf_name);
-    this->partition_key_type = ::make_lw_shared<tuple_type<>>(get_column_types(partition_key));
-    this->clustering_key_type = ::make_lw_shared<tuple_type<>>(get_column_types(clustering_key));
-    this->clustering_key_prefix_type = ::make_lw_shared(clustering_key_type->as_prefix());
-    this->regular_column_name_type = regular_column_name_type;
-
-    if (partition_key.size() == 1) {
-        thrift.partition_key_type = partition_key[0].type;
-    } else {
-        // TODO: the type should be composite_type
-        warn(unimplemented::cause::LEGACY_COMPOSITE_KEYS);
-    }
-
-    build_columns(partition_key, column_definition::column_kind::PARTITION, _partition_key);
-    build_columns(clustering_key, column_definition::column_kind::CLUSTERING, _clustering_key);
-
-    std::sort(regular_columns.begin(), regular_columns.end(), column::name_compare(regular_column_name_type));
-    build_columns(regular_columns, column_definition::column_kind::REGULAR, _regular_columns);
-
-    std::sort(static_columns.begin(), static_columns.end(), column::name_compare(utf8_type));
-    build_columns(static_columns, column_definition::column_kind::STATIC, _static_columns);
-
-    rehash_columns();
-}
-
-schema::schema(const schema& o)
-        : raw_schema(o)
-        , _regular_columns_by_name(serialized_compare(regular_column_name_type)) {
-    rehash_columns();
-}
-
 column_family::column_family(schema_ptr schema)
     : _schema(std::move(schema))
-    , partitions(partition_key::less_compare(*_schema)) {
-}
+{ }
 
 // define in .cc, since sstable is forward-declared in .hh
 column_family::~column_family() {
 }
 
 mutation_partition*
-column_family::find_partition(const partition_key& key) {
+column_family::find_partition(const dht::decorated_key& key) {
     auto i = partitions.find(key);
     return i == partitions.end() ? nullptr : &i->second;
 }
 
+mutation_partition*
+column_family::find_partition_slow(const partition_key& key) {
+    return find_partition(dht::global_partitioner().decorate_key(key));
+}
+
 row*
-column_family::find_row(const partition_key& partition_key, const clustering_key& clustering_key) {
+column_family::find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) {
     mutation_partition* p = find_partition(partition_key);
     if (!p) {
         return nullptr;
@@ -137,18 +49,23 @@ column_family::find_row(const partition_key& partition_key, const clustering_key
 }
 
 mutation_partition&
-column_family::find_or_create_partition(const partition_key& key) {
+column_family::find_or_create_partition_slow(const partition_key& key) {
+    return find_or_create_partition(dht::global_partitioner().decorate_key(key));
+}
+
+mutation_partition&
+column_family::find_or_create_partition(const dht::decorated_key& key) {
     // call lower_bound so we have a hint for the insert, just in case.
     auto i = partitions.lower_bound(key);
-    if (i == partitions.end() || !key.equal(*_schema, i->first)) {
+    if (i == partitions.end() || key != i->first) {
         i = partitions.emplace_hint(i, std::make_pair(std::move(key), mutation_partition(_schema)));
     }
     return i->second;
 }
 
 row&
-column_family::find_or_create_row(const partition_key& partition_key, const clustering_key& clustering_key) {
-    mutation_partition& p = find_or_create_partition(partition_key);
+column_family::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
+    mutation_partition& p = find_or_create_partition_slow(partition_key);
     return p.clustered_row(clustering_key).cells;
 }
 
@@ -374,29 +291,9 @@ database::shard_of(const dht::token& t) {
     return uint8_t(t._data[0]) % smp::count;
 }
 
-column_definition::column_definition(bytes name, data_type type, column_id id, column_kind kind)
-    : _name(std::move(name))
-    , type(std::move(type))
-    , id(id)
-    , kind(kind)
-{ }
-
-const column_definition* schema::get_column_definition(const bytes& name) {
-    auto i = _columns_by_name.find(name);
-    if (i == _columns_by_name.end()) {
-        return nullptr;
-    }
-    return i->second;
-}
-
-const sstring&
-column_definition::name_as_text() const {
-    return column_specification->name->text();
-}
-
-const bytes&
-column_definition::name() const {
-    return _name;
+unsigned
+database::shard_of(const mutation& m) {
+    return shard_of(m.token());
 }
 
 keyspace& database::add_keyspace(sstring name, keyspace k) {
@@ -407,15 +304,15 @@ keyspace& database::add_keyspace(sstring name, keyspace k) {
 }
 
 void database::add_column_family(const utils::UUID& uuid, column_family&& cf) {
-    if (_keyspaces.count(cf._schema->ks_name) == 0) {
-        throw std::invalid_argument("Keyspace " + cf._schema->ks_name + " not defined");
+    if (_keyspaces.count(cf._schema->ks_name()) == 0) {
+        throw std::invalid_argument("Keyspace " + cf._schema->ks_name() + " not defined");
     }
     if (_column_families.count(uuid) != 0) {
         throw std::invalid_argument("UUID " + uuid.to_sstring() + " already mapped");
     }
-    auto kscf = std::make_pair(cf._schema->ks_name, cf._schema->cf_name);
+    auto kscf = std::make_pair(cf._schema->ks_name(), cf._schema->cf_name());
     if (_ks_cf_to_uuid.count(kscf) != 0) {
-        throw std::invalid_argument("Column family " + cf._schema->cf_name + " exists");
+        throw std::invalid_argument("Column family " + cf._schema->cf_name() + " exists");
     }
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
@@ -431,7 +328,7 @@ const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) con
 }
 
 const utils::UUID& database::find_uuid(const schema_ptr& schema) const throw (std::out_of_range) {
-    return find_uuid(schema->ks_name, schema->cf_name);
+    return find_uuid(schema->ks_name(), schema->cf_name());
 }
 
 keyspace& database::find_keyspace(const sstring& name) throw (no_such_keyspace) {
@@ -536,8 +433,8 @@ database::find_or_create_keyspace(const sstring& name) {
 
 void
 column_family::apply(const mutation& m) {
-    mutation_partition& p = find_or_create_partition(m.key);
-    p.apply(_schema, m.p);
+    mutation_partition& p = find_or_create_partition(m.decorated_key());
+    p.apply(_schema, m.partition());
 }
 
 // Based on org.apache.cassandra.db.AbstractCell#reconcile()
@@ -576,11 +473,6 @@ merge_column(const column_definition& def,
     }
 }
 
-bool column_definition::is_compact_value() const {
-    warn(unimplemented::cause::COMPACT_TABLES);
-    return false;
-}
-
 future<lw_shared_ptr<query::result>>
 column_family::query(const query::read_command& cmd) {
     query::result::builder builder(cmd.slice);
@@ -592,7 +484,7 @@ column_family::query(const query::read_command& cmd) {
         }
         if (range.is_singular()) {
             auto& key = range.start_value();
-            auto partition = find_partition(key);
+            auto partition = find_partition_slow(key);
             if (!partition) {
                 break;
             }
@@ -602,9 +494,9 @@ column_family::query(const query::read_command& cmd) {
             limit -= p_builder.row_count();
         } else if (range.is_full()) {
             for (auto&& e : partitions) {
-                auto& key = e.first;
+                auto& dk = e.first;
                 auto& partition = e.second;
-                auto p_builder = builder.add_partition(key);
+                auto p_builder = builder.add_partition(dk._key);
                 partition.query(*_schema, cmd.slice, limit, p_builder);
                 p_builder.finish();
                 limit -= p_builder.row_count();
@@ -653,8 +545,8 @@ void print_partition(std::ostream& out, const schema& s, const mutation_partitio
 }
 
 std::ostream& operator<<(std::ostream& os, const mutation& m) {
-    fprint(os, "{mutation: schema %p key %s data ", m.schema.get(), static_cast<bytes_view>(m.key));
-    print_partition(os, *m.schema, m.p);
+    fprint(os, "{mutation: schema %p key %s data ", m.schema().get(), m.key());
+    print_partition(os, *m.schema(), m.partition());
     os << "}";
     return os;
 }
@@ -674,7 +566,7 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     out << "{\n";
     for (auto&& e : db._column_families) {
         auto&& cf = e.second;
-        out << "(" << e.first.to_sstring() << ", " << cf._schema->cf_name << ", " << cf._schema->ks_name << "): " << cf << "\n";
+        out << "(" << e.first.to_sstring() << ", " << cf._schema->cf_name() << ", " << cf._schema->ks_name() << "): " << cf << "\n";
     }
     out << "}";
     return out;
@@ -721,7 +613,12 @@ operator<<(std::ostream& os, const atomic_cell& ac) {
     return os << atomic_cell_view(ac);
 }
 
-// Based on org.apache.cassandra.config.CFMetaData#generateLegacyCfId
-utils::UUID generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
-    return utils::UUID_gen::get_name_UUID(ks_name + cf_name);
+future<>
+database::stop() {
+    return make_ready_future<>();
+}
+
+void
+database::assign(database&& db) {
+    *this = std::move(db);
 }
