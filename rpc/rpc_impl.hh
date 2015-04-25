@@ -203,9 +203,9 @@ auto send_helper(MsgType t, std::index_sequence<I...>) {
         promise<> sent; // will be fulfilled when data is sent
         auto fsent = sent.get_future();
         dst.out_ready() = dst.out_ready().then([&dst, xargs = std::move(xargs), m = std::move(m), sent = std::move(sent)] () mutable {
-            return marshall(dst.serializer(), dst.out(), std::move(xargs)).then([m = std::move(m)] {}).finally([sent = std::move(sent)] () mutable {
-                sent.set_value();
-            });
+            return marshall(dst.serializer(), dst.out(), std::move(xargs)).then([m = std::move(m)] {});
+        }).finally([sent = std::move(sent)] () mutable {
+            sent.set_value();
         });
 
         // prepare reply handler, if return type is now_wait_type this does nothing, since no reply will be sent
