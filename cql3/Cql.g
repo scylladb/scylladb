@@ -54,6 +54,7 @@ options {
 #include "cql3/type_cast.hh"
 #include "cql3/tuples.hh"
 #include "cql3/user_types.hh"
+#include "cql3/ut_name.hh"
 #include "cql3/functions/function_name.hh"
 #include "cql3/functions/function_call.hh"
 #include "core/sstring.hh"
@@ -1003,11 +1004,9 @@ columnFamilyName returns [shared_ptr<cql3::cf_name> name]
     : (cfOrKsName[name, true] '.')? cfOrKsName[name, false]
     ;
 
-#if 0
-userTypeName returns [UTName name]
-    : (ks=ident '.')? ut=non_type_ident { return new UTName(ks, ut); }
+userTypeName returns [uninitialized<cql3::ut_name> name]
+    : (ks=ident '.')? ut=non_type_ident { $name = cql3::ut_name(ks, ut); }
     ;
-#endif
 
 cfOrKsName[shared_ptr<cql3::cf_name> name, bool isKs]
     : t=IDENT              { if (isKs) $name->set_keyspace($t.text, false); else $name->set_column_family($t.text, false); }
@@ -1291,8 +1290,8 @@ comparatorType returns [shared_ptr<cql3_type::raw> t]
     : n=native_type     { $t = cql3_type::raw::from(n); }
     | c=collection_type { $t = c; }
     | tt=tuple_type     { $t = tt; }
+    | id=userTypeName   { $t = cql3::cql3_type::raw::user_type(id); }
 #if 0
-    | id=userTypeName   { $t = CQL3Type.Raw.userType(id); }
     | K_FROZEN '<' f=comparatorType '>'
       {
         try {
@@ -1365,16 +1364,16 @@ username
     : IDENT
     | STRING_LITERAL
     ;
+#endif
 
 // Basically the same as cident, but we need to exlude existing CQL3 types
 // (which for some reason are not reserved otherwise)
-non_type_ident returns [ColumnIdentifier id]
-    : t=IDENT                    { if (reservedTypeNames.contains($t.text)) addRecognitionError("Invalid (reserved) user type name " + $t.text); $id = new ColumnIdentifier($t.text, false); }
-    | t=QUOTED_NAME              { $id = new ColumnIdentifier($t.text, true); }
-    | k=basic_unreserved_keyword { $id = new ColumnIdentifier(k, false); }
-    | kk=K_KEY                   { $id = new ColumnIdentifier($kk.text, false); }
+non_type_ident returns [shared_ptr<cql3::column_identifier> id]
+    : t=IDENT                    { if (_reserved_type_names().count($t.text)) { add_recognition_error("Invalid (reserved) user type name " + $t.text); } $id = ::make_shared<cql3::column_identifier>($t.text, false); }
+    | t=QUOTED_NAME              { $id = ::make_shared<cql3::column_identifier>($t.text, true); }
+    | k=basic_unreserved_keyword { $id = ::make_shared<cql3::column_identifier>(k, false); }
+    | kk=K_KEY                   { $id = ::make_shared<cql3::column_identifier>($kk.text, false); }
     ;
-#endif
 
 unreserved_keyword returns [sstring str]
     : u=unreserved_function_keyword     { $str = u; }
