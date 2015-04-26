@@ -65,6 +65,10 @@ public:
     sstring to_string() const {
         return (has_keyspace() ? (_ks_name.value() + ".") : "") + _ut_name->to_string();
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const ut_name& n) {
+        return os << n.to_string();
+    }
 };
 
 }
