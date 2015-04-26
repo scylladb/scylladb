@@ -50,8 +50,13 @@ inline std::enable_if_t<N == sizeof...(T), future<>> unmarshall(Serializer&, inp
 
 template<std::size_t N = 0, typename Serializer, typename... T>
 inline std::enable_if_t<N != sizeof...(T), future<>> unmarshall(Serializer& deserialize, input_stream<char>& in, std::tuple<T&...>&& args) {
-    return deserialize(in, std::get<N>(args)).then([&deserialize, &in, args = std::move(args)] () mutable {
-        return unmarshall<N + 1>(deserialize, in, std::move(args));
+    // And you may ask yourself "What is that beautiful house?"^H^H^H^H "Why
+    // make_ready_future() here?". And there answer would be to convert
+    // exception thrown by deserialize info a future
+    return make_ready_future().then([&deserialize, &in, args = std::move(args)] {
+            return deserialize(in, std::get<N>(args)).then([&deserialize, &in, args = std::move(args)] () mutable {
+                return unmarshall<N + 1>(deserialize, in, std::move(args));
+            });
     });
 }
 
@@ -476,7 +481,7 @@ protocol<Serializer, MsgType>::client::client(protocol<Serializer, MsgType>& pro
                     _outstanding.erase(it);
                     auto f = (*handler)(*this, _rcv_msg_id);
                     // hold on to handler so it will not be deleted before reply is received
-                    return f.then([handler = std::move(handler)] {});
+                    return f.finally([handler = std::move(handler)] {});
                 } else {
                     this->_error = true;
                     return make_ready_future<>();
