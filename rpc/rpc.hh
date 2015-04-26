@@ -100,6 +100,7 @@ public:
         id_type _rcv_msg_id = 0;
         struct reply_handler_base {
             virtual future<> operator()(client&, id_type) = 0;
+            virtual ~reply_handler_base() {};
         };
     public:
         template<typename Reply, typename Func>
@@ -110,6 +111,7 @@ public:
             virtual future<> operator()(client& client, id_type msg_id) override {
                 return func(reply, client, msg_id);
             }
+            virtual ~reply_handler() {}
         };
     private:
         std::unordered_map<id_type, std::unique_ptr<reply_handler_base>> _outstanding;
