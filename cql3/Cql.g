@@ -1291,15 +1291,15 @@ comparatorType returns [shared_ptr<cql3_type::raw> t]
     | c=collection_type { $t = c; }
     | tt=tuple_type     { $t = tt; }
     | id=userTypeName   { $t = cql3::cql3_type::raw::user_type(id); }
-#if 0
     | K_FROZEN '<' f=comparatorType '>'
       {
         try {
-            $t = CQL3Type.Raw.frozen(f);
-        } catch (InvalidRequestException e) {
-            addRecognitionError(e.getMessage());
+            $t = cql3::cql3_type::raw::frozen(f);
+        } catch (exceptions::invalid_request_exception& e) {
+            add_recognition_error(e.what());
         }
       }
+#if 0
     | s=STRING_LITERAL
       {
         try {
