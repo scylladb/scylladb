@@ -246,6 +246,12 @@ cql3_type::raw::tuple(std::vector<shared_ptr<raw>> ts) {
     return make_shared(raw_tuple(std::move(ts)));
 }
 
+shared_ptr<cql3_type::raw>
+cql3_type::raw::frozen(shared_ptr<raw> t) {
+    t->freeze();
+    return t;
+}
+
 thread_local shared_ptr<cql3_type> cql3_type::ascii = make("ascii", ascii_type, cql3_type::kind::ASCII);
 thread_local shared_ptr<cql3_type> cql3_type::bigint = make("bigint", long_type, cql3_type::kind::BIGINT);
 thread_local shared_ptr<cql3_type> cql3_type::blob = make("blob", bytes_type, cql3_type::kind::BLOB);

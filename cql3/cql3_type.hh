@@ -64,13 +64,7 @@ public:
         static shared_ptr<raw> list(shared_ptr<raw> t);
         static shared_ptr<raw> set(shared_ptr<raw> t);
         static shared_ptr<raw> tuple(std::vector<shared_ptr<raw>> ts);
-#if 0
-        public static Raw frozen(CQL3Type.Raw t) throws InvalidRequestException
-        {
-            t.freeze();
-            return t;
-        }
-#endif
+        static shared_ptr<raw> frozen(shared_ptr<raw> t);
         virtual sstring to_string() const = 0;
         friend std::ostream& operator<<(std::ostream& os, const raw& r);
     };
