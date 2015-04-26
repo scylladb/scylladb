@@ -88,6 +88,8 @@ public:
      */
     routes& put(operation_type type, const sstring& url,
             handler_base* handler) {
+        //FIXME if a handler is already exists, it need to be
+        // deleted to prevent memory leak
         _map[type][url] = handler;
         return *this;
     }

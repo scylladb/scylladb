@@ -139,19 +139,17 @@ public:
             : _file_directory(file_directory), _base_path(base_path) {
     }
 
-    std::function<void(routes& r)> set_api_doc() {
-        return [this](routes& r) {
-            new api_registry(r, _file_directory, _base_path);
-        };
+    void set_api_doc(routes& r) {
+        new api_registry(r, _file_directory, _base_path);
     }
 
-    std::function<void(routes& r)> register_function(const sstring& api,
+    void register_function(routes& r, const sstring& api,
             const sstring& description, const sstring& alternative_path = "") {
-        return [this, api, description, alternative_path](routes& r) {
-            auto h = r.get_exact_match(GET, _base_path);
-            if (h) {
-                ((api_registry*) h)->reg(api, description, alternative_path);
-            };
+        auto h = r.get_exact_match(GET, _base_path);
+        if (h) {
+            // if a handler is found, it was added there by the api_registry_builder
+            // with the set_api_doc method, so we know it's the type
+            static_cast<api_registry*>(h)->reg(api, description, alternative_path);
         };
     }
 };
