@@ -227,7 +227,7 @@ cql3_type::values() {
 shared_ptr<cql3_type>
 make_cql3_tuple_type(shared_ptr<tuple_type_impl> t) {
     auto name = sprint("tuple<%s>",
-                       join(", ",
+                       ::join(", ",
                             t->all_types()
                             | boost::adaptors::transformed(std::mem_fn(&abstract_type::as_cql3_type))));
     return ::make_shared<cql3_type>(std::move(name), std::move(t), false);
