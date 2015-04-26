@@ -34,11 +34,10 @@ namespace cql3 {
 
 class ut_name final {
     std::experimental::optional<sstring> _ks_name;
-    const ::shared_ptr<column_identifier> _ut_name;
-
+    ::shared_ptr<column_identifier> _ut_name;
 public:
-    ut_name(std::experimental::optional<::shared_ptr<column_identifier>> ks_name, ::shared_ptr<column_identifier> ut_name)
-        : _ks_name{!ks_name ? std::experimental::optional<sstring>{} : std::experimental::optional<sstring>{ks_name.value()->to_string()}}
+    ut_name(shared_ptr<column_identifier> ks_name, ::shared_ptr<column_identifier> ut_name)
+        : _ks_name{!ks_name ? std::experimental::optional<sstring>{} : std::experimental::optional<sstring>{ks_name->to_string()}}
         , _ut_name{ut_name}
     { }
 
