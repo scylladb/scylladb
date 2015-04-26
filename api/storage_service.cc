@@ -7,11 +7,9 @@
 
 namespace api {
 
-future<> set_storage_service(http_context& ctx) {
-    return ctx.http_server.set_routes([] (routes& r) {
-        httpd::storage_service_json::local_hostid.set(r, [](const_req req) {
-            return "";
-        });
+void set_storage_service(http_context& ctx, routes& r) {
+    httpd::storage_service_json::local_hostid.set(r, [](const_req req) {
+        return "";
     });
 }
 

@@ -74,13 +74,13 @@ int main(int ac, char** av) {
                 auto server = new http_server_control();
                 auto rb= make_shared<api_registry_builder>("apps/httpd/");
                 server->start().then([server] {
-                    server->set_routes(set_routes);
+                    return server->set_routes(set_routes);
                 }).then([server, rb]{
-                    server->set_routes(rb->set_api_doc());
+                    return server->set_routes([rb](routes& r){rb->set_api_doc(r);});
                 }).then([server, rb]{
-                    server->set_routes(rb->register_function("demo", "hello world application"));
+                    return server->set_routes([rb](routes& r) {rb->register_function(r, "demo", "hello world application");});
                 }).then([server, port] {
-                    server->listen(port);
+                    return server->listen(port);
                 }).then([port] {
                     std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
                 });

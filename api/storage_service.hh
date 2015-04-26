@@ -9,7 +9,7 @@
 
 namespace api {
 
-future<> set_storage_service(http_context& ctx);
+void set_storage_service(http_context& ctx, routes& r);
 
 }
 
