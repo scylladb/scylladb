@@ -780,7 +780,7 @@ SEASTAR_TEST_CASE(test_user_type) {
     };
     return do_with_cql_env([make_user_type] (cql_test_env& e) {
         return e.create_table([make_user_type] (auto ks_name) {
-            // CQL: "create table cf (id int primary key, t tuple<int, bigint, text>);
+            // CQL: "create table cf (id int primary key, t ut1)";
             return schema({}, ks_name, "cf",
                 {{"id", int32_type}}, {}, {{"t", make_user_type()}}, {}, utf8_type);
         }).then([&e] {
