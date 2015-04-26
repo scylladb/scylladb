@@ -99,19 +99,20 @@ struct uninitialized {
 
     std::vector<::shared_ptr<cql3::column_identifier>> _bind_variables;
 
-#if 0
-    public static final Set<String> reservedTypeNames = new HashSet<String>()
-    {{
-        add("byte");
-        add("smallint");
-        add("complex");
-        add("enum");
-        add("date");
-        add("interval");
-        add("macaddr");
-        add("bitstring");
-    }};
-#endif
+    // Can't use static variable, since it needs to be defined out-of-line
+    static const std::unordered_set<sstring>& _reserved_type_names() {
+        static std::unordered_set<sstring> s = {
+            "byte",
+            "smallint",
+            "complex",
+            "enum",
+            "date",
+            "interval",
+            "macaddr",
+            "bitstring",
+        };
+        return s;
+    }
 
     shared_ptr<cql3::abstract_marker::raw> new_bind_variables(shared_ptr<cql3::column_identifier> name)
     {
