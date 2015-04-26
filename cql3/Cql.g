@@ -68,6 +68,29 @@ using namespace cql3::selection;
 using cql3::cql3_type;
 using conditions_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::column_condition::raw>>>;
 using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>;
+
+// ANTLR forces us to define a default-initialized return value
+// for every rule (e.g. [returns ut_name name]), but not every type
+// can be naturally zero-initialized.
+//
+// The uninitialized<T> wrapper can be zero-initialized, and is convertible
+// to T (after checking that it was assigned to) implicitly, eliminating the
+// problem.  It is up to the user to ensure it is actually assigned to. 
+template <typename T>
+struct uninitialized {
+    std::experimental::optional<T> _val;
+    uninitialized() = default;
+    uninitialized(const uninitialized&) = default;
+    uninitialized(uninitialized&&) = default;
+    uninitialized(const T& val) : _val(val) {}
+    uninitialized(T&& val) : _val(std::move(val)) {}
+    uninitialized& operator=(const uninitialized&) = default;
+    uninitialized& operator=(uninitialized&&) = default;
+    operator const T&() const & { return check(), *_val; }
+    operator T&&() && { return check(), std::move(*_val); }
+    void check() const { if (!_val) { throw std::runtime_error("not intitialized"); } }
+};
+
 }
 
 @context {
