@@ -26,6 +26,7 @@
 #define CQL3_UT_NAME_HH
 
 #include "core/shared_ptr.hh"
+#include "column_identifier.hh"
 
 #include <experimental/optional>
 
