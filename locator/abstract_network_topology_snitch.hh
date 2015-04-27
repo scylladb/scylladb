@@ -14,53 +14,70 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.locator;
 
-import java.net.InetAddress;
+#pragma once
+
+#include "core/sstring.hh"
+#include "gms/inet_address.hh"
+#include "locator/abstract_endpoint_snitch.hh"
+
+namespace locator {
+
+using inet_address = gms::inet_address;
 
 /**
  * An endpoint snitch tells Cassandra information about network topology that it can use to route
  * requests more efficiently.
  */
-public abstract class AbstractNetworkTopologySnitch extends AbstractEndpointSnitch
-{
+class abstract_network_topology_snitch : public abstract_endpoint_snitch {
+public:
     /**
      * Return the rack for which an endpoint resides in
      * @param endpoint a specified endpoint
      * @return string of rack
      */
-    abstract public String getRack(InetAddress endpoint);
+    // virtual sstring get_rack(inet_address endpoint) = 0;
 
     /**
      * Return the data center for which an endpoint resides in
      * @param endpoint a specified endpoint
      * @return string of data center
      */
-    abstract public String getDatacenter(InetAddress endpoint);
+    // virtual sstring get_datacenter(inet_address endpoint) = 0;
 
-    public int compareEndpoints(InetAddress address, InetAddress a1, InetAddress a2)
-    {
-        if (address.equals(a1) && !address.equals(a2))
+    virtual int compare_endpoints(inet_address& address, inet_address& a1, inet_address& a2) override {
+        if (address == a1 && !(address == a2)) {
             return -1;
-        if (address.equals(a2) && !address.equals(a1))
+        }
+        if (address == a2 && !(address == a1)) {
             return 1;
+        }
 
-        String addressDatacenter = getDatacenter(address);
-        String a1Datacenter = getDatacenter(a1);
-        String a2Datacenter = getDatacenter(a2);
-        if (addressDatacenter.equals(a1Datacenter) && !addressDatacenter.equals(a2Datacenter))
+        sstring address_datacenter = get_datacenter(address);
+        sstring a1_datacenter = get_datacenter(a1);
+        sstring a2_datacenter = get_datacenter(a2);
+        if (address_datacenter == a1_datacenter && !(address_datacenter == a2_datacenter)) {
             return -1;
-        if (addressDatacenter.equals(a2Datacenter) && !addressDatacenter.equals(a1Datacenter))
+        }
+        if (address_datacenter == a2_datacenter && !(address_datacenter == a1_datacenter)) {
             return 1;
+        }
 
-        String addressRack = getRack(address);
-        String a1Rack = getRack(a1);
-        String a2Rack = getRack(a2);
-        if (addressRack.equals(a1Rack) && !addressRack.equals(a2Rack))
+        sstring address_rack = get_rack(address);
+        sstring a1_rack = get_rack(a1);
+        sstring a2_rack = get_rack(a2);
+        if (address_rack == a1_rack && !(address_rack == a2_rack)) {
             return -1;
-        if (addressRack.equals(a2Rack) && !addressRack.equals(a1Rack))
+        }
+        if (address_rack == a2_rack && !(address_rack == a1_rack)) {
             return 1;
+        }
         return 0;
     }
-}
+};
+
+} // namespace locator

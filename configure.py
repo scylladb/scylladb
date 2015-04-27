@@ -411,6 +411,7 @@ urchin_core = (['database.cc',
                  'locator/simple_strategy.cc',
                  'locator/token_metadata.cc',
                  'locator/abstract_endpoint_snitch.cc',
+                 'locator/locator.cc',
                  'message/messaging_service.cc',
                  'service/storage_service.cc',
                  ]
