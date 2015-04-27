@@ -628,6 +628,16 @@ SEASTAR_TEST_CASE(test_list_insert_update) {
         }).then([&e] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
                     "list1", list_type_impl::native_type({2008, 2010}));
+        }).then([&e] {
+            return e.execute_cql("update cf set list1 = list1 + [2012, 2019] where p1 = 'key1';").discard_result();
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {},
+                    "list1", list_type_impl::native_type({2008, 2010, 2012, 2019}));
+        }).then([&e] {
+            return e.execute_cql("update cf set list1 = [2001, 2002] + list1 where p1 = 'key1';").discard_result();
+        }).then([&e] {
+            return e.require_column_has_value("cf", {sstring("key1")}, {},
+                    "list1", list_type_impl::native_type({2001, 2002, 2008, 2010, 2012, 2019}));
         });
     });
 }
