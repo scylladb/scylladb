@@ -189,15 +189,14 @@ lists::delayed_value::bind(const query_options& options) {
 
 ::shared_ptr<terminal>
 lists::marker::bind(const query_options& options) {
-    throw std::runtime_error("");
-}
-#if 0
-    public Value bind(QueryOptions options) throws InvalidRequestException
-    {
-        ByteBuffer value = options.getValues().get(bindIndex);
-        return value == null ? null : Value.fromSerialized(value, (ListType)receiver.type, options.getProtocolVersion());
+    const bytes_opt& value = options.get_values()[_bind_index];
+    auto ltype = static_pointer_cast<list_type_impl>(_receiver->type);
+    if (!value) {
+        return nullptr;
+    } else {
+        return make_shared(value::from_serialized(*value, std::move(ltype), options.get_serialization_format()));
     }
-#endif
+}
 
 constexpr const db_clock::time_point lists::precision_time::REFERENCE_TIME;
 thread_local lists::precision_time lists::precision_time::_last = {db_clock::time_point::max(), 0};
