@@ -200,21 +200,11 @@ public:
         virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
     };
 
-#if 0
-    public static class Appender extends Operation
-    {
-        public Appender(ColumnDefinition column, Term t)
-        {
-            super(column, t);
-        }
-
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            assert column.type.isMultiCell() : "Attempted to append to a frozen list";
-            doAppend(t, cf, prefix, column, params);
-        }
-    }
-#endif
+    class appender : public operation {
+    public:
+        using operation::operation;
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+    };
 
     static void do_append(shared_ptr<term> t,
             mutation& m,

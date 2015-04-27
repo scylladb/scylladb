@@ -267,6 +267,12 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
 }
 
 void
+lists::appender::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+    assert(column.type->is_multi_cell()); // "Attempted to append to a frozen list";
+    do_append(_t, m, prefix, column, params);
+}
+
+void
 lists::do_append(shared_ptr<term> t,
         mutation& m,
         const exploded_clustering_prefix& prefix,
