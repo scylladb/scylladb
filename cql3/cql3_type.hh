@@ -33,6 +33,8 @@ class database;
 
 namespace cql3 {
 
+class ut_name;
+
 class cql3_type final {
     sstring _name;
     data_type _type;
@@ -57,23 +59,12 @@ public:
         virtual void freeze();
         virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace) = 0;
         static shared_ptr<raw> from(shared_ptr<cql3_type> type);
-#if 0
-        public static Raw userType(UTName name)
-        {
-            return new RawUT(name);
-        }
-#endif
+        static shared_ptr<raw> user_type(ut_name name);
         static shared_ptr<raw> map(shared_ptr<raw> t1, shared_ptr<raw> t2);
         static shared_ptr<raw> list(shared_ptr<raw> t);
         static shared_ptr<raw> set(shared_ptr<raw> t);
         static shared_ptr<raw> tuple(std::vector<shared_ptr<raw>> ts);
-#if 0
-        public static Raw frozen(CQL3Type.Raw t) throws InvalidRequestException
-        {
-            t.freeze();
-            return t;
-        }
-#endif
+        static shared_ptr<raw> frozen(shared_ptr<raw> t);
         virtual sstring to_string() const = 0;
         friend std::ostream& operator<<(std::ostream& os, const raw& r);
     };
@@ -81,67 +72,7 @@ public:
 private:
     class raw_type;
     class raw_collection;
-#if 0
-        private static class RawUT extends Raw
-        {
-            private final UTName name;
-
-            private RawUT(UTName name)
-            {
-                this.name = name;
-            }
-
-            public String keyspace()
-            {
-                return name.getKeyspace();
-            }
-
-            public void freeze()
-            {
-                frozen = true;
-            }
-
-            public CQL3Type prepare(String keyspace) throws InvalidRequestException
-            {
-                if (name.hasKeyspace())
-                {
-                    // The provided keyspace is the one of the current statement this is part of. If it's different from the keyspace of
-                    // the UTName, we reject since we want to limit user types to their own keyspace (see #6643)
-                    if (keyspace != null && !keyspace.equals(name.getKeyspace()))
-                        throw new InvalidRequestException(String.format("Statement on keyspace %s cannot refer to a user type in keyspace %s; "
-                                                                        + "user types can only be used in the keyspace they are defined in",
-                                                                        keyspace, name.getKeyspace()));
-                }
-                else
-                {
-                    name.setKeyspace(keyspace);
-                }
-
-                KSMetaData ksm = Schema.instance.getKSMetaData(name.getKeyspace());
-                if (ksm == null)
-                    throw new InvalidRequestException("Unknown keyspace " + name.getKeyspace());
-                UserType type = ksm.userTypes.getType(name.getUserTypeName());
-                if (type == null)
-                    throw new InvalidRequestException("Unknown type " + name);
-
-                if (!frozen)
-                    throw new InvalidRequestException("Non-frozen User-Defined types are not supported, please use frozen<>");
-
-                return new UserDefined(name.toString(), type);
-            }
-
-            protected boolean supportsFreezing()
-            {
-                return true;
-            }
-
-            @Override
-            public String toString()
-            {
-                return name.toString();
-            }
-        }
-#endif
+    class raw_ut;
     class raw_tuple;
     friend std::ostream& operator<<(std::ostream& os, const cql3_type& t) {
         return os << t.to_string();

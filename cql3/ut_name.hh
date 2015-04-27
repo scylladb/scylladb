@@ -26,6 +26,7 @@
 #define CQL3_UT_NAME_HH
 
 #include "core/shared_ptr.hh"
+#include "column_identifier.hh"
 
 #include <experimental/optional>
 
@@ -33,11 +34,10 @@ namespace cql3 {
 
 class ut_name final {
     std::experimental::optional<sstring> _ks_name;
-    const ::shared_ptr<column_identifier> _ut_name;
-
+    ::shared_ptr<column_identifier> _ut_name;
 public:
-    ut_name(std::experimental::optional<::shared_ptr<column_identifier>> ks_name, ::shared_ptr<column_identifier> ut_name)
-        : _ks_name{!ks_name ? std::experimental::optional<sstring>{} : std::experimental::optional<sstring>{ks_name.value()->to_string()}}
+    ut_name(shared_ptr<column_identifier> ks_name, ::shared_ptr<column_identifier> ut_name)
+        : _ks_name{!ks_name ? std::experimental::optional<sstring>{} : std::experimental::optional<sstring>{ks_name->to_string()}}
         , _ut_name{ut_name}
     { }
 
@@ -64,6 +64,10 @@ public:
 
     sstring to_string() const {
         return (has_keyspace() ? (_ks_name.value() + ".") : "") + _ut_name->to_string();
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const ut_name& n) {
+        return os << n.to_string();
     }
 };
 

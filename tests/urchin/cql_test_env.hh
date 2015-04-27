@@ -16,6 +16,8 @@
 #include "bytes.hh"
 #include "schema.hh"
 
+class database;
+
 class cql_test_env {
 public:
     virtual ~cql_test_env() {};
@@ -40,6 +42,8 @@ public:
         boost::any expected) = 0;
 
     virtual future<> stop() = 0;
+
+    virtual database& local_db() = 0;
 };
 
 future<::shared_ptr<cql_test_env>> make_env_for_test();

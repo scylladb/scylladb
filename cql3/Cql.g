@@ -54,6 +54,7 @@ options {
 #include "cql3/type_cast.hh"
 #include "cql3/tuples.hh"
 #include "cql3/user_types.hh"
+#include "cql3/ut_name.hh"
 #include "cql3/functions/function_name.hh"
 #include "cql3/functions/function_call.hh"
 #include "core/sstring.hh"
@@ -68,6 +69,29 @@ using namespace cql3::selection;
 using cql3::cql3_type;
 using conditions_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::column_condition::raw>>>;
 using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifier::raw>,::shared_ptr<cql3::operation::raw_update>>>;
+
+// ANTLR forces us to define a default-initialized return value
+// for every rule (e.g. [returns ut_name name]), but not every type
+// can be naturally zero-initialized.
+//
+// The uninitialized<T> wrapper can be zero-initialized, and is convertible
+// to T (after checking that it was assigned to) implicitly, eliminating the
+// problem.  It is up to the user to ensure it is actually assigned to. 
+template <typename T>
+struct uninitialized {
+    std::experimental::optional<T> _val;
+    uninitialized() = default;
+    uninitialized(const uninitialized&) = default;
+    uninitialized(uninitialized&&) = default;
+    uninitialized(const T& val) : _val(val) {}
+    uninitialized(T&& val) : _val(std::move(val)) {}
+    uninitialized& operator=(const uninitialized&) = default;
+    uninitialized& operator=(uninitialized&&) = default;
+    operator const T&() const & { return check(), *_val; }
+    operator T&&() && { return check(), std::move(*_val); }
+    void check() const { if (!_val) { throw std::runtime_error("not intitialized"); } }
+};
+
 }
 
 @context {
@@ -76,19 +100,20 @@ using operations_type = std::vector<std::pair<::shared_ptr<cql3::column_identifi
 
     std::vector<::shared_ptr<cql3::column_identifier>> _bind_variables;
 
-#if 0
-    public static final Set<String> reservedTypeNames = new HashSet<String>()
-    {{
-        add("byte");
-        add("smallint");
-        add("complex");
-        add("enum");
-        add("date");
-        add("interval");
-        add("macaddr");
-        add("bitstring");
-    }};
-#endif
+    // Can't use static variable, since it needs to be defined out-of-line
+    static const std::unordered_set<sstring>& _reserved_type_names() {
+        static std::unordered_set<sstring> s = {
+            "byte",
+            "smallint",
+            "complex",
+            "enum",
+            "date",
+            "interval",
+            "macaddr",
+            "bitstring",
+        };
+        return s;
+    }
 
     shared_ptr<cql3::abstract_marker::raw> new_bind_variables(shared_ptr<cql3::column_identifier> name)
     {
@@ -979,11 +1004,9 @@ columnFamilyName returns [shared_ptr<cql3::cf_name> name]
     : (cfOrKsName[name, true] '.')? cfOrKsName[name, false]
     ;
 
-#if 0
-userTypeName returns [UTName name]
-    : (ks=ident '.')? ut=non_type_ident { return new UTName(ks, ut); }
+userTypeName returns [uninitialized<cql3::ut_name> name]
+    : (ks=ident '.')? ut=non_type_ident { $name = cql3::ut_name(ks, ut); }
     ;
-#endif
 
 cfOrKsName[shared_ptr<cql3::cf_name> name, bool isKs]
     : t=IDENT              { if (isKs) $name->set_keyspace($t.text, false); else $name->set_column_family($t.text, false); }
@@ -1267,16 +1290,16 @@ comparatorType returns [shared_ptr<cql3_type::raw> t]
     : n=native_type     { $t = cql3_type::raw::from(n); }
     | c=collection_type { $t = c; }
     | tt=tuple_type     { $t = tt; }
-#if 0
-    | id=userTypeName   { $t = CQL3Type.Raw.userType(id); }
+    | id=userTypeName   { $t = cql3::cql3_type::raw::user_type(id); }
     | K_FROZEN '<' f=comparatorType '>'
       {
         try {
-            $t = CQL3Type.Raw.frozen(f);
-        } catch (InvalidRequestException e) {
-            addRecognitionError(e.getMessage());
+            $t = cql3::cql3_type::raw::frozen(f);
+        } catch (exceptions::invalid_request_exception& e) {
+            add_recognition_error(e.what());
         }
       }
+#if 0
     | s=STRING_LITERAL
       {
         try {
@@ -1341,16 +1364,16 @@ username
     : IDENT
     | STRING_LITERAL
     ;
+#endif
 
 // Basically the same as cident, but we need to exlude existing CQL3 types
 // (which for some reason are not reserved otherwise)
-non_type_ident returns [ColumnIdentifier id]
-    : t=IDENT                    { if (reservedTypeNames.contains($t.text)) addRecognitionError("Invalid (reserved) user type name " + $t.text); $id = new ColumnIdentifier($t.text, false); }
-    | t=QUOTED_NAME              { $id = new ColumnIdentifier($t.text, true); }
-    | k=basic_unreserved_keyword { $id = new ColumnIdentifier(k, false); }
-    | kk=K_KEY                   { $id = new ColumnIdentifier($kk.text, false); }
+non_type_ident returns [shared_ptr<cql3::column_identifier> id]
+    : t=IDENT                    { if (_reserved_type_names().count($t.text)) { add_recognition_error("Invalid (reserved) user type name " + $t.text); } $id = ::make_shared<cql3::column_identifier>($t.text, false); }
+    | t=QUOTED_NAME              { $id = ::make_shared<cql3::column_identifier>($t.text, true); }
+    | k=basic_unreserved_keyword { $id = ::make_shared<cql3::column_identifier>(k, false); }
+    | kk=K_KEY                   { $id = ::make_shared<cql3::column_identifier>($kk.text, false); }
     ;
-#endif
 
 unreserved_keyword returns [sstring str]
     : u=unreserved_function_keyword     { $str = u; }

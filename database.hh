@@ -72,9 +72,29 @@ private:
         uint32_t limit, query::result::partition_writer&);
 };
 
+class user_types_metadata {
+    std::unordered_map<bytes, user_type> _user_types;
+public:
+    user_type get_type(bytes name) const {
+        return _user_types.at(name);
+    }
+    const std::unordered_map<bytes, user_type>& get_all_types() const {
+        return _user_types;
+    }
+    void add_type(user_type type) {
+        auto i = _user_types.find(type->_name);
+        assert(i == _user_types.end() || type->is_compatible_with(*i->second));
+        _user_types[type->_name] = std::move(type);
+    }
+    void remove_type(user_type type) {
+        _user_types.erase(type->_name);
+    }
+};
+
 class keyspace {
     std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
 public:
+    user_types_metadata _user_types;
     void create_replication_strategy(config::ks_meta_data& ksm);
     locator::abstract_replication_strategy& get_replication_strategy();
 };

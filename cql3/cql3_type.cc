@@ -3,6 +3,7 @@
  */
 
 #include "cql3_type.hh"
+#include "ut_name.hh"
 
 namespace cql3 {
 
@@ -102,6 +103,60 @@ public:
     }
 };
 
+class cql3_type::raw_ut : public raw {
+    ut_name _name;
+public:
+    raw_ut(ut_name name)
+            : _name(std::move(name)) {
+    }
+
+    virtual std::experimental::optional<sstring> keyspace() const override {
+        return _name.get_keyspace();
+    }
+
+    virtual void freeze() override {
+        _frozen = true;
+    }
+
+    virtual shared_ptr<cql3_type> prepare(database& db, const sstring& keyspace) override {
+        if (_name.has_keyspace()) {
+            // The provided keyspace is the one of the current statement this is part of. If it's different from the keyspace of
+            // the UTName, we reject since we want to limit user types to their own keyspace (see #6643)
+            if (!keyspace.empty() && keyspace != _name.get_keyspace()) {
+                throw exceptions::invalid_request_exception(sprint("Statement on keyspace %s cannot refer to a user type in keyspace %s; "
+                                                                   "user types can only be used in the keyspace they are defined in",
+                                                                keyspace, _name.get_keyspace()));
+            }
+        } else {
+            _name.set_keyspace(keyspace);
+        }
+
+        try {
+            auto&& ks = db.find_keyspace(_name.get_keyspace());
+            try {
+                auto&& type = ks._user_types.get_type(_name.get_user_type_name());
+                if (!_frozen) {
+                    throw exceptions::invalid_request_exception("Non-frozen User-Defined types are not supported, please use frozen<>");
+                }
+                return make_shared<cql3_type>(_name.to_string(), std::move(type));
+            } catch (std::out_of_range& e) {
+                throw exceptions::invalid_request_exception(sprint("Unknown type %s", _name));
+            }
+        } catch (no_such_keyspace& nsk) {
+            throw exceptions::invalid_request_exception("Unknown keyspace " + _name.get_keyspace());
+        }
+    }
+
+    virtual bool supports_freezing() const override {
+        return true;
+    }
+
+    virtual sstring to_string() const override {
+        return _name.to_string();
+    }
+};
+
+
 class cql3_type::raw_tuple : public raw {
     std::vector<shared_ptr<raw>> _types;
 public:
@@ -167,6 +222,11 @@ cql3_type::raw::from(shared_ptr<cql3_type> type) {
 }
 
 shared_ptr<cql3_type::raw>
+cql3_type::raw::user_type(ut_name name) {
+    return ::make_shared<raw_ut>(name);
+}
+
+shared_ptr<cql3_type::raw>
 cql3_type::raw::map(shared_ptr<raw> t1, shared_ptr<raw> t2) {
     return make_shared(raw_collection(&collection_type_impl::kind::map, std::move(t1), std::move(t2)));
 }
@@ -184,6 +244,12 @@ cql3_type::raw::set(shared_ptr<raw> t) {
 shared_ptr<cql3_type::raw>
 cql3_type::raw::tuple(std::vector<shared_ptr<raw>> ts) {
     return make_shared(raw_tuple(std::move(ts)));
+}
+
+shared_ptr<cql3_type::raw>
+cql3_type::raw::frozen(shared_ptr<raw> t) {
+    t->freeze();
+    return t;
 }
 
 thread_local shared_ptr<cql3_type> cql3_type::ascii = make("ascii", ascii_type, cql3_type::kind::ASCII);
@@ -227,7 +293,7 @@ cql3_type::values() {
 shared_ptr<cql3_type>
 make_cql3_tuple_type(shared_ptr<tuple_type_impl> t) {
     auto name = sprint("tuple<%s>",
-                       join(", ",
+                       ::join(", ",
                             t->all_types()
                             | boost::adaptors::transformed(std::mem_fn(&abstract_type::as_cql3_type))));
     return ::make_shared<cql3_type>(std::move(name), std::move(t), false);

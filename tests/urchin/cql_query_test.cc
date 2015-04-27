@@ -779,8 +779,10 @@ SEASTAR_TEST_CASE(test_user_type) {
                 {int32_type, long_type, utf8_type});
     };
     return do_with_cql_env([make_user_type] (cql_test_env& e) {
+        // We don't have "CREATE TYPE" yet, so we must insert the type manually
+        e.local_db().find_or_create_keyspace("ks")._user_types.add_type(make_user_type());
         return e.create_table([make_user_type] (auto ks_name) {
-            // CQL: "create table cf (id int primary key, t tuple<int, bigint, text>);
+            // CQL: "create table cf (id int primary key, t ut1)";
             return schema({}, ks_name, "cf",
                 {{"id", int32_type}}, {}, {{"t", make_user_type()}}, {}, utf8_type);
         }).then([&e] {
@@ -800,6 +802,19 @@ SEASTAR_TEST_CASE(test_user_type) {
             assert_that(msg).is_rows()
                 .with_rows({
                      {int32_type->decompose(int32_t(1002)), long_type->decompose(int64_t(2002)), utf8_type->decompose(sstring("abc2"))},
+                });
+        }).then([&e] {
+            return e.execute_cql("insert into cf (id, t) values (2, (frozen<ut1>)(2001, 3001, 'abc4'));").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select t from cf where id = 2;");
+        }).then([&e, make_user_type] (shared_ptr<transport::messages::result_message> msg) {
+            auto ut = make_user_type();
+            auto ut_val = user_type_impl::native_type({boost::any(int32_t(2001)),
+                                                       boost::any(int64_t(3001)),
+                                                       boost::any(sstring("abc4"))});
+            assert_that(msg).is_rows()
+                .with_rows({
+                     {ut->decompose(ut_val)},
                 });
         });
     });

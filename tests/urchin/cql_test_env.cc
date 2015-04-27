@@ -149,6 +149,10 @@ public:
         });
     }
 
+    virtual database& local_db() override {
+        return _db->local();
+    }
+
     future<> start() {
         return _core_local.start();
     }
