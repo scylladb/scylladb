@@ -24,6 +24,9 @@
 
 #include "cql3/column_condition.hh"
 #include "unimplemented.hh"
+#include "lists.hh"
+#include "maps.hh"
+#include <boost/range/algorithm_ext/push_back.hpp>
 
 namespace cql3 {
 
@@ -83,38 +86,37 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
         throw exceptions::invalid_request_exception(sprint("Invalid element access syntax for non-collection column %s", receiver.name_as_text()));
     }
 
-    fail(unimplemented::cause::COLLECTIONS);
-#if 0
-            ColumnSpecification elementSpec, valueSpec;
-            switch ((((CollectionType)receiver.type).kind))
-            {
-                case LIST:
-                    elementSpec = Lists.indexSpecOf(receiver);
-                    valueSpec = Lists.valueSpecOf(receiver);
-                    break;
-                case MAP:
-                    elementSpec = Maps.keySpecOf(receiver);
-                    valueSpec = Maps.valueSpecOf(receiver);
-                    break;
-                case SET:
-                    throw new InvalidRequestException(String.format("Invalid element access syntax for set column %s", receiver.name));
-                default:
-                    throw new AssertionError();
-            }
-            if (operator == Operator.IN)
-            {
-                if (inValues == null)
-                    return ColumnCondition.inCondition(receiver, collectionElement.prepare(keyspace, elementSpec), inMarker.prepare(keyspace, valueSpec));
-                List<Term> terms = new ArrayList<>(inValues.size());
-                for (Term.Raw value : inValues)
-                    terms.add(value.prepare(keyspace, valueSpec));
-                return ColumnCondition.inCondition(receiver, collectionElement.prepare(keyspace, elementSpec), terms);
-            }
-            else
-            {
-                return ColumnCondition.condition(receiver, collectionElement.prepare(keyspace, elementSpec), value.prepare(keyspace, valueSpec), operator);
-            }
-#endif
+    shared_ptr<column_specification> element_spec, value_spec;
+    auto ctype = static_cast<collection_type_impl*>(receiver.type.get());
+    if (&ctype->_kind == &collection_type_impl::kind::list) {
+        element_spec = lists::index_spec_of(receiver.column_specification);
+        value_spec = lists::value_spec_of(receiver.column_specification);
+    } else if (&ctype->_kind == &collection_type_impl::kind::map) {
+        element_spec = maps::key_spec_of(*receiver.column_specification);
+        value_spec = maps::value_spec_of(*receiver.column_specification);
+    } else if (&ctype->_kind == &collection_type_impl::kind::set) {
+        throw exceptions::invalid_request_exception(sprint("Invalid element access syntax for set column %s", receiver.name()));
+    } else {
+        abort();
+    }
+
+    if (_op == operator_type::IN) {
+        if (_in_values.empty()) {
+            return column_condition::in_condition(receiver,
+                    _collection_element->prepare(db, keyspace, element_spec),
+                    _in_marker->prepare(db, keyspace, value_spec));
+        }
+        std::vector<shared_ptr<term>> terms;
+        terms.reserve(_in_values.size());
+        boost::push_back(terms, _in_values
+                                | boost::adaptors::transformed(std::bind(&term::raw::prepare, std::placeholders::_1, std::ref(db), std::ref(keyspace), value_spec)));
+        return column_condition::in_condition(receiver, _collection_element->prepare(db, keyspace, element_spec), terms);
+    } else {
+        return column_condition::condition(receiver,
+                _collection_element->prepare(db, keyspace, element_spec),
+                _value->prepare(db, keyspace, value_spec),
+                _op);
+    }
 }
 
 }
