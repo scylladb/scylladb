@@ -78,10 +78,7 @@ operation::addition::prepare(database& db, const sstring& keyspace, const column
     }
 
     if (&ctype->_kind == &collection_type_impl::kind::list) {
-        warn(unimplemented::cause::COLLECTIONS);
-        // FIXME:
-        // return new Lists.Appender(receiver, v);
-        throw exceptions::invalid_request_exception("unimplemented, bye");
+        return make_shared<lists::appender>(receiver, v);
     } else if (&ctype->_kind == &collection_type_impl::kind::set) {
         return make_shared<sets::adder>(receiver, v);
     } else if (&ctype->_kind == &collection_type_impl::kind::map) {
