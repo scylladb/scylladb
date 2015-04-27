@@ -14,24 +14,34 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.locator;
 
-import java.net.InetAddress;
+#pragma once
+
+#include "core/sstring.hh"
+#include "gms/inet_address.hh"
+#include "locator/abstract_network_topology_snitch.hh"
+
+namespace locator {
+
+using inet_address = gms::inet_address;
 
 /**
  * A simple endpoint snitch implementation that assumes datacenter and rack information is encoded
  * in the 2nd and 3rd octets of the ip address, respectively.
  */
-public class RackInferringSnitch extends AbstractNetworkTopologySnitch
-{
-    public String getRack(InetAddress endpoint)
-    {
-        return Integer.toString(endpoint.getAddress()[2] & 0xFF, 10);
+class rack_inferring_snitch : public abstract_network_topology_snitch {
+public:
+    virtual sstring get_rack(inet_address endpoint) override {
+        return std::to_string((endpoint.raw_addr() >> 8) & 0xFF);
     }
 
-    public String getDatacenter(InetAddress endpoint)
-    {
-        return Integer.toString(endpoint.getAddress()[1] & 0xFF, 10);
+    virtual sstring get_datacenter(inet_address endpoint) override {
+        return std::to_string((endpoint.raw_addr() >> 16) & 0xFF);
     }
-}
+};
+
+} // namespace locator
