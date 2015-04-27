@@ -113,7 +113,7 @@ public:
         }
 #endif
     };
-#if 0
+
     /*
      * For prepend, we need to be able to generate unique but decreasing time
      * UUID, which is a bit challenging. To do that, given a time in milliseconds,
@@ -122,39 +122,21 @@ public:
      * do rely on the fact that the user will only provide decreasing
      * milliseconds timestamp for that purpose.
      */
-    private static class PrecisionTime
-    {
+private:
+    class precision_time {
+    public:
         // Our reference time (1 jan 2010, 00:00:00) in milliseconds.
-        private static final long REFERENCE_TIME = 1262304000000L;
-        private static final AtomicReference<PrecisionTime> last = new AtomicReference<PrecisionTime>(new PrecisionTime(Long.MAX_VALUE, 0));
+        static constexpr const db_clock::time_point REFERENCE_TIME{std::chrono::milliseconds(1262304000000)};
+    private:
+        static thread_local precision_time _last;
+    public:
+        db_clock::time_point millis;
+        int32_t nanos;
 
-        public final long millis;
-        public final int nanos;
+        static precision_time get_next(db_clock::time_point millis);
+    };
 
-        PrecisionTime(long millis, int nanos)
-        {
-            this.millis = millis;
-            this.nanos = nanos;
-        }
-
-        static PrecisionTime getNext(long millis)
-        {
-            while (true)
-            {
-                PrecisionTime current = last.get();
-
-                assert millis <= current.millis;
-                PrecisionTime next = millis < current.millis
-                    ? new PrecisionTime(millis, 9999)
-                    : new PrecisionTime(millis, Math.max(0, current.nanos - 1));
-
-                if (last.compareAndSet(current, next))
-                    return next;
-            }
-        }
-    }
-#endif
-
+public:
     class setter : public operation {
     public:
         setter(const column_definition& column, shared_ptr<term> t)

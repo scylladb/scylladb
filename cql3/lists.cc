@@ -199,6 +199,20 @@ lists::marker::bind(const query_options& options) {
     }
 #endif
 
+constexpr const db_clock::time_point lists::precision_time::REFERENCE_TIME;
+thread_local lists::precision_time lists::precision_time::_last = {db_clock::time_point::max(), 0};
+
+lists::precision_time
+lists::precision_time::get_next(db_clock::time_point millis) {
+    // FIXME: and if time goes backwards?
+    assert(millis <= _last.millis);
+    auto next =  millis < _last.millis
+            ? precision_time{millis, 9999}
+            : precision_time{millis, std::max(0, _last.nanos - 1)};
+    _last = next;
+    return next;
+}
+
 void
 lists::setter::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
     tombstone ts;
