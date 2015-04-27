@@ -312,6 +312,8 @@ private:
         }
     }
 public:
+    using element_type = T;
+
     shared_ptr() noexcept = default;
     shared_ptr(std::nullptr_t) noexcept : shared_ptr() {}
     shared_ptr(const shared_ptr& x) noexcept
