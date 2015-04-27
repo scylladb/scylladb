@@ -37,7 +37,13 @@ public:
 
     // Consume one cell (column name and value). Both are serialized, and need
     // to be deserialized according to the schema.
-    virtual void consume_cell(bytes_view col_name, bytes_view value, uint64_t timestamp) = 0;
+    // When a cell is set with an expiration time, "ttl" is the time to live
+    // (in seconds) originally set for this cell, and "expiration" is the
+    // absolute time (in seconds since the UNIX epoch) when this cell will
+    // expire. Typical cells, not set to expire, will get expiration = 0.
+    virtual void consume_cell(bytes_view col_name, bytes_view value,
+            uint64_t timestamp,
+            uint32_t ttl, uint32_t expiration) = 0;
 
     // Consume one range tombstone.
     virtual void consume_range_tombstone(

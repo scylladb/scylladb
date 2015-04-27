@@ -40,6 +40,9 @@ private:
         ATOM_START_2,
         ATOM_NAME_BYTES,
         ATOM_MASK,
+        EXPIRING_CELL,
+        EXPIRING_CELL_2,
+        EXPIRING_CELL_3,
         CELL,
         CELL_2,
         CELL_VALUE_BYTES,
@@ -57,7 +60,8 @@ private:
     static bool non_consuming(state s, prestate ps) {
         return (((s == state::DELETION_TIME_3)
                 || (s == state::CELL_VALUE_BYTES_2)
-                || (s == state::ATOM_START_2)) && (ps == prestate::NONE));
+                || (s == state::ATOM_START_2)
+                || (s == state::EXPIRING_CELL_3)) && (ps == prestate::NONE));
     }
     // state for non-NONE prestates
     uint32_t _pos;
@@ -77,6 +81,8 @@ private:
 
     temporary_buffer<char> _key;
     temporary_buffer<char> _val;
+
+    uint32_t _ttl, _expiration;
 
     static inline bytes_view to_bytes_view(temporary_buffer<char>& b) {
         // The sstable code works with char, our "bytes_view" works with
@@ -330,19 +336,36 @@ public:
                     COUNTER_UPDATE_MASK = 0x08,
                     RANGE_TOMBSTONE_MASK = 0x10,
                 };
-                if ((mask
-                        & (RANGE_TOMBSTONE_MASK | COUNTER_MASK | EXPIRATION_MASK))
-                        == 0) {
-                    // read regular cell:
-                    _state = state::CELL;
-                } else if(mask & RANGE_TOMBSTONE_MASK) {
+                if (mask & RANGE_TOMBSTONE_MASK) {
                     _state = state::RANGE_TOMBSTONE;
+                } else if (mask & COUNTER_MASK) {
+                    throw malformed_sstable_exception("FIXME COUNTER_MASK");
+                } else if (mask & EXPIRATION_MASK) {
+                    _state = state::EXPIRING_CELL;
                 } else {
-                    // continue here. see sstable data file format document
-                    throw malformed_sstable_exception("FIXME misc cell types");
+                    assert((mask & (DELETION_MASK | COUNTER_UPDATE_MASK)) == 0); // FIXME
+                    _ttl = _expiration = 0;
+                    _state = state::CELL;
                 }
                 break;
             }
+            case state::EXPIRING_CELL:
+                if (data.size() >= sizeof(uint32_t) + sizeof(uint32_t)) {
+                    _ttl = consume_be<uint32_t>(data);
+                    _expiration = consume_be<uint32_t>(data);
+                    _state = state::CELL;
+                } else {
+                    read_32(data, state::EXPIRING_CELL_2);
+                }
+                break;
+            case state::EXPIRING_CELL_2:
+                _ttl = _u32;
+                read_32(data, state::EXPIRING_CELL_3);
+                break;
+            case state::EXPIRING_CELL_3:
+                _expiration = _u32;
+                _state = state::CELL;
+                break;
             case state::CELL:
                 if (data.size() >= sizeof(uint64_t) + sizeof(uint32_t)) {
                     _u64 = consume_be<uint64_t>(data);
@@ -364,7 +387,7 @@ public:
                     data.trim_front(_u32);
                     // finally pass it to the consumer:
                     _consumer.consume_cell(to_bytes_view(_key),
-                            to_bytes_view(_val), _u64);
+                            to_bytes_view(_val), _u64, _ttl, _expiration);
                     // after calling the consume function, we can release the
                     // buffers we held for it.
                     _key.release();
@@ -384,7 +407,7 @@ public:
                 break;
             case state::CELL_VALUE_BYTES_2:
                 _consumer.consume_cell(to_bytes_view(_key),
-                        to_bytes_view(_val), _u64);
+                        to_bytes_view(_val), _u64, _ttl, _expiration);
                 // after calling the consume function, we can release the
                 // buffers we held for it.
                 _key.release();

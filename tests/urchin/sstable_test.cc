@@ -386,7 +386,10 @@ public:
         count_row_start++;
     }
 
-    virtual void consume_cell(bytes_view col_name, bytes_view value, uint64_t timestamp) override {
+    virtual void consume_cell(bytes_view col_name, bytes_view value,
+            uint64_t timestamp, uint32_t ttl, uint32_t expiration) override {
+        BOOST_REQUIRE(ttl == 0);
+        BOOST_REQUIRE(expiration == 0);
         switch (count_cell) {
         case 0:
             // The silly "cql marker" column
@@ -414,6 +417,7 @@ public:
         }
         count_cell++;
     }
+
     virtual void consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
@@ -491,7 +495,8 @@ public:
     virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
         count_row_start++;
     }
-    virtual void consume_cell(bytes_view col_name, bytes_view value, uint64_t timestamp) override {
+    virtual void consume_cell(bytes_view col_name, bytes_view value,
+            uint64_t timestamp, uint32_t ttl, uint32_t expiration) override {
         count_cell++;
     }
     virtual void consume_row_end() override {
@@ -560,6 +565,58 @@ SEASTAR_TEST_CASE(read_set) {
                 BOOST_REQUIRE(c.count_cell == 3);
                 BOOST_REQUIRE(c.count_range_tombstone == 1);
                return make_ready_future<>();
+            });
+        });
+    });
+}
+
+class ttl_row_consumer : public count_row_consumer {
+public:
+    const uint64_t desired_timestamp;
+    ttl_row_consumer(uint64_t t) : desired_timestamp(t) { }
+    virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
+        count_row_consumer::consume_row_start(key, deltime);
+        BOOST_REQUIRE(key == as_bytes("nadav"));
+        BOOST_REQUIRE(deltime.local_deletion_time == (uint32_t)std::numeric_limits<int32_t>::max());
+        BOOST_REQUIRE(deltime.marked_for_delete_at == (uint64_t)std::numeric_limits<int64_t>::min());
+    }
+
+    virtual void consume_cell(bytes_view col_name, bytes_view value,
+            uint64_t timestamp, uint32_t ttl, uint32_t expiration) override {
+        switch (count_cell) {
+        case 0:
+            // The silly "cql row marker" cell
+            BOOST_REQUIRE(col_name.size() == 3 && col_name[0] == 0 && col_name[1] == 0 && col_name[2] == 0);
+            BOOST_REQUIRE(value.size() == 0);
+            BOOST_REQUIRE(timestamp == desired_timestamp);
+            BOOST_REQUIRE(ttl == 3600);
+            BOOST_REQUIRE(expiration == 1430154618);
+            break;
+        case 1:
+            BOOST_REQUIRE(col_name.size() == 6 && col_name[0] == 0 &&
+                    col_name[1] == 3 && col_name[2] == 'a' &&
+                    col_name[3] == 'g' && col_name[4] == 'e' &&
+                    col_name[5] == '\0');
+            BOOST_REQUIRE(value.size() == 4 && value[0] == 0 && value[1] == 0
+                    && value[2] == 0 && value[3] == 40);
+            BOOST_REQUIRE(timestamp == desired_timestamp);
+            BOOST_REQUIRE(ttl == 3600);
+            BOOST_REQUIRE(expiration == 1430154618);
+            break;
+        }
+        count_row_consumer::consume_cell(col_name, value, timestamp, ttl, expiration);
+    }
+};
+
+SEASTAR_TEST_CASE(ttl_read) {
+    return reusable_sst("tests/urchin/sstables/ttl", 1).then([] (auto sstp) {
+        return do_with(ttl_row_consumer(1430151018675502), [sstp] (auto& c) {
+            return sstp->data_consume_rows(c).then([sstp, &c] {
+                BOOST_REQUIRE(c.count_row_start == 1);
+                BOOST_REQUIRE(c.count_cell == 2);
+                BOOST_REQUIRE(c.count_row_end == 1);
+                BOOST_REQUIRE(c.count_range_tombstone == 0);
+                return make_ready_future<>();
             });
         });
     });
