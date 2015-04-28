@@ -37,11 +37,12 @@
 
 namespace utils {
 
-namespace murmur_hash
-{
-    uint32_t hash32(bytes_view data, int32_t seed);
-    uint64_t hash2_64(bytes_view key, uint64_t seed);
-    void hash3_x64_128(bytes_view key, uint64_t seed, std::array<uint64_t,2> &result);
-};
+namespace murmur_hash {
+
+uint32_t hash32(bytes_view data, int32_t seed);
+uint64_t hash2_64(bytes_view key, uint64_t seed);
+void hash3_x64_128(bytes_view key, uint64_t seed, std::array<uint64_t, 2>& result);
+
+} // namespace murmur_hash
 
 } // namespace utils
