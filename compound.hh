@@ -66,8 +66,8 @@ public:
      * Format:
      *   <len(value1)><value1><len(value2)><value2>...<len(value_n-1)><value_n-1>(len(value_n))?<value_n>
      *
-     * The value corresponding to the last component of types doesn't have its length encoded,
-     * its length is deduced from the input range.
+     * For non-prefixable compounds, the value corresponding to the last component of types doesn't
+     * have its length encoded, its length is deduced from the input range.
      *
      * serialize_value() and serialize_optionals() for single element rely on the fact that for a single-element
      * compounds their serialized form is equal to the serialized form of the component.
@@ -84,7 +84,7 @@ public:
         for (auto&& wrapped : values) {
             auto&& val = value_traits<Wrapped>::unwrap(wrapped);
             assert(val.size() <= std::numeric_limits<uint16_t>::max());
-            if (--n_left) {
+            if (--n_left || AllowPrefixes == allow_prefixes::yes) {
                 write<uint16_t>(out, uint16_t(val.size()));
             }
             out = std::copy(val.begin(), val.end(), out);
@@ -97,7 +97,7 @@ public:
         for (auto&& wrapped : values) {
             auto&& val = value_traits<Wrapped>::unwrap(wrapped);
             assert(val.size() <= std::numeric_limits<uint16_t>::max());
-            if (--n_left) {
+            if (--n_left || AllowPrefixes == allow_prefixes::yes) {
                 len += sizeof(uint16_t);
             }
             len += val.size();
@@ -107,21 +107,20 @@ public:
     bytes serialize_single(bytes&& v) {
         if (AllowPrefixes == allow_prefixes::no) {
             assert(_types.size() == 1);
+            return std::move(v);
         } else {
-            if (_types.size() > 1) {
-                std::vector<bytes> vec;
-                vec.reserve(1);
-                vec.emplace_back(std::move(v));
-                return ::serialize_value(*this, vec);
-            }
+            // FIXME: Optimize
+            std::vector<bytes> vec;
+            vec.reserve(1);
+            vec.emplace_back(std::move(v));
+            return ::serialize_value(*this, vec);
         }
-        return std::move(v);
     }
     bytes serialize_value(const std::vector<bytes>& values) {
         return ::serialize_value(*this, values);
     }
     bytes serialize_value(std::vector<bytes>&& values) {
-        if (_types.size() == 1 && values.size() == 1) {
+        if (AllowPrefixes == allow_prefixes::no && _types.size() == 1 && values.size() == 1) {
             return std::move(values[0]);
         }
         return ::serialize_value(*this, values);
@@ -130,7 +129,7 @@ public:
         return ::serialize_value(*this, values);
     }
     bytes serialize_optionals(std::vector<bytes_opt>&& values) {
-        if (_types.size() == 1 && values.size() == 1) {
+        if (AllowPrefixes == allow_prefixes::no && _types.size() == 1 && values.size() == 1) {
             assert(values[0]);
             return std::move(*values[0]);
         }
@@ -164,18 +163,19 @@ public:
                 _v = bytes_view(nullptr, 0);
                 return;
             }
-            if (_v.empty()) {
-                if (AllowPrefixes == allow_prefixes::yes) {
-                    _v = bytes_view(nullptr, 0);
-                    return;
-                } else {
-                    throw marshal_exception();
-                }
-            }
+            --_types_left;
             uint16_t len;
-            if (_types_left == 1) {
+            if (_types_left == 0 && AllowPrefixes == allow_prefixes::no) {
                 len = _v.size();
             } else {
+                if (_v.empty()) {
+                    if (AllowPrefixes == allow_prefixes::yes) {
+                        _v = bytes_view(nullptr, 0);
+                        return;
+                    } else {
+                        throw marshal_exception();
+                    }
+                }
                 len = read_simple<uint16_t>(_v);
                 if (_v.size() < len) {
                     throw marshal_exception();
@@ -191,7 +191,6 @@ public:
         }
         iterator(end_iterator_tag, const bytes_view& v) : _v(nullptr, 0) {}
         iterator& operator++() {
-            --_types_left;
             read_current();
             return *this;
         }
