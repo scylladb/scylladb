@@ -111,6 +111,7 @@ public:
     }
 
     // begin() and end() return iterators over components of this compound. The iterator yields a bytes_view to the component.
+    // The iterators satisfy InputIterator concept.
     auto begin(const schema& s) const {
         return get_compound_type(s)->begin(_bytes);
     }

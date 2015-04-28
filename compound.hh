@@ -153,7 +153,7 @@ public:
     bytes decompose_value(const value_type& values) {
         return ::serialize_value(*this, values);
     }
-    class iterator : public std::iterator<std::forward_iterator_tag, bytes_view> {
+    class iterator : public std::iterator<std::input_iterator_tag, bytes_view> {
     private:
         ssize_t _types_left;
         bytes_view _v;
