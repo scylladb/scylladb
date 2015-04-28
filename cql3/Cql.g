@@ -1152,15 +1152,13 @@ columnCondition[conditions_type& conditions]
             ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::simple_in_condition(values)); }
             | marker=inMarker { conditions.emplace_back(key, cql3::column_condition::raw::simple_in_condition(marker)); }
             )
-#if 0
         | '[' element=term ']'
-            ( op=relationType t=term { conditions.add(Pair.create(key, ColumnCondition.Raw.collectionCondition(t, element, *op))); }
+            ( op=relationType t=term { conditions.emplace_back(key, cql3::column_condition::raw::collection_condition(t, element, *op)); }
             | K_IN
-                ( values=singleColumnInValues { conditions.add(Pair.create(key, ColumnCondition.Raw.collectionInCondition(element, values))); }
-                | marker=inMarker { conditions.add(Pair.create(key, ColumnCondition.Raw.collectionInCondition(element, marker))); }
+                ( values=singleColumnInValues { conditions.emplace_back(key, cql3::column_condition::raw::collection_in_condition(element, values)); }
+                | marker=inMarker { conditions.emplace_back(key, cql3::column_condition::raw::collection_in_condition(element, marker)); }
                 )
             )
-#endif
         )
     ;
 
