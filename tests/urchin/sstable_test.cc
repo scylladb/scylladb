@@ -11,7 +11,9 @@
 #include "core/align.hh"
 #include "core/do_with.hh"
 #include "sstables/sstables.hh"
+#include "sstables/key.hh"
 #include "tests/test-utils.hh"
+#include "schema.hh"
 #include <memory>
 
 using namespace sstables;
@@ -68,6 +70,10 @@ public:
         return _sst->_components;
     }
 
+    template <typename T>
+    int binary_search(const T& entries, const key& sk) {
+        return _sst->binary_search(entries, sk);
+    }
 };
 }
 
@@ -773,7 +779,7 @@ SEASTAR_TEST_CASE(find_key_map) {
         kk.push_back(map);
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(summary.binary_search(key) == 0);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == 0);
     });
 }
 
@@ -793,7 +799,7 @@ SEASTAR_TEST_CASE(find_key_set) {
         kk.push_back(set);
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(summary.binary_search(key) == 0);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == 0);
     });
 }
 
@@ -813,7 +819,7 @@ SEASTAR_TEST_CASE(find_key_list) {
         kk.push_back(list);
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(summary.binary_search(key) == 0);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == 0);
     });
 }
 
@@ -831,7 +837,7 @@ SEASTAR_TEST_CASE(find_key_composite) {
         kk.push_back(boost::any(b2));
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(summary.binary_search(key) == 0);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == 0);
     });
 }
 
@@ -842,7 +848,7 @@ SEASTAR_TEST_CASE(all_in_place) {
         int idx = 0;
         for (auto& e: summary.entries) {
             auto key = sstables::key::from_bytes(e.key);
-            BOOST_REQUIRE(summary.binary_search(key) == idx++);
+            BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == idx++);
         }
     });
 }
@@ -861,6 +867,6 @@ SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
         // (result + 1) * -1 -1 = 0
-        BOOST_REQUIRE(summary.binary_search(key) == -2);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == -2);
     });
 }

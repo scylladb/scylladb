@@ -19,6 +19,7 @@
 #include "row.hh"
 
 namespace sstables {
+class key;
 
 class malformed_sstable_exception : public std::exception {
     sstring _msg;
@@ -118,7 +119,8 @@ private:
     // for iteration through all the rows.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len);
 
-
+    template <typename T>
+    int binary_search(const T& entries, const key& sk);
 public:
     // Read one or few rows at the given byte range from the data file,
     // feeding them into the consumer. This function reads the entire given
