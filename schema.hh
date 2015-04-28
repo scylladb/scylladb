@@ -59,10 +59,6 @@ public:
     }
 };
 
-struct thrift_schema {
-    shared_ptr<abstract_type> partition_key_type;
-};
-
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
@@ -91,7 +87,6 @@ private:
     lw_shared_ptr<compound_type<allow_prefixes::no>> _partition_key_type;
     lw_shared_ptr<compound_type<allow_prefixes::no>> _clustering_key_type;
     lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_prefix_type;
-    thrift_schema _thrift;
 public:
     struct column {
         bytes name;

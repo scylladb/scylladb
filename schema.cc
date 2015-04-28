@@ -42,14 +42,6 @@ void schema::rebuild() {
     _clustering_key_type = make_lw_shared<compound_type<>>(get_column_types(_raw._clustering_key));
     _clustering_key_prefix_type = make_lw_shared(_clustering_key_type->as_prefix());
 
-    _thrift = thrift_schema();
-    if (_raw._partition_key.size() == 1) {
-        _thrift.partition_key_type = _raw._partition_key[0].type;
-    } else {
-        // TODO: the type should be composite_type
-        warn(unimplemented::cause::LEGACY_COMPOSITE_KEYS);
-    }
-
     _columns_by_name.clear();
     _regular_columns_by_name.clear();
 
