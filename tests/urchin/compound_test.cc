@@ -146,3 +146,15 @@ BOOST_AUTO_TEST_CASE(test_conversion_methods_for_non_singular_compound) {
     do_test_conversion_methods_for_non_singular_compound<allow_prefixes::yes>();
     do_test_conversion_methods_for_non_singular_compound<allow_prefixes::no>();
 }
+
+BOOST_AUTO_TEST_CASE(test_component_iterator_post_incrementation) {
+    compound_type<allow_prefixes::no> t({bytes_type, bytes_type, bytes_type});
+
+    auto packed = t.serialize_value(to_bytes_vec({"el1", "el2", "el3"}));
+    auto i = t.begin(packed);
+    auto end = t.end(packed);
+    BOOST_REQUIRE_EQUAL(to_bytes("el1"), *i++);
+    BOOST_REQUIRE_EQUAL(to_bytes("el2"), *i++);
+    BOOST_REQUIRE_EQUAL(to_bytes("el3"), *i++);
+    BOOST_REQUIRE(i == end);
+}

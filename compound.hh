@@ -198,6 +198,11 @@ public:
             read_current();
             return *this;
         }
+        iterator operator++(int) {
+            iterator i(*this);
+            ++(*this);
+            return i;
+        }
         const value_type& operator*() const { return _current; }
         bool operator!=(const iterator& i) const { return _v.begin() != i._v.begin(); }
         bool operator==(const iterator& i) const { return _v.begin() == i._v.begin(); }
