@@ -27,6 +27,9 @@
 #include "unimplemented.hh"
 #include "query_result_merger.hh"
 
+#include <boost/range/algorithm_ext/push_back.hpp>
+#include <boost/range/adaptor/transformed.hpp>
+
 namespace service {
 
 #if 0
@@ -1206,6 +1209,31 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, db::consistency_lev
             return make_foreign(std::move(f));
         });
     }).finally([cmd] {});
+}
+
+future<foreign_ptr<lw_shared_ptr<query::result_set>>>
+storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const dht::decorated_key& key)
+{
+    auto shard = _db.local().shard_of(key._token);
+    return _db.invoke_on(shard, [ks_name, cf_name, key] (database& db) {
+        auto schema = db.find_schema(ks_name, cf_name);
+        std::vector<query::clustering_range> row_ranges = {query::clustering_range::make_open_ended_both_sides()};
+        std::vector<column_id> regular_cols;
+        boost::range::push_back(regular_cols, schema->regular_columns() | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
+        auto opts = query::partition_slice::option_set::of<
+            query::partition_slice::option::send_partition_key>();
+        query::partition_slice slice{row_ranges, {}, regular_cols, opts};
+        std::vector<query::partition_range> pr = {query::partition_range::make_open_ended_both_sides()};
+        auto id = db.find_uuid(ks_name, cf_name);
+        auto cmd = make_lw_shared<query::read_command>(id, pr, slice, std::numeric_limits<uint32_t>::max());
+        return db.query(*cmd).then([key, schema, slice](lw_shared_ptr<query::result>&& result) {
+            query::result_set_builder builder{schema};
+            bytes_ostream w(result->buf());
+            query::result_view view(w.linearize());
+            view.consume(slice, builder);
+            return make_foreign(builder.build());
+        }).finally([cmd] {});
+    });
 }
 
 #if 0
