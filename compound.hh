@@ -58,6 +58,10 @@ public:
         return _types;
     }
 
+    bool is_singular() const {
+        return _types.size() == 1;
+    }
+
     prefix_type as_prefix() {
         return prefix_type(_types);
     }
