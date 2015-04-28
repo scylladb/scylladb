@@ -27,6 +27,7 @@
 #include "cql3/restrictions/abstract_restriction.hh"
 #include "cql3/restrictions/term_slice.hh"
 #include "cql3/term.hh"
+#include "cql3/abstract_marker.hh"
 #include "core/shared_ptr.hh"
 #include "schema.hh"
 #include "to_string.hh"
@@ -82,39 +83,7 @@ public:
     class EQ;
     class IN;
     class IN_with_values;
-
-#if 0
-    public static class InWithMarker extends IN
-    {
-        protected final AbstractMarker marker;
-
-        public InWithMarker(ColumnDefinition columnDef, AbstractMarker marker)
-        {
-            super(columnDef);
-            this.marker = marker;
-        }
-
-        @Override
-        public boolean usesFunction(String ksName, String functionName)
-        {
-            return false;
-        }
-
-        public List<ByteBuffer> values(QueryOptions options) throws InvalidRequestException
-        {
-            Term.MultiItemTerminal lval = (Term.MultiItemTerminal) marker.bind(options);
-            if (lval == null)
-                throw new InvalidRequestException("Invalid null value for IN restriction");
-            return lval.getElements();
-        }
-
-        @Override
-        public String toString()
-        {
-            return "IN ?";
-        }
-    }
-#endif
+    class IN_with_marker;
 
     class slice;
     class contains;
@@ -212,6 +181,31 @@ public:
 
     virtual sstring to_string() override {
         return sprint("IN(%s)", ::to_string(_values));
+    }
+};
+
+class single_column_restriction::IN_with_marker : public IN {
+public:
+    shared_ptr<abstract_marker> _marker;
+public:
+    IN_with_marker(const column_definition& column_def, shared_ptr<abstract_marker> marker)
+            : IN(column_def), _marker(std::move(marker)) {
+    }
+
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+        return false;
+    }
+
+    virtual std::vector<bytes_opt> values(const query_options& options) override {
+        auto&& lval = dynamic_pointer_cast<multi_item_terminal>(_marker->bind(options));
+        if (!lval) {
+            throw exceptions::invalid_request_exception("Invalid null value for IN restriction");
+        }
+        return lval->get_elements();
+    }
+
+    virtual sstring to_string() override {
+        return "IN ?";
     }
 };
 
