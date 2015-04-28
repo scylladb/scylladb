@@ -23,7 +23,13 @@
 
 #include "utils/UUID_gen.hh"
 #include "legacy_schema_tables.hh"
+
+#include "dht/i_partitioner.hh"
 #include "system_keyspace.hh"
+
+#include "query-result-set.hh"
+
+#include "core/do_with.hh"
 
 using namespace db::system_keyspace;
 
@@ -388,38 +394,45 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
             mutation.add(partition.cf);
         }
     }
+#endif
 
-    private static Map<DecoratedKey, ColumnFamily> readSchemaForKeyspaces(String schemaTableName, Set<String> keyspaceNames)
+    future<schema_result>
+    read_schema_for_keyspaces(service::storage_proxy& proxy, const sstring& schema_table_name, const std::set<sstring>& keyspace_names)
     {
-        Map<DecoratedKey, ColumnFamily> schema = new HashMap<>();
-
-        for (String keyspaceName : keyspaceNames)
-        {
-            Row schemaEntity = readSchemaPartitionForKeyspace(schemaTableName, keyspaceName);
-            if (schemaEntity.cf != null)
-                schema.put(schemaEntity.key, schemaEntity.cf);
-        }
-
-        return schema;
+        auto map = [&proxy, schema_table_name] (sstring keyspace_name) { return read_schema_partition_for_keyspace(proxy, schema_table_name, keyspace_name); };
+        auto insert = [] (schema_result&& schema, auto&& schema_entity) {
+            if (schema_entity.second) {
+                schema.insert(std::move(schema_entity));
+            }
+            return std::move(schema);
+        };
+        return map_reduce(keyspace_names.begin(), keyspace_names.end(), map, schema_result(), insert);
     }
 
+#if 0
     private static ByteBuffer getSchemaKSKey(String ksName)
     {
         return AsciiType.instance.fromString(ksName);
     }
+#endif
 
-    private static Row readSchemaPartitionForKeyspace(String schemaTableName, String keyspaceName)
+    future<std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>>
+    read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
     {
-        DecoratedKey keyspaceKey = StorageService.getPartitioner().decorateKey(getSchemaKSKey(keyspaceName));
-        return readSchemaPartitionForKeyspace(schemaTableName, keyspaceKey);
+        auto schema = proxy.get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
+        auto keyspace_key = dht::global_partitioner().decorate_key(partition_key::from_single_value(*schema, to_bytes(keyspace_name)));
+        return read_schema_partition_for_keyspace(proxy, schema_table_name, keyspace_key);
     }
 
-    private static Row readSchemaPartitionForKeyspace(String schemaTableName, DecoratedKey keyspaceKey)
+    future<std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>>
+    read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const dht::decorated_key& keyspace_key)
     {
-        QueryFilter filter = QueryFilter.getIdentityFilter(keyspaceKey, schemaTableName, System.currentTimeMillis());
-        return new Row(keyspaceKey, getSchemaCFS(schemaTableName).getColumnFamily(filter));
+        return proxy.query_local(system_keyspace::NAME, schema_table_name, keyspace_key).then([keyspace_key] (auto&& rs) {
+            return std::make_pair(keyspace_key, std::move(rs));
+        });
     }
 
+#if 0
     private static Row readSchemaPartitionForTable(String schemaTableName, String keyspaceName, String tableName)
     {
         DecoratedKey key = StorageService.getPartitioner().decorateKey(getSchemaKSKey(keyspaceName));
@@ -461,90 +474,116 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 
     future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush)
     {
-#if 0
+        schema_ptr s = keyspaces();
         // compare before/after schemas of the affected keyspaces only
-        Set<String> keyspaces = new HashSet<>(mutations.size());
-        for (Mutation mutation : mutations)
-            keyspaces.add(ByteBufferUtil.string(mutation.key()));
+        std::set<sstring> keyspaces;
+        for (auto&& mutation : mutations) {
+            keyspaces.emplace(boost::any_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0))));
+        }
 
         // current state of the schema
-        Map<DecoratedKey, ColumnFamily> oldKeyspaces = readSchemaForKeyspaces(KEYSPACES, keyspaces);
-        Map<DecoratedKey, ColumnFamily> oldColumnFamilies = readSchemaForKeyspaces(COLUMNFAMILIES, keyspaces);
-        Map<DecoratedKey, ColumnFamily> oldTypes = readSchemaForKeyspaces(USERTYPES, keyspaces);
-        Map<DecoratedKey, ColumnFamily> oldFunctions = readSchemaForKeyspaces(FUNCTIONS, keyspaces);
-        Map<DecoratedKey, ColumnFamily> oldAggregates = readSchemaForKeyspaces(AGGREGATES, keyspaces);
-#endif
-        return proxy.mutate_locally(std::move(mutations)).then([] {
+        auto old_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
+        auto old_column_families = read_schema_for_keyspaces(proxy, COLUMNFAMILIES, keyspaces);
+        auto old_types = read_schema_for_keyspaces(proxy, USERTYPES, keyspaces);
+        auto old_functions = read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
+        auto old_aggregates = read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
+
+        return when_all(std::move(old_keyspaces), std::move(old_column_families), std::move(old_types),
+                        std::move(old_functions), std::move(old_aggregates)).then([&proxy, keyspaces, mutations = std::move(mutations)] (auto&& old_results)  mutable {
+            return proxy.mutate_locally(std::move(mutations)).then([&proxy, keyspaces, old_results = std::move(old_results)] () mutable {
 #if 0
-        if (doFlush)
-            flushSchemaTables();
-
-        // with new data applied
-        Map<DecoratedKey, ColumnFamily> newKeyspaces = readSchemaForKeyspaces(KEYSPACES, keyspaces);
-        Map<DecoratedKey, ColumnFamily> newColumnFamilies = readSchemaForKeyspaces(COLUMNFAMILIES, keyspaces);
-        Map<DecoratedKey, ColumnFamily> newTypes = readSchemaForKeyspaces(USERTYPES, keyspaces);
-        Map<DecoratedKey, ColumnFamily> newFunctions = readSchemaForKeyspaces(FUNCTIONS, keyspaces);
-        Map<DecoratedKey, ColumnFamily> newAggregates = readSchemaForKeyspaces(AGGREGATES, keyspaces);
-
-        Set<String> keyspacesToDrop = mergeKeyspaces(oldKeyspaces, newKeyspaces);
-        mergeTables(oldColumnFamilies, newColumnFamilies);
-        mergeTypes(oldTypes, newTypes);
-        mergeFunctions(oldFunctions, newFunctions);
-        mergeAggregates(oldAggregates, newAggregates);
-
-        // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
-        for (String keyspaceToDrop : keyspacesToDrop)
-            Schema.instance.dropKeyspace(keyspaceToDrop);
+                if (doFlush)
+                    flushSchemaTables();
 #endif
-            return make_ready_future<>();
+                // with new data applied
+                auto new_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
+                auto new_column_families = read_schema_for_keyspaces(proxy, COLUMNFAMILIES, keyspaces);
+                auto new_types = read_schema_for_keyspaces(proxy, USERTYPES, keyspaces);
+                auto new_functions = read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
+                auto new_aggregates = read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
+
+                // FIXME: Make the update atomic like in Origin.
+                return when_all(std::move(new_keyspaces), std::move(new_column_families), std::move(new_types),
+                        std::move(new_functions), std::move(new_aggregates)).then([&proxy, old_results = std::move(old_results)] (auto&& new_results) mutable {
+                    auto old_keyspaces = std::move(std::get<schema_result>(std::get<0>(old_results).get()));
+                    auto old_column_families = std::move(std::get<schema_result>(std::get<1>(old_results).get()));
+                    auto old_types = std::move(std::get<schema_result>(std::get<2>(old_results).get()));
+                    auto old_functions = std::move(std::get<schema_result>(std::get<3>(old_results).get()));
+                    auto old_aggregates = std::move(std::get<schema_result>(std::get<4>(old_results).get()));
+
+                    auto new_keyspaces = std::move(std::get<schema_result>(std::get<0>(new_results).get()));
+                    auto new_column_families = std::move(std::get<schema_result>(std::get<1>(new_results).get()));
+                    auto new_types = std::move(std::get<schema_result>(std::get<2>(new_results).get()));
+                    auto new_functions = std::move(std::get<schema_result>(std::get<3>(new_results).get()));
+                    auto new_aggregates = std::move(std::get<schema_result>(std::get<4>(new_results).get()));
+
+                    auto keyspaces_to_drop = merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces));
+#if 0
+                    mergeTables(oldColumnFamilies, newColumnFamilies);
+                    mergeTypes(oldTypes, newTypes);
+                    mergeFunctions(oldFunctions, newFunctions);
+                    mergeAggregates(oldAggregates, newAggregates);
+#endif
+                    return when_all(std::move(keyspaces_to_drop)).then([proxy] (auto&& results) mutable {
+                        auto keyspaces_to_drop = std::move(std::get<std::set<sstring>>(std::get<0>(results).get()));
+
+                        return proxy.get_db().invoke_on_all([keyspaces_to_drop = std::move(keyspaces_to_drop)] (database& db) {
+                            // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
+                            for (auto&& keyspace_to_drop : keyspaces_to_drop) {
+                                db.drop_keyspace(keyspace_to_drop);
+                            }
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    future<std::set<sstring>> merge_keyspaces(service::storage_proxy& proxy, schema_result&& before, schema_result&& after)
+    {
+        std::vector<std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>> created;
+        std::vector<sstring> altered;
+        std::set<sstring> dropped;
+
+        for (auto&& right : after) {
+            auto left = before.find(right.first);
+            if (left != before.end()) {
+                schema_ptr s = keyspaces();
+                auto b = left->first._key.get_component(*s, 0);
+                sstring keyspace_name = boost::any_cast<sstring>(utf8_type->deserialize(b));
+                auto&& pre  = left->second;
+                auto&& post = right.second;
+                if (!pre->empty() && !post->empty()) {
+                    altered.emplace_back(keyspace_name);
+                } else if (!pre->empty()) {
+                    dropped.emplace(keyspace_name);
+                } else if (!post->empty()) { // a (re)created keyspace
+                    created.emplace_back(std::move(right));
+                }
+            } else {
+                if (!right.second->empty()) {
+                    created.emplace_back(std::move(right));
+                }
+            }
+        }
+        return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
+            return proxy.get_db().invoke_on_all([&created, altered = std::move(altered)] (database& db) {
+                for (auto&& kv : created) {
+                    auto ksm = create_keyspace_from_schema_partition(kv);
+                    keyspace k;
+                    k.create_replication_strategy(*ksm);
+                    db.add_keyspace(ksm->name, std::move(k));
+                }
+                for (auto&& name : altered) {
+                    db.update_keyspace(name);
+                }
+            });
+        }).then([dropped = std::move(dropped)] () {
+            return make_ready_future<std::set<sstring>>(dropped);
         });
     }
 
 #if 0
-    private static Set<String> mergeKeyspaces(Map<DecoratedKey, ColumnFamily> before, Map<DecoratedKey, ColumnFamily> after)
-    {
-        List<Row> created = new ArrayList<>();
-        List<String> altered = new ArrayList<>();
-        Set<String> dropped = new HashSet<>();
-
-        /*
-         * - we don't care about entriesOnlyOnLeft() or entriesInCommon(), because only the changes are of interest to us
-         * - of all entriesOnlyOnRight(), we only care about ones that have live columns; it's possible to have a ColumnFamily
-         *   there that only has the top-level deletion, if:
-         *      a) a pushed DROP KEYSPACE change for a keyspace hadn't ever made it to this node in the first place
-         *      b) a pulled dropped keyspace that got dropped before it could find a way to this node
-         * - of entriesDiffering(), we don't care about the scenario where both pre and post-values have zero live columns:
-         *   that means that a keyspace had been recreated and dropped, and the recreated keyspace had never found a way
-         *   to this node
-         */
-        MapDifference<DecoratedKey, ColumnFamily> diff = Maps.difference(before, after);
-
-        for (Map.Entry<DecoratedKey, ColumnFamily> entry : diff.entriesOnlyOnRight().entrySet())
-            if (entry.getValue().hasColumns())
-                created.add(new Row(entry.getKey(), entry.getValue()));
-
-        for (Map.Entry<DecoratedKey, MapDifference.ValueDifference<ColumnFamily>> entry : diff.entriesDiffering().entrySet())
-        {
-            String keyspaceName = AsciiType.instance.compose(entry.getKey().getKey());
-
-            ColumnFamily pre  = entry.getValue().leftValue();
-            ColumnFamily post = entry.getValue().rightValue();
-
-            if (pre.hasColumns() && post.hasColumns())
-                altered.add(keyspaceName);
-            else if (pre.hasColumns())
-                dropped.add(keyspaceName);
-            else if (post.hasColumns()) // a (re)created keyspace
-                created.add(new Row(entry.getKey(), post));
-        }
-
-        for (Row row : created)
-            Schema.instance.addKeyspace(createKeyspaceFromSchemaPartition(row));
-        for (String name : altered)
-            Schema.instance.updateKeyspace(name);
-        return dropped;
-    }
-
     // see the comments for mergeKeyspaces()
     private static void mergeTables(Map<DecoratedKey, ColumnFamily> before, Map<DecoratedKey, ColumnFamily> after)
     {
@@ -765,14 +804,16 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      * Keyspace metadata serialization/deserialization.
      */
 
-    mutation make_create_keyspace_mutation(lw_shared_ptr<config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions)
+    std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions)
     {
+        std::vector<mutation> mutations;
         schema_ptr s = keyspaces();
         auto pkey = partition_key::from_exploded(*s, {utf8_type->decompose(keyspace->name)});
         mutation m(pkey, s);
         exploded_clustering_prefix ckey;
         m.set_cell(ckey, "durable_writes", keyspace->durable_writes, timestamp);
         m.set_cell(ckey, "strategy_class", keyspace->strategy_name, timestamp);
+        mutations.emplace_back(std::move(m));
 #if 0
         adder.add("strategy_options", json(keyspace.strategyOptions));
 #endif
@@ -783,11 +824,10 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                 addTypeToSchemaMutation(type, timestamp, mutation);
 #endif
             for (auto&& kv : keyspace->cf_meta_data()) {
-                add_table_to_schema_mutation(kv.second, timestamp, true, m);
+                add_table_to_schema_mutation(kv.second, timestamp, true, pkey, mutations);
             }
         }
-
-        return m;
+        return mutations;
     }
 
 #if 0
@@ -816,29 +856,28 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 
         return createKeyspaceFromSchemaPartition(partition);
     }
+#endif
 
     /**
      * Deserialize only Keyspace attributes without nested tables or types
      *
      * @param partition Keyspace attributes in serialized form
      */
-    private static KSMetaData createKeyspaceFromSchemaPartition(Row partition)
+    lw_shared_ptr<config::ks_meta_data> create_keyspace_from_schema_partition(const std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>& result)
     {
-        String query = String.format("SELECT * FROM %s.%s", SystemKeyspace.NAME, KEYSPACES);
-        UntypedResultSet.Row row = QueryProcessor.resultify(query, partition).one();
-        try
-        {
-            return new KSMetaData(row.getString("keyspace_name"),
-                                  AbstractReplicationStrategy.getClass(row.getString("strategy_class")),
-                                  fromJsonMap(row.getString("strategy_options")),
-                                  row.getBoolean("durable_writes"));
+        auto&& rs = result.second;
+        if (rs->empty()) {
+            throw std::runtime_error("query result has no rows");
         }
-        catch (ConfigurationException e)
-        {
-            throw new RuntimeException(e);
-        }
+        auto&& row = rs->row(0);
+        auto keyspace_name = row.get_nonnull<sstring>("keyspace_name");
+        auto strategy_name = row.get_nonnull<sstring>("strategy_class");
+        std::unordered_map<sstring, sstring> strategy_options;
+        bool durable_writes = row.get_nonnull<bool>("durable_writes");
+        return make_lw_shared<config::ks_meta_data>(keyspace_name, strategy_name, strategy_options, durable_writes);
     }
 
+#if 0
     /*
      * User type metadata serialization/deserialization.
      */
@@ -925,19 +964,19 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
     }
 #endif
 
-    void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, mutation& m)
+    void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, const partition_key& pkey, std::vector<mutation>& mutations)
     {
-        throw std::runtime_error("not implemented");
-#if 0
         // For property that can be null (and can be changed), we insert tombstones, to make sure
         // we don't keep a property the user has removed
-        ColumnFamily cells = mutation.addOrGet(Columnfamilies);
-        Composite prefix = Columnfamilies.comparator.make(table.cfName);
-        CFRowAdder adder = new CFRowAdder(cells, prefix, timestamp);
-
-        adder.add("cf_id", table.cfId);
-        adder.add("type", table.cfType.toString());
-
+        schema_ptr s = columnfamilies();
+        mutation m{pkey, s};
+        mutations.emplace_back(std::move(m));
+        auto ckey = clustering_key::from_single_value(*s, to_bytes(table->cf_name()));
+        m.set_clustered_cell(ckey, "cf_id", table->id(), timestamp);
+#if 0
+        m.set_clustered_cell(ckey, "type", table.cfType.toString(), timestamp);
+#endif
+#if 0
         if (table.isSuper())
         {
             // We need to continue saving the comparator and subcomparator separatly, otherwise
@@ -950,10 +989,14 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         {
             adder.add("comparator", table.comparator.toString());
         }
+#endif
 
+#if 0
         adder.add("bloom_filter_fp_chance", table.getBloomFilterFpChance());
         adder.add("caching", table.getCaching().toString());
-        adder.add("comment", table.getComment());
+#endif
+        m.set_clustered_cell(ckey, "comment", table->comment(), timestamp);
+#if 0
         adder.add("compaction_strategy_class", table.compactionStrategyClass.getName());
         adder.add("compaction_strategy_options", json(table.compactionStrategyOptions));
         adder.add("compression_parameters", json(table.compressionParameters.asThriftOptions()));

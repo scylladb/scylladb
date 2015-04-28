@@ -287,7 +287,8 @@ public:
 
         logger.info(String.format("Create new Keyspace: %s", ksm));
 #endif
-        return announce(proxy, db::legacy_schema_tables::make_create_keyspace_mutation(ksm, timestamp), announce_locally);
+        auto mutations = db::legacy_schema_tables::make_create_keyspace_mutations(ksm, timestamp);
+        return announce(proxy, std::move(mutations), announce_locally);
     }
 
 #if 0
@@ -442,6 +443,11 @@ public:
     {
         std::vector<mutation> mutations;
         mutations.emplace_back(std::move(schema));
+        return announce(proxy, std::move(mutations), announce_locally);
+    }
+
+    static future<> announce(service::storage_proxy& proxy, std::vector<mutation> mutations, bool announce_locally)
+    {
         if (announce_locally) {
             return db::legacy_schema_tables::merge_schema(proxy, std::move(mutations), false);
         } else {

@@ -29,10 +29,17 @@
 #include "schema.hh"
 
 #include <vector>
+#include <map>
+
+namespace query {
+class result_set;
+}
 
 /** system.schema_* tables used to store keyspace/table/type attributes prior to C* 3.0 */
 namespace db {
 namespace legacy_schema_tables {
+
+using schema_result = std::map<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>;
 
 static constexpr auto KEYSPACES = "schema_keyspaces";
 static constexpr auto COLUMNFAMILIES = "schema_columnfamilies";
@@ -46,13 +53,23 @@ extern std::vector<const char*> ALL;
 
 std::vector<schema_ptr> all_tables();
 
+future<std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>>
+read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name);
+
+future<std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>>
+read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const dht::decorated_key& keyspace_key);
+
 future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations);
 
 future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush);
 
-mutation make_create_keyspace_mutation(lw_shared_ptr<config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
+future<std::set<sstring>> merge_keyspaces(service::storage_proxy& proxy, schema_result&& before, schema_result&& after);
 
-void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, mutation& m);
+std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
+
+lw_shared_ptr<config::ks_meta_data> create_keyspace_from_schema_partition(const std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>& partition);
+
+void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, const partition_key& pkey, std::vector<mutation>& mutations);
 
 } // namespace legacy_schema_tables
 } // namespace db

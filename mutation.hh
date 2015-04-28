@@ -23,6 +23,7 @@ public:
     mutation(const mutation&) = default;
     void set_static_cell(const column_definition& def, atomic_cell_or_collection value);
     void set_clustered_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value);
+    void set_clustered_cell(const clustering_key& key, const bytes& name, const boost::any& value, api::timestamp_type timestamp, ttl_opt ttl = {});
     void set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection value);
     void set_cell(const exploded_clustering_prefix& prefix, const bytes& name, const boost::any& value, api::timestamp_type timestamp, ttl_opt ttl = {});
     void set_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value);
