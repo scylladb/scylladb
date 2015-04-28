@@ -121,6 +121,8 @@ private:
 
     template <typename T>
     int binary_search(const T& entries, const key& sk);
+
+    future<summary_entry&> read_summary_entry(size_t i);
 public:
     // Read one or few rows at the given byte range from the data file,
     // feeding them into the consumer. This function reads the entire given
@@ -152,8 +154,6 @@ public:
 
     future<> load();
     future<> store();
-
-    future<summary_entry&> read_summary_entry(size_t i);
 
     void set_generation(unsigned long generation) { _generation = generation; }
 

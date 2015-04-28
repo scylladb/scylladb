@@ -58,6 +58,10 @@ public:
         return _sst->read_summary();
     }
 
+    future<summary_entry&> read_summary_entry(size_t i) {
+        return _sst->read_summary_entry(i);
+    }
+
     summary& get_summary() {
         return _sst->_summary;
     }
@@ -207,7 +211,7 @@ SEASTAR_TEST_CASE(composite_index_read_0_21_20) {
 template<uint64_t Position, uint64_t EntryPosition, uint64_t EntryKeySize>
 future<> summary_query(sstring path, int generation) {
     return reusable_sst(path, generation).then([] (sstable_ptr ptr) {
-        return ptr->read_summary_entry(Position).then([ptr] (auto entry) {
+        return sstables::test(ptr).read_summary_entry(Position).then([ptr] (auto entry) {
             BOOST_REQUIRE(entry.position == EntryPosition);
             BOOST_REQUIRE(entry.key.size() == EntryKeySize);
             return make_ready_future<>();
