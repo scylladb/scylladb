@@ -84,6 +84,30 @@ int lexicographical_tri_compare(TypesIterator types_first, TypesIterator types_l
     return 0;
 }
 
+// Trichotomic version of std::lexicographical_compare()
+//
+// Returns an integer which is less, equal or greater than zero when the first value
+// is respectively smaller, equal or greater than the second value.
+template <typename InputIt1, typename InputIt2, typename Compare>
+int lexicographical_tri_compare(InputIt1 first1, InputIt1 last1,
+        InputIt2 first2, InputIt2 last2,
+        Compare comp) {
+    while (first1 != last1 && first2 != last2) {
+        auto c = comp(*first1, *first2);
+        if (c) {
+            return c;
+        }
+        ++first1;
+        ++first2;
+    }
+    bool e1 = first1 == last1;
+    bool e2 = first2 == last2;
+    if (e1 != e2) {
+        return e2 ? 1 : -1;
+    }
+    return 0;
+}
+
 // A trichotomic comparator for prefix equality total ordering.
 // In this ordering, two sequences are equal iff any of them is a prefix
 // of the another. Otherwise, lexicographical ordering determines the order.
