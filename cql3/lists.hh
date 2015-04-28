@@ -56,6 +56,7 @@ public:
     };
 
     class value : public multi_item_terminal, collection_terminal {
+    public:
         std::vector<bytes_opt> _elements;
     public:
         explicit value(std::vector<bytes_opt> elements)
@@ -169,34 +170,11 @@ public:
             const update_parameters& params,
             tombstone ts = {});
 
-#if 0
-    public static class Prepender extends Operation
-    {
-        public Prepender(ColumnDefinition column, Term t)
-        {
-            super(column, t);
-        }
-
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            assert column.type.isMultiCell() : "Attempted to prepend to a frozen list";
-            Term.Terminal value = t.bind(params.options);
-            if (value == null)
-                return;
-
-            assert value instanceof Lists.Value;
-            long time = PrecisionTime.REFERENCE_TIME - (System.currentTimeMillis() - PrecisionTime.REFERENCE_TIME);
-
-            List<ByteBuffer> toAdd = ((Lists.Value)value).elements;
-            for (int i = 0; i < toAdd.size(); i++)
-            {
-                PrecisionTime pt = PrecisionTime.getNext(time);
-                ByteBuffer uuid = ByteBuffer.wrap(UUIDGen.getTimeUUIDBytes(pt.millis, pt.nanos));
-                cf.addColumn(params.makeColumn(cf.getComparator().create(prefix, column, uuid), toAdd.get(i)));
-            }
-        }
-    }
-#endif
+    class prepender : public operation {
+    public:
+        using operation::operation;
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+    };
 
     class discarder : public operation {
     public:
