@@ -32,7 +32,7 @@ struct value_traits<bytes_opt> {
     }
 };
 
-enum class allow_prefixes { yes, no };
+enum class allow_prefixes { no, yes };
 
 template<allow_prefixes AllowPrefixes = allow_prefixes::no>
 class compound_type final {
