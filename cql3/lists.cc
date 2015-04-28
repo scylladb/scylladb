@@ -8,6 +8,7 @@
 #include "cql3_type.hh"
 #include "constants.hh"
 #include <boost/iterator/transform_iterator.hpp>
+#include <boost/range/adaptor/reversed.hpp>
 
 namespace cql3 {
 
@@ -189,15 +190,28 @@ lists::delayed_value::bind(const query_options& options) {
 
 ::shared_ptr<terminal>
 lists::marker::bind(const query_options& options) {
-    throw std::runtime_error("");
-}
-#if 0
-    public Value bind(QueryOptions options) throws InvalidRequestException
-    {
-        ByteBuffer value = options.getValues().get(bindIndex);
-        return value == null ? null : Value.fromSerialized(value, (ListType)receiver.type, options.getProtocolVersion());
+    const bytes_opt& value = options.get_values()[_bind_index];
+    auto ltype = static_pointer_cast<list_type_impl>(_receiver->type);
+    if (!value) {
+        return nullptr;
+    } else {
+        return make_shared(value::from_serialized(*value, std::move(ltype), options.get_serialization_format()));
     }
-#endif
+}
+
+constexpr const db_clock::time_point lists::precision_time::REFERENCE_TIME;
+thread_local lists::precision_time lists::precision_time::_last = {db_clock::time_point::max(), 0};
+
+lists::precision_time
+lists::precision_time::get_next(db_clock::time_point millis) {
+    // FIXME: and if time goes backwards?
+    assert(millis <= _last.millis);
+    auto next =  millis < _last.millis
+            ? precision_time{millis, 9999}
+            : precision_time{millis, std::max(0, _last.nanos - 1)};
+    _last = next;
+    return next;
+}
 
 void
 lists::setter::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
@@ -267,6 +281,12 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
 }
 
 void
+lists::appender::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+    assert(column.type->is_multi_cell()); // "Attempted to append to a frozen list";
+    do_append(_t, m, prefix, column, params);
+}
+
+void
 lists::do_append(shared_ptr<term> t,
         mutation& m,
         const exploded_clustering_prefix& prefix,
@@ -308,6 +328,33 @@ lists::do_append(shared_ptr<term> t,
             m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(std::move(newv)));
         }
     }
+}
+
+void
+lists::prepender::execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
+    assert(column.type->is_multi_cell()); // "Attempted to prepend to a frozen list";
+    auto&& value = _t->bind(params._options);
+    if (!value) {
+        return;
+    }
+
+    auto&& lvalue = dynamic_pointer_cast<lists::value>(std::move(value));
+    assert(lvalue);
+    auto time = precision_time::REFERENCE_TIME - (db_clock::now() - precision_time::REFERENCE_TIME);
+
+    collection_type_impl::mutation mut;
+    mut.cells.reserve(lvalue->get_elements().size());
+    // We reverse the order of insertion, so that the last element gets the lastest time
+    // (lists are sorted by time)
+    for (auto&& v : lvalue->_elements | boost::adaptors::reversed) {
+        auto&& pt = precision_time::get_next(time);
+        auto uuid = utils::UUID_gen::get_time_UUID_bytes(pt.millis.time_since_epoch().count(), pt.nanos);
+        mut.cells.emplace_back(bytes(uuid.data(), uuid.size()), params.make_cell(*v));
+    }
+    // now reverse again, to get the original order back
+    std::reverse(mut.cells.begin(), mut.cells.end());
+    auto&& ltype = static_cast<list_type_impl*>(column.type.get());
+    m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(ltype->serialize_mutation_form(std::move(mut))));
 }
 
 bool

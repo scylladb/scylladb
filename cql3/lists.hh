@@ -32,32 +32,6 @@
 
 namespace cql3 {
 
-#if 0
-package org.apache.cassandra.cql3;
-
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
-
-import org.apache.cassandra.config.ColumnDefinition;
-import org.apache.cassandra.db.Cell;
-import org.apache.cassandra.db.ColumnFamily;
-import org.apache.cassandra.db.composites.CellName;
-import org.apache.cassandra.db.composites.Composite;
-import org.apache.cassandra.db.marshal.Int32Type;
-import org.apache.cassandra.db.marshal.ListType;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.serializers.CollectionSerializer;
-import org.apache.cassandra.serializers.MarshalException;
-import org.apache.cassandra.transport.Server;
-import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.UUIDGen;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-#endif
-
 /**
  * Static helper methods and classes for lists.
  */
@@ -82,6 +56,7 @@ public:
     };
 
     class value : public multi_item_terminal, collection_terminal {
+    public:
         std::vector<bytes_opt> _elements;
     public:
         explicit value(std::vector<bytes_opt> elements)
@@ -139,7 +114,7 @@ public:
         }
 #endif
     };
-#if 0
+
     /*
      * For prepend, we need to be able to generate unique but decreasing time
      * UUID, which is a bit challenging. To do that, given a time in milliseconds,
@@ -148,39 +123,21 @@ public:
      * do rely on the fact that the user will only provide decreasing
      * milliseconds timestamp for that purpose.
      */
-    private static class PrecisionTime
-    {
+private:
+    class precision_time {
+    public:
         // Our reference time (1 jan 2010, 00:00:00) in milliseconds.
-        private static final long REFERENCE_TIME = 1262304000000L;
-        private static final AtomicReference<PrecisionTime> last = new AtomicReference<PrecisionTime>(new PrecisionTime(Long.MAX_VALUE, 0));
+        static constexpr const db_clock::time_point REFERENCE_TIME{std::chrono::milliseconds(1262304000000)};
+    private:
+        static thread_local precision_time _last;
+    public:
+        db_clock::time_point millis;
+        int32_t nanos;
 
-        public final long millis;
-        public final int nanos;
+        static precision_time get_next(db_clock::time_point millis);
+    };
 
-        PrecisionTime(long millis, int nanos)
-        {
-            this.millis = millis;
-            this.nanos = nanos;
-        }
-
-        static PrecisionTime getNext(long millis)
-        {
-            while (true)
-            {
-                PrecisionTime current = last.get();
-
-                assert millis <= current.millis;
-                PrecisionTime next = millis < current.millis
-                    ? new PrecisionTime(millis, 9999)
-                    : new PrecisionTime(millis, Math.max(0, current.nanos - 1));
-
-                if (last.compareAndSet(current, next))
-                    return next;
-            }
-        }
-    }
-#endif
-
+public:
     class setter : public operation {
     public:
         setter(const column_definition& column, shared_ptr<term> t)
@@ -200,21 +157,11 @@ public:
         virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
     };
 
-#if 0
-    public static class Appender extends Operation
-    {
-        public Appender(ColumnDefinition column, Term t)
-        {
-            super(column, t);
-        }
-
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            assert column.type.isMultiCell() : "Attempted to append to a frozen list";
-            doAppend(t, cf, prefix, column, params);
-        }
-    }
-#endif
+    class appender : public operation {
+    public:
+        using operation::operation;
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+    };
 
     static void do_append(shared_ptr<term> t,
             mutation& m,
@@ -223,34 +170,11 @@ public:
             const update_parameters& params,
             tombstone ts = {});
 
-#if 0
-    public static class Prepender extends Operation
-    {
-        public Prepender(ColumnDefinition column, Term t)
-        {
-            super(column, t);
-        }
-
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
-            assert column.type.isMultiCell() : "Attempted to prepend to a frozen list";
-            Term.Terminal value = t.bind(params.options);
-            if (value == null)
-                return;
-
-            assert value instanceof Lists.Value;
-            long time = PrecisionTime.REFERENCE_TIME - (System.currentTimeMillis() - PrecisionTime.REFERENCE_TIME);
-
-            List<ByteBuffer> toAdd = ((Lists.Value)value).elements;
-            for (int i = 0; i < toAdd.size(); i++)
-            {
-                PrecisionTime pt = PrecisionTime.getNext(time);
-                ByteBuffer uuid = ByteBuffer.wrap(UUIDGen.getTimeUUIDBytes(pt.millis, pt.nanos));
-                cf.addColumn(params.makeColumn(cf.getComparator().create(prefix, column, uuid), toAdd.get(i)));
-            }
-        }
-    }
-#endif
+    class prepender : public operation {
+    public:
+        using operation::operation;
+        virtual void execute(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) override;
+    };
 
     class discarder : public operation {
     public:
