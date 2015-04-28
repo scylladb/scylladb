@@ -171,10 +171,7 @@ public:
     bool is_last_partition_key(const column_definition& def) {
         return &_raw._partition_key[_raw._partition_key.size() - 1] == &def;
     }
-    bool has_collections() {
-        warn(unimplemented::cause::COLLECTIONS);
-        return false; // FIXME
-    }
+    bool has_collections();
     bool has_static_columns() {
         return !_raw._static_columns.empty();
     }
