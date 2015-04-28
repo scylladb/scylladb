@@ -377,6 +377,7 @@ public:
     test_row_consumer(uint64_t t) : desired_timestamp(t) { }
     int count_row_start = 0;
     int count_cell = 0;
+    int count_deleted_cell = 0;
     int count_range_tombstone = 0;
     int count_row_end = 0;
     virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
@@ -418,6 +419,10 @@ public:
         count_cell++;
     }
 
+    virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
+        count_deleted_cell++;
+    }
+
     virtual void consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
@@ -434,6 +439,7 @@ SEASTAR_TEST_CASE(uncompressed_row_read_at_once) {
             return sstp->data_consume_rows_at_once(c, 0, 95).then([sstp, &c] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 3);
+                BOOST_REQUIRE(c.count_deleted_cell == 0);
                 BOOST_REQUIRE(c.count_row_end == 1);
                 BOOST_REQUIRE(c.count_range_tombstone == 0);
                 return make_ready_future<>();
@@ -448,6 +454,7 @@ SEASTAR_TEST_CASE(compressed_row_read_at_once) {
             return sstp->data_consume_rows_at_once(c, 0, 95).then([sstp, &c] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 3);
+                BOOST_REQUIRE(c.count_deleted_cell == 0);
                 BOOST_REQUIRE(c.count_row_end == 1);
                 BOOST_REQUIRE(c.count_range_tombstone == 0);
                 return make_ready_future<>();
@@ -462,6 +469,7 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
             return sstp->data_consume_rows(c, 0, 95).then([sstp, &c] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 3);
+                BOOST_REQUIRE(c.count_deleted_cell == 0);
                 BOOST_REQUIRE(c.count_row_end == 1);
                 BOOST_REQUIRE(c.count_range_tombstone == 0);
                 return make_ready_future<>();
@@ -476,6 +484,7 @@ SEASTAR_TEST_CASE(compressed_rows_read_one) {
             return sstp->data_consume_rows(c, 0, 95).then([sstp, &c] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 3);
+                BOOST_REQUIRE(c.count_deleted_cell == 0);
                 BOOST_REQUIRE(c.count_row_end == 1);
                 BOOST_REQUIRE(c.count_range_tombstone == 0);
                 return make_ready_future<>();
@@ -490,6 +499,7 @@ class count_row_consumer : public row_consumer {
 public:
     int count_row_start = 0;
     int count_cell = 0;
+    int count_deleted_cell = 0;
     int count_row_end = 0;
     int count_range_tombstone = 0;
     virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
@@ -498,6 +508,9 @@ public:
     virtual void consume_cell(bytes_view col_name, bytes_view value,
             uint64_t timestamp, uint32_t ttl, uint32_t expiration) override {
         count_cell++;
+    }
+    virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
+        count_deleted_cell++;
     }
     virtual void consume_row_end() override {
         count_row_end++;
@@ -518,6 +531,7 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_all) {
                 BOOST_REQUIRE(c.count_row_start == 4);
                 BOOST_REQUIRE(c.count_row_end == 4);
                 BOOST_REQUIRE(c.count_cell == 4*3);
+                BOOST_REQUIRE(c.count_deleted_cell == 0);
                 BOOST_REQUIRE(c.count_range_tombstone == 0);
                 return make_ready_future<>();
             });
@@ -532,6 +546,7 @@ SEASTAR_TEST_CASE(compressed_rows_read_all) {
                 BOOST_REQUIRE(c.count_row_start == 4);
                 BOOST_REQUIRE(c.count_row_end == 4);
                 BOOST_REQUIRE(c.count_cell == 4*3);
+                BOOST_REQUIRE(c.count_deleted_cell == 0);
                 BOOST_REQUIRE(c.count_range_tombstone == 0);
                 return make_ready_future<>();
             });
@@ -563,6 +578,7 @@ SEASTAR_TEST_CASE(read_set) {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_row_end == 1);
                 BOOST_REQUIRE(c.count_cell == 3);
+                BOOST_REQUIRE(c.count_deleted_cell == 0);
                 BOOST_REQUIRE(c.count_range_tombstone == 1);
                return make_ready_future<>();
             });
@@ -614,6 +630,7 @@ SEASTAR_TEST_CASE(ttl_read) {
             return sstp->data_consume_rows(c).then([sstp, &c] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 2);
+                BOOST_REQUIRE(c.count_deleted_cell == 0);
                 BOOST_REQUIRE(c.count_row_end == 1);
                 BOOST_REQUIRE(c.count_range_tombstone == 0);
                 return make_ready_future<>();
@@ -621,6 +638,42 @@ SEASTAR_TEST_CASE(ttl_read) {
         });
     });
 }
+
+class deleted_cell_row_consumer : public count_row_consumer {
+public:
+    virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
+        count_row_consumer::consume_row_start(key, deltime);
+        BOOST_REQUIRE(key == as_bytes("nadav"));
+        BOOST_REQUIRE(deltime.local_deletion_time == (uint32_t)std::numeric_limits<int32_t>::max());
+        BOOST_REQUIRE(deltime.marked_for_delete_at == (uint64_t)std::numeric_limits<int64_t>::min());
+    }
+
+    virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
+        count_row_consumer::consume_deleted_cell(col_name, deltime);
+        BOOST_REQUIRE(col_name.size() == 6 && col_name[0] == 0 &&
+                col_name[1] == 3 && col_name[2] == 'a' &&
+                col_name[3] == 'g' && col_name[4] == 'e' &&
+                col_name[5] == '\0');
+        BOOST_REQUIRE(deltime.local_deletion_time == 1430200516);
+        BOOST_REQUIRE(deltime.marked_for_delete_at == 1430200516937621UL);
+    }
+};
+
+SEASTAR_TEST_CASE(deleted_cell_read) {
+    return reusable_sst("tests/urchin/sstables/deleted_cell", 2).then([] (auto sstp) {
+        return do_with(deleted_cell_row_consumer(), [sstp] (auto& c) {
+            return sstp->data_consume_rows(c).then([sstp, &c] {
+                BOOST_REQUIRE(c.count_row_start == 1);
+                BOOST_REQUIRE(c.count_cell == 0);
+                BOOST_REQUIRE(c.count_deleted_cell == 1);
+                BOOST_REQUIRE(c.count_row_end == 1);
+                BOOST_REQUIRE(c.count_range_tombstone == 0);
+                return make_ready_future<>();
+            });
+        });
+    });
+}
+
 
 schema_ptr composite_schema() {
     static thread_local auto s = make_lw_shared(schema({}, "tests", "composite",

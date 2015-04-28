@@ -45,6 +45,10 @@ public:
             uint64_t timestamp,
             uint32_t ttl, uint32_t expiration) = 0;
 
+
+    // Consume a deleted cell (i.e., a cell tombstone).
+    virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) = 0;
+
     // Consume one range tombstone.
     virtual void consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,

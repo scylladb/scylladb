@@ -82,6 +82,8 @@ private:
     temporary_buffer<char> _key;
     temporary_buffer<char> _val;
 
+    // state for reading a cell
+    bool _deleted;
     uint32_t _ttl, _expiration;
 
     static inline bytes_view to_bytes_view(temporary_buffer<char>& b) {
@@ -339,12 +341,18 @@ public:
                 if (mask & RANGE_TOMBSTONE_MASK) {
                     _state = state::RANGE_TOMBSTONE;
                 } else if (mask & COUNTER_MASK) {
+                    // FIXME: see ColumnSerializer.java:deserializeColumnBody
                     throw malformed_sstable_exception("FIXME COUNTER_MASK");
                 } else if (mask & EXPIRATION_MASK) {
+                    _deleted = false;
                     _state = state::EXPIRING_CELL;
                 } else {
-                    assert((mask & (DELETION_MASK | COUNTER_UPDATE_MASK)) == 0); // FIXME
+                    // FIXME: see ColumnSerializer.java:deserializeColumnBody
+                    if (mask & COUNTER_UPDATE_MASK) {
+                        throw malformed_sstable_exception("FIXME COUNTER_UPDATE_MASK");
+                    }
                     _ttl = _expiration = 0;
+                    _deleted = mask & DELETION_MASK;
                     _state = state::CELL;
                 }
                 break;
@@ -386,8 +394,18 @@ public:
                     _val = data.share(0, _u32);
                     data.trim_front(_u32);
                     // finally pass it to the consumer:
-                    _consumer.consume_cell(to_bytes_view(_key),
-                            to_bytes_view(_val), _u64, _ttl, _expiration);
+                    if (_deleted) {
+                        if (_val.size() != 4) {
+                            throw malformed_sstable_exception("deleted cell expects local_deletion_time value");
+                        }
+                        deletion_time del;
+                        del.local_deletion_time = consume_be<uint32_t>(_val);
+                        del.marked_for_delete_at = _u64;
+                        _consumer.consume_deleted_cell(to_bytes_view(_key), del);
+                    } else {
+                        _consumer.consume_cell(to_bytes_view(_key),
+                                to_bytes_view(_val), _u64, _ttl, _expiration);
+                    }
                     // after calling the consume function, we can release the
                     // buffers we held for it.
                     _key.release();
@@ -406,8 +424,18 @@ public:
                 }
                 break;
             case state::CELL_VALUE_BYTES_2:
-                _consumer.consume_cell(to_bytes_view(_key),
-                        to_bytes_view(_val), _u64, _ttl, _expiration);
+                if (_deleted) {
+                    if (_val.size() != 4) {
+                        throw malformed_sstable_exception("deleted cell expects local_deletion_time value");
+                    }
+                    deletion_time del;
+                    del.local_deletion_time = consume_be<uint32_t>(_val);
+                    del.marked_for_delete_at = _u64;
+                    _consumer.consume_deleted_cell(to_bytes_view(_key), del);
+                } else {
+                    _consumer.consume_cell(to_bytes_view(_key),
+                            to_bytes_view(_val), _u64, _ttl, _expiration);
+                }
                 // after calling the consume function, we can release the
                 // buffers we held for it.
                 _key.release();
