@@ -131,6 +131,10 @@ private:
     }
 
     future<summary_entry&> read_summary_entry(size_t i);
+
+    // FIXME: pending on Bloom filter implementation
+    bool filter_has_key(const dht::token& dk) { return true; }
+    bool filter_has_key(const dht::decorated_key& dk) { return filter_has_key(dk._token); }
 public:
     // Read one or few rows at the given byte range from the data file,
     // feeding them into the consumer. This function reads the entire given
