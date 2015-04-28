@@ -18,7 +18,6 @@ enum class cause {
     AUTH,
     PERMISSIONS,
     TRIGGERS,
-    COLLECTIONS,
     COUNTERS,
     METRICS,
     MIGRATIONS,

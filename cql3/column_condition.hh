@@ -752,7 +752,7 @@ public:
         }
 
         /** An IN condition on a collection element with a single marker. For example: "IF col['key'] IN ?" */
-        static ::shared_ptr<raw> collectionInCondition(::shared_ptr<term::raw> collection_element,
+        static ::shared_ptr<raw> collection_in_condition(::shared_ptr<term::raw> collection_element,
                 ::shared_ptr<abstract_marker::in_raw> in_marker) {
             return ::make_shared<raw>(::shared_ptr<term::raw>{}, std::vector<::shared_ptr<term::raw>>{}, std::move(in_marker),
                 std::move(collection_element), operator_type::IN);

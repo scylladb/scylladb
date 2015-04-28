@@ -19,7 +19,6 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::AUTH: return out << "AUTH";
         case cause::PERMISSIONS: return out << "PERMISSIONS";
         case cause::TRIGGERS: return out << "TRIGGERS";
-        case cause::COLLECTIONS: return out << "COLLECTIONS";
         case cause::COUNTERS: return out << "COUNTERS";
         case cause::METRICS: return out << "METRICS";
         case cause::MIGRATIONS: return out << "MIGRATIONS";

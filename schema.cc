@@ -5,6 +5,7 @@
 #include "utils/UUID_gen.hh"
 #include "cql3/column_identifier.hh"
 #include "schema.hh"
+#include <boost/algorithm/cxx11/any_of.hpp>
 
 
 template<typename Sequence>
@@ -99,6 +100,13 @@ schema::schema(const schema& o)
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
 {
     rebuild();
+}
+
+bool
+schema::has_collections() {
+    return boost::algorithm::any_of(all_columns_in_select_order(), [] (const column_definition& cdef) {
+        return cdef.type->is_collection();
+    });
 }
 
 column_definition::column_definition(bytes name, data_type type, column_id id, column_kind kind)

@@ -24,6 +24,9 @@
 
 #include "cql3/single_column_relation.hh"
 #include "cql3/restrictions/single_column_restriction.hh"
+#include "cql3/statements/request_validations.hh"
+#include "cql3/cql3_type.hh"
+#include "cql3/lists.hh"
 #include "unimplemented.hh"
 
 using namespace cql3::restrictions;
@@ -50,13 +53,10 @@ single_column_relation::new_EQ_restriction(database& db, schema_ptr schema, ::sh
         auto term = to_term(to_receivers(schema, column_def), _value, db, schema->ks_name(), bound_names);
         return ::make_shared<single_column_restriction::EQ>(column_def, std::move(term));
     }
-    fail(unimplemented::cause::COLLECTIONS);
-#if 0
-        List<? extends ColumnSpecification> receivers = toReceivers(schema, columnDef);
-        Term entryKey = toTerm(Collections.singletonList(receivers.get(0)), map_key, schema.ksName, bound_names);
-        Term entryValue = toTerm(Collections.singletonList(receivers.get(1)), value, schema.ksName, bound_names);
-        return new SingleColumnRestriction.Contains(columnDef, entryKey, entryValue);
-#endif
+    auto&& receivers = to_receivers(schema, column_def);
+    auto&& entry_key = to_term({receivers[0]}, _map_key, db, schema->ks_name(), bound_names);
+    auto&& entry_value = to_term({receivers[1]}, _value, db, schema->ks_name(), bound_names);
+    return make_shared<single_column_restriction::contains>(column_def, std::move(entry_key), std::move(entry_value));
 }
 
 ::shared_ptr<restrictions::restriction>
@@ -65,11 +65,8 @@ single_column_relation::new_IN_restriction(database& db, schema_ptr schema, ::sh
     auto receivers = to_receivers(schema, column_def);
     auto terms = to_terms(receivers, _in_values, db, schema->ks_name(), bound_names);
     if (terms.empty()) {
-        fail(unimplemented::cause::COLLECTIONS);
-#if 0
-        auto term = to_term(receivers, _value, schema->ks_name, bound_names);
-        return new SingleColumnRestriction.InWithMarker(columnDef, (Lists.Marker) term);
-#endif
+        auto term = to_term(receivers, _value, db, schema->ks_name(), bound_names);
+        return make_shared<single_column_restriction::IN_with_marker>(column_def, dynamic_pointer_cast<lists::marker>(term));
     }
     return ::make_shared<single_column_restriction::IN_with_values>(column_def, std::move(terms));
 }
@@ -77,6 +74,7 @@ single_column_relation::new_IN_restriction(database& db, schema_ptr schema, ::sh
 std::vector<::shared_ptr<column_specification>>
 single_column_relation::to_receivers(schema_ptr schema, const column_definition& column_def)
 {
+    using namespace statements::request_validations;
     auto receiver = column_def.column_specification;
 
     if (column_def.is_compact_value()) {
@@ -115,46 +113,34 @@ single_column_relation::to_receivers(schema_ptr schema, const column_definition&
     }
 
     if (is_contains_key()) {
-        fail(unimplemented::cause::COLLECTIONS);
-#if 0
-        if (!(receiver.type instanceof MapType)) {
-            throw exceptions::invalid_request_exception(sprint("Cannot use CONTAINS KEY on non-map column %s", receiver.name_as_text()));
+        if (!dynamic_cast<map_type_impl*>(receiver->type.get())) {
+            throw exceptions::invalid_request_exception(sprint("Cannot use CONTAINS KEY on non-map column %s", receiver->name));
         }
-#endif
     }
 
     if (_map_key) {
-        fail(unimplemented::cause::COLLECTIONS);
-#if 0
-        checkFalse(receiver.type instanceof ListType, "Indexes on list entries (%s[index] = value) are not currently supported.", receiver.name);
-        checkTrue(receiver.type instanceof MapType, "Column %s cannot be used as a map", receiver.name);
-        checkTrue(receiver.type.isMultiCell(), "Map-entry equality predicates on frozen map column %s are not supported", receiver.name);
-        checkTrue(isEQ(), "Only EQ relations are supported on map entries");
-#endif
+        check_false(dynamic_cast<list_type_impl*>(receiver->type.get()), "Indexes on list entries (%s[index] = value) are not currently supported.", receiver->name);
+        check_true(dynamic_cast<map_type_impl*>(receiver->type.get()), "Column %s cannot be used as a map", receiver->name);
+        check_true(receiver->type->is_multi_cell(), "Map-entry equality predicates on frozen map column %s are not supported", receiver->name);
+        check_true(is_EQ(), "Only EQ relations are supported on map entries");
     }
 
     if (receiver->type->is_collection()) {
-        fail(unimplemented::cause::COLLECTIONS);
-#if 0
         // We don't support relations against entire collections (unless they're frozen), like "numbers = {1, 2, 3}"
-        checkFalse(receiver.type.isMultiCell() && !isLegalRelationForNonFrozenCollection(),
+        check_false(receiver->type->is_multi_cell() && !is_legal_relation_for_non_frozen_collection(),
                    "Collection column '%s' (%s) cannot be restricted by a '%s' relation",
-                   receiver.name,
-                   receiver.type.asCQL3Type(),
+                   receiver->name,
+                   receiver->type->as_cql3_type(),
                    get_operator());
 
-        if (isContainsKey() || isContains())
-        {
-            receiver = makeCollectionReceiver(receiver, isContainsKey());
+        if (is_contains_key() || is_contains()) {
+            receiver = make_collection_receiver(receiver, is_contains_key());
+        } else if (receiver->type->is_multi_cell() && _map_key && is_EQ()) {
+            return {
+                make_collection_receiver(receiver, true),
+                make_collection_receiver(receiver, false),
+            };
         }
-        else if (receiver.type.isMultiCell() && map_key != null && isEQ())
-        {
-            List<ColumnSpecification> receivers = new ArrayList<>(2);
-            receivers.add(makeCollectionReceiver(receiver, true));
-            receivers.add(makeCollectionReceiver(receiver, false));
-            return receivers;
-        }
-#endif
     }
 
     return {std::move(receiver)};
