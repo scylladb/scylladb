@@ -307,6 +307,10 @@ void database::update_keyspace(const sstring& name) {
     throw std::runtime_error("not implemented");
 }
 
+void database::drop_keyspace(const sstring& name) {
+    throw std::runtime_error("not implemented");
+}
+
 void database::add_column_family(const utils::UUID& uuid, column_family&& cf) {
     if (_keyspaces.count(cf._schema->ks_name()) == 0) {
         throw std::invalid_argument("Keyspace " + cf._schema->ks_name() + " not defined");
