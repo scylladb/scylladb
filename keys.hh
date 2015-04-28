@@ -119,6 +119,12 @@ public:
     auto end(const schema& s) const {
         return get_compound_type(s)->end(_bytes);
     }
+
+    bytes_view get_component(const schema& s, size_t idx) const {
+        auto it = begin(s);
+        std::advance(it, idx);
+        return *it;
+    }
 };
 
 template <typename TopLevel, typename PrefixTopLevel>
@@ -273,12 +279,6 @@ public:
     partition_key(bytes&& b) : compound_wrapper<partition_key>(std::move(b)) {}
 public:
     using compound = lw_shared_ptr<compound_type<allow_prefixes::no>>;
-
-    bytes_view get_component(const schema& s, size_t idx) const {
-      auto it = begin(s);
-      std::advance(it, idx);
-      return *it;
-    }
 
     static partition_key from_bytes(bytes b) {
         return partition_key(std::move(b));
