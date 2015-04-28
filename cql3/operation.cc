@@ -133,19 +133,15 @@ operation::subtraction::is_compatible_with(shared_ptr<raw_update> other) {
 
 shared_ptr<operation>
 operation::prepend::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
-    warn(unimplemented::cause::COLLECTIONS);
-    throw exceptions::invalid_request_exception("unimplemented, go away");
-    // FIXME:
-#if 0
-    auto v = _value->prepare(keyspace, receiver.column_specification);
+    auto v = _value->prepare(db, keyspace, receiver.column_specification);
 
-    if (!(receiver.type instanceof ListType))
-        throw new InvalidRequestException(String.format("Invalid operation (%s) for non list column %s", toString(receiver), receiver.name));
-    else if (!(receiver.type.isMultiCell()))
-        throw new InvalidRequestException(String.format("Invalid operation (%s) for frozen list column %s", toString(receiver), receiver.name));
+    if (!dynamic_cast<list_type_impl*>(receiver.type.get())) {
+        throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for non list column %s", receiver, receiver.name()));
+    } else if (!receiver.type->is_multi_cell()) {
+        throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for frozen list column %s", receiver, receiver.name()));
+    }
 
-    return new Lists.Prepender(receiver, v);
-#endif
+    return make_shared<lists::prepender>(receiver, std::move(v));
 }
 
 bool
