@@ -169,6 +169,7 @@ urchin_tests = [
     'tests/urchin/serializer_test',
     'tests/urchin/message',
     'tests/urchin/gossip',
+    'tests/urchin/compound_test',
 ]
 
 tests = [
