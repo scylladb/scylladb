@@ -161,22 +161,17 @@ private:
      */
     std::vector<::shared_ptr<column_specification>> to_receivers(schema_ptr schema, const column_definition& column_def);
 
-#if 0
-    private ColumnSpecification makeCollectionReceiver(ColumnSpecification receiver, bool forKey)
-    {
-        return ((CollectionType<?>) receiver.type).makeCollectionReceiver(receiver, forKey);
+    static shared_ptr<column_specification> make_collection_receiver(shared_ptr<column_specification> receiver, bool for_key) {
+        return static_cast<collection_type_impl*>(receiver->type.get())->make_collection_receiver(receiver, for_key);
     }
 
-    private bool isLegalRelationForNonFrozenCollection()
-    {
-        return isContainsKey() || isContains() || isMapEntryEquality();
+    bool is_legal_relation_for_non_frozen_collection() const {
+        return is_contains_key() || is_contains() || is_map_entry_equality();
     }
 
-    private bool isMapEntryEquality()
-    {
-        return map_key != null && isEQ();
+    bool is_map_entry_equality() const {
+        return _map_key && is_EQ();
     }
-#endif
 
 private:
     bool can_have_only_one_value() {
