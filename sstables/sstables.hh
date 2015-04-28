@@ -105,6 +105,10 @@ private:
 
     future<index_list> read_indexes(uint64_t position, uint64_t quantity);
 
+    future<index_list> read_indexes(uint64_t position) {
+        return read_indexes(position, _summary.header.sampling_level);
+    }
+
     input_stream<char> data_stream_at(uint64_t pos);
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
@@ -143,10 +147,6 @@ public:
 
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
-
-    future<index_list> read_indexes(uint64_t position) {
-        return read_indexes(position, _summary.header.sampling_level);
-    }
 
     future<> load();
     future<> store();
