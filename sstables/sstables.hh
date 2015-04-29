@@ -78,6 +78,8 @@ private:
     template <typename T, sstable::component_type Type, T sstable::* Comptr>
     future<> write_simple();
 
+    size_t data_size();
+
     future<> read_toc();
     future<> write_toc();
 

@@ -829,6 +829,13 @@ future<> sstable::store() {
     });
 }
 
+size_t sstable::data_size() {
+    if (has_component(sstable::component_type::CompressionInfo)) {
+        return _compression.data_len;
+    }
+    return _data_file_size;
+}
+
 const bool sstable::has_component(component_type f) {
     return _components.count(f);
 }
