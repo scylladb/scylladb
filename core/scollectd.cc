@@ -35,21 +35,21 @@
 #include "core/future-util.hh"
 #include "net/api.hh"
 
-namespace std {
-inline bool operator<(const scollectd::type_instance_id & id1,
-        const scollectd::type_instance_id & id2) {
+bool scollectd::type_instance_id::operator<(
+        const scollectd::type_instance_id& id2) const {
+    auto& id1 = *this;
     return std::tie(id1.plugin(), id1.plugin_instance(), id1.type(),
             id1.type_instance())
             < std::tie(id2.plugin(), id2.plugin_instance(), id2.type(),
                     id2.type_instance());
 }
-inline bool operator==(const scollectd::type_instance_id & id1,
-        const scollectd::type_instance_id & id2) {
+bool scollectd::type_instance_id::operator==(
+        const scollectd::type_instance_id & id2) const {
+    auto& id1 = *this;
     return std::tie(id1.plugin(), id1.plugin_instance(), id1.type(),
             id1.type_instance())
             == std::tie(id2.plugin(), id2.plugin_instance(), id2.type(),
                     id2.type_instance());
-}
 }
 
 namespace scollectd {

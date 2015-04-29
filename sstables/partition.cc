@@ -5,6 +5,7 @@
 #include "sstables.hh"
 #include "types.hh"
 #include "core/future-util.hh"
+#include "key.hh"
 
 #include "dht/i_partitioner.hh"
 
@@ -24,7 +25,7 @@ namespace sstables {
 // This code should work in all kinds of vectors in whose's elements is possible to aquire
 // a key view.
 template <typename T>
-int binary_search(const T& entries, const key& sk) {
+int sstable::binary_search(const T& entries, const key& sk) {
     int low = 0, mid = entries.size(), high = mid - 1, result = -1;
 
     auto& partitioner = dht::global_partitioner();
@@ -58,7 +59,7 @@ int binary_search(const T& entries, const key& sk) {
     return -mid - (result < 0 ? 1 : 2);
 }
 
-int summary::binary_search(const key& sk) {
-    return sstables::binary_search(entries, sk);
-}
+// Force generation, so we make it available outside this compilation unit without moving that
+// much code to .hh
+template int sstable::binary_search<>(const std::vector<summary_entry>& entries, const key& sk);
 }

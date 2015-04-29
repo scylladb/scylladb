@@ -35,6 +35,15 @@
 #include "core/rwlock.hh"
 #include "net/byteorder.hh"
 #include "commitlog.hh"
+#include "db/config.hh"
+
+db::commitlog::config::config(const db::config& cfg)
+    : commit_log_location(cfg.commitlog_directory())
+    , commitlog_total_space_in_mb(cfg.commitlog_total_space_in_mb())
+    , commitlog_segment_size_in_mb(cfg.commitlog_segment_size_in_mb())
+    , commitlog_sync_period_in_ms(cfg.commitlog_sync_batch_window_in_ms())
+    , mode(cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC)
+{}
 
 class db::commitlog::descriptor {
 public:

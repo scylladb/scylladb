@@ -1,0 +1,696 @@
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ */
+
+#pragma once
+
+#include <boost/program_options.hpp>
+#include <unordered_map>
+#include "core/sstring.hh"
+#include "core/future.hh"
+
+class file;
+
+namespace db {
+
+class config {
+public:
+    enum class value_status {
+        Used,
+        Unused,
+        Invalid,
+    };
+
+    enum class config_source : uint8_t {
+        None,
+        SettingsFile,
+        CommandLine
+    };
+
+    template<typename T, value_status S>
+    struct value {
+        typedef T type;
+        typedef value<T, S> MyType;
+
+        value(const T& t = T()) : _value(t)
+        {}
+        value_status status() const {
+            return S;
+        }
+        config_source source() const {
+            return _source;
+        }
+        bool is_set() const {
+            return _source > config_source::None;
+        }
+        MyType & operator()(const T& t) {
+            _value = t;
+            return *this;
+        }
+        MyType & operator()(T&& t) {
+            _value = std::move(t);
+            return *this;
+        }
+        const T& operator()() const {
+            return _value;
+        }
+        T& operator()() {
+            return _value;
+        }
+    private:
+        friend class config;
+        T _value = T();
+        config_source _source = config_source::None;
+    };
+
+    config();
+
+    boost::program_options::options_description
+    get_options_description();
+
+    boost::program_options::options_description_easy_init&
+    add_options(boost::program_options::options_description_easy_init&);
+
+    void read_from_yaml(const sstring&);
+    void read_from_yaml(const char *);
+    future<> read_from_file(const sstring&);
+    future<> read_from_file(file);
+
+    typedef std::unordered_map<sstring, sstring> string_map;
+
+    /*
+     * This type is not use, and probably never will be.
+     * So it makes sense to jump through hoops just to ensure
+     * it is in fact handled properly...
+     */
+    struct seed_provider_type {
+        seed_provider_type() = default;
+        seed_provider_type(sstring n,
+                std::initializer_list<typename string_map::value_type> opts =
+                        { })
+                : class_name(std::move(n)), parameters(std::move(opts)) {
+        }
+        sstring class_name;
+        string_map parameters;
+    };
+
+    /*
+     * All values and documentation taken from
+     * http://docs.datastax.com/en/cassandra/2.1/cassandra/configuration/configCassandra_yaml_r.html
+     *
+     * Big fat x-macro expansion of _all_ (at this writing) cassandra opts, with the "documentation"
+     * included.
+     *
+     * X-macro syntax:
+     *
+     * X(member, type, default, status, desc [, value, value...])
+     *
+     * Where
+     *  member: is the property name -> config member name
+     *  type:   is the value type (bool, uint32_t etc)
+     *  status: is the current _usage_ of the opt. I.e. if you actually use the value, set it to "Used".
+     *          Most values are set to "Unused", as in "will probably have an effect eventually".
+     *          Values set to "Invalid" have no meaning/usage in urchin, and should (and will currently)
+     *          be signaled to a user providing a config with them, that these settings are pointless.
+     *  desc:   documentation.
+     *  value...: enumerated valid values if any. Not currently used, but why not...
+     *
+     *
+     * Note:
+     * Only values marked as "Used" will be added as command line options.
+     * Options marked as "Invalid" will be warned about if read from config
+     * Options marked as "Unused" will also warned about.
+     *
+     */
+
+#define _make_config_values(val)                \
+    /* Initialization properties */             \
+    /* The minimal properties needed for configuring a cluster. */  \
+    val(cluster_name, sstring, "Test Cluster", Unused,   \
+            "The name of the cluster; used to prevent machines in one logical cluster from joining another. All nodes participating in a cluster must have the same value."   \
+    )                                           \
+    val(listen_address, sstring, "localhost", Used,     \
+            "The IP address or hostname that Cassandra binds to for connecting to other Cassandra nodes. Set this parameter or listen_interface, not both. You must change the default setting for multiple nodes to communicate:\n"    \
+            "\n"    \
+            "Generally set to empty. If the node is properly configured (host name, name resolution, and so on), Cassandra uses InetAddress.getLocalHost() to get the local address from the system.\n" \
+            "For a single node cluster, you can use the default setting (localhost).\n" \
+            "If Cassandra can't find the correct address, you must specify the IP address or host name.\n"  \
+            "Never specify 0.0.0.0; it is always wrong."  \
+    )                                                   \
+    val(listen_interface, sstring, "eth0", Unused,  \
+            "The interface that Cassandra binds to for connecting to other Cassandra nodes. Interfaces must correspond to a single address, IP aliasing is not supported. See listen_address."  \
+    )   \
+    /* Default directories */   \
+    /* If you have changed any of the default directories during installation, make sure you have root access and set these properties: */  \
+    val(commitlog_directory, sstring, "/var/lib/cassandra/commitlog", Used,   \
+            "The directory where the commit log is stored. For optimal write performance, it is recommended the commit log be on a separate disk partition (ideally, a separate physical device) from the data file directories."   \
+    )                                           \
+    val(data_file_directories, sstring, "/var/lib/cassandra/data", Used,   \
+            "The directory location where table data (SSTables) is stored"   \
+    )                                           \
+    val(saved_caches_directory, sstring, "/var/lib/cassandra/saved_caches", Unused, \
+            "The directory location where table key and row caches are stored."  \
+    )                                                   \
+    /* Commonly used properties */  \
+    /* Properties most frequently used when configuring Cassandra. */   \
+    /* Before starting a node for the first time, you should carefully evaluate your requirements. */   \
+    /* Common initialization properties */  \
+    /* Note: Be sure to set the properties in the Quick start section as well. */   \
+    val(commit_failure_policy, sstring, "stop", Unused, \
+            "Policy for commit disk failures:\n"    \
+            "\n"    \
+            "\tdie          Shut down gossip and Thrift and kill the JVM, so the node can be replaced.\n"   \
+            "\tstop         Shut down gossip and Thrift, leaving the node effectively dead, but can be inspected using JMX.\n" \
+            "\tstop_commit  Shut down the commit log, letting writes collect but continuing to service reads (as in pre-2.0.5 Cassandra).\n"    \
+            "\tignore       Ignore fatal errors and let the batches fail."\
+            , "die", "stop", "stop_commit", "ignore"    \
+    )   \
+    val(disk_failure_policy, sstring, "stop", Unused, \
+            "Sets how Cassandra responds to disk failure. Recommend settings are stop or best_effort.\n"    \
+            "\n"    \
+            "\tdie              Shut down gossip and Thrift and kill the JVM for any file system errors or single SSTable errors, so the node can be replaced.\n"   \
+            "\tstop_paranoid    Shut down gossip and Thrift even for single SSTable errors.\n"    \
+            "\tstop             Shut down gossip and Thrift, leaving the node effectively dead, but available for inspection using JMX.\n"    \
+            "\tbest_effort      Stop using the failed disk and respond to requests based on the remaining available SSTables. This means you will see obsolete data at consistency level of ONE.\n"    \
+            "\tignore           Ignores fatal errors and lets the requests fail; all file system errors are logged but otherwise ignored. Cassandra acts as in versions prior to 1.2.\n"    \
+            "\n"    \
+            "Related information: Handling Disk Failures In Cassandra 1.2 blog and Recovering from a single disk failure using JBOD.\n"    \
+            , "die", "stop_paranoid", "stop", "best_effort", "ignore"   \
+    )   \
+    val(endpoint_snitch, sstring, "org.apache.cassandra.locator.SimpleSnitch", Unused,  \
+            "Set to a class that implements the IEndpointSnitch. Cassandra uses snitches for locating nodes and routing requests.\n"    \
+            "\tSimpleSnitch                 Use for single-data center deployments or single-zone in public clouds. Does not recognize data center or rack information. It treats strategy order as proximity, which can improve cache locality when disabling read repair.\n"    \
+            "\tGossipingPropertyFileSnitch  Recommended for production. The rack and data center for the local node are defined in the cassandra-rackdc.properties file and propagated to other nodes via gossip. To allow migration from the PropertyFileSnitch, it uses the cassandra-topology.properties file if it is present.\n"    \
+            "\tPropertyFileSnitch           Determines proximity by rack and data center, which are explicitly configured in the cassandra-topology.properties file.\n"    \
+            "\tEc2Snitch                    For EC2 deployments in a single region. Loads region and availability zone information from the EC2 API. The region is treated as the data center and the availability zone as the rack. Uses only private IPs. Subsequently it does not work across multiple regions.\n"    \
+            "\tEc2MultiRegionSnitch         Uses public IPs as the broadcast_address to allow cross-region connectivity. This means you must also set seed addresses to the public IP and open the storage_port or ssl_storage_port on the public IP firewall. For intra-region traffic, Cassandra switches to the private IP after establishing a connection.\n"    \
+            "\tRackInferringSnitch          Proximity is determined by rack and data center, which are assumed to correspond to the 3rd and 2nd octet of each node's IP address, respectively. This snitch is best used as an example for writing a custom snitch class (unless this happens to match your deployment conventions).\n" \
+            "\n"    \
+            "Related information: Snitches\n"    \
+    )                                                   \
+    val(rpc_address, sstring, "localhost", Used,     \
+            "The listen address for client connections (Thrift RPC service and native transport).Valid values are:\n"    \
+            "\n"    \
+            "\tunset:   Resolves the address using the hostname configuration of the node. If left unset, the hostname must resolve to the IP address of this node using /etc/hostname, /etc/hosts, or DNS.\n"  \
+            "\t0.0.0.0 : Listens on all configured interfaces, but you must set the broadcast_rpc_address to a value other than 0.0.0.0.\n"   \
+            "\tIP address\n"    \
+            "\thostname\n"  \
+            "Related information: Network\n"    \
+    )                                                   \
+    val(rpc_interface, sstring, "eth1", Unused,     \
+            "The listen address for client connections. Interfaces must correspond to a single address, IP aliasing is not supported. See rpc_address." \
+    )   \
+    val(seed_provider, seed_provider_type, seed_provider_type("org.apache.cassandra.locator.SimpleSeedProvider"), Unused, \
+            "The addresses of hosts deemed contact points. Cassandra nodes use the -seeds list to find each other and learn the topology of the ring.\n"    \
+            "\n"    \
+            "\tclass_name (Default: org.apache.cassandra.locator.SimpleSeedProvider)\n" \
+            "\t\tThe class within Cassandra that handles the seed logic. It can be customized, but this is typically not required.\n"   \
+            "\t- seeds (Default: 127.0.0.1)    A comma-delimited list of IP addresses used by gossip for bootstrapping new nodes joining a cluster. When running multiple nodes, you must change the list from the default value. In multiple data-center clusters, the seed list should include at least one node from each data center (replication group). More than a single seed node per data center is recommended for fault tolerance. Otherwise, gossip has to communicate with another data center when bootstrapping a node. Making every node a seed node is not recommended because of increased maintenance and reduced gossip performance. Gossip optimization is not critical, but it is recommended to use a small seed list (approximately three nodes per data center).\n"    \
+            "\n"    \
+            "Related information: Initializing a multiple node cluster (single data center) and Initializing a multiple node cluster (multiple data centers)."  \
+    )                                                   \
+    /* Common compaction settings */    \
+    val(compaction_throughput_mb_per_sec, uint32_t, 16, Unused,     \
+            "Throttles compaction to the specified total throughput across the entire system. The faster you insert data, the faster you need to compact in order to keep the SSTable count down. The recommended Value is 16 to 32 times the rate of write throughput (in MBs/second). Setting the value to 0 disables compaction throttling.\n"  \
+            "Related information: Configuring compaction"   \
+    )                                                   \
+    /* Common memtable settings */  \
+    val(memtable_total_space_in_mb, uint32_t, 0, Unused,     \
+            "Specifies the total memory used for all memtables on a node. This replaces the per-table storage settings memtable_operations_in_millions and memtable_throughput_in_mb."  \
+    )                                                   \
+    /* Common disk settings */  \
+    val(concurrent_reads, uint32_t, 32, Invalid,     \
+            "For workloads with more data than can fit in memory, the bottleneck is reads fetching data from disk. Setting to (16 × number_of_drives) allows operations to queue low enough in the stack so that the OS and drives can reorder them."  \
+    )                                                   \
+    val(concurrent_writes, uint32_t, 32, Invalid,     \
+            "Writes in Cassandra are rarely I/O bound, so the ideal number of concurrent writes depends on the number of CPU cores in your system. The recommended value is (8 x number_of_cpu_cores)."  \
+    )                                                   \
+    val(concurrent_counter_writes, uint32_t, 32, Unused,     \
+            "Counter writes read the current values before incrementing and writing them back. The recommended value is (16 × number_of_drives) ."  \
+    )                                                   \
+    /* Common automatic backup settings */  \
+    val(incremental_backups, bool, false, Unused,     \
+            "Backs up data updated since the last snapshot was taken. When enabled, Cassandra creates a hard link to each SSTable flushed or streamed locally in a backups/ subdirectory of the keyspace data. Removing these links is the operator's responsibility.\n"  \
+            "Related information: Enabling incremental backups" \
+    )                                                   \
+    val(snapshot_before_compaction, bool, false, Unused,     \
+            "Enable or disable taking a snapshot before each compaction. This option is useful to back up data when there is a data format change. Be careful using this option because Cassandra does not clean up older snapshots automatically.\n"  \
+            "Related information: Configuring compaction"   \
+    )                                                   \
+    /* Common fault detection setting */    \
+    val(phi_convict_threshold, uint32_t, 8, Unused,     \
+            "Adjusts the sensitivity of the failure detector on an exponential scale. Generally this setting never needs adjusting.\n"  \
+            "Related information: Failure detection and recovery"  \
+    )                                                   \
+    /* Performance tuning properties */ \
+    /* Tuning performance and system reso   urce utilization, including commit log, compaction, memory, disk I/O, CPU, reads, and writes. */    \
+    /* Commit log settings */   \
+    val(commitlog_sync, sstring, "periodic", Used,     \
+            "The method that Cassandra uses to acknowledge writes in milliseconds:\n"   \
+            "\n"    \
+            "\tperiodic : Used with commitlog_sync_period_in_ms (Default: 10000 - 10 seconds ) to control how often the commit log is synchronized to disk. Periodic syncs are acknowledged immediately.\n"   \
+            "\tbatch : Used with commitlog_sync_batch_window_in_ms (Default: disabled **) to control how long Cassandra waits for other writes before performing a sync. When using this method, writes are not acknowledged until fsynced to disk.\n"  \
+            "Related information: Durability"   \
+    )                                                   \
+    val(commitlog_segment_size_in_mb, uint32_t, 64, Used,     \
+            "Sets the size of the individual commitlog file segments. A commitlog segment may be archived, deleted, or recycled after all its data has been flushed to SSTables. This amount of data can potentially include commitlog segments from every table in the system. The default size is usually suitable for most commitlog archiving, but if you want a finer granularity, 8 or 16 MB is reasonable. See Commit log archive configuration.\n"  \
+            "Related information: Commit log archive configuration" \
+    )                                                   \
+    /* Note: does not exist on the listing page other than in above comment, wtf? */    \
+    val(commitlog_sync_period_in_ms, uint32_t, 10000, Used,     \
+            "Controls how long the system waits for other writes before performing a sync in \"periodic\" mode."    \
+    )   \
+    /* Note: does not exist on the listing page other than in above comment, wtf? */    \
+    val(commitlog_sync_batch_window_in_ms, uint32_t, 10000, Used,     \
+            "Controls how long the system waits for other writes before performing a sync in \"batch\" mode."    \
+    )   \
+    val(commitlog_total_space_in_mb, uint32_t, 1024, Used,     \
+            "Total space used for commitlogs. If the used space goes above this value, Cassandra rounds up to the next nearest segment multiple and flushes memtables to disk for the oldest commitlog segments, removing those log segments. This reduces the amount of data to replay on startup, and prevents infrequently-updated tables from indefinitely keeping commitlog segments. A small total commitlog space tends to cause more flush activity on less-active tables.\n"  \
+            "Related information: Configuring memtable throughput"  \
+    )                                                   \
+    /* Compaction settings */   \
+    /* Related information: Configuring compaction */   \
+    val(compaction_preheat_key_cache, bool, true, Unused,                \
+            "When set to true , cached row keys are tracked during compaction, and re-cached to their new positions in the compacted SSTable. If you have extremely large key caches for tables, set the value to false ; see Global row and key caches properties."  \
+    )                                                   \
+    val(concurrent_compactors, uint32_t, 0, Invalid,     \
+            "Sets the number of concurrent compaction processes allowed to run simultaneously on a node, not including validation compactions for anti-entropy repair. Simultaneous compactions help preserve read performance in a mixed read-write workload by mitigating the tendency of small SSTables to accumulate during a single long-running compaction. If compactions run too slowly or too fast, change compaction_throughput_mb_per_sec first."  \
+    )                                                   \
+    val(in_memory_compaction_limit_in_mb, uint32_t, 64, Invalid,     \
+            "Size limit for rows being compacted in memory. Larger rows spill to disk and use a slower two-pass compaction process. When this occurs, a message is logged specifying the row key. The recommended value is 5 to 10 percent of the available Java heap size."  \
+    )                                                   \
+    val(preheat_kernel_page_cache, bool, false, Unused, \
+            "Enable or disable kernel page cache preheating from contents of the key cache after compaction. When enabled it preheats only first page (4KB) of each row to optimize for sequential access. It can be harmful for fat rows, see CASSANDRA-4937 for more details."    \
+    )   \
+    val(sstable_preemptive_open_interval_in_mb, uint32_t, 50, Unused,     \
+            "When compacting, the replacement opens SSTables before they are completely written and uses in place of the prior SSTables for any range previously written. This setting helps to smoothly transfer reads between the SSTables by reducing page cache churn and keeps hot rows hot."  \
+    )                                                   \
+    /* Memtable settings */ \
+    val(memtable_allocation_type, sstring, "heap_buffers", Invalid,     \
+            "Specify the way Cassandra allocates and manages memtable memory. See Off-heap memtables in Cassandra 2.1. Options are:\n"  \
+            "\theap_buffers     On heap NIO (non-blocking I/O) buffers.\n"  \
+            "\toffheap_buffers  Off heap (direct) NIO buffers.\n"   \
+            "\toffheap_objects  Native memory, eliminating NIO buffer heap overhead."   \
+    )                                                   \
+    val(memtable_cleanup_threshold, double, .11, Unused, \
+            "Ratio of occupied non-flushing memtable size to total permitted size for triggering a flush of the largest memtable. Larger values mean larger flushes and less compaction, but also less concurrent flush activity, which can make it difficult to keep your disks saturated under heavy write load." \
+    )   \
+    val(file_cache_size_in_mb, uint32_t, 512, Unused,  \
+            "Total memory to use for SSTable-reading buffers."  \
+    )   \
+    val(memtable_flush_queue_size, uint32_t, 4, Unused,     \
+            "The number of full memtables to allow pending flush (memtables waiting for a write thread). At a minimum, set to the maximum number of indexes created on a single table.\n"  \
+            "Related information: Flushing data from the memtable"  \
+    )   \
+    val(memtable_flush_writers, uint32_t, 1, Invalid,     \
+            "Sets the number of memtable flush writer threads. These threads are blocked by disk I/O, and each one holds a memtable in memory while blocked. If you have a large Java heap size and many data directories, you can increase the value for better flush performance."  \
+    )   \
+    val(memtable_heap_space_in_mb, uint32_t, 0, Unused,     \
+            "Total permitted memory to use for memtables. Triggers a flush based on memtable_cleanup_threshold. Cassandra stops accepting writes when the limit is exceeded until a flush completes. If unset, sets to default."  \
+    )   \
+    val(memtable_offheap_space_in_mb, uint32_t, 0, Unused,     \
+            "See memtable_heap_space_in_mb"  \
+    )   \
+    /* Cache and index settings */  \
+    val(column_index_size_in_kb, uint32_t, 64, Unused,     \
+            "Granularity of the index of rows within a partition. For huge rows, decrease this setting to improve seek time. If you use key cache, be careful not to make this setting too large because key cache will be overwhelmed. If you're unsure of the size of the rows, it's best to use the default setting."  \
+    )   \
+    val(index_summary_capacity_in_mb, uint32_t, 0, Unused,     \
+            "Fixed memory pool size in MB for SSTable index summaries. If the memory usage of all index summaries exceeds this limit, any SSTables with low read rates shrink their index summaries to meet this limit. This is a best-effort process. In extreme conditions, Cassandra may need to use more than this amount of memory."  \
+    )   \
+    val(index_summary_resize_interval_in_minutes, uint32_t, 60, Unused,     \
+            "How frequently index summaries should be re-sampled. This is done periodically to redistribute memory from the fixed-size pool to SSTables proportional their recent read rates. To disable, set to -1. This leaves existing index summaries at their current sampling level."  \
+    )   \
+    val(reduce_cache_capacity_to, double, .6, Invalid,     \
+            "Sets the size percentage to which maximum cache capacity is reduced when Java heap usage reaches the threshold defined by reduce_cache_sizes_at. Together with flush_largest_memtables_at, these properties constitute an emergency measure for preventing sudden out-of-memory (OOM) errors."  \
+    )   \
+    val(reduce_cache_sizes_at, double, .85, Invalid,     \
+            "When Java heap usage (after a full concurrent mark sweep (CMS) garbage collection) exceeds this percentage, Cassandra reduces the cache capacity to the fraction of the current size as specified by reduce_cache_capacity_to. To disable, set the value to 1.0."  \
+    )   \
+    /* Disks settings */    \
+    val(stream_throughput_outbound_megabits_per_sec, uint32_t, 400, Unused,     \
+            "Throttles all outbound streaming file transfers on a node to the specified throughput. Cassandra does mostly sequential I/O when streaming data during bootstrap or repair, which can lead to saturating the network connection and degrading client (RPC) performance."  \
+    )   \
+    val(inter_dc_stream_throughput_outbound_megabits_per_sec, uint32_t, 0, Unused,     \
+            "Throttles all streaming file transfer between the data centers. This setting allows throttles streaming throughput betweens data centers in addition to throttling all network stream traffic as configured with stream_throughput_outbound_megabits_per_sec."  \
+    )   \
+    val(trickle_fsync, bool, false, Unused,     \
+            "When doing sequential writing, enabling this option tells fsync to force the operating system to flush the dirty buffers at a set interval trickle_fsync_interval_in_kb. Enable this parameter to avoid sudden dirty buffer flushing from impacting read latencies. Recommended to use on SSDs, but not on HDDs."  \
+    )   \
+    val(trickle_fsync_interval_in_kb, uint32_t, 10240, Unused,     \
+            "Sets the size of the fsync in kilobytes."  \
+    )   \
+    /* Advanced properties */   \
+    /* Properties for advanced users or properties that are less commonly used. */  \
+    /* Advanced initialization properties */    \
+    val(auto_bootstrap, bool, true, Unused,     \
+            "This setting has been removed from default configuration. It makes new (non-seed) nodes automatically migrate the right data to themselves. When initializing a fresh cluster with no data, add auto_bootstrap: false.\n"  \
+            "Related information: Initializing a multiple node cluster (single data center) and Initializing a multiple node cluster (multiple data centers)."  \
+    )   \
+    val(batch_size_warn_threshold_in_kb, uint32_t, 5, Unused,     \
+            "Log WARN on any batch size exceeding this value in kilobytes. Caution should be taken on increasing the size of this threshold as it can lead to node instability."  \
+    )   \
+    val(broadcast_address, sstring, /* listen_address */, Unused, \
+            "The IP address a node tells other nodes in the cluster to contact it by. It allows public and private address to be different. For example, use the broadcast_address parameter in topologies where not all nodes have access to other nodes by their private IP addresses.\n" \
+            "If your Cassandra cluster is deployed across multiple Amazon EC2 regions and you use the EC2MultiRegionSnitch , set the broadcast_address to public IP address of the node and the listen_address to the private IP."    \
+    )   \
+    val(initial_token, sstring, /* N/A */, Unused,     \
+            "Used in the single-node-per-token architecture, where a node owns exactly one contiguous range in the ring space. Setting this property overrides num_tokens.\n"   \
+            "If you not using vnodes or have num_tokens set it to 1 or unspecified (#num_tokens), you should always specify this parameter when setting up a production cluster for the first time and when adding capacity. For more information, see this parameter in the Cassandra 1.1 Node and Cluster Configuration documentation.\n" \
+            "This parameter can be used with num_tokens (vnodes ) in special cases such as Restoring from a snapshot." \
+    )   \
+    val(num_tokens, uint32_t, 1, Unused,                \
+            "Defines the number of tokens randomly assigned to this node on the ring when using virtual nodes (vnodes). The more tokens, relative to other nodes, the larger the proportion of data that the node stores. Generally all nodes should have the same number of tokens assuming equal hardware capability. The recommended value is 256. If unspecified (#num_tokens), Cassandra uses 1 (equivalent to #num_tokens : 1) for legacy compatibility and uses the initial_token setting.\n"    \
+            "If not using vnodes, comment #num_tokens : 256 or set num_tokens : 1 and use initial_token. If you already have an existing cluster with one token per node and wish to migrate to vnodes, see Enabling virtual nodes on an existing production cluster.\n"    \
+            "Note: If using DataStax Enterprise, the default setting of this property depends on the type of node and type of install."  \
+    )   \
+    val(partitioner, sstring, "org.apache.cassandra.dht.Murmur3Partitioner", Unused,                \
+            "Distributes rows (by partition key) across all nodes in the cluster. Any IPartitioner may be used, including your own as long as it is in the class path. For new clusters use the default partitioner.\n" \
+            "Cassandra provides the following partitioners for backwards compatibility:\n"  \
+            "\n"    \
+            "\tRandomPartitioner\n" \
+            "\tByteOrderedPartitioner\n"    \
+            "\tOrderPreservingPartitioner (deprecated)\n"    \
+            "\n"    \
+            "Related information: Partitioners"  \
+            , "org.apache.cassandra.dht.Murmur3Partitioner" \
+            , "org.apache.cassandra.dht.RandomPartitioner" \
+            , "org.apache.cassandra.dht.ByteOrderedPartitioner" \
+            , "org.apache.cassandra.dht.OrderPreservingPartitioner" \
+    )                                                   \
+    val(storage_port, uint16_t, 7000, Unused,                \
+            "The port for inter-node communication."  \
+    )                                                   \
+    /* Advanced automatic backup setting */ \
+    val(auto_snapshot, bool, true, Unused,     \
+            "Enable or disable whether a snapshot is taken of the data before keyspace truncation or dropping of tables. To prevent data loss, using the default setting is strongly advised. If you set to false, you will lose data on truncation or drop."  \
+    )   \
+    /* Key caches and global row properties */  \
+    /* When creating or modifying tables, you enable or disable the key cache (partition key cache) or row cache for that table by setting the caching parameter. Other row and key cache tuning and configuration options are set at the global (node) level. Cassandra uses these settings to automatically distribute memory for each table on the node based on the overall workload and specific table usage. You can also configure the save periods for these caches globally. */    \
+    /* Related information: Configuring caches */   \
+    val(key_cache_keys_to_save, uint32_t, 0, Unused,                \
+            "Number of keys from the key cache to save. (0: all)"  \
+    )   \
+    val(key_cache_save_period, uint32_t, 14400, Unused,                \
+            "Duration in seconds that keys are saved in cache. Caches are saved to saved_caches_directory. Saved caches greatly improve cold-start speeds and has relatively little effect on I/O."  \
+    )   \
+    val(key_cache_size_in_mb, uint32_t, 100, Unused,                \
+            "A global cache setting for tables. It is the maximum size of the key cache in memory. To disable set to 0.\n"  \
+            "Related information: nodetool setcachecapacity."   \
+    )   \
+    val(row_cache_keys_to_save, uint32_t, 0, Unused,                \
+            "Number of keys from the row cache to save."  \
+    )   \
+    val(row_cache_size_in_mb, uint32_t, 0, Unused,                \
+            "Maximum size of the row cache in memory. Row cache can save more time than key_cache_size_in_mb, but is space-intensive because it contains the entire row. Use the row cache only for hot rows or static rows. If you reduce the size, you may not get you hottest keys loaded on start up."  \
+    )   \
+    val(row_cache_save_period, uint32_t, 0, Unused,     \
+            "Duration in seconds that rows are saved in cache. Caches are saved to saved_caches_directory."  \
+    )   \
+    val(memory_allocator, sstring, "NativeAllocator", Invalid,     \
+            "The off-heap memory allocator. In addition to caches, this property affects storage engine meta data. Supported values:\n"  \
+            "\tNativeAllocator\n"  \
+            "\tJEMallocAllocator\n"  \
+            "\n"  \
+            "Experiments show that jemalloc saves some memory compared to the native allocator because it is more fragmentation resistant. To use, install jemalloc as a library and modify cassandra-env.sh (instructions in file)."  \
+    )   \
+    /* Counter caches properties */ \
+    /* Counter cache helps to reduce counter locks' contention for hot counter cells. In case of RF = 1 a counter cache hit will cause Cassandra to skip the read before write entirely. With RF > 1 a counter cache hit will still help to reduce the duration of the lock hold, helping with hot counter cell updates, but will not allow skipping the read entirely. Only the local (clock, count) tuple of a counter cell is kept in memory, not the whole counter, so it's relatively cheap. */    \
+    /* Note: Reducing the size counter cache may result in not getting the hottest keys loaded on start-up. */  \
+    val(counter_cache_size_in_mb, uint32_t, 0, Unused,     \
+            "When no value is specified a minimum of 2.5% of Heap or 50MB. If you perform counter deletes and rely on low gc_grace_seconds, you should disable the counter cache. To disable, set to 0"  \
+    )   \
+    val(counter_cache_save_period, uint32_t, 7200, Unused,     \
+            "Duration after which Cassandra should save the counter cache (keys only). Caches are saved to saved_caches_directory."  \
+    )   \
+    val(counter_cache_keys_to_save, uint32_t, 0, Unused,     \
+            "Number of keys from the counter cache to save. When disabled all keys are saved."  \
+    )   \
+    /* Tombstone settings */    \
+    /* When executing a scan, within or across a partition, tombstones must be kept in memory to allow returning them to the coordinator. The coordinator uses them to ensure other replicas know about the deleted rows. Workloads that generate numerous tombstones may cause performance problems and exhaust the server heap. See Cassandra anti-patterns: Queues and queue-like datasets. Adjust these thresholds only if you understand the impact and want to scan more tombstones. Additionally, you can adjust these thresholds at runtime using the StorageServiceMBean. */   \
+    /* Related information: Cassandra anti-patterns: Queues and queue-like datasets */  \
+    val(tombstone_warn_threshold, uint32_t, 1000, Unused,     \
+            "The maximum number of tombstones a query can scan before warning."  \
+    )   \
+    val(tombstone_failure_threshold, uint32_t, 100000, Unused,     \
+            "The maximum number of tombstones a query can scan before aborting."  \
+    )   \
+    /* Network timeout settings */  \
+    val(range_request_timeout_in_ms, uint32_t, 10000, Unused,     \
+            "The time in milliseconds that the coordinator waits for sequential or index scans to complete."  \
+    )   \
+    val(read_request_timeout_in_ms, uint32_t, 5000, Unused,     \
+            "The time that the coordinator waits for read operations to complete"  \
+    )   \
+    val(counter_write_request_timeout_in_ms, uint32_t, 5000, Unused,     \
+            "The time that the coordinator waits for counter writes to complete."  \
+    )   \
+    val(cas_contention_timeout_in_ms, uint32_t, 5000, Unused,     \
+            "The time that the coordinator continues to retry a CAS (compare and set) operation that contends with other proposals for the same row."  \
+    )   \
+    val(truncate_request_timeout_in_ms, uint32_t, 10000, Unused,     \
+            "The time that the coordinator waits for truncates (remove all data from a table) to complete. The long default value allows for a snapshot to be taken before removing the data. If auto_snapshot is disabled (not recommended), you can reduce this time."  \
+    )   \
+    val(write_request_timeout_in_ms, uint32_t, 10000, Unused,     \
+            "The time in milliseconds that the coordinator waits for write operations to complete.\n"  \
+            "Related information: About hinted handoff writes"  \
+    )   \
+    val(request_timeout_in_ms, uint32_t, 10000, Unused,     \
+            "The default timeout for other, miscellaneous operations.\n"  \
+            "Related information: About hinted handoff writes"  \
+    )   \
+    /* Inter-node settings */   \
+    val(cross_node_timeout, bool, false, Unused,                \
+            "Enable or disable operation timeout information exchange between nodes (to accurately measure request timeouts). If disabled Cassandra assumes the request was forwarded to the replica instantly by the coordinator.\n"   \
+            "CAUTION:\n"    \
+            "Before enabling this property make sure NTP (network time protocol) is installed and the times are synchronized between the nodes."  \
+    )   \
+    val(internode_send_buff_size_in_bytes, uint32_t, 0, Unused,     \
+            "Sets the sending socket buffer size in bytes for inter-node calls.\n"  \
+            "When setting this parameter and internode_recv_buff_size_in_bytes, the buffer size is limited by net.core.wmem_max. When unset, buffer size is defined by net.ipv4.tcp_wmem. See man tcp and:\n"   \
+            "\n"    \
+            "\t/proc/sys/net/core/wmem_max\n"   \
+            "\t/proc/sys/net/core/rmem_max\n"   \
+            "\t/proc/sys/net/ipv4/tcp_wmem\n"   \
+            "\t/proc/sys/net/ipv4/tcp_wmem\n"   \
+    )   \
+    val(internode_recv_buff_size_in_bytes, uint32_t, 0, Unused,     \
+            "Sets the receiving socket buffer size in bytes for inter-node calls."  \
+    )   \
+    val(internode_compression, sstring, "all", Unused,     \
+            "Controls whether traffic between nodes is compressed. The valid values are:\n" \
+            "\n"    \
+            "\tall: All traffic is compressed.\n"   \
+            "\tdc : Traffic between data centers is compressed.\n"  \
+            "\tnone : No compression."  \
+    )   \
+    val(inter_dc_tcp_nodelay, bool, false, Unused,     \
+            "Enable or disable tcp_nodelay for inter-data center communication. When disabled larger, but fewer, network packets are sent. This reduces overhead from the TCP protocol itself. However, if cross data-center responses are blocked, it will increase latency."  \
+    )   \
+    val(streaming_socket_timeout_in_ms, uint32_t, 0, Unused,     \
+            "Enable or disable socket timeout for streaming operations. When a timeout occurs during streaming, streaming is retried from the start of the current file. Avoid setting this value too low, as it can result in a significant amount of data re-streaming."  \
+    )   \
+    /* Native transport (CQL Binary Protocol) */    \
+    val(start_native_transport, bool, true, Unused,                \
+            "Enable or disable the native transport server. Uses the same address as the rpc_address, but the port is different from the rpc_port. See native_transport_port."  \
+    )   \
+    val(native_transport_port, uint16_t, 9042, Used,                \
+            "Port on which the CQL native transport listens for clients."  \
+    )   \
+    val(native_transport_max_threads, uint32_t, 128, Invalid,                \
+            "The maximum number of thread handling requests. The meaning is the same as rpc_max_threads.\n"  \
+            "Default is different (128 versus unlimited).\n"  \
+            "No corresponding native_transport_min_threads.\n"  \
+            "Idle threads are stopped after 30 seconds.\n"  \
+    )   \
+    val(native_transport_max_frame_size_in_mb, uint32_t, 256, Unused,                \
+            "The maximum size of allowed frame. Frame (requests) larger than this are rejected as invalid."  \
+    )   \
+    /* RPC (remote procedure call) settings */  \
+    /* Settings for configuring and tuning client connections. */   \
+    val(broadcast_rpc_address, sstring, /* unset */, Unused,    \
+            "RPC address to broadcast to drivers and other Cassandra nodes. This cannot be set to 0.0.0.0. If blank, it is set to the value of the rpc_address or rpc_interface. If rpc_address or rpc_interfaceis set to 0.0.0.0, this property must be set.\n"    \
+    )   \
+    val(rpc_port, uint16_t, 9160, Used,                \
+            "Thrift port for client connections."  \
+    )   \
+    val(start_rpc, bool, true, Unused,                \
+            "Starts the Thrift RPC server"  \
+    )   \
+    val(rpc_keepalive, bool, true, Unused,     \
+            "Enable or disable keepalive on client connections (RPC or native)."  \
+    )   \
+    val(rpc_max_threads, uint32_t, 0, Invalid,     \
+            "Regardless of your choice of RPC server (rpc_server_type), the number of maximum requests in the RPC thread pool dictates how many concurrent requests are possible. However, if you are using the parameter sync in the rpc_server_type, it also dictates the number of clients that can be connected. For a large number of client connections, this could cause excessive memory usage for the thread stack. Connection pooling on the client side is highly recommended. Setting a maximum thread pool size acts as a safeguard against misbehaved clients. If the maximum is reached, Cassandra blocks additional connections until a client disconnects."  \
+    )   \
+    val(rpc_min_threads, uint32_t, 16, Invalid,     \
+            "Sets the minimum thread pool size for remote procedure calls."  \
+    )   \
+    val(rpc_recv_buff_size_in_bytes, uint32_t, 0, Unused,     \
+            "Sets the receiving socket buffer size for remote procedure calls."  \
+    )                                                   \
+    val(rpc_send_buff_size_in_bytes, uint32_t, 0, Unused,     \
+            "Sets the sending socket buffer size in bytes for remote procedure calls."  \
+    )                                                   \
+    val(rpc_server_type, sstring, "sync", Unused,     \
+            "Cassandra provides three options for the RPC server. On Windows, sync is about 30% slower than hsha. On Linux, sync and hsha performance is about the same, but hsha uses less memory.\n"  \
+            "\n"    \
+            "\tsync    (Default One thread per Thrift connection.) For a very large number of clients, memory is the limiting factor. On a 64-bit JVM, 180KB is the minimum stack size per thread and corresponds to your use of virtual memory. Physical memory may be limited depending on use of stack space.\n"   \
+            "\thsh      Half synchronous, half asynchronous. All Thrift clients are handled asynchronously using a small number of threads that does not vary with the number of clients and thus scales well to many clients. The RPC requests are synchronous (one thread per active request).\n"   \
+            "\t         Note: When selecting this option, you must change the default value (unlimited) of rpc_max_threads.\n"   \
+            "\tYour own RPC server: You must provide a fully-qualified class name of an o.a.c.t.TServerFactory that can create a server instance."  \
+    )   \
+    /* Advanced fault detection settings */ \
+    /* Settings to handle poorly performing or failing nodes. */    \
+    val(dynamic_snitch_badness_threshold, double, 0, Unused,     \
+            "Sets the performance threshold for dynamically routing requests away from a poorly performing node. A value of 0.2 means Cassandra continues to prefer the static snitch values until the node response time is 20% worse than the best performing node. Until the threshold is reached, incoming client requests are statically routed to the closest replica (as determined by the snitch). Having requests consistently routed to a given replica can help keep a working set of data hot when read repair is less than 1."  \
+    )   \
+    val(dynamic_snitch_reset_interval_in_ms, uint32_t, 60000, Unused,     \
+            "Time interval in milliseconds to reset all node scores, which allows a bad node to recover."  \
+    )   \
+    val(dynamic_snitch_update_interval_in_ms, uint32_t, 100, Unused,     \
+            "The time interval for how often the snitch calculates node scores. Because score calculation is CPU intensive, be careful when reducing this interval."  \
+    )   \
+    val(hinted_handoff_enabled, bool, true, Unused,     \
+            "Enable or disable hinted handoff. To enable per data center, add data center list. For example: hinted_handoff_enabled: DC1,DC2. A hint indicates that the write needs to be replayed to an unavailable node. Where Cassandra writes the hint depends on the version:\n"  \
+            "\n"    \
+            "\tPrior to 1.0: Writes to a live replica node.\n"  \
+            "\t1.0 and later: Writes to the coordinator node.\n"  \
+            "Related information: About hinted handoff writes"  \
+    )   \
+    val(hinted_handoff_throttle_in_kb, uint32_t, 1024, Unused,     \
+            "Maximum throttle per delivery thread in kilobytes per second. This rate reduces proportionally to the number of nodes in the cluster. For example, if there are two nodes in the cluster, each delivery thread will use the maximum rate. If there are three, each node will throttle to half of the maximum, since the two nodes are expected to deliver hints simultaneously."  \
+    )   \
+    val(max_hint_window_in_ms, uint32_t, 10800000, Unused,     \
+            "Maximum amount of time that hints are generates hints for an unresponsive node. After this interval, new hints are no longer generated until the node is back up and responsive. If the node goes down again, a new interval begins. This setting can prevent a sudden demand for resources when a node is brought back online and the rest of the cluster attempts to replay a large volume of hinted writes.\n"  \
+            "Related information: Failure detection and recovery"  \
+    )   \
+    val(max_hints_delivery_threads, uint32_t, 2, Invalid,     \
+            "Number of threads with which to deliver hints. In multiple data-center deployments, consider increasing this number because cross data-center handoff is generally slower."  \
+    )   \
+    val(batchlog_replay_throttle_in_kb, uint32_t, 1024, Unused,     \
+            "Total maximum throttle. Throttling is reduced proportionally to the number of nodes in the cluster."  \
+    )   \
+    /* Request scheduler properties */  \
+    /* Settings to handle incoming client requests according to a defined policy. If you need to use these properties, your nodes are overloaded and dropping requests. It is recommended that you add more nodes and not try to prioritize requests. */    \
+    val(request_scheduler, sstring, "org.apache.cassandra.scheduler.NoScheduler", Unused,     \
+            "Defines a scheduler to handle incoming client requests according to a defined policy. This scheduler is useful for throttling client requests in single clusters containing multiple keyspaces. This parameter is specifically for requests from the client and does not affect inter-node communication. Valid values are:\n" \
+            "\n"    \
+            "\torg.apache.cassandra.scheduler.NoScheduler   No scheduling takes place.\n"   \
+            "\torg.apache.cassandra.scheduler.RoundRobinScheduler   Round robin of client requests to a node with a separate queue for each request_scheduler_id property.\n"   \
+            "\tA Java class that implements the RequestScheduler interface."  \
+            , "org.apache.cassandra.scheduler.NoScheduler"  \
+            , "org.apache.cassandra.scheduler.RoundRobinScheduler"  \
+    )   \
+    val(request_scheduler_id, sstring, /* keyspace */, Unused,     \
+            "An identifier on which to perform request scheduling. Currently the only valid value is keyspace. See weights."  \
+    )   \
+    val(request_scheduler_options, string_map, /* disabled */, Unused,     \
+            "Contains a list of properties that define configuration options for request_scheduler:\n"  \
+            "\n"    \
+            "\tthrottle_limit: The number of in-flight requests per client. Requests beyond this limit are queued up until running requests complete. Recommended value is ((concurrent_reads + concurrent_writes) × 2)\n" \
+            "\tdefault_weight: (Default: 1 **)  How many requests are handled during each turn of the RoundRobin.\n" \
+            "\tweights: (Default: Keyspace: 1)  Takes a list of keyspaces. It sets how many requests are handled during each turn of the RoundRobin, based on the request_scheduler_id."  \
+    )   \
+    /* Thrift interface properties */   \
+    /* Legacy API for older clients. CQL is a simpler and better API for Cassandra. */  \
+    val(thrift_framed_transport_size_in_mb, uint32_t, 15, Unused,     \
+            "Frame size (maximum field length) for Thrift. The frame is the row or part of the row the application is inserting."  \
+    )   \
+    val(thrift_max_message_length_in_mb, uint32_t, 16, Unused,     \
+            "The maximum length of a Thrift message in megabytes, including all fields and internal Thrift overhead (1 byte of overhead for each frame). Message length is usually used in conjunction with batches. A frame length greater than or equal to 24 accommodates a batch with four inserts, each of which is 24 bytes. The required message length is greater than or equal to 24+24+24+24+4 (number of frames)."  \
+    )   \
+    /* Security properties */   \
+    /* Server and client security settings. */  \
+    val(authenticator, sstring, "org.apache.cassandra.auth.AllowAllAuthenticator", Unused,     \
+            "The authentication backend. It implements IAuthenticator, which is used to identify users. The available authenticators are:\n"    \
+            "\n"    \
+            "\torg.apache.cassandra.auth.AllowAllAuthenticator : Disables authentication; no checks are performed.\n"   \
+            "\torg.apache.cassandra.auth.PasswordAuthenticator : Authenticates users with user names and hashed passwords stored in the system_auth.credentials table. If you use the default, 1, and the node with the lone replica goes down, you will not be able to log into the cluster because the system_auth keyspace was not replicated.\n"  \
+            "Related information: Internal authentication"  \
+            , "org.apache.cassandra.auth.AllowAllAuthenticator" \
+            , "org.apache.cassandra.auth.PasswordAuthenticator" \
+    )   \
+    val(internode_authenticator, sstring, "enabled", Unused,     \
+            "Internode authentication backend. It implements org.apache.cassandra.auth.AllowAllInternodeAuthenticator to allows or disallow connections from peer nodes."  \
+    )   \
+    val(authorizer, sstring, "org.apache.cassandra.auth.AllowAllAuthorizer", Unused,     \
+            "The authorization backend. It implements IAuthenticator, which limits access and provides permissions. The available authorizers are:\n"    \
+            "\n"    \
+            "\tAllowAllAuthorizer : Disables authorization; allows any action to any user.\n"   \
+            "\tCassandraAuthorizer : Stores permissions in system_auth.permissions table. If you use the default, 1, and the node with the lone replica goes down, you will not be able to log into the cluster because the system_auth keyspace was not replicated.\n"  \
+            "Related information: Object permissions"   \
+            , "org.apache.cassandra.auth.AllowAllAuthorizer" \
+            , "org.apache.cassandra.auth.CassandraAuthorizer" \
+    )   \
+    val(permissions_validity_in_ms, uint32_t, 2000, Unused,     \
+            "How long permissions in cache remain valid. Depending on the authorizer, such as CassandraAuthorizer, fetching permissions can be resource intensive. This setting disabled when set to 0 or when AllowAllAuthorizer is set.\n"  \
+            "Related information: Object permissions"   \
+    )   \
+    val(permissions_update_interval_in_ms, uint32_t, 2000, Unused,     \
+            "Refresh interval for permissions cache (if enabled). After this interval, cache entries become eligible for refresh. On next access, an async reload is scheduled and the old value is returned until it completes. If permissions_validity_in_ms , then this property must benon-zero."   \
+    )   \
+    val(server_encryption_options, string_map, /*none*/, Unused,     \
+            "Enable or disable inter-node encryption. You must also generate keys and provide the appropriate key and trust store locations and passwords. No custom encryption options are currently enabled. The available options are:\n"    \
+            "\n"    \
+            "internode_encryption : (Default: none ) Enable or disable encryption of inter-node communication using the TLS_RSA_WITH_AES_128_CBC_SHA cipher suite for authentication, key exchange, and encryption of data transfers. The available inter-node options are:\n"  \
+            "\tall : Encrypt all inter-node communications.\n"  \
+            "\tnone : No encryption.\n" \
+            "\tdc : Encrypt the traffic between the data centers (server only).\n"  \
+            "\track : Encrypt the traffic between the racks(server only).\n"    \
+            "\tkeystore : (Default: conf/.keystore ) The location of a Java keystore (JKS) suitable for use with Java Secure Socket Extension (JSSE), which is the Java version of the Secure Sockets Layer (SSL), and Transport Layer Security (TLS) protocols. The keystore contains the private key used to encrypt outgoing messages.\n"    \
+            "\tkeystore_password : (Default: cassandra ) Password for the keystore.\n"  \
+            "\ttruststore : (Default: conf/.truststore ) Location of the truststore containing the trusted certificate for authenticating remote servers.\n"    \
+            "\ttruststore_password : (Default: cassandra ) Password for the truststore.\n"  \
+            "\n"    \
+            "The passwords used in these options must match the passwords used when generating the keystore and truststore. For instructions on generating these files, see Creating a Keystore to Use with JSSE.\n"   \
+            "\n"    \
+            "The advanced settings are:\n"  \
+            "\n"    \
+            "\tprotocol : (Default: TLS )\n"    \
+            "\talgorithm : (Default: SunX509 )\n"   \
+            "\tstore_type : (Default: JKS )\n"  \
+            "\tcipher_suites : (Default: TLS_RSA_WITH_AES_128_CBC_SHA , TLS_RSA_WITH_AES_256_CBC_SHA )\n"   \
+            "\trequire_client_auth : (Default: false ) Enables or disables certificate authentication.\n" \
+            "Related information: Node-to-node encryption"  \
+    )   \
+    val(client_encryption_options, string_map, /*none*/, Unused,     \
+            "Enable or disable client-to-node encryption. You must also generate keys and provide the appropriate key and trust store locations and passwords. No custom encryption options are currently enabled. The available options are:\n"    \
+            "\n"    \
+            "\tenabled : (Default: false ) To enable, set to true.\n"    \
+            "\tkeystore : (Default: conf/.keystore ) The location of a Java keystore (JKS) suitable for use with Java Secure Socket Extension (JSSE), which is the Java version of the Secure Sockets Layer (SSL), and Transport Layer Security (TLS) protocols. The keystore contains the private key used to encrypt outgoing messages.\n"    \
+            "\tkeystore_password : (Default: cassandra ) Password for the keystore. This must match the password used when generating the keystore and truststore.\n"    \
+            "\trequire_client_auth : (Default: false ) Enables or disables certificate authentication. (Available starting with Cassandra 1.2.3.)\n"    \
+            "\ttruststore : (Default: conf/.truststore ) Set if require_client_auth is true.\n"    \
+            "\ttruststore_password : <truststore_password> Set if require_client_auth is true.\n"    \
+            "\n"    \
+            "The advanced settings are:\n"    \
+            "\n"    \
+            "\tprotocol : (Default: TLS )\n"    \
+            "\talgorithm : (Default: SunX509 )\n"    \
+            "\tstore_type : (Default: JKS )\n"    \
+            "\tcipher_suites : (Default: TLS_RSA_WITH_AES_128_CBC_SHA , TLS_RSA_WITH_AES_256_CBC_SHA )\n"  \
+            "Related information: Client-to-node encryption"    \
+    )   \
+    val(ssl_storage_port, uint32_t, 7001, Unused,     \
+            "The SSL port for encrypted communication. Unused unless enabled in encryption_options."  \
+    )                                                   \
+    /* done! */
+
+#define _make_value_member(name, type, deflt, status, desc, ...)    \
+    value<type, value_status::status> name;
+
+    _make_config_values(_make_value_member)
+
+private:
+    struct bound_value;
+    struct bound_values;
+    struct cmdline_args;
+    struct yaml_config;
+
+    int _dummy;
+};
+
+
+}

@@ -804,7 +804,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      * Keyspace metadata serialization/deserialization.
      */
 
-    std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions)
+    std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<::config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions)
     {
         std::vector<mutation> mutations;
         schema_ptr s = keyspaces();
@@ -863,7 +863,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      *
      * @param partition Keyspace attributes in serialized form
      */
-    lw_shared_ptr<config::ks_meta_data> create_keyspace_from_schema_partition(const std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>& result)
+    lw_shared_ptr<::config::ks_meta_data> create_keyspace_from_schema_partition(const std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>& result)
     {
         auto&& rs = result.second;
         if (rs->empty()) {
@@ -874,7 +874,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         auto strategy_name = row.get_nonnull<sstring>("strategy_class");
         std::unordered_map<sstring, sstring> strategy_options;
         bool durable_writes = row.get_nonnull<bool>("durable_writes");
-        return make_lw_shared<config::ks_meta_data>(keyspace_name, strategy_name, strategy_options, durable_writes);
+        return make_lw_shared<::config::ks_meta_data>(keyspace_name, strategy_name, strategy_options, durable_writes);
     }
 
 #if 0

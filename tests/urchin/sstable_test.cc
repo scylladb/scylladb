@@ -11,7 +11,9 @@
 #include "core/align.hh"
 #include "core/do_with.hh"
 #include "sstables/sstables.hh"
+#include "sstables/key.hh"
 #include "tests/test-utils.hh"
+#include "schema.hh"
 #include <memory>
 
 using namespace sstables;
@@ -56,6 +58,10 @@ public:
         return _sst->read_summary();
     }
 
+    future<summary_entry&> read_summary_entry(size_t i) {
+        return _sst->read_summary_entry(i);
+    }
+
     summary& get_summary() {
         return _sst->_summary;
     }
@@ -68,6 +74,10 @@ public:
         return _sst->_components;
     }
 
+    template <typename T>
+    int binary_search(const T& entries, const key& sk) {
+        return _sst->binary_search(entries, sk);
+    }
 };
 }
 
@@ -201,7 +211,7 @@ SEASTAR_TEST_CASE(composite_index_read_0_21_20) {
 template<uint64_t Position, uint64_t EntryPosition, uint64_t EntryKeySize>
 future<> summary_query(sstring path, int generation) {
     return reusable_sst(path, generation).then([] (sstable_ptr ptr) {
-        return ptr->read_summary_entry(Position).then([ptr] (auto entry) {
+        return sstables::test(ptr).read_summary_entry(Position).then([ptr] (auto entry) {
             BOOST_REQUIRE(entry.position == EntryPosition);
             BOOST_REQUIRE(entry.key.size() == EntryKeySize);
             return make_ready_future<>();
@@ -773,7 +783,7 @@ SEASTAR_TEST_CASE(find_key_map) {
         kk.push_back(map);
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(summary.binary_search(key) == 0);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == 0);
     });
 }
 
@@ -793,7 +803,7 @@ SEASTAR_TEST_CASE(find_key_set) {
         kk.push_back(set);
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(summary.binary_search(key) == 0);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == 0);
     });
 }
 
@@ -813,7 +823,7 @@ SEASTAR_TEST_CASE(find_key_list) {
         kk.push_back(list);
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(summary.binary_search(key) == 0);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == 0);
     });
 }
 
@@ -831,7 +841,7 @@ SEASTAR_TEST_CASE(find_key_composite) {
         kk.push_back(boost::any(b2));
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
-        BOOST_REQUIRE(summary.binary_search(key) == 0);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == 0);
     });
 }
 
@@ -842,7 +852,7 @@ SEASTAR_TEST_CASE(all_in_place) {
         int idx = 0;
         for (auto& e: summary.entries) {
             auto key = sstables::key::from_bytes(e.key);
-            BOOST_REQUIRE(summary.binary_search(key) == idx++);
+            BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == idx++);
         }
     });
 }
@@ -861,6 +871,6 @@ SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
 
         auto key = sstables::key::from_deeply_exploded(*s, kk);
         // (result + 1) * -1 -1 = 0
-        BOOST_REQUIRE(summary.binary_search(key) == -2);
+        BOOST_REQUIRE(sstables::test(sstp).binary_search(summary.entries, key) == -2);
     });
 }
