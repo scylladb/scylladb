@@ -170,6 +170,7 @@ urchin_tests = [
     'tests/urchin/message',
     'tests/urchin/gossip',
     'tests/urchin/compound_test',
+    'tests/urchin/config_test',
 ]
 
 tests = [
@@ -302,7 +303,7 @@ boost_test_lib = [
 ]
 
 defines = []
-libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt'
+libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt -lyaml-cpp'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
 urchin_libs = '-llz4 -lsnappy -lz'
 
@@ -398,6 +399,7 @@ urchin_core = (['database.cc',
                  'db/legacy_schema_tables.cc',
                  'db/commitlog/commitlog.cc',
                  'db/serializer.cc',
+                 'db/config.cc',
                  'io/io.cc',
                  'utils/utils.cc',
                  'utils/UUID_gen.cc',
@@ -470,6 +472,7 @@ for t in urchin_tests:
 
 deps['tests/urchin/cql_query_test'] += boost_test_lib
 deps['tests/urchin/commitlog_test'] += boost_test_lib
+deps['tests/urchin/config_test'] += boost_test_lib
 deps['tests/urchin/sstable_test'] += boost_test_lib
 deps['tests/urchin/hash_test'] += boost_test_lib
 deps['tests/urchin/serializer_test'] += boost_test_lib
