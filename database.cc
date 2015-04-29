@@ -264,10 +264,12 @@ database::init_commitlog() {
 
 unsigned
 database::shard_of(const dht::token& t) {
-    if (t._data.empty()) {
+    if (t._data.size() < 2) {
         return 0;
     }
-    return uint8_t(t._data[0]) % smp::count;
+    uint16_t v = uint8_t(t._data[t._data.size() - 1])
+            | (uint8_t(t._data[t._data.size() - 2]) << 8);
+    return v % smp::count;
 }
 
 unsigned
