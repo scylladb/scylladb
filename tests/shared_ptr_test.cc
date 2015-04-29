@@ -50,3 +50,17 @@ BOOST_AUTO_TEST_CASE(explot_dynamic_cast_use_after_free_problem) {
     }
     BOOST_ASSERT(!A::destroyed);
 }
+
+class C : public enable_shared_from_this<C> {
+public:
+    shared_ptr<C> dup() { return shared_from_this(); }
+    shared_ptr<const C> get() const { return shared_from_this(); }
+};
+
+BOOST_AUTO_TEST_CASE(test_const_ptr) {
+    shared_ptr<C> a = make_shared<C>();
+    shared_ptr<const C> ca = a;
+    BOOST_REQUIRE(ca == a);
+    shared_ptr<const C> cca = ca->get();
+    BOOST_REQUIRE(cca == ca);
+}
