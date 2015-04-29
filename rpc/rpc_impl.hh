@@ -77,11 +77,31 @@ struct reply_payload_base {
 
 template <typename T>
 struct reply_payload : reply_payload_base {
-    T v;
+    void value_set() {
+        v_set = true;
+    }
+    void value_set(T&& v) {
+        new (&u.v) T(std::move(v));
+        value_set();
+    }
+    union U {
+        U() {}
+        ~U() {}
+        typename std::aligned_storage<sizeof(T), alignof(T)>::type pad;
+        T v;
+    } u;
+    ~reply_payload() {
+        if (v_set) {
+            u.v.~T();
+        }
+    }
+private:
+    bool v_set = false; // set it to true when U::v is valid object
 };
 
 template<>
 struct reply_payload<void> : reply_payload_base {
+    void value_set() {}
 };
 
 template<typename Payload, typename... T>
@@ -90,6 +110,7 @@ struct rcv_reply_base : reply_payload<Payload> {
     promise<T...> p;
     template<typename... V>
     void set_value(V&&... v) {
+        this->value_set();
         done = true;
         p.set_value(std::forward<V>(v)...);
     }
@@ -103,8 +124,8 @@ struct rcv_reply_base : reply_payload<Payload> {
 template<typename Serializer, typename MsgType, typename T>
 struct rcv_reply : rcv_reply_base<T, T> {
     inline future<> get_reply(typename protocol<Serializer, MsgType>::client& dst) {
-        return unmarshall(dst.serializer(), dst.in(), std::tie(this->v)).then([this] {
-            this->set_value(this->v);
+        return unmarshall(dst.serializer(), dst.in(), std::tie(this->u.v)).then([this] {
+            this->set_value(this->u.v);
         });
     }
 };
@@ -112,8 +133,8 @@ struct rcv_reply : rcv_reply_base<T, T> {
 template<typename Serializer, typename MsgType, typename... T>
 struct rcv_reply<Serializer, MsgType, future<T...>> : rcv_reply_base<std::tuple<T...>, T...> {
     inline future<> get_reply(typename protocol<Serializer, MsgType>::client& dst) {
-        return unmarshall(dst.serializer(), dst.in(), ref_tuple(this->v)).then([this] {
-            this->set_value(this->v);
+        return unmarshall(dst.serializer(), dst.in(), ref_tuple(this->u.v)).then([this] {
+            this->set_value(this->u.v);
         });
     }
 };
@@ -232,10 +253,10 @@ template<typename Serializer, typename MsgType, typename T>
 struct snd_reply : snd_reply_base<Serializer, MsgType, T> {
     snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, T>(xid) {}
     inline void set_val(std::tuple<T>&& val) {
-        this->v = std::move(std::get<0>(val));
+        this->value_set(std::move(std::get<0>(val)));
     }
     inline future<> reply(typename protocol<Serializer, MsgType>::server::connection& client) {
-        return marshall(client.serializer(), client.out(), std::tie(this->id, this->v));
+        return marshall(client.serializer(), client.out(), std::tie(this->id, this->u.v));
     }
 };
 
@@ -243,10 +264,10 @@ template<typename Serializer, typename MsgType, typename... T>
 struct snd_reply<Serializer, MsgType, future<T...>> : snd_reply_base<Serializer, MsgType, std::tuple<T...>> {
     snd_reply(id_type xid) : snd_reply_base<Serializer, MsgType, std::tuple<T...>>(xid) {}
     inline void set_val(std::tuple<T...>&& val) {
-        this->v = std::move(val);
+        this->value_set(std::move(val));
     }
     inline future<> reply(typename protocol<Serializer, MsgType>::server::connection& client) {
-        return marshall(client.serializer(), client.out(), std::tuple_cat(std::tie(this->id), ref_tuple(this->v)));
+        return marshall(client.serializer(), client.out(), std::tuple_cat(std::tie(this->id), ref_tuple(this->u.v)));
     }
 };
 
