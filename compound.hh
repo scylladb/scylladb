@@ -214,6 +214,9 @@ public:
     iterator end(const bytes_view& v) const {
         return iterator(typename iterator::end_iterator_tag(), v);
     }
+    boost::iterator_range<iterator> components(const bytes_view& v) const {
+        return { begin(v), end(v) };
+    }
     auto iter_items(const bytes_view& v) {
         return boost::iterator_range<iterator>(begin(v), end(v));
     }
