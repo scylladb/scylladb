@@ -31,6 +31,16 @@ murmur3_partitioner::get_token(bytes_view key) {
     return token{token::kind::key, std::move(b)};
 }
 
+token
+murmur3_partitioner::get_token(const sstables::key_view& key) {
+    return get_token(bytes_view(key));
+}
+
+token
+murmur3_partitioner::get_token(const partition_key& key) {
+    return get_token(bytes_view(key));
+}
+
 inline long long_token(const token& t) {
 
     if (t._data.size() != sizeof(long)) {
