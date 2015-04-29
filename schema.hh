@@ -92,8 +92,8 @@ public:
         bytes name;
         data_type type;
         struct name_compare {
-            shared_ptr<abstract_type> type;
-            name_compare(shared_ptr<abstract_type> type) : type(type) {}
+            data_type type;
+            name_compare(data_type type) : type(type) {}
             bool operator()(const column& cd1, const column& cd2) const {
                 return type->less(cd1.name, cd2.name);
             }
@@ -111,7 +111,7 @@ public:
         std::vector<column> clustering_key,
         std::vector<column> regular_columns,
         std::vector<column> static_columns,
-        shared_ptr<abstract_type> regular_column_name_type,
+        data_type regular_column_name_type,
         sstring comment = {});
     schema(const schema&);
     const utils::UUID& id() const {

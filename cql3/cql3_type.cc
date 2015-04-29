@@ -291,7 +291,7 @@ cql3_type::values() {
 }
 
 shared_ptr<cql3_type>
-make_cql3_tuple_type(shared_ptr<tuple_type_impl> t) {
+make_cql3_tuple_type(tuple_type t) {
     auto name = sprint("tuple<%s>",
                        ::join(", ",
                             t->all_types()

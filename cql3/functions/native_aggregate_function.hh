@@ -37,8 +37,8 @@ namespace functions {
  */
 class native_aggregate_function : public native_function, public aggregate_function {
 protected:
-    native_aggregate_function(sstring name, shared_ptr<abstract_type> return_type,
-            std::vector<shared_ptr<abstract_type>> arg_types)
+    native_aggregate_function(sstring name, data_type return_type,
+            std::vector<data_type> arg_types)
         : native_function(std::move(name), std::move(return_type), std::move(arg_types)) {
     }
 
@@ -51,7 +51,7 @@ public:
 template <class Aggregate>
 class native_aggregate_function_using : public native_aggregate_function {
 public:
-    native_aggregate_function_using(sstring name, shared_ptr<abstract_type> type)
+    native_aggregate_function_using(sstring name, data_type type)
             : native_aggregate_function(std::move(name), type, {}) {
     }
     virtual std::unique_ptr<aggregate> new_aggregate() override {
@@ -61,7 +61,7 @@ public:
 
 template <class Aggregate>
 shared_ptr<native_aggregate_function>
-make_native_aggregate_function_using(sstring name, shared_ptr<abstract_type> type) {
+make_native_aggregate_function_using(sstring name, data_type type) {
     return ::make_shared<native_aggregate_function_using<Aggregate>>(name, type);
 }
 

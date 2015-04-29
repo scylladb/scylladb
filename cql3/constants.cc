@@ -45,7 +45,7 @@ operator<<(std::ostream&out, constants::type t)
 }
 
 bytes
-constants::literal::parsed_value(::shared_ptr<abstract_type> validator)
+constants::literal::parsed_value(data_type validator)
 {
     try {
         if (_type == type::HEX && validator == bytes_type) {

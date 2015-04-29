@@ -37,14 +37,14 @@ enum class allow_prefixes { no, yes };
 template<allow_prefixes AllowPrefixes = allow_prefixes::no>
 class compound_type final {
 private:
-    const std::vector<shared_ptr<abstract_type>> _types;
+    const std::vector<data_type> _types;
     const bool _byte_order_equal;
     const bool _byte_order_comparable;
 public:
     using prefix_type = compound_type<allow_prefixes::yes>;
     using value_type = std::vector<bytes>;
 
-    compound_type(std::vector<shared_ptr<abstract_type>> types)
+    compound_type(std::vector<data_type> types)
         : _types(std::move(types))
         , _byte_order_equal(std::all_of(_types.begin(), _types.end(), [] (auto t) {
                 return t->is_byte_order_equal();

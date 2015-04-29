@@ -76,7 +76,7 @@ public:
         bytes_ = to_bytes(_text);
     }
 
-    column_identifier(bytes bytes_, shared_ptr<abstract_type> type)
+    column_identifier(bytes bytes_, data_type type)
         : bytes_(std::move(bytes_))
         , _text(type->get_string(this->bytes_))
     { }

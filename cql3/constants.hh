@@ -126,7 +126,7 @@ public:
 
         virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver);
     private:
-        bytes parsed_value(::shared_ptr<abstract_type> validator);
+        bytes parsed_value(data_type validator);
     public:
         const sstring& get_raw_text() {
             return _text;

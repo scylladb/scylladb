@@ -91,7 +91,7 @@ lists::literal::to_string() const {
 }
 
 lists::value
-lists::value::from_serialized(bytes_view v, shared_ptr<list_type_impl> type, serialization_format sf) {
+lists::value::from_serialized(bytes_view v, list_type type, serialization_format sf) {
     try {
         // Collections have this small hack that validate cannot be called on a serialized object,
         // but compose does the validation (so we're fine).

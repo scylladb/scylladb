@@ -9,9 +9,9 @@
 
 
 template<typename Sequence>
-std::vector<::shared_ptr<abstract_type>>
+std::vector<data_type>
 get_column_types(const Sequence& column_definitions) {
-    std::vector<shared_ptr<abstract_type>> result;
+    std::vector<data_type> result;
     for (auto&& col : column_definitions) {
         result.push_back(col.type);
     }

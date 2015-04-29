@@ -772,7 +772,7 @@ void write_collection_value(bytes::iterator& out, serialization_format sf, data_
     type->serialize(value, out);
 }
 
-shared_ptr<map_type_impl>
+map_type
 map_type_impl::get_instance(data_type keys, data_type values, bool is_multi_cell) {
     return intern::get_instance(std::move(keys), std::move(values), is_multi_cell);
 }

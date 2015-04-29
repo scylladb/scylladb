@@ -38,9 +38,9 @@ public:
     const sstring ks_name;
     const sstring cf_name;
     const ::shared_ptr<column_identifier> name;
-    const ::shared_ptr<abstract_type> type;
+    const data_type type;
 
-    column_specification(sstring ks_name_, sstring cf_name_, ::shared_ptr<column_identifier> name_, ::shared_ptr<abstract_type> type_)
+    column_specification(sstring ks_name_, sstring cf_name_, ::shared_ptr<column_identifier> name_, data_type type_)
         : ks_name(std::move(ks_name_))
         , cf_name(std::move(cf_name_))
         , name(name_)

@@ -40,10 +40,10 @@ namespace functions {
 class abstract_function : public virtual function {
 protected:
     function_name _name;
-    std::vector<shared_ptr<abstract_type>> _arg_types;
-    shared_ptr<abstract_type> _return_type;
+    std::vector<data_type> _arg_types;
+    data_type _return_type;
 
-    abstract_function(function_name name, std::vector<shared_ptr<abstract_type>> arg_types, shared_ptr<abstract_type> return_type)
+    abstract_function(function_name name, std::vector<data_type> arg_types, data_type return_type)
             : _name(std::move(name)), _arg_types(std::move(arg_types)), _return_type(std::move(return_type)) {
     }
 
@@ -52,11 +52,11 @@ public:
         return _name;
     }
 
-    virtual const std::vector<shared_ptr<abstract_type>>&  arg_types() const override {
+    virtual const std::vector<data_type>&  arg_types() const override {
         return _arg_types;
     }
 
-    virtual shared_ptr<abstract_type> return_type() const {
+    virtual data_type return_type() const {
         return _return_type;
     }
 

@@ -62,7 +62,7 @@ public:
         explicit value(std::vector<bytes_opt> elements)
             : _elements(std::move(elements)) {
         }
-        static value from_serialized(bytes_view v, shared_ptr<list_type_impl> type, serialization_format sf);
+        static value from_serialized(bytes_view v, list_type type, serialization_format sf);
         virtual bytes_opt get(const query_options& options) override;
         virtual bytes get_with_protocol_version(serialization_format sf) override;
         bool equals(shared_ptr<list_type_impl> lt, const value& v);

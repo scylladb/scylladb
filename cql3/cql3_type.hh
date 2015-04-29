@@ -136,7 +136,7 @@ public:
     }
 };
 
-shared_ptr<cql3_type> make_cql3_tuple_type(shared_ptr<tuple_type_impl> t);
+shared_ptr<cql3_type> make_cql3_tuple_type(tuple_type t);
 
 #if 0
     public static class Custom implements CQL3Type
