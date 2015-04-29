@@ -195,7 +195,7 @@ static void get_row_slice(const row& cells, const std::vector<column_id>& column
                 }
             } else {
                 auto&& cell = i->second.as_collection_mutation();
-                auto&& ctype = static_pointer_cast<collection_type_impl>(def.type);
+                auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
                 auto m_view = ctype->deserialize_mutation_form(cell);
                 m_view.tomb.apply(tomb);
                 auto m_ser = ctype->serialize_mutation_form_only_live(m_view);
@@ -221,7 +221,7 @@ bool has_any_live_data(const row& cells, tombstone tomb, ColumnDefResolver&& id_
             }
         } else {
             auto&& cell = cell_or_collection.as_collection_mutation();
-            auto&& ctype = static_pointer_cast<collection_type_impl>(def.type);
+            auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
             if (ctype->is_any_live(cell, tomb)) {
                 return true;
             }

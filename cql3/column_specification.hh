@@ -58,7 +58,7 @@ public:
     }
     
     bool is_reversed_type() const {
-        return ::dynamic_pointer_cast<db::marshal::reversed_type>(type) != nullptr;
+        return ::dynamic_pointer_cast<const db::marshal::reversed_type>(type) != nullptr;
     }
 };
 

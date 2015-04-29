@@ -113,14 +113,14 @@ single_column_relation::to_receivers(schema_ptr schema, const column_definition&
     }
 
     if (is_contains_key()) {
-        if (!dynamic_cast<map_type_impl*>(receiver->type.get())) {
+        if (!dynamic_cast<const map_type_impl*>(receiver->type.get())) {
             throw exceptions::invalid_request_exception(sprint("Cannot use CONTAINS KEY on non-map column %s", receiver->name));
         }
     }
 
     if (_map_key) {
-        check_false(dynamic_cast<list_type_impl*>(receiver->type.get()), "Indexes on list entries (%s[index] = value) are not currently supported.", receiver->name);
-        check_true(dynamic_cast<map_type_impl*>(receiver->type.get()), "Column %s cannot be used as a map", receiver->name);
+        check_false(dynamic_cast<const list_type_impl*>(receiver->type.get()), "Indexes on list entries (%s[index] = value) are not currently supported.", receiver->name);
+        check_true(dynamic_cast<const map_type_impl*>(receiver->type.get()), "Column %s cannot be used as a map", receiver->name);
         check_true(receiver->type->is_multi_cell(), "Map-entry equality predicates on frozen map column %s are not supported", receiver->name);
         check_true(is_EQ(), "Only EQ relations are supported on map entries");
     }

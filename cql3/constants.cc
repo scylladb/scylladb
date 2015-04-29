@@ -140,7 +140,7 @@ void constants::deleter::execute(mutation& m, const exploded_clustering_prefix& 
     if (column.type->is_multi_cell()) {
         collection_type_impl::mutation coll_m;
         coll_m.tomb = params.make_tombstone();
-        auto ctype = static_pointer_cast<collection_type_impl>(column.type);
+        auto ctype = static_pointer_cast<const collection_type_impl>(column.type);
         m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(ctype->serialize_mutation_form(coll_m)));
     } else {
         m.set_cell(prefix, column, params.make_dead_cell());

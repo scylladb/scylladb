@@ -135,7 +135,7 @@ class reversed_type : public abstract_type {
 #endif
 
 public:
-    virtual bool is_reversed() override {
+    virtual bool is_reversed() const override {
         return true;
     }
 };

@@ -32,7 +32,7 @@ namespace cql3 {
 shared_ptr<operation>
 operation::set_element::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     using exceptions::invalid_request_exception;
-    auto rtype = dynamic_pointer_cast<collection_type_impl>(receiver.type);
+    auto rtype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!rtype) {
         throw invalid_request_exception(sprint("Invalid operation (%s) for non collection column %s", receiver, receiver.name()));
     } else if (!rtype->is_multi_cell()) {
@@ -64,7 +64,7 @@ shared_ptr<operation>
 operation::addition::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     auto v = _value->prepare(db, keyspace, receiver.column_specification);
 
-    auto ctype = dynamic_pointer_cast<collection_type_impl>(receiver.type);
+    auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
         fail(unimplemented::cause::COUNTERS);
         // FIXME: implelement
@@ -95,7 +95,7 @@ operation::addition::is_compatible_with(shared_ptr<raw_update> other) {
 
 shared_ptr<operation>
 operation::subtraction::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
-    auto ctype = dynamic_pointer_cast<collection_type_impl>(receiver.type);
+    auto ctype = dynamic_pointer_cast<const collection_type_impl>(receiver.type);
     if (!ctype) {
         fail(unimplemented::cause::COUNTERS);
 #if 0
@@ -114,7 +114,7 @@ operation::subtraction::prepare(database& db, const sstring& keyspace, const col
     } else if (&ctype->_kind == &collection_type_impl::kind::set) {
         return make_shared<sets::discarder>(receiver, _value->prepare(db, keyspace, receiver.column_specification));
     } else if (&ctype->_kind == &collection_type_impl::kind::map) {
-        auto&& mtype = dynamic_pointer_cast<map_type_impl>(ctype);
+        auto&& mtype = dynamic_pointer_cast<const map_type_impl>(ctype);
         // The value for a map subtraction is actually a set
         auto&& vr = make_shared<column_specification>(
                 receiver.column_specification->ks_name,
@@ -135,7 +135,7 @@ shared_ptr<operation>
 operation::prepend::prepare(database& db, const sstring& keyspace, const column_definition& receiver) {
     auto v = _value->prepare(db, keyspace, receiver.column_specification);
 
-    if (!dynamic_cast<list_type_impl*>(receiver.type.get())) {
+    if (!dynamic_cast<const list_type_impl*>(receiver.type.get())) {
         throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for non list column %s", receiver, receiver.name()));
     } else if (!receiver.type->is_multi_cell()) {
         throw exceptions::invalid_request_exception(sprint("Invalid operation (%s) for frozen list column %s", receiver, receiver.name()));
@@ -162,7 +162,7 @@ operation::set_value::prepare(database& db, const sstring& keyspace, const colum
         return ::make_shared<constants::setter>(receiver, v);
     }
 
-    auto& k = static_pointer_cast<collection_type_impl>(receiver.type)->_kind;
+    auto& k = static_pointer_cast<const collection_type_impl>(receiver.type)->_kind;
     if (&k == &collection_type_impl::kind::list) {
         return make_shared<lists::setter>(receiver, v);
     } else if (&k == &collection_type_impl::kind::set) {
@@ -193,7 +193,7 @@ operation::element_deletion::prepare(database& db, const sstring& keyspace, cons
     } else if (!receiver.type->is_multi_cell()) {
         throw exceptions::invalid_request_exception(sprint("Invalid deletion operation for frozen collection column %s", receiver.name()));
     }
-    auto ctype = static_pointer_cast<collection_type_impl>(receiver.type);
+    auto ctype = static_pointer_cast<const collection_type_impl>(receiver.type);
     if (&ctype->_kind == &collection_type_impl::kind::list) {
         auto&& idx = _element->prepare(db, keyspace, lists::index_spec_of(receiver.column_specification));
         return make_shared<lists::discarder_by_index>(receiver, std::move(idx));

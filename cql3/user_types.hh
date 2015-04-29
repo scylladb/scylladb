@@ -41,7 +41,7 @@ class user_types {
     user_types() = delete;
 public:
     static shared_ptr<column_specification> field_spec_of(shared_ptr<column_specification> column, size_t field) {
-        auto&& ut = static_pointer_cast<user_type_impl>(column->type);
+        auto&& ut = static_pointer_cast<const user_type_impl>(column->type);
         auto&& name = ut->field_name(field);
         auto&& sname = sstring(reinterpret_cast<const char*>(name.data()), name.size());
         return make_shared<column_specification>(
@@ -62,7 +62,7 @@ public:
 
         virtual shared_ptr<term> prepare(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) override {
             validate_assignable_to(db, keyspace, receiver);
-            auto&& ut = static_pointer_cast<user_type_impl>(receiver->type);
+            auto&& ut = static_pointer_cast<const user_type_impl>(receiver->type);
             bool all_terminal = true;
             std::vector<shared_ptr<term>> values;
             values.reserve(_entries.size());
@@ -104,7 +104,7 @@ public:
         }
     private:
         void validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
-            auto&& ut = dynamic_pointer_cast<user_type_impl>(receiver->type);
+            auto&& ut = dynamic_pointer_cast<const user_type_impl>(receiver->type);
             if (!ut) {
                 throw exceptions::invalid_request_exception(sprint("Invalid user type literal for %s of type %s", receiver->name, receiver->type->as_cql3_type()));
             }
@@ -171,7 +171,7 @@ public:
                 // Inside UDT values, we must force the serialization of collections to v3 whatever protocol
                 // version is in use since we're going to store directly that serialized value.
                 if (sf != serialization_format::use_32_bit() && _type->field_type(i)->is_collection() && buffers.back()) {
-                    auto&& ctype = static_pointer_cast<collection_type_impl>(_type->field_type(i));
+                    auto&& ctype = static_pointer_cast<const collection_type_impl>(_type->field_type(i));
                     buffers.back() = ctype->reserialize(sf, serialization_format::use_32_bit(), bytes_view(*buffers.back()));
                 }
             }

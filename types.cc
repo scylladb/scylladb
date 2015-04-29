@@ -41,7 +41,7 @@ struct simple_type_traits<db_clock::time_point> {
 template <typename T>
 struct simple_type_impl : abstract_type {
     simple_type_impl(sstring name) : abstract_type(std::move(name)) {}
-    virtual int32_t compare(bytes_view v1, bytes_view v2) override {
+    virtual int32_t compare(bytes_view v1, bytes_view v2) const override {
         if (v1.empty()) {
             return v2.empty() ? 0 : -1;
         }
@@ -52,13 +52,13 @@ struct simple_type_impl : abstract_type {
         T b = simple_type_traits<T>::read_nonempty(v2);
         return a == b ? 0 : a < b ? -1 : 1;
     }
-    virtual bool less(bytes_view v1, bytes_view v2) override {
+    virtual bool less(bytes_view v1, bytes_view v2) const override {
         return compare(v1, v2) < 0;
     }
     virtual bool is_byte_order_equal() const override {
         return true;
     }
-    virtual size_t hash(bytes_view v) override {
+    virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
 };
@@ -66,40 +66,40 @@ struct simple_type_impl : abstract_type {
 template<typename T>
 struct integer_type_impl : simple_type_impl<T> {
     integer_type_impl(sstring name) : simple_type_impl<T>(name) {}
-    virtual void serialize(const boost::any& value, bytes::iterator& out) override {
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         auto v = boost::any_cast<const T&>(value);
         auto u = net::hton(v);
         out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(u), out);
     }
-    virtual size_t serialized_size(const boost::any& value) override {
+    virtual size_t serialized_size(const boost::any& value) const override {
         auto v = boost::any_cast<const T&>(value);
         return sizeof(v);
     }
-    virtual boost::any deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) const override {
         return read_simple_opt<T>(v);
     }
-    T compose_value(const bytes& b) {
+    T compose_value(const bytes& b) const {
         if (b.size() != sizeof(T)) {
             throw marshal_exception();
         }
         return (T)net::ntoh(*reinterpret_cast<const T*>(b.begin()));
     }
-    bytes decompose_value(T v) {
+    bytes decompose_value(T v) const {
         bytes b(bytes::initialized_later(), sizeof(v));
         *reinterpret_cast<T*>(b.begin()) = (T)net::hton(v);
         return b;
     }
-    T parse_int(sstring_view s) {
+    T parse_int(sstring_view s) const {
         try {
             return boost::lexical_cast<T>(s.begin(), s.size());
         } catch (const boost::bad_lexical_cast& e) {
             throw marshal_exception(sprint("Invalid number format '%s'", s));
         }
     }
-    virtual bytes from_string(sstring_view s) override {
+    virtual bytes from_string(sstring_view s) const override {
         return decompose_value(parse_int(s));
     }
-    virtual sstring to_string(const bytes& b) override {
+    virtual sstring to_string(const bytes& b) const override {
         if (b.empty()) {
             return {};
         }
@@ -111,7 +111,7 @@ struct int32_type_impl : integer_type_impl<int32_t> {
     int32_type_impl() : integer_type_impl{"int32"}
     { }
 
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::int_;
     }
 };
@@ -120,10 +120,10 @@ struct long_type_impl : integer_type_impl<int64_t> {
     long_type_impl() : integer_type_impl{"long"}
     { }
 
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::bigint;
     }
-    virtual bool is_value_compatible_with_internal(abstract_type& other) override {
+    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == date_type.get() || &other == timestamp_type.get();
     }
 };
@@ -131,19 +131,19 @@ struct long_type_impl : integer_type_impl<int64_t> {
 struct string_type_impl : public abstract_type {
     string_type_impl(sstring name, std::function<shared_ptr<cql3::cql3_type>()> cql3_type)
         : abstract_type(name), _cql3_type(cql3_type) {}
-    virtual void serialize(const boost::any& value, bytes::iterator& out) override {
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         auto& v = boost::any_cast<const sstring&>(value);
         out = std::copy(v.begin(), v.end(), out);
     }
-    virtual size_t serialized_size(const boost::any& value) override {
+    virtual size_t serialized_size(const boost::any& value) const override {
         auto& v = boost::any_cast<const sstring&>(value);
         return v.size();
     }
-    virtual boost::any deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) const override {
         // FIXME: validation?
         return boost::any(sstring(reinterpret_cast<const char*>(v.begin()), v.size()));
     }
-    virtual bool less(bytes_view v1, bytes_view v2) override {
+    virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
     }
     virtual bool is_byte_order_equal() const override {
@@ -152,16 +152,16 @@ struct string_type_impl : public abstract_type {
     virtual bool is_byte_order_comparable() const override {
         return true;
     }
-    virtual size_t hash(bytes_view v) override {
+    virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual bytes from_string(sstring_view s) override {
+    virtual bytes from_string(sstring_view s) const override {
         return to_bytes(bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size()));
     }
-    virtual sstring to_string(const bytes& b) override {
+    virtual sstring to_string(const bytes& b) const override {
         return sstring(reinterpret_cast<const char*>(b.begin()), b.size());
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return _cql3_type();
     }
     std::function<shared_ptr<cql3::cql3_type>()> _cql3_type;
@@ -169,18 +169,18 @@ struct string_type_impl : public abstract_type {
 
 struct bytes_type_impl final : public abstract_type {
     bytes_type_impl() : abstract_type("bytes") {}
-    virtual void serialize(const boost::any& value, bytes::iterator& out) override {
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         auto& v = boost::any_cast<const bytes&>(value);
         out = std::copy(v.begin(), v.end(), out);
     }
-    virtual size_t serialized_size(const boost::any& value) override {
+    virtual size_t serialized_size(const boost::any& value) const override {
         auto& v = boost::any_cast<const bytes&>(value);
         return v.size();
     }
-    virtual boost::any deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) const override {
         return boost::any(bytes(v.begin(), v.end()));
     }
-    virtual bool less(bytes_view v1, bytes_view v2) override {
+    virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
     }
     virtual bool is_byte_order_equal() const override {
@@ -189,33 +189,33 @@ struct bytes_type_impl final : public abstract_type {
     virtual bool is_byte_order_comparable() const override {
         return true;
     }
-    virtual size_t hash(bytes_view v) override {
+    virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual bytes from_string(sstring_view s) override {
+    virtual bytes from_string(sstring_view s) const override {
         return from_hex(s);
     }
-    virtual sstring to_string(const bytes& b) override {
+    virtual sstring to_string(const bytes& b) const override {
         return to_hex(b);
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::blob;
     }
-    virtual bool is_value_compatible_with_internal(abstract_type& other) override {
+    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return true;
     }
 };
 
 struct boolean_type_impl : public simple_type_impl<bool> {
     boolean_type_impl() : simple_type_impl<bool>("boolean") {}
-    virtual void serialize(const boost::any& value, bytes::iterator& out) override {
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         auto v = boost::any_cast<bool>(value);
         *out++ = char(v);
     }
-    virtual size_t serialized_size(const boost::any& value) override {
+    virtual size_t serialized_size(const boost::any& value) const override {
         return 1;
     }
-    virtual boost::any deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) const override {
         if (v.empty()) {
             return {};
         }
@@ -224,68 +224,68 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         }
         return boost::any(*v.begin() != 0);
     }
-    virtual bytes from_string(sstring_view s) override {
+    virtual bytes from_string(sstring_view s) const override {
         throw std::runtime_error("not implemented");
     }
-    virtual sstring to_string(const bytes& b) override {
+    virtual sstring to_string(const bytes& b) const override {
         throw std::runtime_error("not implemented");
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::boolean;
     }
 };
 
 struct date_type_impl : public abstract_type {
     date_type_impl() : abstract_type("date") {}
-    virtual void serialize(const boost::any& value, bytes::iterator& out) override {
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         auto v = boost::any_cast<db_clock::time_point>(value);
         int64_t i = v.time_since_epoch().count();
         i = net::hton(uint64_t(i));
         out = std::copy_n(reinterpret_cast<const char*>(&i), sizeof(i), out);
     }
-    virtual size_t serialized_size(const boost::any& value) override {
+    virtual size_t serialized_size(const boost::any& value) const override {
          return 8;
     }
-    virtual boost::any deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) const override {
         if (v.empty()) {
             return {};
         }
         auto tmp = read_simple_exactly<uint64_t>(v);
         return boost::any(db_clock::time_point(db_clock::duration(tmp)));
     }
-    virtual bool less(bytes_view b1, bytes_view b2) override {
+    virtual bool less(bytes_view b1, bytes_view b2) const override {
         return compare_unsigned(b1, b2);
     }
     virtual bool is_byte_order_comparable() const override {
         return true;
     }
-    virtual size_t hash(bytes_view v) override {
+    virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual bytes from_string(sstring_view s) override {
+    virtual bytes from_string(sstring_view s) const override {
         throw std::runtime_error("not implemented");
     }
-    virtual sstring to_string(const bytes& b) override {
+    virtual sstring to_string(const bytes& b) const override {
         throw std::runtime_error("not implemented");
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timestamp;
     }
-    virtual bool is_value_compatible_with_internal(abstract_type& other) override {
+    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == timestamp_type.get() || &other == long_type.get();
     }
 };
 
 struct timeuuid_type_impl : public abstract_type {
     timeuuid_type_impl() : abstract_type("timeuuid") {}
-    virtual void serialize(const boost::any& value, bytes::iterator& out) override {
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         auto& uuid = boost::any_cast<const utils::UUID&>(value);
         out = std::copy_n(uuid.to_bytes().begin(), sizeof(uuid), out);
     }
-    virtual size_t serialized_size(const boost::any& value) override {
+    virtual size_t serialized_size(const boost::any& value) const override {
         return 16;
     }
-    virtual boost::any deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) const override {
         uint64_t msb, lsb;
         if (v.empty()) {
             return {};
@@ -297,7 +297,7 @@ struct timeuuid_type_impl : public abstract_type {
         }
         return boost::any(utils::UUID(msb, lsb));
     }
-    virtual bool less(bytes_view b1, bytes_view b2) override {
+    virtual bool less(bytes_view b1, bytes_view b2) const override {
         if (b1.empty()) {
             return b2.empty() ? false : true;
         }
@@ -314,16 +314,16 @@ struct timeuuid_type_impl : public abstract_type {
     virtual bool is_byte_order_equal() const override {
         return true;
     }
-    virtual size_t hash(bytes_view v) override {
+    virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual bytes from_string(sstring_view s) override {
+    virtual bytes from_string(sstring_view s) const override {
         throw std::runtime_error("not implemented");
     }
-    virtual sstring to_string(const bytes& b) override {
+    virtual sstring to_string(const bytes& b) const override {
         throw std::runtime_error("not implemented");
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timeuuid;
     }
 private:
@@ -346,15 +346,15 @@ private:
 
 struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
     timestamp_type_impl() : simple_type_impl("timestamp") {}
-    virtual void serialize(const boost::any& value, bytes::iterator& out) override {
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         uint64_t v = boost::any_cast<db_clock::time_point>(value).time_since_epoch().count();
         v = net::hton(v);
         out = std::copy_n(reinterpret_cast<const char*>(&v), sizeof(v), out);
     }
-    virtual size_t serialized_size(const boost::any& value) override {
+    virtual size_t serialized_size(const boost::any& value) const override {
         return 8;
     }
-    virtual boost::any deserialize(bytes_view in) override {
+    virtual boost::any deserialize(bytes_view in) const override {
         if (in.empty()) {
             return {};
         }
@@ -362,30 +362,30 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
         return boost::any(db_clock::time_point(db_clock::duration(v)));
     }
     // FIXME: isCompatibleWith(timestampuuid)
-    virtual bytes from_string(sstring_view s) override {
+    virtual bytes from_string(sstring_view s) const override {
         throw std::runtime_error("not implemented");
     }
-    virtual sstring to_string(const bytes& b) override {
+    virtual sstring to_string(const bytes& b) const override {
         throw std::runtime_error("not implemented");
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timestamp;
     }
-    virtual bool is_value_compatible_with_internal(abstract_type& other) override {
+    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == date_type.get() || &other == long_type.get();
     }
 };
 
 struct uuid_type_impl : abstract_type {
     uuid_type_impl() : abstract_type("uuid") {}
-    virtual void serialize(const boost::any& value, bytes::iterator& out) override {
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         auto& uuid = boost::any_cast<const utils::UUID&>(value);
         out = std::copy_n(uuid.to_bytes().begin(), sizeof(uuid), out);
     }
-    virtual size_t serialized_size(const boost::any& value) override {
+    virtual size_t serialized_size(const boost::any& value) const override {
         return 16;
     }
-    virtual boost::any deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) const override {
         if (v.empty()) {
             return {};
         }
@@ -396,7 +396,7 @@ struct uuid_type_impl : abstract_type {
         }
         return boost::any(utils::UUID(msb, lsb));
     }
-    virtual bool less(bytes_view b1, bytes_view b2) override {
+    virtual bool less(bytes_view b1, bytes_view b2) const override {
         if (b1.size() < 16) {
             return b2.size() < 16 ? false : true;
         }
@@ -424,19 +424,19 @@ struct uuid_type_impl : abstract_type {
     virtual bool is_byte_order_equal() const override {
         return true;
     }
-    virtual size_t hash(bytes_view v) override {
+    virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual bytes from_string(sstring_view s) override {
+    virtual bytes from_string(sstring_view s) const override {
         throw std::runtime_error("not implemented");
     }
-    virtual sstring to_string(const bytes& b) override {
+    virtual sstring to_string(const bytes& b) const override {
         throw std::runtime_error("not implemented");
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::uuid;
     }
-    virtual bool is_value_compatible_with_internal(abstract_type& other) override {
+    virtual bool is_value_compatible_with_internal(const abstract_type& other) const override {
         return &other == this || &other == timeuuid_type.get();
     }
 };
@@ -462,16 +462,16 @@ std::ostream& operator<<(std::ostream& os, const bytes_view& b) {
 
 struct inet_addr_type_impl : abstract_type {
     inet_addr_type_impl() : abstract_type("inet_addr") {}
-    virtual void serialize(const boost::any& value, bytes::iterator& out) override {
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         // FIXME: support ipv6
         auto& ipv4 = boost::any_cast<const net::ipv4_address&>(value);
         uint32_t u = htonl(ipv4.ip);
         out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(u), out);
     }
-    virtual size_t serialized_size(const boost::any& value) override {
+    virtual size_t serialized_size(const boost::any& value) const override {
         return 4;
     }
-    virtual boost::any deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) const override {
         if (v.empty()) {
             return {};
         }
@@ -484,7 +484,7 @@ struct inet_addr_type_impl : abstract_type {
         }
         return boost::any(net::ipv4_address(ip));
     }
-    virtual bool less(bytes_view v1, bytes_view v2) override {
+    virtual bool less(bytes_view v1, bytes_view v2) const override {
         return less_unsigned(v1, v2);
     }
     virtual bool is_byte_order_equal() const override {
@@ -493,16 +493,16 @@ struct inet_addr_type_impl : abstract_type {
     virtual bool is_byte_order_comparable() const override {
         return true;
     }
-    virtual size_t hash(bytes_view v) override {
+    virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
-    virtual bytes from_string(sstring_view s) override {
+    virtual bytes from_string(sstring_view s) const override {
         throw std::runtime_error("not implemented");
     }
-    virtual sstring to_string(const bytes& b) override {
+    virtual sstring to_string(const bytes& b) const override {
         throw std::runtime_error("not implemented");
     }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::inet;
     }
 };
@@ -539,7 +539,7 @@ template<> struct simple_type_traits<double> : public float_type_traits<double> 
 template <typename T>
 struct floating_type_impl : public simple_type_impl<T> {
     floating_type_impl(sstring name) : simple_type_impl<T>(std::move(name)) {}
-    virtual void serialize(const boost::any& value, bytes::iterator& out) override {
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         T d = boost::any_cast<const T&>(value);
         if (std::isnan(d)) {
             // Java's Double.doubleToLongBits() documentation specifies that
@@ -554,11 +554,11 @@ struct floating_type_impl : public simple_type_impl<T> {
         auto u = net::hton(x.i);
         out = std::copy_n(reinterpret_cast<const char*>(&u), sizeof(u), out);
     }
-    virtual size_t serialized_size(const boost::any& value) override {
+    virtual size_t serialized_size(const boost::any& value) const override {
         return sizeof(T);
     }
 
-    virtual boost::any deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) const override {
         if (v.empty()) {
             return {};
         }
@@ -572,54 +572,54 @@ struct floating_type_impl : public simple_type_impl<T> {
         }
         return boost::any(x.d);
     }
-    virtual bytes from_string(sstring_view s) override {
+    virtual bytes from_string(sstring_view s) const override {
         throw std::runtime_error("not implemented");
     }
-    virtual sstring to_string(const bytes& b) override {
+    virtual sstring to_string(const bytes& b) const override {
         throw std::runtime_error("not implemented");
     }
 };
 
 struct double_type_impl : floating_type_impl<double> {
     double_type_impl() : floating_type_impl{"double"} { }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::double_;
     }
 };
 
 struct float_type_impl : floating_type_impl<float> {
     float_type_impl() : floating_type_impl{"float"} { }
-    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() override {
+    virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::float_;
     }
 };
 
 struct empty_type_impl : abstract_type {
     empty_type_impl() : abstract_type("void") {}
-    virtual void serialize(const boost::any& value, bytes::iterator& out) override {
+    virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
     }
-    virtual size_t serialized_size(const boost::any& value) override {
+    virtual size_t serialized_size(const boost::any& value) const override {
         return 0;
     }
 
-    virtual bool less(bytes_view v1, bytes_view v2) override {
+    virtual bool less(bytes_view v1, bytes_view v2) const override {
         return false;
     }
-    virtual size_t hash(bytes_view v) override {
+    virtual size_t hash(bytes_view v) const override {
         return 0;
     }
-    virtual boost::any deserialize(bytes_view v) override {
+    virtual boost::any deserialize(bytes_view v) const override {
         return {};
     }
-    virtual sstring to_string(const bytes& b) override {
+    virtual sstring to_string(const bytes& b) const override {
         // FIXME:
         abort();
     }
-    virtual bytes from_string(sstring_view text) override {
+    virtual bytes from_string(sstring_view text) const override {
         // FIXME:
         abort();
     }
-    virtual shared_ptr<cql3::cql3_type> as_cql3_type() override {
+    virtual shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         // Can't happen
         abort();
     }
@@ -654,12 +654,12 @@ collection_type_impl::kind::make_collection_receiver(shared_ptr<cql3::column_spe
 }
 
 shared_ptr<cql3::column_specification>
-collection_type_impl::make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) {
+collection_type_impl::make_collection_receiver(shared_ptr<cql3::column_specification> collection, bool is_key) const {
     return _kind.make_collection_receiver(std::move(collection), is_key);
 }
 
 std::vector<atomic_cell>
-collection_type_impl::enforce_limit(std::vector<atomic_cell> cells, int version) {
+collection_type_impl::enforce_limit(std::vector<atomic_cell> cells, int version) const {
     assert(is_multi_cell());
     if (version >= 3 || cells.size() <= max_elements) {
         return cells;
@@ -671,7 +671,7 @@ collection_type_impl::enforce_limit(std::vector<atomic_cell> cells, int version)
 }
 
 bytes
-collection_type_impl::serialize_for_native_protocol(std::vector<atomic_cell> cells, int version) {
+collection_type_impl::serialize_for_native_protocol(std::vector<atomic_cell> cells, int version) const {
     assert(is_multi_cell());
     cells = enforce_limit(std::move(cells), version);
     std::vector<bytes> values = serialized_values(std::move(cells));
@@ -681,13 +681,13 @@ collection_type_impl::serialize_for_native_protocol(std::vector<atomic_cell> cel
 }
 
 bool
-collection_type_impl::is_compatible_with(abstract_type& previous) {
+collection_type_impl::is_compatible_with(const abstract_type& previous) const {
     // FIXME: implement
     abort();
 }
 
 shared_ptr<cql3::cql3_type>
-collection_type_impl::as_cql3_type() {
+collection_type_impl::as_cql3_type() const {
     if (!_cql3_type) {
         auto name = cql3_type_name();
         if (!is_multi_cell()) {
@@ -699,7 +699,7 @@ collection_type_impl::as_cql3_type() {
 }
 
 bytes
-collection_type_impl::to_value(collection_mutation::view mut, serialization_format sf) {
+collection_type_impl::to_value(collection_mutation::view mut, serialization_format sf) const {
     return to_value(deserialize_mutation_form(mut), sf);
 }
 
@@ -785,7 +785,7 @@ map_type_impl::map_type_impl(data_type keys, data_type values, bool is_multi_cel
 }
 
 data_type
-map_type_impl::freeze() {
+map_type_impl::freeze() const {
     if (_is_multi_cell) {
         return get_instance(_keys, _values, false);
     } else {
@@ -794,9 +794,9 @@ map_type_impl::freeze() {
 }
 
 bool
-map_type_impl::is_compatible_with_frozen(collection_type_impl& previous) {
+map_type_impl::is_compatible_with_frozen(const collection_type_impl& previous) const {
     assert(!_is_multi_cell);
-    auto* p = dynamic_cast<map_type_impl*>(&previous);
+    auto* p = dynamic_cast<const map_type_impl*>(&previous);
     if (!p) {
         return false;
     }
@@ -805,9 +805,9 @@ map_type_impl::is_compatible_with_frozen(collection_type_impl& previous) {
 }
 
 bool
-map_type_impl::is_value_compatible_with_frozen(collection_type_impl& previous) {
+map_type_impl::is_value_compatible_with_frozen(const collection_type_impl& previous) const {
     assert(!_is_multi_cell);
-    auto* p = dynamic_cast<map_type_impl*>(&previous);
+    auto* p = dynamic_cast<const map_type_impl*>(&previous);
     if (!p) {
         return false;
     }
@@ -816,7 +816,7 @@ map_type_impl::is_value_compatible_with_frozen(collection_type_impl& previous) {
 }
 
 bool
-map_type_impl::less(bytes_view o1, bytes_view o2) {
+map_type_impl::less(bytes_view o1, bytes_view o2) const {
     return compare_maps(_keys, _values, o1, o2) < 0;
 }
 
@@ -849,12 +849,12 @@ map_type_impl::compare_maps(data_type keys, data_type values, bytes_view o1, byt
 }
 
 void
-map_type_impl::serialize(const boost::any& value, bytes::iterator& out) {
+map_type_impl::serialize(const boost::any& value, bytes::iterator& out) const {
     return serialize(value, out, serialization_format::internal());
 }
 
 size_t
-map_type_impl::serialized_size(const boost::any& value) {
+map_type_impl::serialized_size(const boost::any& value) const {
     auto& m = boost::any_cast<const native_type&>(value);
     size_t len = collection_size_len(serialization_format::internal());
     size_t psz = collection_value_len(serialization_format::internal());
@@ -867,7 +867,7 @@ map_type_impl::serialized_size(const boost::any& value) {
 }
 
 void
-map_type_impl::serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) {
+map_type_impl::serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) const {
     auto& m = boost::any_cast<const native_type&>(value);
     write_collection_size(out, m.size(), sf);
     for (auto&& kv : m) {
@@ -877,12 +877,12 @@ map_type_impl::serialize(const boost::any& value, bytes::iterator& out, serializ
 }
 
 boost::any
-map_type_impl::deserialize(bytes_view v) {
+map_type_impl::deserialize(bytes_view v) const {
     return deserialize(v, serialization_format::internal());
 }
 
 boost::any
-map_type_impl::deserialize(bytes_view in, serialization_format sf) {
+map_type_impl::deserialize(bytes_view in, serialization_format sf) const {
     if (in.empty()) {
         return {};
     }
@@ -899,31 +899,31 @@ map_type_impl::deserialize(bytes_view in, serialization_format sf) {
 }
 
 sstring
-map_type_impl::to_string(const bytes& b) {
+map_type_impl::to_string(const bytes& b) const {
     // FIXME:
     abort();
 }
 
 size_t
-map_type_impl::hash(bytes_view v) {
+map_type_impl::hash(bytes_view v) const {
     // FIXME:
     abort();
 }
 
 bytes
-map_type_impl::from_string(sstring_view text) {
+map_type_impl::from_string(sstring_view text) const {
     // FIXME:
     abort();
 }
 
 std::vector<bytes>
-map_type_impl::serialized_values(std::vector<atomic_cell> cells) {
+map_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
     // FIXME:
     abort();
 }
 
 bytes
-map_type_impl::to_value(mutation_view mut, serialization_format sf) {
+map_type_impl::to_value(mutation_view mut, serialization_format sf) const {
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size() * 2);
     for (auto&& e : mut.cells) {
@@ -959,7 +959,7 @@ map_type_impl::cql3_type_name() const {
     return sprint("map<%s, %s>", _keys->as_cql3_type(), _values->as_cql3_type());
 }
 
-auto collection_type_impl::deserialize_mutation_form(collection_mutation::view cm) -> mutation_view {
+auto collection_type_impl::deserialize_mutation_form(collection_mutation::view cm) const -> mutation_view {
     auto&& in = cm.data;
     mutation_view ret;
     auto has_tomb = read_simple<bool>(in);
@@ -982,7 +982,7 @@ auto collection_type_impl::deserialize_mutation_form(collection_mutation::view c
     return ret;
 }
 
-bool collection_type_impl::is_empty(collection_mutation::view cm) {
+bool collection_type_impl::is_empty(collection_mutation::view cm) const {
     auto&& in = cm.data;
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
@@ -991,7 +991,7 @@ bool collection_type_impl::is_empty(collection_mutation::view cm) {
     return read_simple<uint32_t>(in) == 0;
 }
 
-bool collection_type_impl::is_any_live(collection_mutation::view cm, tombstone tomb) {
+bool collection_type_impl::is_any_live(collection_mutation::view cm, tombstone tomb) const {
     auto&& in = cm.data;
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
@@ -1048,24 +1048,24 @@ do_serialize_mutation_form(
 }
 
 collection_mutation::one
-collection_type_impl::serialize_mutation_form(const mutation& mut) {
+collection_type_impl::serialize_mutation_form(const mutation& mut) const {
     return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
 }
 
 collection_mutation::one
-collection_type_impl::serialize_mutation_form(mutation_view mut) {
+collection_type_impl::serialize_mutation_form(mutation_view mut) const {
     return do_serialize_mutation_form(mut.tomb, boost::make_iterator_range(mut.cells.begin(), mut.cells.end()));
 }
 
 collection_mutation::one
-collection_type_impl::serialize_mutation_form_only_live(mutation_view mut) {
+collection_type_impl::serialize_mutation_form_only_live(mutation_view mut) const {
     return do_serialize_mutation_form(mut.tomb, mut.cells | boost::adaptors::filtered([t = mut.tomb] (auto&& e) {
         return e.second.is_live(t);
     }));
 }
 
 collection_mutation::one
-collection_type_impl::merge(collection_mutation::view a, collection_mutation::view b) {
+collection_type_impl::merge(collection_mutation::view a, collection_mutation::view b) const {
     auto aa = deserialize_mutation_form(a);
     auto bb = deserialize_mutation_form(b);
     mutation_view merged;
@@ -1104,7 +1104,7 @@ collection_type_impl::merge(collection_mutation::view a, collection_mutation::vi
 }
 
 bytes_opt
-collection_type_impl::reserialize(serialization_format from, serialization_format to, bytes_view_opt v) {
+collection_type_impl::reserialize(serialization_format from, serialization_format to, bytes_view_opt v) const {
     if (!v) {
         return std::experimental::nullopt;
     }
@@ -1178,12 +1178,12 @@ set_type_impl::set_type_impl(data_type elements, bool is_multi_cell)
 }
 
 data_type
-set_type_impl::value_comparator() {
+set_type_impl::value_comparator() const {
     return empty_type;
 }
 
 data_type
-set_type_impl::freeze() {
+set_type_impl::freeze() const {
     if (_is_multi_cell) {
         return get_instance(_elements, false);
     } else {
@@ -1192,9 +1192,9 @@ set_type_impl::freeze() {
 }
 
 bool
-set_type_impl::is_compatible_with_frozen(collection_type_impl& previous) {
+set_type_impl::is_compatible_with_frozen(const collection_type_impl& previous) const {
     assert(!_is_multi_cell);
-    auto* p = dynamic_cast<set_type_impl*>(&previous);
+    auto* p = dynamic_cast<const set_type_impl*>(&previous);
     if (!p) {
         return false;
     }
@@ -1203,12 +1203,12 @@ set_type_impl::is_compatible_with_frozen(collection_type_impl& previous) {
 }
 
 bool
-set_type_impl::is_value_compatible_with_frozen(collection_type_impl& previous) {
+set_type_impl::is_value_compatible_with_frozen(const collection_type_impl& previous) const {
     return is_compatible_with(previous);
 }
 
 bool
-set_type_impl::less(bytes_view o1, bytes_view o2) {
+set_type_impl::less(bytes_view o1, bytes_view o2) const {
     using llpdi = listlike_partial_deserializing_iterator;
     auto sf = serialization_format::internal();
     return std::lexicographical_compare(
@@ -1218,12 +1218,12 @@ set_type_impl::less(bytes_view o1, bytes_view o2) {
 }
 
 void
-set_type_impl::serialize(const boost::any& value, bytes::iterator& out) {
+set_type_impl::serialize(const boost::any& value, bytes::iterator& out) const {
     return serialize(value, out, serialization_format::internal());
 }
 
 size_t
-set_type_impl::serialized_size(const boost::any& value) {
+set_type_impl::serialized_size(const boost::any& value) const {
     auto& s = boost::any_cast<const native_type&>(value);
     size_t len = collection_size_len(serialization_format::internal());
     size_t psz = collection_value_len(serialization_format::internal());
@@ -1236,7 +1236,7 @@ set_type_impl::serialized_size(const boost::any& value) {
 
 
 void
-set_type_impl::serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) {
+set_type_impl::serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) const {
     auto& s = boost::any_cast<const native_type&>(value);
     write_collection_size(out, s.size(), sf);
     for (auto&& e : s) {
@@ -1245,12 +1245,12 @@ set_type_impl::serialize(const boost::any& value, bytes::iterator& out, serializ
 }
 
 boost::any
-set_type_impl::deserialize(bytes_view in) {
+set_type_impl::deserialize(bytes_view in) const {
     return deserialize(in, serialization_format::internal());
 }
 
 boost::any
-set_type_impl::deserialize(bytes_view in, serialization_format sf) {
+set_type_impl::deserialize(bytes_view in, serialization_format sf) const {
     if (in.empty()) {
         return {};
     }
@@ -1268,7 +1268,7 @@ set_type_impl::deserialize(bytes_view in, serialization_format sf) {
 }
 
 sstring
-set_type_impl::to_string(const bytes& b) {
+set_type_impl::to_string(const bytes& b) const {
     using llpdi = listlike_partial_deserializing_iterator;
     std::ostringstream out;
     bool first = true;
@@ -1286,25 +1286,25 @@ set_type_impl::to_string(const bytes& b) {
 }
 
 size_t
-set_type_impl::hash(bytes_view v) {
+set_type_impl::hash(bytes_view v) const {
     // FIXME:
     abort();
 }
 
 bytes
-set_type_impl::from_string(sstring_view text) {
+set_type_impl::from_string(sstring_view text) const {
     // FIXME:
     abort();
 }
 
 std::vector<bytes>
-set_type_impl::serialized_values(std::vector<atomic_cell> cells) {
+set_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
     // FIXME:
     abort();
 }
 
 bytes
-set_type_impl::to_value(mutation_view mut, serialization_format sf) {
+set_type_impl::to_value(mutation_view mut, serialization_format sf) const {
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size());
     for (auto&& e : mut.cells) {
@@ -1317,7 +1317,7 @@ set_type_impl::to_value(mutation_view mut, serialization_format sf) {
 
 bytes
 set_type_impl::serialize_partially_deserialized_form(
-        const std::vector<bytes_view>& v, serialization_format sf) {
+        const std::vector<bytes_view>& v, serialization_format sf) const {
     return pack(v.begin(), v.end(), v.size(), sf);
 }
 
@@ -1338,17 +1338,17 @@ list_type_impl::list_type_impl(data_type elements, bool is_multi_cell)
 }
 
 data_type
-list_type_impl::name_comparator() {
+list_type_impl::name_comparator() const {
     return timeuuid_type;
 }
 
 data_type
-list_type_impl::value_comparator() {
+list_type_impl::value_comparator() const {
     return _elements;
 }
 
 data_type
-list_type_impl::freeze() {
+list_type_impl::freeze() const {
     if (_is_multi_cell) {
         return get_instance(_elements, false);
     } else {
@@ -1357,9 +1357,9 @@ list_type_impl::freeze() {
 }
 
 bool
-list_type_impl::is_compatible_with_frozen(collection_type_impl& previous) {
+list_type_impl::is_compatible_with_frozen(const collection_type_impl& previous) const {
     assert(!_is_multi_cell);
-    auto* p = dynamic_cast<list_type_impl*>(&previous);
+    auto* p = dynamic_cast<const list_type_impl*>(&previous);
     if (!p) {
         return false;
     }
@@ -1368,13 +1368,13 @@ list_type_impl::is_compatible_with_frozen(collection_type_impl& previous) {
 }
 
 bool
-list_type_impl::is_value_compatible_with_frozen(collection_type_impl& previous) {
-    auto& lp = dynamic_cast<list_type_impl&>(previous);
+list_type_impl::is_value_compatible_with_frozen(const collection_type_impl& previous) const {
+    auto& lp = dynamic_cast<const list_type_impl&>(previous);
     return _elements->is_value_compatible_with_internal(*lp._elements);
 }
 
 bool
-list_type_impl::less(bytes_view o1, bytes_view o2) {
+list_type_impl::less(bytes_view o1, bytes_view o2) const {
     using llpdi = listlike_partial_deserializing_iterator;
     auto sf = serialization_format::internal();
     return std::lexicographical_compare(
@@ -1384,12 +1384,12 @@ list_type_impl::less(bytes_view o1, bytes_view o2) {
 }
 
 void
-list_type_impl::serialize(const boost::any& value, bytes::iterator& out) {
+list_type_impl::serialize(const boost::any& value, bytes::iterator& out) const {
     return serialize(value, out, serialization_format::internal());
 }
 
 void
-list_type_impl::serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) {
+list_type_impl::serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) const {
     auto& s = boost::any_cast<const native_type&>(value);
     write_collection_size(out, s.size(), sf);
     for (auto&& e : s) {
@@ -1398,7 +1398,7 @@ list_type_impl::serialize(const boost::any& value, bytes::iterator& out, seriali
 }
 
 size_t
-list_type_impl::serialized_size(const boost::any& value) {
+list_type_impl::serialized_size(const boost::any& value) const {
     auto& s = boost::any_cast<const native_type&>(value);
     size_t len = collection_size_len(serialization_format::internal());
     size_t psz = collection_value_len(serialization_format::internal());
@@ -1409,12 +1409,12 @@ list_type_impl::serialized_size(const boost::any& value) {
 }
 
 boost::any
-list_type_impl::deserialize(bytes_view in) {
+list_type_impl::deserialize(bytes_view in) const {
     return deserialize(in, serialization_format::internal());
 }
 
 boost::any
-list_type_impl::deserialize(bytes_view in, serialization_format sf) {
+list_type_impl::deserialize(bytes_view in, serialization_format sf) const {
     if (in.empty()) {
         return {};
     }
@@ -1432,7 +1432,7 @@ list_type_impl::deserialize(bytes_view in, serialization_format sf) {
 }
 
 sstring
-list_type_impl::to_string(const bytes& b) {
+list_type_impl::to_string(const bytes& b) const {
     using llpdi = listlike_partial_deserializing_iterator;
     std::ostringstream out;
     bool first = true;
@@ -1450,25 +1450,25 @@ list_type_impl::to_string(const bytes& b) {
 }
 
 size_t
-list_type_impl::hash(bytes_view v) {
+list_type_impl::hash(bytes_view v) const {
     // FIXME:
     abort();
 }
 
 bytes
-list_type_impl::from_string(sstring_view text) {
+list_type_impl::from_string(sstring_view text) const {
     // FIXME:
     abort();
 }
 
 std::vector<bytes>
-list_type_impl::serialized_values(std::vector<atomic_cell> cells) {
+list_type_impl::serialized_values(std::vector<atomic_cell> cells) const {
     // FIXME:
     abort();
 }
 
 bytes
-list_type_impl::to_value(mutation_view mut, serialization_format sf) {
+list_type_impl::to_value(mutation_view mut, serialization_format sf) const {
     std::vector<bytes_view> tmp;
     tmp.reserve(mut.cells.size());
     for (auto&& e : mut.cells) {
@@ -1501,7 +1501,7 @@ tuple_type_impl::get_instance(std::vector<data_type> types) {
 }
 
 int32_t
-tuple_type_impl::compare(bytes_view v1, bytes_view v2) {
+tuple_type_impl::compare(bytes_view v1, bytes_view v2) const {
     return lexicographical_tri_compare(_types.begin(), _types.end(),
             tuple_deserializing_iterator::start(v1), tuple_deserializing_iterator::finish(v1),
             tuple_deserializing_iterator::start(v2), tuple_deserializing_iterator::finish(v2),
@@ -1509,12 +1509,12 @@ tuple_type_impl::compare(bytes_view v1, bytes_view v2) {
 }
 
 bool
-tuple_type_impl::less(bytes_view v1, bytes_view v2) {
+tuple_type_impl::less(bytes_view v1, bytes_view v2) const {
     return tuple_type_impl::compare(v1, v2) < 0;
 }
 
 size_t
-tuple_type_impl::serialized_size(const boost::any& value) {
+tuple_type_impl::serialized_size(const boost::any& value) const {
     size_t size = 0;
     if (value.empty()) {
         return size;
@@ -1529,7 +1529,7 @@ tuple_type_impl::serialized_size(const boost::any& value) {
 }
 
 void
-tuple_type_impl::serialize(const boost::any& value, bytes::iterator& out) {
+tuple_type_impl::serialize(const boost::any& value, bytes::iterator& out) const {
     if (value.empty()) {
         return;
     }
@@ -1548,7 +1548,7 @@ tuple_type_impl::serialize(const boost::any& value, bytes::iterator& out) {
 }
 
 boost::any
-tuple_type_impl::deserialize(bytes_view v) {
+tuple_type_impl::deserialize(bytes_view v) const {
     native_type ret;
     ret.reserve(_types.size());
     auto ti = _types.begin();
@@ -1572,12 +1572,12 @@ tuple_type_impl::split(bytes_view v) const {
 }
 
 bytes
-tuple_type_impl::from_string(sstring_view s) {
+tuple_type_impl::from_string(sstring_view s) const {
     throw std::runtime_error("not implemented");
 }
 
 sstring
-tuple_type_impl::to_string(const bytes& b) {
+tuple_type_impl::to_string(const bytes& b) const {
     throw std::runtime_error("not implemented");
 }
 
@@ -1589,18 +1589,18 @@ tuple_type_impl::equals(const abstract_type& other) const {
 }
 
 bool
-tuple_type_impl::is_compatible_with(abstract_type& previous) {
+tuple_type_impl::is_compatible_with(const abstract_type& previous) const {
     return check_compatibility(previous, &abstract_type::is_compatible_with);
 }
 
 bool
-tuple_type_impl::is_value_compatible_with_internal(abstract_type& previous) {
+tuple_type_impl::is_value_compatible_with_internal(const abstract_type& previous) const {
     return check_compatibility(previous, &abstract_type::is_value_compatible_with);
 }
 
 bool
-tuple_type_impl::check_compatibility(abstract_type& previous, bool (abstract_type::*predicate)(abstract_type&)) const {
-    auto* x = dynamic_cast<tuple_type_impl*>(&previous);
+tuple_type_impl::check_compatibility(const abstract_type& previous, bool (abstract_type::*predicate)(const abstract_type&) const) const {
+    auto* x = dynamic_cast<const tuple_type_impl*>(&previous);
     if (!x) {
         return false;
     }
@@ -1612,7 +1612,7 @@ tuple_type_impl::check_compatibility(abstract_type& previous, bool (abstract_typ
 }
 
 size_t
-tuple_type_impl::hash(bytes_view v) {
+tuple_type_impl::hash(bytes_view v) const {
     auto apply_hash = [] (auto&& type_value) {
         auto&& type = boost::get<0>(type_value);
         auto&& value = boost::get<1>(type_value);
@@ -1626,8 +1626,8 @@ tuple_type_impl::hash(bytes_view v) {
 }
 
 shared_ptr<cql3::cql3_type>
-tuple_type_impl::as_cql3_type() {
-    return cql3::make_cql3_tuple_type(static_pointer_cast<tuple_type_impl>(shared_from_this()));
+tuple_type_impl::as_cql3_type() const {
+    return cql3::make_cql3_tuple_type(static_pointer_cast<const tuple_type_impl>(shared_from_this()));
 }
 
 sstring
@@ -1641,7 +1641,7 @@ user_type_impl::get_name_as_string() const {
 }
 
 shared_ptr<cql3::cql3_type>
-user_type_impl::as_cql3_type() {
+user_type_impl::as_cql3_type() const {
     throw "not yet";
 }
 
@@ -1658,17 +1658,17 @@ user_type_impl::make_name(sstring keyspace, bytes name, std::vector<bytes> field
     return os.str();
 }
 
-thread_local const shared_ptr<abstract_type> int32_type(make_shared<int32_type_impl>());
-thread_local const shared_ptr<abstract_type> long_type(make_shared<long_type_impl>());
-thread_local const shared_ptr<abstract_type> ascii_type(make_shared<string_type_impl>("ascii", [] { return cql3::cql3_type::ascii; }));
-thread_local const shared_ptr<abstract_type> bytes_type(make_shared<bytes_type_impl>());
-thread_local const shared_ptr<abstract_type> utf8_type(make_shared<string_type_impl>("utf8", [] { return cql3::cql3_type::text; }));
-thread_local const shared_ptr<abstract_type> boolean_type(make_shared<boolean_type_impl>());
-thread_local const shared_ptr<abstract_type> date_type(make_shared<date_type_impl>());
-thread_local const shared_ptr<abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
-thread_local const shared_ptr<abstract_type> timestamp_type(make_shared<timestamp_type_impl>());
-thread_local const shared_ptr<abstract_type> uuid_type(make_shared<uuid_type_impl>());
-thread_local const shared_ptr<abstract_type> inet_addr_type(make_shared<inet_addr_type_impl>());
-thread_local const shared_ptr<abstract_type> float_type(make_shared<float_type_impl>());
-thread_local const shared_ptr<abstract_type> double_type(make_shared<double_type_impl>());
+thread_local const shared_ptr<const abstract_type> int32_type(make_shared<int32_type_impl>());
+thread_local const shared_ptr<const abstract_type> long_type(make_shared<long_type_impl>());
+thread_local const shared_ptr<const abstract_type> ascii_type(make_shared<string_type_impl>("ascii", [] { return cql3::cql3_type::ascii; }));
+thread_local const shared_ptr<const abstract_type> bytes_type(make_shared<bytes_type_impl>());
+thread_local const shared_ptr<const abstract_type> utf8_type(make_shared<string_type_impl>("utf8", [] { return cql3::cql3_type::text; }));
+thread_local const shared_ptr<const abstract_type> boolean_type(make_shared<boolean_type_impl>());
+thread_local const shared_ptr<const abstract_type> date_type(make_shared<date_type_impl>());
+thread_local const shared_ptr<const abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
+thread_local const shared_ptr<const abstract_type> timestamp_type(make_shared<timestamp_type_impl>());
+thread_local const shared_ptr<const abstract_type> uuid_type(make_shared<uuid_type_impl>());
+thread_local const shared_ptr<const abstract_type> inet_addr_type(make_shared<inet_addr_type_impl>());
+thread_local const shared_ptr<const abstract_type> float_type(make_shared<float_type_impl>());
+thread_local const shared_ptr<const abstract_type> double_type(make_shared<double_type_impl>());
 thread_local const data_type empty_type(make_shared<empty_type_impl>());

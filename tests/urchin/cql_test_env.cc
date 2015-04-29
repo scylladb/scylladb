@@ -147,7 +147,7 @@ public:
                 actual = { cell.value().begin(), cell.value().end() };
             } else {
                 auto cell = i->second.as_collection_mutation();
-                auto type = dynamic_pointer_cast<collection_type_impl>(col_def->type);
+                auto type = dynamic_pointer_cast<const collection_type_impl>(col_def->type);
                 actual = type->to_value(type->deserialize_mutation_form(cell),
                                         serialization_format::internal());
             }

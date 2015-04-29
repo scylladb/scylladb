@@ -509,7 +509,7 @@ merge_column(const column_definition& def,
             old = neww;
         }
     } else {
-        auto ct = static_pointer_cast<collection_type_impl>(def.type);
+        auto ct = static_pointer_cast<const collection_type_impl>(def.type);
         old = ct->merge(old.as_collection_mutation(), neww.as_collection_mutation());
     }
 }

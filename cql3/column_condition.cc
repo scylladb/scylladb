@@ -87,7 +87,7 @@ column_condition::raw::prepare(database& db, const sstring& keyspace, const colu
     }
 
     shared_ptr<column_specification> element_spec, value_spec;
-    auto ctype = static_cast<collection_type_impl*>(receiver.type.get());
+    auto ctype = static_cast<const collection_type_impl*>(receiver.type.get());
     if (&ctype->_kind == &collection_type_impl::kind::list) {
         element_spec = lists::index_spec_of(receiver.column_specification);
         value_spec = lists::value_spec_of(receiver.column_specification);

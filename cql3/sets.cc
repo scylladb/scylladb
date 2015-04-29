@@ -12,7 +12,7 @@ shared_ptr<column_specification>
 sets::value_spec_of(shared_ptr<column_specification> column) {
     return make_shared<column_specification>(column->ks_name, column->cf_name,
             ::make_shared<column_identifier>(sprint("value(%s)", *column->name), true),
-            dynamic_pointer_cast<set_type_impl>(column->type)->get_elements_type());
+            dynamic_pointer_cast<const set_type_impl>(column->type)->get_elements_type());
 }
 
 shared_ptr<term>
@@ -21,7 +21,7 @@ sets::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_
 
     // We've parsed empty maps as a set literal to break the ambiguity so
     // handle that case now
-    if (_elements.empty() && dynamic_pointer_cast<map_type_impl>(receiver->type)) {
+    if (_elements.empty() && dynamic_pointer_cast<const map_type_impl>(receiver->type)) {
         // use empty_type for comparator, set is empty anyway.
         std::map<bytes, bytes, serialized_compare> m(empty_type->as_less_comparator());
         return ::make_shared<maps::value>(std::move(m));
@@ -45,7 +45,7 @@ sets::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_
 
         values.push_back(std::move(t));
     }
-    auto compare = dynamic_pointer_cast<set_type_impl>(receiver->type)->get_elements_type()->as_less_comparator();
+    auto compare = dynamic_pointer_cast<const set_type_impl>(receiver->type)->get_elements_type()->as_less_comparator();
 
     auto value = ::make_shared<delayed_value>(compare, std::move(values));
     if (all_terminal) {
@@ -57,10 +57,10 @@ sets::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column_
 
 void
 sets::literal::validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
-    if (!dynamic_pointer_cast<set_type_impl>(receiver->type)) {
+    if (!dynamic_pointer_cast<const set_type_impl>(receiver->type)) {
         // We've parsed empty maps as a set literal to break the ambiguity so
         // handle that case now
-        if (dynamic_pointer_cast<map_type_impl>(receiver->type) && _elements.empty()) {
+        if (dynamic_pointer_cast<const map_type_impl>(receiver->type) && _elements.empty()) {
             return;
         }
 
@@ -77,9 +77,9 @@ sets::literal::validate_assignable_to(database& db, const sstring& keyspace, sha
 
 assignment_testable::test_result
 sets::literal::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
-    if (!dynamic_pointer_cast<set_type_impl>(receiver->type)) {
+    if (!dynamic_pointer_cast<const set_type_impl>(receiver->type)) {
         // We've parsed empty maps as a set literal to break the ambiguity so handle that case now
-        if (dynamic_pointer_cast<map_type_impl>(receiver->type) && _elements.empty()) {
+        if (dynamic_pointer_cast<const map_type_impl>(receiver->type) && _elements.empty()) {
             return assignment_testable::test_result::WEAKLY_ASSIGNABLE;
         }
 
@@ -224,7 +224,7 @@ sets::adder::do_add(mutation& m, const exploded_clustering_prefix& row_key, cons
         shared_ptr<term> t, const column_definition& column, tombstone ts) {
     auto&& value = t->bind(params._options);
     auto set_value = dynamic_pointer_cast<sets::value>(std::move(value));
-    auto set_type = dynamic_pointer_cast<set_type_impl>(column.type);
+    auto set_type = dynamic_pointer_cast<const set_type_impl>(column.type);
     if (column.type->is_multi_cell()) {
         // FIXME: mutation_view? not compatible with params.make_cell().
         collection_type_impl::mutation mut;
@@ -277,7 +277,7 @@ sets::discarder::execute(mutation& m, const exploded_clustering_prefix& row_key,
             kill(e);
         }
     }
-    auto ctype = static_pointer_cast<collection_type_impl>(column.type);
+    auto ctype = static_pointer_cast<const collection_type_impl>(column.type);
     m.set_cell(row_key, column,
             atomic_cell_or_collection::from_collection_mutation(
                     ctype->serialize_mutation_form(mut)));

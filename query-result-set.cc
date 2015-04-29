@@ -94,7 +94,7 @@ result_set_builder::deserialize(const result_row_view& row, bool is_static)
         } else {
             auto cell = i.next_collection_cell();
             if (cell) {
-                auto ctype = static_pointer_cast<collection_type_impl>(col.type);
+                auto ctype = static_pointer_cast<const collection_type_impl>(col.type);
                 auto view = cell.value();
                 cells.emplace(col.name_as_text(), ctype->deserialize(view.data, serialization_format::internal()));
             }

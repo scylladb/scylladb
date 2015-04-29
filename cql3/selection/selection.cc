@@ -271,7 +271,7 @@ void result_set_builder::add(const column_definition& def, const query::result_a
 }
 
 void result_set_builder::add(const column_definition& def, collection_mutation::view c) {
-    auto&& ctype = static_cast<collection_type_impl*>(def.type.get());
+    auto&& ctype = static_cast<const collection_type_impl*>(def.type.get());
     current->emplace_back(ctype->to_value(c, _serialization_format));
     // timestamps, ttls meaningless for collections
 }

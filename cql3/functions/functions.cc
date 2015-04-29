@@ -322,21 +322,21 @@ function_call::contains_bind_marker() const {
 
 shared_ptr<terminal>
 function_call::make_terminal(shared_ptr<function> fun, bytes_opt result, serialization_format sf)  {
-    if (!dynamic_pointer_cast<collection_type_impl>(fun->return_type())) {
+    if (!dynamic_pointer_cast<const collection_type_impl>(fun->return_type())) {
         return ::make_shared<constants::value>(std::move(result));
     }
 
-    auto ctype = static_pointer_cast<collection_type_impl>(fun->return_type());
+    auto ctype = static_pointer_cast<const collection_type_impl>(fun->return_type());
     bytes_view res;
     if (result) {
         res = *result;
     }
     if (&ctype->_kind == &collection_type_impl::kind::list) {
-        return make_shared(lists::value::from_serialized(std::move(res), static_pointer_cast<list_type_impl>(ctype), sf));
+        return make_shared(lists::value::from_serialized(std::move(res), static_pointer_cast<const list_type_impl>(ctype), sf));
     } else if (&ctype->_kind == &collection_type_impl::kind::set) {
-        return make_shared(sets::value::from_serialized(std::move(res), static_pointer_cast<set_type_impl>(ctype), sf));
+        return make_shared(sets::value::from_serialized(std::move(res), static_pointer_cast<const set_type_impl>(ctype), sf));
     } else if (&ctype->_kind == &collection_type_impl::kind::map) {
-        return make_shared(maps::value::from_serialized(std::move(res), static_pointer_cast<map_type_impl>(ctype), sf));
+        return make_shared(maps::value::from_serialized(std::move(res), static_pointer_cast<const map_type_impl>(ctype), sf));
     }
     abort();
 }

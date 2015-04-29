@@ -22,7 +22,7 @@ shared_ptr<column_specification>
 lists::value_spec_of(shared_ptr<column_specification> column) {
     return make_shared<column_specification>(column->ks_name, column->cf_name,
             ::make_shared<column_identifier>(sprint("value(%s)", *column->name), true),
-                dynamic_pointer_cast<list_type_impl>(column->type)->get_elements_type());
+                dynamic_pointer_cast<const list_type_impl>(column->type)->get_elements_type());
 }
 
 shared_ptr<term>
@@ -54,7 +54,7 @@ lists::literal::prepare(database& db, const sstring& keyspace, shared_ptr<column
 
 void
 lists::literal::validate_assignable_to(database& db, const sstring keyspace, shared_ptr<column_specification> receiver) {
-    if (!dynamic_pointer_cast<list_type_impl>(receiver->type)) {
+    if (!dynamic_pointer_cast<const list_type_impl>(receiver->type)) {
         throw exceptions::invalid_request_exception(sprint("Invalid list literal for %s of type %s",
                 *receiver->name, *receiver->type->as_cql3_type()));
     }
@@ -69,7 +69,7 @@ lists::literal::validate_assignable_to(database& db, const sstring keyspace, sha
 
 assignment_testable::test_result
 lists::literal::test_assignment(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
-    if (!dynamic_pointer_cast<list_type_impl>(receiver->type)) {
+    if (!dynamic_pointer_cast<const list_type_impl>(receiver->type)) {
         return assignment_testable::test_result::NOT_ASSIGNABLE;
     }
 
@@ -191,7 +191,7 @@ lists::delayed_value::bind(const query_options& options) {
 ::shared_ptr<terminal>
 lists::marker::bind(const query_options& options) {
     const bytes_opt& value = options.get_values()[_bind_index];
-    auto ltype = static_pointer_cast<list_type_impl>(_receiver->type);
+    auto ltype = static_pointer_cast<const list_type_impl>(_receiver->type);
     if (!value) {
         return nullptr;
     } else {
@@ -255,7 +255,7 @@ lists::setter_by_index::execute(mutation& m, const exploded_clustering_prefix& p
         throw exceptions::invalid_request_exception(sprint("List index %d out of bound, list has size 0", idx));
     }
     collection_mutation::view existing_list_ser = *existing_list_opt;
-    auto ltype = dynamic_pointer_cast<list_type_impl>(column.type);
+    auto ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
     collection_type_impl::mutation_view existing_list = ltype->deserialize_mutation_form(existing_list_ser);
     // we verified that index is an int32_type
     if (idx < 0 || size_t(idx) >= existing_list.cells.size()) {
@@ -295,7 +295,7 @@ lists::do_append(shared_ptr<term> t,
         tombstone ts) {
     auto&& value = t->bind(params._options);
     auto&& list_value = dynamic_pointer_cast<lists::value>(value);
-    auto&& ltype = dynamic_pointer_cast<list_type_impl>(column.type);
+    auto&& ltype = dynamic_pointer_cast<const list_type_impl>(column.type);
     if (column.type->is_multi_cell()) {
         // If we append null, do nothing. Note that for Setter, we've
         // already removed the previous value so we're good here too
@@ -353,7 +353,7 @@ lists::prepender::execute(mutation& m, const exploded_clustering_prefix& prefix,
     }
     // now reverse again, to get the original order back
     std::reverse(mut.cells.begin(), mut.cells.end());
-    auto&& ltype = static_cast<list_type_impl*>(column.type.get());
+    auto&& ltype = static_cast<const list_type_impl*>(column.type.get());
     m.set_cell(prefix, column, atomic_cell_or_collection::from_collection_mutation(ltype->serialize_mutation_form(std::move(mut))));
 }
 
@@ -370,7 +370,7 @@ lists::discarder::execute(mutation& m, const exploded_clustering_prefix& prefix,
     // We want to call bind before possibly returning to reject queries where the value provided is not a list.
     auto&& value = _t->bind(params._options);
 
-    auto&& ltype = static_pointer_cast<list_type_impl>(column.type);
+    auto&& ltype = static_pointer_cast<const list_type_impl>(column.type);
 
     if (!existing_list) {
         return;
@@ -422,7 +422,7 @@ lists::discarder_by_index::execute(mutation& m, const exploded_clustering_prefix
         throw exceptions::invalid_request_exception("Invalid null value for list index");
     }
 
-    auto ltype = static_pointer_cast<list_type_impl>(column.type);
+    auto ltype = static_pointer_cast<const list_type_impl>(column.type);
     auto cvalue = dynamic_pointer_cast<constants::value>(index);
     assert(cvalue);
 

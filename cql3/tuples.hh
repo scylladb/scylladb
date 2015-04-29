@@ -34,7 +34,7 @@ public:
                 column->ks_name,
                 column->cf_name,
                 ::make_shared<column_identifier>(sprint("%s[%d]", column->name, component), true),
-                static_pointer_cast<tuple_type_impl>(column->type)->type(component));
+                static_pointer_cast<const tuple_type_impl>(column->type)->type(component));
     }
 
     /**
@@ -58,7 +58,7 @@ public:
                 }
                 values.push_back(std::move(value));
             }
-            delayed_value value(static_pointer_cast<tuple_type_impl>(receiver->type), values);
+            delayed_value value(static_pointer_cast<const tuple_type_impl>(receiver->type), values);
             if (all_terminal) {
                 return value.bind(query_options::DEFAULT);
             } else {
@@ -92,7 +92,7 @@ public:
 
     private:
         void validate_assignable_to(database& db, const sstring& keyspace, shared_ptr<column_specification> receiver) {
-            auto tt = dynamic_pointer_cast<tuple_type_impl>(receiver->type);
+            auto tt = dynamic_pointer_cast<const tuple_type_impl>(receiver->type);
             if (!tt) {
                 throw exceptions::invalid_request_exception(sprint("Invalid tuple type literal for %s of type %s", receiver->name, receiver->type->as_cql3_type()));
             }
@@ -185,7 +185,7 @@ public:
                 if (options.get_serialization_format() != serialization_format::internal()
                         && _type->type(i)->is_collection()) {
                     if (buffers[i]) {
-                        buffers[i] = static_pointer_cast<collection_type_impl>(_type->type(i))->reserialize(
+                        buffers[i] = static_pointer_cast<const collection_type_impl>(_type->type(i))->reserialize(
                                 options.get_serialization_format(),
                                 serialization_format::internal(),
                                 bytes_view(*buffers[i]));
