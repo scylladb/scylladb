@@ -139,7 +139,7 @@ inline std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os
 }
 // just write in-memory...
 SEASTAR_TEST_CASE(test_create_commitlog){
-return make_commitlog().then([](tmplog_ptr log) {
+    return make_commitlog().then([](tmplog_ptr log) {
             sstring tmp = "hej bubba cow";
             return log->second.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), [tmp](db::commitlog::output& dst) {
                         dst.write(tmp.begin(), tmp.end());
@@ -153,9 +153,9 @@ return make_commitlog().then([](tmplog_ptr log) {
 
 // check we
 SEASTAR_TEST_CASE(test_commitlog_written_to_disk_batch){
-commitlog::config cfg;
-cfg.mode = commitlog::sync_mode::BATCH;
-return make_commitlog(cfg).then([](tmplog_ptr log) {
+    commitlog::config cfg;
+    cfg.mode = commitlog::sync_mode::BATCH;
+    return make_commitlog(cfg).then([](tmplog_ptr log) {
             sstring tmp = "hej bubba cow";
             return log->second.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), [tmp](db::commitlog::output& dst) {
                         dst.write(tmp.begin(), tmp.end());
@@ -171,7 +171,7 @@ return make_commitlog(cfg).then([](tmplog_ptr log) {
 }
 
 SEASTAR_TEST_CASE(test_commitlog_written_to_disk_periodic){
-return make_commitlog().then([](tmplog_ptr log) {
+    return make_commitlog().then([](tmplog_ptr log) {
             auto state = make_lw_shared(false);
             auto uuid = utils::UUID_gen::get_time_UUID();
             return do_until([state]() {return *state;},
@@ -193,9 +193,9 @@ return make_commitlog().then([](tmplog_ptr log) {
 }
 
 SEASTAR_TEST_CASE(test_commitlog_new_segment){
-commitlog::config cfg;
-cfg.commitlog_segment_size_in_mb = 1;
-return make_commitlog(cfg).then([](tmplog_ptr log) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return make_commitlog(cfg).then([](tmplog_ptr log) {
             auto state = make_lw_shared(false);
             auto uuid = utils::UUID_gen::get_time_UUID();
             return do_until([state]() {return *state;},
@@ -220,9 +220,9 @@ return make_commitlog(cfg).then([](tmplog_ptr log) {
 
 
 SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
-commitlog::config cfg;
-cfg.commitlog_segment_size_in_mb = 1;
-return make_commitlog(cfg).then([](tmplog_ptr log) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return make_commitlog(cfg).then([](tmplog_ptr log) {
             struct state_type {
                 std::vector<utils::UUID> uuids;
                 std::unordered_map<utils::UUID, replay_position> rps;
@@ -268,7 +268,7 @@ return make_commitlog(cfg).then([](tmplog_ptr log) {
 }
 
 SEASTAR_TEST_CASE(test_equal_record_limit){
-return make_commitlog().then([](tmplog_ptr log) {
+    return make_commitlog().then([](tmplog_ptr log) {
             auto size = log->second.max_record_size();
             return log->second.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](db::commitlog::output& dst) {
                         dst.write(char(1), size);
@@ -281,7 +281,7 @@ return make_commitlog().then([](tmplog_ptr log) {
 }
 
 SEASTAR_TEST_CASE(test_exceed_record_limit){
-return make_commitlog().then([](tmplog_ptr log) {
+    return make_commitlog().then([](tmplog_ptr log) {
             auto size = log->second.max_record_size() + 1;
             return log->second.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](db::commitlog::output& dst) {
                         dst.write(char(1), size);
@@ -300,3 +300,32 @@ return make_commitlog().then([](tmplog_ptr log) {
                     });
         });
 }
+
+SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 2;
+    cfg.commitlog_total_space_in_mb = 1;
+    return make_commitlog(cfg).then([](tmplog_ptr log) {
+            auto state = make_lw_shared(false);
+            auto uuid = utils::UUID_gen::get_time_UUID();
+            return do_until([state]() {return *state;},
+                    [log, state, uuid]() {
+                        sstring tmp = "hej bubba cow";
+                        return log->second.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                                    dst.write(tmp.begin(), tmp.end());
+                                }).then([log, state](replay_position rp) {
+                                    BOOST_CHECK_NE(rp, db::replay_position());
+                                    *state = rp.id > 1;
+                                });
+
+                    }).then([log]() {
+                        return count_files(log->first.path).then([](size_t n) {
+                                    BOOST_REQUIRE(n > 0);
+                                    BOOST_REQUIRE(n < 2);
+                                });
+                    }).finally([log]() {
+                        return log->second.clear().then([log] {});
+                    });
+        }).then([]{});
+}
+
