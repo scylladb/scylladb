@@ -158,6 +158,7 @@ urchin_tests = [
     'tests/urchin/types_test',
     'tests/urchin/keys_test',
     'tests/perf/perf_mutation',
+    'tests/perf/perf_hash',
     'tests/perf/perf_cql_parser',
     'tests/perf/perf_simple_query',
     'tests/urchin/cql_query_test',
