@@ -50,6 +50,7 @@ template<typename T>
 class serializer;
 
 class commitlog;
+class config;
 }
 
 struct column_family {
@@ -126,11 +127,14 @@ class database {
     std::unordered_map<utils::UUID, column_family> _column_families;
     std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
     std::unique_ptr<db::commitlog> _commitlog;
+    std::unique_ptr<db::config> _cfg;
 
-    future<> init_commitlog(sstring datadir);
+    future<> init_commitlog();
     future<> apply_in_memory(const mutation&);
+    future<> populate(sstring datadir);
 public:
     database();
+    database(const db::config&);
     database(database&&) = default;
     ~database();
 
@@ -138,8 +142,7 @@ public:
         return _commitlog.get();
     }
 
-    future<> init_from_data_directory(sstring datadir);
-    future<> populate(sstring datadir);
+    future<> init_from_data_directory();
 
     keyspace& add_keyspace(sstring name, keyspace k);
     /** Adds cf with auto-generated UUID. */

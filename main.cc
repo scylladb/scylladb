@@ -10,16 +10,28 @@
 #include "transport/server.hh"
 #include "http/httpd.hh"
 #include "api/api.hh"
+#include "db/config.hh"
 
 namespace bpo = boost::program_options;
 
+static future<>
+read_config(bpo::variables_map& opts, db::config& cfg) {
+    if (opts.count("options-file") == 0) {
+        return make_ready_future<>();
+    }
+    return cfg.read_from_file(opts["options-file"].as<sstring>());
+}
+
 int main(int ac, char** av) {
     app_template app;
-    app.add_options()
-        ("cql-port", bpo::value<uint16_t>()->default_value(9042), "CQL port")
-        ("thrift-port", bpo::value<uint16_t>()->default_value(9160), "Thrift port")
+    auto opt_add = app.add_options();
+
+    auto cfg = make_lw_shared<db::config>();
+    cfg->add_options(opt_add)
         ("api-port", bpo::value<uint16_t>()->default_value(10000), "Http Rest API port")
-        ("datadir", bpo::value<std::string>()->default_value("/var/lib/cassandra/data"), "data directory");
+        // TODO : default, always read?
+        ("options-file", bpo::value<sstring>(), "cassandra.yaml file to read options from")
+        ;
 
     auto server = std::make_unique<distributed<thrift_server>>();
     distributed<database> db;
@@ -28,15 +40,16 @@ int main(int ac, char** av) {
     api::http_context ctx;
 
     return app.run(ac, av, [&] {
-        auto&& config = app.configuration();
-        uint16_t thrift_port = config["thrift-port"].as<uint16_t>();
-        uint16_t cql_port = config["cql-port"].as<uint16_t>();
-        sstring datadir = config["datadir"].as<std::string>();
-        uint16_t api_port = config["api-port"].as<uint16_t>();
+        auto&& opts = app.configuration();
+        uint16_t thrift_port = cfg->rpc_port();
+        uint16_t cql_port = cfg->native_transport_port();
+        uint16_t api_port = opts["api-port"].as<uint16_t>();
 
-        return db.start().then([datadir, &db] {
+        return read_config(opts, *cfg).then([cfg, &db]() {
+            return db.start(std::move(*cfg));
+        }).then([&db] {
             engine().at_exit([&db] { return db.stop(); });
-            return db.invoke_on_all(&database::init_from_data_directory, datadir);
+            return db.invoke_on_all(&database::init_from_data_directory);
         }).then([&db, &proxy, &qp] {
             return qp.start(std::ref(proxy), std::ref(db)).then([&qp] {
                 engine().at_exit([&qp] { return qp.stop(); });

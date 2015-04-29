@@ -10,6 +10,7 @@
 #include "db/consistency_level.hh"
 #include "db/serializer.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/config.hh"
 #include "to_string.hh"
 #include "query-result-writer.hh"
 
@@ -181,7 +182,11 @@ future<> column_family::populate(sstring sstdir) {
 }
 
 
-database::database() {
+database::database() : database(db::config())
+{}
+
+database::database(const db::config& cfg) : _cfg(std::make_unique<db::config>(cfg))
+{
     db::system_keyspace::make(*this);
 }
 
@@ -224,15 +229,15 @@ future<> database::populate(sstring datadir) {
 }
 
 future<>
-database::init_from_data_directory(sstring datadir) {
-    return populate(datadir).then([this, datadir]() {
-        return init_commitlog(datadir);
+database::init_from_data_directory() {
+    return populate(_cfg->data_file_directories()).then([this]() {
+        return init_commitlog();
     });
 }
 
 future<>
-database::init_commitlog(sstring datadir) {
-    auto logdir = datadir + "/work" + std::to_string(engine().cpu_id());
+database::init_commitlog() {
+    auto logdir = _cfg->commitlog_directory() + "/work" + std::to_string(engine().cpu_id());
 
     return engine().file_type(logdir).then([this, logdir](auto type) {
         if (type && type.value() != directory_entry_type::directory) {
@@ -242,7 +247,7 @@ database::init_commitlog(sstring datadir) {
             throw std::runtime_error("Could not create directory " + logdir);
         }
 
-        db::commitlog::config cfg;
+        db::commitlog::config cfg(*_cfg);
         cfg.commit_log_location = logdir;
         // TODO: real config. Real logging.
         // Right now we just set this up to use a single segment

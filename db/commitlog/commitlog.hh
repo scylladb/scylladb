@@ -33,6 +33,8 @@
 
 namespace db {
 
+class config;
+
 typedef uint64_t segment_id_type;
 typedef uint64_t position_type;
 typedef utils::UUID cf_id_type;
@@ -91,6 +93,7 @@ public:
     struct config {
         config() = default;
         config(const config&) = default;
+        config(const db::config&);
 
         sstring commit_log_location;
         uint64_t commitlog_total_space_in_mb = 0; // TODO: not respected yet.
