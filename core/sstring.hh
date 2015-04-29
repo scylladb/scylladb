@@ -513,6 +513,17 @@ operator<<(std::basic_ostream<char_type, char_traits>& os,
     return os.write(s.begin(), s.size());
 }
 
+template <typename char_type, typename size_type, size_type max_size, typename char_traits>
+inline
+std::basic_istream<char_type, char_traits>&
+operator>>(std::basic_istream<char_type, char_traits>& is,
+        basic_sstring<char_type, size_type, max_size>& s) {
+    std::string tmp;
+    is >> tmp;
+    s = tmp;
+    return is;
+}
+
 namespace std {
 
 template <typename char_type, typename size_type, size_type max_size>
