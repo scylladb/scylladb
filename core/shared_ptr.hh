@@ -285,6 +285,7 @@ template <typename T>
 class enable_shared_from_this : private shared_ptr_count_base {
 public:
     shared_ptr<T> shared_from_this();
+    shared_ptr<const T> shared_from_this() const;
 
     template <typename U>
     friend class shared_ptr;
@@ -306,7 +307,7 @@ private:
             ++_b->count;
         }
     }
-    explicit shared_ptr(enable_shared_from_this<T>* p) noexcept : _b(p), _p(static_cast<T*>(p)) {
+    explicit shared_ptr(enable_shared_from_this<std::remove_const_t<T>>* p) noexcept : _b(p), _p(static_cast<T*>(p)) {
         if (_b) {
             ++_b->count;
         }
@@ -488,7 +489,17 @@ template <typename T>
 inline
 shared_ptr<T>
 enable_shared_from_this<T>::shared_from_this() {
-    return shared_ptr<T>(this);
+    auto unconst = reinterpret_cast<enable_shared_from_this<std::remove_const_t<T>>*>(this);
+    return shared_ptr<T>(unconst);
+}
+
+template <typename T>
+inline
+shared_ptr<const T>
+enable_shared_from_this<T>::shared_from_this() const {
+    auto esft = const_cast<enable_shared_from_this*>(this);
+    auto unconst = reinterpret_cast<enable_shared_from_this<std::remove_const_t<T>>*>(esft);
+    return shared_ptr<const T>(unconst);
 }
 
 template <typename T, typename U>
