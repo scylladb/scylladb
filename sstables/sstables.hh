@@ -19,6 +19,7 @@
 #include "row.hh"
 
 namespace sstables {
+class key;
 
 class malformed_sstable_exception : public std::exception {
     sstring _msg;
@@ -105,6 +106,10 @@ private:
 
     future<index_list> read_indexes(uint64_t position, uint64_t quantity);
 
+    future<index_list> read_indexes(uint64_t position) {
+        return read_indexes(position, _summary.header.sampling_level);
+    }
+
     input_stream<char> data_stream_at(uint64_t pos);
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
@@ -114,7 +119,10 @@ private:
     // for iteration through all the rows.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len);
 
+    template <typename T>
+    int binary_search(const T& entries, const key& sk);
 
+    future<summary_entry&> read_summary_entry(size_t i);
 public:
     // Read one or few rows at the given byte range from the data file,
     // feeding them into the consumer. This function reads the entire given
@@ -144,14 +152,8 @@ public:
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
 
-    future<index_list> read_indexes(uint64_t position) {
-        return read_indexes(position, _summary.header.sampling_level);
-    }
-
     future<> load();
     future<> store();
-
-    future<summary_entry&> read_summary_entry(size_t i);
 
     void set_generation(unsigned long generation) { _generation = generation; }
 
