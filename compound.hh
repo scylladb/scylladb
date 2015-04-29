@@ -204,6 +204,7 @@ public:
             return i;
         }
         const value_type& operator*() const { return _current; }
+        const value_type* operator->() const { return &_current; }
         bool operator!=(const iterator& i) const { return _v.begin() != i._v.begin(); }
         bool operator==(const iterator& i) const { return _v.begin() == i._v.begin(); }
     };
