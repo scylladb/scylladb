@@ -98,21 +98,7 @@ public:
         marker(int32_t bind_index, ::shared_ptr<column_specification> receiver)
             : abstract_marker{bind_index, std::move(receiver)}
         { }
-#if 0
-        protected Marker(int bindIndex, ColumnSpecification receiver)
-        {
-            super(bindIndex, receiver);
-            assert receiver.type instanceof ListType;
-        }
-#endif
         virtual ::shared_ptr<terminal> bind(const query_options& options) override;
-#if 0
-        public Value bind(QueryOptions options) throws InvalidRequestException
-        {
-            ByteBuffer value = options.getValues().get(bindIndex);
-            return value == null ? null : Value.fromSerialized(value, (ListType)receiver.type, options.getProtocolVersion());
-        }
-#endif
     };
 
     /*
