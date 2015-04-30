@@ -7,6 +7,7 @@
 #include "schema.hh"
 #include "bytes.hh"
 #include "types.hh"
+#include "compound_compat.hh"
 
 //
 // This header defines type system for primary key holders.
@@ -276,10 +277,11 @@ public:
 };
 
 class partition_key : public compound_wrapper<partition_key> {
+    using c_type = compound_type<allow_prefixes::no>;
 public:
     partition_key(bytes&& b) : compound_wrapper<partition_key>(std::move(b)) {}
 public:
-    using compound = lw_shared_ptr<compound_type<allow_prefixes::no>>;
+    using compound = lw_shared_ptr<c_type>;
 
     static partition_key from_bytes(bytes b) {
         return partition_key(std::move(b));
@@ -287,6 +289,23 @@ public:
 
     static const compound& get_compound_type(const schema& s) {
         return s.partition_key_type();
+    }
+
+    // Returns key's representation which is compatible with Origin.
+    // The result is valid as long as the schema is live.
+    const legacy_compound_view<c_type> legacy_form(const schema& s) const {
+        return { *get_compound_type(s), _bytes };
+    }
+
+    // A trichotomic comparator for ordering compatible with Origin.
+    int legacy_tri_compare(const schema& s, const partition_key& o) const {
+        auto cmp = legacy_compound_view<c_type>::tri_comparator(*get_compound_type(s));
+        return cmp(*this, o);
+    }
+
+    // Checks if keys are equal in a way which is compatible with Origin.
+    bool legacy_equal(const schema& s, const partition_key& o) const {
+        return legacy_tri_compare(s, o) == 0;
     }
 
     friend std::ostream& operator<<(std::ostream& out, const partition_key& pk);
