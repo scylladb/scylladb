@@ -88,19 +88,21 @@ BOOST_AUTO_TEST_CASE(test_hash_output) {
         }
     };
 
-    for (int i = 0; i < full_sequence.size(); ++i) {
+    for (size_t i = 0; i < full_sequence.size(); ++i) {
         auto prefix = bytes_view(full_sequence.begin(), i);
         auto&& expected = prefix_hashes[i];
 
         {
             std::array<uint64_t, 2> dst;
             utils::murmur_hash::hash3_x64_128(prefix, seed, dst);
+            assert_hashes_equal(prefix, dst, expected);
         }
 
         // Test the iterator version
         {
             std::array<uint64_t,2> dst;
             utils::murmur_hash::hash3_x64_128(prefix.begin(), prefix.size(), seed, dst);
+            assert_hashes_equal(prefix, dst, expected);
         }
     }
 }
