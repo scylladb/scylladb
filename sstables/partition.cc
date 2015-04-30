@@ -42,9 +42,10 @@ int sstable::binary_search(const T& entries, const key& sk) {
         auto mid_key = key_view(mid_bytes);
         auto mid_token = partitioner.get_token(mid_key);
 
-        result = compare_unsigned(bytes_view(token._data), bytes_view(mid_token._data));
-        if (result == 0) {
+        if (token == mid_token) {
             result = compare_unsigned(sk_bytes, mid_bytes);
+        } else {
+            result = token < mid_token ? -1 : 1;
         }
 
         if (result > 0) {
