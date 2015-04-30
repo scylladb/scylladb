@@ -133,7 +133,7 @@ public:
                 throw unimplemented_exception();
             } else if (predicate.__isset.slice_range) {
                 auto&& range = predicate.slice_range;
-                const row* rw = cf.find_row(dk, clustering_key::make_empty(*cf.schema()));
+                column_family::const_row_ptr rw = cf.find_row(dk, clustering_key::make_empty(*cf.schema()));
                 if (rw) {
                     auto beg = cf.schema()->regular_begin();
                     if (!range.start.empty()) {

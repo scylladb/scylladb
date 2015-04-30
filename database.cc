@@ -32,24 +32,31 @@ column_family::column_family(schema_ptr schema)
 column_family::~column_family() {
 }
 
-const mutation_partition*
+column_family::const_mutation_partition_ptr
 column_family::find_partition(const dht::decorated_key& key) const {
     auto i = partitions.find(key);
-    return i == partitions.end() ? nullptr : &i->second;
+    // FIXME: remove copy if only one data source
+    return i == partitions.end() ? const_mutation_partition_ptr() : std::make_unique<const mutation_partition>(i->second);
 }
 
-const mutation_partition*
+column_family::const_mutation_partition_ptr
 column_family::find_partition_slow(const partition_key& key) const {
     return find_partition(dht::global_partitioner().decorate_key(*_schema, key));
 }
 
-const row*
+column_family::const_row_ptr
 column_family::find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) const {
-    const mutation_partition* p = find_partition(partition_key);
+    const_mutation_partition_ptr p = find_partition(partition_key);
     if (!p) {
         return nullptr;
     }
-    return p->find_row(clustering_key);
+    auto r = p->find_row(clustering_key);
+    if (r) {
+        // FIXME: remove copy if only one data source
+        return std::make_unique<row>(*r);
+    } else {
+        return nullptr;
+    }
 }
 
 mutation_partition&

@@ -59,16 +59,23 @@ class column_family {
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
 public:
+    // Queries can be satisfied from multiple data sources, so they are returned
+    // as temporaries.
+    //
+    // FIXME: in case a query is satisfied from a single memtable, avoid a copy
+    using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
+    using const_row_ptr = std::unique_ptr<const row>;
+public:
     column_family(schema_ptr schema);
     column_family(column_family&&) = default;
     ~column_family();
     schema_ptr schema() const { return _schema; }
     mutation_partition& find_or_create_partition(const dht::decorated_key& key);
     mutation_partition& find_or_create_partition_slow(const partition_key& key);
-    const mutation_partition* find_partition(const dht::decorated_key& key) const;
-    const mutation_partition* find_partition_slow(const partition_key& key) const;
+    const_mutation_partition_ptr find_partition(const dht::decorated_key& key) const;
+    const_mutation_partition_ptr find_partition_slow(const partition_key& key) const;
     row& find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key);
-    const row* find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) const;
+    const_row_ptr find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) const;
     void apply(const mutation& m);
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd) const;
