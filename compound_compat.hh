@@ -115,16 +115,6 @@ public:
             : _type(type)
         { }
 
-        tri_comparator(tri_comparator&& other)
-            : _type(other._type)
-        { }
-
-        tri_comparator& operator=(tri_comparator&& other) {
-            this->~tri_comparator();
-            new (this) tri_comparator(std::move(other));
-            return *this;
-        }
-
         // @k1 and @k2 must be serialized using @type, which was passed to the constructor.
         int operator()(bytes_view k1, bytes_view k2) const {
             if (_type.is_singular()) {
