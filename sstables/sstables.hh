@@ -18,6 +18,8 @@
 #include "compress.hh"
 #include "row.hh"
 #include "dht/i_partitioner.hh"
+#include "schema.hh"
+#include "database_fwd.hh"
 
 namespace sstables {
 class key;
@@ -168,6 +170,8 @@ public:
     future<> store();
 
     void set_generation(unsigned long generation) { _generation = generation; }
+
+    future<lw_shared_ptr<mutation>> convert_row(schema_ptr schema, const key& k);
 
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
