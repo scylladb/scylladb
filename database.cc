@@ -32,20 +32,20 @@ column_family::column_family(schema_ptr schema)
 column_family::~column_family() {
 }
 
-mutation_partition*
-column_family::find_partition(const dht::decorated_key& key) {
+const mutation_partition*
+column_family::find_partition(const dht::decorated_key& key) const {
     auto i = partitions.find(key);
     return i == partitions.end() ? nullptr : &i->second;
 }
 
-mutation_partition*
-column_family::find_partition_slow(const partition_key& key) {
+const mutation_partition*
+column_family::find_partition_slow(const partition_key& key) const {
     return find_partition(dht::global_partitioner().decorate_key(*_schema, key));
 }
 
-row*
-column_family::find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) {
-    mutation_partition* p = find_partition(partition_key);
+const row*
+column_family::find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) const {
+    const mutation_partition* p = find_partition(partition_key);
     if (!p) {
         return nullptr;
     }
@@ -461,7 +461,7 @@ merge_column(const column_definition& def,
 }
 
 future<lw_shared_ptr<query::result>>
-column_family::query(const query::read_command& cmd) {
+column_family::query(const query::read_command& cmd) const {
     query::result::builder builder(cmd.slice);
 
     uint32_t limit = cmd.row_limit;

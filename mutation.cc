@@ -59,8 +59,8 @@ void mutation::set_cell(const exploded_clustering_prefix& prefix, const column_d
 }
 
 std::experimental::optional<atomic_cell_or_collection>
-mutation::get_cell(const clustering_key& rkey, const column_definition& def) {
-    auto find_cell = [&def] (row& r) {
+mutation::get_cell(const clustering_key& rkey, const column_definition& def) const {
+    auto find_cell = [&def] (const row& r) {
         auto i = r.find(def.id);
         if (i == r.end()) {
             return std::experimental::optional<atomic_cell_or_collection>{};

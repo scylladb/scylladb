@@ -179,8 +179,8 @@ public:
     const rows_type& clustered_rows() const { return _rows; }
     const row& static_row() const { return _static_row; }
     deletable_row& clustered_row(const clustering_key& key);
-    row* find_row(const clustering_key& key);
-    rows_entry* find_entry(schema_ptr schema, const clustering_key_prefix& key);
+    const row* find_row(const clustering_key& key) const;
+    const rows_entry* find_entry(schema_ptr schema, const clustering_key_prefix& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;

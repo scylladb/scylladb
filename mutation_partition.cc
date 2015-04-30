@@ -127,8 +127,8 @@ mutation_partition::apply_delete(schema_ptr schema, clustering_key&& key, tombst
     }
 }
 
-rows_entry*
-mutation_partition::find_entry(schema_ptr schema, const clustering_key_prefix& key) {
+const rows_entry*
+mutation_partition::find_entry(schema_ptr schema, const clustering_key_prefix& key) const {
     auto i = _rows.find(key, rows_entry::key_comparator(clustering_key::less_compare_with_prefix(*schema)));
     if (i == _rows.end()) {
         return nullptr;
@@ -136,8 +136,8 @@ mutation_partition::find_entry(schema_ptr schema, const clustering_key_prefix& k
     return &*i;
 }
 
-row*
-mutation_partition::find_row(const clustering_key& key) {
+const row*
+mutation_partition::find_row(const clustering_key& key) const {
     auto i = _rows.find(key);
     if (i == _rows.end()) {
         return nullptr;

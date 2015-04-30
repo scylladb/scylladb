@@ -59,15 +59,15 @@ struct column_family {
     ~column_family();
     mutation_partition& find_or_create_partition(const dht::decorated_key& key);
     mutation_partition& find_or_create_partition_slow(const partition_key& key);
-    mutation_partition* find_partition(const dht::decorated_key& key);
-    mutation_partition* find_partition_slow(const partition_key& key);
+    const mutation_partition* find_partition(const dht::decorated_key& key) const;
+    const mutation_partition* find_partition_slow(const partition_key& key) const;
     row& find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key);
-    row* find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key);
+    const row* find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) const;
     schema_ptr _schema;
     std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator> partitions;
     void apply(const mutation& m);
     // Returns at most "cmd.limit" rows
-    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
+    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd) const;
 
     future<> populate(sstring datadir);
 private:
