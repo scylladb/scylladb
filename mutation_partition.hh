@@ -149,6 +149,7 @@ class serializer;
 
 
 class mutation_partition final {
+    // FIXME: using boost::intrusive because gcc's std::set<> does not support heterogeneous lookup yet
     using rows_type = boost::intrusive::set<rows_entry, boost::intrusive::compare<rows_entry::compare>>;
 private:
     tombstone _tombstone;
@@ -156,6 +157,7 @@ private:
     rows_type _rows;
     // Contains only strict prefixes so that we don't have to lookup full keys
     // in both _row_tombstones and _rows.
+    // FIXME: using boost::intrusive because gcc's std::set<> does not support heterogeneous lookup yet
     boost::intrusive::set<row_tombstones_entry, boost::intrusive::compare<row_tombstones_entry::compare>> _row_tombstones;
 
     template<typename T>
@@ -166,6 +168,7 @@ public:
         , _row_tombstones(row_tombstones_entry::compare(*s))
     { }
     mutation_partition(mutation_partition&&) = default;
+    mutation_partition(const mutation_partition&);
     ~mutation_partition();
     tombstone partition_tombstone() const { return _tombstone; }
     void apply(tombstone t) { _tombstone.apply(t); }

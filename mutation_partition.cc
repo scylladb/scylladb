@@ -4,6 +4,15 @@
 
 #include "mutation_partition.hh"
 
+mutation_partition::mutation_partition(const mutation_partition& x)
+        : _tombstone(x._tombstone)
+        , _static_row(x._static_row)
+        , _rows(x._rows.value_comp())
+        , _row_tombstones(x._row_tombstones.value_comp()) {
+    auto cloner = [] (const auto& x) { return new std::remove_const_t<std::remove_reference_t<decltype(x)>>(x); };
+    _rows.clone_from(x._rows, cloner, std::default_delete<rows_entry>());
+    _row_tombstones.clone_from(x._row_tombstones, cloner, std::default_delete<row_tombstones_entry>());
+}
 
 mutation_partition::~mutation_partition() {
     _rows.clear_and_dispose(std::default_delete<rows_entry>());
