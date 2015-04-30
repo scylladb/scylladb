@@ -857,6 +857,18 @@ SEASTAR_TEST_CASE(all_in_place) {
     });
 }
 
+SEASTAR_TEST_CASE(full_index_search) {
+    return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([] (auto sstp) {
+        return sstables::test(sstp).read_indexes(0, 4).then([sstp] (auto index_list) {
+            int idx = 0;
+            for (auto& ie: index_list) {
+                auto key = key::from_bytes(ie.key.value);
+                BOOST_REQUIRE(sstables::test(sstp).binary_search(index_list, key) == idx++);
+            }
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(not_find_key_composite_bucket0) {
     return reusable_sst("tests/urchin/sstables/composite", 1).then([] (auto sstp) {
         schema_ptr s = composite_schema();

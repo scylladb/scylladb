@@ -63,4 +63,5 @@ int sstable::binary_search(const T& entries, const key& sk) {
 // Force generation, so we make it available outside this compilation unit without moving that
 // much code to .hh
 template int sstable::binary_search<>(const std::vector<summary_entry>& entries, const key& sk);
+template int sstable::binary_search<>(const std::vector<index_entry>& entries, const key& sk);
 }
