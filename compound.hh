@@ -41,6 +41,7 @@ private:
     const bool _byte_order_equal;
     const bool _byte_order_comparable;
 public:
+    static constexpr bool is_prefixable = AllowPrefixes == allow_prefixes::yes;
     using prefix_type = compound_type<allow_prefixes::yes>;
     using value_type = std::vector<bytes>;
 
