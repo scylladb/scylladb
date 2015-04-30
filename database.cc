@@ -20,23 +20,34 @@
 #include "sstables/sstables.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include "locator/simple_snitch.hh"
+#include <boost/algorithm/cxx11/all_of.hpp>
 
 thread_local logging::logger dblog("database");
 
+memtable::memtable(schema_ptr schema)
+        : _schema(std::move(schema))
+        , partitions(dht::decorated_key::less_comparator(_schema)) {
+}
+
 column_family::column_family(schema_ptr schema)
     : _schema(std::move(schema))
-    , partitions(dht::decorated_key::less_comparator(_schema))
+    , _memtable(_schema)
 { }
 
 // define in .cc, since sstable is forward-declared in .hh
 column_family::~column_family() {
 }
 
-column_family::const_mutation_partition_ptr
-column_family::find_partition(const dht::decorated_key& key) const {
+memtable::const_mutation_partition_ptr
+memtable::find_partition(const dht::decorated_key& key) const {
     auto i = partitions.find(key);
     // FIXME: remove copy if only one data source
     return i == partitions.end() ? const_mutation_partition_ptr() : std::make_unique<const mutation_partition>(i->second);
+}
+
+column_family::const_mutation_partition_ptr
+column_family::find_partition(const dht::decorated_key& key) const {
+    return _memtable.find_partition(key);
 }
 
 column_family::const_mutation_partition_ptr
@@ -65,13 +76,24 @@ column_family::find_or_create_partition_slow(const partition_key& key) {
 }
 
 mutation_partition&
-column_family::find_or_create_partition(const dht::decorated_key& key) {
+memtable::find_or_create_partition(const dht::decorated_key& key) {
     // call lower_bound so we have a hint for the insert, just in case.
     auto i = partitions.lower_bound(key);
     if (i == partitions.end() || !key.equal(*_schema, i->first)) {
         i = partitions.emplace_hint(i, std::make_pair(std::move(key), mutation_partition(_schema)));
     }
     return i->second;
+}
+
+const memtable::partitions_type&
+memtable::all_partitions() const {
+    return partitions;
+}
+
+template <typename Func>
+bool
+column_family::for_all_partitions(Func&& func) const {
+    return boost::algorithm::all_of(_memtable.all_partitions(), std::forward<Func>(func));
 }
 
 row&
@@ -181,18 +203,17 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
     return make_ready_future<>();
 }
 
-const std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator>&
-column_family::all_partitions() const {
-    return partitions;
-}
-
-
 future<> column_family::populate(sstring sstdir) {
 
     return lister::scan_dir(sstdir, directory_entry_type::regular, [this, sstdir] (directory_entry de) {
         // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
         return probe_file(sstdir, de.name);
     });
+}
+
+const boost::iterator_range<const memtable*>
+column_family::testonly_all_memtables() const {
+    return boost::make_iterator_range(&_memtable, &_memtable + 1);
 }
 
 
@@ -432,7 +453,7 @@ database::find_or_create_keyspace(const sstring& name) {
 }
 
 void
-column_family::apply(const mutation& m) {
+memtable::apply(const mutation& m) {
     mutation_partition& p = find_or_create_partition(m.decorated_key());
     p.apply(_schema, m.partition());
 }
@@ -493,7 +514,7 @@ column_family::query(const query::read_command& cmd) const {
             p_builder.finish();
             limit -= p_builder.row_count();
         } else if (range.is_full()) {
-            for (auto&& e : partitions) {
+            for_all_partitions([&] (auto&& e) {
                 auto& dk = e.first;
                 auto& partition = e.second;
                 auto p_builder = builder.add_partition(dk._key);
@@ -501,9 +522,10 @@ column_family::query(const query::read_command& cmd) const {
                 p_builder.finish();
                 limit -= p_builder.row_count();
                 if (limit == 0) {
-                    break;
+                    return false;
                 }
-            }
+                return true;
+            });
         } else {
             fail(unimplemented::cause::RANGE_QUERIES);
         }
@@ -553,11 +575,12 @@ std::ostream& operator<<(std::ostream& os, const mutation& m) {
 
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
     out << "{\n";
-    for (auto&& e : cf.partitions) {
+    cf.for_all_partitions([&] (auto&& e) {
         out << e.first << " => ";
         print_partition(out, *cf._schema, e.second);
         out << "\n";
-    }
+        return true;
+    });
     out << "}";
     return out;
 }

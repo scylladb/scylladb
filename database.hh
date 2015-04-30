@@ -53,9 +53,26 @@ class commitlog;
 class config;
 }
 
+class memtable {
+public:
+    using partitions_type = std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator>;
+private:
+    schema_ptr _schema;
+    partitions_type partitions;
+public:
+    using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
+public:
+    explicit memtable(schema_ptr schema);
+    schema_ptr schema() const { return _schema; }
+    mutation_partition& find_or_create_partition(const dht::decorated_key& key);
+    const_mutation_partition_ptr find_partition(const dht::decorated_key& key) const;
+    void apply(const mutation& m);
+    const partitions_type& all_partitions() const;
+};
+
 class column_family {
     schema_ptr _schema;
-    std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator> partitions;
+    memtable _memtable;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
 public:
@@ -81,8 +98,13 @@ public:
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd) const;
 
     future<> populate(sstring datadir);
-    const std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator>& all_partitions() const;
+    const boost::iterator_range<const memtable*> testonly_all_memtables() const;
 private:
+    // Iterate over all partitions.  Protocol is the same as std::all_of(),
+    // so that iteration can be stopped by returning false.
+    // Func called with: std::pair<decorated_key, mutation_partition> e
+    template <typename Func>
+    bool for_all_partitions(Func&& func) const;
     future<> probe_file(sstring sstdir, sstring fname);
     // Returns at most "limit" rows. The limit must be greater than 0.
     void get_partition_slice(mutation_partition& partition, const query::partition_slice& slice,
@@ -189,5 +211,17 @@ public:
 
 // FIXME: stub
 class secondary_index_manager {};
+
+inline
+mutation_partition&
+column_family::find_or_create_partition(const dht::decorated_key& key) {
+    return _memtable.find_or_create_partition(key);
+}
+
+inline
+void
+column_family::apply(const mutation& m) {
+    return _memtable.apply(m);
+}
 
 #endif /* DATABASE_HH_ */

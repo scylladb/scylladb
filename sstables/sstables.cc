@@ -975,20 +975,20 @@ static future<> write_static_row(output_stream<char>& out, schema_ptr schema, co
     });
 }
 
-future<> write_datafile(column_family& cf, sstring datafile) {
+future<> write_datafile(const memtable& mt, sstring datafile) {
     auto oflags = open_flags::wo | open_flags::create | open_flags::truncate;
-    return engine().open_file_dma(datafile, oflags).then([&cf] (file f) {
+    return engine().open_file_dma(datafile, oflags).then([&mt] (file f) {
         // TODO: Add compression support by having a specialized output stream.
         auto out = make_file_output_stream(make_lw_shared<file>(std::move(f)), 4096);
         auto w = make_shared<output_stream<char>>(std::move(out));
 
         // Iterate through CQL partitions, then CQL rows, then CQL columns.
-        // Each cf.partitions entry is a set of clustered rows sharing the same partition key.
-        return do_for_each(cf.all_partitions(),
-                [w, &cf] (const std::pair<const dht::decorated_key, mutation_partition>& partition_entry) {
+        // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.
+        return do_for_each(mt.all_partitions(),
+                [w, &mt] (const std::pair<const dht::decorated_key, mutation_partition>& partition_entry) {
             // TODO: Write index and summary files on-the-fly.
 
-            key partition_key = key::from_partition_key(*cf.schema(), partition_entry.first._key);
+            key partition_key = key::from_partition_key(*mt.schema(), partition_entry.first._key);
 
             return do_with(std::move(partition_key), [w, &partition_entry] (auto& partition_key) {
                 disk_string_view<uint16_t> p_key;
@@ -1011,15 +1011,15 @@ future<> write_datafile(column_family& cf, sstring datafile) {
 
                     return write(*w, d);
                 });
-            }).then([w, &cf, &partition_entry] {
+            }).then([w, &mt, &partition_entry] {
                 auto& partition = partition_entry.second;
 
                 auto& static_row = partition.static_row();
-                return write_static_row(*w, cf.schema(), static_row).then([w, &cf, &partition] {
+                return write_static_row(*w, mt.schema(), static_row).then([w, &mt, &partition] {
 
                     // Write all CQL rows from a given mutation partition.
-                    return do_for_each(partition.clustered_rows(), [w, &cf] (const rows_entry& clustered_row) {
-                        return write_clustered_row(*w, cf.schema(), clustered_row);
+                    return do_for_each(partition.clustered_rows(), [w, &mt] (const rows_entry& clustered_row) {
+                        return write_clustered_row(*w, mt.schema(), clustered_row);
                     }).then([w] {
                         // end_of_row is appended to the end of each partition.
                         int16_t end_of_row = 0;
