@@ -1217,7 +1217,8 @@ storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const
         std::vector<column_id> regular_cols;
         boost::range::push_back(regular_cols, schema->regular_columns() | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
         auto opts = query::partition_slice::option_set::of<
-            query::partition_slice::option::send_partition_key>();
+            query::partition_slice::option::send_partition_key,
+            query::partition_slice::option::send_clustering_key>();
         query::partition_slice slice{row_ranges, {}, regular_cols, opts};
         std::vector<query::partition_range> pr = {query::partition_range::make_open_ended_both_sides()};
         auto id = db.find_uuid(ks_name, cf_name);
