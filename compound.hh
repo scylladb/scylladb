@@ -41,6 +41,7 @@ private:
     const bool _byte_order_equal;
     const bool _byte_order_comparable;
 public:
+    static constexpr bool is_prefixable = AllowPrefixes == allow_prefixes::yes;
     using prefix_type = compound_type<allow_prefixes::yes>;
     using value_type = std::vector<bytes>;
 
@@ -56,6 +57,10 @@ public:
 
     auto const& types() {
         return _types;
+    }
+
+    bool is_singular() const {
+        return _types.size() == 1;
     }
 
     prefix_type as_prefix() {
@@ -149,7 +154,7 @@ public:
     bytes decompose_value(const value_type& values) {
         return ::serialize_value(*this, values);
     }
-    class iterator : public std::iterator<std::forward_iterator_tag, bytes_view> {
+    class iterator : public std::iterator<std::input_iterator_tag, bytes_view> {
     private:
         ssize_t _types_left;
         bytes_view _v;
@@ -194,7 +199,13 @@ public:
             read_current();
             return *this;
         }
+        iterator operator++(int) {
+            iterator i(*this);
+            ++(*this);
+            return i;
+        }
         const value_type& operator*() const { return _current; }
+        const value_type* operator->() const { return &_current; }
         bool operator!=(const iterator& i) const { return _v.begin() != i._v.begin(); }
         bool operator==(const iterator& i) const { return _v.begin() == i._v.begin(); }
     };
@@ -203,6 +214,9 @@ public:
     }
     iterator end(const bytes_view& v) const {
         return iterator(typename iterator::end_iterator_tag(), v);
+    }
+    boost::iterator_range<iterator> components(const bytes_view& v) const {
+        return { begin(v), end(v) };
     }
     auto iter_items(const bytes_view& v) {
         return boost::iterator_range<iterator>(begin(v), end(v));

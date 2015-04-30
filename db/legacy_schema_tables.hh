@@ -39,7 +39,8 @@ class result_set;
 namespace db {
 namespace legacy_schema_tables {
 
-using schema_result = std::map<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>;
+using schema_result = std::map<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>,
+    dht::decorated_key::less_comparator>;
 
 static constexpr auto KEYSPACES = "schema_keyspaces";
 static constexpr auto COLUMNFAMILIES = "schema_columnfamilies";

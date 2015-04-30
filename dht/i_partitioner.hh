@@ -68,11 +68,25 @@ bool operator==(const token& t1, const token& t2);
 bool operator<(const token& t1, const token& t2);
 std::ostream& operator<<(std::ostream& out, const token& t);
 
-
+// Wraps partition_key with its corresponding token.
+//
+// Total ordering defined by comparators is compatible with Origin's ordering.
 class decorated_key {
 public:
     token _token;
     partition_key _key;
+
+    struct less_comparator {
+        schema_ptr s;
+        less_comparator(schema_ptr s);
+        bool operator()(const decorated_key& k1, const decorated_key& k2) const;
+    };
+
+    bool equal(const schema& s, const decorated_key& other) const;
+
+    bool less_compare(const schema& s, const decorated_key& other) const;
+
+    int tri_compare(const schema& s, const decorated_key& other) const;
 };
 
 class i_partitioner {
@@ -84,8 +98,8 @@ public:
      * @param key the raw, client-facing key
      * @return decorated version of key
      */
-    decorated_key decorate_key(const partition_key& key) {
-        return { get_token(key), key };
+    decorated_key decorate_key(const schema& s, const partition_key& key) {
+        return { get_token(s, key), key };
     }
 
     /**
@@ -94,8 +108,8 @@ public:
      * @param key the raw, client-facing key
      * @return decorated version of key
      */
-    decorated_key decorate_key(partition_key&& key) {
-        auto token = get_token(key);
+    decorated_key decorate_key(const schema& s, partition_key&& key) {
+        auto token = get_token(s, key);
         return { std::move(token), std::move(key) };
     }
 
@@ -122,7 +136,7 @@ public:
      * (This is NOT a method to create a token from its string representation;
      * for that, use tokenFactory.fromString.)
      */
-    virtual token get_token(const partition_key& key) = 0;
+    virtual token get_token(const schema& s, const partition_key& key) = 0;
     virtual token get_token(const sstables::key_view& key) = 0;
 
     /**
@@ -163,12 +177,6 @@ protected:
     friend bool operator==(const token& t1, const token& t2);
     friend bool operator<(const token& t1, const token& t2);
 };
-
-bool operator<(const decorated_key& lht, const decorated_key& rht);
-
-bool operator==(const decorated_key& lht, const decorated_key& rht);
-
-bool operator!=(const decorated_key& lht, const decorated_key& rht);
 
 std::ostream& operator<<(std::ostream& out, const token& t);
 

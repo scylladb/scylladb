@@ -148,22 +148,6 @@ static uint64_t getblock(bytes_view key, uint32_t index)
             (((uint64_t) key[i_8 + 6] & 0xff) << 48) + (((uint64_t) key[i_8 + 7] & 0xff) << 56);
 }
 
-static uint64_t rotl64(uint64_t v, uint32_t n)
-{
-    return ((v << n) | ((uint64_t)v >> (64 - n)));
-}
-
-static uint64_t fmix(uint64_t k)
-{
-    k ^= (uint64_t)k >> 33;
-    k *= 0xff51afd7ed558ccdL;
-    k ^= (uint64_t)k >> 33;
-    k *= 0xc4ceb9fe1a85ec53L;
-    k ^= (uint64_t)k >> 33;
-
-    return k;
-}
-
 void hash3_x64_128(bytes_view key, uint64_t seed, std::array<uint64_t,2> &result)
 {
     uint32_t length = key.size();

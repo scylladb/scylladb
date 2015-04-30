@@ -120,7 +120,7 @@ public:
         auto& cf = db.find_column_family(ks_name, table_name);
         auto schema = cf._schema;
         auto pkey = partition_key::from_deeply_exploded(*schema, pk);
-        auto dk = dht::global_partitioner().decorate_key(pkey);
+        auto dk = dht::global_partitioner().decorate_key(*schema, pkey);
         auto shard = db.shard_of(dk._token);
         return _db->invoke_on(shard, [pkey = std::move(pkey),
                                       ck = std::move(ck),

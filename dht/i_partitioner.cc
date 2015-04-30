@@ -129,25 +129,6 @@ bool operator<(const token& t1, const token& t2)
     return false;
 }
 
-bool operator<(const decorated_key& lht, const decorated_key& rht) {
-    if (lht._token == rht._token) {
-        return static_cast<bytes_view>(lht._key) < rht._key;
-    } else {
-        return lht._token < rht._token;
-    }
-}
-
-bool operator==(const decorated_key& lht, const decorated_key& rht) {
-    if (lht._token == rht._token) {
-        return static_cast<bytes_view>(lht._key) == rht._key;
-    }
-    return false;
-}
-
-bool operator!=(const decorated_key& lht, const decorated_key& rht) {
-    return !(lht == rht);
-}
-
 std::ostream& operator<<(std::ostream& out, const token& t) {
     auto flags = out.flags();
     for (auto c : t._data) {
@@ -169,6 +150,37 @@ murmur3_partitioner default_partitioner;
 i_partitioner&
 global_partitioner() {
     return default_partitioner;
+}
+
+bool
+decorated_key::equal(const schema& s, const decorated_key& other) const {
+    if (_token == other._token) {
+        return _key.legacy_equal(s, other._key);
+    }
+    return false;
+}
+
+int
+decorated_key::tri_compare(const schema& s, const decorated_key& other) const {
+    if (_token == other._token) {
+        return _key.legacy_tri_compare(s, other._key);
+    } else {
+        return _token < other._token ? -1 : 1;
+    }
+}
+
+bool
+decorated_key::less_compare(const schema& s, const decorated_key& other) const {
+    return tri_compare(s, other) < 0;
+}
+
+decorated_key::less_comparator::less_comparator(schema_ptr s)
+    : s(std::move(s))
+{ }
+
+bool
+decorated_key::less_comparator::operator()(const decorated_key& lhs, const decorated_key& rhs) const {
+    return lhs.less_compare(*s, rhs);
 }
 
 }

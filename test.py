@@ -42,6 +42,7 @@ boost_tests = [
     'cartesian_product_test',
     'urchin/UUID_test',
     'urchin/compound_test',
+    'urchin/murmur_hash_test',
 ]
 
 other_tests = [
