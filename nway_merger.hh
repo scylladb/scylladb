@@ -20,8 +20,6 @@
 #include <list>
 #include <functional>
 
-namespace osv {
-
 /** @class Ptr
  * Compares two containers by the elemnt at the head
  */
@@ -246,7 +244,5 @@ private:
     C* _sorted_lists;
     std::list<SPtr> _empty_lists;
 };
-} /* namespace osv */
-
 
 #endif /* _NWAY_MERGE_HH */
