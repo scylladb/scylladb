@@ -539,6 +539,7 @@ protocol<Serializer, MsgType>::client::client(protocol<Serializer, MsgType>& pro
                 }
             });
         }).finally([this] () {
+            this->_error = true;
             this->_write_buf.close();
             _outstanding.clear();
         });
