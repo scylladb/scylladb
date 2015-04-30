@@ -153,6 +153,11 @@ public:
     basic_sstring(const char_type* b, const char_type* e) : basic_sstring(b, e - b) {}
     basic_sstring(const std::basic_string<char_type>& s)
         : basic_sstring(s.data(), s.size()) {}
+    template <typename InputIterator>
+    basic_sstring(InputIterator first, InputIterator last)
+            : basic_sstring(initialized_later(), std::distance(first, last)) {
+        std::copy(first, last, begin());
+    }
     ~basic_sstring() noexcept {
         if (is_external()) {
             std::free(u.external.str);
