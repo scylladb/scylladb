@@ -25,6 +25,7 @@ thread_local logging::logger dblog("database");
 
 column_family::column_family(schema_ptr schema)
     : _schema(std::move(schema))
+    , partitions(dht::decorated_key::less_comparator(_schema))
 { }
 
 // define in .cc, since sstable is forward-declared in .hh
@@ -39,7 +40,7 @@ column_family::find_partition(const dht::decorated_key& key) {
 
 mutation_partition*
 column_family::find_partition_slow(const partition_key& key) {
-    return find_partition(dht::global_partitioner().decorate_key(key));
+    return find_partition(dht::global_partitioner().decorate_key(*_schema, key));
 }
 
 row*
@@ -53,14 +54,14 @@ column_family::find_row(const dht::decorated_key& partition_key, const clusterin
 
 mutation_partition&
 column_family::find_or_create_partition_slow(const partition_key& key) {
-    return find_or_create_partition(dht::global_partitioner().decorate_key(key));
+    return find_or_create_partition(dht::global_partitioner().decorate_key(*_schema, key));
 }
 
 mutation_partition&
 column_family::find_or_create_partition(const dht::decorated_key& key) {
     // call lower_bound so we have a hint for the insert, just in case.
     auto i = partitions.lower_bound(key);
-    if (i == partitions.end() || key != i->first) {
+    if (i == partitions.end() || !key.equal(*_schema, i->first)) {
         i = partitions.emplace_hint(i, std::make_pair(std::move(key), mutation_partition(_schema)));
     }
     return i->second;

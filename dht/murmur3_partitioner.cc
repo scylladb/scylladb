@@ -22,10 +22,15 @@ murmur3_partitioner::get_token(bytes_view key) {
     }
     std::array<uint64_t, 2> hash;
     utils::murmur_hash::hash3_x64_128(key, 0, hash);
+    return get_token(hash[0]);
+}
+
+token
+murmur3_partitioner::get_token(uint64_t value) const {
     // We don't normalize() the value, since token includes an is-before-everything
     // indicator.
     // FIXME: will this require a repair when importing a database?
-    auto t = net::hton(normalize(hash[0]));
+    auto t = net::hton(normalize(value));
     bytes b(bytes::initialized_later(), 8);
     std::copy_n(reinterpret_cast<int8_t*>(&t), 8, b.begin());
     return token{token::kind::key, std::move(b)};
@@ -37,8 +42,11 @@ murmur3_partitioner::get_token(const sstables::key_view& key) {
 }
 
 token
-murmur3_partitioner::get_token(const partition_key& key) {
-    return get_token(bytes_view(key));
+murmur3_partitioner::get_token(const schema& s, const partition_key& key) {
+    std::array<uint64_t, 2> hash;
+    auto&& legacy = key.legacy_form(s);
+    utils::murmur_hash::hash3_x64_128(legacy.begin(), legacy.size(), 0, hash);
+    return get_token(hash[0]);
 }
 
 inline long long_token(const token& t) {

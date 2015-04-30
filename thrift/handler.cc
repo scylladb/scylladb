@@ -117,7 +117,7 @@ public:
             return complete_with_exception<InvalidRequestException>(std::move(exn_cob), "column family %s not found", column_parent.column_family);
         }
         auto pk = key_from_thrift(schema, to_bytes(key));
-        auto dk = dht::global_partitioner().decorate_key(pk);
+        auto dk = dht::global_partitioner().decorate_key(*schema, pk);
         auto shard = _db.local().shard_of(dk._token);
 
         auto do_get = [this,

@@ -1188,13 +1188,19 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, db::consistency_lev
 
     if (range.is_singular()) {
         auto& key = range.start_value();
-        auto dk = dht::global_partitioner().decorate_key(key);
-        auto shard = _db.local().shard_of(dk._token);
-        return _db.invoke_on(shard, [cmd] (database& db) {
-            return db.query(*cmd).then([] (auto&& f) {
-                return make_foreign(std::move(f));
-            });
-        }).finally([cmd] {});
+        // TODO: consider storing decorated key in the request
+        try {
+            auto schema = _db.local().find_schema(cmd->cf_id);
+            auto token = dht::global_partitioner().get_token(*schema, key);
+            auto shard = _db.local().shard_of(token);
+            return _db.invoke_on(shard, [cmd](database& db) {
+                return db.query(*cmd).then([](auto&& f) {
+                    return make_foreign(std::move(f));
+                });
+            }).finally([cmd] { });
+        } catch (const no_such_column_family&) {
+            return make_empty();
+        }
     }
 
     // FIXME: Respect cmd->row_limit to avoid unnecessary transfer

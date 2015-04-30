@@ -399,14 +399,16 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
     future<schema_result>
     read_schema_for_keyspaces(service::storage_proxy& proxy, const sstring& schema_table_name, const std::set<sstring>& keyspace_names)
     {
+        auto schema = proxy.get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
         auto map = [&proxy, schema_table_name] (sstring keyspace_name) { return read_schema_partition_for_keyspace(proxy, schema_table_name, keyspace_name); };
-        auto insert = [] (schema_result&& schema, auto&& schema_entity) {
+        auto insert = [] (schema_result&& result, auto&& schema_entity) {
             if (schema_entity.second) {
-                schema.insert(std::move(schema_entity));
+                result.insert(std::move(schema_entity));
             }
-            return std::move(schema);
+            return std::move(result);
         };
-        return map_reduce(keyspace_names.begin(), keyspace_names.end(), map, schema_result(), insert);
+        return map_reduce(keyspace_names.begin(), keyspace_names.end(), map,
+            schema_result(dht::decorated_key::less_comparator(schema)), insert);
     }
 
 #if 0
@@ -420,7 +422,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
     read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
     {
         auto schema = proxy.get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
-        auto keyspace_key = dht::global_partitioner().decorate_key(partition_key::from_single_value(*schema, to_bytes(keyspace_name)));
+        auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
+            partition_key::from_single_value(*schema, to_bytes(keyspace_name)));
         return read_schema_partition_for_keyspace(proxy, schema_table_name, keyspace_key);
     }
 

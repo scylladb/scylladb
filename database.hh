@@ -64,7 +64,7 @@ struct column_family {
     row& find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key);
     row* find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key);
     schema_ptr _schema;
-    std::map<dht::decorated_key, mutation_partition> partitions;
+    std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator> partitions;
     void apply(const mutation& m);
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);

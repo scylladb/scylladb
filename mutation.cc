@@ -10,8 +10,10 @@ mutation::mutation(dht::decorated_key key, schema_ptr schema)
     , _p(_schema)
 { }
 
-mutation::mutation(partition_key key_, schema_ptr schema_)
-    : mutation(dht::global_partitioner().decorate_key(std::move(key_)), std::move(schema_))
+mutation::mutation(partition_key key_, schema_ptr schema)
+    : _schema(std::move(schema))
+    , _dk(dht::global_partitioner().decorate_key(*_schema, std::move(key_)))
+    , _p(_schema)
 { }
 
 void mutation::set_static_cell(const column_definition& def, atomic_cell_or_collection value) {
