@@ -1223,8 +1223,7 @@ storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const
             query::partition_slice::option::send_clustering_key>();
         query::partition_slice slice{row_ranges, static_cols, regular_cols, opts};
         std::vector<query::partition_range> pr = {query::partition_range::make_open_ended_both_sides()};
-        auto id = db.find_uuid(ks_name, cf_name);
-        auto cmd = make_lw_shared<query::read_command>(id, pr, slice, std::numeric_limits<uint32_t>::max());
+        auto cmd = make_lw_shared<query::read_command>(schema->id(), pr, slice, std::numeric_limits<uint32_t>::max());
         return db.query(*cmd).then([key, schema, slice](lw_shared_ptr<query::result>&& result) {
             query::result_set_builder builder{schema};
             bytes_ostream w(result->buf());
