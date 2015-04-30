@@ -43,7 +43,7 @@ uint32_t hash32(bytes_view data, int32_t seed);
 uint64_t hash2_64(bytes_view key, uint64_t seed);
 
 template<typename InputIterator>
-static inline
+inline
 uint64_t read_block(InputIterator& in) {
     typename std::iterator_traits<InputIterator>::value_type tmp[8];
     for (int i = 0; i < 8; ++i) {
