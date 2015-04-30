@@ -206,6 +206,36 @@ inline auto wait_for_reply(typename protocol<Serializer, MsgType>::client& dst, 
     return std::move(sent);
 }
 
+template<typename Ex, typename... T> struct make_send_exception_helper {
+    auto operator()(Ex&& ex) {
+        return make_exception_future<T...>(std::move(ex));
+    }
+};
+
+template<typename Ex, typename... T> struct make_send_exception_helper<Ex, future<T...>> {
+    auto operator()(Ex&& ex) {
+        return make_exception_future<T...>(std::move(ex));
+    }
+};
+
+template<typename Ex> struct make_send_exception_helper<Ex, no_wait_type> {
+    auto operator()(Ex&& ex) {
+        return make_exception_future<>(std::move(ex));
+    }
+};
+
+template<typename Ex> struct make_send_exception_helper<Ex, void> {
+    auto operator()(Ex&& ex) {
+        return make_exception_future<>(std::move(ex));
+    }
+};
+
+template<typename Ret, typename Ex>
+inline auto make_send_exception(Ex&& ex) {
+    make_send_exception_helper<Ex, Ret> ex_maker;
+    return ex_maker(std::move(ex));
+}
+
 // Returns lambda that can be used to send rpc messages.
 // The lambda gets client connection and rpc parameters as arguments, marshalls them sends
 // to a server and waits for a reply. After receiving reply it unmarshalls it and signal completion
@@ -219,7 +249,7 @@ auto send_helper(MsgType t, std::index_sequence<I...>) {
         int _[] = { 0, (assert_type<decltype(args), typename std::tuple_element<I, types>::type>(), 0)... }; (void)_;
 
         if (dst.error()) {
-            throw closed_error();
+            return make_send_exception<typename F::return_type>(closed_error());
         }
 
         // send message
