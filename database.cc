@@ -174,6 +174,12 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
     return make_ready_future<>();
 }
 
+const std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator>&
+column_family::all_partitions() const {
+    return partitions;
+}
+
+
 future<> column_family::populate(sstring sstdir) {
 
     return lister::scan_dir(sstdir, directory_entry_type::regular, [this, sstdir] (directory_entry de) {
@@ -291,22 +297,22 @@ void database::drop_keyspace(const sstring& name) {
 }
 
 void database::add_column_family(const utils::UUID& uuid, column_family&& cf) {
-    if (_keyspaces.count(cf._schema->ks_name()) == 0) {
-        throw std::invalid_argument("Keyspace " + cf._schema->ks_name() + " not defined");
+    if (_keyspaces.count(cf.schema()->ks_name()) == 0) {
+        throw std::invalid_argument("Keyspace " + cf.schema()->ks_name() + " not defined");
     }
     if (_column_families.count(uuid) != 0) {
         throw std::invalid_argument("UUID " + uuid.to_sstring() + " already mapped");
     }
-    auto kscf = std::make_pair(cf._schema->ks_name(), cf._schema->cf_name());
+    auto kscf = std::make_pair(cf.schema()->ks_name(), cf.schema()->cf_name());
     if (_ks_cf_to_uuid.count(kscf) != 0) {
-        throw std::invalid_argument("Column family " + cf._schema->cf_name() + " exists");
+        throw std::invalid_argument("Column family " + cf.schema()->cf_name() + " exists");
     }
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
 }
 
 void database::add_column_family(column_family&& cf) {
-    auto id = cf._schema->id();
+    auto id = cf.schema()->id();
     add_column_family(id, std::move(cf));
 }
 
@@ -406,7 +412,7 @@ schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name)
 }
 
 schema_ptr database::find_schema(const utils::UUID& uuid) const throw (no_such_column_family) {
-    return find_column_family(uuid)._schema;
+    return find_column_family(uuid).schema();
 }
 
 keyspace&
@@ -553,7 +559,7 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     out << "{\n";
     for (auto&& e : db._column_families) {
         auto&& cf = e.second;
-        out << "(" << e.first.to_sstring() << ", " << cf._schema->cf_name() << ", " << cf._schema->ks_name() << "): " << cf << "\n";
+        out << "(" << e.first.to_sstring() << ", " << cf.schema()->cf_name() << ", " << cf.schema()->ks_name() << "): " << cf << "\n";
     }
     out << "}";
     return out;

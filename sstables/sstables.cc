@@ -984,11 +984,11 @@ future<> write_datafile(column_family& cf, sstring datafile) {
 
         // Iterate through CQL partitions, then CQL rows, then CQL columns.
         // Each cf.partitions entry is a set of clustered rows sharing the same partition key.
-        return do_for_each(cf.partitions,
-                [w, &cf] (std::pair<const dht::decorated_key, mutation_partition>& partition_entry) {
+        return do_for_each(cf.all_partitions(),
+                [w, &cf] (const std::pair<const dht::decorated_key, mutation_partition>& partition_entry) {
             // TODO: Write index and summary files on-the-fly.
 
-            key partition_key = key::from_partition_key(*cf._schema, partition_entry.first._key);
+            key partition_key = key::from_partition_key(*cf.schema(), partition_entry.first._key);
 
             return do_with(std::move(partition_key), [w, &partition_entry] (auto& partition_key) {
                 disk_string_view<uint16_t> p_key;
@@ -1015,11 +1015,11 @@ future<> write_datafile(column_family& cf, sstring datafile) {
                 auto& partition = partition_entry.second;
 
                 auto& static_row = partition.static_row();
-                return write_static_row(*w, cf._schema, static_row).then([w, &cf, &partition] {
+                return write_static_row(*w, cf.schema(), static_row).then([w, &cf, &partition] {
 
                     // Write all CQL rows from a given mutation partition.
                     return do_for_each(partition.clustered_rows(), [w, &cf] (const rows_entry& clustered_row) {
-                        return write_clustered_row(*w, cf._schema, clustered_row);
+                        return write_clustered_row(*w, cf.schema(), clustered_row);
                     }).then([w] {
                         // end_of_row is appended to the end of each partition.
                         int16_t end_of_row = 0;

@@ -53,30 +53,35 @@ class commitlog;
 class config;
 }
 
-struct column_family {
+class column_family {
+    schema_ptr _schema;
+    std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator> partitions;
+    // generation -> sstable. Ordered by key so we can easily get the most recent.
+    std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
+public:
     column_family(schema_ptr schema);
     column_family(column_family&&) = default;
     ~column_family();
+    schema_ptr schema() const { return _schema; }
     mutation_partition& find_or_create_partition(const dht::decorated_key& key);
     mutation_partition& find_or_create_partition_slow(const partition_key& key);
     const mutation_partition* find_partition(const dht::decorated_key& key) const;
     const mutation_partition* find_partition_slow(const partition_key& key) const;
     row& find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key);
     const row* find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) const;
-    schema_ptr _schema;
-    std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator> partitions;
     void apply(const mutation& m);
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd) const;
 
     future<> populate(sstring datadir);
+    const std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator>& all_partitions() const;
 private:
-    // generation -> sstable. Ordered by key so we can easily get the most recent.
-    std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
     future<> probe_file(sstring sstdir, sstring fname);
     // Returns at most "limit" rows. The limit must be greater than 0.
     void get_partition_slice(mutation_partition& partition, const query::partition_slice& slice,
         uint32_t limit, query::result::partition_writer&);
+
+    friend std::ostream& operator<<(std::ostream& out, const column_family& cf);
 };
 
 class user_types_metadata {

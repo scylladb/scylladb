@@ -133,15 +133,15 @@ public:
                 throw unimplemented_exception();
             } else if (predicate.__isset.slice_range) {
                 auto&& range = predicate.slice_range;
-                const row* rw = cf.find_row(dk, clustering_key::make_empty(*cf._schema));
+                const row* rw = cf.find_row(dk, clustering_key::make_empty(*cf.schema()));
                 if (rw) {
-                    auto beg = cf._schema->regular_begin();
+                    auto beg = cf.schema()->regular_begin();
                     if (!range.start.empty()) {
-                        beg = cf._schema->regular_lower_bound(to_bytes(range.start));
+                        beg = cf.schema()->regular_lower_bound(to_bytes(range.start));
                     }
-                    auto end = cf._schema->regular_end();
+                    auto end = cf.schema()->regular_end();
                     if (!range.finish.empty()) {
-                        end = cf._schema->regular_upper_bound(to_bytes(range.finish));
+                        end = cf.schema()->regular_upper_bound(to_bytes(range.finish));
                     }
                     auto count = range.count;
                     // FIXME: force limit count?
@@ -253,15 +253,15 @@ public:
                 sstring cf_name = cf_mutations.first;
                 const std::vector<Mutation>& mutations = cf_mutations.second;
                 auto& cf = lookup_column_family(_db.local(), _ks_name, cf_name);
-                mutation m_to_apply(key_from_thrift(cf._schema, thrift_key), cf._schema);
-                auto empty_clustering_key = clustering_key::make_empty(*cf._schema);
+                mutation m_to_apply(key_from_thrift(cf.schema(), thrift_key), cf.schema());
+                auto empty_clustering_key = clustering_key::make_empty(*cf.schema());
                 for (const Mutation& m : mutations) {
                     if (m.__isset.column_or_supercolumn) {
                         auto&& cosc = m.column_or_supercolumn;
                         if (cosc.__isset.column) {
                             auto&& col = cosc.column;
                             bytes cname = to_bytes(col.name);
-                            auto def = cf._schema->get_column_definition(cname);
+                            auto def = cf.schema()->get_column_definition(cname);
                             if (!def) {
                                 throw make_exception<InvalidRequestException>("column %s not found", col.name);
                             }
@@ -273,7 +273,7 @@ public:
                                 ttl = std::chrono::duration_cast<gc_clock::duration>(std::chrono::seconds(col.ttl));
                             }
                             if (ttl.count() <= 0) {
-                                ttl = cf._schema->default_time_to_live();
+                                ttl = cf.schema()->default_time_to_live();
                             }
                             auto ttl_option = ttl.count() > 0 ? ttl_opt(gc_clock::now() + ttl) : ttl_opt();
                             m_to_apply.set_clustered_cell(empty_clustering_key, *def,
