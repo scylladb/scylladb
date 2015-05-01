@@ -11,19 +11,27 @@
 
 namespace sstables {
 
-// Origin uses this slightly modified binary search for the Summary, that will
-// indicate in which bucket the element would be in case it is not a match.
-//
-// For the Index entries, it uses a "normal", java.lang binary search. Because
-// we have made the explicit decision to open code the comparator for
-// efficiency, using a separate binary search would be possible, but very
-// messy.
-//
-// It's easier to reuse the same code for both binary searches, and just ignore
-// the extra information when not needed.
-//
-// This code should work in all kinds of vectors in whose's elements is possible to aquire
-// a key view.
+/**
+ * @returns: >= 0, if key is found. That is the index where the key is found.
+ *             -1, if key is not found, and is smaller than the first key in the list.
+ *          <= -2, if key is not found, but is greater than one of the keys. By adding 2 and
+ *                 negating, one can determine the index before which the key would have to
+ *                 be inserted.
+ *
+ * Origin uses this slightly modified binary search for the Summary, that will
+ * indicate in which bucket the element would be in case it is not a match.
+ *
+ * For the Index entries, it uses a "normal", java.lang binary search. Because
+ * we have made the explicit decision to open code the comparator for
+ * efficiency, using a separate binary search would be possible, but very
+ * messy.
+ *
+ * It's easier to reuse the same code for both binary searches, and just ignore
+ * the extra information when not needed.
+ *
+ * This code should work in all kinds of vectors in whose's elements is possible to aquire
+ * a key view.
+ */
 template <typename T>
 int sstable::binary_search(const T& entries, const key& sk) {
     int low = 0, mid = entries.size(), high = mid - 1, result = -1;
@@ -42,9 +50,10 @@ int sstable::binary_search(const T& entries, const key& sk) {
         auto mid_key = key_view(mid_bytes);
         auto mid_token = partitioner.get_token(mid_key);
 
-        result = compare_unsigned(bytes_view(token._data), bytes_view(mid_token._data));
-        if (result == 0) {
+        if (token == mid_token) {
             result = compare_unsigned(sk_bytes, mid_bytes);
+        } else {
+            result = token < mid_token ? -1 : 1;
         }
 
         if (result > 0) {
@@ -62,4 +71,5 @@ int sstable::binary_search(const T& entries, const key& sk) {
 // Force generation, so we make it available outside this compilation unit without moving that
 // much code to .hh
 template int sstable::binary_search<>(const std::vector<summary_entry>& entries, const key& sk);
+template int sstable::binary_search<>(const std::vector<index_entry>& entries, const key& sk);
 }
