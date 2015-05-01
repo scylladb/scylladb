@@ -17,6 +17,7 @@
 #include "core/enum.hh"
 #include "compress.hh"
 #include "row.hh"
+#include "dht/i_partitioner.hh"
 
 namespace sstables {
 class key;
@@ -122,7 +123,12 @@ private:
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len);
 
     template <typename T>
-    int binary_search(const T& entries, const key& sk);
+    int binary_search(const T& entries, const key& sk, const dht::token& token);
+
+    template <typename T>
+    int binary_search(const T& entries, const key& sk) {
+        return binary_search(entries, sk, dht::global_partitioner().get_token(key_view(sk)));
+    }
 
     future<summary_entry&> read_summary_entry(size_t i);
 public:

@@ -33,12 +33,11 @@ namespace sstables {
  * a key view.
  */
 template <typename T>
-int sstable::binary_search(const T& entries, const key& sk) {
+int sstable::binary_search(const T& entries, const key& sk, const dht::token& token) {
     int low = 0, mid = entries.size(), high = mid - 1, result = -1;
 
     auto& partitioner = dht::global_partitioner();
     auto sk_bytes = bytes_view(sk);
-    auto token = partitioner.get_token(key_view(sk_bytes));
 
     while (low <= high) {
         // The token comparison should yield the right result most of the time.
