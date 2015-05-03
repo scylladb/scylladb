@@ -85,7 +85,7 @@ public:
      *  - front() - return the element from the HEAD element.
      *  - empty() - returns true if there are no more elements left
      *  - begin() - return the iterator pointing to the HEAD element:
-     *  - erase(it) - deleting the element pointed by the iterator it.
+     *  - pop_front() - deleting the element returned by front().
      *
      * Output iterator should implement:
      *  - Required operators to implement the *it = xx in order to consume the
@@ -111,7 +111,7 @@ public:
             ++res;
 
             /* Erase the "HEAD" */
-            t->erase(t_it);
+            t->pop_front();
 
             if (!t->empty()) {
                 _heads_heap.push(t);
@@ -153,7 +153,7 @@ public:
             ++res;
 
             /* Erase the "HEAD" */
-            t->erase(t_it);
+            t->pop_front();
 
             if (!t->empty()) {
                 _heads_heap.push(t);
