@@ -303,3 +303,36 @@ mutation_partition::query(const schema& s,
         }
     }
 }
+
+std::ostream&
+operator<<(std::ostream& os, const row::value_type& rv) {
+    return fprint(os, "{column: %s %s}", rv.first, rv.second);
+}
+
+std::ostream&
+operator<<(std::ostream& os, const row& r) {
+    return fprint(os, "{row: %s}", ::join(", ", r));
+}
+
+
+std::ostream&
+operator<<(std::ostream& os, const deletable_row& dr) {
+    return fprint(os, "{deletable_row: %s %s %s}", dr.created_at, dr.t, dr.cells);
+}
+
+std::ostream&
+operator<<(std::ostream& os, const rows_entry& re) {
+    return fprint(os, "{rows_entry: %s %s}", re._key, re._row);
+}
+
+std::ostream&
+operator<<(std::ostream& os, const row_tombstones_entry& rte) {
+    return fprint(os, "{row_tombstone_entry: %s %s}", rte._prefix, rte._t);
+}
+
+std::ostream&
+operator<<(std::ostream& os, const mutation_partition& mp) {
+    return fprint(os, "{mutation_partition: %s (%s) static %s clustered %s}",
+                  mp._tombstone, ::join(", ", mp._row_tombstones), mp._static_row,
+                  ::join(", ", mp._rows));
+}

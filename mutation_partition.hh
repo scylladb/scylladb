@@ -16,6 +16,9 @@
 
 using row = std::map<column_id, atomic_cell_or_collection>;
 
+std::ostream& operator<<(std::ostream& os, const row::value_type& rv);
+std::ostream& operator<<(std::ostream& os, const row& r);
+
 struct deletable_row final {
     tombstone t;
     api::timestamp_type created_at = api::missing_timestamp;
@@ -24,6 +27,8 @@ struct deletable_row final {
     void apply(tombstone t_) {
         t.apply(t_);
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
 };
 
 class row_tombstones_entry : public boost::intrusive::set_base_hook<> {
@@ -79,6 +84,8 @@ public:
     static auto key_comparator(Comparator&& c) {
         return delegating_compare<Comparator>(std::move(c));
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const row_tombstones_entry& rte);
 };
 
 class rows_entry : public boost::intrusive::set_base_hook<> {
@@ -140,6 +147,7 @@ public:
     static auto key_comparator(Comparator&& c) {
         return delegating_compare<Comparator>(std::move(c));
     }
+    friend std::ostream& operator<<(std::ostream& os, const rows_entry& re);
 };
 
 namespace db {
