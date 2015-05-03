@@ -77,6 +77,7 @@ template <class C,
           class Comp = std_ptr_front_comparator<typename C::value_type> >
 class nway_merger {
 public:
+    nway_merger(Comp comp = Comp()) : _comp(comp), _heads_heap(comp) {}
     /**
      * Merges the containers and outputs the resulting stream into the output
      * iterator res (see class description for more details).
@@ -99,7 +100,7 @@ public:
     template <class OutputIt>
     void merge(const C& sorted_lists, OutputIt res)
     {
-        create_heap(sorted_lists);
+        create_heap(sorted_lists, _comp);
 
         while (!_heads_heap.empty()) {
             SPtr t = _heads_heap.top();
@@ -167,7 +168,7 @@ public:
         }
     }
 
-    void clear() { _heads_heap = heap_type(); }
+    void clear() { _heads_heap = heap_type(_comp); }
 
     /**
      * Create a new heap from the sorted sequences.
@@ -240,6 +241,7 @@ private:
     typedef typename C::value_type                             SPtr;
     typedef std::priority_queue<SPtr, std::vector<SPtr>, Comp> heap_type;
 
+    Comp _comp;
     heap_type _heads_heap;
     C* _sorted_lists;
     std::list<SPtr> _empty_lists;
