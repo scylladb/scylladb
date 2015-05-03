@@ -170,6 +170,8 @@ public:
     mutation_partition(mutation_partition&&) = default;
     mutation_partition(const mutation_partition&);
     ~mutation_partition();
+    mutation_partition& operator=(const mutation_partition& x);
+    mutation_partition& operator=(mutation_partition&& x) = default;
     tombstone partition_tombstone() const { return _tombstone; }
     void apply(tombstone t) { _tombstone.apply(t); }
     void apply_delete(schema_ptr schema, const exploded_clustering_prefix& prefix, tombstone t);

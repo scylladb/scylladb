@@ -19,6 +19,13 @@ mutation_partition::~mutation_partition() {
     _row_tombstones.clear_and_dispose(std::default_delete<row_tombstones_entry>());
 }
 
+mutation_partition&
+mutation_partition::operator=(const mutation_partition& x) {
+    mutation_partition n(x);
+    std::swap(*this, n);
+    return *this;
+}
+
 void
 mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
     _tombstone.apply(p._tombstone);
