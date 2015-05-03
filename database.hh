@@ -72,9 +72,12 @@ public:
 
 class column_family {
     schema_ptr _schema;
-    memtable _memtable;
+    std::vector<memtable> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
+private:
+    memtable& active_memtable() { return _memtables.back(); }
+    struct merge_comparator;
 public:
     // Queries can be satisfied from multiple data sources, so they are returned
     // as temporaries.
@@ -98,11 +101,11 @@ public:
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd) const;
 
     future<> populate(sstring datadir);
-    const boost::iterator_range<const memtable*> testonly_all_memtables() const;
+    const std::vector<memtable>& testonly_all_memtables() const;
 private:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
-    // Func called with: std::pair<decorated_key, mutation_partition> e
+    // Func signature: bool (const decorated_key& dk, const mutation_partition& mp)
     template <typename Func>
     bool for_all_partitions(Func&& func) const;
     future<> probe_file(sstring sstdir, sstring fname);
@@ -215,13 +218,13 @@ class secondary_index_manager {};
 inline
 mutation_partition&
 column_family::find_or_create_partition(const dht::decorated_key& key) {
-    return _memtable.find_or_create_partition(key);
+    return active_memtable().find_or_create_partition(key);
 }
 
 inline
 void
 column_family::apply(const mutation& m) {
-    return _memtable.apply(m);
+    return active_memtable().apply(m);
 }
 
 #endif /* DATABASE_HH_ */

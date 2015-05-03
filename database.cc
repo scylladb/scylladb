@@ -13,7 +13,7 @@
 #include "db/config.hh"
 #include "to_string.hh"
 #include "query-result-writer.hh"
-
+#include "nway_merger.hh"
 #include "cql3/column_identifier.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -21,6 +21,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include "locator/simple_snitch.hh"
 #include <boost/algorithm/cxx11/all_of.hpp>
+#include <boost/function_output_iterator.hpp>
 
 thread_local logging::logger dblog("database");
 
@@ -31,7 +32,7 @@ memtable::memtable(schema_ptr schema)
 
 column_family::column_family(schema_ptr schema)
     : _schema(std::move(schema))
-    , _memtable(_schema)
+    , _memtables({memtable(_schema)})
 { }
 
 // define in .cc, since sstable is forward-declared in .hh
@@ -47,7 +48,21 @@ memtable::find_partition(const dht::decorated_key& key) const {
 
 column_family::const_mutation_partition_ptr
 column_family::find_partition(const dht::decorated_key& key) const {
-    return _memtable.find_partition(key);
+    // FIXME: optimize for 0 or 1 entries found case
+    mutation_partition ret(_schema);
+    bool any = false;
+    for (auto&& mt : _memtables) {
+        auto mp = mt.find_partition(key);
+        if (mp) {
+            ret.apply(_schema, *mp);
+            any = true;
+        }
+    }
+    if (any) {
+        return std::make_unique<mutation_partition>(std::move(ret));
+    } else {
+        return nullptr;
+    }
 }
 
 column_family::const_mutation_partition_ptr
@@ -90,10 +105,57 @@ memtable::all_partitions() const {
     return partitions;
 }
 
+struct column_family::merge_comparator {
+    schema_ptr _schema;
+    using ptr = boost::iterator_range<memtable::partitions_type::const_iterator>*;
+    merge_comparator(schema_ptr schema) : _schema(std::move(schema)) {}
+    bool operator()(ptr x, ptr y) const {
+        return y->front().first.less_compare(*_schema, x->front().first);
+    }
+};
+
 template <typename Func>
 bool
 column_family::for_all_partitions(Func&& func) const {
-    return boost::algorithm::all_of(_memtable.all_partitions(), std::forward<Func>(func));
+    static_assert(std::is_same<bool, std::result_of_t<Func(const dht::decorated_key&, const mutation_partition&)>>::value,
+                  "bad Func signature");
+    using partitions_range = boost::iterator_range<memtable::partitions_type::const_iterator>;
+    std::vector<partitions_range> tables;
+    for (auto&& mt : _memtables) {
+        tables.push_back(boost::make_iterator_range(mt.all_partitions()));
+    }
+    std::vector<partitions_range*> ptables;
+    for (auto&& r : tables) {
+        ptables.push_back(&r);
+    }
+    nway_merger<std::vector<partitions_range*>, merge_comparator> merger{merge_comparator(_schema)};
+    merger.create_heap(ptables);
+    bool ok = true;
+    bool more = true;
+    // Can't use memtable::partitions_type::value_type due do constness
+    std::experimental::optional<std::pair<dht::decorated_key, mutation_partition>> current;
+    while (ok && more) {
+        more = merger.pop(boost::make_function_output_iterator([&] (const memtable::partitions_type::value_type& e) {
+            auto&& key = e.first;
+            auto&& mp = e.second;
+            // Schema cannot have different keys
+            if (current && !current->first.equal(*_schema, key)) {
+                ok = func(std::move(current->first), std::move(current->second));
+                current = std::experimental::nullopt;
+            }
+            if (current) {
+                // FIXME: handle different schemas
+                current->second.apply(_schema, mp);
+            } else {
+                current = std::make_pair(key, mp);
+            }
+        }));
+    }
+    if (ok && current) {
+        ok = func(std::move(current->first), std::move(current->second));
+        current = std::experimental::nullopt;
+    }
+    return ok;
 }
 
 row&
@@ -211,9 +273,9 @@ future<> column_family::populate(sstring sstdir) {
     });
 }
 
-const boost::iterator_range<const memtable*>
+const std::vector<memtable>&
 column_family::testonly_all_memtables() const {
-    return boost::make_iterator_range(&_memtable, &_memtable + 1);
+    return _memtables;
 }
 
 
@@ -514,9 +576,7 @@ column_family::query(const query::read_command& cmd) const {
             p_builder.finish();
             limit -= p_builder.row_count();
         } else if (range.is_full()) {
-            for_all_partitions([&] (auto&& e) {
-                auto& dk = e.first;
-                auto& partition = e.second;
+            for_all_partitions([&] (const dht::decorated_key& dk, const mutation_partition& partition) {
                 auto p_builder = builder.add_partition(dk._key);
                 partition.query(*_schema, cmd.slice, limit, p_builder);
                 p_builder.finish();
@@ -575,9 +635,9 @@ std::ostream& operator<<(std::ostream& os, const mutation& m) {
 
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
     out << "{\n";
-    cf.for_all_partitions([&] (auto&& e) {
-        out << e.first << " => ";
-        print_partition(out, *cf._schema, e.second);
+    cf.for_all_partitions([&] (const dht::decorated_key& key, const mutation_partition& mp) {
+        out << key << " => ";
+        print_partition(out, *cf._schema, mp);
         out << "\n";
         return true;
     });
