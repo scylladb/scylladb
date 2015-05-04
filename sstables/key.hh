@@ -8,6 +8,7 @@
 #include <boost/any.hpp>
 
 class partition_key;
+class clustering_key;
 
 namespace sstables {
 
@@ -42,5 +43,7 @@ public:
         return _bytes;
     }
 };
+
+bytes composite_from_clustering_key(const schema& s, const clustering_key& ck);
 
 }
