@@ -24,6 +24,7 @@
 
 #include <boost/test/included/unit_test.hpp>
 #include "core/sstring.hh"
+#include <list>
 
 BOOST_AUTO_TEST_CASE(test_equality) {
     BOOST_REQUIRE_EQUAL(sstring("aaa"), sstring("aaa"));
@@ -120,4 +121,10 @@ BOOST_AUTO_TEST_CASE(test_erase) {
     BOOST_REQUIRE_EQUAL(*i, 'd');
     BOOST_REQUIRE_EQUAL(str, "adef");
     BOOST_REQUIRE_THROW(str.erase(str.begin() + 5, str.begin() + 6), std::out_of_range);
+}
+
+BOOST_AUTO_TEST_CASE(test_ctor_iterator) {
+    std::list<char> data{{'a', 'b', 'c'}};
+    sstring s(data.begin(), data.end());
+    BOOST_REQUIRE_EQUAL(s, "abc");
 }
