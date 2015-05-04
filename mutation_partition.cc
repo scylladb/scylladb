@@ -249,7 +249,7 @@ mutation_partition::query(const schema& s,
             return s.static_column_at(id);
         };
         auto row_builder = pw.add_static_row();
-        get_row_slice(static_row(), slice.static_columns, tombstone_for_static_row(),
+        get_row_slice(static_row(), slice.static_columns, partition_tombstone(),
             static_column_resolver, row_builder);
         row_builder.finish();
     }
