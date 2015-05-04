@@ -132,26 +132,61 @@ bpo::options_description db::config::get_options_description() {
     return std::move(opts);
 }
 
+/*
+ * Our own bpo::typed_valye.
+ * Only difference is that we _don't_ apply defaults (they are already applied)
+ * Needed to make aliases work properly.
+ */
+template<class T, class charT = char>
+class typed_value_ex : public bpo::typed_value<T, charT> {
+public:
+    typedef bpo::typed_value<T, charT> _Super;
+
+    typed_value_ex(T* store_to)
+        : _Super(store_to)
+    {}
+    bool apply_default(boost::any& value_store) const override {
+        return false;
+    }
+};
+
+template<class T>
+inline typed_value_ex<T>* value_ex(T* v) {
+    typed_value_ex<T>* r = new typed_value_ex<T>(v);
+    return r;
+}
+
 bpo::options_description_easy_init& db::config::add_options(bpo::options_description_easy_init& init) {
-    auto opt_add = [&init](const char* name, const auto& dflt, auto& dst, const char* desc) mutable {
-        sstring tmp(name);
-        std::replace(tmp.begin(), tmp.end(), '_', '-');
+    auto opt_add =
+            [&init](const char* name, const auto& dflt, auto& dst, const char* desc) mutable {
+                sstring tmp(name);
+                std::replace(tmp.begin(), tmp.end(), '_', '-');
                 init(tmp.c_str(),
-                        bpo::value(&dst._value)->default_value(dflt)->notifier([dst](auto) mutable {
+                        value_ex(&dst._value)->default_value(dflt)->notifier([dst](auto) mutable {
                                     dst._source = config_source::CommandLine;
                                 })
-                , desc);
-    };
+                        , desc);
+            };
 
     // Add all used opts as command line opts
 #define _add_boost_opt(name, type, deflt, status, desc, ...)      \
         do_value_opt<type, value_status::status>()(opt_add, #name, type( deflt ), name, desc);
     _make_config_values(_add_boost_opt)
 
+    auto alias_add =
+            [&init](const char* name, auto& dst, const char* desc) mutable {
+                init(name,
+                        value_ex(&dst._value)->notifier([dst](auto) mutable {
+                                    dst._source = config_source::CommandLine;
+                                })
+                        , desc);
+            };
+
+
     // Handle "old" syntax with "aliases"
-    opt_add("datadir", "", data_file_directories, "alias for 'data-file-directories'");
-    opt_add("thrift-port", 0, rpc_port, "alias for 'rpc-port'");
-    opt_add("cql-port", 0, native_transport_port, "alias for 'native-transport-port'");
+    alias_add("datadir", data_file_directories, "alias for 'data-file-directories'");
+    alias_add("thrift-port", rpc_port, "alias for 'rpc-port'");
+    alias_add("cql-port", native_transport_port, "alias for 'native-transport-port'");
 
     return init;
 }
