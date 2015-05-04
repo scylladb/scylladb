@@ -14,10 +14,14 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
 
 #pragma once
-#include "abstract_endpoint_snitch.hh"
+#include "snitch_base.hh"
+#include "utils/fb_utilities.hh"
 
 namespace locator {
 
@@ -26,27 +30,40 @@ namespace locator {
  * allowing non-read-repaired reads to prefer a single endpoint, which improves
  * cache locality.
  */
-struct simple_snitch : public abstract_endpoint_snitch
-{
-    sstring get_rack(inet_address endpoint) override
-    {
+struct simple_snitch : public snitch_base {
+    simple_snitch() {
+        _my_dc = get_datacenter(utils::fb_utilities::get_broadcast_address());
+        _my_rack = get_rack(utils::fb_utilities::get_broadcast_address());
+    }
+
+    virtual sstring get_rack(inet_address endpoint) override {
         return "rack1";
     }
 
-    sstring get_datacenter(inet_address endpoint) override
-    {
+    virtual sstring get_datacenter(inet_address endpoint) override {
         return "datacenter1";
     }
 
-    void sort_by_proximity(inet_address address, std::vector<inet_address>& addresses) override
-    {
+    virtual void sort_by_proximity(
+        inet_address address, std::vector<inet_address>& addresses) override {
         // Optimization to avoid walking the list
     }
 
-    int compare_endpoints(inet_address& target, inet_address& a1, inet_address& a2) override
-    {
-        // Making all endpoints equal ensures we won't change the original ordering (since
-        // Collections.sort is guaranteed to be stable)
+    virtual int compare_endpoints(inet_address& target, inet_address& a1,
+                                  inet_address& a2) override {
+        //
+        // "Making all endpoints equal ensures we won't change the original
+        // ordering." - quote from C* code.
+        //
+        // Effectively this would return 0 even in the following case:
+        //
+        // compare_endpoints(NodeA, NodeA, NodeB) // -1 should be returned
+        //
+        // The snitch_base implementation would handle the above case correctly.
+        //
+        // I'm leaving the this implementation anyway since it's the C*'s
+        // implementation and some installations may depend on it.
+        //
         return 0;
     }
 };

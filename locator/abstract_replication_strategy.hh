@@ -10,7 +10,7 @@
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
 #include "token_metadata.hh"
-#include "abstract_endpoint_snitch.hh"
+#include "snitch_base.hh"
 
 // forward declaration since database.hh includes this file
 class keyspace;
