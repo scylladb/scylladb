@@ -71,6 +71,13 @@ public:
     static sstring to_json(float f);
 
     /**
+     * return a json formated double
+     * @param d the double to format
+     * @return the given double in a json format
+     */
+    static sstring to_json(double d);
+
+    /**
      * return a json formated char* (treated as string)
      * @param str the char* to foramt
      * @return the given char* in a json foramt

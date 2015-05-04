@@ -77,6 +77,22 @@ SEASTAR_TEST_CASE(test_formatter)
     BOOST_REQUIRE_EQUAL(json::formatter::to_json(txt), "\"efg\"");
     sstring str = "abc";
     BOOST_REQUIRE_EQUAL(json::formatter::to_json(str), "\"abc\"");
+    float f = 1;
+    BOOST_REQUIRE_EQUAL(json::formatter::to_json(f), "1.000000");
+    f = 1.0/0.0;
+    BOOST_CHECK_THROW(json::formatter::to_json(f), std::out_of_range);
+    f = -1.0/0.0;
+    BOOST_CHECK_THROW(json::formatter::to_json(f), std::out_of_range);
+    f = 0.0/0.0;
+    BOOST_CHECK_THROW(json::formatter::to_json(f), std::invalid_argument);
+    double d = -1;
+    BOOST_REQUIRE_EQUAL(json::formatter::to_json(d), "-1.000000");
+    d = 1.0/0.0;
+    BOOST_CHECK_THROW(json::formatter::to_json(d), std::out_of_range);
+    d = -1.0/0.0;
+    BOOST_CHECK_THROW(json::formatter::to_json(d), std::out_of_range);
+    d = 0.0/0.0;
+    BOOST_CHECK_THROW(json::formatter::to_json(d), std::invalid_argument);
     return make_ready_future<>();
 }
 
