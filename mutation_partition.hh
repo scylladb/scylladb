@@ -175,6 +175,8 @@ public:
     void apply_row_tombstone(schema_ptr schema, clustering_key_prefix prefix, tombstone t);
     void apply(schema_ptr schema, const mutation_partition& p);
     row& static_row() { return _static_row; }
+    // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
+    const rows_type& clustered_rows() const { return _rows; }
     const row& static_row() const { return _static_row; }
     deletable_row& clustered_row(const clustering_key& key);
     row* find_row(const clustering_key& key);
