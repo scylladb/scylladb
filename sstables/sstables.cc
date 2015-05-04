@@ -236,6 +236,10 @@ future<> write(output_stream<char>& out, bytes& s) {
     });
 }
 
+future<> write(output_stream<char>& out, bytes_view s) {
+    return out.write(reinterpret_cast<const char*>(s.data()), s.size());
+}
+
 // All composite parsers must come after this
 template<typename First, typename... Rest>
 future<> parse(random_access_reader& in, First& first, Rest&&... rest) {
@@ -289,6 +293,13 @@ future<> write(output_stream<char>& out, disk_string<Size>& s) {
     return write(out, len).then([&out, &s] {
         return write(out, s.value);
     });
+}
+
+template <typename Size>
+future<> write(output_stream<char>& out, disk_string_view<Size>& s) {
+    Size len;
+    check_truncate_and_assign(len, s.value.size());
+    return write(out, len, s.value);
 }
 
 // We cannot simply read the whole array at once, because we don't know its

@@ -22,6 +22,11 @@ struct disk_string {
     }
 };
 
+template <typename Size>
+struct disk_string_view {
+    bytes_view value;
+};
+
 template <typename Size, typename Members>
 struct disk_array {
     static_assert(std::is_integral<Size>::value, "Length type must be convertible to integer");
