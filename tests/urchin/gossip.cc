@@ -37,27 +37,27 @@ int main(int ac, char ** av) {
                     };
 
                     int generation_number = 1;
-                    gossiper.start(generation_number, app_states);
+                    gossiper.start(generation_number, app_states).then([] () {
+                        auto reporter = std::make_shared<timer<lowres_clock>>();
+                        reporter->set_callback ([reporter] {
+                            auto& gossiper = gms::get_local_gossiper();
+                            gossiper.dump_endpoint_state_map();
+                            auto& fd = gms::get_local_failure_detector();
+                            print("%s", fd);
+                        });
+                        reporter->arm_periodic(std::chrono::milliseconds(1000));
 
-                    auto reporter = std::make_shared<timer<lowres_clock>>();
-                    reporter->set_callback ([reporter] {
-                        auto& gossiper = gms::get_local_gossiper();
-                        gossiper.dump_endpoint_state_map();
-                        auto& fd = gms::get_local_failure_detector();
-                        print("%s", fd);
+                        auto app_state_adder = std::make_shared<timer<lowres_clock>>();
+                        app_state_adder->set_callback ([app_state_adder] {
+                            static double load = 0.5;
+                            auto& gossiper = gms::get_local_gossiper();
+                            auto state = gms::application_state::LOAD;
+                            auto value = gms::versioned_value::versioned_value_factory::load(load);
+                            gossiper.add_local_application_state(state, value);
+                            load += 0.0001;
+                        });
+                        app_state_adder->arm_periodic(std::chrono::seconds(1));
                     });
-                    reporter->arm_periodic(std::chrono::milliseconds(1000));
-
-                    auto app_state_adder = std::make_shared<timer<lowres_clock>>();
-                    app_state_adder->set_callback ([app_state_adder] {
-                        static double load = 0.5;
-                        auto& gossiper = gms::get_local_gossiper();
-                        auto state = gms::application_state::LOAD;
-                        auto value = gms::versioned_value::versioned_value_factory::load(load);
-                        gossiper.add_local_application_state(state, value);
-                        load += 0.0001;
-                    });
-                    app_state_adder->arm_periodic(std::chrono::seconds(1));
                 });
             });
         });

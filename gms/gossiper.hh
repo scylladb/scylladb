@@ -80,7 +80,10 @@ private:
     net::messaging_service& ms() {
         return net::get_local_messaging_service();
     }
+    class handler {};
+    distributed<handler> _handlers;
     void init_messaging_service_handler();
+    future<gossip_digest_ack> handle_syn_msg(gossip_digest_syn syn_msg);
     static constexpr const uint32_t _default_cpuid = 0;
     shard_id get_shard_id(inet_address to) {
         return shard_id{to, _default_cpuid};
@@ -396,12 +399,12 @@ public:
                          std::map<inet_address, endpoint_state>& delta_ep_state_map);
 
 public:
-    void start(int generation_number);
+    future<> start(int generation_number);
 
     /**
      * Start the gossiper with the generation number, preloading the map of application states before starting
      */
-    void start(int generation_nbr, std::map<application_state, versioned_value> preload_local_states);
+    future<> start(int generation_nbr, std::map<application_state, versioned_value> preload_local_states);
 
 public:
     /**
