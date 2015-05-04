@@ -12,12 +12,12 @@
 #include "core/fstream.hh"
 #include "core/shared_ptr.hh"
 #include "core/do_with.hh"
-#include <boost/algorithm/string.hpp>
 #include <iterator>
 
 #include "types.hh"
 #include "sstables.hh"
 #include "compress.hh"
+#include <boost/algorithm/string.hpp>
 
 namespace sstables {
 
@@ -837,6 +837,199 @@ future<> sstable::store() {
         return write_filter();
     }).then([this] {
         return write_summary();
+    });
+}
+
+static future<> write_composite_component(output_stream<char>& out, disk_string<uint16_t>&& column_name,
+    int8_t end_of_component = 0) {
+    // NOTE: end of component can also be -1 and 1 to represent ranges.
+    return do_with(std::move(column_name), [&out, end_of_component] (auto& column_name) {
+        return write(out, column_name, end_of_component);
+    });
+}
+
+// @clustering_key: it's expected that clustering key is already in its composite form.
+// NOTE: empty clustering key means that there is no clustering key.
+static future<> write_column_name(output_stream<char>& out, bytes& clustering_key, const bytes& column_name) {
+    // FIXME: This code assumes name is always composite, but it wouldn't if "WITH COMPACT STORAGE"
+    // was defined in the schema, for example.
+
+    // uint16_t and int8_t are about the 16-bit length and end of component, respectively.
+    uint16_t size = clustering_key.size() + column_name.size() + sizeof(uint16_t) + sizeof(int8_t);
+
+    return write(out, size).then([&out, &clustering_key] {
+        if (!clustering_key.size()) {
+            return make_ready_future<>();
+        }
+
+        return write(out, clustering_key);
+    }).then([&out, &column_name] {
+        // if size of column_name is zero, then column_name is a row marker.
+        disk_string<uint16_t> c_name;
+        c_name.value = column_name;
+
+        return write_composite_component(out, std::move(c_name));
+    });
+}
+
+// magic value for identifying a static column.
+static constexpr uint16_t STATIC_MARKER = 0xffff;
+
+static future<> write_static_column_name(output_stream<char>& out, const bytes& column_name) {
+    // first component of static column name is composed of the 16-bit magic value ff ff,
+    // followed by a null composite, i.e. three null bytes.
+    uint16_t first_component_size = sizeof(uint16_t) + sizeof(uint16_t) + sizeof(int8_t);
+    uint16_t second_component_size = column_name.size() + sizeof(uint16_t) + sizeof(int8_t);
+    uint16_t total_size = first_component_size + second_component_size;
+
+    return write(out, total_size).then([&out] {
+
+        return write(out, STATIC_MARKER).then([&out] {
+            return write_composite_component(out, {});
+        });
+    }).then([&out, &column_name] {
+        disk_string<uint16_t> c_name;
+        c_name.value = column_name;
+
+        return write_composite_component(out, std::move(c_name));
+    });
+}
+
+// Intended to write all cell components that follow column name.
+static future<> write_cell(output_stream<char>& out, atomic_cell_view cell) {
+    // FIXME: cell with expiration time isn't supported.
+    // cell with expiration time has a different mask and additional data in representation.
+    // FIXME: deleted cell isn't supported either.
+    column_mask mask = column_mask::none;
+    uint64_t timestamp = cell.timestamp();
+    disk_string_view<uint32_t> cell_value;
+    cell_value.value = cell.value();
+
+    return do_with(std::move(cell_value), [&out, mask, timestamp] (auto& cell_value) {
+        return write(out, mask, timestamp, cell_value);
+    });
+}
+
+static future<> write_row_marker(output_stream<char>& out, const rows_entry& clustered_row, bytes& clustering_key) {
+    // Missing created_at (api::missing_timestamp) means no row marker.
+    if (clustered_row.row().created_at == api::missing_timestamp) {
+        return make_ready_future<>();
+    }
+
+    // Write row mark cell to the beginning of clustered row.
+    return write_column_name(out, clustering_key, {}).then([&out, &clustered_row] {
+        column_mask mask = column_mask::none;
+        uint64_t timestamp = clustered_row.row().created_at;
+        uint32_t value_length = 0;
+
+        return write(out, mask, timestamp, value_length);
+    });
+}
+
+// write_datafile_clustered_row() is about writing a clustered_row to data file according to SSTables format.
+// clustered_row contains a set of cells sharing the same clustering key.
+static future<> write_clustered_row(output_stream<char>& out, schema_ptr schema, const rows_entry& clustered_row) {
+    bytes clustering_key = composite_from_clustering_key(*schema, clustered_row.key());
+
+    return do_with(std::move(clustering_key), [&out, schema, &clustered_row] (auto& clustering_key) {
+        return write_row_marker(out, clustered_row, clustering_key).then(
+                [&out, &clustered_row, schema, &clustering_key] {
+            // FIXME: Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
+            assert(!clustered_row.row().t);
+
+            // Write all cells of a partition's row.
+            return do_for_each(clustered_row.row().cells, [&out, schema, &clustering_key] (auto& value) {
+                auto column_id = value.first;
+                auto&& column_definition = schema->regular_column_at(column_id);
+                // non atomic cell isn't supported yet. atomic cell maps to a single trift cell.
+                // non atomic cell maps to multiple trift cell, e.g. collection.
+                if (!column_definition.is_atomic()) {
+                    fail(unimplemented::cause::NONATOMIC);
+                }
+                assert(column_definition.is_regular());
+                atomic_cell_view cell = value.second.as_atomic_cell();
+                const bytes& column_name = column_definition.name();
+
+                return write_column_name(out, clustering_key, column_name).then([&out, cell] {
+                    return write_cell(out, cell);
+                });
+            });
+        });
+    });
+}
+
+static future<> write_static_row(output_stream<char>& out, schema_ptr schema, const row& static_row) {
+    return do_for_each(static_row, [&out, schema] (auto& value) {
+        auto column_id = value.first;
+        auto&& column_definition = schema->static_column_at(column_id);
+        if (!column_definition.is_atomic()) {
+            fail(unimplemented::cause::NONATOMIC);
+        }
+        assert(column_definition.is_static());
+        atomic_cell_view cell = value.second.as_atomic_cell();
+        const bytes& column_name = column_definition.name();
+
+        return write_static_column_name(out, column_name).then([&out, cell] {
+            return write_cell(out, cell);
+        });
+    });
+}
+
+future<> write_datafile(column_family& cf, sstring datafile) {
+    auto oflags = open_flags::wo | open_flags::create | open_flags::truncate;
+    return engine().open_file_dma(datafile, oflags).then([&cf] (file f) {
+        // TODO: Add compression support by having a specialized output stream.
+        auto out = make_file_output_stream(make_lw_shared<file>(std::move(f)), 4096);
+        auto w = make_shared<output_stream<char>>(std::move(out));
+
+        // Iterate through CQL partitions, then CQL rows, then CQL columns.
+        // Each cf.partitions entry is a set of clustered rows sharing the same partition key.
+        return do_for_each(cf.partitions,
+                [w, &cf] (std::pair<const dht::decorated_key, mutation_partition>& partition_entry) {
+            // TODO: Write index and summary files on-the-fly.
+
+            key partition_key = key::from_partition_key(*cf._schema, partition_entry.first._key);
+
+            return do_with(std::move(partition_key), [w, &partition_entry] (auto& partition_key) {
+                disk_string_view<uint16_t> p_key;
+                p_key.value = bytes_view(partition_key);
+
+                return do_with(std::move(p_key), [w] (auto& p_key) {
+                    return write(*w, p_key);
+                }).then([w, &partition_entry] {
+                    auto tombstone = partition_entry.second.partition_tombstone();
+                    deletion_time d;
+
+                    if (tombstone) {
+                        d.local_deletion_time = tombstone.deletion_time.time_since_epoch().count();
+                        d.marked_for_delete_at = tombstone.timestamp;
+                    } else {
+                        // Default values for live, undeleted rows.
+                        d.local_deletion_time = std::numeric_limits<int32_t>::max();
+                        d.marked_for_delete_at = std::numeric_limits<int64_t>::min();
+                    }
+
+                    return write(*w, d);
+                });
+            }).then([w, &cf, &partition_entry] {
+                auto& partition = partition_entry.second;
+
+                auto& static_row = partition.static_row();
+                return write_static_row(*w, cf._schema, static_row).then([w, &cf, &partition] {
+
+                    // Write all CQL rows from a given mutation partition.
+                    return do_for_each(partition.clustered_rows(), [w, &cf] (const rows_entry& clustered_row) {
+                        return write_clustered_row(*w, cf._schema, clustered_row);
+                    }).then([w] {
+                        // end_of_row is appended to the end of each partition.
+                        int16_t end_of_row = 0;
+                        return write(*w, end_of_row);
+                    });
+                });
+            });
+        }).then([w] {
+            return w->close().then([w] {});
+        });
     });
 }
 
