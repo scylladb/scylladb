@@ -100,6 +100,8 @@ public:
     const uint64_t max_size;
     const uint64_t max_mutation_size;
 
+    semaphore _new_segment_semaphore;
+
     // TODO: verify that we're ok with not-so-great granularity
     typedef lowres_clock clock_type;
     typedef clock_type::time_point time_point;
@@ -455,7 +457,7 @@ future<> db::commitlog::segment_manager::init() {
         // keep sub alive...
             auto h = make_lw_shared<helper>(this, std::move(dir));
             return h->done().then([this, h]() {
-                        return this->new_segment().then([this, h](auto) {
+                        return this->active_segment().then([this, h](auto) {
                                     // nothing really. just keeping sub alive
                                     if (cfg.mode != sync_mode::BATCH) {
                                         _timer.set_callback(std::bind(&segment_manager::sync, this));
@@ -498,7 +500,14 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::active_segment() {
     if (_segments.empty() || !_segments.back()->is_still_allocating()) {
-        return new_segment();
+        return _new_segment_semaphore.wait().then([this]() {
+            if (_segments.empty() || !_segments.back()->is_still_allocating()) {
+                return new_segment();
+            }
+            return make_ready_future<sseg_ptr>(_segments.back());
+        }).finally([this]() {
+            _new_segment_semaphore.signal();
+        });
     }
     return make_ready_future<sseg_ptr>(_segments.back());
 }
