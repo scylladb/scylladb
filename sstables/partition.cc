@@ -207,10 +207,8 @@ public:
         auto ac = atomic_cell::make_dead(timestamp, ttl);
 
         if (col.is_static) {
-            printf("Deleted static cell!\n");
             mut->set_static_cell(*(col.cdef), atomic_cell_or_collection(ac));
         } else {
-            printf("Deleted non static cell!\n");
             auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
             mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(ac));
         }
