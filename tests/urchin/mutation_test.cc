@@ -198,3 +198,38 @@ BOOST_AUTO_TEST_CASE(test_list_mutations) {
     // FIXME: more strict tests
 }
 
+BOOST_AUTO_TEST_CASE(test_multiple_memtables_one_partition) {
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
+
+    column_family cf(s);
+
+    const column_definition& r1_col = *s->get_column_definition("r1");
+    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+
+    auto insert_row = [&] (int32_t c1, int32_t r1) {
+        auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
+        mutation m(key, s);
+        m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(r1)));
+        cf.apply(std::move(m));
+        cf.seal_active_memtable();
+    };
+    insert_row(1001, 2001);
+    insert_row(1002, 2002);
+    insert_row(1003, 2003);
+
+    auto verify_row = [&] (int32_t c1, int32_t r1) {
+        auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
+        auto r = cf.find_row(dht::global_partitioner().decorate_key(*s, key), c_key);
+        BOOST_REQUIRE(r);
+        auto i = r->find(r1_col.id);
+        BOOST_REQUIRE(i != r->end());
+        auto cell = i->second.as_atomic_cell();
+        BOOST_REQUIRE(cell.is_live());
+        BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(r1)));
+    };
+    verify_row(1001, 2001);
+    verify_row(1002, 2002);
+    verify_row(1003, 2003);
+}
+
