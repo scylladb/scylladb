@@ -17,6 +17,9 @@ class key_view {
 public:
     key_view(bytes_view b) : _bytes(b) {}
 
+    bool operator==(const key_view& k) const { return k._bytes == _bytes; }
+    bool operator!=(const key_view& k) const { return !(k == *this); }
+
     explicit operator bytes_view() const {
         return _bytes;
     }
