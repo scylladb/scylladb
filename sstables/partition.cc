@@ -139,10 +139,13 @@ public:
     }
 
     virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
-        // FIXME: We should be doing more than that: We need to check the deletion time and propagate the tombstone information
         key_view k(_key);
         if (key != k) {
             throw malformed_sstable_exception(sprint("Key mismatch. Got %s while processing %s", to_hex(bytes_view(key)).c_str(), to_hex(bytes_view(k)).c_str()));
+        }
+
+        if (!deltime.live()) {
+            mut.partition().apply(tombstone(deltime));
         }
     }
 
