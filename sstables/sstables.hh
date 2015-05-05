@@ -17,6 +17,7 @@
 #include "core/enum.hh"
 #include "compress.hh"
 #include "row.hh"
+#include "database.hh"
 
 namespace sstables {
 class key;
@@ -162,4 +163,7 @@ public:
     // will then re-export as public every method it needs.
     friend class test;
 };
+
+future<> write_datafile(column_family& cf, sstring datafile);
+
 }

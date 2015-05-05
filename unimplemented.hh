@@ -31,6 +31,7 @@ enum class cause {
     VALIDATION,
     REVERSED,
     COMPRESSION,
+    NONATOMIC,
 };
 
 void fail(cause what) __attribute__((noreturn));

@@ -36,12 +36,10 @@ inline void serialize(data_type& t, const bytes_view& value, bytes::iterator& ou
 
 // The iterator has to provide successive elements that are from one of the
 // type above ( so we know how to serialize them)
-template <typename Iterator>
+template <typename Iterator, typename Type>
 inline
-key from_components(const schema& s, Iterator begin, Iterator end) {
-    auto types = s.partition_key_type()->types();
-
-    bool composite = types.size() > 1;
+bytes from_components(Iterator begin, Iterator end, Type types, bool always_composite = false) {
+    bool composite = types.size() > 1 || always_composite;
 
     size_t len = 0;
     auto i = types.begin();
@@ -90,6 +88,13 @@ key from_components(const schema& s, Iterator begin, Iterator end) {
             write<uint8_t>(bi, uint8_t(0));
         }
     }
+    return b;
+}
+
+template <typename Iterator>
+inline
+key from_components(const schema& s, Iterator begin, Iterator end) {
+    bytes&& b = from_components(begin, end, s.partition_key_type()->types(), false);
     return key::from_bytes(std::move(b));
 }
 
@@ -111,4 +116,9 @@ key key::from_exploded(const schema& s, std::vector<bytes>&& v) {
 key key::from_partition_key(const schema& s, const partition_key& pk) {
     return from_components(s, pk.begin(s), pk.end(s));
 }
+
+bytes composite_from_clustering_key(const schema& s, const clustering_key& ck) {
+    return from_components(ck.begin(s), ck.end(s), s.clustering_key_type()->types(), true);
+}
+
 }
