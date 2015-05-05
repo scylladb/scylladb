@@ -175,11 +175,10 @@ int main(int ac, char ** av) {
         ("server", bpo::value<std::string>(), "Server ip")
         ("listen-address", bpo::value<std::string>()->default_value("0.0.0.0"), "IP address to listen")
         ("cpuid", bpo::value<uint32_t>()->default_value(0), "Server cpuid");
-    return app.run(ac, av, [&] {
-        auto&& config = app.configuration();
-        auto listen = gms::inet_address(config["listen-address"].as<std::string>());
-        net::get_messaging_service().start(std::ref(listen)).then([&] () {
-            auto&& config = app.configuration();
+    return app.run(ac, av, [&app] {
+        auto config = app.configuration();
+        const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
+        net::get_messaging_service().start(listen).then([config] () {
             auto testers = new distributed<tester>;
             testers->start().then([testers]{
                 auto& server = net::get_local_messaging_service();
