@@ -155,16 +155,6 @@ public:
     }
 
     virtual void consume_cell(bytes_view col_name, bytes_view value, int64_t timestamp, int32_t ttl, int32_t expiration) override {
-        static bytes cql_row_marker(3, bytes::value_type(0x0));
-
-        // The row marker exists mainly so that one can create empty rows. It should not be present
-        // in dense tables. It serializes to \x0\x0\x0 and should yield an empty vector.
-        // FIXME: What to do with its timestamp ? We are not setting any row-wide timestamp in the mutation partition
-        if (col_name == cql_row_marker) {
-            validate_row_marker();
-            return;
-        }
-
         struct column col(*_schema, col_name);
 
         // FIXME: collections are different, but not yet handled.
