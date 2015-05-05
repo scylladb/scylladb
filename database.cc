@@ -158,6 +158,12 @@ column_family::for_all_partitions(Func&& func) const {
     return ok;
 }
 
+bool
+column_family::for_all_partitions_slow(std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const {
+    return for_all_partitions(std::move(func));
+}
+
+
 row&
 column_family::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
     mutation_partition& p = find_or_create_partition_slow(partition_key);

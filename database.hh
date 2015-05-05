@@ -113,6 +113,10 @@ private:
     // Returns at most "limit" rows. The limit must be greater than 0.
     void get_partition_slice(mutation_partition& partition, const query::partition_slice& slice,
         uint32_t limit, query::result::partition_writer&);
+public:
+    // Iterate over all partitions.  Protocol is the same as std::all_of(),
+    // so that iteration can be stopped by returning false.
+    bool for_all_partitions_slow(std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const;
 
     friend std::ostream& operator<<(std::ostream& out, const column_family& cf);
 };
