@@ -265,6 +265,15 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
     return make_ready_future<>();
 }
 
+void
+column_family::seal_active_memtable() {
+    _memtables.emplace_back(_schema);
+    // FIXME: start flushing the previously-active memtable
+    // FIXME: remove the flushed memtable when done
+    // FIXME: release commit log
+    // FIXME: provide back-pressure to upper layers
+}
+
 future<> column_family::populate(sstring sstdir) {
 
     return lister::scan_dir(sstdir, directory_entry_type::regular, [this, sstdir] (directory_entry de) {

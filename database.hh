@@ -101,6 +101,7 @@ public:
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd) const;
 
     future<> populate(sstring datadir);
+    void seal_active_memtable();
     const std::vector<memtable>& testonly_all_memtables() const;
 private:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
