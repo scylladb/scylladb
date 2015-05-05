@@ -154,7 +154,7 @@ public:
         }
     }
 
-    virtual void consume_cell(bytes_view col_name, bytes_view value, uint64_t timestamp, uint32_t ttl, uint32_t expiration) override {
+    virtual void consume_cell(bytes_view col_name, bytes_view value, int64_t timestamp, int32_t ttl, int32_t expiration) override {
         static bytes cql_row_marker(3, bytes::value_type(0x0));
 
         // The row marker exists mainly so that one can create empty rows. It should not be present
@@ -198,7 +198,7 @@ public:
         consume_deleted_cell(col, deltime.marked_for_delete_at, gc_clock::time_point(secs));
     }
 
-    void consume_deleted_cell(column &col, uint64_t timestamp, gc_clock::time_point ttl) {
+    void consume_deleted_cell(column &col, int64_t timestamp, gc_clock::time_point ttl) {
         auto ac = atomic_cell::make_dead(timestamp, ttl);
 
         if (col.is_static) {

@@ -43,8 +43,8 @@ public:
     // absolute time (in seconds since the UNIX epoch) when this cell will
     // expire. Typical cells, not set to expire, will get expiration = 0.
     virtual void consume_cell(bytes_view col_name, bytes_view value,
-            uint64_t timestamp,
-            uint32_t ttl, uint32_t expiration) = 0;
+            int64_t timestamp,
+            int32_t ttl, int32_t expiration) = 0;
 
 
     // Consume a deleted cell (i.e., a cell tombstone).
