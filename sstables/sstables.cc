@@ -1009,7 +1009,9 @@ future<> write_datafile(column_family& cf, sstring datafile) {
                         d.marked_for_delete_at = std::numeric_limits<int64_t>::min();
                     }
 
-                    return write(*w, d);
+                    return do_with(std::move(d), [w] (auto& d) {
+                        return write(*w, d);
+                    });
                 });
             }).then([w, &cf, &partition_entry] {
                 auto& partition = partition_entry.second;
