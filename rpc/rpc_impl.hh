@@ -157,6 +157,9 @@ struct rcv_reply<Serializer, MsgType, void> : rcv_reply_base<void, void> {
     }
 };
 
+template<typename Serializer, typename MsgType>
+struct rcv_reply<Serializer, MsgType, future<>> : rcv_reply<Serializer, MsgType, void> {};
+
 // structure to hold outgoing message parameters on a client side
 // while they are serialized
 template<typename MsgType, typename... T>

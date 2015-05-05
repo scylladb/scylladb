@@ -173,7 +173,7 @@ public:
     future<> write(net::packet p);
     future<> write(scattered_message<char_type> msg);
     future<> flush();
-    future<> close() { return _fd.close(); }
+    future<> close() { return flush().then([this] { return _fd.close(); }); }
 private:
 };
 
