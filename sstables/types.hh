@@ -240,6 +240,11 @@ struct deletion_time {
 
     template <typename Describer>
     future<> describe_type(Describer f) { return f(local_deletion_time, marked_for_delete_at); }
+
+    bool live() const {
+        return (local_deletion_time == std::numeric_limits<int32_t>::max()) &&
+               (marked_for_delete_at == std::numeric_limits<int64_t>::min());
+    }
 };
 
 enum class column_mask : uint8_t {
