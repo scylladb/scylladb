@@ -49,8 +49,9 @@ public:
         return v;
     }
 
+    template <typename SizeType>
     bytes_view read_view_to_blob() {
-        auto len = read<uint32_t>();
+        auto len = read<SizeType>();
         return read_view(len);
     }
 private:

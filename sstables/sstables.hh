@@ -18,6 +18,8 @@
 #include "compress.hh"
 #include "row.hh"
 #include "database.hh"
+#include "dht/i_partitioner.hh"
+#include "schema.hh"
 
 namespace sstables {
 class key;
@@ -79,6 +81,8 @@ private:
     template <typename T, sstable::component_type Type, T sstable::* Comptr>
     future<> write_simple();
 
+    size_t data_size();
+
     future<> read_toc();
     future<> write_toc();
 
@@ -121,9 +125,18 @@ private:
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len);
 
     template <typename T>
-    int binary_search(const T& entries, const key& sk);
+    int binary_search(const T& entries, const key& sk, const dht::token& token);
+
+    template <typename T>
+    int binary_search(const T& entries, const key& sk) {
+        return binary_search(entries, sk, dht::global_partitioner().get_token(key_view(sk)));
+    }
 
     future<summary_entry&> read_summary_entry(size_t i);
+
+    // FIXME: pending on Bloom filter implementation
+    bool filter_has_key(const dht::token& dk) { return true; }
+    bool filter_has_key(const dht::decorated_key& dk) { return filter_has_key(dk._token); }
 public:
     // Read one or few rows at the given byte range from the data file,
     // feeding them into the consumer. This function reads the entire given
@@ -157,6 +170,8 @@ public:
     future<> store();
 
     void set_generation(unsigned long generation) { _generation = generation; }
+
+    future<lw_shared_ptr<mutation>> convert_row(schema_ptr schema, const key& k);
 
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class

@@ -126,6 +126,8 @@ public:
         }
         return _compress(input, input_len, output, output_len);
     }
+
+    friend class sstable;
 };
 
 }

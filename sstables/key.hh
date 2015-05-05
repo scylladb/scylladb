@@ -36,6 +36,8 @@ public:
     // Unfortunately, the _bytes field for the partition_key are not public. We can't move.
     static key from_partition_key(const schema& s, const partition_key& pk);
 
+    std::vector<bytes> explode(const schema& s) const;
+
     operator key_view() const {
         return key_view(_bytes);
     }
@@ -46,4 +48,14 @@ public:
 
 bytes composite_from_clustering_key(const schema& s, const clustering_key& ck);
 
+class composite_view {
+    bytes_view _bytes;
+public:
+    composite_view(bytes_view b) : _bytes(b) {}
+
+    std::vector<bytes> explode() const;
+    explicit operator bytes_view() const {
+        return _bytes;
+    }
+};
 }

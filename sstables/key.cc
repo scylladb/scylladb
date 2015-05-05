@@ -8,6 +8,8 @@
 #include "sstables/key.hh"
 #include "../types.hh"
 
+#include "utils/data_input.hh"
+
 namespace sstables {
 
 inline size_t serialized_size(data_type& t, const boost::any& value) {
@@ -121,4 +123,32 @@ bytes composite_from_clustering_key(const schema& s, const clustering_key& ck) {
     return from_components(ck.begin(s), ck.end(s), s.clustering_key_type()->types(), true);
 }
 
+inline
+std::vector<bytes> explode_composite(bytes_view _bytes) {
+    std::vector<bytes> ret;
+
+    data_input in(_bytes);
+    while (in.has_next()) {
+        auto b = in.read_view_to_blob<uint16_t>();
+        ret.push_back(to_bytes(b));
+        auto marker = in.read<uint8_t>();
+        if (marker != 0) {
+            throw runtime_exception(sprint("non-zero marker found (%d). Can't handle that yet.", marker));
+        }
+    }
+    return ret;
+}
+
+std::vector<bytes> key::explode(const schema& s) const {
+
+    if (s.partition_key_size() == 1) {
+        return { _bytes };
+    }
+
+    return explode_composite(bytes_view(_bytes));
+}
+
+std::vector<bytes> composite_view::explode() const {
+    return explode_composite(_bytes);
+}
 }
