@@ -99,12 +99,12 @@ class mp_row_consumer : public row_consumer {
             return col;
         }
 
-        column(schema_ptr schema, bytes_view col)
+        column(const schema& schema, bytes_view col)
             : is_static(check_static(col))
             , col_name(fix_static_name(col))
             , clustering(composite_view(col_name).explode())
             , cell(std::move(clustering.back()))
-            , cdef(schema->get_column_definition(cell))
+            , cdef(schema.get_column_definition(cell))
         {
 
             if (is_static) {
@@ -116,7 +116,7 @@ class mp_row_consumer : public row_consumer {
             }
 
             if (cell.size() && !cdef) {
-                throw malformed_sstable_exception(sprint("schema does not contain colum: %s", cell.c_str()));
+                throw malformed_sstable_exception(sprint("schema does not contain column: %s", cell.c_str()));
             }
 
             clustering.pop_back();
@@ -165,7 +165,7 @@ public:
             return;
         }
 
-        struct column col(_schema, col_name);
+        struct column col(*_schema, col_name);
 
         // FIXME: collections are different, but not yet handled.
         if (col.clustering.size() > (_schema->clustering_key_type()->types().size() + 1)) {
@@ -175,7 +175,7 @@ public:
         auto ac = make_atomic_cell(timestamp, value, ttl, expiration);
 
         if (col.is_static) {
-            mut.set_static_cell(*(col.cdef), ac);
+            mut.set_static_cell(*(col.cdef), std::move(ac));
             return;
         }
 
@@ -188,11 +188,11 @@ public:
             return;
         }
 
-        mut.set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(ac));
+        mut.set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
     }
 
     virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
-        struct column col(_schema, col_name);
+        struct column col(*_schema, col_name);
         gc_clock::duration secs(deltime.local_deletion_time);
 
         consume_deleted_cell(col, deltime.marked_for_delete_at, gc_clock::time_point(secs));
@@ -202,10 +202,10 @@ public:
         auto ac = atomic_cell::make_dead(timestamp, ttl);
 
         if (col.is_static) {
-            mut.set_static_cell(*(col.cdef), atomic_cell_or_collection(ac));
+            mut.set_static_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
         } else {
             auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
-            mut.set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(ac));
+            mut.set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
         }
     }
     virtual void consume_row_end() override {
