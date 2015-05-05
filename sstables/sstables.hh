@@ -20,6 +20,7 @@
 #include "database.hh"
 #include "dht/i_partitioner.hh"
 #include "schema.hh"
+#include "mutation.hh"
 
 namespace sstables {
 
@@ -90,7 +91,7 @@ public:
         _generation = generation;
     }
 
-    future<lw_shared_ptr<mutation>> convert_row(schema_ptr schema, const key& k);
+    future<mutation_opt> convert_row(schema_ptr schema, const key& k);
 private:
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;

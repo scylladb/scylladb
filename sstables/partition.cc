@@ -123,12 +123,12 @@ class mp_row_consumer : public row_consumer {
         }
     };
 public:
-    lw_shared_ptr<mutation> mut;
+    mutation mut;
 
     mp_row_consumer(const key& key, const schema_ptr _schema)
             : _schema(_schema)
             , _key(key)
-            , mut(make_lw_shared<mutation>(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema))
+            , mut(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema)
     { }
 
     void validate_row_marker() {
@@ -175,7 +175,7 @@ public:
         auto ac = make_atomic_cell(timestamp, value, ttl, expiration);
 
         if (col.is_static) {
-            mut->set_static_cell(*(col.cdef), ac);
+            mut.set_static_cell(*(col.cdef), ac);
             return;
         }
 
@@ -183,12 +183,12 @@ public:
 
         if (col.cell.size() == 0) {
             auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
-            auto& dr = mut->partition().clustered_row(clustering_key);
+            auto& dr = mut.partition().clustered_row(clustering_key);
             dr.apply(timestamp);
             return;
         }
 
-        mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(ac));
+        mut.set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(ac));
     }
 
     virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
@@ -202,10 +202,10 @@ public:
         auto ac = atomic_cell::make_dead(timestamp, ttl);
 
         if (col.is_static) {
-            mut->set_static_cell(*(col.cdef), atomic_cell_or_collection(ac));
+            mut.set_static_cell(*(col.cdef), atomic_cell_or_collection(ac));
         } else {
             auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
-            mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(ac));
+            mut.set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(ac));
         }
     }
     virtual void consume_row_end() override {
@@ -218,8 +218,7 @@ public:
     }
 };
 
-
-future<lw_shared_ptr<mutation>>
+future<mutation_opt>
 sstables::sstable::convert_row(schema_ptr schema, const sstables::key& key) {
 
     assert(schema);
@@ -228,7 +227,7 @@ sstables::sstable::convert_row(schema_ptr schema, const sstables::key& key) {
     auto token = partitioner.get_token(key_view(key));
 
     if (!filter_has_key(token)) {
-        return make_ready_future<lw_shared_ptr<mutation>>();
+        return make_ready_future<mutation_opt>();
     }
 
     auto& summary = _summary;
@@ -240,14 +239,14 @@ sstables::sstable::convert_row(schema_ptr schema, const sstables::key& key) {
         summary_idx = gt - 1;
     }
     if (summary_idx < 0) {
-        return make_ready_future<lw_shared_ptr<mutation>>();
+        return make_ready_future<mutation_opt>();
     }
 
     auto position = _summary.entries[summary_idx].position;
     return read_indexes(position).then([this, schema, &key, token] (auto index_list) {
         auto index_idx = this->binary_search(index_list, key, token);
         if (index_idx < 0) {
-            return make_ready_future<lw_shared_ptr<mutation>>();
+            return make_ready_future<mutation_opt>();
         }
 
         auto position = index_list[index_idx].position;
@@ -260,7 +259,7 @@ sstables::sstable::convert_row(schema_ptr schema, const sstables::key& key) {
 
         return do_with(mp_row_consumer(key, schema), [this, position, end] (auto& c) {
             return this->data_consume_rows_at_once(c, position, end).then([&c] {
-                return make_ready_future<lw_shared_ptr<mutation>>(c.mut);
+                return make_ready_future<mutation_opt>(std::move(c.mut));
             });
         });
     });

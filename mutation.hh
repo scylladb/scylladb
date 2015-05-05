@@ -41,3 +41,5 @@ public:
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
+
+using mutation_opt = std::experimental::optional<mutation>;
