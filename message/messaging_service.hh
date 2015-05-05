@@ -131,7 +131,7 @@ struct serializer {
                     throw rpc::closed_error();
                 }
                 bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), serialize_string_size);
-                v = read_simple_short_string(bv);
+                new (&v) sstring(read_simple_short_string(bv));
                 return make_ready_future<>();
             });
         });
@@ -161,7 +161,7 @@ struct serializer {
                     throw rpc::closed_error();
                 }
                 bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), sz);
-                v = v.deserialize(bv);
+                new (&v) T(T::deserialize(bv));
                 return make_ready_future<>();
             });
         });
