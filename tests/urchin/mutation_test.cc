@@ -277,3 +277,80 @@ BOOST_AUTO_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     BOOST_REQUIRE(shadow == result);
 }
 
+BOOST_AUTO_TEST_CASE(test_cell_ordering) {
+    auto expiry_1 = gc_clock::now();
+    auto expiry_2 = expiry_1 + gc_clock::duration(1);
+
+    auto assert_order = [] (atomic_cell_view first, atomic_cell_view second) {
+        if (compare_atomic_cell_for_merge(first, second) >= 0) {
+            BOOST_FAIL(sprint("Expected %s < %s", first, second));
+        }
+        if (compare_atomic_cell_for_merge(second, first) <= 0) {
+            BOOST_FAIL(sprint("Expected %s < %s", second, first));
+        }
+    };
+
+    auto assert_equal = [] (atomic_cell_view c1, atomic_cell_view c2) {
+        BOOST_REQUIRE(compare_atomic_cell_for_merge(c1, c2) == 0);
+    };
+
+    assert_equal(
+        atomic_cell::make_live(0, expiry_opt{}, bytes("value")),
+        atomic_cell::make_live(0, expiry_opt{}, bytes("value")));
+
+    assert_equal(
+        atomic_cell::make_live(1, expiry_1, bytes("value")),
+        atomic_cell::make_live(1, expiry_1, bytes("value")));
+
+    assert_equal(
+        atomic_cell::make_dead(1, expiry_1),
+        atomic_cell::make_dead(1, expiry_1));
+
+    // If one cell doesn't have an expiry, Origin considers them equal.
+    assert_equal(
+        atomic_cell::make_live(1, expiry_2, bytes()),
+        atomic_cell::make_live(1, expiry_opt{}, bytes()));
+
+    assert_order(
+        atomic_cell::make_live(0, expiry_opt{}, bytes("value1")),
+        atomic_cell::make_live(0, expiry_opt{}, bytes("value2")));
+
+    assert_order(
+        atomic_cell::make_live(0, expiry_opt{}, bytes("value12")),
+        atomic_cell::make_live(0, expiry_opt{}, bytes("value2")));
+
+    // Live cells are ordered first by timestamp...
+    assert_order(
+        atomic_cell::make_live(0, expiry_opt{}, bytes("value2")),
+        atomic_cell::make_live(1, expiry_opt{}, bytes("value1")));
+
+    // ..then by value
+    assert_order(
+        atomic_cell::make_live(1, expiry_2, bytes("value1")),
+        atomic_cell::make_live(1, expiry_1, bytes("value2")));
+
+    // ..then by expiry
+    assert_order(
+        atomic_cell::make_live(1, expiry_1, bytes()),
+        atomic_cell::make_live(1, expiry_2, bytes()));
+
+    // Dead wins
+    assert_order(
+        atomic_cell::make_live(1, expiry_opt{}, bytes("value")),
+        atomic_cell::make_dead(1, expiry_1));
+
+    // Dead wins with expiring cell
+    assert_order(
+        atomic_cell::make_live(1, expiry_2, bytes("value")),
+        atomic_cell::make_dead(1, expiry_1));
+
+    // Deleted cells are ordered first by timestamp
+    assert_order(
+        atomic_cell::make_dead(1, expiry_2),
+        atomic_cell::make_dead(2, expiry_1));
+
+    // ...then by expiry
+    assert_order(
+        atomic_cell::make_dead(1, expiry_1),
+        atomic_cell::make_dead(1, expiry_2));
+}
