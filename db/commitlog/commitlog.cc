@@ -213,7 +213,7 @@ public:
         auto now = clock_type::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - _sync_time).count();
-        return _segment_manager->cfg.commitlog_sync_period_in_ms > uint64_t(ms);
+        return _segment_manager->cfg.commitlog_sync_period_in_ms < uint64_t(ms);
     }
     /**
      * Finalize this segment and get a new one
