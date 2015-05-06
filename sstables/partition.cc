@@ -75,6 +75,12 @@ int sstable::binary_search(const T& entries, const key& sk, const dht::token& to
 template int sstable::binary_search<>(const std::vector<summary_entry>& entries, const key& sk);
 template int sstable::binary_search<>(const std::vector<index_entry>& entries, const key& sk);
 
+static inline bytes pop_back(std::vector<bytes>& vec) {
+    auto b = std::move(vec.back());
+    vec.pop_back();
+    return std::move(b);
+}
+
 class mp_row_consumer : public row_consumer {
     schema_ptr _schema;
     key _key;
@@ -83,10 +89,32 @@ class mp_row_consumer : public row_consumer {
         bool is_static;
         bytes_view col_name;
         std::vector<bytes> clustering;
+        // see is_collection. collections have an extra element aside from the name.
+        // This will be non-zero size if this is a collection, and zero size othersize.
+        bytes collection_extra_data;
         bytes cell;
         const column_definition *cdef;
 
         static constexpr size_t static_size = 2;
+
+        // For every normal column, we expect the clustering key, followed by the
+        // extra element for the column name.
+        //
+        // For a collection, some auxiliary data will be embedded into the
+        // column_name as seen by the row consumer. This means that if our
+        // exploded clustering keys has more rows than expected, we are dealing
+        // with a collection.
+        bool is_collection(const schema& s) {
+            auto expected_normal = s.clustering_key_size() + 1;
+            // Note that we can have less than the expected. That is the case for
+            // incomplete prefixes, for instance.
+            if (clustering.size() <= expected_normal) {
+                return false;
+            } else if (clustering.size() == (expected_normal + 1)) {
+                return true;
+            }
+            throw malformed_sstable_exception(sprint("Found %d clustering elements in column name. Was not expecting that!", clustering.size()));
+        }
 
         static bool check_static(bytes_view col) {
             static bytes static_row(static_size, 0xff);
@@ -104,7 +132,8 @@ class mp_row_consumer : public row_consumer {
             : is_static(check_static(col))
             , col_name(fix_static_name(col))
             , clustering(composite_view(col_name).explode())
-            , cell(std::move(clustering.back()))
+            , collection_extra_data(is_collection(schema) ? pop_back(clustering) : bytes())
+            , cell(pop_back(clustering))
             , cdef(schema.get_column_definition(cell))
         {
 
@@ -119,8 +148,6 @@ class mp_row_consumer : public row_consumer {
             if (cell.size() && !cdef) {
                 throw malformed_sstable_exception(sprint("schema does not contain column: %s", cell.c_str()));
             }
-
-            clustering.pop_back();
         }
     };
 public:
@@ -161,9 +188,8 @@ public:
     virtual void consume_cell(bytes_view col_name, bytes_view value, int64_t timestamp, int32_t ttl, int32_t expiration) override {
         struct column col(*_schema, col_name);
 
-        // FIXME: collections are different, but not yet handled.
-        if (col.clustering.size() > (_schema->clustering_key_type()->types().size() + 1)) {
-            throw malformed_sstable_exception("wrong number of clustering columns");
+        if (col.collection_extra_data.size()) {
+            throw runtime_exception("collections not supported");
         }
 
         auto ac = make_atomic_cell(timestamp, value, ttl, expiration);
@@ -230,6 +256,11 @@ public:
         }
 
         auto start = composite_view(column::fix_static_name(start_col)).explode();
+        // Note how this is slightly different from the check in is_collection. Collection tombstones
+        // do not have extra data.
+        //
+        // Still, it is enough to check if we're dealing with a collection, since any other tombstone
+        // won't have a full clustering prefix (otherwise it isn't a range)
         if (start.size() <= _schema->clustering_key_size()) {
             mut.partition().apply_delete(*_schema, exploded_clustering_prefix(std::move(start)), tombstone(deltime));
         } else {
