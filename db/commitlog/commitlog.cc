@@ -103,9 +103,9 @@ public:
     semaphore _new_segment_semaphore;
 
     // TODO: verify that we're ok with not-so-great granularity
-    typedef lowres_clock clock_type;
-    typedef clock_type::time_point time_point;
-    typedef lw_shared_ptr<segment> sseg_ptr;
+    using clock_type = lowres_clock;
+    using time_point = clock_type::time_point;
+    using sseg_ptr = lw_shared_ptr<segment>;
 
     segment_manager(config cfg)
             : cfg(cfg), max_size(
@@ -166,10 +166,10 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
     uint64_t _buf_pos = 0;
     bool _closed = false;
 
-    typedef temporary_buffer<char> buffer_type;
-    typedef segment_manager::sseg_ptr sseg_ptr;
-    typedef segment_manager::clock_type clock_type;
-    typedef segment_manager::time_point time_point;
+    using buffer_type = temporary_buffer<char>;
+    using sseg_ptr = segment_manager::sseg_ptr;
+    using clock_type = segment_manager::clock_type;
+    using time_point = segment_manager::time_point;
 
     buffer_type _buffer;
     rwlock _dwrite; // used as a barrier between write & flush

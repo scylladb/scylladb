@@ -35,9 +35,9 @@ namespace db {
 
 class config;
 
-typedef uint64_t segment_id_type;
-typedef uint64_t position_type;
-typedef utils::UUID cf_id_type;
+using segment_id_type = uint64_t;
+using position_type = uint64_t;
+using cf_id_type = utils::UUID;
 
 struct replay_position {
     replay_position(segment_id_type i = 0, position_type p = 0) : id(i), pos(p) {};
@@ -124,8 +124,8 @@ public:
      * of data to be written. (See add).
      * Don't write less, absolutely don't write more...
      */
-    typedef data_output output;
-    typedef std::function<void(output&)> serializer_func;
+    using output = data_output;
+    using serializer_func = std::function<void(output&)>;
 
     /**
      * Add a "Mutation" to the commit log.
