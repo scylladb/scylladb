@@ -21,8 +21,7 @@
  * Copyright 2015 Cloudius Systems
  */
 
-#ifndef DB_COMMITLOG_COMMITLOG_HH
-#define DB_COMMITLOG_COMMITLOG_HH
+#pragma once
 
 #include <memory>
 
@@ -176,5 +175,3 @@ private:
 };
 
 }
-
-#endif // DB_COMMITLOG_COMMITLOG_HH
