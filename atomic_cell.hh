@@ -8,6 +8,7 @@
 #include "timestamp.hh"
 #include "tombstone.hh"
 #include "gc_clock.hh"
+#include "net/byteorder.hh"
 #include <cstdint>
 #include <iostream>
 
