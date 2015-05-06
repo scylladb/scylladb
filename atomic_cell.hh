@@ -192,9 +192,14 @@ class collection_mutation {
 public:
     struct view {
         bytes_view data;
+        bytes_view serialize() const { return data; }
+        static view from_bytes(bytes_view v) { return { v }; }
     };
     struct one {
         bytes data;
+        one() {}
+        one(bytes b) : data(std::move(b)) {}
+        one(view v) : data(v.data.begin(), v.data.end()) {}
         operator view() const { return { data }; }
     };
 };
@@ -224,6 +229,9 @@ public:
     }
     collection_mutation::view as_collection_mutation() const {
         return collection_mutation::view{_data};
+    }
+    bytes_view serialize() const {
+        return _data;
     }
     friend std::ostream& operator<<(std::ostream&, const atomic_cell_or_collection&);
 };
