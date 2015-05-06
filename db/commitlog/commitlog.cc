@@ -294,6 +294,7 @@ public:
         data_output out(p, p + buf.size());
 
         auto id = net::hton(_desc.id);
+        auto header_size = 0;
 
         if (off == 0) {
             // first block. write file header.
@@ -304,13 +305,14 @@ public:
             crc.process<int32_t>(_desc.id);
             crc.process<int32_t>(_desc.id >> 32);
             out.write(crc.checksum());
+            header_size = descriptor_header_size;
         }
 
         // write chunk header
         crc32 crc;
         crc.process<int32_t>(id >> 32);
         crc.process<int32_t>(id & 0xffffffff);
-        crc.process(uint32_t(off));
+        crc.process(uint32_t(off + header_size));
 
         out.write(uint32_t(_file_pos));
         out.write(crc.checksum());
