@@ -112,6 +112,7 @@ protected:
     enable_lw_shared_from_this& operator=(enable_lw_shared_from_this&&) { return *this; }
 public:
     lw_shared_ptr<T> shared_from_this();
+    lw_shared_ptr<const T> shared_from_this() const;
     template <typename X>
     friend class lw_shared_ptr;
 };
@@ -136,9 +137,9 @@ struct shared_ptr_no_esft {
 template <typename T>
 using shared_ptr_impl
     = std::conditional_t<
-        std::is_base_of<enable_lw_shared_from_this<T>, T>::value,
-        enable_lw_shared_from_this<T>,
-        shared_ptr_no_esft<T>
+        std::is_base_of<enable_lw_shared_from_this<std::remove_const_t<T>>, T>::value,
+        enable_lw_shared_from_this<std::remove_const_t<T>>,
+        shared_ptr_no_esft<std::remove_const_t<T>>
       >;
 
 template <typename T>
@@ -199,7 +200,7 @@ public:
     T* operator->() const noexcept { return _p->to_value(); }
     T* get() const noexcept { return _p->to_value(); }
 
-    long int use_count() noexcept {
+    long int use_count() const noexcept {
         if (_p) {
             return _p->_count;
         } else {
@@ -218,6 +219,25 @@ public:
     bool owned() const noexcept {
         return _p->_count == 1;
     }
+
+    bool operator==(const lw_shared_ptr<const T>& x) const {
+        return _p == x._p;
+    }
+
+    bool operator!=(const lw_shared_ptr<const T>& x) const {
+        return !operator==(x);
+    }
+
+    bool operator==(const lw_shared_ptr<std::remove_const_t<T>>& x) const {
+        return _p == x._p;
+    }
+
+    bool operator!=(const lw_shared_ptr<std::remove_const_t<T>>& x) const {
+        return !operator==(x);
+    }
+
+    template <typename U>
+    friend class lw_shared_ptr;
 
     template <typename X, typename... A>
     friend lw_shared_ptr<X> make_lw_shared(A&&...);
@@ -255,6 +275,13 @@ inline
 lw_shared_ptr<T>
 enable_lw_shared_from_this<T>::shared_from_this() {
     return lw_shared_ptr<T>(this);
+}
+
+template <typename T>
+inline
+lw_shared_ptr<const T>
+enable_lw_shared_from_this<T>::shared_from_this() const {
+    return lw_shared_ptr<const T>(this);
 }
 
 template <typename T>

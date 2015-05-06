@@ -64,3 +64,21 @@ BOOST_AUTO_TEST_CASE(test_const_ptr) {
     shared_ptr<const C> cca = ca->get();
     BOOST_REQUIRE(cca == ca);
 }
+
+struct D {};
+
+BOOST_AUTO_TEST_CASE(test_lw_const_ptr_1) {
+    auto pd1 = make_lw_shared<const D>(D());
+    auto pd2 = make_lw_shared(D());
+    lw_shared_ptr<const D> pd3 = pd2;
+    BOOST_REQUIRE(pd2 == pd3);
+}
+
+struct E : enable_lw_shared_from_this<E> {};
+
+BOOST_AUTO_TEST_CASE(test_lw_const_ptr_2) {
+    auto pe1 = make_lw_shared<const E>();
+    auto pe2 = make_lw_shared<E>();
+    lw_shared_ptr<const E> pe3 = pe2;
+    BOOST_REQUIRE(pe2 == pe3);
+}
