@@ -76,12 +76,12 @@ public:
             print("Server got shutdown msg = %s\n", msg);
             return messaging_service::no_wait();
         });
-        ms.register_handler(messaging_verb::ECHO, [] (int x, long y) {
+        ms.register_handler(messaging_verb::ECHO, [] (int x, int y) {
             print("Server got echo msg = (%d, %ld) \n", x, y);
             std::tuple<int, long> ret(x*x, y*y);
             return make_ready_future<decltype(ret)>(std::move(ret));
         });
-        ms.register_handler(messaging_verb::UNUSED_1, [] (int x, long y) {
+        ms.register_handler(messaging_verb::UNUSED_1, [] (int x, int y) {
             print("Server got echo msg = (%d, %ld) \n", x, y);
             throw std::runtime_error("I'm throwing runtime_error exception");
             long ret = x + y;
@@ -132,10 +132,8 @@ public:
     future<> test_echo() {
         print("=== %s ===\n", __func__);
         auto id = get_shard_id();
-        int msg1 = 30;
-        int msg2 = 60;
         using RetMsg = std::tuple<int, long>;
-        return ms.send_message<RetMsg>(messaging_verb::ECHO, id, msg1, msg2).then_wrapped([] (future<RetMsg> f) {
+        return ms.send_message<RetMsg>(messaging_verb::ECHO, id, 30, 60).then_wrapped([] (future<RetMsg> f) {
             try {
                 auto msg = std::get<0>(f.get());
                 print("Client sent echo got reply = (%d , %ld)\n", std::get<0>(msg), std::get<1>(msg));
@@ -152,9 +150,7 @@ public:
     future<> test_exception() {
         print("=== %s ===\n", __func__);
         auto id = get_shard_id();
-        int msg1 = 3;
-        int msg2 = 6;
-        return ms.send_message<long>(messaging_verb::UNUSED_1, id, msg1, msg2).then_wrapped([] (future<long> f) {
+        return ms.send_message<long>(messaging_verb::UNUSED_1, id, 3, 6).then_wrapped([] (future<long> f) {
             try {
                 auto ret = std::get<0>(f.get());
                 print("Client sent UNUSED_1 got reply = %ld\n", ret);
