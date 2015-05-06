@@ -329,3 +329,56 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit){
         }).then([]{});
 }
 
+SEASTAR_TEST_CASE(test_commitlog_reader){
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return make_commitlog(cfg).then([](tmplog_ptr log) {
+            auto state = make_lw_shared(false);
+            auto count = make_lw_shared<size_t>(0);
+            auto count2 = make_lw_shared<size_t>(0);
+            auto uuid = utils::UUID_gen::get_time_UUID();
+            return do_until([state]() {return *state;},
+                    [log, state, uuid, count]() {
+                        sstring tmp = "hej bubba cow";
+                        return log->second.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
+                                    dst.write(tmp.begin(), tmp.end());
+                                }).then([log, state, count](replay_position rp) {
+                                    BOOST_CHECK_NE(rp, db::replay_position());
+                                    if (rp.id == 1) {
+                                        (*count)++;
+                                    }
+                                    *state = rp.id > 1;
+                                });
+
+                    }).then([log, count]() {
+                        return count_files(log->first.path).then([](size_t n) {
+                                    BOOST_REQUIRE(n > 1);
+                                });
+                    }).then([log, count2] {
+                        return list_files(log->first.path).then([log, count2](auto l) {
+                                    for (auto & de : l->contents()) {
+                                        // TODO, meh, hard coded name...
+                                        if (de.name == "CommitLog-1-1.log") {
+                                            auto path = log->first.path + "/" + de.name;
+                                            return db::commitlog::read_log_file(path, [count2](temporary_buffer<char> buf) {
+                                                        sstring str(buf.get(), buf.size());
+                                                        BOOST_CHECK_EQUAL(str, "hej bubba cow");
+                                                        (*count2)++;
+                                                        return make_ready_future<>();
+                                                    }).then([log](subscription<temporary_buffer<char>> s) {
+                                                        auto ss = make_lw_shared(std::move(s));
+                                                        return ss->done().then([ss] {});
+                                                    });
+                                        }
+                                    }
+                                    throw std::runtime_error("Did not find expected log file");
+                               });
+                    }).then([count, count2] {
+                        BOOST_CHECK_EQUAL(*count, *count2);
+                    }).finally([log]() {
+                        return log->second.clear().then([log] {});
+                    });
+        });
+}
+
+

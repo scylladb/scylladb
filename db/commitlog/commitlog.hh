@@ -28,7 +28,10 @@
 #include "utils/data_output.hh"
 #include "core/future.hh"
 #include "core/shared_ptr.hh"
+#include "core/stream.hh"
 #include "utils/UUID.hh"
+
+class file;
 
 namespace db {
 
@@ -170,6 +173,11 @@ public:
     future<> clear();
 
     const config& active_config() const;
+
+    typedef std::function<future<>(temporary_buffer<char>)> commit_load_reader_func;
+
+    static subscription<temporary_buffer<char>> read_log_file(file, commit_load_reader_func);
+    static future<subscription<temporary_buffer<char>>> read_log_file(const sstring&, commit_load_reader_func);
 private:
     commitlog(config);
 };
