@@ -26,6 +26,17 @@ public:
             throw std::out_of_range("Offset out of range");
         }
     }
+    template<typename T>
+    data_input(const std::experimental::basic_string_view<T>& view)
+            : data_input(
+                    bytes_view(reinterpret_cast<const int8_t *>(view.data()),
+                            view.size() * sizeof(T))) {
+    }
+    template<typename T>
+    data_input(const temporary_buffer<T>& buf)
+            : data_input(
+                    std::experimental::basic_string_view<T>(buf.get(), buf.size())) {
+    }
     data_input(data_input&&) = default;
     data_input(const data_input&) = default;
 
@@ -53,6 +64,11 @@ public:
     bytes_view read_view_to_blob() {
         auto len = read<SizeType>();
         return read_view(len);
+    }
+
+    void skip(size_t s) {
+        ensure(s);
+        _view.remove_prefix(s);
     }
 private:
     template<typename T> size_t ssize(const T &) const;
