@@ -99,6 +99,14 @@ template<> inline bytes data_input::peek<bytes>() const {
 template<> inline size_t data_input::ssize<bytes>(const bytes & s) const {
     return sizeof(uint32_t) + s.size();
 }
+template<> inline bytes_view data_input::peek<bytes_view>() const {
+    auto len = peek<uint32_t>();
+    ensure(sizeof(uint32_t) + len);
+    return bytes_view(_view.data() + sizeof(uint32_t), len);
+}
+template<> inline size_t data_input::ssize<bytes_view>(const bytes_view& v) const {
+    return sizeof(uint32_t) + v.size();
+}
 template<> inline size_t data_input::ssize(const bool &) const {
     return sizeof(uint8_t);
 }
