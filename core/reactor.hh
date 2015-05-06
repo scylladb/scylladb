@@ -63,6 +63,7 @@
 #include "semaphore.hh"
 #include "core/scattered_message.hh"
 #include "core/enum.hh"
+#include <boost/range/irange.hpp>
 
 #ifdef HAVE_OSV
 #include <osv/sched.hh>
@@ -918,6 +919,9 @@ public:
             }
         }
         return got != 0;
+    }
+    static boost::integer_range<unsigned> all_cpus() {
+        return boost::irange(0u, count);
     }
 private:
     static void start_all_queues();
