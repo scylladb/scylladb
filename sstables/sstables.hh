@@ -179,6 +179,6 @@ public:
     friend class test;
 };
 
-future<> write_datafile(column_family& cf, sstring datafile);
+future<> write_datafile(const memtable& mt, sstring datafile);
 
 }

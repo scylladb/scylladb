@@ -13,43 +13,76 @@
 #include "db/config.hh"
 #include "to_string.hh"
 #include "query-result-writer.hh"
-
+#include "nway_merger.hh"
 #include "cql3/column_identifier.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
 #include <boost/range/adaptor/transformed.hpp>
 #include "locator/simple_snitch.hh"
+#include <boost/algorithm/cxx11/all_of.hpp>
+#include <boost/function_output_iterator.hpp>
 
 thread_local logging::logger dblog("database");
 
+memtable::memtable(schema_ptr schema)
+        : _schema(std::move(schema))
+        , partitions(dht::decorated_key::less_comparator(_schema)) {
+}
+
 column_family::column_family(schema_ptr schema)
     : _schema(std::move(schema))
-    , partitions(dht::decorated_key::less_comparator(_schema))
+    , _memtables({memtable(_schema)})
 { }
 
 // define in .cc, since sstable is forward-declared in .hh
 column_family::~column_family() {
 }
 
-mutation_partition*
-column_family::find_partition(const dht::decorated_key& key) {
+memtable::const_mutation_partition_ptr
+memtable::find_partition(const dht::decorated_key& key) const {
     auto i = partitions.find(key);
-    return i == partitions.end() ? nullptr : &i->second;
+    // FIXME: remove copy if only one data source
+    return i == partitions.end() ? const_mutation_partition_ptr() : std::make_unique<const mutation_partition>(i->second);
 }
 
-mutation_partition*
-column_family::find_partition_slow(const partition_key& key) {
+column_family::const_mutation_partition_ptr
+column_family::find_partition(const dht::decorated_key& key) const {
+    // FIXME: optimize for 0 or 1 entries found case
+    mutation_partition ret(_schema);
+    bool any = false;
+    for (auto&& mt : _memtables) {
+        auto mp = mt.find_partition(key);
+        if (mp) {
+            ret.apply(_schema, *mp);
+            any = true;
+        }
+    }
+    if (any) {
+        return std::make_unique<mutation_partition>(std::move(ret));
+    } else {
+        return nullptr;
+    }
+}
+
+column_family::const_mutation_partition_ptr
+column_family::find_partition_slow(const partition_key& key) const {
     return find_partition(dht::global_partitioner().decorate_key(*_schema, key));
 }
 
-row*
-column_family::find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) {
-    mutation_partition* p = find_partition(partition_key);
+column_family::const_row_ptr
+column_family::find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) const {
+    const_mutation_partition_ptr p = find_partition(partition_key);
     if (!p) {
         return nullptr;
     }
-    return p->find_row(clustering_key);
+    auto r = p->find_row(clustering_key);
+    if (r) {
+        // FIXME: remove copy if only one data source
+        return std::make_unique<row>(*r);
+    } else {
+        return nullptr;
+    }
 }
 
 mutation_partition&
@@ -58,7 +91,7 @@ column_family::find_or_create_partition_slow(const partition_key& key) {
 }
 
 mutation_partition&
-column_family::find_or_create_partition(const dht::decorated_key& key) {
+memtable::find_or_create_partition(const dht::decorated_key& key) {
     // call lower_bound so we have a hint for the insert, just in case.
     auto i = partitions.lower_bound(key);
     if (i == partitions.end() || !key.equal(*_schema, i->first)) {
@@ -66,6 +99,70 @@ column_family::find_or_create_partition(const dht::decorated_key& key) {
     }
     return i->second;
 }
+
+const memtable::partitions_type&
+memtable::all_partitions() const {
+    return partitions;
+}
+
+struct column_family::merge_comparator {
+    schema_ptr _schema;
+    using ptr = boost::iterator_range<memtable::partitions_type::const_iterator>*;
+    merge_comparator(schema_ptr schema) : _schema(std::move(schema)) {}
+    bool operator()(ptr x, ptr y) const {
+        return y->front().first.less_compare(*_schema, x->front().first);
+    }
+};
+
+template <typename Func>
+bool
+column_family::for_all_partitions(Func&& func) const {
+    static_assert(std::is_same<bool, std::result_of_t<Func(const dht::decorated_key&, const mutation_partition&)>>::value,
+                  "bad Func signature");
+    using partitions_range = boost::iterator_range<memtable::partitions_type::const_iterator>;
+    std::vector<partitions_range> tables;
+    for (auto&& mt : _memtables) {
+        tables.push_back(boost::make_iterator_range(mt.all_partitions()));
+    }
+    std::vector<partitions_range*> ptables;
+    for (auto&& r : tables) {
+        ptables.push_back(&r);
+    }
+    nway_merger<std::vector<partitions_range*>, merge_comparator> merger{merge_comparator(_schema)};
+    merger.create_heap(ptables);
+    bool ok = true;
+    bool more = true;
+    // Can't use memtable::partitions_type::value_type due do constness
+    std::experimental::optional<std::pair<dht::decorated_key, mutation_partition>> current;
+    while (ok && more) {
+        more = merger.pop(boost::make_function_output_iterator([&] (const memtable::partitions_type::value_type& e) {
+            auto&& key = e.first;
+            auto&& mp = e.second;
+            // Schema cannot have different keys
+            if (current && !current->first.equal(*_schema, key)) {
+                ok = func(std::move(current->first), std::move(current->second));
+                current = std::experimental::nullopt;
+            }
+            if (current) {
+                // FIXME: handle different schemas
+                current->second.apply(_schema, mp);
+            } else {
+                current = std::make_pair(key, mp);
+            }
+        }));
+    }
+    if (ok && current) {
+        ok = func(std::move(current->first), std::move(current->second));
+        current = std::experimental::nullopt;
+    }
+    return ok;
+}
+
+bool
+column_family::for_all_partitions_slow(std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const {
+    return for_all_partitions(std::move(func));
+}
+
 
 row&
 column_family::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
@@ -174,12 +271,26 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
     return make_ready_future<>();
 }
 
+void
+column_family::seal_active_memtable() {
+    _memtables.emplace_back(_schema);
+    // FIXME: start flushing the previously-active memtable
+    // FIXME: remove the flushed memtable when done
+    // FIXME: release commit log
+    // FIXME: provide back-pressure to upper layers
+}
+
 future<> column_family::populate(sstring sstdir) {
 
     return lister::scan_dir(sstdir, directory_entry_type::regular, [this, sstdir] (directory_entry de) {
         // FIXME: The secondary indexes are in this level, but with a directory type, (starting with ".")
         return probe_file(sstdir, de.name);
     });
+}
+
+const std::vector<memtable>&
+column_family::testonly_all_memtables() const {
+    return _memtables;
 }
 
 
@@ -293,22 +404,22 @@ void database::drop_keyspace(const sstring& name) {
 }
 
 void database::add_column_family(const utils::UUID& uuid, column_family&& cf) {
-    if (_keyspaces.count(cf._schema->ks_name()) == 0) {
-        throw std::invalid_argument("Keyspace " + cf._schema->ks_name() + " not defined");
+    if (_keyspaces.count(cf.schema()->ks_name()) == 0) {
+        throw std::invalid_argument("Keyspace " + cf.schema()->ks_name() + " not defined");
     }
     if (_column_families.count(uuid) != 0) {
         throw std::invalid_argument("UUID " + uuid.to_sstring() + " already mapped");
     }
-    auto kscf = std::make_pair(cf._schema->ks_name(), cf._schema->cf_name());
+    auto kscf = std::make_pair(cf.schema()->ks_name(), cf.schema()->cf_name());
     if (_ks_cf_to_uuid.count(kscf) != 0) {
-        throw std::invalid_argument("Column family " + cf._schema->cf_name() + " exists");
+        throw std::invalid_argument("Column family " + cf.schema()->cf_name() + " exists");
     }
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
 }
 
 void database::add_column_family(column_family&& cf) {
-    auto id = cf._schema->id();
+    auto id = cf.schema()->id();
     add_column_family(id, std::move(cf));
 }
 
@@ -408,7 +519,7 @@ schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name)
 }
 
 schema_ptr database::find_schema(const utils::UUID& uuid) const throw (no_such_column_family) {
-    return find_column_family(uuid)._schema;
+    return find_column_family(uuid).schema();
 }
 
 keyspace&
@@ -421,7 +532,7 @@ database::find_or_create_keyspace(const sstring& name) {
 }
 
 void
-column_family::apply(const mutation& m) {
+memtable::apply(const mutation& m) {
     mutation_partition& p = find_or_create_partition(m.decorated_key());
     p.apply(_schema, m.partition());
 }
@@ -463,7 +574,7 @@ merge_column(const column_definition& def,
 }
 
 future<lw_shared_ptr<query::result>>
-column_family::query(const query::read_command& cmd) {
+column_family::query(const query::read_command& cmd) const {
     query::result::builder builder(cmd.slice);
 
     uint32_t limit = cmd.row_limit;
@@ -482,17 +593,16 @@ column_family::query(const query::read_command& cmd) {
             p_builder.finish();
             limit -= p_builder.row_count();
         } else if (range.is_full()) {
-            for (auto&& e : partitions) {
-                auto& dk = e.first;
-                auto& partition = e.second;
+            for_all_partitions([&] (const dht::decorated_key& dk, const mutation_partition& partition) {
                 auto p_builder = builder.add_partition(dk._key);
                 partition.query(*_schema, cmd.slice, limit, p_builder);
                 p_builder.finish();
                 limit -= p_builder.row_count();
                 if (limit == 0) {
-                    break;
+                    return false;
                 }
-            }
+                return true;
+            });
         } else {
             fail(unimplemented::cause::RANGE_QUERIES);
         }
@@ -542,11 +652,12 @@ std::ostream& operator<<(std::ostream& os, const mutation& m) {
 
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
     out << "{\n";
-    for (auto&& e : cf.partitions) {
-        out << e.first << " => ";
-        print_partition(out, *cf._schema, e.second);
+    cf.for_all_partitions([&] (const dht::decorated_key& key, const mutation_partition& mp) {
+        out << key << " => ";
+        print_partition(out, *cf._schema, mp);
         out << "\n";
-    }
+        return true;
+    });
     out << "}";
     return out;
 }
@@ -555,7 +666,7 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     out << "{\n";
     for (auto&& e : db._column_families) {
         auto&& cf = e.second;
-        out << "(" << e.first.to_sstring() << ", " << cf._schema->cf_name() << ", " << cf._schema->ks_name() << "): " << cf << "\n";
+        out << "(" << e.first.to_sstring() << ", " << cf.schema()->cf_name() << ", " << cf.schema()->ks_name() << "): " << cf << "\n";
     }
     out << "}";
     return out;

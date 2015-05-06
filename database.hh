@@ -53,30 +53,72 @@ class commitlog;
 class config;
 }
 
-struct column_family {
+class memtable {
+public:
+    using partitions_type = std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator>;
+private:
+    schema_ptr _schema;
+    partitions_type partitions;
+public:
+    using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
+public:
+    explicit memtable(schema_ptr schema);
+    schema_ptr schema() const { return _schema; }
+    mutation_partition& find_or_create_partition(const dht::decorated_key& key);
+    const_mutation_partition_ptr find_partition(const dht::decorated_key& key) const;
+    void apply(const mutation& m);
+    const partitions_type& all_partitions() const;
+};
+
+class column_family {
+    schema_ptr _schema;
+    std::vector<memtable> _memtables;
+    // generation -> sstable. Ordered by key so we can easily get the most recent.
+    std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
+private:
+    memtable& active_memtable() { return _memtables.back(); }
+    struct merge_comparator;
+public:
+    // Queries can be satisfied from multiple data sources, so they are returned
+    // as temporaries.
+    //
+    // FIXME: in case a query is satisfied from a single memtable, avoid a copy
+    using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
+    using const_row_ptr = std::unique_ptr<const row>;
+public:
     column_family(schema_ptr schema);
     column_family(column_family&&) = default;
     ~column_family();
+    schema_ptr schema() const { return _schema; }
     mutation_partition& find_or_create_partition(const dht::decorated_key& key);
     mutation_partition& find_or_create_partition_slow(const partition_key& key);
-    mutation_partition* find_partition(const dht::decorated_key& key);
-    mutation_partition* find_partition_slow(const partition_key& key);
+    const_mutation_partition_ptr find_partition(const dht::decorated_key& key) const;
+    const_mutation_partition_ptr find_partition_slow(const partition_key& key) const;
     row& find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key);
-    row* find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key);
-    schema_ptr _schema;
-    std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator> partitions;
+    const_row_ptr find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) const;
     void apply(const mutation& m);
     // Returns at most "cmd.limit" rows
-    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
+    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd) const;
 
     future<> populate(sstring datadir);
+    void seal_active_memtable();
+    const std::vector<memtable>& testonly_all_memtables() const;
 private:
-    // generation -> sstable. Ordered by key so we can easily get the most recent.
-    std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
+    // Iterate over all partitions.  Protocol is the same as std::all_of(),
+    // so that iteration can be stopped by returning false.
+    // Func signature: bool (const decorated_key& dk, const mutation_partition& mp)
+    template <typename Func>
+    bool for_all_partitions(Func&& func) const;
     future<> probe_file(sstring sstdir, sstring fname);
     // Returns at most "limit" rows. The limit must be greater than 0.
     void get_partition_slice(mutation_partition& partition, const query::partition_slice& slice,
         uint32_t limit, query::result::partition_writer&);
+public:
+    // Iterate over all partitions.  Protocol is the same as std::all_of(),
+    // so that iteration can be stopped by returning false.
+    bool for_all_partitions_slow(std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const;
+
+    friend std::ostream& operator<<(std::ostream& out, const column_family& cf);
 };
 
 class user_types_metadata {
@@ -177,5 +219,17 @@ public:
 
 // FIXME: stub
 class secondary_index_manager {};
+
+inline
+mutation_partition&
+column_family::find_or_create_partition(const dht::decorated_key& key) {
+    return active_memtable().find_or_create_partition(key);
+}
+
+inline
+void
+column_family::apply(const mutation& m) {
+    return active_memtable().apply(m);
+}
 
 #endif /* DATABASE_HH_ */
