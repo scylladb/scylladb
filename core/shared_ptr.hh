@@ -200,7 +200,7 @@ public:
     T* operator->() const noexcept { return _p->to_value(); }
     T* get() const noexcept { return _p->to_value(); }
 
-    long int use_count() noexcept {
+    long int use_count() const noexcept {
         if (_p) {
             return _p->_count;
         } else {
