@@ -537,7 +537,10 @@ memtable::apply(const mutation& m) {
     p.apply(_schema, m.partition());
 }
 
-// Based on org.apache.cassandra.db.AbstractCell#reconcile()
+// Based on:
+//  - org.apache.cassandra.db.AbstractCell#reconcile()
+//  - org.apache.cassandra.db.BufferExpiringCell#reconcile()
+//  - org.apache.cassandra.db.BufferDeletedCell#reconcile()
 int
 compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
     if (left.timestamp() != right.timestamp()) {
@@ -547,15 +550,28 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
         return left.is_live() ? -1 : 1;
     }
     if (left.is_live()) {
-        return compare_unsigned(left.value(), right.value());
-    } else {
-        if (*left.expiry() != *right.expiry()) {
-            // Origin compares big-endian serialized expiry time
-            return (uint32_t)left.expiry()->time_since_epoch().count()
-                 < (uint32_t)right.expiry()->time_since_epoch().count() ? -1 : 1;
+        auto c = compare_unsigned(left.value(), right.value());
+        if (c != 0) {
+            return c;
         }
-        return 0;
+        if (left.is_live_and_has_ttl()
+            && right.is_live_and_has_ttl()
+            && *left.expiry() != *right.expiry())
+        {
+            return left.expiry() < right.expiry() ? -1 : 1;
+        }
+    } else {
+        // Both are deleted
+        if (*left.expiry() != *right.expiry()) {
+            // Origin compares big-endian serialized expiry time. That's because it
+            // delegates to AbstractCell.reconcile() which compares values after
+            // comparing timestamps, which in case of deleted cells will hold
+            // serialized expiry.
+            return (uint32_t) left.expiry()->time_since_epoch().count()
+                   < (uint32_t) right.expiry()->time_since_epoch().count() ? -1 : 1;
+        }
     }
+    return 0;
 }
 
 void
