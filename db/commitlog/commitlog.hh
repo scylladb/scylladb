@@ -40,10 +40,12 @@ using position_type = uint64_t;
 using cf_id_type = utils::UUID;
 
 struct replay_position {
-    replay_position(segment_id_type i = 0, position_type p = 0) : id(i), pos(p) {};
-
     segment_id_type id;
     position_type pos;
+
+    replay_position(segment_id_type i = 0, position_type p = 0)
+        : id(i), pos(p)
+    { }
 
     bool operator<(const replay_position & r) const {
         return id < r.id ? true : (r.id < id ? false : pos < r.pos);
@@ -54,38 +56,45 @@ struct replay_position {
 };
 
 /*
- * Commit Log tracks every write operation into the system. The aim of the commit log is to be able to
- * successfully recover data that was not stored to disk via the Memtable.
+ * Commit Log tracks every write operation into the system. The aim of
+ * the commit log is to be able to successfully recover data that was
+ * not stored to disk via the Memtable.
  *
  * This impl is cassandra log format compatible (for what it is worth).
  * The behaviour is similar, but not 100% identical as "stock cl".
  *
- * Files are managed with "normal" file writes (as normal as seastar gets) - no mmapping.
- * Data is kept in internal buffers which, when full, are written to disk (see below).
- * Files are also flushed periodically (or always), ensuring all data is written + writes are complete.
+ * Files are managed with "normal" file writes (as normal as seastar
+ * gets) - no mmapping. Data is kept in internal buffers which, when
+ * full, are written to disk (see below). Files are also flushed
+ * periodically (or always), ensuring all data is written + writes are
+ * complete.
  *
- * In BATCH mode, every write to the log will also send the data to disk + issue a flush and wait for both to complete.
+ * In BATCH mode, every write to the log will also send the data to disk
+ * + issue a flush and wait for both to complete.
  *
- * In PERIODIC mode, most writes will only add to the internal memory buffers. If the mem buffer is saturated, data is sent to
- * disk, but we don't wait for the write to complete. However, if periodic (timer) flushing has not been done in X ms, we will
- * write + flush to file. In which case we wait for it.
+ * In PERIODIC mode, most writes will only add to the internal memory
+ * buffers. If the mem buffer is saturated, data is sent to disk, but we
+ * don't wait for the write to complete. However, if periodic (timer)
+ * flushing has not been done in X ms, we will write + flush to file. In
+ * which case we wait for it.
  *
- * The commitlog does not guarantee any ordering between "add" callers (due to the above). The actual order in the commitlog is however
+ * The commitlog does not guarantee any ordering between "add" callers
+ * (due to the above). The actual order in the commitlog is however
  * identified by the replay_position returned.
  *
- * Like the stock cl, the log segments keep track of the highest dirty (added) internal position for a given table id (cf_id_type / UUID).
- * Code should ensure to use discard_completed_segments with UUID + highest rp once a memtable has been flushed. This will allow discarding
- * used segments. Failure to do so will keep stuff indefinately.
- *
+ * Like the stock cl, the log segments keep track of the highest dirty
+ * (added) internal position for a given table id (cf_id_type / UUID).
+ * Code should ensure to use discard_completed_segments with UUID +
+ * highest rp once a memtable has been flushed. This will allow
+ * discarding used segments. Failure to do so will keep stuff
+ * indefinately.
  */
 class commitlog {
     class segment_manager;
     class segment;
     class descriptor;
 
-    std::unique_ptr<segment_manager>
-        _segment_manager;
-
+    std::unique_ptr<segment_manager> _segment_manager;
 public:
     enum class sync_mode {
         PERIODIC, BATCH
