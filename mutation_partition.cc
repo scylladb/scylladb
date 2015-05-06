@@ -31,7 +31,7 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
     _tombstone.apply(p._tombstone);
 
     for (auto&& e : p._row_tombstones) {
-        apply_row_tombstone(schema, e.prefix(), e.t());
+        apply_row_tombstone(*schema, e.prefix(), e.t());
     }
 
     auto merge_cells = [this, schema] (row& old_row, const row& new_row, auto&& find_column_def) {
@@ -109,10 +109,10 @@ mutation_partition::tombstone_for_row(const schema& schema, const rows_entry& e)
 }
 
 void
-mutation_partition::apply_row_tombstone(schema_ptr schema, clustering_key_prefix prefix, tombstone t) {
-    assert(!prefix.is_full(*schema));
-    auto i = _row_tombstones.lower_bound(prefix, row_tombstones_entry::compare(*schema));
-    if (i == _row_tombstones.end() || !prefix.equal(*schema, i->prefix())) {
+mutation_partition::apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t) {
+    assert(!prefix.is_full(schema));
+    auto i = _row_tombstones.lower_bound(prefix, row_tombstones_entry::compare(schema));
+    if (i == _row_tombstones.end() || !prefix.equal(schema, i->prefix())) {
         auto e = new row_tombstones_entry(std::move(prefix), t);
         _row_tombstones.insert(i, *e);
     } else {
@@ -127,7 +127,7 @@ mutation_partition::apply_delete(schema_ptr schema, const exploded_clustering_pr
     } else if (prefix.is_full(*schema)) {
         apply_delete(schema, clustering_key::from_clustering_prefix(*schema, prefix), t);
     } else {
-        apply_row_tombstone(schema, clustering_key_prefix::from_clustering_prefix(*schema, prefix), t);
+        apply_row_tombstone(*schema, clustering_key_prefix::from_clustering_prefix(*schema, prefix), t);
     }
 }
 

@@ -57,18 +57,18 @@ BOOST_AUTO_TEST_CASE(test_multi_level_row_tombstones) {
         return clustering_key::from_deeply_exploded(*s, v);
     };
 
-    m.partition().apply_row_tombstone(s, make_prefix({1, 2}), tombstone(9, ttl));
+    m.partition().apply_row_tombstone(*s, make_prefix({1, 2}), tombstone(9, ttl));
     BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 2, 3})), tombstone(9, ttl));
 
-    m.partition().apply_row_tombstone(s, make_prefix({1, 3}), tombstone(8, ttl));
+    m.partition().apply_row_tombstone(*s, make_prefix({1, 3}), tombstone(8, ttl));
     BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 2, 0})), tombstone(9, ttl));
     BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 3, 0})), tombstone(8, ttl));
 
-    m.partition().apply_row_tombstone(s, make_prefix({1}), tombstone(11, ttl));
+    m.partition().apply_row_tombstone(*s, make_prefix({1}), tombstone(11, ttl));
     BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 2, 0})), tombstone(11, ttl));
     BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 3, 0})), tombstone(11, ttl));
 
-    m.partition().apply_row_tombstone(s, make_prefix({1, 4}), tombstone(6, ttl));
+    m.partition().apply_row_tombstone(*s, make_prefix({1, 4}), tombstone(6, ttl));
     BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 2, 0})), tombstone(11, ttl));
     BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 3, 0})), tombstone(11, ttl));
     BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, make_key({1, 4, 0})), tombstone(11, ttl));
@@ -89,13 +89,13 @@ BOOST_AUTO_TEST_CASE(test_row_tombstone_updates) {
     auto ttl = gc_clock::now() + std::chrono::seconds(1);
 
     mutation m(key, s);
-    m.partition().apply_row_tombstone(s, c_key1_prefix, tombstone(1, ttl));
-    m.partition().apply_row_tombstone(s, c_key2_prefix, tombstone(0, ttl));
+    m.partition().apply_row_tombstone(*s, c_key1_prefix, tombstone(1, ttl));
+    m.partition().apply_row_tombstone(*s, c_key2_prefix, tombstone(0, ttl));
 
     BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, c_key1), tombstone(1, ttl));
     BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, c_key2), tombstone(0, ttl));
 
-    m.partition().apply_row_tombstone(s, c_key2_prefix, tombstone(1, ttl));
+    m.partition().apply_row_tombstone(*s, c_key2_prefix, tombstone(1, ttl));
     BOOST_REQUIRE_EQUAL(m.partition().tombstone_for_row(*s, c_key2), tombstone(1, ttl));
 }
 
