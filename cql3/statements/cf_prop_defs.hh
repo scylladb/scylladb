@@ -191,7 +191,7 @@ public:
     }
 #endif
 
-    void apply_to_schema(schema_ptr s) {
+    void apply_to_schema(schema* s) {
         if (has_property(KW_COMMENT)) {
             s->set_comment(get_string(KW_COMMENT, ""));
         }

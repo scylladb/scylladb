@@ -95,7 +95,7 @@ schema::schema(const schema& o)
 }
 
 bool
-schema::has_collections() {
+schema::has_collections() const {
     return boost::algorithm::any_of(all_columns_in_select_order(), [] (const column_definition& cdef) {
         return cdef.type->is_collection();
     });
@@ -109,7 +109,7 @@ column_definition::column_definition(bytes name, data_type type, column_id id, c
 { }
 
 const column_definition*
-schema::get_column_definition(const bytes& name) {
+schema::get_column_definition(const bytes& name) const {
     auto i = _columns_by_name.find(name);
     if (i == _columns_by_name.end()) {
         return nullptr;

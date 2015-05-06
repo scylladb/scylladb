@@ -184,11 +184,11 @@ public:
             // comment
             ""
         ));
-        apply_properties_to(s);
+        apply_properties_to(s.get());
         return s;
     }
 
-    void apply_properties_to(schema_ptr s) {
+    void apply_properties_to(schema* s) {
 #if 0
         cfmd.defaultValidator(defaultValidator)
             .keyValidator(keyValidator)

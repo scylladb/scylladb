@@ -132,14 +132,14 @@ public:
     bool is_counter() const {
         return false;
     }
-    const column_definition* get_column_definition(const bytes& name);
-    auto regular_begin() {
+    const column_definition* get_column_definition(const bytes& name) const;
+    auto regular_begin() const {
         return _raw._regular_columns.begin();
     }
-    auto regular_end() {
+    auto regular_end() const {
         return _raw._regular_columns.end();
     }
-    auto regular_lower_bound(const bytes& name) {
+    auto regular_lower_bound(const bytes& name) const {
         // TODO: use regular_columns and a version of std::lower_bound() with heterogeneous comparator
         auto i = _regular_columns_by_name.lower_bound(name);
         if (i == _regular_columns_by_name.end()) {
@@ -148,7 +148,7 @@ public:
             return _raw._regular_columns.begin() + i->second->id;
         }
     }
-    auto regular_upper_bound(const bytes& name) {
+    auto regular_upper_bound(const bytes& name) const {
         // TODO: use regular_columns and a version of std::upper_bound() with heterogeneous comparator
         auto i = _regular_columns_by_name.upper_bound(name);
         if (i == _regular_columns_by_name.end()) {
@@ -157,7 +157,7 @@ public:
             return _raw._regular_columns.begin() + i->second->id;
         }
     }
-    data_type column_name_type(const column_definition& def) {
+    data_type column_name_type(const column_definition& def) const {
         return def.kind == column_definition::column_kind::REGULAR ? _raw._regular_column_name_type : utf8_type;
     }
     const column_definition& regular_column_at(column_id id) const {
@@ -166,11 +166,11 @@ public:
     const column_definition& static_column_at(column_id id) const {
         return _raw._static_columns.at(id);
     }
-    bool is_last_partition_key(const column_definition& def) {
+    bool is_last_partition_key(const column_definition& def) const {
         return &_raw._partition_key[_raw._partition_key.size() - 1] == &def;
     }
-    bool has_collections();
-    bool has_static_columns() {
+    bool has_collections() const ;
+    bool has_static_columns() const {
         return !_raw._static_columns.empty();
     }
     size_t partition_key_size() const { return _raw._partition_key.size(); }
@@ -228,6 +228,6 @@ public:
     }
 };
 
-using schema_ptr = lw_shared_ptr<schema>;
+using schema_ptr = lw_shared_ptr<const schema>;
 
 utils::UUID generate_legacy_id(const sstring& ks_name, const sstring& cf_name);
