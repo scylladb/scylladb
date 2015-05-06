@@ -31,7 +31,7 @@ class atomic_cell_or_collection;
  *
  * Layout:
  *
- *  <live>  := <int8_t:flags><int64_t:timestamp><int32_t:expiry>?<value>
+ *  <live>  := <int8_t:flags><int64_t:timestamp>(<int32_t:expiry><int32_t:ttl>)?<value>
  *  <dead>  := <int8_t:    0><int64_t:timestamp><int32_t:expiry>
  */
 class atomic_cell_type final {
@@ -44,6 +44,8 @@ private:
     static constexpr unsigned timestamp_size = 8;
     static constexpr unsigned expiry_offset = timestamp_offset + timestamp_size;
     static constexpr unsigned expiry_size = 4;
+    static constexpr unsigned ttl_offset = expiry_offset + expiry_size;
+    static constexpr unsigned ttl_size = 4;
 private:
     static bool is_live(const bytes_view& cell) {
         return cell[0] != DEAD_FLAGS;
@@ -60,7 +62,7 @@ private:
     }
     // Can be called on live cells only
     static bytes_view value(bytes_view cell) {
-        auto expiry_field_size = bool(cell[0] & EXPIRY_FLAG) * expiry_size;
+        auto expiry_field_size = bool(cell[0] & EXPIRY_FLAG) * (expiry_size + ttl_size);
         auto value_offset = flags_size + timestamp_size + expiry_field_size;
         cell.remove_prefix(value_offset);
         return cell;
@@ -74,6 +76,11 @@ private:
         }
         return {};
     }
+    // Can be called only when is_live_and_has_ttl() is true.
+    static gc_clock::duration ttl(const bytes_view& cell) {
+        assert(is_live_and_has_ttl(cell));
+        return gc_clock::duration(get_field<int32_t>(cell, ttl_offset));
+    }
     static bytes make_dead(api::timestamp_type timestamp, gc_clock::time_point expiry) {
         bytes b(bytes::initialized_later(), flags_size + timestamp_size + expiry_size);
         b[0] = DEAD_FLAGS;
@@ -81,14 +88,21 @@ private:
         set_field(b, expiry_offset, expiry.time_since_epoch().count());
         return b;
     }
-    static bytes make_live(api::timestamp_type timestamp, expiry_opt expiry, bytes_view value) {
-        auto value_offset = flags_size + timestamp_size + bool(expiry) * expiry_size;
+    static bytes make_live(api::timestamp_type timestamp, bytes_view value) {
+        auto value_offset = flags_size + timestamp_size;
         bytes b(bytes::initialized_later(), value_offset + value.size());
-        b[0] = (expiry ? EXPIRY_FLAG : 0) | LIVE_FLAG;
+        b[0] = LIVE_FLAG;
         set_field(b, timestamp_offset, timestamp);
-        if (expiry) {
-            set_field(b, expiry_offset, expiry->time_since_epoch().count());
-        }
+        std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
+        return b;
+    }
+    static bytes make_live(api::timestamp_type timestamp, bytes_view value, gc_clock::time_point expiry, gc_clock::duration ttl) {
+        auto value_offset = flags_size + timestamp_size + expiry_size + ttl_size;
+        bytes b(bytes::initialized_later(), value_offset + value.size());
+        b[0] = EXPIRY_FLAG | LIVE_FLAG;
+        set_field(b, timestamp_offset, timestamp);
+        set_field(b, expiry_offset, expiry.time_since_epoch().count());
+        set_field(b, ttl_offset, ttl.count());
         std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
         return b;
     }
@@ -125,6 +139,10 @@ public:
     // Can be called on live and dead cells. For dead cells, the result is never empty.
     expiry_opt expiry() const {
         return atomic_cell_type::expiry(_data);
+    }
+    // Can be called only when is_live_and_has_ttl()
+    gc_clock::duration ttl() const {
+        return atomic_cell_type::ttl(_data);
     }
     bytes_view serialize() const {
         return _data;
@@ -167,6 +185,10 @@ public:
     expiry_opt expiry() const {
         return atomic_cell_type::expiry(_data);
     }
+    // Can be called only when is_live_and_has_ttl()
+    gc_clock::duration ttl() const {
+        return atomic_cell_type::ttl(_data);
+    }
     bytes_view serialize() const {
         return _data;
     }
@@ -176,8 +198,20 @@ public:
     static atomic_cell make_dead(api::timestamp_type timestamp, gc_clock::time_point expiry) {
         return atomic_cell_type::make_dead(timestamp, expiry);
     }
-    static atomic_cell make_live(api::timestamp_type timestamp, expiry_opt expiry, bytes_view value) {
-        return atomic_cell_type::make_live(timestamp, expiry, value);
+    static atomic_cell make_live(api::timestamp_type timestamp, bytes_view value) {
+        return atomic_cell_type::make_live(timestamp, value);
+    }
+    static atomic_cell make_live(api::timestamp_type timestamp, bytes_view value,
+        gc_clock::time_point expiry, gc_clock::duration ttl)
+    {
+        return atomic_cell_type::make_live(timestamp, value, expiry, ttl);
+    }
+    static atomic_cell make_live(api::timestamp_type timestamp, bytes_view value, ttl_opt ttl) {
+        if (!ttl) {
+            return atomic_cell_type::make_live(timestamp, value);
+        } else {
+            return atomic_cell_type::make_live(timestamp, value, gc_clock::now() + *ttl, *ttl);
+        }
     }
     friend class atomic_cell_or_collection;
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell& ac);

@@ -2,7 +2,7 @@
 #include "perf.hh"
 
 static atomic_cell make_atomic_cell(bytes value) {
-    return atomic_cell::make_live(0, expiry_opt{}, value);
+    return atomic_cell::make_live(0, value);
 };
 
 int main(int argc, char* argv[]) {
