@@ -129,6 +129,12 @@ public:
         bool operator()(const rows_entry& e, const clustering_key& key) const {
             return _c(e._key, key);
         }
+        bool operator()(const clustering_key_view& key, const rows_entry& e) const {
+            return _c(key, e._key);
+        }
+        bool operator()(const rows_entry& e, const clustering_key_view& key) const {
+            return _c(e._key, key);
+        }
     };
     template <typename Comparator>
     struct delegating_compare {
@@ -192,6 +198,7 @@ public:
     const rows_type& clustered_rows() const { return _rows; }
     const row& static_row() const { return _static_row; }
     deletable_row& clustered_row(const clustering_key& key);
+    deletable_row& clustered_row(const schema& s, const clustering_key_view& key);
     const row* find_row(const clustering_key& key) const;
     const rows_entry* find_entry(schema_ptr schema, const clustering_key_prefix& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;

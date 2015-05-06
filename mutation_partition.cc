@@ -172,6 +172,16 @@ mutation_partition::clustered_row(const clustering_key& key) {
     return i->row();
 }
 
+deletable_row&
+mutation_partition::clustered_row(const schema& s, const clustering_key_view& key) {
+    auto i = _rows.find(key, rows_entry::compare(s));
+    if (i == _rows.end()) {
+        auto e = new rows_entry(key);
+        _rows.insert(i, *e);
+        return e->row();
+    }
+    return i->row();
+}
 
 boost::iterator_range<mutation_partition::rows_type::const_iterator>
 mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) const {
