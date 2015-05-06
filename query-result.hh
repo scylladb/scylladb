@@ -46,7 +46,7 @@ namespace query {
 // client, because they are already specified in the query request, and not
 // queried for. The query results hold keys optionally.
 //
-// Also, meta-data like cell timestamp and ttl is optional. It is only needed
+// Also, meta-data like cell timestamp and expiry is optional. It is only needed
 // if the query has writetime() or ttl() functions in it, which it typically
 // won't have.
 //
@@ -62,13 +62,13 @@ namespace query {
 // <static-row>      ::= <row>
 // <row>             ::= <row-length> <cell>+
 // <cell>            ::= <atomic-cell> | <collection-cell>
-// <atomic-cell>     ::= <present-byte> [ <timestamp> <ttl> ] <value>
+// <atomic-cell>     ::= <present-byte> [ <timestamp> <expiry> ] <value>
 // <collection-cell> ::= <blob>
 //
 // <value>           ::= <blob>
 // <blob>            ::= <blob-length> <uint8_t>*
 // <timestamp>       ::= <uint64_t>
-// <ttl>             ::= <int32_t>
+// <expiry>          ::= <int32_t>
 // <present-byte>    ::= <int8_t>
 // <row-length>      ::= <uint32_t>
 // <row-count>       ::= <uint32_t>

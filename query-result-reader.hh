@@ -14,18 +14,18 @@ namespace query {
 
 class result_atomic_cell_view {
     api::timestamp_type _timestamp;
-    ttl_opt _ttl;
+    expiry_opt _expiry;
     bytes_view _value;
 public:
-    result_atomic_cell_view(api::timestamp_type timestamp, ttl_opt ttl, bytes_view value)
-        : _timestamp(timestamp), _ttl(ttl), _value(value) { }
+    result_atomic_cell_view(api::timestamp_type timestamp, expiry_opt expiry, bytes_view value)
+        : _timestamp(timestamp), _expiry(expiry), _value(value) { }
 
     api::timestamp_type timestamp() const {
         return _timestamp;
     }
 
-    ttl_opt ttl() const {
-        return _ttl;
+    expiry_opt expiry() const {
+        return _expiry;
     }
 
     bytes_view value() const {
@@ -55,16 +55,16 @@ public:
                 return {};
             }
             api::timestamp_type timestamp = api::missing_timestamp;
-            ttl_opt ttl_;
-            if (_slice.options.contains<partition_slice::option::send_timestamp_and_ttl>()) {
+            expiry_opt expiry_;
+            if (_slice.options.contains<partition_slice::option::send_timestamp_and_expiry>()) {
                 timestamp = _in.read <api::timestamp_type> ();
-                auto ttl_rep = _in.read<gc_clock::rep>();
-                if (ttl_rep != std::numeric_limits<gc_clock::rep>::max()) {
-                    ttl_ = gc_clock::time_point(gc_clock::duration(ttl_rep));
+                auto expiry_rep = _in.read<gc_clock::rep>();
+                if (expiry_rep != std::numeric_limits<gc_clock::rep>::max()) {
+                    expiry_ = gc_clock::time_point(gc_clock::duration(expiry_rep));
                 }
             }
             auto value = _in.read_view_to_blob<uint32_t>();
-            return {result_atomic_cell_view(timestamp, ttl_, value)};
+            return {result_atomic_cell_view(timestamp, expiry_, value)};
         }
         std::experimental::optional<collection_mutation::view> next_collection_cell() {
             auto present = _in.read<int8_t>();

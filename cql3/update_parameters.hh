@@ -117,7 +117,7 @@ public:
         }
 
         return atomic_cell::make_live(_timestamp,
-            ttl.count() > 0 ? ttl_opt{_local_deletion_time + ttl} : ttl_opt{}, value);
+            ttl.count() > 0 ? expiry_opt{_local_deletion_time + ttl} : expiry_opt{}, value);
     };
 
 #if 0

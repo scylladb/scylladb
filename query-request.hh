@@ -121,11 +121,11 @@ using clustering_range = range<clustering_key_prefix>;
 
 class partition_slice {
 public:
-    enum class option { send_clustering_key, send_partition_key, send_timestamp_and_ttl };
+    enum class option { send_clustering_key, send_partition_key, send_timestamp_and_expiry };
     using option_set = enum_set<super_enum<option,
         option::send_clustering_key,
         option::send_partition_key,
-        option::send_timestamp_and_ttl>>;
+        option::send_timestamp_and_expiry>>;
 public:
     std::vector<clustering_range> row_ranges;
     std::vector<column_id> static_columns; // TODO: consider using bitmap

@@ -46,7 +46,7 @@ selection::selection(schema_ptr schema,
 query::partition_slice::option_set selection::get_query_options() {
     query::partition_slice::option_set opts;
 
-    opts.set_if<query::partition_slice::option::send_timestamp_and_ttl>(_collect_timestamps || _collect_TTLs);
+    opts.set_if<query::partition_slice::option::send_timestamp_and_expiry>(_collect_timestamps || _collect_TTLs);
 
     opts.set_if<query::partition_slice::option::send_partition_key>(
         std::any_of(_columns.begin(), _columns.end(),
@@ -261,12 +261,12 @@ void result_set_builder::add(const column_definition& def, const query::result_a
         _timestamps[current->size() - 1] = c.timestamp();
     }
     if (!_ttls.empty()) {
-        gc_clock::duration ttl(-1);
-        auto maybe_ttl = c.ttl();
-        if (maybe_ttl) {
-            ttl = *maybe_ttl - to_gc_clock(_now);
+        gc_clock::duration ttl_left(-1);
+        expiry_opt e = c.expiry();
+        if (e) {
+            ttl_left = *e - to_gc_clock(_now);
         }
-        _ttls[current->size() - 1] = ttl.count();
+        _ttls[current->size() - 1] = ttl_left.count();
     }
 }
 

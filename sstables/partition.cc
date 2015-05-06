@@ -163,7 +163,7 @@ public:
             throw malformed_sstable_exception("wrong number of clustering columns");
         }
 
-        ttl_opt opt;
+        expiry_opt opt;
         if (ttl) {
             gc_clock::duration secs(expiration);
             auto tp = gc_clock::time_point(secs);
@@ -172,7 +172,7 @@ public:
                 return;
             }
 
-            opt = ttl_opt(tp);
+            opt = expiry_opt(tp);
         } else {
             opt = {};
         }

@@ -549,10 +549,10 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
     if (left.is_live()) {
         return compare_unsigned(left.value(), right.value());
     } else {
-        if (*left.ttl() != *right.ttl()) {
-            // Origin compares big-endian serialized TTL
-            return (uint32_t)left.ttl()->time_since_epoch().count()
-                 < (uint32_t)right.ttl()->time_since_epoch().count() ? -1 : 1;
+        if (*left.expiry() != *right.expiry()) {
+            // Origin compares big-endian serialized expiry time
+            return (uint32_t)left.expiry()->time_since_epoch().count()
+                 < (uint32_t)right.expiry()->time_since_epoch().count() ? -1 : 1;
         }
         return 0;
     }
@@ -727,10 +727,10 @@ operator<<(std::ostream& os, const exploded_clustering_prefix& ecp) {
 
 std::ostream&
 operator<<(std::ostream& os, const atomic_cell_view& acv) {
-    return fprint(os, "atomic_cell{%s;ts=%d;ttl=%d}",
+    return fprint(os, "atomic_cell{%s;ts=%d;expiry=%d}",
             (acv.is_live() ? to_hex(acv.value()) : sstring("DEAD")),
             acv.timestamp(),
-            acv.is_live_and_has_ttl() ? acv.ttl()->time_since_epoch().count() : -1);
+            acv.is_live_and_has_ttl() ? acv.expiry()->time_since_epoch().count() : -1);
 }
 
 std::ostream&
