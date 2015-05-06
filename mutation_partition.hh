@@ -165,6 +165,7 @@ class serializer;
 class mutation_partition final {
     // FIXME: using boost::intrusive because gcc's std::set<> does not support heterogeneous lookup yet
     using rows_type = boost::intrusive::set<rows_entry, boost::intrusive::compare<rows_entry::compare>>;
+    using row_tombstones_type = boost::intrusive::set<row_tombstones_entry, boost::intrusive::compare<row_tombstones_entry::compare>>;
 private:
     tombstone _tombstone;
     row _static_row;
@@ -172,7 +173,7 @@ private:
     // Contains only strict prefixes so that we don't have to lookup full keys
     // in both _row_tombstones and _rows.
     // FIXME: using boost::intrusive because gcc's std::set<> does not support heterogeneous lookup yet
-    boost::intrusive::set<row_tombstones_entry, boost::intrusive::compare<row_tombstones_entry::compare>> _row_tombstones;
+    row_tombstones_type _row_tombstones;
 
     template<typename T>
     friend class db::serializer;
@@ -197,6 +198,7 @@ public:
     // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
     const rows_type& clustered_rows() const { return _rows; }
     const row& static_row() const { return _static_row; }
+    const row_tombstones_type& row_tombstones() const { return _row_tombstones; }
     deletable_row& clustered_row(const clustering_key& key);
     deletable_row& clustered_row(const schema& s, const clustering_key_view& key);
     const row* find_row(const clustering_key& key) const;
