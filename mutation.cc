@@ -20,6 +20,17 @@ void mutation::set_static_cell(const column_definition& def, atomic_cell_or_coll
     update_column(_p.static_row(), def, std::move(value));
 }
 
+void mutation::set_static_cell(const bytes& name, const boost::any& value, api::timestamp_type timestamp, ttl_opt ttl) {
+    auto column_def = _schema->get_column_definition(name);
+    if (!column_def) {
+        throw std::runtime_error(sprint("no column definition found for '%s'", name));
+    }
+    if (!column_def->is_static()) {
+        throw std::runtime_error(sprint("column '%s' is not static", name));
+    }
+    update_column(_p.static_row(), *column_def, atomic_cell::make_live(timestamp, column_def->type->decompose(value), ttl));
+}
+
 void mutation::set_clustered_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value) {
     auto& row = _p.clustered_row(clustering_key::from_clustering_prefix(*_schema, prefix)).cells;
     update_column(row, def, std::move(value));
