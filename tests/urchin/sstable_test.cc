@@ -315,7 +315,7 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}, {"r2", int32_type}}, {}, utf8_type));
 
-    column_family cf(s);
+    memtable mt(s);
 
     const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -324,11 +324,11 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
 
     mutation m(key, s);
     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
-    cf.apply(std::move(m));
+    mt.apply(std::move(m));
 
-    auto cfp = make_shared<column_family>(std::move(cf));
+    auto mtp = make_shared<memtable>(std::move(mt));
 
-    return sstables::write_datafile(*cfp, "tests/urchin/sstables/Data.tmp.db").then([cfp, s] {
+    return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data.tmp.db").then([mtp, s] {
         return engine().open_file_dma("tests/urchin/sstables/Data.tmp.db", open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -380,7 +380,7 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}, {"p2", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-    column_family cf(s);
+    memtable mt(s);
 
     const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -389,11 +389,11 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
 
     mutation m(key, s);
     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
-    cf.apply(std::move(m));
+    mt.apply(std::move(m));
 
-    auto cfp = make_shared<column_family>(std::move(cf));
+    auto mtp = make_shared<memtable>(std::move(mt));
 
-    return sstables::write_datafile(*cfp, "tests/urchin/sstables/Data2.tmp.db").then([cfp, s] {
+    return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data2.tmp.db").then([mtp, s] {
         return engine().open_file_dma("tests/urchin/sstables/Data2.tmp.db", open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -447,7 +447,7 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", utf8_type}, {"c2", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-    column_family cf(s);
+    memtable mt(s);
 
     const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -456,11 +456,11 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
 
     mutation m(key, s);
     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
-    cf.apply(std::move(m));
+    mt.apply(std::move(m));
 
-    auto cfp = make_shared<column_family>(std::move(cf));
+    auto mtp = make_shared<memtable>(std::move(mt));
 
-    return sstables::write_datafile(*cfp, "tests/urchin/sstables/Data3.tmp.db").then([cfp, s] {
+    return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data3.tmp.db").then([mtp, s] {
         return engine().open_file_dma("tests/urchin/sstables/Data3.tmp.db", open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -515,7 +515,7 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {{"s1", int32_type}}, utf8_type));
 
-    column_family cf(s);
+    memtable mt(s);
 
     const column_definition& r1_col = *s->get_column_definition("r1");
     const column_definition& s1_col = *s->get_column_definition("s1");
@@ -526,11 +526,11 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
     mutation m(key, s);
     m.set_static_cell(s1_col, make_atomic_cell(int32_type->decompose(10)));
     m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
-    cf.apply(std::move(m));
+    mt.apply(std::move(m));
 
-    auto cfp = make_shared<column_family>(std::move(cf));
+    auto mtp = make_shared<memtable>(std::move(mt));
 
-    return sstables::write_datafile(*cfp, "tests/urchin/sstables/Data4.tmp.db").then([cfp, s] {
+    return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data4.tmp.db").then([mtp, s] {
         return engine().open_file_dma("tests/urchin/sstables/Data4.tmp.db", open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 

@@ -118,7 +118,7 @@ public:
                                       boost::any expected) override {
         auto& db = _db->local();
         auto& cf = db.find_column_family(ks_name, table_name);
-        auto schema = cf._schema;
+        auto schema = cf.schema();
         auto pkey = partition_key::from_deeply_exploded(*schema, pk);
         auto dk = dht::global_partitioner().decorate_key(*schema, pkey);
         auto shard = db.shard_of(dk._token);
@@ -129,7 +129,7 @@ public:
                                       expected = std::move(expected),
                                       table_name = std::move(table_name)] (database& db) {
             auto& cf = db.find_column_family(ks_name, table_name);
-            auto schema = cf._schema;
+            auto schema = cf.schema();
             auto p = cf.find_partition_slow(pkey);
             assert(p != nullptr);
             auto row = p->find_row(clustering_key::from_deeply_exploded(*schema, ck));

@@ -16,6 +16,9 @@
 
 using row = std::map<column_id, atomic_cell_or_collection>;
 
+std::ostream& operator<<(std::ostream& os, const row::value_type& rv);
+std::ostream& operator<<(std::ostream& os, const row& r);
+
 struct deletable_row final {
     tombstone t;
     api::timestamp_type created_at = api::missing_timestamp;
@@ -24,6 +27,8 @@ struct deletable_row final {
     void apply(tombstone t_) {
         t.apply(t_);
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
 };
 
 class row_tombstones_entry : public boost::intrusive::set_base_hook<> {
@@ -79,6 +84,8 @@ public:
     static auto key_comparator(Comparator&& c) {
         return delegating_compare<Comparator>(std::move(c));
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const row_tombstones_entry& rte);
 };
 
 class rows_entry : public boost::intrusive::set_base_hook<> {
@@ -140,6 +147,7 @@ public:
     static auto key_comparator(Comparator&& c) {
         return delegating_compare<Comparator>(std::move(c));
     }
+    friend std::ostream& operator<<(std::ostream& os, const rows_entry& re);
 };
 
 namespace db {
@@ -149,6 +157,7 @@ class serializer;
 
 
 class mutation_partition final {
+    // FIXME: using boost::intrusive because gcc's std::set<> does not support heterogeneous lookup yet
     using rows_type = boost::intrusive::set<rows_entry, boost::intrusive::compare<rows_entry::compare>>;
 private:
     tombstone _tombstone;
@@ -156,6 +165,7 @@ private:
     rows_type _rows;
     // Contains only strict prefixes so that we don't have to lookup full keys
     // in both _row_tombstones and _rows.
+    // FIXME: using boost::intrusive because gcc's std::set<> does not support heterogeneous lookup yet
     boost::intrusive::set<row_tombstones_entry, boost::intrusive::compare<row_tombstones_entry::compare>> _row_tombstones;
 
     template<typename T>
@@ -166,7 +176,10 @@ public:
         , _row_tombstones(row_tombstones_entry::compare(*s))
     { }
     mutation_partition(mutation_partition&&) = default;
+    mutation_partition(const mutation_partition&);
     ~mutation_partition();
+    mutation_partition& operator=(const mutation_partition& x);
+    mutation_partition& operator=(mutation_partition&& x) = default;
     tombstone partition_tombstone() const { return _tombstone; }
     void apply(tombstone t) { _tombstone.apply(t); }
     void apply_delete(schema_ptr schema, const exploded_clustering_prefix& prefix, tombstone t);
@@ -179,8 +192,8 @@ public:
     const rows_type& clustered_rows() const { return _rows; }
     const row& static_row() const { return _static_row; }
     deletable_row& clustered_row(const clustering_key& key);
-    row* find_row(const clustering_key& key);
-    rows_entry* find_entry(schema_ptr schema, const clustering_key_prefix& key);
+    const row* find_row(const clustering_key& key) const;
+    const rows_entry* find_entry(schema_ptr schema, const clustering_key_prefix& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;

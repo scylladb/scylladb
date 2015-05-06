@@ -4,10 +4,26 @@
 
 #include "mutation_partition.hh"
 
+mutation_partition::mutation_partition(const mutation_partition& x)
+        : _tombstone(x._tombstone)
+        , _static_row(x._static_row)
+        , _rows(x._rows.value_comp())
+        , _row_tombstones(x._row_tombstones.value_comp()) {
+    auto cloner = [] (const auto& x) { return new std::remove_const_t<std::remove_reference_t<decltype(x)>>(x); };
+    _rows.clone_from(x._rows, cloner, std::default_delete<rows_entry>());
+    _row_tombstones.clone_from(x._row_tombstones, cloner, std::default_delete<row_tombstones_entry>());
+}
 
 mutation_partition::~mutation_partition() {
     _rows.clear_and_dispose(std::default_delete<rows_entry>());
     _row_tombstones.clear_and_dispose(std::default_delete<row_tombstones_entry>());
+}
+
+mutation_partition&
+mutation_partition::operator=(const mutation_partition& x) {
+    mutation_partition n(x);
+    std::swap(*this, n);
+    return *this;
 }
 
 void
@@ -127,8 +143,8 @@ mutation_partition::apply_delete(schema_ptr schema, clustering_key&& key, tombst
     }
 }
 
-rows_entry*
-mutation_partition::find_entry(schema_ptr schema, const clustering_key_prefix& key) {
+const rows_entry*
+mutation_partition::find_entry(schema_ptr schema, const clustering_key_prefix& key) const {
     auto i = _rows.find(key, rows_entry::key_comparator(clustering_key::less_compare_with_prefix(*schema)));
     if (i == _rows.end()) {
         return nullptr;
@@ -136,8 +152,8 @@ mutation_partition::find_entry(schema_ptr schema, const clustering_key_prefix& k
     return &*i;
 }
 
-row*
-mutation_partition::find_row(const clustering_key& key) {
+const row*
+mutation_partition::find_row(const clustering_key& key) const {
     auto i = _rows.find(key);
     if (i == _rows.end()) {
         return nullptr;
@@ -286,4 +302,37 @@ mutation_partition::query(const schema& s,
             }
         }
     }
+}
+
+std::ostream&
+operator<<(std::ostream& os, const row::value_type& rv) {
+    return fprint(os, "{column: %s %s}", rv.first, rv.second);
+}
+
+std::ostream&
+operator<<(std::ostream& os, const row& r) {
+    return fprint(os, "{row: %s}", ::join(", ", r));
+}
+
+
+std::ostream&
+operator<<(std::ostream& os, const deletable_row& dr) {
+    return fprint(os, "{deletable_row: %s %s %s}", dr.created_at, dr.t, dr.cells);
+}
+
+std::ostream&
+operator<<(std::ostream& os, const rows_entry& re) {
+    return fprint(os, "{rows_entry: %s %s}", re._key, re._row);
+}
+
+std::ostream&
+operator<<(std::ostream& os, const row_tombstones_entry& rte) {
+    return fprint(os, "{row_tombstone_entry: %s %s}", rte._prefix, rte._t);
+}
+
+std::ostream&
+operator<<(std::ostream& os, const mutation_partition& mp) {
+    return fprint(os, "{mutation_partition: %s (%s) static %s clustered %s}",
+                  mp._tombstone, ::join(", ", mp._row_tombstones), mp._static_row,
+                  ::join(", ", mp._rows));
 }
