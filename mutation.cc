@@ -88,3 +88,11 @@ void mutation::update_column(row& row, const column_definition& def, atomic_cell
         merge_column(def, i->second, value);
     }
 }
+
+bool mutation::operator==(const mutation& m) const {
+    return _dk.equal(*_schema, m._dk) && _p.equal(*_schema, m._p);
+}
+
+bool mutation::operator!=(const mutation& m) const {
+    return !(*this == m);
+}

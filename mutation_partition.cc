@@ -31,7 +31,7 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
     _tombstone.apply(p._tombstone);
 
     for (auto&& e : p._row_tombstones) {
-        apply_row_tombstone(schema, e.prefix(), e.t());
+        apply_row_tombstone(*schema, e.prefix(), e.t());
     }
 
     auto merge_cells = [this, schema] (row& old_row, const row& new_row, auto&& find_column_def) {
@@ -109,10 +109,10 @@ mutation_partition::tombstone_for_row(const schema& schema, const rows_entry& e)
 }
 
 void
-mutation_partition::apply_row_tombstone(schema_ptr schema, clustering_key_prefix prefix, tombstone t) {
-    assert(!prefix.is_full(*schema));
-    auto i = _row_tombstones.lower_bound(prefix, row_tombstones_entry::compare(*schema));
-    if (i == _row_tombstones.end() || !prefix.equal(*schema, i->prefix())) {
+mutation_partition::apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t) {
+    assert(!prefix.is_full(schema));
+    auto i = _row_tombstones.lower_bound(prefix, row_tombstones_entry::compare(schema));
+    if (i == _row_tombstones.end() || !prefix.equal(schema, i->prefix())) {
         auto e = new row_tombstones_entry(std::move(prefix), t);
         _row_tombstones.insert(i, *e);
     } else {
@@ -127,7 +127,7 @@ mutation_partition::apply_delete(schema_ptr schema, const exploded_clustering_pr
     } else if (prefix.is_full(*schema)) {
         apply_delete(schema, clustering_key::from_clustering_prefix(*schema, prefix), t);
     } else {
-        apply_row_tombstone(schema, clustering_key_prefix::from_clustering_prefix(*schema, prefix), t);
+        apply_row_tombstone(*schema, clustering_key_prefix::from_clustering_prefix(*schema, prefix), t);
     }
 }
 
@@ -172,6 +172,16 @@ mutation_partition::clustered_row(const clustering_key& key) {
     return i->row();
 }
 
+deletable_row&
+mutation_partition::clustered_row(const schema& s, const clustering_key_view& key) {
+    auto i = _rows.find(key, rows_entry::compare(s));
+    if (i == _rows.end()) {
+        auto e = new rows_entry(key);
+        _rows.insert(i, *e);
+        return e->row();
+    }
+    return i->row();
+}
 
 boost::iterator_range<mutation_partition::rows_type::const_iterator>
 mutation_partition::range(const schema& schema, const query::range<clustering_key_prefix>& r) const {
@@ -335,4 +345,51 @@ operator<<(std::ostream& os, const mutation_partition& mp) {
     return fprint(os, "{mutation_partition: %s (%s) static %s clustered %s}",
                   mp._tombstone, ::join(", ", mp._row_tombstones), mp._static_row,
                   ::join(", ", mp._rows));
+}
+
+static bool
+rows_equal(const schema& s, const row& r1, const row& r2) {
+    return std::equal(r1.begin(), r1.end(), r2.begin(), r2.end(),
+        [] (const row::value_type& c1, const row::value_type& c2) {
+            return c1.first == c2.first && c1.second.serialize() == c2.second.serialize();
+        });
+}
+
+bool
+deletable_row::equal(const schema& s, const deletable_row& other) const {
+    if (t != other.t || created_at != other.created_at) {
+        return false;
+    }
+    return rows_equal(s, cells, other.cells);
+}
+
+bool
+rows_entry::equal(const schema& s, const rows_entry& other) const {
+    return key().equal(s, other.key()) && row().equal(s, other.row());
+}
+
+bool
+row_tombstones_entry::equal(const schema& s, const row_tombstones_entry& other) const {
+    return prefix().equal(s, other.prefix()) && t() == other.t();
+}
+
+bool mutation_partition::equal(const schema& s, const mutation_partition& p) const {
+    if (_tombstone != p._tombstone) {
+        return false;
+    }
+
+    if (!std::equal(_rows.begin(), _rows.end(), p._rows.begin(), p._rows.end(),
+        [&s] (const rows_entry& e1, const rows_entry& e2) { return e1.equal(s, e2); }
+    )) {
+        return false;
+    }
+
+    if (!std::equal(_row_tombstones.begin(), _row_tombstones.end(),
+        p._row_tombstones.begin(), p._row_tombstones.end(),
+        [&s] (const row_tombstones_entry& e1, const row_tombstones_entry& e2) { return e1.equal(s, e2); }
+    )) {
+        return false;
+    }
+
+    return rows_equal(s, _static_row, p._static_row);
 }

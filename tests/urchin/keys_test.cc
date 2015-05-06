@@ -96,3 +96,20 @@ BOOST_AUTO_TEST_CASE(test_legacy_ordering_for_composite_keys) {
     BOOST_REQUIRE(cmp(to_key("", "A"), to_key("A", "A")) < 0);
     BOOST_REQUIRE(cmp(to_key("A", ""), to_key("A", "A")) < 0);
 }
+
+BOOST_AUTO_TEST_CASE(test_conversions_between_view_and_wrapper) {
+    schema s({}, "", "", {{"c1", bytes_type}}, {}, {}, {}, utf8_type);
+
+    auto key = partition_key::from_deeply_exploded(s, {bytes("value")});
+    partition_key_view key_view = key;
+
+    BOOST_REQUIRE(key_view.equal(s, key));
+    BOOST_REQUIRE(key.equal(s, key_view));
+
+    partition_key key2 = key_view;
+
+    BOOST_REQUIRE(key2.equal(s, key));
+    BOOST_REQUIRE(key.equal(s, key2));
+
+    BOOST_REQUIRE(*key.begin(s) == bytes("value"));
+}

@@ -32,11 +32,81 @@
 // schema, from which information about structure is extracted.
 
 class partition_key;
+class partition_key_view;
 class clustering_key;
+class clustering_key_view;
 class clustering_key_prefix;
+class clustering_key_prefix_view;
 
-// Abstracts serialized compound, managed by compound_type.
-template <typename TopLevel>
+// Abstracts a view to serialized compound.
+template <typename TopLevelView>
+class compound_view_wrapper {
+protected:
+    bytes_view _bytes;
+protected:
+    compound_view_wrapper(bytes_view v)
+        : _bytes(v)
+    { }
+
+    static inline const auto& get_compound_type(const schema& s) {
+        return TopLevelView::get_compound_type(s);
+    }
+public:
+    std::vector<bytes> explode(const schema& s) const {
+        return get_compound_type(s)->deserialize_value(_bytes);
+    }
+
+    bytes_view representation() const {
+        return _bytes;
+    }
+
+    struct less_compare {
+        typename TopLevelView::compound _t;
+        less_compare(const schema& s) : _t(get_compound_type(s)) {}
+        bool operator()(const TopLevelView& k1, const TopLevelView& k2) const {
+            return _t->less(k1.representation(), k2.representation());
+        }
+    };
+
+    struct hashing {
+        typename TopLevelView::compound _t;
+        hashing(const schema& s) : _t(get_compound_type(s)) {}
+        size_t operator()(const TopLevelView& o) const {
+            return _t->hash(o.representation());
+        }
+    };
+
+    struct equality {
+        typename TopLevelView::compound _t;
+        equality(const schema& s) : _t(get_compound_type(s)) {}
+        bool operator()(const TopLevelView& o1, const TopLevelView& o2) const {
+            return _t->equal(o1.representation(), o2.representation());
+        }
+    };
+
+    bool equal(const schema& s, const TopLevelView& other) const {
+        return get_compound_type(s)->equal(representation(), other.representation());
+    }
+
+    // begin() and end() return iterators over components of this compound. The iterator yields a bytes_view to the component.
+    // The iterators satisfy InputIterator concept.
+    auto begin(const schema& s) const {
+        return get_compound_type(s)->begin(representation());
+    }
+
+    // See begin()
+    auto end(const schema& s) const {
+        return get_compound_type(s)->end(representation());
+    }
+
+    bytes_view get_component(const schema& s, size_t idx) const {
+        auto it = begin(s);
+        std::advance(it, idx);
+        return *it;
+    }
+};
+
+template <typename TopLevel, typename TopLevelView>
 class compound_wrapper {
 protected:
     bytes _bytes;
@@ -74,6 +144,14 @@ public:
         return TopLevel::from_bytes(get_compound_type(s)->serialize_single(std::move(v)));
     }
 
+    TopLevelView view() const {
+        return TopLevelView::from_bytes(_bytes);
+    }
+
+    operator TopLevelView() const {
+        return view();
+    }
+
     // FIXME: return views
     std::vector<bytes> explode(const schema& s) const {
         return get_compound_type(s)->deserialize_value(_bytes);
@@ -83,7 +161,13 @@ public:
         typename TopLevel::compound _t;
         less_compare(const schema& s) : _t(get_compound_type(s)) {}
         bool operator()(const TopLevel& k1, const TopLevel& k2) const {
-            return _t->less(k1, k2);
+            return _t->less(k1.representation(), k2.representation());
+        }
+        bool operator()(const TopLevelView& k1, const TopLevel& k2) const {
+            return _t->less(k1.representation(), k2.representation());
+        }
+        bool operator()(const TopLevel& k1, const TopLevelView& k2) const {
+            return _t->less(k1.representation(), k2.representation());
         }
     };
 
@@ -99,15 +183,29 @@ public:
         typename TopLevel::compound _t;
         equality(const schema& s) : _t(get_compound_type(s)) {}
         bool operator()(const TopLevel& o1, const TopLevel& o2) const {
-            return _t->equal(o1, o2);
+            return _t->equal(o1.representation(), o2.representation());
+        }
+        bool operator()(const TopLevelView& o1, const TopLevel& o2) const {
+            return _t->equal(o1.representation(), o2.representation());
+        }
+        bool operator()(const TopLevel& o1, const TopLevelView& o2) const {
+            return _t->equal(o1.representation(), o2.representation());
         }
     };
 
     bool equal(const schema& s, const TopLevel& other) const {
-        return get_compound_type(s)->equal(*this, other);
+        return get_compound_type(s)->equal(representation(), other.representation());
+    }
+
+    bool equal(const schema& s, const TopLevelView& other) const {
+        return get_compound_type(s)->equal(representation(), other.representation());
     }
 
     operator bytes_view() const {
+        return _bytes;
+    }
+
+    bytes_view representation() const {
         return _bytes;
     }
 
@@ -176,9 +274,9 @@ public:
     };
 };
 
-template <typename TopLevel, typename PrefixTopLevel>
-class prefixable_full_compound : public compound_wrapper<TopLevel> {
-    using base = compound_wrapper<TopLevel>;
+template <typename TopLevel, typename TopLevelView, typename PrefixTopLevel>
+class prefixable_full_compound : public compound_wrapper<TopLevel, TopLevelView> {
+    using base = compound_wrapper<TopLevel, TopLevelView>;
 protected:
     prefixable_full_compound(bytes&& b) : base(std::move(b)) {}
 public:
@@ -247,14 +345,22 @@ public:
         }
     };
 
-    auto prefix_view(const schema& s, unsigned prefix_len) const {
-        return prefix_view_type(s, *this, prefix_len);
+    prefix_view_type prefix_view(const schema& s, unsigned prefix_len) const {
+        return { s, this->representation(), prefix_len };
     }
 };
 
 template <typename TopLevel, typename FullTopLevel>
-class prefix_compound_wrapper : public compound_wrapper<TopLevel> {
-    using base = compound_wrapper<TopLevel>;
+class prefix_compound_view_wrapper : public compound_view_wrapper<TopLevel> {
+protected:
+    prefix_compound_view_wrapper(bytes_view v)
+        : compound_view_wrapper<TopLevel>(v)
+    { }
+};
+
+template <typename TopLevel, typename TopLevelView, typename FullTopLevel>
+class prefix_compound_wrapper : public compound_wrapper<TopLevel, TopLevelView> {
+    using base = compound_wrapper<TopLevel, TopLevelView>;
 protected:
     prefix_compound_wrapper(bytes&& b) : base(std::move(b)) {}
 public:
@@ -276,11 +382,51 @@ public:
     }
 };
 
-class partition_key : public compound_wrapper<partition_key> {
+class partition_key_view : public compound_view_wrapper<partition_key_view> {
+public:
     using c_type = compound_type<allow_prefixes::no>;
+private:
+    partition_key_view(bytes_view v)
+        : compound_view_wrapper<partition_key_view>(v)
+    { }
 public:
-    partition_key(bytes&& b) : compound_wrapper<partition_key>(std::move(b)) {}
+    using compound = lw_shared_ptr<c_type>;
+
+    static partition_key_view from_bytes(bytes_view v) {
+        return { v };
+    }
+
+    static const compound& get_compound_type(const schema& s) {
+        return s.partition_key_type();
+    }
+
+    // Returns key's representation which is compatible with Origin.
+    // The result is valid as long as the schema is live.
+    const legacy_compound_view<c_type> legacy_form(const schema& s) const;
+
+    // A trichotomic comparator for ordering compatible with Origin.
+    int legacy_tri_compare(const schema& s, const partition_key& o) const;
+
+    // Checks if keys are equal in a way which is compatible with Origin.
+    bool legacy_equal(const schema& s, const partition_key& o) const {
+        return legacy_tri_compare(s, o) == 0;
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const partition_key_view& pk);
+};
+
+class partition_key : public compound_wrapper<partition_key, partition_key_view> {
 public:
+    using c_type = compound_type<allow_prefixes::no>;
+private:
+    partition_key(bytes&& b)
+        : compound_wrapper<partition_key, partition_key_view>(std::move(b))
+    { }
+public:
+    partition_key(const partition_key_view& key)
+        : partition_key(bytes(key.representation().begin(), key.representation().end()))
+    { }
+
     using compound = lw_shared_ptr<c_type>;
 
     static partition_key from_bytes(bytes b) {
@@ -294,18 +440,17 @@ public:
     // Returns key's representation which is compatible with Origin.
     // The result is valid as long as the schema is live.
     const legacy_compound_view<c_type> legacy_form(const schema& s) const {
-        return { *get_compound_type(s), _bytes };
+        return view().legacy_form(s);
     }
 
     // A trichotomic comparator for ordering compatible with Origin.
     int legacy_tri_compare(const schema& s, const partition_key& o) const {
-        auto cmp = legacy_compound_view<c_type>::tri_comparator(*get_compound_type(s));
-        return cmp(*this, o);
+        return view().legacy_tri_compare(s, o);
     }
 
     // Checks if keys are equal in a way which is compatible with Origin.
     bool legacy_equal(const schema& s, const partition_key& o) const {
-        return legacy_tri_compare(s, o) == 0;
+        return view().legacy_equal(s, o);
     }
 
     friend std::ostream& operator<<(std::ostream& out, const partition_key& pk);
@@ -331,10 +476,26 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const exploded_clustering_prefix& ecp);
 };
 
-class clustering_key : public prefixable_full_compound<clustering_key, clustering_key_prefix> {
+class clustering_key_view : public compound_view_wrapper<clustering_key_view> {
 public:
-    clustering_key(bytes&& b) : prefixable_full_compound<clustering_key, clustering_key_prefix>(std::move(b)) {}
+    clustering_key_view(bytes_view v)
+        : compound_view_wrapper<clustering_key_view>(v)
+    { }
 public:
+    static clustering_key_view from_bytes(bytes_view v) {
+        return { v };
+    }
+};
+
+class clustering_key : public prefixable_full_compound<clustering_key, clustering_key_view, clustering_key_prefix> {
+    clustering_key(bytes&& b)
+        : prefixable_full_compound<clustering_key, clustering_key_view, clustering_key_prefix>(std::move(b))
+    { }
+public:
+    clustering_key(const clustering_key_view& v)
+        : clustering_key(bytes(v.representation().begin(), v.representation().end()))
+    { }
+
     using compound = lw_shared_ptr<compound_type<allow_prefixes::no>>;
 
     static clustering_key from_bytes(bytes b) {
@@ -353,9 +514,25 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const clustering_key& ck);
 };
 
-class clustering_key_prefix : public prefix_compound_wrapper<clustering_key_prefix, clustering_key> {
-    clustering_key_prefix(bytes&& b) : prefix_compound_wrapper<clustering_key_prefix, clustering_key>(std::move(b)) {}
+class clustering_key_prefix_view : public prefix_compound_view_wrapper<clustering_key_prefix_view, clustering_key> {
+    clustering_key_prefix_view(bytes_view v)
+        : prefix_compound_view_wrapper<clustering_key_prefix_view, clustering_key>(v)
+    { }
 public:
+    static clustering_key_prefix_view from_bytes(bytes_view v) {
+        return { v };
+    }
+};
+
+class clustering_key_prefix : public prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key> {
+    clustering_key_prefix(bytes&& b)
+        : prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key>(std::move(b))
+    { }
+public:
+    clustering_key_prefix(clustering_key_prefix_view v)
+        : clustering_key_prefix(bytes(v.representation().begin(), v.representation().end()))
+    { }
+
     using compound = lw_shared_ptr<compound_type<allow_prefixes::yes>>;
 
     static clustering_key_prefix from_bytes(bytes b) {

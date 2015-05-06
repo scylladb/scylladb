@@ -42,7 +42,7 @@ murmur3_partitioner::get_token(const sstables::key_view& key) {
 }
 
 token
-murmur3_partitioner::get_token(const schema& s, const partition_key& key) {
+murmur3_partitioner::get_token(const schema& s, partition_key_view key) {
     std::array<uint64_t, 2> hash;
     auto&& legacy = key.legacy_form(s);
     utils::murmur_hash::hash3_x64_128(legacy.begin(), legacy.size(), 0, hash);

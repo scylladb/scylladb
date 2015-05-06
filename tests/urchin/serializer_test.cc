@@ -143,42 +143,6 @@ static atomic_cell make_atomic_cell(bytes value) {
     return atomic_cell::make_live(0, ttl_opt{}, std::move(value));
 }
 
-inline bool operator==(const deletable_row& r1, const deletable_row& r2) {
-    return r1.t == r2.t && r1.cells == r2.cells;
-}
-
-inline bool operator==(const partition_key& m1, const partition_key& m2) {
-    const bytes_view& b1 = m1;
-    const bytes_view& b2 = m2;
-    return b1 == b2;
-}
-
-inline bool operator==(const rows_entry& r1, const rows_entry& r2) {
-    return r1.row() == r2.row();
-}
-
-inline bool operator!=(const rows_entry& r1, const rows_entry& r2) {
-    return !(r1 == r2);
-}
-
-// TODO: not complete... meh...
-inline bool operator==(const mutation_partition& cp1, const mutation_partition& cp2) {
-    static schema dummy({}, "", "", {}, {}, {}, {}, utf8_type);
-    auto& p1 = const_cast<mutation_partition&>(cp1);
-    auto& p2 = const_cast<mutation_partition&>(cp2);
-    return p1.static_row() == p2.static_row()
-            && p1.range(dummy, query::range<clustering_key_prefix>::make_open_ended_both_sides())
-            == p2.range(dummy, query::range<clustering_key_prefix>::make_open_ended_both_sides())
-            ;
-}
-
-inline bool operator==(const mutation& m1, const mutation& m2) {
-    return m1.schema().get() == m2.schema().get()
-            && m1.key() == m2.key()
-            && m1.partition() == m2.partition()
-            ;
-}
-
 SEASTAR_TEST_CASE(test_mutation){
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));

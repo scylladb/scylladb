@@ -14,11 +14,13 @@
 #include "atomic_cell.hh"
 #include "query-result-writer.hh"
 
+// FIXME: Encapsulate
 using row = std::map<column_id, atomic_cell_or_collection>;
 
 std::ostream& operator<<(std::ostream& os, const row::value_type& rv);
 std::ostream& operator<<(std::ostream& os, const row& r);
 
+// FIXME: Encapsulate
 struct deletable_row final {
     tombstone t;
     api::timestamp_type created_at = api::missing_timestamp;
@@ -29,6 +31,7 @@ struct deletable_row final {
     }
 
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
+    bool equal(const schema& s, const deletable_row& other) const;
 };
 
 class row_tombstones_entry : public boost::intrusive::set_base_hook<> {
@@ -86,6 +89,7 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream& os, const row_tombstones_entry& rte);
+    bool equal(const schema& s, const row_tombstones_entry& other) const;
 };
 
 class rows_entry : public boost::intrusive::set_base_hook<> {
@@ -129,6 +133,12 @@ public:
         bool operator()(const rows_entry& e, const clustering_key& key) const {
             return _c(e._key, key);
         }
+        bool operator()(const clustering_key_view& key, const rows_entry& e) const {
+            return _c(key, e._key);
+        }
+        bool operator()(const rows_entry& e, const clustering_key_view& key) const {
+            return _c(e._key, key);
+        }
     };
     template <typename Comparator>
     struct delegating_compare {
@@ -148,6 +158,7 @@ public:
         return delegating_compare<Comparator>(std::move(c));
     }
     friend std::ostream& operator<<(std::ostream& os, const rows_entry& re);
+    bool equal(const schema& s, const rows_entry& other) const;
 };
 
 namespace db {
@@ -159,6 +170,7 @@ class serializer;
 class mutation_partition final {
     // FIXME: using boost::intrusive because gcc's std::set<> does not support heterogeneous lookup yet
     using rows_type = boost::intrusive::set<rows_entry, boost::intrusive::compare<rows_entry::compare>>;
+    using row_tombstones_type = boost::intrusive::set<row_tombstones_entry, boost::intrusive::compare<row_tombstones_entry::compare>>;
 private:
     tombstone _tombstone;
     row _static_row;
@@ -166,7 +178,7 @@ private:
     // Contains only strict prefixes so that we don't have to lookup full keys
     // in both _row_tombstones and _rows.
     // FIXME: using boost::intrusive because gcc's std::set<> does not support heterogeneous lookup yet
-    boost::intrusive::set<row_tombstones_entry, boost::intrusive::compare<row_tombstones_entry::compare>> _row_tombstones;
+    row_tombstones_type _row_tombstones;
 
     template<typename T>
     friend class db::serializer;
@@ -185,13 +197,15 @@ public:
     void apply_delete(schema_ptr schema, const exploded_clustering_prefix& prefix, tombstone t);
     void apply_delete(schema_ptr schema, clustering_key&& key, tombstone t);
     // prefix must not be full
-    void apply_row_tombstone(schema_ptr schema, clustering_key_prefix prefix, tombstone t);
+    void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
     void apply(schema_ptr schema, const mutation_partition& p);
     row& static_row() { return _static_row; }
     // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
     const rows_type& clustered_rows() const { return _rows; }
     const row& static_row() const { return _static_row; }
+    const row_tombstones_type& row_tombstones() const { return _row_tombstones; }
     deletable_row& clustered_row(const clustering_key& key);
+    deletable_row& clustered_row(const schema& s, const clustering_key_view& key);
     const row* find_row(const clustering_key& key) const;
     const rows_entry* find_entry(schema_ptr schema, const clustering_key_prefix& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
@@ -200,4 +214,6 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
     boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r) const;
     void query(const schema& s, const query::partition_slice& slice, uint32_t limit, query::result::partition_writer& pw) const;
+public:
+    bool equal(const schema& s, const mutation_partition&) const;
 };
