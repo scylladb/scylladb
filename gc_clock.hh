@@ -25,5 +25,4 @@ public:
 using ttl_opt = std::experimental::optional<gc_clock::time_point>;
 
 // 20 years in seconds
-static constexpr gc_clock::time_point max_ttl = gc_clock::time_point{
-    gc_clock::duration{20 * 365 * 24 * 60 * 60}};
+static constexpr gc_clock::duration max_ttl = gc_clock::duration{20 * 365 * 24 * 60 * 60};
