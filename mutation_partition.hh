@@ -14,11 +14,13 @@
 #include "atomic_cell.hh"
 #include "query-result-writer.hh"
 
+// FIXME: Encapsulate
 using row = std::map<column_id, atomic_cell_or_collection>;
 
 std::ostream& operator<<(std::ostream& os, const row::value_type& rv);
 std::ostream& operator<<(std::ostream& os, const row& r);
 
+// FIXME: Encapsulate
 struct deletable_row final {
     tombstone t;
     api::timestamp_type created_at = api::missing_timestamp;
@@ -29,6 +31,7 @@ struct deletable_row final {
     }
 
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
+    bool equal(const schema& s, const deletable_row& other) const;
 };
 
 class row_tombstones_entry : public boost::intrusive::set_base_hook<> {
@@ -86,6 +89,7 @@ public:
     }
 
     friend std::ostream& operator<<(std::ostream& os, const row_tombstones_entry& rte);
+    bool equal(const schema& s, const row_tombstones_entry& other) const;
 };
 
 class rows_entry : public boost::intrusive::set_base_hook<> {
@@ -154,6 +158,7 @@ public:
         return delegating_compare<Comparator>(std::move(c));
     }
     friend std::ostream& operator<<(std::ostream& os, const rows_entry& re);
+    bool equal(const schema& s, const rows_entry& other) const;
 };
 
 namespace db {
@@ -209,4 +214,6 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
     boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r) const;
     void query(const schema& s, const query::partition_slice& slice, uint32_t limit, query::result::partition_writer& pw) const;
+public:
+    bool equal(const schema& s, const mutation_partition&) const;
 };

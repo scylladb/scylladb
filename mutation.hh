@@ -35,6 +35,8 @@ public:
     const mutation_partition& partition() const { return _p; }
     mutation_partition& partition() { return _p; }
     const utils::UUID& column_family_id() const { return _schema->id(); }
+    bool operator==(const mutation&) const;
+    bool operator!=(const mutation&) const;
 private:
     static void update_column(row& row, const column_definition& def, atomic_cell_or_collection&& value);
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
