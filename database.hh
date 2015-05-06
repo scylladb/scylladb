@@ -39,6 +39,8 @@
 #include "keys.hh"
 #include "mutation.hh"
 
+class frozen_mutation;
+
 namespace sstables {
 
 class sstable;
@@ -96,6 +98,7 @@ public:
     const_mutation_partition_ptr find_partition_slow(const partition_key& key) const;
     row& find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key);
     const_row_ptr find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) const;
+    void apply(const frozen_mutation& m);
     void apply(const mutation& m);
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd) const;
@@ -168,7 +171,7 @@ class database {
     std::unique_ptr<db::config> _cfg;
 
     future<> init_commitlog();
-    future<> apply_in_memory(const mutation&);
+    future<> apply_in_memory(const frozen_mutation&);
     future<> populate(sstring datadir);
 public:
     database();
@@ -209,8 +212,9 @@ public:
     future<> stop();
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
+    unsigned shard_of(const frozen_mutation& m);
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
-    future<> apply(const mutation&);
+    future<> apply(const frozen_mutation&);
     friend std::ostream& operator<<(std::ostream& out, const database& db);
 };
 

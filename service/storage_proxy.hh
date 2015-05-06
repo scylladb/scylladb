@@ -44,6 +44,7 @@ public:
     }
 
     future<> mutate_locally(const mutation& m);
+    future<> mutate_locally(const frozen_mutation& m);
     future<> mutate_locally(std::vector<mutation> mutations);
 
     /**

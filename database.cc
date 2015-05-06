@@ -22,6 +22,7 @@
 #include "locator/simple_snitch.hh"
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/function_output_iterator.hpp>
+#include "frozen_mutation.hh"
 
 thread_local logging::logger dblog("database");
 
@@ -388,6 +389,15 @@ database::shard_of(const mutation& m) {
     return shard_of(m.token());
 }
 
+unsigned
+database::shard_of(const frozen_mutation& m) {
+    // FIXME: This lookup wouldn't be necessary if we
+    // sent the partition key in legacy form or together
+    // with token.
+    schema_ptr schema = find_schema(m.column_family_id());
+    return shard_of(dht::global_partitioner().get_token(*schema, m.key(*schema)));
+}
+
 keyspace& database::add_keyspace(sstring name, keyspace k) {
     if (_keyspaces.count(name) != 0) {
         throw std::invalid_argument("Keyspace " + name + " already exists");
@@ -688,9 +698,9 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     return out;
 }
 
-future<> database::apply_in_memory(const mutation& m) {
+future<> database::apply_in_memory(const frozen_mutation& m) {
     try {
-        auto& cf = find_column_family(m.schema());
+        auto& cf = find_column_family(m.column_family_id());
         cf.apply(m);
     } catch (no_such_column_family&) {
         // TODO: log a warning
@@ -699,14 +709,14 @@ future<> database::apply_in_memory(const mutation& m) {
     return make_ready_future<>();
 }
 
-future<> database::apply(const mutation& m) {
+future<> database::apply(const frozen_mutation& m) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
     if (_commitlog != nullptr) {
-        db::serializer<mutation> ms(*this, m);
-        auto uuid = m.schema()->id();
-        return _commitlog->add_mutation(uuid, ms.size(), ms).then([&m, this](auto rp) {
+        auto uuid = m.column_family_id();
+        bytes_view repr = m.representation();
+        return _commitlog->add_mutation(uuid, repr.size(), [repr] (data_output& out) { out.write(repr); }).then([&m, this](auto rp) {
             return this->apply_in_memory(m);
         });
     }
@@ -759,3 +769,8 @@ database::stop() {
     return make_ready_future<>();
 }
 
+void
+column_family::apply(const frozen_mutation& m) {
+    // FIXME: Optimize
+    active_memtable().apply(m.unfreeze(_schema));
+}

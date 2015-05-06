@@ -9,6 +9,7 @@ class database;
 
 // mutation.hh
 class mutation;
+class mutation_partition;
 
 // schema.hh
 class schema;

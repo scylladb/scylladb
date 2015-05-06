@@ -12,6 +12,7 @@
 #include "database.hh"
 #include "core/sstring.hh"
 #include "core/print.hh"
+#include "frozen_mutation.hh"
 #include "utils/UUID_gen.hh"
 #include <thrift/protocol/TBinaryProtocol.h>
 
@@ -298,8 +299,8 @@ public:
                     }
                 }
                 auto shard = _db.local().shard_of(m_to_apply);
-                return _db.invoke_on(shard, [this, cf_name, m_to_apply = std::move(m_to_apply)] (database& db) {
-                    return db.apply(m_to_apply);
+                return _db.invoke_on(shard, [this, cf_name, m = freeze(m_to_apply)] (database& db) {
+                    return db.apply(m);
                 });
             });
         }).then_wrapped([this, cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<> ret) {
