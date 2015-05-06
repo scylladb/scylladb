@@ -8,6 +8,7 @@
 #include "key.hh"
 #include "keys.hh"
 #include "core/do_with.hh"
+#include "unimplemented.hh"
 
 #include "dht/i_partitioner.hh"
 
@@ -204,7 +205,33 @@ public:
     virtual void consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
-        throw runtime_exception("Not implemented");
+        check_marker(start_col, composite_marker::start_range);
+        check_marker(end_col, composite_marker::end_range);
+
+        // FIXME: CASSANDRA-6237 says support will be added to things like this.
+        //
+        // The check below represents a range with a different start and end
+        // clustering key.  Cassandra-generated files (to the moment) will
+        // generate multi-row deletes, but they always have the same clustering
+        // key. This is basically because one can't (yet) write delete
+        // statements in which the WHERE clause looks like WHERE clustering_key >= x.
+        //
+        // We don't really have it in our model ATM, so let's just mark this unimplemented.
+        //
+        // The only expected difference between them, is the final marker. We
+        // will remove it from end_col to ease the comparison, but will leave
+        // start_col untouched to make sure explode() still works.
+        end_col.remove_suffix(1);
+        if (start_col.compare(0, end_col.size(), end_col)) {
+            fail(unimplemented::cause::RANGE_DELETES);
+        }
+
+        auto start = composite_view(column::fix_static_name(start_col)).explode();
+        if (start.size() <= _schema->clustering_key_size()) {
+            mut.partition().apply_delete(*_schema, exploded_clustering_prefix(std::move(start)), tombstone(deltime));
+        } else {
+            throw runtime_exception("Collections not implemented");
+        }
     }
 };
 
