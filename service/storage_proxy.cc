@@ -1221,9 +1221,9 @@ storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const
         auto schema = db.find_schema(ks_name, cf_name);
         std::vector<query::clustering_range> row_ranges = {query::clustering_range::make_open_ended_both_sides()};
         std::vector<column_id> regular_cols;
-        boost::range::push_back(regular_cols, schema->regular_columns() | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
+        boost::range::push_back(regular_cols, schema->regular_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
         std::vector<column_id> static_cols;
-        boost::range::push_back(static_cols, schema->static_columns() | boost::adaptors::transformed([] (auto&& col) { return col.id; }));
+        boost::range::push_back(static_cols, schema->static_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
         auto opts = query::partition_slice::option_set::of<
             query::partition_slice::option::send_partition_key,
             query::partition_slice::option::send_clustering_key>();
