@@ -272,7 +272,7 @@ public:
         // TODO: keep a queue of available buffers?
         if (s > 0) {
             auto overhead = segment_overhead_size;
-            if (off == 0) {
+            if (_file_pos == 0) {
                 overhead += descriptor_header_size;
             }
             auto k = std::max(align_up(s + overhead, alignment), default_size);
