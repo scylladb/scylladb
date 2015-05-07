@@ -141,6 +141,11 @@ mutation_partition::apply_delete(schema_ptr schema, clustering_key_view key, tom
     clustered_row(*schema, key).apply(t);
 }
 
+void
+mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::timestamp_type created_at) {
+    clustered_row(s, key).apply(created_at);
+}
+
 const rows_entry*
 mutation_partition::find_entry(schema_ptr schema, const clustering_key_prefix& key) const {
     auto i = _rows.find(key, rows_entry::key_comparator(clustering_key::less_compare_with_prefix(*schema)));

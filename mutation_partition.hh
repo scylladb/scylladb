@@ -30,6 +30,12 @@ struct deletable_row final {
         t.apply(t_);
     }
 
+    void apply(api::timestamp_type new_created_at) {
+        if (new_created_at > created_at) {
+            created_at = new_created_at;
+        }
+    }
+
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
     bool equal(const schema& s, const deletable_row& other) const;
 };
@@ -197,6 +203,8 @@ public:
     void apply_delete(schema_ptr schema, const exploded_clustering_prefix& prefix, tombstone t);
     void apply_delete(schema_ptr schema, clustering_key&& key, tombstone t);
     void apply_delete(schema_ptr schema, clustering_key_view key, tombstone t);
+    // Equivalent to applying a mutation with an empty row, created with given timestamp
+    void apply_insert(const schema& s, clustering_key_view, api::timestamp_type created_at);
     // prefix must not be full
     void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
     void apply(schema_ptr schema, const mutation_partition& p);
