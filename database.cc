@@ -656,32 +656,16 @@ std::ostream& operator<<(std::ostream& out, const atomic_cell_or_collection& c) 
     return out << to_hex(c._data);
 }
 
-void print_partition(std::ostream& out, const schema& s, const mutation_partition& mp) {
-    out << "{rows={\n";
-    for (auto&& e : mp.range(s, query::range<clustering_key_prefix>())) {
-        out << e.key() << " => ";
-        for (auto&& cell_e : e.row().cells) {
-            out << cell_e.first << ":";
-            out << cell_e.second << " ";
-        }
-        out << "\n";
-    }
-    out << "}}";
-}
-
 std::ostream& operator<<(std::ostream& os, const mutation& m) {
     fprint(os, "{mutation: schema %p key %s data ", m.schema().get(), m.key());
-    print_partition(os, *m.schema(), m.partition());
-    os << "}";
+    os << m.partition() << "}";
     return os;
 }
 
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
     out << "{\n";
     cf.for_all_partitions([&] (const dht::decorated_key& key, const mutation_partition& mp) {
-        out << key << " => ";
-        print_partition(out, *cf._schema, mp);
-        out << "\n";
+        out << key << " => " << mp << "\n";
         return true;
     });
     out << "}";
