@@ -13,6 +13,7 @@
 #include "keys.hh"
 #include "atomic_cell.hh"
 #include "query-result-writer.hh"
+#include "mutation_partition_view.hh"
 
 // FIXME: Encapsulate
 using row = std::map<column_id, atomic_cell_or_collection>;
@@ -188,6 +189,7 @@ private:
 
     template<typename T>
     friend class db::serializer;
+    friend class mutation_partition_applier;
 public:
     mutation_partition(schema_ptr s)
         : _rows(rows_entry::compare(*s))
@@ -208,6 +210,7 @@ public:
     // prefix must not be full
     void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
     void apply(schema_ptr schema, const mutation_partition& p);
+    void apply(schema_ptr schema, mutation_partition_view);
     row& static_row() { return _static_row; }
     // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
     const rows_type& clustered_rows() const { return _rows; }

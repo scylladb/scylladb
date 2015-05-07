@@ -3,6 +3,7 @@
  */
 
 #include "mutation_partition.hh"
+#include "mutation_partition_applier.hh"
 
 mutation_partition::mutation_partition(const mutation_partition& x)
         : _tombstone(x._tombstone)
@@ -65,6 +66,12 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
             merge_cells(i->row().cells, entry.row().cells, find_regular_column_def);
         }
     }
+}
+
+void
+mutation_partition::apply(schema_ptr schema, mutation_partition_view p) {
+    mutation_partition_applier applier(*schema, *this);
+    p.accept(*schema, applier);
 }
 
 tombstone

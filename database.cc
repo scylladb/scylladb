@@ -23,6 +23,7 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/function_output_iterator.hpp>
 #include "frozen_mutation.hh"
+#include "mutation_partition_applier.hh"
 
 thread_local logging::logger dblog("database");
 
@@ -88,6 +89,16 @@ column_family::find_row(const dht::decorated_key& partition_key, const clusterin
 
 mutation_partition&
 column_family::find_or_create_partition_slow(const partition_key& key) {
+    return find_or_create_partition(dht::global_partitioner().decorate_key(*_schema, key));
+}
+
+mutation_partition&
+memtable::find_or_create_partition_slow(partition_key_view key) {
+    // FIXME: Perform lookup using std::pair<token, partition_key_view>
+    // to avoid unconditional copy of the partition key.
+    // We can't do it right now because std::map<> which holds
+    // partitions doesn't support heterogenous lookup.
+    // We could switch to boost::intrusive_map<> similar to what we have for row keys.
     return find_or_create_partition(dht::global_partitioner().decorate_key(*_schema, key));
 }
 
@@ -547,6 +558,12 @@ memtable::apply(const mutation& m) {
     p.apply(_schema, m.partition());
 }
 
+void
+memtable::apply(const frozen_mutation& m) {
+    mutation_partition& p = find_or_create_partition_slow(m.key(*_schema));
+    p.apply(_schema, m.partition());
+}
+
 // Based on:
 //  - org.apache.cassandra.db.AbstractCell#reconcile()
 //  - org.apache.cassandra.db.BufferExpiringCell#reconcile()
@@ -751,10 +768,4 @@ operator<<(std::ostream& os, const atomic_cell& ac) {
 future<>
 database::stop() {
     return make_ready_future<>();
-}
-
-void
-column_family::apply(const frozen_mutation& m) {
-    // FIXME: Optimize
-    active_memtable().apply(m.unfreeze(_schema));
 }
