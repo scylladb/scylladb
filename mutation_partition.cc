@@ -133,14 +133,7 @@ mutation_partition::apply_delete(schema_ptr schema, const exploded_clustering_pr
 
 void
 mutation_partition::apply_delete(schema_ptr schema, clustering_key&& key, tombstone t) {
-    auto i = _rows.lower_bound(key, rows_entry::compare(*schema));
-    if (i == _rows.end() || !i->key().equal(*schema, key)) {
-        auto e = new rows_entry(std::move(key));
-        e->row().apply(t);
-        _rows.insert(i, *e);
-    } else {
-        i->row().apply(t);
-    }
+    clustered_row(*schema, std::move(key)).apply(t);
 }
 
 const rows_entry*
