@@ -196,6 +196,7 @@ public:
     void apply(tombstone t) { _tombstone.apply(t); }
     void apply_delete(schema_ptr schema, const exploded_clustering_prefix& prefix, tombstone t);
     void apply_delete(schema_ptr schema, clustering_key&& key, tombstone t);
+    void apply_delete(schema_ptr schema, clustering_key_view key, tombstone t);
     // prefix must not be full
     void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
     void apply(schema_ptr schema, const mutation_partition& p);
