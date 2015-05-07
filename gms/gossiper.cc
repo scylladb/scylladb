@@ -123,7 +123,7 @@ void gossiper::init_messaging_service_handler() {
             return make_ready_future<empty_msg>();
         });
     });
-    ms().register_handler_oneway(messaging_verb::GOSSIP_SHUTDOWN, [] (inet_address from) {
+    ms().register_handler(messaging_verb::GOSSIP_SHUTDOWN, [] (inet_address from) {
         smp::submit_to(0, [from] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_last_processed_message_at(now_millis());
@@ -138,7 +138,7 @@ void gossiper::init_messaging_service_handler() {
             return gossiper.handle_syn_msg(std::move(syn_msg));
         });
     });
-    ms().register_handler_oneway(messaging_verb::GOSSIP_DIGEST_ACK2, [] (gossip_digest_ack2 msg) {
+    ms().register_handler(messaging_verb::GOSSIP_DIGEST_ACK2, [] (gossip_digest_ack2 msg) {
         smp::submit_to(0, [msg = std::move(msg)] () mutable {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_last_processed_message_at(now_millis());

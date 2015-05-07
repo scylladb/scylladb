@@ -68,11 +68,11 @@ public:
             gms::gossip_digest_ack ack(std::move(digests), std::move(eps));
             return make_ready_future<gms::gossip_digest_ack>(ack);
         });
-        ms.register_handler_oneway(messaging_verb::GOSSIP_DIGEST_ACK2, [] (gms::gossip_digest_ack2 msg) {
+        ms.register_handler(messaging_verb::GOSSIP_DIGEST_ACK2, [] (gms::gossip_digest_ack2 msg) {
             print("Server got ack2 msg = %s\n", msg);
             return messaging_service::no_wait();
         });
-        ms.register_handler_oneway(messaging_verb::GOSSIP_SHUTDOWN, [] (empty_msg msg) {
+        ms.register_handler(messaging_verb::GOSSIP_SHUTDOWN, [] (empty_msg msg) {
             print("Server got shutdown msg = %s\n", msg);
             return messaging_service::no_wait();
         });

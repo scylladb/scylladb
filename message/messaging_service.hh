@@ -260,11 +260,6 @@ public:
         _rpc.register_handler(verb, std::move(func));
     }
 
-    template <typename Func>
-    void register_handler_oneway(messaging_verb verb, Func&& func) {
-        _rpc.register_handler(verb, std::move(func));
-    }
-
     // Send a message for verb
     template <typename MsgIn, typename... MsgOut>
     future<MsgIn> send_message(messaging_verb verb, shard_id id, MsgOut&&... msg) {
