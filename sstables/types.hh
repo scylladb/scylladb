@@ -2,6 +2,8 @@
 
 #include "core/enum.hh"
 #include "bytes.hh"
+#include "gc_clock.hh"
+#include "tombstone.hh"
 
 namespace sstables {
 
@@ -244,6 +246,10 @@ struct deletion_time {
     bool live() const {
         return (local_deletion_time == std::numeric_limits<int32_t>::max()) &&
                (marked_for_delete_at == std::numeric_limits<int64_t>::min());
+    }
+
+    explicit operator tombstone() {
+        return tombstone(marked_for_delete_at, gc_clock::time_point(gc_clock::duration(local_deletion_time)));
     }
 };
 
