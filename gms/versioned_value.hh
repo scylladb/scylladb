@@ -51,19 +51,19 @@ public:
     static constexpr const char DELIMITER_STR[] = { DELIMITER, 0 };
 
     // values for ApplicationState.STATUS
-    static constexpr const char *STATUS_BOOTSTRAPPING = "BOOT";
-    static constexpr const char *STATUS_NORMAL = "NORMAL";
-    static constexpr const char *STATUS_LEAVING = "LEAVING";
-    static constexpr const char *STATUS_LEFT = "LEFT";
-    static constexpr const char *STATUS_MOVING = "MOVING";
+    static constexpr const char* STATUS_BOOTSTRAPPING = "BOOT";
+    static constexpr const char* STATUS_NORMAL = "NORMAL";
+    static constexpr const char* STATUS_LEAVING = "LEAVING";
+    static constexpr const char* STATUS_LEFT = "LEFT";
+    static constexpr const char* STATUS_MOVING = "MOVING";
 
-    static constexpr const char *REMOVING_TOKEN = "removing";
-    static constexpr const char *REMOVED_TOKEN = "removed";
+    static constexpr const char* REMOVING_TOKEN = "removing";
+    static constexpr const char* REMOVED_TOKEN = "removed";
 
-    static constexpr const char *HIBERNATE = "hibernate";
+    static constexpr const char* HIBERNATE = "hibernate";
 
     // values for ApplicationState.REMOVAL_COORDINATOR
-    static constexpr const char *REMOVAL_COORDINATOR = "REMOVER";
+    static constexpr const char* REMOVAL_COORDINATOR = "REMOVER";
 
     int version;
     sstring value;

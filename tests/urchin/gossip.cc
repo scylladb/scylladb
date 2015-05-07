@@ -12,17 +12,16 @@ int main(int ac, char ** av) {
     app.add_options()
         ("seed", bpo::value<std::vector<std::string>>(), "IP address of seed node")
         ("listen-address", bpo::value<std::string>()->default_value("0.0.0.0"), "IP address to listen");
-    return app.run(ac, av, [&] {
-        auto&& config = app.configuration();
-        auto listen = gms::inet_address(config["listen-address"].as<std::string>());
-        net::get_messaging_service().start(std::ref(listen)).then([&] {
+    return app.run(ac, av, [&app] {
+        auto config = app.configuration();
+        const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
+        net::get_messaging_service().start(listen).then([config] {
             auto& server = net::get_local_messaging_service();
             auto port = server.port();
             auto listen = server.listen_address();
             print("Messaging server listening on ip %s port %d ...\n", listen, port);
-            gms::get_failure_detector().start_single().then([&] {
-                gms::get_gossiper().start_single().then([&] {
-                    auto&& config = app.configuration();
+            gms::get_failure_detector().start_single().then([config] {
+                gms::get_gossiper().start_single().then([config] {
                     std::set<gms::inet_address> seeds;
                     for (auto s : config["seed"].as<std::vector<std::string>>()) {
                         seeds.emplace(std::move(s));
