@@ -45,8 +45,8 @@ public:
         assert(c.is_live());
         if (_slice.options.contains<partition_slice::option::send_timestamp_and_expiry>()) {
             _w.write(c.timestamp());
-            if (c.expiry()) {
-                _w.write<gc_clock::rep>(c.expiry()->time_since_epoch().count());
+            if (c.is_live_and_has_ttl()) {
+                _w.write<gc_clock::rep>(c.expiry().time_since_epoch().count());
             } else {
                 _w.write<gc_clock::rep>(std::numeric_limits<gc_clock::rep>::max());
             }

@@ -583,19 +583,19 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
         }
         if (left.is_live_and_has_ttl()
             && right.is_live_and_has_ttl()
-            && *left.expiry() != *right.expiry())
+            && left.expiry() != right.expiry())
         {
             return left.expiry() < right.expiry() ? -1 : 1;
         }
     } else {
         // Both are deleted
-        if (*left.expiry() != *right.expiry()) {
-            // Origin compares big-endian serialized expiry time. That's because it
+        if (left.deletion_time() != right.deletion_time()) {
+            // Origin compares big-endian serialized deletion time. That's because it
             // delegates to AbstractCell.reconcile() which compares values after
             // comparing timestamps, which in case of deleted cells will hold
             // serialized expiry.
-            return (uint32_t) left.expiry()->time_since_epoch().count()
-                   < (uint32_t) right.expiry()->time_since_epoch().count() ? -1 : 1;
+            return (uint32_t) left.deletion_time().time_since_epoch().count()
+                   < (uint32_t) right.deletion_time().time_since_epoch().count() ? -1 : 1;
         }
     }
     return 0;
@@ -754,10 +754,16 @@ operator<<(std::ostream& os, const exploded_clustering_prefix& ecp) {
 
 std::ostream&
 operator<<(std::ostream& os, const atomic_cell_view& acv) {
-    return fprint(os, "atomic_cell{%s;ts=%d;expiry=%d}",
-            (acv.is_live() ? to_hex(acv.value()) : sstring("DEAD")),
+    if (acv.is_live()) {
+        return fprint(os, "atomic_cell{%s;ts=%d;expiry=%d,ttl=%d}",
+            to_hex(acv.value()),
             acv.timestamp(),
-            acv.is_live_and_has_ttl() ? acv.expiry()->time_since_epoch().count() : -1);
+            acv.is_live_and_has_ttl() ? acv.expiry().time_since_epoch().count() : -1,
+            acv.is_live_and_has_ttl() ? acv.ttl().count() : 0);
+    } else {
+        return fprint(os, "atomic_cell{DEAD;ts=%d;deletion_time=%d}",
+            acv.timestamp(), acv.deletion_time().time_since_epoch().count());
+    }
 }
 
 std::ostream&

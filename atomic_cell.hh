@@ -32,7 +32,7 @@ class atomic_cell_or_collection;
  * Layout:
  *
  *  <live>  := <int8_t:flags><int64_t:timestamp>(<int32_t:expiry><int32_t:ttl>)?<value>
- *  <dead>  := <int8_t:    0><int64_t:timestamp><int32_t:expiry>
+ *  <dead>  := <int8_t:    0><int64_t:timestamp><int32_t:deletion_time>
  */
 class atomic_cell_type final {
 private:
@@ -44,6 +44,8 @@ private:
     static constexpr unsigned timestamp_size = 8;
     static constexpr unsigned expiry_offset = timestamp_offset + timestamp_size;
     static constexpr unsigned expiry_size = 4;
+    static constexpr unsigned deletion_time_offset = timestamp_offset + timestamp_size;
+    static constexpr unsigned deletion_time_size = 4;
     static constexpr unsigned ttl_offset = expiry_offset + expiry_size;
     static constexpr unsigned ttl_size = 4;
 private:
@@ -67,25 +69,28 @@ private:
         cell.remove_prefix(value_offset);
         return cell;
     }
-    // Can be called on live and dead cells. For dead cells, the result is never empty.
-    static expiry_opt expiry(const bytes_view& cell) {
-        auto flags = cell[0];
-        if (flags == DEAD_FLAGS || (flags & EXPIRY_FLAG)) {
-            auto expiry = get_field<int32_t>(cell, expiry_offset);
-            return {gc_clock::time_point(gc_clock::duration(expiry))};
-        }
-        return {};
+    // Can be called only when is_dead() is true.
+    static gc_clock::time_point deletion_time(const bytes_view& cell) {
+        assert(is_dead(cell));
+        return gc_clock::time_point(gc_clock::duration(
+            get_field<int32_t>(cell, deletion_time_offset)));
+    }
+    // Can be called only when is_live_and_has_ttl() is true.
+    static gc_clock::time_point expiry(const bytes_view& cell) {
+        assert(is_live_and_has_ttl(cell));
+        auto expiry = get_field<int32_t>(cell, expiry_offset);
+        return gc_clock::time_point(gc_clock::duration(expiry));
     }
     // Can be called only when is_live_and_has_ttl() is true.
     static gc_clock::duration ttl(const bytes_view& cell) {
         assert(is_live_and_has_ttl(cell));
         return gc_clock::duration(get_field<int32_t>(cell, ttl_offset));
     }
-    static bytes make_dead(api::timestamp_type timestamp, gc_clock::time_point expiry) {
-        bytes b(bytes::initialized_later(), flags_size + timestamp_size + expiry_size);
+    static bytes make_dead(api::timestamp_type timestamp, gc_clock::time_point deletion_time) {
+        bytes b(bytes::initialized_later(), flags_size + timestamp_size + deletion_time_size);
         b[0] = DEAD_FLAGS;
         set_field(b, timestamp_offset, timestamp);
-        set_field(b, expiry_offset, expiry.time_since_epoch().count());
+        set_field(b, deletion_time_offset, deletion_time.time_since_epoch().count());
         return b;
     }
     static bytes make_live(api::timestamp_type timestamp, bytes_view value) {
@@ -136,8 +141,12 @@ public:
     bytes_view value() const {
         return atomic_cell_type::value(_data);
     }
-    // Can be called on live and dead cells. For dead cells, the result is never empty.
-    expiry_opt expiry() const {
+    // Can be called only when is_dead()
+    gc_clock::time_point deletion_time() const {
+        return atomic_cell_type::deletion_time(_data);
+    }
+    // Can be called only when is_live_and_has_ttl()
+    gc_clock::time_point expiry() const {
         return atomic_cell_type::expiry(_data);
     }
     // Can be called only when is_live_and_has_ttl()
@@ -181,8 +190,12 @@ public:
     bytes_view value() const {
         return atomic_cell_type::value(_data);
     }
-    // Can be called on live and dead cells. For dead cells, the result is never empty.
-    expiry_opt expiry() const {
+    // Can be called only when is_dead()
+    gc_clock::time_point deletion_time() const {
+        return atomic_cell_type::deletion_time(_data);
+    }
+    // Can be called only when is_live_and_has_ttl()
+    gc_clock::time_point expiry() const {
         return atomic_cell_type::expiry(_data);
     }
     // Can be called only when is_live_and_has_ttl()
