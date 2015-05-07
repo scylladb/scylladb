@@ -44,6 +44,7 @@ boost_tests = [
     'urchin/compound_test',
     'urchin/murmur_hash_test',
     'urchin/partitioner_test',
+    'urchin/frozen_mutation_test',
 ]
 
 other_tests = [
