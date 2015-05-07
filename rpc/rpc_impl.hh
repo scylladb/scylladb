@@ -29,8 +29,8 @@
 namespace rpc {
 
 template<std::size_t N, typename Serializer, typename... T>
-inline std::enable_if_t<N == sizeof...(T), future<>> marshall(Serializer&, output_stream<char>&, std::tuple<T...>&&) {
-    return make_ready_future<>();
+inline std::enable_if_t<N == sizeof...(T), future<>> marshall(Serializer&, output_stream<char>& out, std::tuple<T...>&&) {
+    return out.flush();
 }
 
 template<std::size_t N = 0, typename Serializer, typename... T>
@@ -38,8 +38,6 @@ inline std::enable_if_t<N != sizeof...(T), future<>> marshall(Serializer& serial
     using tuple_type = std::tuple<T...>;
     return serialize(out, std::forward<typename std::tuple_element<N, tuple_type>::type>(std::get<N>(args))).then([&serialize, &out, args = std::move(args)] () mutable {
         return marshall<N + 1>(serialize, out, std::move(args));
-    }).then([&out] {
-        return out.flush();
     });
 }
 
