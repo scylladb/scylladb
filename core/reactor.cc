@@ -29,6 +29,7 @@
 #include "scollectd.hh"
 #include "util/conversions.hh"
 #include "core/future-util.hh"
+#include "thread.hh"
 #include <cassert>
 #include <unistd.h>
 #include <fcntl.h>
@@ -186,6 +187,7 @@ reactor::reactor()
     , _io_context_available(max_aio)
     , _reuseport(posix_reuseport_detect()) {
 
+    seastar::thread_impl::init();
     auto r = ::io_setup(max_aio, &_io_context);
     assert(r >= 0);
 #ifdef HAVE_OSV
