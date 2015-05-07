@@ -81,3 +81,43 @@ BOOST_AUTO_TEST_CASE(test_writing_and_reading) {
 
     test_freezing(m);
 }
+
+BOOST_AUTO_TEST_CASE(test_application_of_partition_view_has_the_same_effect_as_applying_regular_mutation) {
+    schema_ptr s = new_table()
+        .with_column("pk_col", bytes_type, column_kind::partition_key)
+        .with_column("ck_1", bytes_type, column_kind::clustering_key)
+        .with_column("reg_1", bytes_type)
+        .with_column("reg_2", bytes_type)
+        .with_column("static_1", bytes_type, column_kind::static_column)
+        .build();
+
+    partition_key key = partition_key::from_single_value(*s, bytes("key"));
+    clustering_key ck = clustering_key::from_deeply_exploded(*s, {bytes("ck")});
+
+    mutation m1(key, s);
+    m1.partition().apply(new_tombstone());
+    m1.set_clustered_cell(ck, "reg_1", bytes("val1"), new_timestamp());
+    m1.set_clustered_cell(ck, "reg_2", bytes("val2"), new_timestamp());
+    m1.partition().apply_insert(*s, ck, new_timestamp());
+    m1.set_static_cell("static_1", bytes("val3"), new_timestamp());
+
+    mutation m2(key, s);
+    m2.set_clustered_cell(ck, "reg_1", bytes("val4"), new_timestamp());
+    m2.partition().apply_insert(*s, ck, new_timestamp());
+    m2.set_static_cell("static_1", bytes("val5"), new_timestamp());
+
+    mutation m_frozen(key, s);
+    m_frozen.partition().apply(s, freeze(m1).partition());
+    m_frozen.partition().apply(s, freeze(m2).partition());
+
+    mutation m_unfrozen(key, s);
+    m_unfrozen.partition().apply(s, m1.partition());
+    m_unfrozen.partition().apply(s, m2.partition());
+
+    mutation m_refrozen(key, s);
+    m_refrozen.partition().apply(s, freeze(m1).unfreeze(s).partition());
+    m_refrozen.partition().apply(s, freeze(m2).unfreeze(s).partition());
+
+    assert_that(m_unfrozen).is_equal_to(m_refrozen);
+    assert_that(m_unfrozen).is_equal_to(m_frozen);
+}
