@@ -205,6 +205,7 @@ public:
     const row& static_row() const { return _static_row; }
     const row_tombstones_type& row_tombstones() const { return _row_tombstones; }
     deletable_row& clustered_row(const clustering_key& key);
+    deletable_row& clustered_row(clustering_key&& key);
     deletable_row& clustered_row(const schema& s, const clustering_key_view& key);
     const row* find_row(const clustering_key& key) const;
     const rows_entry* find_entry(schema_ptr schema, const clustering_key_prefix& key) const;

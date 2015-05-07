@@ -162,6 +162,17 @@ mutation_partition::find_row(const clustering_key& key) const {
 }
 
 deletable_row&
+mutation_partition::clustered_row(clustering_key&& key) {
+    auto i = _rows.find(key);
+    if (i == _rows.end()) {
+        auto e = new rows_entry(std::move(key));
+        _rows.insert(i, *e);
+        return e->row();
+    }
+    return i->row();
+}
+
+deletable_row&
 mutation_partition::clustered_row(const clustering_key& key) {
     auto i = _rows.find(key);
     if (i == _rows.end()) {
