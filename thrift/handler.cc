@@ -275,9 +275,12 @@ public:
                             if (ttl.count() <= 0) {
                                 ttl = cf.schema()->default_time_to_live();
                             }
-                            auto ttl_option = ttl.count() > 0 ? ttl_opt(gc_clock::now() + ttl) : ttl_opt();
+                            ttl_opt maybe_ttl;
+                            if (ttl.count() > 0) {
+                                maybe_ttl = ttl;
+                            }
                             m_to_apply.set_clustered_cell(empty_clustering_key, *def,
-                                atomic_cell::make_live(col.timestamp, ttl_option, to_bytes(col.value)));
+                                atomic_cell::make_live(col.timestamp, to_bytes(col.value), maybe_ttl));
                         } else if (cosc.__isset.super_column) {
                             // FIXME: implement
                         } else if (cosc.__isset.counter_column) {

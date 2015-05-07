@@ -104,9 +104,9 @@ public:
             throw exceptions::invalid_request_exception("A TTL must be greater or equal to 0");
         }
 
-        if (ttl > max_ttl.time_since_epoch().count()) {
+        if (ttl > max_ttl.count()) {
             throw exceptions::invalid_request_exception("ttl is too large. requested (" + std::to_string(ttl) +
-                ") maximum (" + std::to_string(max_ttl.time_since_epoch().count()) + ")");
+                ") maximum (" + std::to_string(max_ttl.count()) + ")");
         }
 
         return ttl;

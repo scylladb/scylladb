@@ -116,8 +116,11 @@ public:
             ttl = _schema->default_time_to_live();
         }
 
-        return atomic_cell::make_live(_timestamp,
-            ttl.count() > 0 ? ttl_opt{_local_deletion_time + ttl} : ttl_opt{}, value);
+        if (ttl.count() > 0) {
+            return atomic_cell::make_live(_timestamp, value, _local_deletion_time + ttl, ttl);
+        } else {
+            return atomic_cell::make_live(_timestamp, value);
+        }
     };
 
 #if 0

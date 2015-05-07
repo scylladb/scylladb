@@ -145,6 +145,15 @@ public:
         }
     }
 
+    atomic_cell make_atomic_cell(uint64_t timestamp, bytes_view value, uint32_t ttl, uint32_t expiration) {
+        if (ttl) {
+            return atomic_cell::make_live(timestamp, value,
+                gc_clock::time_point(gc_clock::duration(expiration)), gc_clock::duration(ttl));
+        } else {
+            return atomic_cell::make_live(timestamp, value);
+        }
+    }
+
     virtual void consume_cell(bytes_view col_name, bytes_view value, uint64_t timestamp, uint32_t ttl, uint32_t expiration) override {
         static bytes cql_row_marker(3, bytes::value_type(0x0));
 
@@ -163,21 +172,7 @@ public:
             throw malformed_sstable_exception("wrong number of clustering columns");
         }
 
-        ttl_opt opt;
-        if (ttl) {
-            gc_clock::duration secs(expiration);
-            auto tp = gc_clock::time_point(secs);
-            if (tp < gc_clock::now()) {
-                consume_deleted_cell(col, timestamp, tp);
-                return;
-            }
-
-            opt = ttl_opt(tp);
-        } else {
-            opt = {};
-        }
-
-        auto ac = atomic_cell::make_live(timestamp, opt, value);
+        auto ac = make_atomic_cell(timestamp, value, ttl, expiration);
 
         if (col.is_static) {
             mut->set_static_cell(*(col.cdef), ac);
