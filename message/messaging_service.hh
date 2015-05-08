@@ -218,13 +218,6 @@ public:
         }
         std::unique_ptr<rpc::protocol<serializer, messaging_verb>::client> rpc_client;
     };
-    struct handler_base {
-    };
-    template <typename Func>
-    struct handler : public handler_base {
-        std::function<Func> rpc_handler;
-        handler(std::function<Func>&& rpc_handler_) : rpc_handler(std::move(rpc_handler_)) {}
-    };
 private:
     static constexpr const uint16_t _default_port = 7000;
     gms::inet_address _listen_address;
