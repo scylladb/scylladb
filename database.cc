@@ -56,7 +56,7 @@ column_family::find_partition(const dht::decorated_key& key) const {
     for (auto&& mt : _memtables) {
         auto mp = mt.find_partition(key);
         if (mp) {
-            ret.apply(_schema, *mp);
+            ret.apply(*_schema, *mp);
             any = true;
         }
     }
@@ -157,7 +157,7 @@ column_family::for_all_partitions(Func&& func) const {
             }
             if (current) {
                 // FIXME: handle different schemas
-                current->second.apply(_schema, mp);
+                current->second.apply(*_schema, mp);
             } else {
                 current = std::make_pair(key, mp);
             }
@@ -555,13 +555,13 @@ database::find_or_create_keyspace(const sstring& name) {
 void
 memtable::apply(const mutation& m) {
     mutation_partition& p = find_or_create_partition(m.decorated_key());
-    p.apply(_schema, m.partition());
+    p.apply(*_schema, m.partition());
 }
 
 void
 memtable::apply(const frozen_mutation& m) {
     mutation_partition& p = find_or_create_partition_slow(m.key(*_schema));
-    p.apply(_schema, m.partition());
+    p.apply(*_schema, m.partition());
 }
 
 // Based on:

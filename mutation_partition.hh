@@ -204,15 +204,15 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
 public:
     void apply(tombstone t) { _tombstone.apply(t); }
-    void apply_delete(schema_ptr schema, const exploded_clustering_prefix& prefix, tombstone t);
-    void apply_delete(schema_ptr schema, clustering_key&& key, tombstone t);
-    void apply_delete(schema_ptr schema, clustering_key_view key, tombstone t);
+    void apply_delete(const schema& schema, const exploded_clustering_prefix& prefix, tombstone t);
+    void apply_delete(const schema& schema, clustering_key&& key, tombstone t);
+    void apply_delete(const schema& schema, clustering_key_view key, tombstone t);
     // Equivalent to applying a mutation with an empty row, created with given timestamp
     void apply_insert(const schema& s, clustering_key_view, api::timestamp_type created_at);
     // prefix must not be full
     void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
-    void apply(schema_ptr schema, const mutation_partition& p);
-    void apply(schema_ptr schema, mutation_partition_view);
+    void apply(const schema& schema, const mutation_partition& p);
+    void apply(const schema& schema, mutation_partition_view);
 public:
     deletable_row& clustered_row(const clustering_key& key);
     deletable_row& clustered_row(clustering_key&& key);
@@ -225,7 +225,7 @@ public:
     const rows_type& clustered_rows() const { return _rows; }
     const row_tombstones_type& row_tombstones() const { return _row_tombstones; }
     const row* find_row(const clustering_key& key) const;
-    const rows_entry* find_entry(schema_ptr schema, const clustering_key_prefix& key) const;
+    const rows_entry* find_entry(const schema& schema, const clustering_key_prefix& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;

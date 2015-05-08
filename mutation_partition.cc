@@ -28,14 +28,14 @@ mutation_partition::operator=(const mutation_partition& x) {
 }
 
 void
-mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
+mutation_partition::apply(const schema& schema, const mutation_partition& p) {
     _tombstone.apply(p._tombstone);
 
     for (auto&& e : p._row_tombstones) {
-        apply_row_tombstone(*schema, e.prefix(), e.t());
+        apply_row_tombstone(schema, e.prefix(), e.t());
     }
 
-    auto merge_cells = [this, schema] (row& old_row, const row& new_row, auto&& find_column_def) {
+    static auto merge_cells = [] (row& old_row, const row& new_row, auto&& find_column_def) {
         for (auto&& new_column : new_row) {
             auto col = new_column.first;
             auto i = old_row.find(col);
@@ -49,14 +49,14 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
         }
     };
 
-    auto find_static_column_def = [schema] (auto col) -> const column_definition& { return schema->static_column_at(col); };
-    auto find_regular_column_def = [schema] (auto col) -> const column_definition& { return schema->regular_column_at(col); };
+    auto find_static_column_def = [&schema] (auto col) -> const column_definition& { return schema.static_column_at(col); };
+    auto find_regular_column_def = [&schema] (auto col) -> const column_definition& { return schema.regular_column_at(col); };
 
     merge_cells(_static_row, p._static_row, find_static_column_def);
 
     for (auto&& entry : p._rows) {
         auto& key = entry.key();
-        auto i = _rows.find(key, rows_entry::compare(*schema));
+        auto i = _rows.find(key, rows_entry::compare(schema));
         if (i == _rows.end()) {
             auto e = new rows_entry(entry);
             _rows.insert(i, *e);
@@ -69,9 +69,9 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
 }
 
 void
-mutation_partition::apply(schema_ptr schema, mutation_partition_view p) {
-    mutation_partition_applier applier(*schema, *this);
-    p.accept(*schema, applier);
+mutation_partition::apply(const schema& schema, mutation_partition_view p) {
+    mutation_partition_applier applier(schema, *this);
+    p.accept(schema, applier);
 }
 
 tombstone
@@ -128,24 +128,24 @@ mutation_partition::apply_row_tombstone(const schema& schema, clustering_key_pre
 }
 
 void
-mutation_partition::apply_delete(schema_ptr schema, const exploded_clustering_prefix& prefix, tombstone t) {
+mutation_partition::apply_delete(const schema& schema, const exploded_clustering_prefix& prefix, tombstone t) {
     if (!prefix) {
         apply(t);
-    } else if (prefix.is_full(*schema)) {
-        apply_delete(schema, clustering_key::from_clustering_prefix(*schema, prefix), t);
+    } else if (prefix.is_full(schema)) {
+        apply_delete(schema, clustering_key::from_clustering_prefix(schema, prefix), t);
     } else {
-        apply_row_tombstone(*schema, clustering_key_prefix::from_clustering_prefix(*schema, prefix), t);
+        apply_row_tombstone(schema, clustering_key_prefix::from_clustering_prefix(schema, prefix), t);
     }
 }
 
 void
-mutation_partition::apply_delete(schema_ptr schema, clustering_key&& key, tombstone t) {
-    clustered_row(*schema, std::move(key)).apply(t);
+mutation_partition::apply_delete(const schema& schema, clustering_key&& key, tombstone t) {
+    clustered_row(schema, std::move(key)).apply(t);
 }
 
 void
-mutation_partition::apply_delete(schema_ptr schema, clustering_key_view key, tombstone t) {
-    clustered_row(*schema, key).apply(t);
+mutation_partition::apply_delete(const schema& schema, clustering_key_view key, tombstone t) {
+    clustered_row(schema, key).apply(t);
 }
 
 void
@@ -154,8 +154,8 @@ mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::
 }
 
 const rows_entry*
-mutation_partition::find_entry(schema_ptr schema, const clustering_key_prefix& key) const {
-    auto i = _rows.find(key, rows_entry::key_comparator(clustering_key::less_compare_with_prefix(*schema)));
+mutation_partition::find_entry(const schema& schema, const clustering_key_prefix& key) const {
+    auto i = _rows.find(key, rows_entry::key_comparator(clustering_key::less_compare_with_prefix(schema)));
     if (i == _rows.end()) {
         return nullptr;
     }

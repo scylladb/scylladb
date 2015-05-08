@@ -30,7 +30,7 @@ namespace statements {
 
 void delete_statement::add_update_for_key(mutation& m, const exploded_clustering_prefix& prefix, const update_parameters& params) {
     if (_column_operations.empty()) {
-        m.partition().apply_delete(s, prefix, params.make_tombstone());
+        m.partition().apply_delete(*s, prefix, params.make_tombstone());
         return;
     }
 
