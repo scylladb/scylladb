@@ -162,7 +162,7 @@ private:
     }
     inline void read_64(temporary_buffer<char>& data, state next_state) {
         if (data.size() >= sizeof(uint64_t)) {
-            _u64 = consume_be<uint64_t>(data);
+            _u32 = consume_be<uint64_t>(data);
         } else {
             std::copy(data.begin(), data.end(), _read_int.bytes);
             _pos = data.size();
