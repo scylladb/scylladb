@@ -170,6 +170,7 @@ urchin_tests = [
     'tests/cartesian_product_test',
     'tests/urchin/hash_test',
     'tests/urchin/serializer_test',
+    'tests/urchin/map_difference_test',
     'tests/urchin/message',
     'tests/urchin/gossip',
     'tests/urchin/compound_test',
