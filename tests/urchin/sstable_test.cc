@@ -786,8 +786,8 @@ public:
         BOOST_REQUIRE(start_col == bytes({0, 9, 'f', 'a', 'v', 'o', 'r', 'i', 't', 'e', 's', -1}));
         BOOST_REQUIRE(end_col == as_bytes({0, 9, 'f', 'a', 'v', 'o', 'r', 'i', 't', 'e', 's', 1}));
         // Note the range tombstone have an interesting, not default, deltime.
-        BOOST_REQUIRE(deltime.local_deletion_time == 1297062948U);
-        BOOST_REQUIRE(deltime.marked_for_delete_at == 1428855312063525UL);
+        BOOST_REQUIRE(deltime.local_deletion_time == 1428855312U);
+        BOOST_REQUIRE(deltime.marked_for_delete_at == 1428855312063524UL);
     }
 };
 
