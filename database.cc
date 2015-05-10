@@ -32,8 +32,9 @@ memtable::memtable(schema_ptr schema)
         , partitions(dht::decorated_key::less_comparator(_schema)) {
 }
 
-column_family::column_family(schema_ptr schema)
+column_family::column_family(schema_ptr schema, config config)
     : _schema(std::move(schema))
+    , _config(std::move(config))
     , _memtables({memtable(_schema)})
 { }
 
@@ -500,7 +501,7 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
 }
 
 void
-keyspace::create_replication_strategy(config::ks_meta_data& ksm) {
+keyspace::create_replication_strategy(::config::ks_meta_data& ksm) {
     static thread_local locator::token_metadata tm;
     static locator::simple_snitch snitch;
     static std::unordered_map<sstring, sstring> options = {{"replication_factor", "3"}};
@@ -520,6 +521,18 @@ keyspace::create_replication_strategy(config::ks_meta_data& ksm) {
 locator::abstract_replication_strategy&
 keyspace::get_replication_strategy() {
     return *_replication_strategy;
+}
+
+column_family::config
+keyspace::make_column_family_config(const schema& s) const {
+    column_family::config cfg;
+    cfg.datadir = column_family_directory(s.cf_name(), s.id());
+    return cfg;
+}
+
+sstring
+keyspace::column_family_directory(const sstring& name, utils::UUID uuid) const {
+    return sprint("%s/%s-%s", _config.datadir, name, uuid);
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) throw (no_such_column_family) {
@@ -544,7 +557,7 @@ database::find_or_create_keyspace(const sstring& name) {
     if (i != _keyspaces.end()) {
         return i->second;
     }
-    return _keyspaces.emplace(name, keyspace()).first->second;
+    return _keyspaces.emplace(name, keyspace(make_keyspace_config(name))).first->second;
 }
 
 void
@@ -703,6 +716,13 @@ future<> database::apply(const frozen_mutation& m) {
         });
     }
     return apply_in_memory(m);
+}
+
+keyspace::config
+database::make_keyspace_config(sstring name) const {
+    keyspace::config cfg;
+    cfg.datadir = sprint("%s/%s", _cfg->data_file_directories(), name);
+    return cfg;
 }
 
 namespace db {

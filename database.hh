@@ -76,7 +76,13 @@ public:
 };
 
 class column_family {
+public:
+    struct config {
+        sstring datadir;
+    };
+private:
     schema_ptr _schema;
+    config _config;
     std::vector<memtable> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
@@ -91,7 +97,7 @@ public:
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
 public:
-    column_family(schema_ptr schema);
+    column_family(schema_ptr schema, config cfg);
     column_family(column_family&&) = default;
     ~column_family();
     schema_ptr schema() const { return _schema; }
@@ -141,11 +147,21 @@ public:
 };
 
 class keyspace {
-    std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
 public:
+    struct config {
+        sstring datadir;
+    };
+private:
+    std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
+    config _config;
+public:
+    explicit keyspace(config cfg) : _config(std::move(cfg)) {}
     user_types_metadata _user_types;
-    void create_replication_strategy(config::ks_meta_data& ksm);
+    void create_replication_strategy(::config::ks_meta_data& ksm);
     locator::abstract_replication_strategy& get_replication_strategy();
+    column_family::config make_column_family_config(const schema& s) const;
+private:
+    sstring column_family_directory(const sstring& name, utils::UUID uuid) const;
 };
 
 class no_such_keyspace : public std::runtime_error {
@@ -215,6 +231,7 @@ public:
     unsigned shard_of(const frozen_mutation& m);
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
     future<> apply(const frozen_mutation&);
+    keyspace::config make_keyspace_config(sstring name) const;
     friend std::ostream& operator<<(std::ostream& out, const database& db);
 };
 

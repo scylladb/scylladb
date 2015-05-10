@@ -208,7 +208,8 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-    column_family cf(s);
+    column_family::config cfg;
+    column_family cf(s, cfg);
 
     const column_definition& r1_col = *s->get_column_definition("r1");
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -244,7 +245,8 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
         {{"p1", int32_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-    column_family cf(s);
+    column_family::config cfg;
+    column_family cf(s, cfg);
     std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
 
     const column_definition& r1_col = *s->get_column_definition("r1");

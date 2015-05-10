@@ -1001,10 +1001,11 @@ std::vector<schema_ptr> all_tables() {
 }
 
 void make(database& db) {
-    keyspace ks;
+    auto kscfg = db.make_keyspace_config("system");
+    keyspace ks{std::move(kscfg)};
     db.add_keyspace("system", std::move(ks));
     for (auto&& table : all_tables()) {
-        db.add_column_family(column_family(table));
+        db.add_column_family(column_family(table, ks.make_column_family_config(*table)));
     }
 }
 

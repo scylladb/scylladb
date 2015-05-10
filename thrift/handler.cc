@@ -428,7 +428,7 @@ public:
             cf_ids.push_back(utils::UUID_gen::get_time_UUID());
         });
         _db.invoke_on_all([this, ks_def = std::move(ks_def), cf_ids = std::move(cf_ids)] (database& db) {
-            keyspace& ks = db.add_keyspace(ks_def.name, keyspace());
+            keyspace& ks = db.add_keyspace(ks_def.name, keyspace(db.make_keyspace_config(ks_def.name)));
             std::vector<schema_ptr> cf_defs;
             cf_defs.reserve(ks_def.cf_defs.size());
             auto id_iterator = cf_ids.begin();
@@ -449,7 +449,8 @@ public:
                 auto s = make_lw_shared(schema(id, ks_def.name, cf_def.name,
                     std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
                     std::vector<schema::column>(), column_name_type));
-                column_family cf(s);
+                auto& ks = db.find_keyspace(ks_def.name);
+                column_family cf(s, ks.make_column_family_config(*s));
                 db.add_column_family(std::move(cf));
                 cf_defs.push_back(s);
             }
