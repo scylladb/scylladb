@@ -89,6 +89,7 @@ private:
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
     unsigned _sstable_generation = 1;
+    unsigned _mutation_count = 0;
 private:
     memtable& active_memtable() { return _memtables.back(); }
     struct merge_comparator;
@@ -122,6 +123,7 @@ private:
     template <typename Func>
     bool for_all_partitions(Func&& func) const;
     future<> probe_file(sstring sstdir, sstring fname);
+    void seal_on_overflow();
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
@@ -246,13 +248,25 @@ class secondary_index_manager {};
 inline
 void
 column_family::apply(const mutation& m) {
-    return active_memtable().apply(m);
+    active_memtable().apply(m);
+    seal_on_overflow();
+}
+
+inline
+void
+column_family::seal_on_overflow() {
+    // FIXME: something better
+    if (++_mutation_count == 10000) {
+        _mutation_count = 0;
+        seal_active_memtable();
+    }
 }
 
 inline
 void
 column_family::apply(const frozen_mutation& m) {
-    return active_memtable().apply(m);
+    active_memtable().apply(m);
+    seal_on_overflow();
 }
 
 #endif /* DATABASE_HH_ */
