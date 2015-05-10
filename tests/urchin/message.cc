@@ -112,7 +112,7 @@ public:
                 {ep1, endpoint_state()},
             };
             gms::gossip_digest_ack2 ack2(std::move(eps));
-            return ms.send_message_oneway<void>(messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(ack2)).then([] () {
+            return ms.send_message_oneway(messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(ack2)).then([] () {
                 print("Client sent gossip_digest_ack2 got reply = void\n");
                 return make_ready_future<>();
             });
@@ -123,7 +123,7 @@ public:
         print("=== %s ===\n", __func__);
         auto id = get_shard_id();
         empty_msg msg;
-        return ms.send_message_oneway<void>(messaging_verb::GOSSIP_SHUTDOWN, std::move(id), std::move(msg)).then([] () {
+        return ms.send_message_oneway(messaging_verb::GOSSIP_SHUTDOWN, std::move(id), std::move(msg)).then([] () {
             print("Client sent gossip_shutdown got reply = void\n");
             return make_ready_future<>();
         });

@@ -195,7 +195,7 @@ bool gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> eps
             }
         }
         gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
-        return ms().send_message_oneway<void>(messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(ack2_msg)).then([] () {
+        return ms().send_message_oneway(messaging_verb::GOSSIP_DIGEST_ACK2, std::move(id), std::move(ack2_msg)).then([] () {
             return make_ready_future<>();
         });
     });
@@ -1181,7 +1181,7 @@ void gossiper::stop() {
     // logger.info("Announcing shutdown");
     // Uninterruptibles.sleepUninterruptibly(INTERVAL_IN_MILLIS * 2, TimeUnit.MILLISECONDS);
     for (inet_address ep : _live_endpoints) {
-        ms().send_message_oneway<void>(messaging_verb::GOSSIP_SHUTDOWN, get_shard_id(ep), ep).then([]{
+        ms().send_message_oneway(messaging_verb::GOSSIP_SHUTDOWN, get_shard_id(ep), ep).then([]{
         });
     }
 }
