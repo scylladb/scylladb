@@ -88,6 +88,7 @@ private:
     std::vector<memtable> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
+    unsigned _sstable_generation = 1;
 private:
     memtable& active_memtable() { return _memtables.back(); }
     struct merge_comparator;

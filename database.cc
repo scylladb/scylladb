@@ -281,7 +281,22 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
 
 void
 column_family::seal_active_memtable() {
+    auto& old = _memtables.back();
     _memtables.emplace_back(_schema);
+    sstring name = sprint("%s/%s-%s-%d.%d-Data.db",
+            _config.datadir,
+            _schema->ks_name(), _schema->cf_name(),
+            engine().cpu_id(),
+            _sstable_generation++);
+    if (!_config.enable_disk_writes) {
+        return;
+    }
+    // FIXME: write all components
+    sstables::write_datafile(old, name).then_wrapped([name] (future<> ret) {
+        // FIXME: add to read set, or handle exception
+        // FIXME: drop memtable
+        print("Warning: wrote %s/%s, abandoning\n", name);
+    });
     // FIXME: start flushing the previously-active memtable
     // FIXME: remove the flushed memtable when done
     // FIXME: release commit log
