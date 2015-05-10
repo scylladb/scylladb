@@ -72,6 +72,11 @@ public:
     int version;
     sstring value;
 public:
+    bool operator==(const versioned_value& other) const {
+        return version == other.version &&
+               value   == other.value;
+    }
+
     versioned_value()
         : version(version_generator::get_next_version())
         , value("") {

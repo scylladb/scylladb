@@ -35,6 +35,10 @@ private:
     int32_t _generation;
     int32_t _version;
 public:
+    bool operator==(const heart_beat_state& other) const {
+        return _generation == other._generation && _version == other._version;
+    }
+
     heart_beat_state(int32_t gen)
         : _generation(gen)
         , _version(0) {

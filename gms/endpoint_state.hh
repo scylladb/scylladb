@@ -43,6 +43,13 @@ private:
     db_clock::time_point _update_timestamp;
     bool _is_alive;
 public:
+    bool operator==(const endpoint_state& other) const {
+        return _heart_beat_state  == other._heart_beat_state &&
+               _application_state == other._application_state &&
+               _update_timestamp  == other._update_timestamp &&
+               _is_alive          == other._is_alive;
+    }
+
     endpoint_state()
         : _heart_beat_state(0)
         , _update_timestamp(db_clock::now())
