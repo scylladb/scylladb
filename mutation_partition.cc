@@ -3,6 +3,7 @@
  */
 
 #include "mutation_partition.hh"
+#include "mutation_partition_applier.hh"
 
 mutation_partition::mutation_partition(const mutation_partition& x)
         : _tombstone(x._tombstone)
@@ -65,6 +66,12 @@ mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
             merge_cells(i->row().cells, entry.row().cells, find_regular_column_def);
         }
     }
+}
+
+void
+mutation_partition::apply(schema_ptr schema, mutation_partition_view p) {
+    mutation_partition_applier applier(*schema, *this);
+    p.accept(*schema, applier);
 }
 
 tombstone
@@ -133,14 +140,17 @@ mutation_partition::apply_delete(schema_ptr schema, const exploded_clustering_pr
 
 void
 mutation_partition::apply_delete(schema_ptr schema, clustering_key&& key, tombstone t) {
-    auto i = _rows.lower_bound(key, rows_entry::compare(*schema));
-    if (i == _rows.end() || !i->key().equal(*schema, key)) {
-        auto e = new rows_entry(std::move(key));
-        e->row().apply(t);
-        _rows.insert(i, *e);
-    } else {
-        i->row().apply(t);
-    }
+    clustered_row(*schema, std::move(key)).apply(t);
+}
+
+void
+mutation_partition::apply_delete(schema_ptr schema, clustering_key_view key, tombstone t) {
+    clustered_row(*schema, key).apply(t);
+}
+
+void
+mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::timestamp_type created_at) {
+    clustered_row(s, key).apply(created_at);
 }
 
 const rows_entry*
@@ -159,6 +169,17 @@ mutation_partition::find_row(const clustering_key& key) const {
         return nullptr;
     }
     return &i->row().cells;
+}
+
+deletable_row&
+mutation_partition::clustered_row(clustering_key&& key) {
+    auto i = _rows.find(key);
+    if (i == _rows.end()) {
+        auto e = new rows_entry(std::move(key));
+        _rows.insert(i, *e);
+        return e->row();
+    }
+    return i->row();
 }
 
 deletable_row&

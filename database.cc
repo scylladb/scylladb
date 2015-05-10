@@ -22,6 +22,8 @@
 #include "locator/simple_snitch.hh"
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/function_output_iterator.hpp>
+#include "frozen_mutation.hh"
+#include "mutation_partition_applier.hh"
 
 thread_local logging::logger dblog("database");
 
@@ -87,6 +89,16 @@ column_family::find_row(const dht::decorated_key& partition_key, const clusterin
 
 mutation_partition&
 column_family::find_or_create_partition_slow(const partition_key& key) {
+    return find_or_create_partition(dht::global_partitioner().decorate_key(*_schema, key));
+}
+
+mutation_partition&
+memtable::find_or_create_partition_slow(partition_key_view key) {
+    // FIXME: Perform lookup using std::pair<token, partition_key_view>
+    // to avoid unconditional copy of the partition key.
+    // We can't do it right now because std::map<> which holds
+    // partitions doesn't support heterogenous lookup.
+    // We could switch to boost::intrusive_map<> similar to what we have for row keys.
     return find_or_create_partition(dht::global_partitioner().decorate_key(*_schema, key));
 }
 
@@ -388,6 +400,15 @@ database::shard_of(const mutation& m) {
     return shard_of(m.token());
 }
 
+unsigned
+database::shard_of(const frozen_mutation& m) {
+    // FIXME: This lookup wouldn't be necessary if we
+    // sent the partition key in legacy form or together
+    // with token.
+    schema_ptr schema = find_schema(m.column_family_id());
+    return shard_of(dht::global_partitioner().get_token(*schema, m.key(*schema)));
+}
+
 keyspace& database::add_keyspace(sstring name, keyspace k) {
     if (_keyspaces.count(name) != 0) {
         throw std::invalid_argument("Keyspace " + name + " already exists");
@@ -537,6 +558,12 @@ memtable::apply(const mutation& m) {
     p.apply(_schema, m.partition());
 }
 
+void
+memtable::apply(const frozen_mutation& m) {
+    mutation_partition& p = find_or_create_partition_slow(m.key(*_schema));
+    p.apply(_schema, m.partition());
+}
+
 // Based on:
 //  - org.apache.cassandra.db.AbstractCell#reconcile()
 //  - org.apache.cassandra.db.BufferExpiringCell#reconcile()
@@ -646,32 +673,16 @@ std::ostream& operator<<(std::ostream& out, const atomic_cell_or_collection& c) 
     return out << to_hex(c._data);
 }
 
-void print_partition(std::ostream& out, const schema& s, const mutation_partition& mp) {
-    out << "{rows={\n";
-    for (auto&& e : mp.range(s, query::range<clustering_key_prefix>())) {
-        out << e.key() << " => ";
-        for (auto&& cell_e : e.row().cells) {
-            out << cell_e.first << ":";
-            out << cell_e.second << " ";
-        }
-        out << "\n";
-    }
-    out << "}}";
-}
-
 std::ostream& operator<<(std::ostream& os, const mutation& m) {
     fprint(os, "{mutation: schema %p key %s data ", m.schema().get(), m.key());
-    print_partition(os, *m.schema(), m.partition());
-    os << "}";
+    os << m.partition() << "}";
     return os;
 }
 
 std::ostream& operator<<(std::ostream& out, const column_family& cf) {
     out << "{\n";
     cf.for_all_partitions([&] (const dht::decorated_key& key, const mutation_partition& mp) {
-        out << key << " => ";
-        print_partition(out, *cf._schema, mp);
-        out << "\n";
+        out << key << " => " << mp << "\n";
         return true;
     });
     out << "}";
@@ -688,9 +699,9 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     return out;
 }
 
-future<> database::apply_in_memory(const mutation& m) {
+future<> database::apply_in_memory(const frozen_mutation& m) {
     try {
-        auto& cf = find_column_family(m.schema());
+        auto& cf = find_column_family(m.column_family_id());
         cf.apply(m);
     } catch (no_such_column_family&) {
         // TODO: log a warning
@@ -699,14 +710,14 @@ future<> database::apply_in_memory(const mutation& m) {
     return make_ready_future<>();
 }
 
-future<> database::apply(const mutation& m) {
+future<> database::apply(const frozen_mutation& m) {
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
     if (_commitlog != nullptr) {
-        db::serializer<mutation> ms(*this, m);
-        auto uuid = m.schema()->id();
-        return _commitlog->add_mutation(uuid, ms.size(), ms).then([&m, this](auto rp) {
+        auto uuid = m.column_family_id();
+        bytes_view repr = m.representation();
+        return _commitlog->add_mutation(uuid, repr.size(), [repr] (data_output& out) { out.write(repr); }).then([&m, this](auto rp) {
             return this->apply_in_memory(m);
         });
     }
@@ -758,4 +769,3 @@ future<>
 database::stop() {
     return make_ready_future<>();
 }
-

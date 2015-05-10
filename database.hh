@@ -39,6 +39,8 @@
 #include "keys.hh"
 #include "mutation.hh"
 
+class frozen_mutation;
+
 namespace sstables {
 
 class sstable;
@@ -65,8 +67,10 @@ public:
     explicit memtable(schema_ptr schema);
     schema_ptr schema() const { return _schema; }
     mutation_partition& find_or_create_partition(const dht::decorated_key& key);
+    mutation_partition& find_or_create_partition_slow(partition_key_view key);
     const_mutation_partition_ptr find_partition(const dht::decorated_key& key) const;
     void apply(const mutation& m);
+    void apply(const frozen_mutation& m);
     const partitions_type& all_partitions() const;
 };
 
@@ -96,6 +100,7 @@ public:
     const_mutation_partition_ptr find_partition_slow(const partition_key& key) const;
     row& find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key);
     const_row_ptr find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) const;
+    void apply(const frozen_mutation& m);
     void apply(const mutation& m);
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd) const;
@@ -110,9 +115,6 @@ private:
     template <typename Func>
     bool for_all_partitions(Func&& func) const;
     future<> probe_file(sstring sstdir, sstring fname);
-    // Returns at most "limit" rows. The limit must be greater than 0.
-    void get_partition_slice(mutation_partition& partition, const query::partition_slice& slice,
-        uint32_t limit, query::result::partition_writer&);
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
@@ -171,7 +173,7 @@ class database {
     std::unique_ptr<db::config> _cfg;
 
     future<> init_commitlog();
-    future<> apply_in_memory(const mutation&);
+    future<> apply_in_memory(const frozen_mutation&);
     future<> populate(sstring datadir);
 public:
     database();
@@ -212,8 +214,9 @@ public:
     future<> stop();
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
+    unsigned shard_of(const frozen_mutation& m);
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
-    future<> apply(const mutation&);
+    future<> apply(const frozen_mutation&);
     friend std::ostream& operator<<(std::ostream& out, const database& db);
 };
 
@@ -229,6 +232,12 @@ column_family::find_or_create_partition(const dht::decorated_key& key) {
 inline
 void
 column_family::apply(const mutation& m) {
+    return active_memtable().apply(m);
+}
+
+inline
+void
+column_family::apply(const frozen_mutation& m) {
     return active_memtable().apply(m);
 }
 

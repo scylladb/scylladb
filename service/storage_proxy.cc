@@ -27,6 +27,7 @@
 #include "db/serializer.hh"
 #include "storage_proxy.hh"
 #include "unimplemented.hh"
+#include "frozen_mutation.hh"
 #include "query_result_merger.hh"
 
 #include <boost/range/algorithm_ext/push_back.hpp>
@@ -473,6 +474,14 @@ namespace service {
 
 future<>
 storage_proxy::mutate_locally(const mutation& m) {
+    auto shard = _db.local().shard_of(m);
+    return _db.invoke_on(shard, [m = freeze(m)] (database& db) -> future<> {
+        return db.apply(m);
+    });
+}
+
+future<>
+storage_proxy::mutate_locally(const frozen_mutation& m) {
     auto shard = _db.local().shard_of(m);
     return _db.invoke_on(shard, [&m] (database& db) -> future<> {
         return db.apply(m);

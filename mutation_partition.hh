@@ -13,6 +13,7 @@
 #include "keys.hh"
 #include "atomic_cell.hh"
 #include "query-result-writer.hh"
+#include "mutation_partition_view.hh"
 
 // FIXME: Encapsulate
 using row = std::map<column_id, atomic_cell_or_collection>;
@@ -28,6 +29,12 @@ struct deletable_row final {
 
     void apply(tombstone t_) {
         t.apply(t_);
+    }
+
+    void apply(api::timestamp_type new_created_at) {
+        if (new_created_at > created_at) {
+            created_at = new_created_at;
+        }
     }
 
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
@@ -182,6 +189,7 @@ private:
 
     template<typename T>
     friend class db::serializer;
+    friend class mutation_partition_applier;
 public:
     mutation_partition(schema_ptr s)
         : _rows(rows_entry::compare(*s))
@@ -196,15 +204,20 @@ public:
     void apply(tombstone t) { _tombstone.apply(t); }
     void apply_delete(schema_ptr schema, const exploded_clustering_prefix& prefix, tombstone t);
     void apply_delete(schema_ptr schema, clustering_key&& key, tombstone t);
+    void apply_delete(schema_ptr schema, clustering_key_view key, tombstone t);
+    // Equivalent to applying a mutation with an empty row, created with given timestamp
+    void apply_insert(const schema& s, clustering_key_view, api::timestamp_type created_at);
     // prefix must not be full
     void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
     void apply(schema_ptr schema, const mutation_partition& p);
+    void apply(schema_ptr schema, mutation_partition_view);
     row& static_row() { return _static_row; }
     // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
     const rows_type& clustered_rows() const { return _rows; }
     const row& static_row() const { return _static_row; }
     const row_tombstones_type& row_tombstones() const { return _row_tombstones; }
     deletable_row& clustered_row(const clustering_key& key);
+    deletable_row& clustered_row(clustering_key&& key);
     deletable_row& clustered_row(const schema& s, const clustering_key_view& key);
     const row* find_row(const clustering_key& key) const;
     const rows_entry* find_entry(schema_ptr schema, const clustering_key_prefix& key) const;
@@ -213,6 +226,7 @@ public:
     tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;
     friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
     boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r) const;
+    // Returns at most "limit" rows. The limit must be greater than 0.
     void query(const schema& s, const query::partition_slice& slice, uint32_t limit, query::result::partition_writer& pw) const;
 public:
     bool equal(const schema& s, const mutation_partition&) const;
