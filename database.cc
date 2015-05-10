@@ -177,9 +177,14 @@ column_family::for_all_partitions_slow(std::function<bool (const dht::decorated_
 
 
 row&
-column_family::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
+memtable::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
     mutation_partition& p = find_or_create_partition_slow(partition_key);
     return p.clustered_row(clustering_key).cells();
+}
+
+row&
+column_family::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
+    return active_memtable().find_or_create_row_slow(partition_key, clustering_key);
 }
 
 class lister {
