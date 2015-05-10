@@ -1072,6 +1072,11 @@ public:
         }
     }
 #endif
+    void invalidate_cached_rings() {
+        // TODO:
+        //ringVersion++;
+        //cachedTokenMap.set(null);
+    }
 };
 
 }

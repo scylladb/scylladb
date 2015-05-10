@@ -1035,6 +1035,24 @@ utils::UUID set_local_host_id(const utils::UUID& host_id) {
     // executeInternal(String.format(req, LOCAL, LOCAL), hostId);
     return host_id;
 }
-
+std::unordered_map<gms::inet_address, endpoint_dc_rack>
+load_dc_rack_info()
+{
+    std::unordered_map<gms::inet_address, endpoint_dc_rack> result;
+#if 0 //TODO
+    for (UntypedResultSet.Row row : executeInternal("SELECT peer, data_center, rack from system." + PEERS))
+    {
+        InetAddress peer = row.getInetAddress("peer");
+        if (row.has("data_center") && row.has("rack"))
+        {
+            Map<String, String> dcRack = new HashMap<>();
+            dcRack.put("data_center", row.getString("data_center"));
+            dcRack.put("rack", row.getString("rack"));
+            result.put(peer, dcRack);
+        }
+    }
+#endif
+    return result;
+}
 } // namespace system_keyspace
 } // namespace db
