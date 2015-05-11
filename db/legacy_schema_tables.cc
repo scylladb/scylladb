@@ -28,6 +28,7 @@
 #include "system_keyspace.hh"
 
 #include "query-result-set.hh"
+#include "map_difference.hh"
 
 #include "core/do_with.hh"
 
@@ -548,25 +549,37 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         std::vector<sstring> altered;
         std::set<sstring> dropped;
 
-        for (auto&& right : after) {
-            auto left = before.find(right.first);
-            if (left != before.end()) {
-                schema_ptr s = keyspaces();
-                auto b = left->first._key.get_component(*s, 0);
-                sstring keyspace_name = boost::any_cast<sstring>(utf8_type->deserialize(b));
-                auto&& pre  = left->second;
-                auto&& post = right.second;
-                if (!pre->empty() && !post->empty()) {
-                    altered.emplace_back(keyspace_name);
-                } else if (!pre->empty()) {
-                    dropped.emplace(keyspace_name);
-                } else if (!post->empty()) { // a (re)created keyspace
-                    created.emplace_back(std::move(right));
-                }
-            } else {
-                if (!right.second->empty()) {
-                    created.emplace_back(std::move(right));
-                }
+        /*
+         * - we don't care about entriesOnlyOnLeft() or entriesInCommon(), because only the changes are of interest to us
+         * - of all entriesOnlyOnRight(), we only care about ones that have live columns; it's possible to have a ColumnFamily
+         *   there that only has the top-level deletion, if:
+         *      a) a pushed DROP KEYSPACE change for a keyspace hadn't ever made it to this node in the first place
+         *      b) a pulled dropped keyspace that got dropped before it could find a way to this node
+         * - of entriesDiffering(), we don't care about the scenario where both pre and post-values have zero live columns:
+         *   that means that a keyspace had been recreated and dropped, and the recreated keyspace had never found a way
+         *   to this node
+         */
+        auto diff = difference(before, after);
+
+        for (auto&& entry : diff.entries_only_on_right) {
+            if (!entry.second->empty()) {
+                created.emplace_back(std::move(entry));
+            }
+        }
+        for (auto&& entry : diff.entries_differing) {
+            schema_ptr s = keyspaces();
+            auto b = entry.first._key.get_component(*s, 0);
+            sstring keyspace_name = boost::any_cast<sstring>(utf8_type->deserialize(b));
+
+            auto&& pre  = entry.second.left_value;
+            auto&& post = entry.second.right_value;
+
+            if (!pre->empty() && !post->empty()) {
+                altered.emplace_back(keyspace_name);
+            } else if (!pre->empty()) {
+                dropped.emplace(keyspace_name);
+            } else if (!post->empty()) { // a (re)created keyspace
+                created.emplace_back(entry.first, std::move(post));
             }
         }
         return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
