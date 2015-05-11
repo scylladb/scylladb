@@ -392,10 +392,15 @@ public:
     }
 
     std::vector<type_instance_id> get_instance_ids() {
-        std::vector<type_instance_id> res(_values.size());
-        int pos = 0;
+        std::vector<type_instance_id> res;
         for (auto i: _values) {
-            res[pos++] = i.first;
+            // Need to check for empty value_list, since unreg is two-stage.
+            // Not an issue for most uses, but unit testing etc that would like
+            // fully deterministic operation here would like us to only return
+            // actually active ids
+            if (i.second) {
+                res.emplace_back(i.first);
+            }
         }
         return res;
     }
