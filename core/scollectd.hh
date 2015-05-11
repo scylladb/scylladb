@@ -40,6 +40,7 @@
 #include "future.hh"
 #include "net/byteorder.hh"
 #include "core/shared_ptr.hh"
+#include "core/sstring.hh"
 
 /**
  * Implementation of rudimentary collectd data gathering.
@@ -104,15 +105,16 @@ static inline typed<T> make_typed(data_type type, T&& t) {
     return typed<T>(type, std::forward<T>(t));
 }
 
-typedef std::string plugin_id;
-typedef std::string plugin_instance_id;
-typedef std::string type_id;
+typedef sstring plugin_id;
+typedef sstring plugin_instance_id;
+typedef sstring type_id;
+typedef sstring type_instance;
 
 class type_instance_id {
 public:
     type_instance_id() = default;
     type_instance_id(const plugin_id & p, const plugin_instance_id & pi,
-            const type_id & t, const std::string & ti = std::string())
+            const type_id & t, const scollectd::type_instance & ti = std::string())
     : _plugin(p), _plugin_instance(pi), _type(t), _type_instance(ti) {
     }
     type_instance_id(type_instance_id &&) = default;
@@ -130,7 +132,7 @@ public:
     const type_id & type() const {
         return _type;
     }
-    const std::string & type_instance() const {
+    const scollectd::type_instance & type_instance() const {
         return _type_instance;
     }
     bool operator<(const type_instance_id&) const;
@@ -139,7 +141,7 @@ private:
     plugin_id _plugin;
     plugin_instance_id _plugin_instance;
     type_id _type;
-    std::string _type_instance;
+    scollectd::type_instance _type_instance;
 };
 
 extern const plugin_instance_id per_cpu_plugin_instance;
@@ -387,7 +389,7 @@ static auto make_type_instance(_Args && ... args) -> values_impl < decltype(valu
 template<typename ... _Args>
 static type_instance_id add_polled_metric(const plugin_id & plugin,
         const plugin_instance_id & plugin_instance, const type_id & type,
-        const std::string & type_instance, _Args&& ... args) {
+        const scollectd::type_instance & type_instance, _Args&& ... args) {
     return add_polled_metric(
             type_instance_id(plugin, plugin_instance, type, type_instance),
             std::forward<_Args>(args)...);
@@ -395,7 +397,7 @@ static type_instance_id add_polled_metric(const plugin_id & plugin,
 template<typename ... _Args>
 static future<> send_explicit_metric(const plugin_id & plugin,
         const plugin_instance_id & plugin_instance, const type_id & type,
-        const std::string & type_instance, _Args&& ... args) {
+        const scollectd::type_instance & type_instance, _Args&& ... args) {
     return send_explicit_metric(
             type_instance_id(plugin, plugin_instance, type, type_instance),
             std::forward<_Args>(args)...);
@@ -403,7 +405,7 @@ static future<> send_explicit_metric(const plugin_id & plugin,
 template<typename ... _Args>
 static notify_function create_explicit_metric(const plugin_id & plugin,
         const plugin_instance_id & plugin_instance, const type_id & type,
-        const std::string & type_instance, _Args&& ... args) {
+        const scollectd::type_instance & type_instance, _Args&& ... args) {
     return create_explicit_metric(
             type_instance_id(plugin, plugin_instance, type, type_instance),
             std::forward<_Args>(args)...);
@@ -434,7 +436,7 @@ static notify_function create_explicit_metric(const type_instance_id & id,
 }
 
 // Send a message packet (string)
-future<> send_notification(const type_instance_id & id, const std::string & msg);
+future<> send_notification(const type_instance_id & id, const sstring & msg);
 };
 
 #endif /* SCOLLECTD_HH_ */

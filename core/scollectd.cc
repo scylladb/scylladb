@@ -69,7 +69,7 @@ class impl {
     net::udp_channel _chan;
     timer<> _timer;
 
-    std::string _host = "localhost";
+    sstring _host = "localhost";
     ipv4_addr _addr = default_addr;
     clock_type::duration _period = default_period;
     uint64_t _num_packets = 0;
@@ -99,14 +99,14 @@ public:
         return _chan.send(_addr, net::packet(out.data(), out.size()));
     }
     future<> send_notification(const type_instance_id & id,
-            const std::string & msg) {
+            const sstring & msg) {
         cpwriter out;
         out.put(_host, id);
         out.put(part_type::Message, msg);
         return _chan.send(_addr, net::packet(out.data(), out.size()));
     }
     // initiates actual value polling -> send to target "loop"
-    void start(const std::string & host, const ipv4_addr & addr,
+    void start(const sstring & host, const ipv4_addr & addr,
             const clock_type::duration period) {
         _period = period;
         _addr = addr;
@@ -201,7 +201,7 @@ private:
         buffer_type _buf;
         mark_type _pos;
 
-        std::unordered_map<uint16_t, std::string> _cache;
+        std::unordered_map<uint16_t, sstring> _cache;
 
         cpwriter()
                 : _pos(_buf.begin()) {
@@ -250,17 +250,17 @@ private:
             write(p, e);
             return *this;
         }
-        cpwriter & write(const std::string & s) {
+        cpwriter & write(const sstring & s) {
             write(s.begin(), s.end() + 1); // include \0
             return *this;
         }
-        cpwriter & put(part_type type, const std::string & s) {
+        cpwriter & put(part_type type, const sstring & s) {
             write(uint16_t(type));
             write(uint16_t(4 + s.size() + 1)); // include \0
             write(s); // include \0
             return *this;
         }
-        cpwriter & put_cached(part_type type, const std::string & s) {
+        cpwriter & put_cached(part_type type, const sstring & s) {
             auto & cached = _cache[uint16_t(type)];
             if (cached != s) {
                 put(type, s);
@@ -289,7 +289,7 @@ private:
             _pos += s * sizeof(uint64_t);
             return *this;
         }
-        cpwriter & put(const std::string & host, const type_instance_id & id) {
+        cpwriter & put(const sstring & host, const type_instance_id & id) {
             const auto ts = std::chrono::system_clock::now().time_since_epoch();
             const auto lrts =
                     std::chrono::duration_cast<std::chrono::seconds>(ts).count();
@@ -303,13 +303,13 @@ private:
             // Optional
             put_cached(part_type::PluginInst,
                     id.plugin_instance() == per_cpu_plugin_instance ?
-                            std::to_string(engine().cpu_id()) : id.plugin_instance());
+                            to_sstring(engine().cpu_id()) : id.plugin_instance());
             put_cached(part_type::Type, id.type());
             // Optional
             put_cached(part_type::TypeInst, id.type_instance());
             return *this;
         }
-        cpwriter & put(const std::string & host,
+        cpwriter & put(const sstring & host,
                 const clock_type::duration & period,
                 const type_instance_id & id, const value_list & v) {
             const auto ps = std::chrono::duration_cast<collectd_hres_duration>(
@@ -420,7 +420,7 @@ void remove_polled_metric(const type_instance_id & id) {
 }
 
 future<> send_notification(const type_instance_id & id,
-        const std::string & msg) {
+        const sstring & msg) {
     return get_impl().send_notification(id, msg);
 }
 
