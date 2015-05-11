@@ -897,11 +897,9 @@ static future<> write_static_column_name(output_stream<char>& out, const bytes& 
 
 // Intended to write all cell components that follow column name.
 static future<> write_cell(output_stream<char>& out, atomic_cell_view cell) {
-    // FIXME: deleted cell isn't supported yet.
+    // FIXME: range tombstone and counter cells aren't supported yet.
 
     uint64_t timestamp = cell.timestamp();
-    disk_string_view<uint32_t> cell_value;
-    cell_value.value = cell.value();
 
     if (cell.is_live_and_has_ttl()) {
         // expiring cell
@@ -909,14 +907,24 @@ static future<> write_cell(output_stream<char>& out, atomic_cell_view cell) {
         column_mask mask = column_mask::expiration;
         uint32_t ttl = cell.ttl().count();
         uint32_t expiration = cell.expiry().time_since_epoch().count();
+        disk_string_view<uint32_t> cell_value { cell.value() };
 
         return do_with(std::move(cell_value), [&out, mask, ttl, expiration, timestamp] (auto& cell_value) {
             return write(out, mask, ttl, expiration, timestamp, cell_value);
         });
+    } else if (cell.is_dead()) {
+        // tombstone cell
+
+        column_mask mask = column_mask::deletion;
+        uint32_t deletion_time_size = sizeof(uint32_t);
+        uint32_t deletion_time = cell.deletion_time().time_since_epoch().count();
+
+        return write(out, mask, timestamp, deletion_time_size, deletion_time);
     } else {
         // regular cell
 
         column_mask mask = column_mask::none;
+        disk_string_view<uint32_t> cell_value { cell.value() };
 
         return do_with(std::move(cell_value), [&out, mask, timestamp] (auto& cell_value) {
             return write(out, mask, timestamp, cell_value);
