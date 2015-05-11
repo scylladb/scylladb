@@ -209,6 +209,8 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
         {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
     column_family::config cfg;
+    cfg.enable_disk_reads = false;
+    cfg.enable_disk_writes = false;
     column_family cf(s, cfg);
 
     const column_definition& r1_col = *s->get_column_definition("r1");
@@ -246,6 +248,8 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
         {{"p1", int32_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
     column_family::config cfg;
+    cfg.enable_disk_reads = false;
+    cfg.enable_disk_writes = false;
     column_family cf(s, cfg);
     std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
 

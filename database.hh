@@ -79,6 +79,8 @@ class column_family {
 public:
     struct config {
         sstring datadir;
+        bool enable_disk_writes = true;
+        bool enable_disk_reads = true;
     };
 private:
     schema_ptr _schema;
@@ -150,6 +152,8 @@ class keyspace {
 public:
     struct config {
         sstring datadir;
+        bool enable_disk_reads = true;
+        bool enable_disk_writes = true;
     };
 private:
     std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;

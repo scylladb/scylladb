@@ -527,6 +527,8 @@ column_family::config
 keyspace::make_column_family_config(const schema& s) const {
     column_family::config cfg;
     cfg.datadir = column_family_directory(s.cf_name(), s.id());
+    cfg.enable_disk_reads = _config.enable_disk_reads;
+    cfg.enable_disk_writes = _config.enable_disk_writes;
     return cfg;
 }
 
