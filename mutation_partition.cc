@@ -37,15 +37,7 @@ mutation_partition::apply(const schema& schema, const mutation_partition& p) {
 
     static auto merge_cells = [] (row& old_row, const row& new_row, auto&& find_column_def) {
         for (auto&& new_column : new_row) {
-            auto col = new_column.first;
-            auto i = old_row.find(col);
-            if (i == old_row.end()) {
-                old_row.emplace_hint(i, new_column);
-            } else {
-                auto& old_column = *i;
-                auto& def = find_column_def(col);
-                merge_column(def, old_column.second, new_column.second);
-            }
+            old_row.apply(new_column.first, new_column.second, find_column_def);
         }
     };
 
@@ -228,22 +220,22 @@ template <typename ColumnDefResolver>
 static void get_row_slice(const row& cells, const std::vector<column_id>& columns, tombstone tomb,
         ColumnDefResolver&& id_to_def, query::result::row_writer& writer) {
     for (auto id : columns) {
-        auto i = cells.find(id);
-        if (i == cells.end()) {
+        const atomic_cell_or_collection* cell = cells.find_cell(id);
+        if (!cell) {
             writer.add_empty();
         } else {
             auto&& def = id_to_def(id);
             if (def.is_atomic()) {
-                auto c = i->second.as_atomic_cell();
+                auto c = cell->as_atomic_cell();
                 if (!c.is_live(tomb)) {
                     writer.add_empty();
                 } else {
-                    writer.add(i->second.as_atomic_cell());
+                    writer.add(cell->as_atomic_cell());
                 }
             } else {
-                auto&& cell = i->second.as_collection_mutation();
+                auto&& mut = cell->as_collection_mutation();
                 auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
-                auto m_view = ctype->deserialize_mutation_form(cell);
+                auto m_view = ctype->deserialize_mutation_form(mut);
                 m_view.tomb.apply(tomb);
                 auto m_ser = ctype->serialize_mutation_form_only_live(m_view);
                 if (ctype->is_empty(m_ser)) {
@@ -413,4 +405,45 @@ bool mutation_partition::equal(const schema& s, const mutation_partition& p) con
     }
 
     return rows_equal(s, _static_row, p._static_row);
+}
+
+void
+merge_column(const column_definition& def,
+             atomic_cell_or_collection& old,
+             const atomic_cell_or_collection& neww) {
+    if (def.is_atomic()) {
+        if (compare_atomic_cell_for_merge(old.as_atomic_cell(), neww.as_atomic_cell()) < 0) {
+            // FIXME: move()?
+            old = neww;
+        }
+    } else {
+        auto ct = static_pointer_cast<const collection_type_impl>(def.type);
+        old = ct->merge(old.as_collection_mutation(), neww.as_collection_mutation());
+    }
+}
+
+void
+row::apply(const column_definition& column, atomic_cell_or_collection value) {
+    // our mutations are not yet immutable
+    auto id = column.id;
+    auto i = _cells.lower_bound(id);
+    if (i == _cells.end() || i->first != id) {
+        _cells.emplace_hint(i, id, std::move(value));
+    } else {
+        merge_column(column, i->second, value);
+    }
+}
+
+void
+row::append_cell(column_id id, atomic_cell_or_collection value) {
+    _cells.emplace_hint(_cells.end(), id, std::move(value));
+}
+
+const atomic_cell_or_collection*
+row::find_cell(column_id id) const {
+    auto i = _cells.find(id);
+    if (i == _cells.end()) {
+        return nullptr;
+    }
+    return &i->second;
 }

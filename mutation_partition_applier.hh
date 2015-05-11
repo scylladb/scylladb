@@ -13,16 +13,6 @@ class mutation_partition_applier : public mutation_partition_visitor {
     const schema& _schema;
     mutation_partition& _p;
     deletable_row* _current_row;
-private:
-    template <typename ColumnIdResolver>
-    void apply_cell(row& r, column_id id, atomic_cell_or_collection c, ColumnIdResolver&& resolver) {
-        auto i = r.lower_bound(id);
-        if (i == r.end() || i->first != id) {
-            r.emplace_hint(i, id, std::move(c));
-        } else {
-            merge_column(resolver(id), i->second, std::move(c));
-        }
-    }
 public:
     mutation_partition_applier(const schema& s, mutation_partition& target)
         : _schema(s), _p(target) { }
@@ -32,12 +22,12 @@ public:
     }
 
     virtual void accept_static_cell(column_id id, atomic_cell_view cell) override {
-        apply_cell(_p._static_row, id, atomic_cell_or_collection(cell),
+        _p._static_row.apply(id, atomic_cell_or_collection(cell),
             [this](column_id id) -> const column_definition& { return _schema.static_column_at(id); });
     }
 
     virtual void accept_static_cell(column_id id, collection_mutation::view collection) override {
-        apply_cell(_p._static_row, id, atomic_cell_or_collection(collection),
+        _p._static_row.apply(id, atomic_cell_or_collection(collection),
             [this](column_id id) -> const column_definition& { return _schema.static_column_at(id); });
     }
 
@@ -53,12 +43,12 @@ public:
     }
 
     virtual void accept_row_cell(column_id id, atomic_cell_view cell) override {
-        apply_cell(_current_row->cells, id, atomic_cell_or_collection(cell),
+        _current_row->cells.apply(id, atomic_cell_or_collection(cell),
             [this](column_id id) -> const column_definition& { return _schema.regular_column_at(id); });
     }
 
     virtual void accept_row_cell(column_id id, collection_mutation::view collection) override {
-        apply_cell(_current_row->cells, id, atomic_cell_or_collection(collection),
+        _current_row->cells.apply(id, atomic_cell_or_collection(collection),
             [this](column_id id) -> const column_definition& { return _schema.regular_column_at(id); });
     }
 };

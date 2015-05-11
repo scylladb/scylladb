@@ -601,21 +601,6 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
     return 0;
 }
 
-void
-merge_column(const column_definition& def,
-             atomic_cell_or_collection& old,
-             const atomic_cell_or_collection& neww) {
-    if (def.is_atomic()) {
-        if (compare_atomic_cell_for_merge(old.as_atomic_cell(), neww.as_atomic_cell()) < 0) {
-            // FIXME: move()?
-            old = neww;
-        }
-    } else {
-        auto ct = static_pointer_cast<const collection_type_impl>(def.type);
-        old = ct->merge(old.as_collection_mutation(), neww.as_collection_mutation());
-    }
-}
-
 future<lw_shared_ptr<query::result>>
 column_family::query(const query::read_command& cmd) const {
     query::result::builder builder(cmd.slice);

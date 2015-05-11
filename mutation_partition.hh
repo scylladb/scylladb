@@ -15,8 +15,47 @@
 #include "query-result-writer.hh"
 #include "mutation_partition_view.hh"
 
-// FIXME: Encapsulate
-using row = std::map<column_id, atomic_cell_or_collection>;
+// Container for cells of a row. Cells are identified by column_id.
+//
+// Can be used as a range of std::pair<column_id, atomic_cell_or_collection>.
+//
+class row {
+    using map_type = std::map<column_id, atomic_cell_or_collection>;
+    map_type _cells;
+public:
+    using value_type = map_type::value_type;
+    using iterator = map_type::iterator;
+    using const_iterator = map_type::const_iterator;
+public:
+    iterator begin() { return _cells.begin(); }
+    iterator end() { return _cells.end(); }
+    const_iterator begin() const { return _cells.begin(); }
+    const_iterator end() const { return _cells.end(); }
+    size_t size() const { return _cells.size(); }
+
+    // Returns a reference to cell's value or throws std::out_of_range
+    const atomic_cell_or_collection& cell_at(column_id id) const { return _cells.at(id); }
+
+    // Returns a pointer to cell's value or nullptr if column is not set.
+    const atomic_cell_or_collection* find_cell(column_id id) const;
+public:
+    // Merges cell's value into the row.
+    void apply(const column_definition& column, atomic_cell_or_collection cell);
+
+    // Adds cell to the row. The column must not be already set.
+    void append_cell(column_id id, atomic_cell_or_collection cell);
+
+    // Merges given cell into the row.
+    template <typename ColumnDefinitionResolver>
+    void apply(column_id id, atomic_cell_or_collection cell, ColumnDefinitionResolver&& resolver) {
+        auto i = _cells.lower_bound(id);
+        if (i == _cells.end() || i->first != id) {
+            _cells.emplace_hint(i, id, std::move(cell));
+        } else {
+            merge_column(resolver(id), i->second, std::move(cell));
+        }
+    }
+};
 
 std::ostream& operator<<(std::ostream& os, const row::value_type& rv);
 std::ostream& operator<<(std::ostream& os, const row& r);
