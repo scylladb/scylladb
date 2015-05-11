@@ -7,4 +7,4 @@
 
 #include "locator/simple_snitch.hh"
 #include "locator/rack_inferring_snitch.hh"
-
+#include "locator/gossiping_property_file_snitch.hh"
