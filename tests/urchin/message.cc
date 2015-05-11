@@ -7,6 +7,8 @@
 #include "gms/gossip_digest_ack2.hh"
 #include "gms/gossip_digest.hh"
 #include "core/sleep.hh"
+#include "http/httpd.hh"
+#include "api/api.hh"
 
 using namespace std::chrono_literals;
 using namespace net;
@@ -169,18 +171,37 @@ int main(int ac, char ** av) {
     app.add_options()
         ("server", bpo::value<std::string>(), "Server ip")
         ("listen-address", bpo::value<std::string>()->default_value("0.0.0.0"), "IP address to listen")
+        ("api-port", bpo::value<uint16_t>()->default_value(10000), "Http Rest API port")
+        ("stay-alive", bpo::value<bool>()->default_value(false), "Do not kill the test server after the test")
         ("cpuid", bpo::value<uint32_t>()->default_value(0), "Server cpuid");
-    return app.run(ac, av, [&app] {
+
+    distributed<database> db;
+    api::http_context ctx(db);
+
+    return app.run(ac, av, [&app, &ctx] {
         auto config = app.configuration();
+        uint16_t api_port = config["api-port"].as<uint16_t>();
+        bool stay_alive = config["stay-alive"].as<bool>();
+        if (config.count("server")) {
+            api_port++;
+        }
         const gms::inet_address listen = gms::inet_address(config["listen-address"].as<std::string>());
-        net::get_messaging_service().start(listen).then([config] () {
+        net::get_messaging_service().start(listen).then([config, api_port, &ctx, stay_alive] () {
             auto testers = new distributed<tester>;
             testers->start().then([testers]{
                 auto& server = net::get_local_messaging_service();
                 auto port = server.port();
                 std::cout << "Messaging server listening on port " << port << " ...\n";
                 return testers->invoke_on_all(&tester::init_handler);
-            }).then([testers, config] {
+            }).then([api_port, &ctx] {
+                return ctx.http_server.start();
+            }).then([api_port, &ctx] {
+                return set_server(ctx);
+            }).then([&ctx, api_port] {
+                return ctx.http_server.listen(api_port);
+            }).then([api_port] {
+                    std::cout << "Seastar HTTP server listening on port " << api_port << " ...\n";
+            }).then([testers, config, stay_alive] {
                 auto t = &testers->local();
                 if (!config.count("server")) {
                     return;
@@ -197,7 +218,10 @@ int main(int ac, char ** av) {
                     return t->test_echo();
                 }).then([testers, t] {
                     return t->test_exception();
-                }).then([testers, t] {
+                }).then([testers, t, stay_alive] {
+                    if (stay_alive) {
+                        return;
+                    }
                     print("=============TEST DONE===========\n");
                     testers->stop().then([testers] {
                         delete testers;
