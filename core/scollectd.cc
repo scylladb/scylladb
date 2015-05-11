@@ -34,6 +34,7 @@
 #include "scollectd.hh"
 #include "core/future-util.hh"
 #include "net/api.hh"
+#include "scollectd_api.hh"
 
 bool scollectd::type_instance_id::operator<(
         const scollectd::type_instance_id& id2) const {
@@ -385,6 +386,20 @@ private:
             arm();
         });
     }
+public:
+    shared_ptr<value_list> get_values(const type_instance_id & id) {
+        return _values[id];
+    }
+
+    std::vector<type_instance_id> get_instance_ids() {
+        std::vector<type_instance_id> res(_values.size());
+        int pos = 0;
+        for (auto i: _values) {
+            res[pos++] = i.first;
+        }
+        return res;
+    }
+
 private:
     value_list_map _values;
     std::vector<registration> _regs;
@@ -450,5 +465,40 @@ boost::program_options::options_description get_options_description() {
             bpo::value<std::string>()->default_value(hostname),
             "collectd host name");
     return opts;
+}
+
+std::vector<collectd_value> get_collectd_value(
+        shared_ptr<scollectd::type_instance_id> id) {
+    std::vector<collectd_value> res_values;
+    auto raw_types = get_impl().get_values(*id);
+    if (raw_types == nullptr) {
+        return res_values;
+    }
+    std::vector<data_type> types(raw_types->size());
+    raw_types->types(&(*types.begin()));
+    std::vector<net::packed<uint64_t>> value(raw_types->size());
+    raw_types->values(&(*value.begin()));
+
+    auto i = value.begin();
+    for (auto t : types) {
+        collectd_value c(t, be64toh(*i));
+        res_values.push_back(c);
+    }
+    return res_values;
+}
+
+std::vector<data_type> get_collectd_types(
+        const scollectd::type_instance_id& id) {
+    auto res = get_impl().get_values(id);
+    if (res == nullptr) {
+        return std::vector<data_type>();
+    }
+    std::vector<data_type> vals(res->size());
+    res->types(&(*vals.begin()));
+    return vals;
+}
+
+std::vector<scollectd::type_instance_id> get_collectd_ids() {
+    return get_impl().get_instance_ids();
 }
 }

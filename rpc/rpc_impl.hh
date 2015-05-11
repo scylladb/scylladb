@@ -300,7 +300,7 @@ auto send_helper(MsgType t, std::index_sequence<I...>) {
         auto xargs = std::tie(m->t, m->id, std::get<I>(m->args)...); // holds references to all message elements
         promise<> sent; // will be fulfilled when data is sent
         auto fsent = sent.get_future();
-        dst.out_ready() = dst.out_ready().then([&dst, xargs = std::move(xargs), m = std::move(m), sent = std::move(sent)] () mutable {
+        dst.out_ready() = dst.out_ready().then([&dst, xargs = std::move(xargs), m = std::move(m)] () mutable {
             return marshall(dst.serializer(), dst.out(), std::move(xargs)).then([m = std::move(m)] {});
         }).finally([sent = std::move(sent)] () mutable {
             sent.set_value();

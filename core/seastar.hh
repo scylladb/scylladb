@@ -47,5 +47,6 @@ future<connected_socket> connect(socket_address sa);
 // File API
 future<file> open_file_dma(sstring name, open_flags flags);
 future<file> open_directory(sstring name);
+future<> make_directory(sstring name);
 future<> remove_file(sstring pathname);
 
