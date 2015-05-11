@@ -170,12 +170,12 @@ struct registration {
     registration(type_instance_id&& id)
     : _id(std::move(id)) {
     }
-    registration(const registration&) = default;
+    registration(const registration&) = delete;
     registration(registration&&) = default;
     ~registration() {
         unregister();
     }
-    registration & operator=(const registration&) = default;
+    registration & operator=(const registration&) = delete;
     registration & operator=(registration&&) = default;
 
     void unregister() {
@@ -184,6 +184,34 @@ struct registration {
     }
 private:
     type_instance_id _id;
+};
+
+/**
+ * Helper type to make generating vectors of registration objects
+ * easier, since it constructs from an initializer list of
+ * type_instance_id:s, avoiding early conversion to registration objs,
+ * which in case of init lists, are copy semantics, not move...
+ */
+class registrations
+    : public std::vector<registration>
+{
+public:
+    typedef std::vector<registration> vector_type;
+
+    registrations()
+    {}
+    registrations(vector_type&& v) : vector_type(std::move(v))
+    {}
+    registrations(const std::initializer_list<type_instance_id>& l)
+        : vector_type(l.begin(),l.end())
+    {}
+    registrations& operator=(vector_type&& v) {
+        vector_type::operator=(std::move(v));
+        return *this;
+    }
+    registrations& operator=(const std::initializer_list<type_instance_id>& l) {
+        return registrations::operator=(registrations(l));
+    }
 };
 
 // lots of template junk to build typed value list tuples

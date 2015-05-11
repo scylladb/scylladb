@@ -748,12 +748,12 @@ void reactor::exit(int ret) {
 
 
 struct reactor::collectd_registrations {
-    std::vector<scollectd::registration> regs;
+    scollectd::registrations regs;
 };
 
 reactor::collectd_registrations
 reactor::register_collectd_metrics() {
-    std::vector<scollectd::registration> regs = {
+    return collectd_registrations{ {
             // queue_length     value:GAUGE:0:U
             // Absolute value of num tasks in queue.
             scollectd::add_polled_metric(scollectd::type_instance_id("reactor"
@@ -810,8 +810,7 @@ reactor::register_collectd_metrics() {
                 scollectd::make_typed(scollectd::data_type::GAUGE,
                         [] { return memory::stats().live_objects(); })
             ),
-    };
-    return { regs };
+    } };
 }
 
 void reactor::run_tasks(circular_buffer<std::unique_ptr<task>>& tasks, size_t quota) {
@@ -1187,7 +1186,7 @@ void smp_message_queue::start(unsigned cpuid) {
     _tx.init();
     char instance[10];
     std::snprintf(instance, sizeof(instance), "%u-%u", engine().cpu_id(), cpuid);
-    _collectd_regs = {
+    _collectd_regs = scollectd::registrations({
             // queue_length     value:GAUGE:0:U
             // Absolute value of num packets in last tx batch.
             scollectd::add_polled_metric(scollectd::type_instance_id("smp"
@@ -1228,7 +1227,7 @@ void smp_message_queue::start(unsigned cpuid) {
                     , "total_operations", "completed-messages")
             , scollectd::make_typed(scollectd::data_type::DERIVE, _compl)
             ),
-    };
+    });
 }
 
 /* not yet implemented for OSv. TODO: do the notification like we do class smp. */

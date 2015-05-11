@@ -83,10 +83,13 @@ public:
 
     void add_polled(const type_instance_id & id,
             const shared_ptr<value_list> & values) {
-        _values.insert(std::make_pair(id, values));
+        _values[id] = values;
     }
     void remove_polled(const type_instance_id & id) {
-        _values.insert(std::make_pair(id, shared_ptr<value_list>()));
+        auto i = _values.find(id);
+        if (i != _values.end()) {
+            i->second = nullptr;
+        }
     }
     // explicitly send a type_instance value list (outside polling)
     future<> send_metric(const type_instance_id & id,
@@ -148,7 +151,7 @@ public:
                     type_instance_id("scollectd", per_cpu_plugin_instance,
                             "records"),
                     make_typed(data_type::GAUGE, std::bind(&value_list_map::size, &_values))
-            )
+            ),
         };
 
         send_notification(
@@ -407,7 +410,7 @@ public:
 
 private:
     value_list_map _values;
-    std::vector<registration> _regs;
+    registrations _regs;
 };
 
 impl & get_impl() {
