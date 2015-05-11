@@ -418,7 +418,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
     }
 #endif
 
-    future<std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>>
+    future<std::pair<dht::decorated_key, lw_shared_ptr<query::result_set>>>
     read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
     {
         auto schema = proxy.get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
@@ -427,7 +427,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         return read_schema_partition_for_keyspace(proxy, schema_table_name, keyspace_key);
     }
 
-    future<std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>>
+    future<std::pair<dht::decorated_key, lw_shared_ptr<query::result_set>>>
     read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const dht::decorated_key& keyspace_key)
     {
         return proxy.query_local(system_keyspace::NAME, schema_table_name, keyspace_key).then([keyspace_key] (auto&& rs) {
@@ -544,7 +544,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 
     future<std::set<sstring>> merge_keyspaces(service::storage_proxy& proxy, schema_result&& before, schema_result&& after)
     {
-        std::vector<std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>> created;
+        std::vector<std::pair<dht::decorated_key, lw_shared_ptr<query::result_set>>> created;
         std::vector<sstring> altered;
         std::set<sstring> dropped;
 
@@ -866,7 +866,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      *
      * @param partition Keyspace attributes in serialized form
      */
-    lw_shared_ptr<::config::ks_meta_data> create_keyspace_from_schema_partition(const std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>& result)
+    lw_shared_ptr<::config::ks_meta_data> create_keyspace_from_schema_partition(const std::pair<dht::decorated_key, lw_shared_ptr<query::result_set>>& result)
     {
         auto&& rs = result.second;
         if (rs->empty()) {

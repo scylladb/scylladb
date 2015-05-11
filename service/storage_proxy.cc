@@ -1222,30 +1222,38 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, db::consistency_lev
     }).finally([cmd] {});
 }
 
-future<foreign_ptr<lw_shared_ptr<query::result_set>>>
+// The query_local() method returns a result set value object (which is
+// copyable) that is accessible on the local CPU without having to use
+// the foreign_ptr<> annotation. The result set object is constructed by
+// first performing the query on shard CPU and the building the result
+// set on the local CPU.
+future<lw_shared_ptr<query::result_set>>
 storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const dht::decorated_key& key)
 {
-    auto shard = _db.local().shard_of(key._token);
-    return _db.invoke_on(shard, [ks_name, cf_name, key] (database& db) {
-        auto schema = db.find_schema(ks_name, cf_name);
-        std::vector<query::clustering_range> row_ranges = {query::clustering_range::make_open_ended_both_sides()};
-        std::vector<column_id> regular_cols;
-        boost::range::push_back(regular_cols, schema->regular_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
-        std::vector<column_id> static_cols;
-        boost::range::push_back(static_cols, schema->static_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
-        auto opts = query::partition_slice::option_set::of<
-            query::partition_slice::option::send_partition_key,
-            query::partition_slice::option::send_clustering_key>();
-        query::partition_slice slice{row_ranges, static_cols, regular_cols, opts};
-        std::vector<query::partition_range> pr = {query::partition_range::make_open_ended_both_sides()};
-        auto cmd = make_lw_shared<query::read_command>(schema->id(), pr, slice, std::numeric_limits<uint32_t>::max());
-        return db.query(*cmd).then([key, schema, slice](lw_shared_ptr<query::result>&& result) {
-            query::result_set_builder builder{schema};
-            bytes_ostream w(result->buf());
-            query::result_view view(w.linearize());
-            view.consume(slice, builder);
-            return make_foreign(builder.build());
+    auto&& db = _db.local();
+    auto schema = db.find_schema(ks_name, cf_name);
+    std::vector<query::clustering_range> row_ranges = {query::clustering_range::make_open_ended_both_sides()};
+    std::vector<column_id> regular_cols;
+    boost::range::push_back(regular_cols, schema->regular_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
+    std::vector<column_id> static_cols;
+    boost::range::push_back(static_cols, schema->static_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
+    auto opts = query::partition_slice::option_set::of<
+        query::partition_slice::option::send_partition_key,
+        query::partition_slice::option::send_clustering_key>();
+    query::partition_slice slice{row_ranges, static_cols, regular_cols, opts};
+    std::vector<query::partition_range> pr = {query::partition_range::make_open_ended_both_sides()};
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), pr, slice, std::numeric_limits<uint32_t>::max());
+    auto shard = db.shard_of(key._token);
+    return _db.invoke_on(shard, [cmd] (database& db) {
+        return db.query(*cmd).then([] (lw_shared_ptr<query::result>&& result) {
+            return make_foreign(std::move(result));
         }).finally([cmd] {});
+    }).then([this, schema, slice] (auto&& result) {
+        query::result_set_builder builder{schema};
+        bytes_ostream w(result->buf());
+        query::result_view view(w.linearize());
+        view.consume(slice, builder);
+        return builder.build();
     });
 }
 
