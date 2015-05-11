@@ -9,6 +9,7 @@
 #include "gossiper.hh"
 #include "failure_detector.hh"
 #include "column_family.hh"
+#include "messaging_service.hh"
 
 namespace api {
 
@@ -32,6 +33,10 @@ future<> set_server(http_context& ctx) {
         rb->register_function(r, "failure_detector",
                                 "The failure detector API");
         set_failure_detector(ctx,r);
+
+        rb->register_function(r, "messaging_service",
+                "The messaging service API");
+        set_messaging_service(ctx, r);
 
     });
 }

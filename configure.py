@@ -319,6 +319,8 @@ api = ['api/api.cc',
        'api/failure_detector.cc',
        'api/api-doc/column_family.json',
        'api/column_family.cc',
+       'api/messaging_service.cc',
+       'api/api-doc/messaging_service.json',
        ]
 
 boost_test_lib = [
