@@ -481,7 +481,7 @@ for t in urchin_tests:
 deps['tests/urchin/cql_query_test'] += boost_test_lib
 deps['tests/urchin/commitlog_test'] += boost_test_lib
 deps['tests/urchin/config_test'] += boost_test_lib
-deps['tests/urchin/sstable_test'] += boost_test_lib
+deps['tests/urchin/sstable_test'] += boost_test_lib + ['tests/urchin/sstable_datafile_test.cc']
 deps['tests/urchin/hash_test'] += boost_test_lib
 deps['tests/urchin/serializer_test'] += boost_test_lib
 
