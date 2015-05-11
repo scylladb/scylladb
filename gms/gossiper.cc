@@ -759,7 +759,7 @@ void gossiper::reset_endpoint_state_map() {
     _live_endpoints.clear();
 }
 
-std::map<inet_address, endpoint_state>&gms::gossiper::get_endpoint_states() {
+std::unordered_map<inet_address, endpoint_state>& gms::gossiper::get_endpoint_states() {
     return endpoint_state_map;
 }
 

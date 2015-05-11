@@ -29,6 +29,7 @@
 #include "gms/i_failure_detection_event_listener.hh"
 #include "gms/versioned_value.hh"
 #include "gms/application_state.hh"
+#include "gms/endpoint_state.hh"
 #include "message/messaging_service.hh"
 #include <boost/algorithm/string.hpp>
 #include <experimental/optional>
@@ -40,7 +41,6 @@ class gossip_digest_syn;
 class gossip_digest_ack;
 class gossip_digest_ack2;
 class gossip_digest;
-class endpoint_state;
 class inet_address;
 class i_endpoint_state_change_subscriber;
 class i_failure_detector;
@@ -121,7 +121,7 @@ public:
     }
 public:
     /* map where key is the endpoint and value is the state associated with the endpoint */
-    std::map<inet_address, endpoint_state> endpoint_state_map;
+    std::unordered_map<inet_address, endpoint_state> endpoint_state_map;
 
     const std::vector<sstring> DEAD_STATES = { versioned_value::REMOVING_TOKEN, versioned_value::REMOVED_TOKEN,
                                                versioned_value::STATUS_LEFT, versioned_value::HIBERNATE };
@@ -334,7 +334,7 @@ public:
     // removes ALL endpoint states; should only be called after shadow gossip
     void reset_endpoint_state_map();
 
-    std::map<inet_address, endpoint_state>& get_endpoint_states();
+    std::unordered_map<inet_address, endpoint_state>& get_endpoint_states();
 
     bool uses_host_id(inet_address endpoint);
 
