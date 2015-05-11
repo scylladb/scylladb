@@ -496,6 +496,15 @@ reactor::open_directory(sstring name) {
 }
 
 future<>
+reactor::make_directory(sstring name) {
+    return _thread_pool.submit<syscall_result<int>>([name = std::move(name)] {
+        return wrap_syscall<int>(::mkdir(name.c_str(), S_IRWXU));
+    }).then([] (syscall_result<int> sr) {
+        sr.throw_if_error();
+    });
+}
+
+future<>
 posix_file_impl::flush(void) {
     return engine()._thread_pool.submit<syscall_result<int>>([this] {
         return wrap_syscall<int>(::fsync(_fd));
@@ -1720,6 +1729,10 @@ future<file> open_file_dma(sstring name, open_flags flags) {
 
 future<file> open_directory(sstring name) {
     return engine().open_directory(std::move(name));
+}
+
+future<> make_directory(sstring name) {
+    return engine().make_directory(std::move(name));
 }
 
 future<> remove_file(sstring pathname) {
