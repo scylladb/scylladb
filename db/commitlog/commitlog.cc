@@ -30,6 +30,7 @@
 
 #include "core/align.hh"
 #include "core/reactor.hh"
+#include "core/scollectd.hh"
 #include "core/future-util.hh"
 #include "core/file.hh"
 #include "core/rwlock.hh"
@@ -112,11 +113,24 @@ public:
     const uint64_t max_mutation_size;
 
     semaphore _new_segment_semaphore;
+    std::vector<scollectd::registration> _regs;
 
     // TODO: verify that we're ok with not-so-great granularity
     using clock_type = lowres_clock;
     using time_point = clock_type::time_point;
     using sseg_ptr = lw_shared_ptr<segment>;
+
+    struct stats {
+        uint64_t cycle_count = 0;
+        uint64_t flush_count = 0;
+        uint64_t allocation_count = 0;
+        uint64_t bytes_written = 0;
+        uint64_t bytes_slack = 0;
+        uint64_t segments_created = 0;
+        uint64_t segments_destroyed = 0;
+    };
+
+    stats totals;
 
     segment_manager(config cfg)
             : cfg(cfg), max_size(
@@ -128,6 +142,7 @@ public:
             cfg.commit_log_location = "/tmp/urchin/commitlog/"
                     + std::to_string(engine().cpu_id());
         }
+        _regs = create_counters();
     }
 
     uint64_t next_id() {
@@ -146,6 +161,8 @@ public:
     future<sseg_ptr> new_segment();
     future<sseg_ptr> active_segment();
     future<> clear();
+
+    std::vector<scollectd::registration> create_counters();
 
     void discard_unused_segments();
     void discard_completed_segments(const cf_id_type& id,
@@ -201,9 +218,12 @@ public:
     static const constexpr size_t default_size = 8 * alignment;
 
     segment(segment_manager* m, const descriptor& d, file && f)
-            : _segment_manager(m), _desc(std::move(d)), _file(std::move(f)) {
+            : _segment_manager(m), _desc(std::move(d)), _file(std::move(f))
+    {
+        ++_segment_manager->totals.segments_created;
     }
     ~segment() {
+        ++_segment_manager->totals.segments_destroyed;
         ::unlink(
                 (_segment_manager->cfg.commit_log_location + "/" + _desc.filename()).c_str());
     }
@@ -255,6 +275,7 @@ public:
                     _sync_time = clock_type::now();
                     return _file.flush().then([this, pos, me = std::move(me)]() {
                                 _flush_pos = std::max(pos, _flush_pos);
+                                ++_segment_manager->totals.flush_count;
                                 return make_ready_future<sseg_ptr>(std::move(me));
                             });
                 });
@@ -324,6 +345,8 @@ public:
                     auto p = buf.get();
                     return _file.dma_write(off, p, size).then([this, size, buf = std::move(buf), me = std::move(me)](size_t written) mutable {
                                 assert(written == size); // we are not equipped to deal with partial writes.
+                                _segment_manager->totals.bytes_written += written;
+                                ++_segment_manager->totals.cycle_count;
                                 return make_ready_future<sseg_ptr>(std::move(me));
                             }).finally([me, this]() {
                                 _dwrite.read_unlock(); // release
@@ -381,6 +404,7 @@ public:
         out = data_output(e, sizeof(uint32_t));
         out.write(crc.checksum());
 
+        ++_segment_manager->totals.allocation_count;
         // finally, check if we're required to sync.
         if (must_sync()) {
             return sync().then([rp](auto seg) {
@@ -405,6 +429,7 @@ public:
         auto size = align_up(_buf_pos, alignment);
         std::fill(_buffer.get_write() + _buf_pos, _buffer.get_write() + size,
                 0);
+        _segment_manager->totals.bytes_slack += (size - _buf_pos);
         return size;
     }
     void mark_clean(const cf_id_type& id, position_type pos) {
@@ -469,6 +494,62 @@ future<> db::commitlog::segment_manager::init() {
                                 });
                     });
         });
+}
+
+std::vector<scollectd::registration> db::commitlog::segment_manager::create_counters() {
+    using scollectd::add_polled_metric;
+    using scollectd::make_typed;
+    using scollectd::type_instance_id;
+    using scollectd::per_cpu_plugin_instance;
+    using scollectd::data_type;
+
+    std::vector<scollectd::registration> regs = {
+        add_polled_metric(type_instance_id("commitlog"
+                        , per_cpu_plugin_instance, "queue_length", "segments")
+                , make_typed(data_type::GAUGE
+                        , std::bind(&decltype(_segments)::size, &_segments))
+        ),
+        add_polled_metric(type_instance_id("commitlog"
+                        , per_cpu_plugin_instance, "queue_length", "allocating_segments")
+                , make_typed(data_type::GAUGE
+                        , [this]() {
+                            return std::count_if(_segments.begin(), _segments.end(), [](const sseg_ptr & s) {
+                                        return s->is_still_allocating();
+                                    });
+                        })
+        ),
+        add_polled_metric(type_instance_id("commitlog"
+                        , per_cpu_plugin_instance, "queue_length", "unused_segments")
+                , make_typed(data_type::GAUGE
+                        , [this]() {
+                            return std::count_if(_segments.begin(), _segments.end(), [](const sseg_ptr & s) {
+                                        return s->is_unused();
+                                    });
+                        })
+        ),
+        add_polled_metric(type_instance_id("commitlog"
+                        , per_cpu_plugin_instance, "total_operations", "alloc")
+                , make_typed(data_type::DERIVE, totals.allocation_count)
+        ),
+        add_polled_metric(type_instance_id("commitlog"
+                        , per_cpu_plugin_instance, "total_operations", "cycle")
+                , make_typed(data_type::DERIVE, totals.cycle_count)
+        ),
+        add_polled_metric(type_instance_id("commitlog"
+                        , per_cpu_plugin_instance, "total_operations", "flush")
+                , make_typed(data_type::DERIVE, totals.flush_count)
+        ),
+
+        add_polled_metric(type_instance_id("commitlog"
+                        , per_cpu_plugin_instance, "total_bytes", "written")
+                , make_typed(data_type::GAUGE, totals.bytes_written)
+        ),
+        add_polled_metric(type_instance_id("commitlog"
+                        , per_cpu_plugin_instance, "total_bytes", "slack")
+                , make_typed(data_type::GAUGE, totals.bytes_slack)
+        ),
+    };
+    return regs;
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment() {
