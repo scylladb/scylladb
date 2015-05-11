@@ -266,6 +266,13 @@ public:
         }
         std::unique_ptr<rpc::protocol<serializer, messaging_verb>::client> rpc_client;
     };
+
+    void foreach_client(std::function<void(const messaging_service::shard_id& id,
+                    const messaging_service::shard_info& info)> f) const {
+        for (auto i = _clients.cbegin(); i != _clients.cend(); i++) {
+            f(i->first, i->second);
+        }
+    }
 private:
     static constexpr uint16_t _default_port = 7000;
     gms::inet_address _listen_address;
