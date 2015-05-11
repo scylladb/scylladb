@@ -200,6 +200,7 @@ private:
 
         buffer_type _buf;
         mark_type _pos;
+        bool _overflow = false;
 
         std::unordered_map<uint16_t, std::string> _cache;
 
@@ -209,8 +210,12 @@ private:
         mark_type mark() const {
             return _pos;
         }
+        bool overflow() const {
+            return _overflow;
+        }
         void reset(mark_type m) {
             _pos = m;
+            _overflow = false;
         }
         size_t size() const {
             return std::distance(_buf.begin(), const_mark_type(_pos));
@@ -221,6 +226,7 @@ private:
         void clear() {
             reset(_buf.begin());
             _cache.clear();
+            _overflow = false;
         }
         const char * data() const {
             return &_buf.at(0);
@@ -228,17 +234,22 @@ private:
         char * data() {
             return &_buf.at(0);
         }
-        void check(size_t sz) const {
-            size_t av = std::distance(const_mark_type(_pos), _buf.end());
-            if (av < sz) {
-                throw std::length_error("buffer overflow");
-            }
+        cpwriter& check(size_t sz) {
+            size_t av = std::distance(_pos, _buf.end());
+            _overflow |= av < sz;
+            return *this;
         }
-
+        explicit operator bool() const {
+            return !_overflow;
+        }
+        bool operator!() const {
+            return !operator bool();
+        }
         template<typename _Iter>
         cpwriter & write(_Iter s, _Iter e) {
-            check(std::distance(s, e));
-            _pos = std::copy(s, e, _pos);
+            if (check(std::distance(s, e))) {
+                _pos = std::copy(s, e, _pos);
+            }
             return *this;
         }
         template<typename T>
@@ -279,14 +290,15 @@ private:
         cpwriter & put(part_type type, const value_list & v) {
             auto s = v.size();
             auto sz = 6 + s + s * sizeof(uint64_t);
-            check(sz);
-            write(uint16_t(type));
-            write(uint16_t(sz));
-            write(uint16_t(s));
-            v.types(reinterpret_cast<data_type *>(&(*_pos)));
-            _pos += s;
-            v.values(reinterpret_cast<net::packed<uint64_t> *>(&(*_pos)));
-            _pos += s * sizeof(uint64_t);
+            if (check(sz)) {
+                write(uint16_t(type));
+                write(uint16_t(sz));
+                write(uint16_t(s));
+                v.types(reinterpret_cast<data_type *>(&(*_pos)));
+                _pos += s;
+                v.values(reinterpret_cast<net::packed<uint64_t> *>(&(*_pos)));
+                _pos += s * sizeof(uint64_t);
+            }
             return *this;
         }
         cpwriter & put(const std::string & host, const type_instance_id & id) {
@@ -353,9 +365,8 @@ private:
                     continue;
                 }
                 auto m = out.mark();
-                try {
-                    out.put(_host, _period, i->first, *i->second);
-                } catch (std::length_error &) {
+                out.put(_host, _period, i->first, *i->second);
+                if (!out) {
                     out.reset(m);
                     break;
                 }
