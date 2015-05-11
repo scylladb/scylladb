@@ -208,7 +208,7 @@ public:
 
     future<> init_from_data_directory();
 
-    keyspace& add_keyspace(sstring name, keyspace k);
+    void add_keyspace(sstring name, keyspace k);
     /** Adds cf with auto-generated UUID. */
     void add_column_family(column_family&&);
     void add_column_family(const utils::UUID&, column_family&&);

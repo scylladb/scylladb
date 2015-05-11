@@ -428,7 +428,7 @@ public:
             cf_ids.push_back(utils::UUID_gen::get_time_UUID());
         });
         _db.invoke_on_all([this, ks_def = std::move(ks_def), cf_ids = std::move(cf_ids)] (database& db) {
-            keyspace& ks = db.add_keyspace(ks_def.name, keyspace(db.make_keyspace_config(ks_def.name)));
+            db.add_keyspace(ks_def.name, keyspace(db.make_keyspace_config(ks_def.name)));
             std::vector<schema_ptr> cf_defs;
             cf_defs.reserve(ks_def.cf_defs.size());
             auto id_iterator = cf_ids.begin();
@@ -460,6 +460,7 @@ public:
                     ks_def.durable_writes,
                     cf_defs,
                     shared_ptr<config::ut_meta_data>());
+            auto& ks = db.find_keyspace(ks_def.name);
             ks.create_replication_strategy(ksm);
         }).then([schema_id = std::move(schema_id)] {
             return make_ready_future<std::string>(std::move(schema_id));

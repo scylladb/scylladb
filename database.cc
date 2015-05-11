@@ -420,11 +420,11 @@ database::shard_of(const frozen_mutation& m) {
     return shard_of(dht::global_partitioner().get_token(*schema, m.key(*schema)));
 }
 
-keyspace& database::add_keyspace(sstring name, keyspace k) {
+void database::add_keyspace(sstring name, keyspace k) {
     if (_keyspaces.count(name) != 0) {
         throw std::invalid_argument("Keyspace " + name + " already exists");
     }
-    return _keyspaces.emplace(std::move(name), std::move(k)).first->second;
+    _keyspaces.emplace(std::move(name), std::move(k));
 }
 
 void database::update_keyspace(const sstring& name) {
