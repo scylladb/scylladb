@@ -60,22 +60,25 @@ public:
 std::ostream& operator<<(std::ostream& os, const row::value_type& rv);
 std::ostream& operator<<(std::ostream& os, const row& r);
 
-// FIXME: Encapsulate
-struct deletable_row final {
-    tombstone t;
-    api::timestamp_type created_at = api::missing_timestamp;
-    row cells;
+class deletable_row final {
+    tombstone _deleted_at;
+    api::timestamp_type _created_at = api::missing_timestamp;
+    row _cells;
+public:
+    deletable_row() {}
 
-    void apply(tombstone t_) {
-        t.apply(t_);
+    void apply(tombstone deleted_at) {
+        _deleted_at.apply(deleted_at);
     }
 
-    void apply(api::timestamp_type new_created_at) {
-        if (new_created_at > created_at) {
-            created_at = new_created_at;
-        }
+    void apply(api::timestamp_type created_at) {
+        _created_at = std::max(_created_at, created_at);
     }
-
+public:
+    tombstone deleted_at() const { return _deleted_at; }
+    api::timestamp_type created_at() const { return _created_at; }
+    const row& cells() const { return _cells; }
+    row& cells() { return _cells; }
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
     bool equal(const schema& s, const deletable_row& other) const;
 };

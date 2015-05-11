@@ -53,9 +53,9 @@ mutation_partition::apply(const schema& schema, const mutation_partition& p) {
             auto e = new rows_entry(entry);
             _rows.insert(i, *e);
         } else {
-            i->row().t.apply(entry.row().t);
-            i->row().created_at = std::max(i->row().created_at, entry.row().created_at);
-            merge_cells(i->row().cells, entry.row().cells, find_regular_column_def);
+            i->row().apply(entry.row().deleted_at());
+            i->row().apply(entry.row().created_at());
+            merge_cells(i->row().cells(), entry.row().cells(), find_regular_column_def);
         }
     }
 }
@@ -94,7 +94,7 @@ mutation_partition::tombstone_for_row(const schema& schema, const clustering_key
 
     auto j = _rows.find(key, rows_entry::compare(schema));
     if (j != _rows.end()) {
-        t.apply(j->row().t);
+        t.apply(j->row().deleted_at());
     }
 
     return t;
@@ -103,7 +103,7 @@ mutation_partition::tombstone_for_row(const schema& schema, const clustering_key
 tombstone
 mutation_partition::tombstone_for_row(const schema& schema, const rows_entry& e) const {
     tombstone t = range_tombstone_for_row(schema, e.key());
-    t.apply(e.row().t);
+    t.apply(e.row().deleted_at());
     return t;
 }
 
@@ -160,7 +160,7 @@ mutation_partition::find_row(const clustering_key& key) const {
     if (i == _rows.end()) {
         return nullptr;
     }
-    return &i->row().cells;
+    return &i->row().cells();
 }
 
 deletable_row&
@@ -303,10 +303,10 @@ mutation_partition::query(const schema& s,
         // only one lookup for a full-tuple singular range though.
         for (const rows_entry& e : range(s, row_range)) {
             auto& row = e.row();
-            auto&& cells = row.cells;
+            auto&& cells = row.cells();
 
             auto row_tombstone = tombstone_for_row(s, e);
-            auto row_is_live = row.created_at > row_tombstone.timestamp;
+            auto row_is_live = row.created_at() > row_tombstone.timestamp;
 
             // row_is_live is true for rows created using 'insert' statement
             // which are not deleted yet. Such rows are considered as present
@@ -340,7 +340,7 @@ operator<<(std::ostream& os, const row& r) {
 
 std::ostream&
 operator<<(std::ostream& os, const deletable_row& dr) {
-    return fprint(os, "{deletable_row: %s %s %s}", dr.created_at, dr.t, dr.cells);
+    return fprint(os, "{deletable_row: %s %s %s}", dr._created_at, dr._deleted_at, dr._cells);
 }
 
 std::ostream&
@@ -370,10 +370,10 @@ rows_equal(const schema& s, const row& r1, const row& r2) {
 
 bool
 deletable_row::equal(const schema& s, const deletable_row& other) const {
-    if (t != other.t || created_at != other.created_at) {
+    if (_deleted_at != other._deleted_at || _created_at != other._created_at) {
         return false;
     }
-    return rows_equal(s, cells, other.cells);
+    return rows_equal(s, _cells, other._cells);
 }
 
 bool

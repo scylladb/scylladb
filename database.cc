@@ -179,7 +179,7 @@ column_family::for_all_partitions_slow(std::function<bool (const dht::decorated_
 row&
 column_family::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
     mutation_partition& p = find_or_create_partition_slow(partition_key);
-    return p.clustered_row(clustering_key).cells;
+    return p.clustered_row(clustering_key).cells();
 }
 
 class lister {

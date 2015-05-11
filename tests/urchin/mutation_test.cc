@@ -267,7 +267,7 @@ BOOST_AUTO_TEST_CASE(test_multiple_memtables_multiple_partitions) {
         auto p1 = boost::any_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
         for (const rows_entry& re : mp.range(*s, query::range<clustering_key_prefix>())) {
             auto c1 = boost::any_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
-            auto cell = re.row().cells.find_cell(r1_col.id);
+            auto cell = re.row().cells().find_cell(r1_col.id);
             if (cell) {
                 result[p1][c1] = boost::any_cast<int32_t>(int32_type->deserialize(cell->as_atomic_cell().value()));
             }

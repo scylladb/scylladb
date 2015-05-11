@@ -184,7 +184,7 @@ public:
         if (col.cell.size() == 0) {
             auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
             auto& dr = mut->partition().clustered_row(clustering_key);
-            dr.created_at = timestamp;
+            dr.apply(timestamp);
             return;
         }
 

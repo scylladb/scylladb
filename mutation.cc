@@ -32,7 +32,7 @@ void mutation::set_static_cell(const bytes& name, const boost::any& value, api::
 }
 
 void mutation::set_clustered_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value) {
-    auto& row = _p.clustered_row(clustering_key::from_clustering_prefix(*_schema, prefix)).cells;
+    auto& row = _p.clustered_row(clustering_key::from_clustering_prefix(*_schema, prefix)).cells();
     row.apply(def, std::move(value));
 }
 
@@ -46,7 +46,7 @@ void mutation::set_clustered_cell(const clustering_key& key, const bytes& name, 
 }
 
 void mutation::set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection value) {
-    auto& row = _p.clustered_row(key).cells;
+    auto& row = _p.clustered_row(key).cells();
     row.apply(def, std::move(value));
 }
 

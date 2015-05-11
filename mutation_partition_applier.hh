@@ -43,12 +43,12 @@ public:
     }
 
     virtual void accept_row_cell(column_id id, atomic_cell_view cell) override {
-        _current_row->cells.apply(id, atomic_cell_or_collection(cell),
+        _current_row->cells().apply(id, atomic_cell_or_collection(cell),
             [this](column_id id) -> const column_definition& { return _schema.regular_column_at(id); });
     }
 
     virtual void accept_row_cell(column_id id, collection_mutation::view collection) override {
-        _current_row->cells.apply(id, atomic_cell_or_collection(collection),
+        _current_row->cells().apply(id, atomic_cell_or_collection(collection),
             [this](column_id id) -> const column_definition& { return _schema.regular_column_at(id); });
     }
 };

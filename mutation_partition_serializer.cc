@@ -53,9 +53,9 @@ mutation_partition_serializer::size(const schema& schema, const mutation_partiti
     for (const rows_entry& e : p.clustered_rows()) {
         size += clustering_key_view_serializer(e.key()).size();
         size += sizeof(api::timestamp_type); // e.row().created_at
-        size += tombstone_serializer(e.row().t).size();
+        size += tombstone_serializer(e.row().deleted_at()).size();
         size += sizeof(count_type); // e.row().cells.size()
-        for (auto&& cell_entry : e.row().cells) {
+        for (auto&& cell_entry : e.row().cells()) {
             size += sizeof(column_id);
             const column_definition& def = schema.regular_column_at(cell_entry.first);
             if (def.is_atomic()) {
@@ -96,10 +96,10 @@ mutation_partition_serializer::write(data_output& out, const schema& schema, con
     // rows
     for (const rows_entry& e : p.clustered_rows()) {
         clustering_key_view_serializer::write(out, e.key());
-        out.write(e.row().created_at);
-        tombstone_serializer::write(out, e.row().t);
-        out.write<count_type>(e.row().cells.size());
-        for (auto&& cell_entry : e.row().cells) {
+        out.write(e.row().created_at());
+        tombstone_serializer::write(out, e.row().deleted_at());
+        out.write<count_type>(e.row().cells().size());
+        for (auto&& cell_entry : e.row().cells()) {
             out.write(cell_entry.first);
             const column_definition& def = schema.regular_column_at(cell_entry.first);
             if (def.is_atomic()) {
