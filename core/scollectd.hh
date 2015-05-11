@@ -326,6 +326,7 @@ public:
 
 class value_list {
 public:
+    virtual ~value_list() {}
     virtual size_t size() const = 0;
 
     virtual void types(data_type *) const = 0;
