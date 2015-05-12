@@ -899,10 +899,31 @@ public:
     static void join_all();
     static bool main_thread() { return std::this_thread::get_id() == _tmain; }
 
+    /// Runs a function on a remote core.
+    ///
+    /// \param t designates the core to run the function on (may be a remote
+    ///          core or the local core).
+    /// \param func a callable to run on core \c t.  If \c func is a temporary object,
+    ///          its lifetime will be extended by moving it.  If @func is a reference,
+    ///          the caller must guarantee that it will survive the call.
+    /// \return whatever \c func returns, as a future<> (if \c func does not return a future,
+    ///         submit_to() will wrap it in a future<>).
     template <typename Func>
     static futurize_t<std::result_of_t<Func()>> submit_to(unsigned t, Func&& func) {
+        using ret_type = std::result_of_t<Func()>;
         if (t == engine().cpu_id()) {
-            return futurize<std::result_of_t<Func()>>::apply(std::forward<Func>(func));
+            if (!is_future<ret_type>::value) {
+                // Non-deferring function, so don't worry about func lifetime
+                return futurize<ret_type>::apply(std::forward<Func>(func));
+            } else if (std::is_lvalue_reference<Func>::value) {
+                // func is an lvalue, so caller worries about its lifetime
+                return futurize<ret_type>::apply(func);
+            } else {
+                // Deferring call on rvalue function, make sure to preserve it across call
+                auto w = std::make_unique<Func>(std::move(func));
+                auto ret = futurize<ret_type>::apply(*w);
+                return ret.finally([w = std::move(w)] {});
+            }
         } else {
             return _qs[t][engine().cpu_id()].submit(std::forward<Func>(func));
         }
