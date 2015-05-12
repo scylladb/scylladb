@@ -40,6 +40,7 @@
 #include "future.hh"
 #include "net/byteorder.hh"
 #include "core/shared_ptr.hh"
+#include "core/sstring.hh"
 
 /**
  * Implementation of rudimentary collectd data gathering.
@@ -104,15 +105,16 @@ static inline typed<T> make_typed(data_type type, T&& t) {
     return typed<T>(type, std::forward<T>(t));
 }
 
-typedef std::string plugin_id;
-typedef std::string plugin_instance_id;
-typedef std::string type_id;
+typedef sstring plugin_id;
+typedef sstring plugin_instance_id;
+typedef sstring type_id;
+typedef sstring type_instance;
 
 class type_instance_id {
 public:
     type_instance_id() = default;
     type_instance_id(const plugin_id & p, const plugin_instance_id & pi,
-            const type_id & t, const std::string & ti = std::string())
+            const type_id & t, const scollectd::type_instance & ti = std::string())
     : _plugin(p), _plugin_instance(pi), _type(t), _type_instance(ti) {
     }
     type_instance_id(type_instance_id &&) = default;
@@ -130,7 +132,7 @@ public:
     const type_id & type() const {
         return _type;
     }
-    const std::string & type_instance() const {
+    const scollectd::type_instance & type_instance() const {
         return _type_instance;
     }
     bool operator<(const type_instance_id&) const;
@@ -139,7 +141,7 @@ private:
     plugin_id _plugin;
     plugin_instance_id _plugin_instance;
     type_id _type;
-    std::string _type_instance;
+    scollectd::type_instance _type_instance;
 };
 
 extern const plugin_instance_id per_cpu_plugin_instance;
@@ -168,12 +170,12 @@ struct registration {
     registration(type_instance_id&& id)
     : _id(std::move(id)) {
     }
-    registration(const registration&) = default;
+    registration(const registration&) = delete;
     registration(registration&&) = default;
     ~registration() {
         unregister();
     }
-    registration & operator=(const registration&) = default;
+    registration & operator=(const registration&) = delete;
     registration & operator=(registration&&) = default;
 
     void unregister() {
@@ -182,6 +184,34 @@ struct registration {
     }
 private:
     type_instance_id _id;
+};
+
+/**
+ * Helper type to make generating vectors of registration objects
+ * easier, since it constructs from an initializer list of
+ * type_instance_id:s, avoiding early conversion to registration objs,
+ * which in case of init lists, are copy semantics, not move...
+ */
+class registrations
+    : public std::vector<registration>
+{
+public:
+    typedef std::vector<registration> vector_type;
+
+    registrations()
+    {}
+    registrations(vector_type&& v) : vector_type(std::move(v))
+    {}
+    registrations(const std::initializer_list<type_instance_id>& l)
+        : vector_type(l.begin(),l.end())
+    {}
+    registrations& operator=(vector_type&& v) {
+        vector_type::operator=(std::move(v));
+        return *this;
+    }
+    registrations& operator=(const std::initializer_list<type_instance_id>& l) {
+        return registrations::operator=(registrations(l));
+    }
 };
 
 // lots of template junk to build typed value list tuples
@@ -324,6 +354,7 @@ public:
 
 class value_list {
 public:
+    virtual ~value_list() {}
     virtual size_t size() const = 0;
 
     virtual void types(data_type *) const = 0;
@@ -387,7 +418,7 @@ static auto make_type_instance(_Args && ... args) -> values_impl < decltype(valu
 template<typename ... _Args>
 static type_instance_id add_polled_metric(const plugin_id & plugin,
         const plugin_instance_id & plugin_instance, const type_id & type,
-        const std::string & type_instance, _Args&& ... args) {
+        const scollectd::type_instance & type_instance, _Args&& ... args) {
     return add_polled_metric(
             type_instance_id(plugin, plugin_instance, type, type_instance),
             std::forward<_Args>(args)...);
@@ -395,7 +426,7 @@ static type_instance_id add_polled_metric(const plugin_id & plugin,
 template<typename ... _Args>
 static future<> send_explicit_metric(const plugin_id & plugin,
         const plugin_instance_id & plugin_instance, const type_id & type,
-        const std::string & type_instance, _Args&& ... args) {
+        const scollectd::type_instance & type_instance, _Args&& ... args) {
     return send_explicit_metric(
             type_instance_id(plugin, plugin_instance, type, type_instance),
             std::forward<_Args>(args)...);
@@ -403,7 +434,7 @@ static future<> send_explicit_metric(const plugin_id & plugin,
 template<typename ... _Args>
 static notify_function create_explicit_metric(const plugin_id & plugin,
         const plugin_instance_id & plugin_instance, const type_id & type,
-        const std::string & type_instance, _Args&& ... args) {
+        const scollectd::type_instance & type_instance, _Args&& ... args) {
     return create_explicit_metric(
             type_instance_id(plugin, plugin_instance, type, type_instance),
             std::forward<_Args>(args)...);
@@ -434,7 +465,7 @@ static notify_function create_explicit_metric(const type_instance_id & id,
 }
 
 // Send a message packet (string)
-future<> send_notification(const type_instance_id & id, const std::string & msg);
+future<> send_notification(const type_instance_id & id, const sstring & msg);
 };
 
 #endif /* SCOLLECTD_HH_ */

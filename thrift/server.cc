@@ -31,7 +31,7 @@ using namespace apache::thrift::async;
 using namespace org::apache::cassandra;
 
 class thrift_stats {
-    std::vector<scollectd::registration> _regs;
+    scollectd::registrations _regs;
 public:
     thrift_stats(thrift_server& server);
 };

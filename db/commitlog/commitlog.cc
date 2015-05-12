@@ -113,7 +113,7 @@ public:
     const uint64_t max_mutation_size;
 
     semaphore _new_segment_semaphore;
-    std::vector<scollectd::registration> _regs;
+    scollectd::registrations _regs;
 
     // TODO: verify that we're ok with not-so-great granularity
     using clock_type = lowres_clock;
@@ -162,7 +162,7 @@ public:
     future<sseg_ptr> active_segment();
     future<> clear();
 
-    std::vector<scollectd::registration> create_counters();
+    scollectd::registrations create_counters();
 
     void discard_unused_segments();
     void discard_completed_segments(const cf_id_type& id,
@@ -496,14 +496,14 @@ future<> db::commitlog::segment_manager::init() {
         });
 }
 
-std::vector<scollectd::registration> db::commitlog::segment_manager::create_counters() {
+scollectd::registrations db::commitlog::segment_manager::create_counters() {
     using scollectd::add_polled_metric;
     using scollectd::make_typed;
     using scollectd::type_instance_id;
     using scollectd::per_cpu_plugin_instance;
     using scollectd::data_type;
 
-    std::vector<scollectd::registration> regs = {
+    return {
         add_polled_metric(type_instance_id("commitlog"
                         , per_cpu_plugin_instance, "queue_length", "segments")
                 , make_typed(data_type::GAUGE
@@ -549,7 +549,6 @@ std::vector<scollectd::registration> db::commitlog::segment_manager::create_coun
                 , make_typed(data_type::GAUGE, totals.bytes_slack)
         ),
     };
-    return regs;
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::new_segment() {

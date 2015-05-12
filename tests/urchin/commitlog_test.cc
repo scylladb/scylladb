@@ -11,9 +11,9 @@
 
 #include "tests/test-utils.hh"
 #include "core/future-util.hh"
+#include "core/scollectd_api.hh"
 #include "utils/UUID_gen.hh"
 #include "db/commitlog/commitlog.hh"
-
 
 using namespace db;
 
@@ -379,6 +379,21 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
                         return log->second.clear().then([log] {});
                     });
         });
+}
+
+SEASTAR_TEST_CASE(test_commitlog_counters) {
+    auto count_cl_counters = []() -> size_t {
+        auto ids = scollectd::get_collectd_ids();
+        return std::count_if(ids.begin(), ids.end(), [](const scollectd::type_instance_id& id) {
+            return id.plugin() == "commitlog";
+        });
+    };
+    BOOST_CHECK_EQUAL(count_cl_counters(), 0);
+    return make_commitlog().then([&](tmplog_ptr log) {
+        BOOST_CHECK_GT(count_cl_counters(), 0);
+    }).finally([&]() {
+        BOOST_CHECK_EQUAL(count_cl_counters(), 0);
+    });
 }
 
 

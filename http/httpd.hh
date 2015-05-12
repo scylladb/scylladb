@@ -52,7 +52,7 @@ class http_stats;
 using namespace std::chrono_literals;
 
 class http_stats {
-    std::vector<scollectd::registration> _regs;
+    scollectd::registrations _regs;
 public:
     http_stats(http_server& server);
 };
