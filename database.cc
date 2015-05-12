@@ -702,8 +702,8 @@ future<> database::apply(const frozen_mutation& m) {
     if (_commitlog != nullptr) {
         auto uuid = m.column_family_id();
         bytes_view repr = m.representation();
-        auto sz = data_output::serialized_size(repr);
-        return _commitlog->add_mutation(uuid, sz, [repr] (data_output& out) { out.write(repr); }).then([&m, this](auto rp) {
+        auto write_repr = [repr] (data_output& out) { out.write(repr.begin(), repr.end()); };
+        return _commitlog->add_mutation(uuid, repr.size(), write_repr).then([&m, this](auto rp) {
             return this->apply_in_memory(m);
         });
     }
