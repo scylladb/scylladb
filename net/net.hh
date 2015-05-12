@@ -220,7 +220,7 @@ class qp {
 protected:
     const std::string _stats_plugin_name;
     const std::string _queue_name;
-    std::vector<scollectd::registration> _collectd_regs;
+    scollectd::registrations _collectd_regs;
     qp_stats _stats;
 
 public:
