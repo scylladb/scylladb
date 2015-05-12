@@ -497,7 +497,7 @@ modification_statement::parsed::prepare(database& db, ::shared_ptr<variable_spec
 }
 
 void
-modification_statement::validate(const service::client_state& state) {
+modification_statement::validate(service::storage_proxy&, const service::client_state& state) {
     if (has_conditions() && attrs->is_timestamp_set()) {
         throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional updates");
     }

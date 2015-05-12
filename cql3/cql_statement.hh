@@ -61,7 +61,7 @@ public:
      *
      * @param state the current client state
      */
-    virtual void validate(const service::client_state& state) = 0;
+    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) = 0;
 
     /**
      * Execute the statement and return the resulting result or null if there is no result.

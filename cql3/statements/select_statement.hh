@@ -115,7 +115,7 @@ public:
 
     virtual uint32_t get_bound_terms() override;
     virtual void check_access(const service::client_state& state) override;
-    virtual void validate(const service::client_state& state) override;
+    virtual void validate(service::storage_proxy&, const service::client_state& state) override;
 
     virtual future<::shared_ptr<transport::messages::result_message>> execute(service::storage_proxy& proxy,
         service::query_state& state, const query_options& options) override;

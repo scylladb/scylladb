@@ -65,7 +65,7 @@ public:
         state.validate_login();
     }
 
-    virtual void validate(const service::client_state& state) override {
+    virtual void validate(service::storage_proxy&, const service::client_state& state) override {
     }
 
     virtual future<::shared_ptr<transport::messages::result_message>>
