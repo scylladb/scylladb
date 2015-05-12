@@ -348,7 +348,6 @@ future<> parse(random_access_reader& in, disk_array<Size, Members>& arr) {
     });
 }
 
-
 template <typename Members>
 typename std::enable_if_t<!std::is_integral<Members>::value, future<>>
 write(output_stream<char>& out, std::vector<Members>& arr) {
