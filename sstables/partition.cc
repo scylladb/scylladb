@@ -87,13 +87,13 @@ class mp_row_consumer : public row_consumer {
 
         static constexpr size_t static_size = 2;
 
-        bool check_static(bytes_view col) const {
+        static bool check_static(bytes_view col) {
             static bytes static_row(static_size, 0xff);
             return col.compare(0, static_size, static_row) == 0;
         }
 
-        bytes_view fix_static_name(bytes_view col) {
-            if (is_static) {
+        static bytes_view fix_static_name(bytes_view col) {
+            if (check_static(col)) {
                 col.remove_prefix(static_size);
             }
             return col;
