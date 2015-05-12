@@ -1186,6 +1186,13 @@ void gossiper::shutdown() {
     }
 }
 
+future<> gossiper::stop() {
+    _scheduled_gossip_task.cancel();
+    return _handlers.stop().then( [] () {
+        return make_ready_future<>();
+    });
+}
+
 bool gossiper::is_enabled() {
     //return (scheduledGossipTask != null) && (!scheduledGossipTask.isCancelled());
     warn(unimplemented::cause::GOSSIP);
