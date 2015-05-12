@@ -65,11 +65,19 @@ std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_meta
 
 lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result::value_type& partition);
 
+future<> merge_tables(service::storage_proxy& proxy, schema_result&& before, schema_result&& after);
+
+lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result::value_type& partition);
+
 mutation make_create_keyspace_mutation(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 
 std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp);
 
+std::map<sstring, schema_ptr> create_tables_from_tables_partition(const schema_result::mapped_type& result);
+
 void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, const partition_key& pkey, std::vector<mutation>& mutations);
+
+schema_ptr create_table_from_table_row(const query::result_set_row& row);
 
 } // namespace legacy_schema_tables
 } // namespace db
