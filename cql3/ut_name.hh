@@ -36,7 +36,7 @@ class ut_name final {
     ::shared_ptr<column_identifier> _ut_name;
 public:
     ut_name(shared_ptr<column_identifier> ks_name, ::shared_ptr<column_identifier> ut_name)
-        : _ks_name{!ks_name ? std::experimental::optional<sstring>{} : std::experimental::optional<sstring>{ks_name->to_string()}}
+        : _ks_name{!ks_name ? std::experimental::nullopt : std::experimental::optional<sstring>{ks_name->to_string()}}
         , _ut_name{ut_name}
     { }
 
