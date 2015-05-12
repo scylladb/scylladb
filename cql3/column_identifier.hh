@@ -34,26 +34,6 @@
 
 namespace cql3 {
 
-#if 0
-import java.util.List;
-import java.util.Locale;
-import java.nio.ByteBuffer;
-
-import org.apache.cassandra.cache.IMeasurableMemory;
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.config.ColumnDefinition;
-import org.apache.cassandra.cql3.selection.Selectable;
-import org.apache.cassandra.cql3.selection.Selector;
-import org.apache.cassandra.cql3.selection.SimpleSelector;
-import org.apache.cassandra.db.marshal.AbstractType;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.db.marshal.CompositeType;
-import org.apache.cassandra.db.marshal.UTF8Type;
-import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.ObjectSizes;
-import org.apache.cassandra.utils.memory.AbstractAllocator;
-#endif
-
 /**
  * Represents an identifer for a CQL column definition.
  * TODO : should support light-weight mode without text representation for when not interned

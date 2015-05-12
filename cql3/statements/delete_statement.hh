@@ -33,22 +33,6 @@ namespace cql3 {
 
 namespace statements {
 
-#if 0
-import java.nio.ByteBuffer;
-import java.util.*;
-
-import com.google.common.collect.Iterators;
-
-import org.apache.cassandra.cql3.*;
-import org.apache.cassandra.cql3.restrictions.Restriction;
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.config.ColumnDefinition;
-import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.composites.Composite;
-import org.apache.cassandra.exceptions.*;
-import org.apache.cassandra.utils.Pair;
-#endif
-
 /**
 * A <code>DELETE</code> parsed from a CQL query statement.
 */

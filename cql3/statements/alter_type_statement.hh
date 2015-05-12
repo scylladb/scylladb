@@ -32,21 +32,6 @@ namespace cql3 {
 
 namespace statements {
 
-#if 0
-import java.nio.ByteBuffer;
-import java.util.*;
-
-import org.apache.cassandra.auth.Permission;
-import org.apache.cassandra.config.*;
-import org.apache.cassandra.cql3.*;
-import org.apache.cassandra.db.composites.CellNames;
-import org.apache.cassandra.db.marshal.*;
-import org.apache.cassandra.exceptions.*;
-import org.apache.cassandra.service.ClientState;
-import org.apache.cassandra.service.MigrationManager;
-import org.apache.cassandra.transport.Event;
-#endif
-
 class alter_type_statement : public schema_altering_statement {
 protected:
     const ::shared_ptr<ut_name> _name;

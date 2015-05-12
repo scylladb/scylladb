@@ -34,22 +34,6 @@ namespace cql3 {
 
 namespace selection {
 
-#if 0
-import java.util.ArrayList;
-import java.util.List;
-
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.config.ColumnDefinition;
-import org.apache.cassandra.cql3.ColumnIdentifier;
-import org.apache.cassandra.cql3.functions.Function;
-import org.apache.cassandra.cql3.functions.FunctionName;
-import org.apache.cassandra.cql3.functions.Functions;
-import org.apache.cassandra.db.marshal.AbstractType;
-import org.apache.cassandra.db.marshal.UserType;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.commons.lang3.text.StrBuilder;
-#endif
-
 class selectable {
 public:
     virtual ~selectable() {}

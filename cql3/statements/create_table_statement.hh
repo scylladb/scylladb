@@ -39,33 +39,6 @@
 #include <vector>
 #include <set>
 
-#if 0
-package org.apache.cassandra.cql3.statements;
-
-import java.nio.ByteBuffer;
-import java.util.*;
-
-import org.apache.cassandra.exceptions.*;
-import org.apache.commons.lang3.StringUtils;
-import com.google.common.collect.HashMultiset;
-import com.google.common.collect.Multiset;
-
-import org.apache.cassandra.auth.Permission;
-import org.apache.cassandra.config.ColumnDefinition;
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.config.Schema;
-import org.apache.cassandra.cql3.*;
-import org.apache.cassandra.db.composites.*;
-import org.apache.cassandra.db.ColumnFamilyType;
-import org.apache.cassandra.db.marshal.*;
-import org.apache.cassandra.exceptions.AlreadyExistsException;
-import org.apache.cassandra.io.compress.CompressionParameters;
-import org.apache.cassandra.service.ClientState;
-import org.apache.cassandra.service.MigrationManager;
-import org.apache.cassandra.transport.Event;
-import org.apache.cassandra.utils.ByteBufferUtil;
-#endif
-
 namespace cql3 {
 
 namespace statements {

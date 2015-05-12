@@ -28,26 +28,6 @@
 #include "cql3/abstract_marker.hh"
 #include "cql3/operator.hh"
 
-#if 0
-import java.nio.ByteBuffer;
-import java.util.*;
-
-import com.google.common.base.Predicate;
-import com.google.common.collect.Iterators;
-import static com.google.common.collect.Lists.newArrayList;
-
-import org.apache.cassandra.config.ColumnDefinition;
-import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.composites.CellName;
-import org.apache.cassandra.db.composites.CellNameType;
-import org.apache.cassandra.db.composites.Composite;
-import org.apache.cassandra.db.filter.ColumnSlice;
-import org.apache.cassandra.db.marshal.*;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-import org.apache.cassandra.transport.Server;
-import org.apache.cassandra.utils.ByteBufferUtil;
-#endif
-
 namespace cql3 {
 
 /**
