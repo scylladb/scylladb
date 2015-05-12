@@ -22,6 +22,7 @@
 #include "schema.hh"
 
 namespace sstables {
+
 class key;
 
 class malformed_sstable_exception : public std::exception {
@@ -50,7 +51,46 @@ public:
     };
     enum class version_types { la };
     enum class format_types { big };
+public:
+    sstable(sstring dir, unsigned long generation, version_types v, format_types f)
+        : _dir(dir)
+        , _generation(generation)
+        , _version(v)
+        , _format(f)
+    { }
+    sstable& operator=(const sstable&) = delete;
+    sstable(const sstable&) = delete;
+    sstable(sstable&&) = default;
 
+    // Read one or few rows at the given byte range from the data file,
+    // feeding them into the consumer. This function reads the entire given
+    // byte range at once into memory, so it should not be used for iterating
+    // over all the rows in the data file (see the next function for that.
+    // The function returns a future which completes after all the data has
+    // been fed into the consumer. The caller needs to ensure the "consumer"
+    // object lives until then (e.g., using the do_with() idiom).
+    future<> data_consume_rows_at_once(row_consumer& consumer, uint64_t pos, uint64_t end);
+
+    // Iterate over all rows in the data file (or rows in a particular range),
+    // feeding them into the consumer. The iteration is done as efficiently as
+    // possible - reading only the data file (not the summary or index files)
+    // and reading data in batches.
+    // The function returns a future which completes after all the data has
+    // been fed into the consumer. The caller needs to ensure the "consumer"
+    // object lives until then (e.g., using the do_with() idiom).
+    future<> data_consume_rows(row_consumer& consumer, uint64_t start = 0, uint64_t end = 0);
+
+    static version_types version_from_sstring(sstring& s);
+    static format_types format_from_sstring(sstring& s);
+
+    future<> load();
+    future<> store();
+
+    void set_generation(unsigned long generation) {
+        _generation = generation;
+    }
+
+    future<lw_shared_ptr<mutation>> convert_row(schema_ptr schema, const key& k);
 private:
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
@@ -116,6 +156,7 @@ private:
     }
 
     input_stream<char> data_stream_at(uint64_t pos);
+
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
     // a specific row from the data file (its position and length can be
@@ -138,41 +179,6 @@ private:
     bool filter_has_key(const dht::token& dk) { return true; }
     bool filter_has_key(const dht::decorated_key& dk) { return filter_has_key(dk._token); }
 public:
-    // Read one or few rows at the given byte range from the data file,
-    // feeding them into the consumer. This function reads the entire given
-    // byte range at once into memory, so it should not be used for iterating
-    // over all the rows in the data file (see the next function for that.
-    // The function returns a future which completes after all the data has
-    // been fed into the consumer. The caller needs to ensure the "consumer"
-    // object lives until then (e.g., using the do_with() idiom).
-    future<> data_consume_rows_at_once(row_consumer& consumer,
-            uint64_t pos, uint64_t end);
-
-    // Iterate over all rows in the data file (or rows in a particular range),
-    // feeding them into the consumer. The iteration is done as efficiently as
-    // possible - reading only the data file (not the summary or index files)
-    // and reading data in batches.
-    // The function returns a future which completes after all the data has
-    // been fed into the consumer. The caller needs to ensure the "consumer"
-    // object lives until then (e.g., using the do_with() idiom).
-    future<> data_consume_rows(row_consumer& consumer,
-            uint64_t start = 0, uint64_t end = 0);
-
-    sstable(sstring dir, unsigned long generation, version_types v, format_types f) : _dir(dir), _generation(generation), _version(v), _format(f) {}
-    sstable& operator=(const sstable&) = delete;
-    sstable(const sstable&) = delete;
-    sstable(sstable&&) = default;
-
-    static version_types version_from_sstring(sstring& s);
-    static format_types format_from_sstring(sstring& s);
-
-    future<> load();
-    future<> store();
-
-    void set_generation(unsigned long generation) { _generation = generation; }
-
-    future<lw_shared_ptr<mutation>> convert_row(schema_ptr schema, const key& k);
-
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
     // will then re-export as public every method it needs.
