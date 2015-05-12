@@ -39,7 +39,7 @@ class result_set;
 namespace db {
 namespace legacy_schema_tables {
 
-using schema_result = std::map<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>,
+using schema_result = std::map<dht::decorated_key, lw_shared_ptr<query::result_set>,
     dht::decorated_key::less_comparator>;
 
 static constexpr auto KEYSPACES = "schema_keyspaces";
@@ -54,10 +54,10 @@ extern std::vector<const char*> ALL;
 
 std::vector<schema_ptr> all_tables();
 
-future<std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>>
+future<std::pair<dht::decorated_key, lw_shared_ptr<query::result_set>>>
 read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name);
 
-future<std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>>
+future<std::pair<dht::decorated_key, lw_shared_ptr<query::result_set>>>
 read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const dht::decorated_key& keyspace_key);
 
 future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations);
@@ -68,7 +68,7 @@ future<std::set<sstring>> merge_keyspaces(service::storage_proxy& proxy, schema_
 
 std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<::config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 
-lw_shared_ptr<::config::ks_meta_data> create_keyspace_from_schema_partition(const std::pair<dht::decorated_key, foreign_ptr<lw_shared_ptr<query::result_set>>>& partition);
+lw_shared_ptr<::config::ks_meta_data> create_keyspace_from_schema_partition(const std::pair<dht::decorated_key, lw_shared_ptr<query::result_set>>& partition);
 
 mutation make_create_keyspace_mutation(lw_shared_ptr<::config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 
