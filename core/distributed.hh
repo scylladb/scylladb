@@ -111,6 +111,37 @@ public:
             }, std::forward<Reducer>(r));
     }
 
+    /// Applies a map function to all shards, then reduces the output by calling a reducer function.
+    ///
+    /// \param mapper map function accepting a \c Service& and returning a value
+    ///               used as the second input to \c reduce
+    /// \param initial initial value used as the first input to \c reduce .
+    /// \param reduce binary function used to left-fold the return values of \c map
+    ///               into \c initial .
+    ///
+    /// Each \c map invocation runs on the shard associated with the service.
+    ///
+    /// Requirements:
+    ///   Mapper: unary function taking \c Service@ and producing some result.
+    ///   Initial: any value type
+    ///   Reduce: a binary function taking two Initial values and returning an Initial
+    /// Returns:
+    ///   future<Initial>
+    template <typename Mapper, typename Initial, typename Reduce>
+    inline
+    future<Initial>
+    map_reduce0(Mapper map, Initial initial, Reduce reduce) {
+        auto wrapped_map = [this, map] (unsigned c) {
+            return smp::submit_to(c, [map, inst = _instances[c]] {
+                return map(*inst);
+            });
+        };
+        return ::map_reduce(smp::all_cpus().begin(), smp::all_cpus().end(),
+                            std::move(wrapped_map),
+                            std::move(initial),
+                            std::move(reduce));
+    }
+
     // Invoke a method on a specific instance of @Service.
     // The return value (which must be a future) contains the future
     // returned by @Service.

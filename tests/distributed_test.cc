@@ -28,6 +28,10 @@ struct X {
     sstring echo(sstring arg) {
         return arg;
     }
+    int cpu_id_squared() const {
+        auto id = engine().cpu_id();
+        return id * id;
+    }
     future<> stop() { return make_ready_future<>(); }
 };
 
@@ -81,6 +85,21 @@ future<> test_constructor_argument_is_passed_to_each_core() {
     });
 }
 
+future<> test_map_reduce() {
+    return do_with_distributed<X>([] (distributed<X>& x) {
+        return x.start().then([&x] {
+            return x.map_reduce0(std::mem_fn(&X::cpu_id_squared),
+                                 0,
+                                 std::plus<int>()).then([] (int result) {
+                int n = smp::count - 1;
+                if (result != (n * (n + 1) * (2*n + 1)) / 6) {
+                    throw std::runtime_error("map_reduce failed");
+                }
+            });
+        });
+    });
+}
+
 int main(int argc, char** argv) {
     app_template app;
     return app.run(argc, argv, [] {
@@ -88,6 +107,8 @@ int main(int argc, char** argv) {
             return test_functor_version();
         }).then([] {
             return test_constructor_argument_is_passed_to_each_core();
+        }).then([] {
+            return test_map_reduce();
         }).then([] {
             return engine().exit(0);
         }).or_terminate();
