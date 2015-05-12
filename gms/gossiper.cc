@@ -1174,7 +1174,7 @@ void gossiper::add_lccal_application_states(std::list<std::pair<application_stat
     }
 }
 
-void gossiper::stop() {
+void gossiper::shutdown() {
     warn(unimplemented::cause::GOSSIP);
     // if (scheduledGossipTask != null)
     // 	scheduledGossipTask.cancel(false);

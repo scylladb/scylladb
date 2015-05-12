@@ -414,7 +414,7 @@ public:
 
     void add_lccal_application_states(std::list<std::pair<application_state, versioned_value>> states);
 
-    void stop();
+    void shutdown();
 
 public:
     bool is_enabled();
