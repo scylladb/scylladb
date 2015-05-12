@@ -101,6 +101,10 @@ public:
     failure_detector() {
     }
 
+    future<> stop() {
+        return make_ready_future<>();
+    }
+
     sstring get_all_endpoint_states();
 
     std::map<sstring, sstring> get_simple_states();
