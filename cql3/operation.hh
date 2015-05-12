@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_OPERATION_HH
-#define CQL3_OPERATION_HH
+#pragma once
 
 #include "core/shared_ptr.hh"
 #include "exceptions/exceptions.hh"
@@ -35,18 +34,6 @@
 namespace cql3 {
 
 class update_parameters;
-
-#if 0
-package org.apache.cassandra.cql3;
-
-import java.nio.ByteBuffer;
-
-import org.apache.cassandra.config.ColumnDefinition;
-import org.apache.cassandra.db.ColumnFamily;
-import org.apache.cassandra.db.composites.Composite;
-import org.apache.cassandra.db.marshal.*;
-import org.apache.cassandra.exceptions.InvalidRequestException;
-#endif
 
 /**
  * An UPDATE or DELETE operation.
@@ -267,5 +254,3 @@ public:
 };
 
 }
-
-#endif

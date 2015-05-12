@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_CONSTANTS_HH
-#define CQL3_CONSTANTS_HH
+#pragma once
 
 #include "cql3/abstract_marker.hh"
 #include "cql3/update_parameters.hh"
@@ -234,5 +233,3 @@ public:
 std::ostream& operator<<(std::ostream&out, constants::type t);
 
 }
-
-#endif

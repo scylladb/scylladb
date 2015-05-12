@@ -87,7 +87,7 @@ protected:
     std::experimental::optional<sstring> get_simple(const sstring& name) const {
         auto it = _properties.find(name);
         if (it == _properties.end()) {
-            return std::experimental::optional<sstring>{};
+            return std::experimental::nullopt;
         }
         try {
             return boost::any_cast<sstring>(it->second);
@@ -99,7 +99,7 @@ protected:
     std::experimental::optional<std::unordered_map<sstring, sstring>> get_map(const sstring& name) const {
         auto it = _properties.find(name);
         if (it == _properties.end()) {
-            return std::experimental::optional<std::unordered_map<sstring, sstring>>{};
+            return std::experimental::nullopt;
         }
         try {
             return boost::any_cast<std::unordered_map<sstring, sstring>>(it->second);

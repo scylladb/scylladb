@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_FUNCTIONS_FUNCTION_HH
-#define CQL3_FUNCTIONS_FUNCTION_HH
+#pragma once
 
 #include "function_name.hh"
 #include "types.hh"
@@ -78,5 +77,3 @@ operator<<(std::ostream& os, const function& f) {
 
 }
 }
-
-#endif

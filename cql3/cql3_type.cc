@@ -207,7 +207,7 @@ cql3_type::raw::is_counter() const {
 
 std::experimental::optional<sstring>
 cql3_type::raw::keyspace() const {
-    return std::experimental::optional<sstring>{};
+    return std::experimental::nullopt;
 }
 
 void

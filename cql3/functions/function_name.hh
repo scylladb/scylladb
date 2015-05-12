@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_FUNCTION_NAME_HH
-#define CQL3_FUNCTION_NAME_HH
+#pragma once
 
 #include "core/sstring.hh"
 #include "db/system_keyspace.hh"
@@ -82,5 +81,3 @@ struct hash<cql3::functions::function_name> {
 };
 
 }
-
-#endif

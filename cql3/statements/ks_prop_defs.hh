@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_STATEMENTS_KS_PROP_DEFS_HH
-#define CQL3_STATEMENTS_KS_PROP_DEFS_HH
+#pragma once
 
 #include "cql3/statements/property_definitions.hh"
 #include "config/ks_meta_data.hh"
@@ -106,5 +105,3 @@ public:
 }
 
 }
-
-#endif

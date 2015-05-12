@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_ASSIGNMENT_TESTABLE_HH
-#define CQL3_ASSIGNMENT_TESTABLE_HH
+#pragma once
 
 #include "column_specification.hh"
 #include <memory>
@@ -104,5 +103,3 @@ operator<<(std::ostream& os, const assignment_testable& at) {
 }
 
 }
-
-#endif

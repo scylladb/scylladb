@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_UPDATE_PARAMETERS_HH
-#define CQL3_UPDATE_PARAMETERS_HH
+#pragma once
 
 #include "gc_clock.hh"
 #include "timestamp.hh"
@@ -164,5 +163,3 @@ public:
 };
 
 }
-
-#endif

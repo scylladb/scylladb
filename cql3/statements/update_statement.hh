@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL_STATEMENTS_UPDATE_STATEMENT_HH
-#define CQL_STATEMENTS_UPDATE_STATEMENT_HH
+#pragma once
 
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/column_identifier.hh"
@@ -33,23 +32,6 @@
 
 #include <vector>
 #include "unimplemented.hh"
-
-#if 0
-package org.apache.cassandra.cql3.statements;
-
-import java.nio.ByteBuffer;
-import java.util.*;
-
-import org.apache.cassandra.cql3.*;
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.config.ColumnDefinition;
-import org.apache.cassandra.db.*;
-import org.apache.cassandra.db.composites.Composite;
-import org.apache.cassandra.db.index.SecondaryIndexManager;
-import org.apache.cassandra.exceptions.*;
-import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.Pair;
-#endif
 
 namespace cql3 {
 
@@ -137,5 +119,3 @@ public:
 }
 
 }
-
-#endif

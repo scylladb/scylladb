@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_CQL_QUERY_OPTIONS_HH
-#define CQL3_CQL_QUERY_OPTIONS_HH
+#pragma once
 
 #include "timestamp.hh"
 #include "bytes.hh"
@@ -253,5 +252,3 @@ public:
 };
 
 }
-
-#endif

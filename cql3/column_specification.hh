@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_COLUMN_SPECIFICATION_HH
-#define CQL3_COLUMN_SPECIFICATION_HH
+#pragma once
 
 #include "db/marshal/reversed_type.hh"
 #include "types.hh"
@@ -63,5 +62,3 @@ public:
 };
 
 }
-
-#endif

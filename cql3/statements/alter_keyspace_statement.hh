@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_STATEMENTS_ALTER_KEYSPACE_STATEMENT_HH
-#define CQL3_STATEMENTS_ALTER_KEYSPACE_STATEMENT_HH
+#pragma once
 
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
@@ -33,22 +32,6 @@
 namespace cql3 {
 
 namespace statements {
-
-#if 0
-package org.apache.cassandra.cql3.statements;
-
-import org.apache.cassandra.auth.Permission;
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.config.KSMetaData;
-import org.apache.cassandra.config.Schema;
-import org.apache.cassandra.db.SystemKeyspace;
-import org.apache.cassandra.exceptions.*;
-import org.apache.cassandra.locator.AbstractReplicationStrategy;
-import org.apache.cassandra.service.ClientState;
-import org.apache.cassandra.service.MigrationManager;
-import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.transport.Event;
-#endif
 
 class alter_keyspace_statement : public schema_altering_statement {
     sstring _name;
@@ -118,5 +101,3 @@ public:
 }
 
 }
-
-#endif

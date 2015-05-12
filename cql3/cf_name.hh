@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_CFNAME_HH
-#define CQL3_CFNAME_HH
+#pragma once
 
 #include <experimental/optional>
 
@@ -74,5 +73,3 @@ operator<<(std::ostream& os, const cf_name& n) {
 }
 
 }
-
-#endif

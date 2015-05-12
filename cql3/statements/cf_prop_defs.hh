@@ -28,24 +28,6 @@
 
 #include "schema.hh"
 
-#if 0
-package org.apache.cassandra.cql3.statements;
-
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-
-import org.apache.cassandra.cache.CachingOptions;
-import org.apache.cassandra.config.CFMetaData;
-import org.apache.cassandra.config.CFMetaData.SpeculativeRetry;
-import org.apache.cassandra.db.compaction.AbstractCompactionStrategy;
-import org.apache.cassandra.exceptions.ConfigurationException;
-import org.apache.cassandra.exceptions.SyntaxException;
-import org.apache.cassandra.io.compress.CompressionParameters;
-#endif
-
 namespace cql3 {
 
 namespace statements {
