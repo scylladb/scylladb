@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_LISTS_HH
-#define CQL3_LISTS_HH
+#pragma once
 
 #include "cql3/abstract_marker.hh"
 #include "to_string.hh"
@@ -182,5 +181,3 @@ public:
 };
 
 }
-
-#endif

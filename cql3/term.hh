@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_TERM_HH
-#define CQL3_TERM_HH
+#pragma once
 
 #include <experimental/optional>
 #include "variable_specifications.hh"
@@ -218,5 +217,3 @@ public:
 };
 
 }
-
-#endif

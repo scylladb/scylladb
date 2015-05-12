@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_FUNCTIONS_SCALAR_FUNCTION_HH
-#define CQL3_FUNCTIONS_SCALAR_FUNCTION_HH
+#pragma once
 
 #include "bytes.hh"
 #include <vector>
@@ -48,5 +47,3 @@ public:
 
 }
 }
-
-#endif

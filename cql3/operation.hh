@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_OPERATION_HH
-#define CQL3_OPERATION_HH
+#pragma once
 
 #include "core/shared_ptr.hh"
 #include "exceptions/exceptions.hh"
@@ -267,5 +266,3 @@ public:
 };
 
 }
-
-#endif

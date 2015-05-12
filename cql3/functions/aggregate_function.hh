@@ -22,8 +22,7 @@
  * Copyright 2014 Cloudius Systems
  */
 
-#ifndef CQL3_FUNCTIONS_AGGREGATE_FUNCTION_HH_
-#define CQL3_FUNCTIONS_AGGREGATE_FUNCTION_HH_
+#pragma once
 
 #include "function.hh"
 #include <experimental/optional>
@@ -80,5 +79,3 @@ public:
 
 }
 }
-
-#endif /* CQL3_FUNCTIONS_AGGREGATE_FUNCTION_HH_ */

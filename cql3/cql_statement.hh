@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_CQL_STATEMENT_HH
-#define CQL3_CQL_STATEMENT_HH
+#pragma once
 
 #include "service/client_state.hh"
 #include "service/query_state.hh"
@@ -85,5 +84,3 @@ public:
 };
 
 }
-
-#endif

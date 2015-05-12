@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_STATEMENTS_SELECT_STATEMENT_HH
-#define CQL3_STATEMENTS_SELECT_STATEMENT_HH
+#pragma once
 
 #include "cql3/statements/cf_statement.hh"
 #include "cql3/cql_statement.hh"
@@ -502,5 +501,3 @@ private:
 }
 
 }
-
-#endif

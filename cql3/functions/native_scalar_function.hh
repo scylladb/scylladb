@@ -22,8 +22,7 @@
  * Copyright 2014 Cloudius Systems
  */
 
-#ifndef CQL3_FUNCTIONS_NATIVE_SCALAR_FUNCTION_HH_
-#define CQL3_FUNCTIONS_NATIVE_SCALAR_FUNCTION_HH_
+#pragma once
 
 #include "native_function.hh"
 #include "scalar_function.hh"
@@ -77,5 +76,3 @@ make_native_scalar_function(sstring name,
 
 }
 }
-
-#endif /* CQL3_FUNCTIONS_NATIVE_SCALAR_FUNCTION_HH_ */

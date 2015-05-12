@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_STATEMENTS_ALTER_KEYSPACE_STATEMENT_HH
-#define CQL3_STATEMENTS_ALTER_KEYSPACE_STATEMENT_HH
+#pragma once
 
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
@@ -118,5 +117,3 @@ public:
 }
 
 }
-
-#endif

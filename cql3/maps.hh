@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_MAPS_HH
-#define CQL3_MAPS_HH
+#pragma once
 
 #include "cql3/abstract_marker.hh"
 #include "cql3/term.hh"
@@ -134,5 +133,3 @@ public:
 };
 
 }
-
-#endif

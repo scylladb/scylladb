@@ -23,8 +23,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_SELECTION_SELECTABLE_HH
-#define CQL3_SELECTION_SELECTABLE_HH
+#pragma once
 
 #include "schema.hh"
 #include "core/shared_ptr.hh"
@@ -120,5 +119,3 @@ public:
 }
 
 }
-
-#endif

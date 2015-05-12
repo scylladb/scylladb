@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL_STATEMENTS_UPDATE_STATEMENT_HH
-#define CQL_STATEMENTS_UPDATE_STATEMENT_HH
+#pragma once
 
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/column_identifier.hh"
@@ -137,5 +136,3 @@ public:
 }
 
 }
-
-#endif

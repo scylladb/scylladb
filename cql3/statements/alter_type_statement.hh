@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL_STATEMENTS_ALTER_TYPE_STATEMENT_HH
-#define CQL_STATEMENTS_ALTER_TYPE_STATEMENT_HH
+#pragma once
 
 #include "cql3/ut_name.hh"
 
@@ -368,5 +367,3 @@ protected:
 }
 
 }
-
-#endif

@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_VARIABLE_SPECIFICATIONS_HH
-#define CQL3_VARIABLE_SPECIFICATIONS_HH
+#pragma once
 
 #include "cql3/column_specification.hh"
 #include "cql3/column_identifier.hh"
@@ -83,5 +82,3 @@ public:
 };
 
 }
-
-#endif

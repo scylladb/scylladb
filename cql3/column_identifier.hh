@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_COLUMN_IDENTIFIER_HH
-#define CQL3_COLUMN_IDENTIFIER_HH
+#pragma once
 
 #include "cql3/selection/selectable.hh"
 
@@ -216,5 +215,3 @@ struct hash<cql3::column_identifier::raw> {
 };
 
 }
-
-#endif

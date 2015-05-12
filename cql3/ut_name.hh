@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_UT_NAME_HH
-#define CQL3_UT_NAME_HH
+#pragma once
 
 #include "core/shared_ptr.hh"
 #include "column_identifier.hh"
@@ -72,5 +71,3 @@ public:
 };
 
 }
-
-#endif

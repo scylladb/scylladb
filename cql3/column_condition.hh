@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_COLUMN_CONDITION_HH
-#define CQL3_COLUMN_CONDITION_HH
+#pragma once
 
 #include "cql3/term.hh"
 #include "cql3/abstract_marker.hh"
@@ -763,5 +762,3 @@ public:
 };
 
 }
-
-#endif

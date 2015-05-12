@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_FUNCTIONS_ABSTRACT_FUNCTION_HH
-#define CQL3_FUNCTIONS_ABSTRACT_FUNCTION_HH
+#pragma once
 
 #include "types.hh"
 #include <vector>
@@ -109,5 +108,3 @@ struct hash<cql3::functions::abstract_function> {
 };
 
 }
-
-#endif

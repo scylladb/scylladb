@@ -22,8 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_STATEMENTS_CF_STATEMENT_HH
-#define CQL3_STATEMENTS_CF_STATEMENT_HH
+#pragma once
 
 #include "cql3/statements/parsed_statement.hh"
 #include "cql3/cf_name.hh"
@@ -75,5 +74,3 @@ public:
 }
 
 }
-
-#endif

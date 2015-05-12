@@ -22,8 +22,7 @@
  * Copyright 2014 Cloudius Systems
  */
 
-#ifndef CQL3_FUNCTIONS_NATIVE_AGGREGATE_FUNCTION_HH
-#define CQL3_FUNCTIONS_NATIVE_AGGREGATE_FUNCTION_HH
+#pragma once
 
 #include "types.hh"
 #include "native_function.hh"
@@ -68,6 +67,3 @@ make_native_aggregate_function_using(sstring name, data_type type) {
 
 }
 }
-
-#endif
-

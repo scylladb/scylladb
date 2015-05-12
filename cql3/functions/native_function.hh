@@ -22,8 +22,7 @@
  * Copyright 2014 Cloudius Systems
  */
 
-#ifndef CQL3_FUNCTIONS_NATIVE_FUNCTION_HH
-#define CQL3_FUNCTIONS_NATIVE_FUNCTION_HH
+#pragma once
 
 #include "abstract_function.hh"
 
@@ -53,5 +52,3 @@ public:
 
 }
 }
-
-#endif

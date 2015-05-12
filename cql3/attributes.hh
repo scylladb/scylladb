@@ -22,9 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#ifndef CQL3_ATTRIBUTES_HH
-#define CQL3_ATTRIBUTES_HH
-
+#pragma once
 
 #include "exceptions/exceptions.hh"
 #include "cql3/term.hh"
@@ -144,5 +142,3 @@ public:
 };
 
 }
-
-#endif
