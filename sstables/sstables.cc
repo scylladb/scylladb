@@ -997,7 +997,7 @@ static future<> write_static_row(output_stream<char>& out, schema_ptr schema, co
 }
 
 future<> write_datafile(const memtable& mt, sstring datafile) {
-    auto oflags = open_flags::wo | open_flags::create | open_flags::truncate;
+    auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
     return engine().open_file_dma(datafile, oflags).then([&mt] (file f) {
         // TODO: Add compression support by having a specialized output stream.
         auto out = make_file_output_stream(make_lw_shared<file>(std::move(f)), 4096);
