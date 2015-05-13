@@ -606,6 +606,7 @@ enum class open_flags {
     wo = O_WRONLY,
     create = O_CREAT,
     truncate = O_TRUNC,
+    exclusive = O_EXCL,
 };
 
 inline open_flags operator|(open_flags a, open_flags b) {
