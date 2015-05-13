@@ -6,6 +6,7 @@
 #include <yaml-cpp/yaml.h>
 #include <boost/program_options.hpp>
 #include <unordered_map>
+#include <regex>
 #include "config.hh"
 #include "core/file.hh"
 #include "core/reactor.hh"
@@ -98,6 +99,38 @@ struct convert<db::config::seed_provider_type> {
 
 }
 
+template<typename... Args>
+std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const db::config::string_map & map) {
+    int n = 0;
+    for (auto& e : map) {
+        if (n > 0) {
+            os << ",";
+        }
+        os << e.first << "=" << e.second;
+    }
+    return os;
+}
+
+template<typename... Args>
+std::basic_istream<Args...> & operator>>(std::basic_istream<Args...> & is, db::config::string_map & map) {
+    std::string str;
+    is >> str;
+
+    std::regex comma(",");
+
+    std::sregex_token_iterator s(str.begin(), str.end(), comma, -1);
+    std::sregex_token_iterator e;
+    while (s != e) {
+        sstring p = std::string(*s++);
+        auto i = p.find('=');
+        auto k = p.substr(0, i);
+        auto v = i == sstring::npos ? sstring() : p.substr(i + 1, p.size());
+        map.emplace(std::make_pair(k, v));
+    };
+
+    return is;
+}
+
 /*
  * Helper type to do compile time exclusion of Unused/invalid options from
  * command line.
@@ -111,8 +144,18 @@ struct do_value_opt;
 template<typename T>
 struct do_value_opt<T, db::config::value_status::Used> {
     template<typename Func>
-    void operator()(Func&& func, const char* name, const T& dflt, db::config::value<T, db::config::value_status::Used>& dst, const char* desc) const {
-        func(name, dflt, dst, desc);
+    void operator()(Func&& func, const char* name, const T& dflt, T * dst, db::config::config_source & src, const char* desc) const {
+        func(name, dflt, dst, src, desc);
+    }
+};
+
+template<>
+struct do_value_opt<db::config::seed_provider_type, db::config::value_status::Used> {
+    using seed_provider_type = db::config::seed_provider_type;
+    template<typename Func>
+    void operator()(Func&& func, const char* name, const seed_provider_type& dflt, seed_provider_type * dst, db::config::config_source & src, const char* desc) const {
+        func((sstring(name) + "_class_name").c_str(), dflt.class_name, &dst->class_name, src, desc);
+        func((sstring(name) + "_parameters").c_str(), dflt.parameters, &dst->parameters, src, desc);
     }
 };
 
@@ -158,19 +201,19 @@ inline typed_value_ex<T>* value_ex(T* v) {
 
 bpo::options_description_easy_init& db::config::add_options(bpo::options_description_easy_init& init) {
     auto opt_add =
-            [&init](const char* name, const auto& dflt, auto& dst, const char* desc) mutable {
+            [&init](const char* name, const auto& dflt, auto* dst, auto& src, const char* desc) mutable {
                 sstring tmp(name);
                 std::replace(tmp.begin(), tmp.end(), '_', '-');
                 init(tmp.c_str(),
-                        value_ex(&dst._value)->default_value(dflt)->notifier([dst](auto) mutable {
-                                    dst._source = config_source::CommandLine;
+                        value_ex(dst)->default_value(dflt)->notifier([&src](auto) mutable {
+                                    src = config_source::CommandLine;
                                 })
                         , desc);
             };
 
     // Add all used opts as command line opts
 #define _add_boost_opt(name, type, deflt, status, desc, ...)      \
-        do_value_opt<type, value_status::status>()(opt_add, #name, type( deflt ), name, desc);
+        do_value_opt<type, value_status::status>()(opt_add, #name, type( deflt ), &name._value, name._source, desc);
     _make_config_values(_add_boost_opt)
 
     auto alias_add =

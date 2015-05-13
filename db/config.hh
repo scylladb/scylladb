@@ -201,12 +201,12 @@ public:
     val(rpc_interface, sstring, "eth1", Unused,     \
             "The listen address for client connections. Interfaces must correspond to a single address, IP aliasing is not supported. See rpc_address." \
     )   \
-    val(seed_provider, seed_provider_type, seed_provider_type("org.apache.cassandra.locator.SimpleSeedProvider"), Unused, \
+    val(seed_provider, seed_provider_type, seed_provider_type("org.apache.cassandra.locator.SimpleSeedProvider"), Used, \
             "The addresses of hosts deemed contact points. Cassandra nodes use the -seeds list to find each other and learn the topology of the ring.\n"    \
             "\n"    \
-            "\tclass_name (Default: org.apache.cassandra.locator.SimpleSeedProvider)\n" \
-            "\t\tThe class within Cassandra that handles the seed logic. It can be customized, but this is typically not required.\n"   \
-            "\t- seeds (Default: 127.0.0.1)    A comma-delimited list of IP addresses used by gossip for bootstrapping new nodes joining a cluster. When running multiple nodes, you must change the list from the default value. In multiple data-center clusters, the seed list should include at least one node from each data center (replication group). More than a single seed node per data center is recommended for fault tolerance. Otherwise, gossip has to communicate with another data center when bootstrapping a node. Making every node a seed node is not recommended because of increased maintenance and reduced gossip performance. Gossip optimization is not critical, but it is recommended to use a small seed list (approximately three nodes per data center).\n"    \
+            "  class_name (Default: org.apache.cassandra.locator.SimpleSeedProvider)\n" \
+            "  \tThe class within Cassandra that handles the seed logic. It can be customized, but this is typically not required.\n"   \
+            "  \t- seeds (Default: 127.0.0.1)    A comma-delimited list of IP addresses used by gossip for bootstrapping new nodes joining a cluster. When running multiple nodes, you must change the list from the default value. In multiple data-center clusters, the seed list should include at least one node from each data center (replication group). More than a single seed node per data center is recommended for fault tolerance. Otherwise, gossip has to communicate with another data center when bootstrapping a node. Making every node a seed node is not recommended because of increased maintenance and reduced gossip performance. Gossip optimization is not critical, but it is recommended to use a small seed list (approximately three nodes per data center).\n"    \
             "\n"    \
             "Related information: Initializing a multiple node cluster (single data center) and Initializing a multiple node cluster (multiple data centers)."  \
     )                                                   \
