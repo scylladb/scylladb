@@ -255,14 +255,17 @@ public:
 
     // Send a message for verb
     template <typename MsgIn, typename... MsgOut>
-    future<MsgIn> send_message(messaging_verb verb, shard_id id, MsgOut&&... msg) {
+    auto send_message(messaging_verb verb, shard_id id, MsgOut&&... msg) {
         auto& rpc_client = get_rpc_client(id);
         auto rpc_handler = _rpc.make_client<MsgIn(MsgOut...)>(verb);
-        return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([this, id] (future<MsgIn> f) -> future<MsgIn> {
+        return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([this, id] (auto&& f) {
             try {
-                auto ret = f.get();
-                return make_ready_future<MsgIn>(std::move(std::get<0>(ret)));
-            } catch (std::runtime_error&) {
+                if (f.failed()) {
+                    f.get();
+                    assert(false); // never reached
+                }
+                return std::move(f);
+            } catch(...) {
                 // FIXME: we need to distinguish between a transport error and
                 // a server error.
                 // remove_rpc_client(id);
@@ -271,20 +274,9 @@ public:
         });
     }
 
-    template <typename MsgIn, typename... MsgOut>
-    future<> send_message_oneway(messaging_verb verb, shard_id id, MsgOut&&... msg) {
-        auto& rpc_client = get_rpc_client(id);
-        auto rpc_handler = _rpc.make_client<rpc::no_wait_type(MsgOut...)>(verb);
-        return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).then_wrapped([this, id] (future<> f) -> future<> {
-            try {
-                f.get();
-                return make_ready_future<>();
-            } catch (std::runtime_error&) {
-                // FIXME: as above
-                // remove_rpc_client(id);
-                throw;
-            }
-        });
+    template <typename... MsgOut>
+    auto send_message_oneway(messaging_verb verb, shard_id id, MsgOut&&... msg) {
+        return send_message<rpc::no_wait_type>(std::move(verb), std::move(id), std::forward<MsgOut>(msg)...);
     }
 private:
     // Return rpc::protocol::client for a shard which is a ip + cpuid pair.
