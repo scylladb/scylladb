@@ -19,6 +19,9 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
+
+/** @file */
+
 #ifndef CORE_FUTURE_UTIL_HH_
 #define CORE_FUTURE_UTIL_HH_
 
@@ -46,6 +49,28 @@ parallel_for_each(Iterator begin, Iterator end, Func&& func) {
         ret = std::move(f);
     }
     return ret;
+}
+
+/// \brief parallel_for_each - run tasks in parallel
+///
+/// Given a range [\c begin, \c end) of objects, run \c func(object) for
+/// each object in the range, and return a future<> that resolves when all
+/// the functions complete.  @func should return a future<> that indicates
+/// when it is complete.
+///
+/// \param range A range of objects to iterate run \c func on
+/// \param func  A callable, accepting reference to the range's
+///              \c value_type, and returning a \c future<>.
+/// \return a \c future<> that becomes ready when the entire range
+///         was processed.  If one or more of the invocations of
+///         \c func returned an exceptional future, then the return
+///         value will contain one of those exceptions.
+template <typename Range, typename Func>
+inline
+future<>
+parallel_for_each(Range&& range, Func&& func) {
+    return parallel_for_each(std::begin(range), std::end(range),
+            std::forward<Func>(func));
 }
 
 // The AsyncAction concept represents an action which can complete later than
