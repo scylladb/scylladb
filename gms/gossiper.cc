@@ -46,8 +46,12 @@ gossiper::gossiper()
     // half of QUARATINE_DELAY, to ensure _just_removed_endpoints has enough leeway to prevent re-gossip
     fat_client_timeout = (int64_t) (QUARANTINE_DELAY / 2);
     /* register with the Failure Detector for receiving Failure detector events */
-    get_local_failure_detector().register_failure_detection_event_listener(this->shared_from_this());
+    get_local_failure_detector().register_failure_detection_event_listener(this);
     // Register this instance with JMX
+}
+
+gossiper::~gossiper() {
+    get_local_failure_detector().unregister_failure_detection_event_listener(this);
 }
 
 /*

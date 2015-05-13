@@ -23,7 +23,6 @@
 
 #include "gms/inet_address.hh"
 #include "gms/i_failure_detection_event_listener.hh"
-#include "core/shared_ptr.hh"
 
 namespace gms {
 
@@ -79,14 +78,14 @@ public:
      *
      * @param listener implementation of an application provided IFailureDetectionEventListener
      */
-    virtual void register_failure_detection_event_listener(shared_ptr<i_failure_detection_event_listener> listener) = 0;
+    virtual void register_failure_detection_event_listener(i_failure_detection_event_listener* listener) = 0;
 
     /**
      * Un-register interest for Failure Detector events.
      *
      * @param listener implementation of an application provided IFailureDetectionEventListener
      */
-    virtual void unregister_failure_detection_event_listener(shared_ptr<i_failure_detection_event_listener> listener) = 0;
+    virtual void unregister_failure_detection_event_listener(i_failure_detection_event_listener* listener) = 0;
 };
 
 } // namespace gms

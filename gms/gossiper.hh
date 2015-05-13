@@ -152,6 +152,7 @@ private:
     void run();
 public:
     gossiper();
+    ~gossiper();
     void set_last_processed_message_at(int64_t time_in_millis) {
         _last_processed_message_at = time_in_millis;
     }

@@ -95,7 +95,7 @@ private:
     // change.
     static constexpr const double PHI_FACTOR{1.0 / std::log(10.0)}; // 0.434...
     std::map<inet_address, arrival_window> _arrival_samples;
-    std::list<shared_ptr<i_failure_detection_event_listener>> _fd_evnt_listeners;
+    std::list<i_failure_detection_event_listener*> _fd_evnt_listeners;
 
 public:
     failure_detector() {
@@ -158,9 +158,9 @@ public:
 
     void remove(inet_address ep);
 
-    void register_failure_detection_event_listener(shared_ptr<i_failure_detection_event_listener> listener);
+    void register_failure_detection_event_listener(i_failure_detection_event_listener* listener);
 
-    void unregister_failure_detection_event_listener(shared_ptr<i_failure_detection_event_listener> listener);
+    void unregister_failure_detection_event_listener(i_failure_detection_event_listener* listener);
 
     friend std::ostream& operator<<(std::ostream& os, const failure_detector& x);
 };
