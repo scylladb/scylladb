@@ -119,6 +119,8 @@ std::ostream& operator<<(std::ostream& out, const range<U>& r) {
 using partition_range = range<partition_key>;
 using clustering_range = range<clustering_key_prefix>;
 
+// Specifies subset of rows, columns and cell attributes to be returned in a query.
+// Can be accessed across cores.
 class partition_slice {
 public:
     enum class option { send_clustering_key, send_partition_key, send_timestamp_and_expiry };
@@ -142,6 +144,9 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const partition_slice& ps);
 };
 
+// Full specification of a query to the database.
+// Intended for passing across replicas.
+// Can be accessed across cores.
 class read_command {
 public:
     utils::UUID cf_id;
