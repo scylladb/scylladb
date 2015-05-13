@@ -33,9 +33,9 @@ BOOST_AUTO_TEST_CASE(test_mutation_is_applied) {
     cf.apply(std::move(m));
 
     row& r = cf.find_or_create_row_slow(key, c_key);
-    auto i = r.find(r1_col.id);
-    BOOST_REQUIRE(i != r.end());
-    auto cell = i->second.as_atomic_cell();
+    auto i = r.find_cell(r1_col.id);
+    BOOST_REQUIRE(i);
+    auto cell = i->as_atomic_cell();
     BOOST_REQUIRE(cell.is_live());
     BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(3)));
 }
@@ -124,9 +124,9 @@ BOOST_AUTO_TEST_CASE(test_map_mutations) {
     cf.apply(m2o);
 
     row& r = cf.find_or_create_partition_slow(key).static_row();
-    auto i = r.find(column.id);
-    BOOST_REQUIRE(i != r.end());
-    auto cell = i->second.as_collection_mutation();
+    auto i = r.find_cell(column.id);
+    BOOST_REQUIRE(i);
+    auto cell = i->as_collection_mutation();
     auto muts = my_map_type->deserialize_mutation_form(cell);
     BOOST_REQUIRE(muts.cells.size() == 3);
     // FIXME: more strict tests
@@ -157,9 +157,9 @@ BOOST_AUTO_TEST_CASE(test_set_mutations) {
     cf.apply(m2o);
 
     row& r = cf.find_or_create_partition_slow(key).static_row();
-    auto i = r.find(column.id);
-    BOOST_REQUIRE(i != r.end());
-    auto cell = i->second.as_collection_mutation();
+    auto i = r.find_cell(column.id);
+    BOOST_REQUIRE(i);
+    auto cell = i->as_collection_mutation();
     auto muts = my_set_type->deserialize_mutation_form(cell);
     BOOST_REQUIRE(muts.cells.size() == 3);
     // FIXME: more strict tests
@@ -191,9 +191,9 @@ BOOST_AUTO_TEST_CASE(test_list_mutations) {
     cf.apply(m2o);
 
     row& r = cf.find_or_create_partition_slow(key).static_row();
-    auto i = r.find(column.id);
-    BOOST_REQUIRE(i != r.end());
-    auto cell = i->second.as_collection_mutation();
+    auto i = r.find_cell(column.id);
+    BOOST_REQUIRE(i);
+    auto cell = i->as_collection_mutation();
     auto muts = my_list_type->deserialize_mutation_form(cell);
     BOOST_REQUIRE(muts.cells.size() == 4);
     // FIXME: more strict tests
@@ -223,9 +223,9 @@ BOOST_AUTO_TEST_CASE(test_multiple_memtables_one_partition) {
         auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
         auto r = cf.find_row(dht::global_partitioner().decorate_key(*s, key), c_key);
         BOOST_REQUIRE(r);
-        auto i = r->find(r1_col.id);
-        BOOST_REQUIRE(i != r->end());
-        auto cell = i->second.as_atomic_cell();
+        auto i = r->find_cell(r1_col.id);
+        BOOST_REQUIRE(i);
+        auto cell = i->as_atomic_cell();
         BOOST_REQUIRE(cell.is_live());
         BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(r1)));
     };
@@ -267,9 +267,9 @@ BOOST_AUTO_TEST_CASE(test_multiple_memtables_multiple_partitions) {
         auto p1 = boost::any_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
         for (const rows_entry& re : mp.range(*s, query::range<clustering_key_prefix>())) {
             auto c1 = boost::any_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
-            auto i = re.row().cells.find(r1_col.id);
-            if (i != re.row().cells.end()) {
-                result[p1][c1] = boost::any_cast<int32_t>(int32_type->deserialize(i->second.as_atomic_cell().value()));
+            auto cell = re.row().cells().find_cell(r1_col.id);
+            if (cell) {
+                result[p1][c1] = boost::any_cast<int32_t>(int32_type->deserialize(cell->as_atomic_cell().value()));
             }
         }
         return true;

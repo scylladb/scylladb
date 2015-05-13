@@ -933,14 +933,14 @@ static future<> write_cell(output_stream<char>& out, atomic_cell_view cell) {
 
 static future<> write_row_marker(output_stream<char>& out, const rows_entry& clustered_row, bytes& clustering_key) {
     // Missing created_at (api::missing_timestamp) means no row marker.
-    if (clustered_row.row().created_at == api::missing_timestamp) {
+    if (clustered_row.row().created_at() == api::missing_timestamp) {
         return make_ready_future<>();
     }
 
     // Write row mark cell to the beginning of clustered row.
     return write_column_name(out, clustering_key, {}).then([&out, &clustered_row] {
         column_mask mask = column_mask::none;
-        uint64_t timestamp = clustered_row.row().created_at;
+        uint64_t timestamp = clustered_row.row().created_at();
         uint32_t value_length = 0;
 
         return write(out, mask, timestamp, value_length);
@@ -956,10 +956,10 @@ static future<> write_clustered_row(output_stream<char>& out, schema_ptr schema,
         return write_row_marker(out, clustered_row, clustering_key).then(
                 [&out, &clustered_row, schema, &clustering_key] {
             // FIXME: Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
-            assert(!clustered_row.row().t);
+            assert(!clustered_row.row().deleted_at());
 
             // Write all cells of a partition's row.
-            return do_for_each(clustered_row.row().cells, [&out, schema, &clustering_key] (auto& value) {
+            return do_for_each(clustered_row.row().cells(), [&out, schema, &clustering_key] (auto& value) {
                 auto column_id = value.first;
                 auto&& column_definition = schema->regular_column_at(column_id);
                 // non atomic cell isn't supported yet. atomic cell maps to a single trift cell.

@@ -59,7 +59,7 @@ void update_statement::add_update_for_key(mutation& m, const exploded_clustering
     } else {
         if (type == statement_type::INSERT && prefix) {
             auto& row = m.partition().clustered_row(clustering_key::from_clustering_prefix(*s, prefix));
-            row.created_at = params.timestamp();
+            row.apply(params.timestamp());
         }
     }
 

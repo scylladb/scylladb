@@ -15,28 +15,70 @@
 #include "query-result-writer.hh"
 #include "mutation_partition_view.hh"
 
-// FIXME: Encapsulate
-using row = std::map<column_id, atomic_cell_or_collection>;
+// Container for cells of a row. Cells are identified by column_id.
+//
+// Can be used as a range of std::pair<column_id, atomic_cell_or_collection>.
+//
+class row {
+    using map_type = std::map<column_id, atomic_cell_or_collection>;
+    map_type _cells;
+public:
+    using value_type = map_type::value_type;
+    using iterator = map_type::iterator;
+    using const_iterator = map_type::const_iterator;
+public:
+    iterator begin() { return _cells.begin(); }
+    iterator end() { return _cells.end(); }
+    const_iterator begin() const { return _cells.begin(); }
+    const_iterator end() const { return _cells.end(); }
+    size_t size() const { return _cells.size(); }
+
+    // Returns a reference to cell's value or throws std::out_of_range
+    const atomic_cell_or_collection& cell_at(column_id id) const { return _cells.at(id); }
+
+    // Returns a pointer to cell's value or nullptr if column is not set.
+    const atomic_cell_or_collection* find_cell(column_id id) const;
+public:
+    // Merges cell's value into the row.
+    void apply(const column_definition& column, atomic_cell_or_collection cell);
+
+    // Adds cell to the row. The column must not be already set.
+    void append_cell(column_id id, atomic_cell_or_collection cell);
+
+    // Merges given cell into the row.
+    template <typename ColumnDefinitionResolver>
+    void apply(column_id id, atomic_cell_or_collection cell, ColumnDefinitionResolver&& resolver) {
+        auto i = _cells.lower_bound(id);
+        if (i == _cells.end() || i->first != id) {
+            _cells.emplace_hint(i, id, std::move(cell));
+        } else {
+            merge_column(resolver(id), i->second, std::move(cell));
+        }
+    }
+};
 
 std::ostream& operator<<(std::ostream& os, const row::value_type& rv);
 std::ostream& operator<<(std::ostream& os, const row& r);
 
-// FIXME: Encapsulate
-struct deletable_row final {
-    tombstone t;
-    api::timestamp_type created_at = api::missing_timestamp;
-    row cells;
+class deletable_row final {
+    tombstone _deleted_at;
+    api::timestamp_type _created_at = api::missing_timestamp;
+    row _cells;
+public:
+    deletable_row() {}
 
-    void apply(tombstone t_) {
-        t.apply(t_);
+    void apply(tombstone deleted_at) {
+        _deleted_at.apply(deleted_at);
     }
 
-    void apply(api::timestamp_type new_created_at) {
-        if (new_created_at > created_at) {
-            created_at = new_created_at;
-        }
+    void apply(api::timestamp_type created_at) {
+        _created_at = std::max(_created_at, created_at);
     }
-
+public:
+    tombstone deleted_at() const { return _deleted_at; }
+    api::timestamp_type created_at() const { return _created_at; }
+    const row& cells() const { return _cells; }
+    row& cells() { return _cells; }
     friend std::ostream& operator<<(std::ostream& os, const deletable_row& dr);
     bool equal(const schema& s, const deletable_row& other) const;
 };
@@ -200,34 +242,36 @@ public:
     ~mutation_partition();
     mutation_partition& operator=(const mutation_partition& x);
     mutation_partition& operator=(mutation_partition&& x) = default;
-    tombstone partition_tombstone() const { return _tombstone; }
+    bool equal(const schema& s, const mutation_partition&) const;
+    friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
+public:
     void apply(tombstone t) { _tombstone.apply(t); }
-    void apply_delete(schema_ptr schema, const exploded_clustering_prefix& prefix, tombstone t);
-    void apply_delete(schema_ptr schema, clustering_key&& key, tombstone t);
-    void apply_delete(schema_ptr schema, clustering_key_view key, tombstone t);
+    void apply_delete(const schema& schema, const exploded_clustering_prefix& prefix, tombstone t);
+    void apply_delete(const schema& schema, clustering_key&& key, tombstone t);
+    void apply_delete(const schema& schema, clustering_key_view key, tombstone t);
     // Equivalent to applying a mutation with an empty row, created with given timestamp
     void apply_insert(const schema& s, clustering_key_view, api::timestamp_type created_at);
     // prefix must not be full
     void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
-    void apply(schema_ptr schema, const mutation_partition& p);
-    void apply(schema_ptr schema, mutation_partition_view);
-    row& static_row() { return _static_row; }
-    // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
-    const rows_type& clustered_rows() const { return _rows; }
-    const row& static_row() const { return _static_row; }
-    const row_tombstones_type& row_tombstones() const { return _row_tombstones; }
+    void apply(const schema& schema, const mutation_partition& p);
+    void apply(const schema& schema, mutation_partition_view);
+public:
     deletable_row& clustered_row(const clustering_key& key);
     deletable_row& clustered_row(clustering_key&& key);
     deletable_row& clustered_row(const schema& s, const clustering_key_view& key);
+public:
+    tombstone partition_tombstone() const { return _tombstone; }
+    row& static_row() { return _static_row; }
+    const row& static_row() const { return _static_row; }
+    // return a set of rows_entry where each entry represents a CQL row sharing the same clustering key.
+    const rows_type& clustered_rows() const { return _rows; }
+    const row_tombstones_type& row_tombstones() const { return _row_tombstones; }
     const row* find_row(const clustering_key& key) const;
-    const rows_entry* find_entry(schema_ptr schema, const clustering_key_prefix& key) const;
+    const rows_entry* find_entry(const schema& schema, const clustering_key_prefix& key) const;
     tombstone range_tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const clustering_key& key) const;
     tombstone tombstone_for_row(const schema& schema, const rows_entry& e) const;
-    friend std::ostream& operator<<(std::ostream& os, const mutation_partition& mp);
     boost::iterator_range<rows_type::const_iterator> range(const schema& schema, const query::range<clustering_key_prefix>& r) const;
     // Returns at most "limit" rows. The limit must be greater than 0.
     void query(const schema& s, const query::partition_slice& slice, uint32_t limit, query::result::partition_writer& pw) const;
-public:
-    bool equal(const schema& s, const mutation_partition&) const;
 };

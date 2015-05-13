@@ -118,9 +118,7 @@ protected:
     }
 public:
     static TopLevel make_empty(const schema& s) {
-        std::vector<bytes> v;
-        v.resize(get_compound_type(s)->types().size());
-        return from_exploded(s, v);
+        return from_exploded(s, {});
     }
 
     static TopLevel from_exploded(const schema& s, const std::vector<bytes>& v) {

@@ -56,7 +56,7 @@ column_family::find_partition(const dht::decorated_key& key) const {
     for (auto&& mt : _memtables) {
         auto mp = mt.find_partition(key);
         if (mp) {
-            ret.apply(_schema, *mp);
+            ret.apply(*_schema, *mp);
             any = true;
         }
     }
@@ -157,7 +157,7 @@ column_family::for_all_partitions(Func&& func) const {
             }
             if (current) {
                 // FIXME: handle different schemas
-                current->second.apply(_schema, mp);
+                current->second.apply(*_schema, mp);
             } else {
                 current = std::make_pair(key, mp);
             }
@@ -179,7 +179,7 @@ column_family::for_all_partitions_slow(std::function<bool (const dht::decorated_
 row&
 column_family::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
     mutation_partition& p = find_or_create_partition_slow(partition_key);
-    return p.clustered_row(clustering_key).cells;
+    return p.clustered_row(clustering_key).cells();
 }
 
 class lister {
@@ -555,13 +555,13 @@ database::find_or_create_keyspace(const sstring& name) {
 void
 memtable::apply(const mutation& m) {
     mutation_partition& p = find_or_create_partition(m.decorated_key());
-    p.apply(_schema, m.partition());
+    p.apply(*_schema, m.partition());
 }
 
 void
 memtable::apply(const frozen_mutation& m) {
     mutation_partition& p = find_or_create_partition_slow(m.key(*_schema));
-    p.apply(_schema, m.partition());
+    p.apply(*_schema, m.partition());
 }
 
 // Based on:
@@ -599,21 +599,6 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
         }
     }
     return 0;
-}
-
-void
-merge_column(const column_definition& def,
-             atomic_cell_or_collection& old,
-             const atomic_cell_or_collection& neww) {
-    if (def.is_atomic()) {
-        if (compare_atomic_cell_for_merge(old.as_atomic_cell(), neww.as_atomic_cell()) < 0) {
-            // FIXME: move()?
-            old = neww;
-        }
-    } else {
-        auto ct = static_pointer_cast<const collection_type_impl>(def.type);
-        old = ct->merge(old.as_collection_mutation(), neww.as_collection_mutation());
-    }
 }
 
 future<lw_shared_ptr<query::result>>

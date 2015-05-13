@@ -136,19 +136,19 @@ public:
             assert(row != nullptr);
             auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
             assert(col_def != nullptr);
-            auto i = row->find(col_def->id);
-            if (i == row->end()) {
+            const atomic_cell_or_collection* cell = row->find_cell(col_def->id);
+            if (!cell) {
                 assert(((void)"column not set", 0));
             }
             bytes actual;
             if (!col_def->type->is_multi_cell()) {
-                auto cell = i->second.as_atomic_cell();
-                assert(cell.is_live());
-                actual = { cell.value().begin(), cell.value().end() };
+                auto c = cell->as_atomic_cell();
+                assert(c.is_live());
+                actual = { c.value().begin(), c.value().end() };
             } else {
-                auto cell = i->second.as_collection_mutation();
+                auto c = cell->as_collection_mutation();
                 auto type = dynamic_pointer_cast<const collection_type_impl>(col_def->type);
-                actual = type->to_value(type->deserialize_mutation_form(cell),
+                actual = type->to_value(type->deserialize_mutation_form(c),
                                         serialization_format::internal());
             }
             assert(col_def->type->equal(actual, col_def->type->decompose(expected)));

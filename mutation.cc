@@ -17,7 +17,7 @@ mutation::mutation(partition_key key_, schema_ptr schema)
 { }
 
 void mutation::set_static_cell(const column_definition& def, atomic_cell_or_collection value) {
-    update_column(_p.static_row(), def, std::move(value));
+    _p.static_row().apply(def, std::move(value));
 }
 
 void mutation::set_static_cell(const bytes& name, const boost::any& value, api::timestamp_type timestamp, ttl_opt ttl) {
@@ -28,12 +28,12 @@ void mutation::set_static_cell(const bytes& name, const boost::any& value, api::
     if (!column_def->is_static()) {
         throw std::runtime_error(sprint("column '%s' is not static", name));
     }
-    update_column(_p.static_row(), *column_def, atomic_cell::make_live(timestamp, column_def->type->decompose(value), ttl));
+    _p.static_row().apply(*column_def, atomic_cell::make_live(timestamp, column_def->type->decompose(value), ttl));
 }
 
 void mutation::set_clustered_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value) {
-    auto& row = _p.clustered_row(clustering_key::from_clustering_prefix(*_schema, prefix)).cells;
-    update_column(row, def, std::move(value));
+    auto& row = _p.clustered_row(clustering_key::from_clustering_prefix(*_schema, prefix)).cells();
+    row.apply(def, std::move(value));
 }
 
 void mutation::set_clustered_cell(const clustering_key& key, const bytes& name, const boost::any& value,
@@ -46,8 +46,8 @@ void mutation::set_clustered_cell(const clustering_key& key, const bytes& name, 
 }
 
 void mutation::set_clustered_cell(const clustering_key& key, const column_definition& def, atomic_cell_or_collection value) {
-    auto& row = _p.clustered_row(key).cells;
-    update_column(row, def, std::move(value));
+    auto& row = _p.clustered_row(key).cells();
+    row.apply(def, std::move(value));
 }
 
 void mutation::set_cell(const exploded_clustering_prefix& prefix, const bytes& name, const boost::any& value,
@@ -71,32 +71,19 @@ void mutation::set_cell(const exploded_clustering_prefix& prefix, const column_d
 
 std::experimental::optional<atomic_cell_or_collection>
 mutation::get_cell(const clustering_key& rkey, const column_definition& def) const {
-    auto find_cell = [&def] (const row& r) {
-        auto i = r.find(def.id);
-        if (i == r.end()) {
-            return std::experimental::optional<atomic_cell_or_collection>{};
-        }
-        return std::experimental::optional<atomic_cell_or_collection>{i->second};
-    };
     if (def.is_static()) {
-        return find_cell(_p.static_row());
+        const atomic_cell_or_collection* cell = _p.static_row().find_cell(def.id);
+        if (!cell) {
+            return {};
+        }
+        return { *cell };
     } else {
-        auto r = _p.find_row(rkey);
+        const row* r = _p.find_row(rkey);
         if (!r) {
             return {};
         }
-        return find_cell(*r);
-    }
-}
-
-void mutation::update_column(row& row, const column_definition& def, atomic_cell_or_collection&& value) {
-    // our mutations are not yet immutable
-    auto id = def.id;
-    auto i = row.lower_bound(id);
-    if (i == row.end() || i->first != id) {
-        row.emplace_hint(i, id, std::move(value));
-    } else {
-        merge_column(def, i->second, value);
+        const atomic_cell_or_collection* cell = r->find_cell(def.id);
+        return { *cell };
     }
 }
 

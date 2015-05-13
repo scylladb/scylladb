@@ -27,12 +27,12 @@ public:
 
     virtual void accept_static_cell(column_id id, atomic_cell_view cell) override {
         row& r = _partition.static_row();
-        r.emplace_hint(r.end(), id, atomic_cell_or_collection(cell));
+        r.append_cell(id, atomic_cell_or_collection(cell));
     }
 
     virtual void accept_static_cell(column_id id, collection_mutation::view collection) override {
         row& r = _partition.static_row();
-        r.emplace_hint(r.end(), id, atomic_cell_or_collection(collection));
+        r.append_cell(id, atomic_cell_or_collection(collection));
     }
 
     virtual void accept_row_tombstone(clustering_key_prefix_view prefix, tombstone t) override {
@@ -41,18 +41,18 @@ public:
 
     virtual void accept_row(clustering_key_view key, api::timestamp_type created_at, tombstone deleted_at) override {
         deletable_row& r = _partition.clustered_row(_schema, key);
-        r.created_at = created_at;
+        r.apply(created_at);
         r.apply(deleted_at);
         _current_row = &r;
     }
 
     virtual void accept_row_cell(column_id id, atomic_cell_view cell) override {
-        row& r = _current_row->cells;
-        r.emplace_hint(r.end(), id, atomic_cell_or_collection(cell));
+        row& r = _current_row->cells();
+        r.append_cell(id, atomic_cell_or_collection(cell));
     }
 
     virtual void accept_row_cell(column_id id, collection_mutation::view collection) override {
-        row& r = _current_row->cells;
-        r.emplace_hint(r.end(), id, atomic_cell_or_collection(collection));
+        row& r = _current_row->cells();
+        r.append_cell(id, atomic_cell_or_collection(collection));
     }
 };

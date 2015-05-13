@@ -28,50 +28,42 @@ mutation_partition::operator=(const mutation_partition& x) {
 }
 
 void
-mutation_partition::apply(schema_ptr schema, const mutation_partition& p) {
+mutation_partition::apply(const schema& schema, const mutation_partition& p) {
     _tombstone.apply(p._tombstone);
 
     for (auto&& e : p._row_tombstones) {
-        apply_row_tombstone(*schema, e.prefix(), e.t());
+        apply_row_tombstone(schema, e.prefix(), e.t());
     }
 
-    auto merge_cells = [this, schema] (row& old_row, const row& new_row, auto&& find_column_def) {
+    static auto merge_cells = [] (row& old_row, const row& new_row, auto&& find_column_def) {
         for (auto&& new_column : new_row) {
-            auto col = new_column.first;
-            auto i = old_row.find(col);
-            if (i == old_row.end()) {
-                old_row.emplace_hint(i, new_column);
-            } else {
-                auto& old_column = *i;
-                auto& def = find_column_def(col);
-                merge_column(def, old_column.second, new_column.second);
-            }
+            old_row.apply(new_column.first, new_column.second, find_column_def);
         }
     };
 
-    auto find_static_column_def = [schema] (auto col) -> const column_definition& { return schema->static_column_at(col); };
-    auto find_regular_column_def = [schema] (auto col) -> const column_definition& { return schema->regular_column_at(col); };
+    auto find_static_column_def = [&schema] (auto col) -> const column_definition& { return schema.static_column_at(col); };
+    auto find_regular_column_def = [&schema] (auto col) -> const column_definition& { return schema.regular_column_at(col); };
 
     merge_cells(_static_row, p._static_row, find_static_column_def);
 
     for (auto&& entry : p._rows) {
         auto& key = entry.key();
-        auto i = _rows.find(key, rows_entry::compare(*schema));
+        auto i = _rows.find(key, rows_entry::compare(schema));
         if (i == _rows.end()) {
             auto e = new rows_entry(entry);
             _rows.insert(i, *e);
         } else {
-            i->row().t.apply(entry.row().t);
-            i->row().created_at = std::max(i->row().created_at, entry.row().created_at);
-            merge_cells(i->row().cells, entry.row().cells, find_regular_column_def);
+            i->row().apply(entry.row().deleted_at());
+            i->row().apply(entry.row().created_at());
+            merge_cells(i->row().cells(), entry.row().cells(), find_regular_column_def);
         }
     }
 }
 
 void
-mutation_partition::apply(schema_ptr schema, mutation_partition_view p) {
-    mutation_partition_applier applier(*schema, *this);
-    p.accept(*schema, applier);
+mutation_partition::apply(const schema& schema, mutation_partition_view p) {
+    mutation_partition_applier applier(schema, *this);
+    p.accept(schema, applier);
 }
 
 tombstone
@@ -102,7 +94,7 @@ mutation_partition::tombstone_for_row(const schema& schema, const clustering_key
 
     auto j = _rows.find(key, rows_entry::compare(schema));
     if (j != _rows.end()) {
-        t.apply(j->row().t);
+        t.apply(j->row().deleted_at());
     }
 
     return t;
@@ -111,7 +103,7 @@ mutation_partition::tombstone_for_row(const schema& schema, const clustering_key
 tombstone
 mutation_partition::tombstone_for_row(const schema& schema, const rows_entry& e) const {
     tombstone t = range_tombstone_for_row(schema, e.key());
-    t.apply(e.row().t);
+    t.apply(e.row().deleted_at());
     return t;
 }
 
@@ -128,24 +120,24 @@ mutation_partition::apply_row_tombstone(const schema& schema, clustering_key_pre
 }
 
 void
-mutation_partition::apply_delete(schema_ptr schema, const exploded_clustering_prefix& prefix, tombstone t) {
+mutation_partition::apply_delete(const schema& schema, const exploded_clustering_prefix& prefix, tombstone t) {
     if (!prefix) {
         apply(t);
-    } else if (prefix.is_full(*schema)) {
-        apply_delete(schema, clustering_key::from_clustering_prefix(*schema, prefix), t);
+    } else if (prefix.is_full(schema)) {
+        apply_delete(schema, clustering_key::from_clustering_prefix(schema, prefix), t);
     } else {
-        apply_row_tombstone(*schema, clustering_key_prefix::from_clustering_prefix(*schema, prefix), t);
+        apply_row_tombstone(schema, clustering_key_prefix::from_clustering_prefix(schema, prefix), t);
     }
 }
 
 void
-mutation_partition::apply_delete(schema_ptr schema, clustering_key&& key, tombstone t) {
-    clustered_row(*schema, std::move(key)).apply(t);
+mutation_partition::apply_delete(const schema& schema, clustering_key&& key, tombstone t) {
+    clustered_row(schema, std::move(key)).apply(t);
 }
 
 void
-mutation_partition::apply_delete(schema_ptr schema, clustering_key_view key, tombstone t) {
-    clustered_row(*schema, key).apply(t);
+mutation_partition::apply_delete(const schema& schema, clustering_key_view key, tombstone t) {
+    clustered_row(schema, key).apply(t);
 }
 
 void
@@ -154,8 +146,8 @@ mutation_partition::apply_insert(const schema& s, clustering_key_view key, api::
 }
 
 const rows_entry*
-mutation_partition::find_entry(schema_ptr schema, const clustering_key_prefix& key) const {
-    auto i = _rows.find(key, rows_entry::key_comparator(clustering_key::less_compare_with_prefix(*schema)));
+mutation_partition::find_entry(const schema& schema, const clustering_key_prefix& key) const {
+    auto i = _rows.find(key, rows_entry::key_comparator(clustering_key::less_compare_with_prefix(schema)));
     if (i == _rows.end()) {
         return nullptr;
     }
@@ -168,7 +160,7 @@ mutation_partition::find_row(const clustering_key& key) const {
     if (i == _rows.end()) {
         return nullptr;
     }
-    return &i->row().cells;
+    return &i->row().cells();
 }
 
 deletable_row&
@@ -228,22 +220,22 @@ template <typename ColumnDefResolver>
 static void get_row_slice(const row& cells, const std::vector<column_id>& columns, tombstone tomb,
         ColumnDefResolver&& id_to_def, query::result::row_writer& writer) {
     for (auto id : columns) {
-        auto i = cells.find(id);
-        if (i == cells.end()) {
+        const atomic_cell_or_collection* cell = cells.find_cell(id);
+        if (!cell) {
             writer.add_empty();
         } else {
             auto&& def = id_to_def(id);
             if (def.is_atomic()) {
-                auto c = i->second.as_atomic_cell();
+                auto c = cell->as_atomic_cell();
                 if (!c.is_live(tomb)) {
                     writer.add_empty();
                 } else {
-                    writer.add(i->second.as_atomic_cell());
+                    writer.add(cell->as_atomic_cell());
                 }
             } else {
-                auto&& cell = i->second.as_collection_mutation();
+                auto&& mut = cell->as_collection_mutation();
                 auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
-                auto m_view = ctype->deserialize_mutation_form(cell);
+                auto m_view = ctype->deserialize_mutation_form(mut);
                 m_view.tomb.apply(tomb);
                 auto m_ser = ctype->serialize_mutation_form_only_live(m_view);
                 if (ctype->is_empty(m_ser)) {
@@ -311,10 +303,10 @@ mutation_partition::query(const schema& s,
         // only one lookup for a full-tuple singular range though.
         for (const rows_entry& e : range(s, row_range)) {
             auto& row = e.row();
-            auto&& cells = row.cells;
+            auto&& cells = row.cells();
 
             auto row_tombstone = tombstone_for_row(s, e);
-            auto row_is_live = row.created_at > row_tombstone.timestamp;
+            auto row_is_live = row.created_at() > row_tombstone.timestamp;
 
             // row_is_live is true for rows created using 'insert' statement
             // which are not deleted yet. Such rows are considered as present
@@ -348,7 +340,7 @@ operator<<(std::ostream& os, const row& r) {
 
 std::ostream&
 operator<<(std::ostream& os, const deletable_row& dr) {
-    return fprint(os, "{deletable_row: %s %s %s}", dr.created_at, dr.t, dr.cells);
+    return fprint(os, "{deletable_row: %s %s %s}", dr._created_at, dr._deleted_at, dr._cells);
 }
 
 std::ostream&
@@ -378,10 +370,10 @@ rows_equal(const schema& s, const row& r1, const row& r2) {
 
 bool
 deletable_row::equal(const schema& s, const deletable_row& other) const {
-    if (t != other.t || created_at != other.created_at) {
+    if (_deleted_at != other._deleted_at || _created_at != other._created_at) {
         return false;
     }
-    return rows_equal(s, cells, other.cells);
+    return rows_equal(s, _cells, other._cells);
 }
 
 bool
@@ -413,4 +405,45 @@ bool mutation_partition::equal(const schema& s, const mutation_partition& p) con
     }
 
     return rows_equal(s, _static_row, p._static_row);
+}
+
+void
+merge_column(const column_definition& def,
+             atomic_cell_or_collection& old,
+             const atomic_cell_or_collection& neww) {
+    if (def.is_atomic()) {
+        if (compare_atomic_cell_for_merge(old.as_atomic_cell(), neww.as_atomic_cell()) < 0) {
+            // FIXME: move()?
+            old = neww;
+        }
+    } else {
+        auto ct = static_pointer_cast<const collection_type_impl>(def.type);
+        old = ct->merge(old.as_collection_mutation(), neww.as_collection_mutation());
+    }
+}
+
+void
+row::apply(const column_definition& column, atomic_cell_or_collection value) {
+    // our mutations are not yet immutable
+    auto id = column.id;
+    auto i = _cells.lower_bound(id);
+    if (i == _cells.end() || i->first != id) {
+        _cells.emplace_hint(i, id, std::move(value));
+    } else {
+        merge_column(column, i->second, value);
+    }
+}
+
+void
+row::append_cell(column_id id, atomic_cell_or_collection value) {
+    _cells.emplace_hint(_cells.end(), id, std::move(value));
+}
+
+const atomic_cell_or_collection*
+row::find_cell(column_id id) const {
+    auto i = _cells.find(id);
+    if (i == _cells.end()) {
+        return nullptr;
+    }
+    return &i->second;
 }

@@ -148,7 +148,7 @@ public:
                     // FIXME: force limit count?
                     while (beg != end && count--) {
                         const column_definition& def = range.reversed ? *--end : *beg++;
-                        atomic_cell_view cell = (*rw).at(def.id).as_atomic_cell();
+                        atomic_cell_view cell = (*rw).cell_at(def.id).as_atomic_cell();
                         if (def.is_atomic()) {
                             if (cell.is_live()) { // FIXME: we should actually use tombstone information from all levels
                                 Column col;

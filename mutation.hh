@@ -39,6 +39,5 @@ public:
     bool operator==(const mutation&) const;
     bool operator!=(const mutation&) const;
 private:
-    static void update_column(row& row, const column_definition& def, atomic_cell_or_collection&& value);
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
