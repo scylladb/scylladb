@@ -62,13 +62,13 @@ int main(int ac, char** av) {
         }).then([&db, &proxy, &qp, cql_port, thrift_port] {
             auto cserver = new distributed<cql_server>;
             cserver->start(std::ref(proxy), std::ref(qp)).then([server = std::move(cserver), cql_port] () mutable {
-                    server->invoke_on_all(&cql_server::listen, ipv4_addr{cql_port});
+                server->invoke_on_all(&cql_server::listen, ipv4_addr{cql_port});
             }).then([cql_port] {
                 std::cout << "CQL server listening on port " << cql_port << " ...\n";
             });
             auto tserver = new distributed<thrift_server>;
             tserver->start(std::ref(db)).then([server = std::move(tserver), thrift_port] () mutable {
-                    server->invoke_on_all(&thrift_server::listen, ipv4_addr{thrift_port});
+                server->invoke_on_all(&thrift_server::listen, ipv4_addr{thrift_port});
             }).then([thrift_port] {
                 std::cout << "Thrift server listening on port " << thrift_port << " ...\n";
             });
