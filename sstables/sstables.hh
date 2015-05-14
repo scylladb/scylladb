@@ -116,11 +116,11 @@ private:
 
     const sstring filename(component_type f);
 
-    template <typename T, sstable::component_type Type, T sstable::* Comptr>
-    future<> read_simple();
+    template <sstable::component_type Type, typename T>
+    future<> read_simple(T& comp);
 
-    template <typename T, sstable::component_type Type, T sstable::* Comptr>
-    future<> write_simple();
+    template <sstable::component_type Type, typename T>
+    future<> write_simple(T& comp);
 
     size_t data_size();
 
@@ -131,17 +131,18 @@ private:
     future<> write_compression();
 
     future<> read_filter() {
-        return read_simple<filter, component_type::Filter, &sstable::_filter>();
+        return read_simple<component_type::Filter>(_filter);
     }
+
     future<> write_filter() {
-        return write_simple<filter, component_type::Filter, &sstable::_filter>();
+        return write_simple<component_type::Filter>(_filter);
     }
 
     future<> read_summary() {
-        return read_simple<summary, component_type::Summary, &sstable::_summary>();
+        return read_simple<component_type::Summary>(_summary);
     }
     future<> write_summary() {
-        return write_simple<summary, component_type::Summary, &sstable::_summary>();
+        return write_simple<component_type::Summary>(_summary);
     }
 
     future<> read_statistics();

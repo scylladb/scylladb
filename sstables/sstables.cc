@@ -724,15 +724,15 @@ future<index_list> sstable::read_indexes(uint64_t position, uint64_t quantity) {
     });
 }
 
-template <typename T, sstable::component_type Type, T sstable::* Comptr>
-future<> sstable::read_simple() {
+template <sstable::component_type Type, typename T>
+future<> sstable::read_simple(T& component) {
 
     auto file_path = filename(Type);
     sstlog.debug(("Reading " + _component_map[Type] + " file {} ").c_str(), file_path);
-    return engine().open_file_dma(file_path, open_flags::ro).then([this] (file f) {
+    return engine().open_file_dma(file_path, open_flags::ro).then([this, &component] (file f) {
 
         auto r = std::make_unique<file_random_access_reader>(std::move(f), 4096);
-        auto fut = parse(*r, *this.*Comptr);
+        auto fut = parse(*r, component);
         return fut.then([r = std::move(r)] {});
     }).then_wrapped([this, file_path] (future<> f) {
         try {
@@ -745,16 +745,15 @@ future<> sstable::read_simple() {
     });
 }
 
-template <typename T, sstable::component_type Type, T sstable::* Comptr>
-future<> sstable::write_simple() {
-
+template <sstable::component_type Type, typename T>
+future<> sstable::write_simple(T& component) {
     auto file_path = filename(Type);
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
-    return engine().open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).then([this] (file f) {
+    return engine().open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).then([this, &component] (file f) {
 
         auto out = make_file_output_stream(make_lw_shared<file>(std::move(f)), 4096);
         auto w = make_shared<output_stream<char>>(std::move(out));
-        auto fut = write(*w, *this.*Comptr);
+        auto fut = write(*w, component);
         return fut.then([w] {
             return w->flush().then([w] {
                 return w->close().then([w] {}); // the underlying file is synced here.
@@ -775,7 +774,7 @@ future<> sstable::read_compression() {
         return make_ready_future<>();
     }
 
-    return read_simple<compression, component_type::CompressionInfo, &sstable::_compression>();
+    return read_simple<component_type::CompressionInfo>(_compression);
 }
 
 future<> sstable::write_compression() {
@@ -783,15 +782,15 @@ future<> sstable::write_compression() {
         return make_ready_future<>();
     }
 
-    return write_simple<compression, component_type::CompressionInfo, &sstable::_compression>();
+    return write_simple<component_type::CompressionInfo>(_compression);
 }
 
 future<> sstable::read_statistics() {
-    return read_simple<statistics, component_type::Statistics, &sstable::_statistics>();
+    return read_simple<component_type::Statistics>(_statistics);
 }
 
 future<> sstable::write_statistics() {
-    return write_simple<statistics, component_type::Statistics, &sstable::_statistics>();
+    return write_simple<component_type::Statistics>(_statistics);
 }
 
 future<> sstable::open_data() {
