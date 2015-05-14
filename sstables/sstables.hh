@@ -177,8 +177,8 @@ private:
     future<summary_entry&> read_summary_entry(size_t i);
 
     // FIXME: pending on Bloom filter implementation
-    bool filter_has_key(const dht::token& dk) { return true; }
-    bool filter_has_key(const dht::decorated_key& dk) { return filter_has_key(dk._token); }
+    bool filter_has_key(const key& key) { return true; }
+    bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }
 public:
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
