@@ -25,23 +25,23 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
     return cfg.read_from_file(opts["options-file"].as<sstring>());
 }
 
-void init_messaging_service(auto listen_address, auto seed_provider) {
+future<> init_messaging_service(auto listen_address, auto seed_provider) {
     const gms::inet_address listen(listen_address);
     std::set<gms::inet_address> seeds;
     for (auto& x : seed_provider.parameters) {
         seeds.emplace(x.first);
     }
-    net::get_messaging_service().start(listen).then([seeds] {
+    return net::get_messaging_service().start(listen).then([seeds] {
         auto& ms = net::get_local_messaging_service();
         print("Messaging server listening on ip %s port %d ...\n", ms.listen_address(), ms.port());
-        gms::get_failure_detector().start_single().then([seeds] {
-            gms::get_gossiper().start_single().then([seeds] {
+        return gms::get_failure_detector().start_single().then([seeds] {
+            return gms::get_gossiper().start_single().then([seeds] {
                 auto& gossiper = gms::get_local_gossiper();
                 gossiper.set_seeds(seeds);
                 using namespace std::chrono;
                 auto now = high_resolution_clock::now().time_since_epoch();
                 int generation_number = duration_cast<seconds>(now).count();
-                gossiper.start(generation_number).then([] {
+                return gossiper.start(generation_number).then([] {
                     print("Start gossiper service ...\n");
                 });
             });
@@ -79,6 +79,8 @@ int main(int ac, char** av) {
         }).then([&db] {
             engine().at_exit([&db] { return db.stop(); });
             return db.invoke_on_all(&database::init_from_data_directory);
+        }).then([listen_address, seed_provider] {
+            return init_messaging_service(listen_address, seed_provider);
         }).then([&db, &proxy, &qp] {
             return qp.start(std::ref(proxy), std::ref(db)).then([&qp] {
                 engine().at_exit([&qp] { return qp.stop(); });
@@ -96,8 +98,6 @@ int main(int ac, char** av) {
             }).then([thrift_port] {
                 std::cout << "Thrift server listening on port " << thrift_port << " ...\n";
             });
-        }).then([listen_address, seed_provider] {
-            init_messaging_service(listen_address, seed_provider);
         }).then([&db, api_port, &ctx]{
             ctx.http_server.start().then([api_port, &ctx] {
                 return set_server(ctx);
