@@ -45,21 +45,6 @@ class inet_address;
 class i_endpoint_state_change_subscriber;
 class i_failure_detector;
 
-struct empty_msg {
-    void serialize(bytes::iterator& out) const {
-    }
-    static empty_msg deserialize(bytes_view& v) {
-        return empty_msg();
-    }
-    size_t serialized_size() const {
-        return 0;
-    }
-    friend inline std::ostream& operator<<(std::ostream& os, const empty_msg& ack) {
-        return os << "empty_msg";
-    }
-};
-
-
 /**
  * This module is responsible for Gossiping information for the local endpoint. This abstraction
  * maintains the list of live and dead endpoints. Periodically i.e. every 1 second this module
