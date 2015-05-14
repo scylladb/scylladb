@@ -314,22 +314,22 @@ SEASTAR_TEST_CASE(compressed_random_access_read) {
 
 class test_row_consumer : public row_consumer {
 public:
-    const uint64_t desired_timestamp;
-    test_row_consumer(uint64_t t) : desired_timestamp(t) { }
+    const int64_t desired_timestamp;
+    test_row_consumer(int64_t t) : desired_timestamp(t) { }
     int count_row_start = 0;
     int count_cell = 0;
     int count_deleted_cell = 0;
     int count_range_tombstone = 0;
     int count_row_end = 0;
-    virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
-        BOOST_REQUIRE(key == as_bytes("vinna"));
-        BOOST_REQUIRE(deltime.local_deletion_time == (uint32_t)std::numeric_limits<int32_t>::max());
-        BOOST_REQUIRE(deltime.marked_for_delete_at == (uint64_t)std::numeric_limits<int64_t>::min());
+    virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
+        BOOST_REQUIRE(bytes_view(key) == as_bytes("vinna"));
+        BOOST_REQUIRE(deltime.local_deletion_time == std::numeric_limits<int32_t>::max());
+        BOOST_REQUIRE(deltime.marked_for_delete_at == std::numeric_limits<int64_t>::min());
         count_row_start++;
     }
 
     virtual void consume_cell(bytes_view col_name, bytes_view value,
-            uint64_t timestamp, uint32_t ttl, uint32_t expiration) override {
+            int64_t timestamp, int32_t ttl, int32_t expiration) override {
         BOOST_REQUIRE(ttl == 0);
         BOOST_REQUIRE(expiration == 0);
         switch (count_cell) {
@@ -443,11 +443,11 @@ public:
     int count_deleted_cell = 0;
     int count_row_end = 0;
     int count_range_tombstone = 0;
-    virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
+    virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         count_row_start++;
     }
     virtual void consume_cell(bytes_view col_name, bytes_view value,
-            uint64_t timestamp, uint32_t ttl, uint32_t expiration) override {
+            int64_t timestamp, int32_t ttl, int32_t expiration) override {
         count_cell++;
     }
     virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
@@ -531,15 +531,15 @@ class ttl_row_consumer : public count_row_consumer {
 public:
     const uint64_t desired_timestamp;
     ttl_row_consumer(uint64_t t) : desired_timestamp(t) { }
-    virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
+    virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         count_row_consumer::consume_row_start(key, deltime);
-        BOOST_REQUIRE(key == as_bytes("nadav"));
+        BOOST_REQUIRE(bytes_view(key) == as_bytes("nadav"));
         BOOST_REQUIRE(deltime.local_deletion_time == (uint32_t)std::numeric_limits<int32_t>::max());
         BOOST_REQUIRE(deltime.marked_for_delete_at == (uint64_t)std::numeric_limits<int64_t>::min());
     }
 
     virtual void consume_cell(bytes_view col_name, bytes_view value,
-            uint64_t timestamp, uint32_t ttl, uint32_t expiration) override {
+            int64_t timestamp, int32_t ttl, int32_t expiration) override {
         switch (count_cell) {
         case 0:
             // The silly "cql row marker" cell
@@ -582,11 +582,11 @@ SEASTAR_TEST_CASE(ttl_read) {
 
 class deleted_cell_row_consumer : public count_row_consumer {
 public:
-    virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
+    virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         count_row_consumer::consume_row_start(key, deltime);
-        BOOST_REQUIRE(key == as_bytes("nadav"));
-        BOOST_REQUIRE(deltime.local_deletion_time == (uint32_t)std::numeric_limits<int32_t>::max());
-        BOOST_REQUIRE(deltime.marked_for_delete_at == (uint64_t)std::numeric_limits<int64_t>::min());
+        BOOST_REQUIRE(bytes_view(key) == as_bytes("nadav"));
+        BOOST_REQUIRE(deltime.local_deletion_time == std::numeric_limits<int32_t>::max());
+        BOOST_REQUIRE(deltime.marked_for_delete_at == std::numeric_limits<int64_t>::min());
     }
 
     virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {

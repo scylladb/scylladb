@@ -8,6 +8,7 @@
 #include "key.hh"
 #include "keys.hh"
 #include "core/do_with.hh"
+#include "unimplemented.hh"
 
 #include "dht/i_partitioner.hh"
 
@@ -74,6 +75,12 @@ int sstable::binary_search(const T& entries, const key& sk, const dht::token& to
 template int sstable::binary_search<>(const std::vector<summary_entry>& entries, const key& sk);
 template int sstable::binary_search<>(const std::vector<index_entry>& entries, const key& sk);
 
+static inline bytes pop_back(std::vector<bytes>& vec) {
+    auto b = std::move(vec.back());
+    vec.pop_back();
+    return std::move(b);
+}
+
 class mp_row_consumer : public row_consumer {
     schema_ptr _schema;
     key _key;
@@ -82,29 +89,52 @@ class mp_row_consumer : public row_consumer {
         bool is_static;
         bytes_view col_name;
         std::vector<bytes> clustering;
+        // see is_collection. collections have an extra element aside from the name.
+        // This will be non-zero size if this is a collection, and zero size othersize.
+        bytes collection_extra_data;
         bytes cell;
         const column_definition *cdef;
 
         static constexpr size_t static_size = 2;
 
-        bool check_static(bytes_view col) const {
+        // For every normal column, we expect the clustering key, followed by the
+        // extra element for the column name.
+        //
+        // For a collection, some auxiliary data will be embedded into the
+        // column_name as seen by the row consumer. This means that if our
+        // exploded clustering keys has more rows than expected, we are dealing
+        // with a collection.
+        bool is_collection(const schema& s) {
+            auto expected_normal = s.clustering_key_size() + 1;
+            // Note that we can have less than the expected. That is the case for
+            // incomplete prefixes, for instance.
+            if (clustering.size() <= expected_normal) {
+                return false;
+            } else if (clustering.size() == (expected_normal + 1)) {
+                return true;
+            }
+            throw malformed_sstable_exception(sprint("Found %d clustering elements in column name. Was not expecting that!", clustering.size()));
+        }
+
+        static bool check_static(bytes_view col) {
             static bytes static_row(static_size, 0xff);
             return col.compare(0, static_size, static_row) == 0;
         }
 
-        bytes_view fix_static_name(bytes_view col) {
-            if (is_static) {
+        static bytes_view fix_static_name(bytes_view col) {
+            if (check_static(col)) {
                 col.remove_prefix(static_size);
             }
             return col;
         }
 
-        column(schema_ptr schema, bytes_view col)
+        column(const schema& schema, bytes_view col)
             : is_static(check_static(col))
             , col_name(fix_static_name(col))
             , clustering(composite_view(col_name).explode())
-            , cell(std::move(clustering.back()))
-            , cdef(schema->get_column_definition(cell))
+            , collection_extra_data(is_collection(schema) ? pop_back(clustering) : bytes())
+            , cell(pop_back(clustering))
+            , cdef(schema.get_column_definition(cell))
         {
 
             if (is_static) {
@@ -116,19 +146,86 @@ class mp_row_consumer : public row_consumer {
             }
 
             if (cell.size() && !cdef) {
-                throw malformed_sstable_exception(sprint("schema does not contain colum: %s", cell.c_str()));
+                throw malformed_sstable_exception(sprint("schema does not contain column: %s", cell.c_str()));
             }
-
-            clustering.pop_back();
         }
     };
+
+    // Notes for collection mutation:
+    //
+    // While we could in theory generate the mutation for the elements as they
+    // appear, that would be costly.  We would need to keep deserializing and
+    // serializing them, either explicitly or through a merge.
+    //
+    // The best way forward is to accumulate the collection data into a data
+    // structure, and later on serialize it fully when this (sstable) row ends.
+    class collection_mutation {
+        const column_definition *_cdef;
+        exploded_clustering_prefix _clustering_prefix;
+    public:
+        collection_type_impl::mutation cm;
+
+        // We need to get a copy of the prefix here, because the outer object may be short lived.
+        collection_mutation(exploded_clustering_prefix prefix, const column_definition *cdef)
+            : _cdef(cdef)
+            , _clustering_prefix(std::move(prefix)) { }
+
+        collection_mutation() : _cdef(nullptr) {}
+
+        bool is_new_collection(const exploded_clustering_prefix& prefix, const column_definition *c) {
+            if (prefix.components() != _clustering_prefix.components()) {
+                return true;
+            }
+            if (!_cdef || ((_cdef->id != c->id) || (_cdef->kind != c->kind))) {
+                return true;
+            }
+            return false;
+        };
+
+        void flush(const schema& s, mutation& mut) {
+            if (!_cdef) {
+                return;
+            }
+            auto ctype = static_pointer_cast<const collection_type_impl>(_cdef->type);
+            auto ac = atomic_cell_or_collection::from_collection_mutation(ctype->serialize_mutation_form(cm));
+            if (_cdef->is_static()) {
+                mut.set_static_cell(*_cdef, std::move(ac));
+            } else {
+                auto ckey = clustering_key::from_clustering_prefix(s, _clustering_prefix);
+                mut.set_clustered_cell(ckey, *_cdef, std::move(ac));
+            }
+        }
+    };
+    collection_mutation _pending_collection;
+
+    collection_mutation& pending_collection(const exploded_clustering_prefix& clustering_prefix, const column_definition *cdef) {
+        if (_pending_collection.is_new_collection(clustering_prefix, cdef)) {
+            _pending_collection.flush(*_schema, mut);
+
+            if (!cdef->type->is_multi_cell()) {
+                throw malformed_sstable_exception("frozen set should behave like a cell\n");
+            }
+            _pending_collection = collection_mutation(clustering_prefix, cdef);
+        }
+        return _pending_collection;
+    }
+
+    void update_pending_collection(const exploded_clustering_prefix& clustering_prefix, const column_definition *cdef,
+                                   bytes&& col, atomic_cell&& ac) {
+        pending_collection(clustering_prefix, cdef).cm.cells.emplace_back(std::move(col), std::move(ac));
+    }
+
+    void update_pending_collection(const exploded_clustering_prefix& clustering_prefix, const column_definition *cdef, tombstone&& t) {
+        pending_collection(clustering_prefix, cdef).cm.tomb = std::move(t);
+    }
+
 public:
-    lw_shared_ptr<mutation> mut;
+    mutation mut;
 
     mp_row_consumer(const key& key, const schema_ptr _schema)
             : _schema(_schema)
             , _key(key)
-            , mut(make_lw_shared<mutation>(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema))
+            , mut(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema)
     { }
 
     void validate_row_marker() {
@@ -137,11 +234,14 @@ public:
         }
     }
 
-    virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) override {
-        // FIXME: We should be doing more than that: We need to check the deletion time and propagate the tombstone information
-        auto k = bytes_view(_key);
+    virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
+        key_view k(_key);
         if (key != k) {
-            throw malformed_sstable_exception(sprint("Key mismatch. Got %s while processing %s", to_hex(key).c_str(), to_hex(k).c_str()));
+            throw malformed_sstable_exception(sprint("Key mismatch. Got %s while processing %s", to_hex(bytes_view(key)).c_str(), to_hex(bytes_view(k)).c_str()));
+        }
+
+        if (!deltime.live()) {
+            mut.partition().apply(tombstone(deltime));
         }
     }
 
@@ -154,72 +254,97 @@ public:
         }
     }
 
-    virtual void consume_cell(bytes_view col_name, bytes_view value, uint64_t timestamp, uint32_t ttl, uint32_t expiration) override {
-        static bytes cql_row_marker(3, bytes::value_type(0x0));
-
-        // The row marker exists mainly so that one can create empty rows. It should not be present
-        // in dense tables. It serializes to \x0\x0\x0 and should yield an empty vector.
-        // FIXME: What to do with its timestamp ? We are not setting any row-wide timestamp in the mutation partition
-        if (col_name == cql_row_marker) {
-            validate_row_marker();
-            return;
-        }
-
-        struct column col(_schema, col_name);
-
-        // FIXME: collections are different, but not yet handled.
-        if (col.clustering.size() > (_schema->clustering_key_type()->types().size() + 1)) {
-            throw malformed_sstable_exception("wrong number of clustering columns");
-        }
+    virtual void consume_cell(bytes_view col_name, bytes_view value, int64_t timestamp, int32_t ttl, int32_t expiration) override {
+        struct column col(*_schema, col_name);
 
         auto ac = make_atomic_cell(timestamp, value, ttl, expiration);
+        auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
 
-        if (col.is_static) {
-            mut->set_static_cell(*(col.cdef), ac);
+        if (col.collection_extra_data.size()) {
+            update_pending_collection(clustering_prefix, col.cdef, std::move(col.collection_extra_data), std::move(ac));
             return;
         }
 
-        auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
+        if (col.is_static) {
+            mut.set_static_cell(*(col.cdef), std::move(ac));
+            return;
+        }
 
         if (col.cell.size() == 0) {
             auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
-            auto& dr = mut->partition().clustered_row(clustering_key);
+            auto& dr = mut.partition().clustered_row(clustering_key);
             dr.apply(timestamp);
             return;
         }
 
-        mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(ac));
+        mut.set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
     }
 
     virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
-        struct column col(_schema, col_name);
+        struct column col(*_schema, col_name);
         gc_clock::duration secs(deltime.local_deletion_time);
 
         consume_deleted_cell(col, deltime.marked_for_delete_at, gc_clock::time_point(secs));
     }
 
-    void consume_deleted_cell(column &col, uint64_t timestamp, gc_clock::time_point ttl) {
+    void consume_deleted_cell(column &col, int64_t timestamp, gc_clock::time_point ttl) {
         auto ac = atomic_cell::make_dead(timestamp, ttl);
 
-        if (col.is_static) {
-            mut->set_static_cell(*(col.cdef), atomic_cell_or_collection(ac));
+        auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
+        if (col.collection_extra_data.size()) {
+            update_pending_collection(clustering_prefix, col.cdef, std::move(col.collection_extra_data), std::move(ac));
+        } else if (col.is_static) {
+            mut.set_static_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
         } else {
-            auto clustering_prefix = exploded_clustering_prefix(std::move(col.clustering));
-            mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(ac));
+            mut.set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
         }
     }
     virtual void consume_row_end() override {
+        _pending_collection.flush(*_schema, mut);
     }
 
     virtual void consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
             sstables::deletion_time deltime) override {
-        throw runtime_exception("Not implemented");
+        check_marker(start_col, composite_marker::start_range);
+        check_marker(end_col, composite_marker::end_range);
+
+        // FIXME: CASSANDRA-6237 says support will be added to things like this.
+        //
+        // The check below represents a range with a different start and end
+        // clustering key.  Cassandra-generated files (to the moment) will
+        // generate multi-row deletes, but they always have the same clustering
+        // key. This is basically because one can't (yet) write delete
+        // statements in which the WHERE clause looks like WHERE clustering_key >= x.
+        //
+        // We don't really have it in our model ATM, so let's just mark this unimplemented.
+        //
+        // The only expected difference between them, is the final marker. We
+        // will remove it from end_col to ease the comparison, but will leave
+        // start_col untouched to make sure explode() still works.
+        end_col.remove_suffix(1);
+        if (start_col.compare(0, end_col.size(), end_col)) {
+            fail(unimplemented::cause::RANGE_DELETES);
+        }
+
+        auto start = composite_view(column::fix_static_name(start_col)).explode();
+        // Note how this is slightly different from the check in is_collection. Collection tombstones
+        // do not have extra data.
+        //
+        // Still, it is enough to check if we're dealing with a collection, since any other tombstone
+        // won't have a full clustering prefix (otherwise it isn't a range)
+        if (start.size() <= _schema->clustering_key_size()) {
+            mut.partition().apply_delete(*_schema, exploded_clustering_prefix(std::move(start)), tombstone(deltime));
+        } else {
+            auto&& column = pop_back(start);
+
+            auto clustering_prefix = exploded_clustering_prefix(std::move(start));
+            update_pending_collection(clustering_prefix, _schema->get_column_definition(column), tombstone(deltime));
+        }
     }
 };
 
-
-future<lw_shared_ptr<mutation>>
+future<mutation_opt>
 sstables::sstable::convert_row(schema_ptr schema, const sstables::key& key) {
 
     assert(schema);
@@ -228,7 +353,7 @@ sstables::sstable::convert_row(schema_ptr schema, const sstables::key& key) {
     auto token = partitioner.get_token(key_view(key));
 
     if (!filter_has_key(token)) {
-        return make_ready_future<lw_shared_ptr<mutation>>();
+        return make_ready_future<mutation_opt>();
     }
 
     auto& summary = _summary;
@@ -240,14 +365,14 @@ sstables::sstable::convert_row(schema_ptr schema, const sstables::key& key) {
         summary_idx = gt - 1;
     }
     if (summary_idx < 0) {
-        return make_ready_future<lw_shared_ptr<mutation>>();
+        return make_ready_future<mutation_opt>();
     }
 
     auto position = _summary.entries[summary_idx].position;
     return read_indexes(position).then([this, schema, &key, token] (auto index_list) {
         auto index_idx = this->binary_search(index_list, key, token);
         if (index_idx < 0) {
-            return make_ready_future<lw_shared_ptr<mutation>>();
+            return make_ready_future<mutation_opt>();
         }
 
         auto position = index_list[index_idx].position;
@@ -260,7 +385,7 @@ sstables::sstable::convert_row(schema_ptr schema, const sstables::key& key) {
 
         return do_with(mp_row_consumer(key, schema), [this, position, end] (auto& c) {
             return this->data_consume_rows_at_once(c, position, end).then([&c] {
-                return make_ready_future<lw_shared_ptr<mutation>>(c.mut);
+                return make_ready_future<mutation_opt>(std::move(c.mut));
             });
         });
     });

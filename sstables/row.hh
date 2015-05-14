@@ -6,6 +6,7 @@
 #pragma once
 
 #include "bytes.hh"
+#include "key.hh"
 #include "core/temporary_buffer.hh"
 
 // sstables::data_consume_row feeds the contents of a single row into a
@@ -33,7 +34,7 @@ public:
     // (according to the schema) before use.
     // As explained above, the key object is only valid during this call, and
     // if the implementation wishes to save it, it must copy the *contents*.
-    virtual void consume_row_start(bytes_view key, sstables::deletion_time deltime) = 0;
+    virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) = 0;
 
     // Consume one cell (column name and value). Both are serialized, and need
     // to be deserialized according to the schema.
@@ -42,8 +43,8 @@ public:
     // absolute time (in seconds since the UNIX epoch) when this cell will
     // expire. Typical cells, not set to expire, will get expiration = 0.
     virtual void consume_cell(bytes_view col_name, bytes_view value,
-            uint64_t timestamp,
-            uint32_t ttl, uint32_t expiration) = 0;
+            int64_t timestamp,
+            int32_t ttl, int32_t expiration) = 0;
 
 
     // Consume a deleted cell (i.e., a cell tombstone).

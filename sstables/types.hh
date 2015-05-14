@@ -2,6 +2,8 @@
 
 #include "core/enum.hh"
 #include "bytes.hh"
+#include "gc_clock.hh"
+#include "tombstone.hh"
 
 namespace sstables {
 
@@ -235,11 +237,20 @@ struct statistics {
 };
 
 struct deletion_time {
-    uint32_t local_deletion_time;
-    uint64_t marked_for_delete_at;
+    int32_t local_deletion_time;
+    int64_t marked_for_delete_at;
 
     template <typename Describer>
     future<> describe_type(Describer f) { return f(local_deletion_time, marked_for_delete_at); }
+
+    bool live() const {
+        return (local_deletion_time == std::numeric_limits<int32_t>::max()) &&
+               (marked_for_delete_at == std::numeric_limits<int64_t>::min());
+    }
+
+    explicit operator tombstone() {
+        return tombstone(marked_for_delete_at, gc_clock::time_point(gc_clock::duration(local_deletion_time)));
+    }
 };
 
 enum class column_mask : uint8_t {

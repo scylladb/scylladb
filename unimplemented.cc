@@ -28,6 +28,7 @@ std::ostream& operator<<(std::ostream& out, cause c) {
         case cause::LEGACY_COMPOSITE_KEYS: return out << "LEGACY_COMPOSITE_KEYS";
         case cause::COLLECTION_RANGE_TOMBSTONES: return out << "COLLECTION_RANGE_TOMBSTONES";
         case cause::RANGE_QUERIES: return out << "RANGE_QUERIES";
+        case cause::RANGE_DELETES: return out << "RANGE_DELETES";
         case cause::THRIFT: return out << "THRIFT";
         case cause::VALIDATION: return out << "VALIDATION";
         case cause::REVERSED: return out << "REVERSED";

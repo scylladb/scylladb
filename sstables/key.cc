@@ -132,8 +132,9 @@ std::vector<bytes> explode_composite(bytes_view _bytes) {
         auto b = in.read_view_to_blob<uint16_t>();
         ret.push_back(to_bytes(b));
         auto marker = in.read<uint8_t>();
-        if (marker != 0) {
-            throw runtime_exception(sprint("non-zero marker found (%d). Can't handle that yet.", marker));
+        // The components will be separated by a null byte, but the last one has special significance.
+        if (in.has_next() && (marker != 0)) {
+            throw runtime_exception(sprint("non-zero component divider found (%d) mid", marker));
         }
     }
     return ret;

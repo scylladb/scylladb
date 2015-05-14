@@ -153,4 +153,52 @@ inline schema_ptr list_schema() {
        ));
     return s;
 }
+
+inline schema_ptr uncompressed_schema() {
+    static thread_local auto uncompressed = make_lw_shared(schema(generate_legacy_id("ks", "uncompressed"), "ks", "uncompressed",
+        // partition key
+        {{"name", utf8_type}},
+        // clustering key
+        {},
+        // regular columns
+        {{"col1", utf8_type}, {"col2", int32_type}},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "Uncompressed data"
+        ));
+    return uncompressed;
+}
+
+inline schema_ptr complex_schema() {
+    auto my_list_type = list_type_impl::get_instance(bytes_type, true);
+    auto my_map_type = map_type_impl::get_instance(bytes_type, bytes_type, true);
+    auto my_set_type = set_type_impl::get_instance(bytes_type, true);
+    auto my_fset_type = set_type_impl::get_instance(bytes_type, false);
+    auto my_set_static_type = set_type_impl::get_instance(bytes_type, true);
+
+    static thread_local auto s = make_lw_shared(schema({}, "tests", "complex_schema",
+        // partition key
+        {{"key", bytes_type}},
+        // clustering key
+        {{"clust1", bytes_type}, {"clust2", bytes_type}},
+        // regular columns
+        {
+            {"reg_set", my_set_type},
+            {"reg_list", my_list_type},
+            {"reg_map", my_map_type},
+            {"reg_fset", my_fset_type},
+            {"reg", bytes_type},
+        },
+        // static columns
+        {{"static_obj", bytes_type}, {"static_collection", my_set_static_type}},
+        // regular column name type
+        bytes_type,
+        // comment
+        "Table with a complex schema, including collections and static keys"
+       ));
+    return s;
+}
 }

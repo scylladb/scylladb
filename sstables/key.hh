@@ -17,10 +17,26 @@ class key_view {
 public:
     key_view(bytes_view b) : _bytes(b) {}
 
+    bool operator==(const key_view& k) const { return k._bytes == _bytes; }
+    bool operator!=(const key_view& k) const { return !(k == *this); }
+
     explicit operator bytes_view() const {
         return _bytes;
     }
 };
+
+enum class composite_marker : bytes::value_type {
+    start_range = -1,
+    none = 0,
+    end_range = 1,
+};
+
+inline void check_marker(bytes_view component, composite_marker expected) {
+    auto found = composite_marker(component.back());
+    if (found != expected) {
+        throw runtime_exception(sprint("Unexpected marker. Found %d, expected %d\n", uint8_t(found), uint8_t(expected)));
+    }
+}
 
 // Our internal representation differs slightly (in the way it serializes) from Origin.
 // In order to be able to achieve read and write compatibility for sstables - so they can
@@ -54,6 +70,7 @@ public:
     composite_view(bytes_view b) : _bytes(b) {}
 
     std::vector<bytes> explode() const;
+
     explicit operator bytes_view() const {
         return _bytes;
     }
