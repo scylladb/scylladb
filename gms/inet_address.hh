@@ -20,8 +20,13 @@ public:
     inet_address(int32_t ip)
         : _addr(uint32_t(ip)) {
     }
-    inet_address(const sstring& addr)
-        : _addr(addr) {
+    inet_address(const sstring& addr) {
+        // FIXME: We need a real DNS resolver
+        if (addr == "localhost") {
+            _addr = net::ipv4_address("127.0.0.1");
+        } else {
+            _addr = net::ipv4_address(addr);
+        }
     }
     uint32_t raw_addr() const {
         return _addr.ip;
