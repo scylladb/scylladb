@@ -490,15 +490,23 @@ future<> parse(random_access_reader& in, summary& s) {
     });
 }
 
+future<> write(output_stream<char>& out, summary_entry& entry)
+{
+    return write(out, entry.key).then([&out, &entry] {
+        auto p = reinterpret_cast<const char*>(&entry.position);
+        return out.write(p, sizeof(uint64_t));
+    });
+}
+
 future<> write(output_stream<char>& out, summary& s) {
     using pos_type = typename decltype(summary::positions)::value_type;
 
+    // NOTE: positions and entries must be stored in NATIVE BYTE ORDER, not BIG-ENDIAN.
     return write(out, s.header.min_index_interval,
                       s.header.size,
                       s.header.memory_size,
                       s.header.sampling_level,
                       s.header.size_at_full_sampling).then([&out, &s] {
-        // NOTE: s.positions must be stored in NATIVE BYTE ORDER, not BIG-ENDIAN.
         auto p = reinterpret_cast<const char*>(s.positions.data());
         return out.write(p, sizeof(pos_type) * s.positions.size());
     }).then([&out, &s] {

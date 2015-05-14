@@ -77,9 +77,6 @@ struct summary_entry {
     bool operator==(const summary_entry& x) const {
         return position ==  x.position && key == x.key;
     }
-
-    template <typename Describer>
-    future<> describe_type(Describer f) { return f(key, position); }
 };
 
 // Note: Sampling level is present in versions ka and higher. We ATM only support la,
