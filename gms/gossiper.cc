@@ -115,12 +115,12 @@ future<gossip_digest_ack> gossiper::handle_syn_msg(gossip_digest_syn syn_msg) {
 }
 
 void gossiper::init_messaging_service_handler() {
-    ms().register_handler(messaging_verb::ECHO, [] (empty_msg msg) {
+    ms().register_handler(messaging_verb::ECHO, [] {
         // TODO: Use time_point instead of long for timing.
-        return smp::submit_to(0, [msg = std::move(msg)] () mutable {
+        return smp::submit_to(0, [] {
             auto& gossiper = gms::get_local_gossiper();
             gossiper.set_last_processed_message_at(now_millis());
-            return make_ready_future<empty_msg>();
+            return make_ready_future<>();
         });
     });
     ms().register_handler(messaging_verb::GOSSIP_SHUTDOWN, [] (inet_address from) {
@@ -846,7 +846,7 @@ void gossiper::mark_alive(inet_address addr, endpoint_state local_state) {
     local_state.mark_dead();
     //logger.trace("Sending a EchoMessage to {}", addr);
     shard_id id = get_shard_id(addr);
-    ms().send_message<empty_msg>(messaging_verb::ECHO, id).then([this, addr, local_state = std::move(local_state)] (empty_msg msg) mutable {
+    ms().send_message<void>(messaging_verb::ECHO, id).then([this, addr, local_state = std::move(local_state)] () mutable {
         this->set_last_processed_message_at(now_millis());
         this->real_mark_alive(addr, local_state);
     });
