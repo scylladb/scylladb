@@ -529,13 +529,13 @@ SEASTAR_TEST_CASE(read_set) {
 
 class ttl_row_consumer : public count_row_consumer {
 public:
-    const uint64_t desired_timestamp;
-    ttl_row_consumer(uint64_t t) : desired_timestamp(t) { }
+    const int64_t desired_timestamp;
+    ttl_row_consumer(int64_t t) : desired_timestamp(t) { }
     virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
         count_row_consumer::consume_row_start(key, deltime);
         BOOST_REQUIRE(bytes_view(key) == as_bytes("nadav"));
-        BOOST_REQUIRE(deltime.local_deletion_time == (uint32_t)std::numeric_limits<int32_t>::max());
-        BOOST_REQUIRE(deltime.marked_for_delete_at == (uint64_t)std::numeric_limits<int64_t>::min());
+        BOOST_REQUIRE(deltime.local_deletion_time == std::numeric_limits<int32_t>::max());
+        BOOST_REQUIRE(deltime.marked_for_delete_at == std::numeric_limits<int64_t>::min());
     }
 
     virtual void consume_cell(bytes_view col_name, bytes_view value,
