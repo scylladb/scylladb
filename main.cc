@@ -25,6 +25,30 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
     return cfg.read_from_file(opts["options-file"].as<sstring>());
 }
 
+void init_messaging_service(auto listen_address, auto seed_provider) {
+    const gms::inet_address listen(listen_address);
+    std::set<gms::inet_address> seeds;
+    for (auto& x : seed_provider.parameters) {
+        seeds.emplace(x.first);
+    }
+    net::get_messaging_service().start(listen).then([seeds] {
+        auto& ms = net::get_local_messaging_service();
+        print("Messaging server listening on ip %s port %d ...\n", ms.listen_address(), ms.port());
+        gms::get_failure_detector().start_single().then([seeds] {
+            gms::get_gossiper().start_single().then([seeds] {
+                auto& gossiper = gms::get_local_gossiper();
+                gossiper.set_seeds(seeds);
+                using namespace std::chrono;
+                auto now = high_resolution_clock::now().time_since_epoch();
+                int generation_number = duration_cast<seconds>(now).count();
+                gossiper.start(generation_number).then([] {
+                    print("Start gossiper service ...\n");
+                });
+            });
+        });
+    });
+}
+
 int main(int ac, char** av) {
     app_template app;
     auto opt_add = app.add_options();
@@ -73,27 +97,7 @@ int main(int ac, char** av) {
                 std::cout << "Thrift server listening on port " << thrift_port << " ...\n";
             });
         }).then([listen_address, seed_provider] {
-            const gms::inet_address listen(listen_address);
-            std::set<gms::inet_address> seeds;
-            for (auto& x : seed_provider.parameters) {
-                seeds.emplace(x.first);
-            }
-            net::get_messaging_service().start(listen).then([seeds] {
-                auto& ms = net::get_local_messaging_service();
-                print("Messaging server listening on ip %s port %d ...\n", ms.listen_address(), ms.port());
-                gms::get_failure_detector().start_single().then([seeds] {
-                    gms::get_gossiper().start_single().then([seeds] {
-                        auto& gossiper = gms::get_local_gossiper();
-                        gossiper.set_seeds(seeds);
-                        using namespace std::chrono;
-                        auto now = high_resolution_clock::now().time_since_epoch();
-                        int generation_number = duration_cast<seconds>(now).count();
-                        gossiper.start(generation_number).then([] {
-                            print("Start gossiper service ...\n");
-                        });
-                    });
-                });
-            });
+            init_messaging_service(listen_address, seed_provider);
         }).then([&db, api_port, &ctx]{
             ctx.http_server.start().then([api_port, &ctx] {
                 return set_server(ctx);
