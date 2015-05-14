@@ -174,6 +174,7 @@ urchin_tests = [
     'tests/urchin/map_difference_test',
     'tests/urchin/message',
     'tests/urchin/gossip',
+    'tests/urchin/gossip_test',
     'tests/urchin/compound_test',
     'tests/urchin/config_test',
 ]
@@ -487,6 +488,7 @@ deps['tests/urchin/sstable_test'] += boost_test_lib + ['tests/urchin/sstable_dat
 deps['tests/urchin/sstable_mutation_test'] += boost_test_lib
 deps['tests/urchin/hash_test'] += boost_test_lib
 deps['tests/urchin/serializer_test'] += boost_test_lib
+deps['tests/urchin/gossip_test'] += boost_test_lib
 
 deps['tests/urchin/bytes_ostream_test'] = ['tests/urchin/bytes_ostream_test.cc']
 deps['tests/urchin/UUID_test'] = ['utils/UUID_gen.cc', 'tests/urchin/UUID_test.cc']

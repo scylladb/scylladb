@@ -65,7 +65,12 @@ private:
     net::messaging_service& ms() {
         return net::get_local_messaging_service();
     }
-    class handler {};
+    class handler {
+    public:
+        future<> stop() {
+            return make_ready_future<>();
+        }
+    };
     distributed<handler> _handlers;
     void init_messaging_service_handler();
     future<gossip_digest_ack> handle_syn_msg(gossip_digest_syn syn_msg);
@@ -147,6 +152,7 @@ private:
     void run();
 public:
     gossiper();
+    ~gossiper();
     void set_last_processed_message_at(int64_t time_in_millis) {
         _last_processed_message_at = time_in_millis;
     }
@@ -414,7 +420,9 @@ public:
 
     void add_lccal_application_states(std::list<std::pair<application_state, versioned_value>> states);
 
-    void stop();
+    void shutdown();
+
+    future<> stop();
 
 public:
     bool is_enabled();

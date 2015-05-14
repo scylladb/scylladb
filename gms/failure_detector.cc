@@ -252,11 +252,11 @@ void failure_detector::remove(inet_address ep) {
     _arrival_samples.erase(ep);
 }
 
-void failure_detector::register_failure_detection_event_listener(shared_ptr<i_failure_detection_event_listener> listener) {
+void failure_detector::register_failure_detection_event_listener(i_failure_detection_event_listener* listener) {
     _fd_evnt_listeners.push_back(std::move(listener));
 }
 
-void failure_detector::unregister_failure_detection_event_listener(shared_ptr<i_failure_detection_event_listener> listener) {
+void failure_detector::unregister_failure_detection_event_listener(i_failure_detection_event_listener* listener) {
     _fd_evnt_listeners.remove(listener);
 }
 
