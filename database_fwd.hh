@@ -20,3 +20,6 @@ class exploded_clustering_prefix;
 class partition_key;
 class clustering_key;
 class clustering_key_prefix;
+
+// memtable.hh
+class memtable;
