@@ -79,6 +79,7 @@ private:
         sstring _comment;
         gc_clock::duration _default_time_to_live = gc_clock::duration::zero();
         data_type _regular_column_name_type;
+        double _bloom_filter_fp_chance = 0.01;
     };
     raw_schema _raw;
 private:
@@ -114,6 +115,14 @@ public:
         data_type regular_column_name_type,
         sstring comment = {});
     schema(const schema&);
+    double bloom_filter_fp_chance() const {
+        return _raw._bloom_filter_fp_chance;
+    }
+    schema& set_bloom_filter_fp_chance(double fp) {
+        _raw._bloom_filter_fp_chance = fp;
+        return *this;
+    }
+
     const utils::UUID& id() const {
         return _raw._id;
     }
