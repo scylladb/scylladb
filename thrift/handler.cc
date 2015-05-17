@@ -15,6 +15,7 @@
 #include "frozen_mutation.hh"
 #include "utils/UUID_gen.hh"
 #include <thrift/protocol/TBinaryProtocol.h>
+#include <boost/move/iterator.hpp>
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
