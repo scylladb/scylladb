@@ -15,6 +15,7 @@
 #include "utils/hash.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
+#include "core/distributed.hh"
 #include <functional>
 #include <cstdint>
 #include <unordered_map>
@@ -168,6 +169,7 @@ public:
     void create_replication_strategy(::config::ks_meta_data& ksm);
     locator::abstract_replication_strategy& get_replication_strategy();
     column_family::config make_column_family_config(const schema& s) const;
+    future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
 private:
     sstring column_family_directory(const sstring& name, utils::UUID uuid) const;
 };
@@ -209,6 +211,7 @@ public:
 
     future<> init_from_data_directory();
 
+    // but see: create_keyspace(distributed<database>&, sstring)
     void add_keyspace(sstring name, keyspace k);
     /** Adds cf with auto-generated UUID. */
     void add_column_family(column_family&&);
@@ -241,7 +244,12 @@ public:
     future<> apply(const frozen_mutation&);
     keyspace::config make_keyspace_config(sstring name) const;
     friend std::ostream& operator<<(std::ostream& out, const database& db);
+    friend future<> create_keyspace(distributed<database>&, sstring);
 };
+
+// Creates a keyspace.  Keyspaces have a non-sharded
+// component (the directory), so a global function is needed.
+future<> create_keyspace(distributed<database>& db, sstring name);
 
 // FIXME: stub
 class secondary_index_manager {};

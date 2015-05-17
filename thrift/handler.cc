@@ -427,8 +427,16 @@ public:
         boost::for_each(ks_def.cf_defs, [&cf_ids] (auto&&) {
             cf_ids.push_back(utils::UUID_gen::get_time_UUID());
         });
-        _db.invoke_on_all([this, ks_def = std::move(ks_def), cf_ids = std::move(cf_ids)] (database& db) {
-            db.add_keyspace(ks_def.name, keyspace(db.make_keyspace_config(ks_def.name)));
+        create_keyspace(_db, ks_def.name).then([this, ks_def, cf_ids] {
+            return parallel_for_each(boost::combine(ks_def.cf_defs, cf_ids), [this, ks_def, cf_ids] (auto&& cf_def_and_id) {
+                // We create the directory on the local shard, since the same directory is
+                // used for all shards.
+                auto&& name = boost::get<0>(cf_def_and_id).name;
+                auto&& uuid = boost::get<1>(cf_def_and_id);
+                return _db.local().find_keyspace(ks_def.name).make_directory_for_column_family(name, uuid);
+            });
+        }).then([this, ks_def, cf_ids] {
+          return _db.invoke_on_all([this, ks_def = std::move(ks_def), cf_ids = std::move(cf_ids)] (database& db) {
             std::vector<schema_ptr> cf_defs;
             cf_defs.reserve(ks_def.cf_defs.size());
             auto id_iterator = cf_ids.begin();
@@ -462,6 +470,7 @@ public:
                     shared_ptr<config::ut_meta_data>());
             auto& ks = db.find_keyspace(ks_def.name);
             ks.create_replication_strategy(ksm);
+          });
         }).then([schema_id = std::move(schema_id)] {
             return make_ready_future<std::string>(std::move(schema_id));
         }).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<std::string> result) {

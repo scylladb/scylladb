@@ -15,6 +15,7 @@
 #include "query-result-writer.hh"
 #include "nway_merger.hh"
 #include "cql3/column_identifier.hh"
+#include "core/seastar.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
@@ -427,6 +428,19 @@ void database::add_keyspace(sstring name, keyspace k) {
     _keyspaces.emplace(std::move(name), std::move(k));
 }
 
+future<>
+create_keyspace(distributed<database>& db, sstring name) {
+    return make_directory(db.local()._cfg->data_file_directories() + "/" + name).then([name, &db] {
+        return db.invoke_on_all([&name] (database& db) {
+            auto cfg = db.make_keyspace_config(name);
+            db.add_keyspace(name, keyspace(cfg));
+        });
+    });
+    // FIXME: rollback on error, or keyspace directory remains on disk, poisoning
+    // everything.
+    // FIXME: sync parent directory?
+}
+
 void database::update_keyspace(const sstring& name) {
     throw std::runtime_error("not implemented");
 }
@@ -550,6 +564,11 @@ keyspace::make_column_family_config(const schema& s) const {
 sstring
 keyspace::column_family_directory(const sstring& name, utils::UUID uuid) const {
     return sprint("%s/%s-%s", _config.datadir, name, uuid);
+}
+
+future<>
+keyspace::make_directory_for_column_family(const sstring& name, utils::UUID uuid) {
+    return make_directory(column_family_directory(name, uuid));
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) throw (no_such_column_family) {
