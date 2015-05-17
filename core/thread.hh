@@ -24,7 +24,7 @@
 
 #include "future.hh"
 #include <memory>
-#include <ucontext.h>
+#include <setjmp.h>
 
 namespace seastar {
 
@@ -40,7 +40,7 @@ void init();
 
 }
 
-extern thread_local ucontext_t g_unthreaded_context;
+extern thread_local jmp_buf g_unthreaded_context;
 
 // Internal class holding thread state.  We can't hold this in
 // \c thread itself because \c thread is movable, and we want pointers
@@ -49,7 +49,7 @@ class thread_context {
     static constexpr const size_t _stack_size = 128*1024;
     std::unique_ptr<char[]> _stack{new char[_stack_size]};
     std::function<void ()> _func;
-    ucontext_t _context;
+    jmp_buf _context;
     promise<> _done;
     bool _joined = false;
 private:
@@ -103,7 +103,6 @@ template <typename Func>
 inline
 thread::thread(Func func)
         : _context(std::make_unique<thread_context>(func)) {
-    _context->switch_in();
 }
 
 inline

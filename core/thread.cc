@@ -22,12 +22,13 @@
 
 #include "thread.hh"
 #include "posix.hh"
+#include <ucontext.h>
 
 namespace seastar {
 
 thread_local thread_context* g_current_thread;
-thread_local ucontext_t g_unthreaded_context;
-thread_local ucontext_t* g_current_context;
+thread_local jmp_buf g_unthreaded_context;
+thread_local jmp_buf* g_current_context;
 
 thread_context::thread_context(std::function<void ()> func)
         : _func(std::move(func)) {
@@ -36,14 +37,24 @@ thread_context::thread_context(std::function<void ()> func)
 
 void
 thread_context::setup() {
+    // use setcontext() for the initial jump, as it allows us
+    // to set up a stack, but continue with longjmp() as it's
+    // much faster.
+    ucontext_t initial_context;
     auto q = uint64_t(reinterpret_cast<uintptr_t>(this));
     auto main = reinterpret_cast<void (*)()>(&thread_context::s_main);
-    auto r = getcontext(&_context);
+    auto r = getcontext(&initial_context);
     throw_system_error_on(r == -1);
-    _context.uc_stack.ss_sp = _stack.get();
-    _context.uc_stack.ss_size = _stack_size;
-    _context.uc_link = &g_unthreaded_context;
-    makecontext(&_context, main, 2, int(q), int(q >> 32));
+    initial_context.uc_stack.ss_sp = _stack.get();
+    initial_context.uc_stack.ss_size = _stack_size;
+    initial_context.uc_link = nullptr;
+    makecontext(&initial_context, main, 2, int(q), int(q >> 32));
+    auto prev = g_current_context;
+    g_current_context = &_context;
+    g_current_thread = this;
+    if (setjmp(*prev) == 0) {
+        setcontext(&initial_context);
+    }
 }
 
 void
@@ -52,14 +63,18 @@ thread_context::switch_in() {
     auto prev = g_current_context;
     g_current_context = &_context;
     g_current_thread = this;
-    swapcontext(prev, &_context);
+    if (setjmp(*prev) == 0) {
+        longjmp(_context, 1);
+    }
 }
 
 void
 thread_context::switch_out() {
     g_current_context = &g_unthreaded_context;
     g_current_thread = nullptr;
-    swapcontext(&_context, &g_unthreaded_context);
+    if (setjmp(_context) == 0) {
+        longjmp(g_unthreaded_context, 1);
+    }
 }
 
 void
@@ -78,7 +93,7 @@ thread_context::main() {
     }
     g_current_context = &g_unthreaded_context;
     g_current_thread = nullptr;
-    // returning here auto-switches to the "next context" link
+    longjmp(g_unthreaded_context, 1);
 }
 
 namespace thread_impl {
@@ -96,8 +111,6 @@ void switch_out(thread_context* from) {
 }
 
 void init() {
-    auto r = getcontext(&g_unthreaded_context);
-    throw_system_error_on(r == -1);
     g_current_context = &g_unthreaded_context;
 }
 
