@@ -12,6 +12,7 @@
 #include "database.hh"
 #include <memory>
 #include "sstable_test.hh"
+#include "core/seastar.hh"
 
 using namespace sstables;
 
@@ -56,7 +57,9 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
 
     auto mtp = make_shared<memtable>(std::move(mt));
 
-    return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data.tmp.db").then([mtp, s] {
+    return remove_file("tests/urchin/sstables/Data.tmp.db").then_wrapped([mtp] (future<> ret) {
+        return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data.tmp.db");
+    }).then([mtp, s] {
         return engine().open_file_dma("tests/urchin/sstables/Data.tmp.db", open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -121,7 +124,9 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
 
     auto mtp = make_shared<memtable>(std::move(mt));
 
-    return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data2.tmp.db").then([mtp, s] {
+    return remove_file("tests/urchin/sstables/Data2.tmp.db").then_wrapped([mtp] (future<> ret) {
+        return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data2.tmp.db");
+    }).then([mtp, s] {
         return engine().open_file_dma("tests/urchin/sstables/Data2.tmp.db", open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -188,7 +193,9 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
 
     auto mtp = make_shared<memtable>(std::move(mt));
 
-    return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data3.tmp.db").then([mtp, s] {
+    return remove_file("tests/urchin/sstables/Data3.tmp.db").then_wrapped([mtp] (future<> ret) {
+        return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data3.tmp.db");
+    }).then([mtp, s] {
         return engine().open_file_dma("tests/urchin/sstables/Data3.tmp.db", open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -258,7 +265,9 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
 
     auto mtp = make_shared<memtable>(std::move(mt));
 
-    return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data4.tmp.db").then([mtp, s] {
+    return remove_file("tests/urchin/sstables/Data4.tmp.db").then_wrapped([mtp] (future<> f) {
+        return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data4.tmp.db");
+    }).then([mtp, s] {
         return engine().open_file_dma("tests/urchin/sstables/Data4.tmp.db", open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
