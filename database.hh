@@ -38,6 +38,7 @@
 #include "query-result.hh"
 #include "keys.hh"
 #include "mutation.hh"
+#include <list>
 
 class frozen_mutation;
 
@@ -85,7 +86,7 @@ public:
 private:
     schema_ptr _schema;
     config _config;
-    std::vector<memtable> _memtables;
+    std::list<memtable> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
     unsigned _sstable_generation = 1;
@@ -115,7 +116,7 @@ public:
 
     future<> populate(sstring datadir);
     void seal_active_memtable();
-    const std::vector<memtable>& testonly_all_memtables() const;
+    const std::list<memtable>& testonly_all_memtables() const;
 private:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.

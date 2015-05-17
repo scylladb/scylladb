@@ -311,7 +311,7 @@ future<> column_family::populate(sstring sstdir) {
     });
 }
 
-const std::vector<memtable>&
+const std::list<memtable>&
 column_family::testonly_all_memtables() const {
     return _memtables;
 }
