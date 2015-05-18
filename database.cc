@@ -284,11 +284,13 @@ void
 column_family::seal_active_memtable() {
     auto& old = _memtables.back();
     _memtables.emplace_back(_schema);
-    sstring name = sprint("%s/%s-%s-%d.%d-Data.db",
+    // FIXME: better way of ensuring we don't attemt to
+    //        overwrite an existing table.
+    auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
+    sstring name = sprint("%s/%s-%s-%d-Data.db",
             _config.datadir,
             _schema->ks_name(), _schema->cf_name(),
-            engine().cpu_id(),
-            _sstable_generation++);
+            gen);
     if (!_config.enable_disk_writes) {
         return;
     }
