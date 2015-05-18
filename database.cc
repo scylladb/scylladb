@@ -25,6 +25,7 @@
 #include <boost/function_output_iterator.hpp>
 #include "frozen_mutation.hh"
 #include "mutation_partition_applier.hh"
+#include "core/do_with.hh"
 
 thread_local logging::logger dblog("database");
 
@@ -647,20 +648,35 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
     return 0;
 }
 
+struct query_state {
+    explicit query_state(const query::read_command& cmd)
+            : cmd(cmd)
+            , builder(cmd.slice)
+            , limit(cmd.row_limit)
+            , current_partition_range(cmd.partition_ranges.begin()) {
+    }
+    const query::read_command& cmd;
+    query::result::builder builder;
+    uint32_t limit;
+    std::vector<query::partition_range>::const_iterator current_partition_range;
+    bool done() const {
+        return !limit || current_partition_range == cmd.partition_ranges.end();
+    }
+};
+
 future<lw_shared_ptr<query::result>>
 column_family::query(const query::read_command& cmd) const {
-    query::result::builder builder(cmd.slice);
-
-    uint32_t limit = cmd.row_limit;
-    for (auto&& range : cmd.partition_ranges) {
-        if (limit == 0) {
-            break;
-        }
+  return do_with(query_state(cmd), [this] (query_state& qs) {
+    return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
+        auto& cmd = qs.cmd;
+        auto& builder = qs.builder;
+        auto& limit = qs.limit;
+        auto&& range = *qs.current_partition_range++;
         if (range.is_singular()) {
             auto& key = range.start_value();
             auto partition = find_partition_slow(key);
             if (!partition) {
-                continue;
+                return make_ready_future<>();
             }
             auto p_builder = builder.add_partition(key);
             partition->query(*_schema, cmd.slice, limit, p_builder);
@@ -680,9 +696,12 @@ column_family::query(const query::read_command& cmd) const {
         } else {
             fail(unimplemented::cause::RANGE_QUERIES);
         }
-    }
-    return make_ready_future<lw_shared_ptr<query::result>>(
-            make_lw_shared<query::result>(builder.build()));
+        return make_ready_future<>();
+    }).then([&qs] {
+        return make_ready_future<lw_shared_ptr<query::result>>(
+                make_lw_shared<query::result>(qs.builder.build()));
+    });
+  });
 }
 
 future<lw_shared_ptr<query::result>>
