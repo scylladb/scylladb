@@ -88,11 +88,6 @@ column_family::find_row(const dht::decorated_key& partition_key, const clusterin
 }
 
 mutation_partition&
-column_family::find_or_create_partition_slow(const partition_key& key) {
-    return find_or_create_partition(dht::global_partitioner().decorate_key(*_schema, key));
-}
-
-mutation_partition&
 memtable::find_or_create_partition_slow(partition_key_view key) {
     // FIXME: Perform lookup using std::pair<token, partition_key_view>
     // to avoid unconditional copy of the partition key.
@@ -180,11 +175,6 @@ row&
 memtable::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
     mutation_partition& p = find_or_create_partition_slow(partition_key);
     return p.clustered_row(clustering_key).cells();
-}
-
-row&
-column_family::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
-    return active_memtable().find_or_create_row_slow(partition_key, clustering_key);
 }
 
 class lister {

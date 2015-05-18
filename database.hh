@@ -95,11 +95,8 @@ public:
     column_family(column_family&&) = default;
     ~column_family();
     schema_ptr schema() const { return _schema; }
-    mutation_partition& find_or_create_partition(const dht::decorated_key& key);
-    mutation_partition& find_or_create_partition_slow(const partition_key& key);
     const_mutation_partition_ptr find_partition(const dht::decorated_key& key) const;
     const_mutation_partition_ptr find_partition_slow(const partition_key& key) const;
-    row& find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key);
     const_row_ptr find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) const;
     void apply(const frozen_mutation& m);
     void apply(const mutation& m);
@@ -223,12 +220,6 @@ public:
 
 // FIXME: stub
 class secondary_index_manager {};
-
-inline
-mutation_partition&
-column_family::find_or_create_partition(const dht::decorated_key& key) {
-    return active_memtable().find_or_create_partition(key);
-}
 
 inline
 void
