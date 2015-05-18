@@ -468,7 +468,7 @@ public:
                     std::unordered_map<sstring, sstring>(),//ks_def.strategy_options,
                     ks_def.durable_writes,
                     cf_defs,
-                    shared_ptr<config::ut_meta_data>());
+                    shared_ptr<user_types_metadata>());
             auto& ks = db.find_keyspace(ks_def.name);
             ks.create_replication_strategy(ksm);
           });
