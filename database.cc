@@ -658,7 +658,7 @@ column_family::query(const query::read_command& cmd) const {
             auto& key = range.start_value();
             auto partition = find_partition_slow(key);
             if (!partition) {
-                break;
+                continue;
             }
             auto p_builder = builder.add_partition(key);
             partition->query(*_schema, cmd.slice, limit, p_builder);
