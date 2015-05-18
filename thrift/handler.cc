@@ -84,12 +84,12 @@ std::string bytes_to_string(bytes_view v) {
     return { reinterpret_cast<const char*>(v.begin()), v.size() };
 }
 
-class CassandraAsyncHandler : public CassandraCobSvIf {
+class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
     sstring _ks_name;
     sstring _cql_version;
 public:
-    explicit CassandraAsyncHandler(distributed<database>& db) : _db(db) {}
+    explicit thrift_handler(distributed<database>& db) : _db(db) {}
     void login(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const AuthenticationRequest& auth_request) {
         // FIXME: implement
         return pass_unimplemented(exn_cob);
@@ -437,41 +437,41 @@ public:
                 return _db.local().find_keyspace(ks_def.name).make_directory_for_column_family(name, uuid);
             });
         }).then([this, ks_def, cf_ids] {
-          return _db.invoke_on_all([this, ks_def = std::move(ks_def), cf_ids = std::move(cf_ids)] (database& db) {
-            std::vector<schema_ptr> cf_defs;
-            cf_defs.reserve(ks_def.cf_defs.size());
-            auto id_iterator = cf_ids.begin();
-            for (const CfDef& cf_def : ks_def.cf_defs) {
-                std::vector<schema::column> partition_key;
-                std::vector<schema::column> clustering_key;
-                std::vector<schema::column> regular_columns;
-                // FIXME: get this from comparator
-                auto column_name_type = utf8_type;
-                // FIXME: look at key_alias and key_validator first
-                partition_key.push_back({"key", bytes_type});
-                // FIXME: guess clustering keys
-                for (const ColumnDef& col_def : cf_def.column_metadata) {
-                    // FIXME: look at all fields, not just name
-                    regular_columns.push_back({to_bytes(col_def.name), bytes_type});
+            return _db.invoke_on_all([this, ks_def = std::move(ks_def), cf_ids = std::move(cf_ids)] (database& db) {
+                std::vector<schema_ptr> cf_defs;
+                cf_defs.reserve(ks_def.cf_defs.size());
+                auto id_iterator = cf_ids.begin();
+                for (const CfDef& cf_def : ks_def.cf_defs) {
+                    std::vector<schema::column> partition_key;
+                    std::vector<schema::column> clustering_key;
+                    std::vector<schema::column> regular_columns;
+                    // FIXME: get this from comparator
+                    auto column_name_type = utf8_type;
+                    // FIXME: look at key_alias and key_validator first
+                    partition_key.push_back({"key", bytes_type});
+                    // FIXME: guess clustering keys
+                    for (const ColumnDef& col_def : cf_def.column_metadata) {
+                        // FIXME: look at all fields, not just name
+                        regular_columns.push_back({to_bytes(col_def.name), bytes_type});
+                    }
+                    auto id = *id_iterator++;
+                    auto s = make_lw_shared(schema(id, ks_def.name, cf_def.name,
+                            std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
+                            std::vector<schema::column>(), column_name_type));
+                    auto& ks = db.find_keyspace(ks_def.name);
+                    column_family cf(s, ks.make_column_family_config(*s));
+                    db.add_column_family(std::move(cf));
+                    cf_defs.push_back(s);
                 }
-                auto id = *id_iterator++;
-                auto s = make_lw_shared(schema(id, ks_def.name, cf_def.name,
-                    std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
-                    std::vector<schema::column>(), column_name_type));
+                config::ks_meta_data ksm(to_sstring(ks_def.name),
+                        to_sstring(ks_def.strategy_class),
+                        std::unordered_map<sstring, sstring>(),//ks_def.strategy_options,
+                        ks_def.durable_writes,
+                        cf_defs,
+                        shared_ptr<user_types_metadata>());
                 auto& ks = db.find_keyspace(ks_def.name);
-                column_family cf(s, ks.make_column_family_config(*s));
-                db.add_column_family(std::move(cf));
-                cf_defs.push_back(s);
-            }
-            config::ks_meta_data ksm(to_sstring(ks_def.name),
-                    to_sstring(ks_def.strategy_class),
-                    std::unordered_map<sstring, sstring>(),//ks_def.strategy_options,
-                    ks_def.durable_writes,
-                    cf_defs,
-                    shared_ptr<user_types_metadata>());
-            auto& ks = db.find_keyspace(ks_def.name);
-            ks.create_replication_strategy(ksm);
-          });
+                ks.create_replication_strategy(ksm);
+            });
         }).then([schema_id = std::move(schema_id)] {
             return make_ready_future<std::string>(std::move(schema_id));
         }).then_wrapped([cob = std::move(cob), exn_cob = std::move(exn_cob)] (future<std::string> result) {
@@ -564,7 +564,7 @@ public:
     explicit handler_factory(distributed<database>& db) : _db(db) {}
     typedef CassandraCobSvIf Handler;
     virtual CassandraCobSvIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) {
-        return new CassandraAsyncHandler(_db);
+        return new thrift_handler(_db);
     }
     virtual void releaseHandler(CassandraCobSvIf* handler) {
         delete handler;
