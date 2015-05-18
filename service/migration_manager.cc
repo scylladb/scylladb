@@ -247,6 +247,24 @@ future<> migration_manager::announce_new_column_family(service::storage_proxy& p
     }
 }
 
+future<> migration_manager::announce_column_family_update(service::storage_proxy& proxy, schema_ptr cfm, bool from_thrift, bool announce_locally) {
+    warn(unimplemented::cause::MIGRATIONS);
+    return make_ready_future<>();
+#if 0
+    cfm.validate();
+
+    CFMetaData oldCfm = Schema.instance.getCFMetaData(cfm.ksName, cfm.cfName);
+    if (oldCfm == null)
+        throw new ConfigurationException(String.format("Cannot update non existing table '%s' in keyspace '%s'.", cfm.cfName, cfm.ksName));
+    KSMetaData ksm = Schema.instance.getKSMetaData(cfm.ksName);
+
+    oldCfm.validateCompatility(cfm);
+
+    logger.info(String.format("Update table '%s/%s' From %s To %s", cfm.ksName, cfm.cfName, oldCfm, cfm));
+    announce(LegacySchemaTables.makeUpdateTableMutation(ksm, oldCfm, cfm, FBUtilities.timestampMicros(), fromThrift), announceLocally);
+#endif
+}
+
 #if 0
 public static void announceNewType(UserType newType, boolean announceLocally)
 {

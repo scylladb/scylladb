@@ -47,6 +47,8 @@ public:
 
     static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally);
 
+    static future<> announce_column_family_update(service::storage_proxy& proxy, schema_ptr cfm, bool from_thrift, bool announce_locally = false);
+
     static future<> announce_new_column_family(service::storage_proxy& proxy, schema_ptr cfm, bool announce_locally = false);
 
     /**
