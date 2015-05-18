@@ -84,12 +84,12 @@ std::string bytes_to_string(bytes_view v) {
     return { reinterpret_cast<const char*>(v.begin()), v.size() };
 }
 
-class CassandraAsyncHandler : public CassandraCobSvIf {
+class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
     sstring _ks_name;
     sstring _cql_version;
 public:
-    explicit CassandraAsyncHandler(distributed<database>& db) : _db(db) {}
+    explicit thrift_handler(distributed<database>& db) : _db(db) {}
     void login(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const AuthenticationRequest& auth_request) {
         // FIXME: implement
         return pass_unimplemented(exn_cob);
@@ -564,7 +564,7 @@ public:
     explicit handler_factory(distributed<database>& db) : _db(db) {}
     typedef CassandraCobSvIf Handler;
     virtual CassandraCobSvIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) {
-        return new CassandraAsyncHandler(_db);
+        return new thrift_handler(_db);
     }
     virtual void releaseHandler(CassandraCobSvIf* handler) {
         delete handler;
