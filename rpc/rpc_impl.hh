@@ -228,8 +228,10 @@ inline auto wait_for_reply(typename protocol<Serializer, MsgType>::client& dst, 
     using reply_type = rcv_reply<Serializer, MsgType, Ret>;
     auto lambda = [] (reply_type& r, typename protocol<Serializer, MsgType>::client& dst, id_type msg_id) mutable {
         if (msg_id >= 0) {
+            dst.get_stats_internal().replied++;
             return r.get_reply(dst);
         } else {
+            dst.get_stats_internal().exception_received++;
             return unmarshall(dst.serializer(), dst.in(), std::tie(r.ex)).then([&r] {
                 r.done = true;
                 r.p.set_exception(std::runtime_error(r.ex.c_str()));
@@ -300,9 +302,12 @@ auto send_helper(MsgType t, std::index_sequence<I...>) {
         auto xargs = std::tie(m->t, m->id, std::get<I>(m->args)...); // holds references to all message elements
         promise<> sent; // will be fulfilled when data is sent
         auto fsent = sent.get_future();
+        dst.get_stats_internal().pending++;
         dst.out_ready() = dst.out_ready().then([&dst, xargs = std::move(xargs), m = std::move(m)] () mutable {
             return marshall(dst.serializer(), dst.out(), std::move(xargs)).then([m = std::move(m)] {});
-        }).finally([sent = std::move(sent)] () mutable {
+        }).finally([&dst, sent = std::move(sent)] () mutable {
+            dst.get_stats_internal().pending--;
+            dst.get_stats_internal().sent_messages++;
             sent.set_value();
         });
 

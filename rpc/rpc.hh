@@ -103,6 +103,15 @@ public:
             virtual ~reply_handler_base() {};
         };
     public:
+        struct stats {
+            using counter_type = uint64_t;
+            counter_type replied = 0;
+            counter_type pending = 0;
+            counter_type exception_received = 0;
+            counter_type sent_messages = 0;
+            counter_type wait_reply = 0;
+        };
+
         template<typename Reply, typename Func>
         struct reply_handler final : reply_handler_base {
             Func func;
@@ -115,8 +124,19 @@ public:
         };
     private:
         std::unordered_map<id_type, std::unique_ptr<reply_handler_base>> _outstanding;
+        stats _stats;
     public:
         client(protocol& proto, ipv4_addr addr);
+
+        stats get_stats() const {
+            stats res = _stats;
+            res.wait_reply = _outstanding.size();
+            return _stats;
+        }
+
+        stats& get_stats_internal() {
+            return _stats;
+        }
         auto next_message_id() { return _message_id++; }
         void wait_for_reply(id_type id, std::unique_ptr<reply_handler_base>&& h) {
             _outstanding.emplace(id, std::move(h));
