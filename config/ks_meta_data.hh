@@ -48,58 +48,25 @@ public:
     ks_meta_data(sstring name_,
                  sstring strategy_name_,
                  std::unordered_map<sstring, sstring> strategy_options_,
-                 bool durable_writes_)
-        : ks_meta_data{std::move(name_),
-                       std::move(strategy_name_),
-                       std::move(strategy_options_),
-                       durable_writes_,
-                       {}, ::make_shared<ut_meta_data>()}
-    { }
+                 bool durable_writes_);
 
     ks_meta_data(sstring name_,
                  sstring strategy_name_,
                  std::unordered_map<sstring, sstring> strategy_options_,
                  bool durable_writes_,
-                 std::vector<schema_ptr> cf_defs)
-            : ks_meta_data{std::move(name_),
-                           std::move(strategy_name_),
-                           std::move(strategy_options_),
-                           durable_writes_,
-                           std::move(cf_defs),
-                           ::make_shared<ut_meta_data>()}
-    { }
+                 std::vector<schema_ptr> cf_defs);
 
     ks_meta_data(sstring name_,
                        sstring strategy_name_,
                        std::unordered_map<sstring, sstring> strategy_options_,
                        bool durable_writes_,
                        std::vector<schema_ptr> cf_defs,
-                       shared_ptr<ut_meta_data> user_types_)
-        : name{std::move(name_)}
-        , strategy_name{strategy_name_.empty() ? "NetworkTopologyStrategy" : strategy_name_}
-        , strategy_options{std::move(strategy_options_)}
-        , durable_writes{durable_writes_}
-        , user_types{std::move(user_types_)}
-    {
-        for (auto&& s : cf_defs) {
-            _cf_meta_data.emplace(s->cf_name(), s);
-        }
-    }
+                       shared_ptr<ut_meta_data> user_types_);
 
     // For new user created keyspaces (through CQL)
-    static lw_shared_ptr<ks_meta_data> new_keyspace(sstring name, sstring strategy_name, std::unordered_map<sstring, sstring> options, bool durable_writes) {
-#if 0
-        Class<? extends AbstractReplicationStrategy> cls = AbstractReplicationStrategy.getClass(strategyName);
-        if (cls.equals(LocalStrategy.class))
-            throw new ConfigurationException("Unable to use given strategy class: LocalStrategy is reserved for internal use.");
-#endif
-        return new_keyspace(name, strategy_name, options, durable_writes, std::vector<schema_ptr>{});
-    }
+    static lw_shared_ptr<ks_meta_data> new_keyspace(sstring name, sstring strategy_name, std::unordered_map<sstring, sstring> options, bool durable_writes);
 
-    static lw_shared_ptr<ks_meta_data> new_keyspace(sstring name, sstring strategy_name, std::unordered_map<sstring, sstring> options, bool durables_writes, std::vector<schema_ptr> cf_defs)
-    {
-        return ::make_lw_shared<ks_meta_data>(name, strategy_name, options, durables_writes, cf_defs, ::make_shared<ut_meta_data>());
-    }
+    static lw_shared_ptr<ks_meta_data> new_keyspace(sstring name, sstring strategy_name, std::unordered_map<sstring, sstring> options, bool durables_writes, std::vector<schema_ptr> cf_defs);
 
 #if 0
     public KSMetaData cloneWithTableRemoved(CFMetaData table)
