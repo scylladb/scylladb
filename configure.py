@@ -177,6 +177,7 @@ urchin_tests = [
     'tests/urchin/gossip_test',
     'tests/urchin/compound_test',
     'tests/urchin/config_test',
+    'tests/urchin/gossiping_property_file_snitch_test',
 ]
 
 tests = [
@@ -319,7 +320,7 @@ boost_test_lib = [
 ]
 
 defines = []
-libs = '-laio -lboost_program_options -lboost_system -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt -lyaml-cpp'
+libs = '-laio -lboost_program_options -lboost_system -lboost_filesystem -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt -lyaml-cpp'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
 urchin_libs = '-llz4 -lsnappy -lz'
 
@@ -497,6 +498,7 @@ deps = {
     'tests/fstream_test': ['tests/fstream_test.cc'] + core + boost_test_lib,
     'tests/distributed_test': ['tests/distributed_test.cc'] + core,
     'tests/rpc': ['tests/rpc.cc'] + core + libnet,
+    'tests/urchin/gossiping_property_file_snitch_test': ['tests/urchin/gossiping_property_file_snitch_test.cc'] + urchin_core,
 }
 
 for t in urchin_tests:
@@ -511,6 +513,7 @@ deps['tests/urchin/sstable_mutation_test'] += boost_test_lib
 deps['tests/urchin/hash_test'] += boost_test_lib
 deps['tests/urchin/serializer_test'] += boost_test_lib
 deps['tests/urchin/gossip_test'] += boost_test_lib
+deps['tests/urchin/gossiping_property_file_snitch_test'] += boost_test_lib
 
 deps['tests/urchin/bytes_ostream_test'] = ['tests/urchin/bytes_ostream_test.cc']
 deps['tests/urchin/UUID_test'] = ['utils/UUID_gen.cc', 'tests/urchin/UUID_test.cc']
