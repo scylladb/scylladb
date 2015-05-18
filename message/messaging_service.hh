@@ -76,6 +76,8 @@ public:
 
 namespace net {
 
+// NOTE: operator(input_stream<char>&, T&) takes a reference to uninitialized
+//       T object and should use placement new in case T is non POD
 struct serializer {
     // For integer type
     template<typename T>
@@ -90,6 +92,38 @@ struct serializer {
                 throw rpc::closed_error();
             }
             v = net::ntoh(*reinterpret_cast<const net::packed<T>*>(buf.get()));
+        });
+    }
+
+    // For vectors
+    template<typename T>
+    inline auto operator()(output_stream<char>& out, std::vector<T>& v) {
+        return operator()(out, v.size()).then([&out, &v, this] {
+            return do_for_each(v.begin(), v.end(), [&out, this] (T& e) {
+                return operator()(out, e);
+            });
+        });
+    }
+    template<typename T>
+    inline auto operator()(input_stream<char>& in, std::vector<T>& v) {
+        using size_type = typename  std::vector<T>::size_type;
+        return in.read_exactly(sizeof(size_type)).then([&v, &in, this] (temporary_buffer<char> buf) {
+            if (buf.size() != sizeof(size_type)) {
+                throw rpc::closed_error();
+            }
+            size_type c = net::ntoh(*reinterpret_cast<const net::packed<size_type>*>(buf.get()));
+            new (&v) std::vector<T>;
+            v.reserve(c);
+            union U {
+                U(){}
+                ~U(){}
+                T v;
+            };
+            return do_until([c] () mutable {return !c--;}, [&v, &in, u = U(), this] () mutable {
+                return operator()(in, u.v).then([&u, &v] {
+                    v.emplace_back(std::move(u.v));
+                });
+            });
         });
     }
 
