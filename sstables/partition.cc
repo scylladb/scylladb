@@ -345,7 +345,7 @@ public:
 };
 
 future<mutation_opt>
-sstables::sstable::convert_row(schema_ptr schema, const sstables::key& key) {
+sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
 
     assert(schema);
 

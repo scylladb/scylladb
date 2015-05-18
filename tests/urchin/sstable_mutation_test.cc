@@ -18,7 +18,7 @@ SEASTAR_TEST_CASE(nonexistent_key) {
     return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([] (auto sstp) {
         return do_with(key::from_bytes(to_bytes("invalid_key")), [sstp] (auto& key) {
             auto s = uncompressed_schema();
-            return sstp->convert_row(s, key).then([sstp, s, &key] (auto mutation) {
+            return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
                 BOOST_REQUIRE(!mutation);
                 return make_ready_future<>();
             });
@@ -114,7 +114,7 @@ future<> test_no_clustered(bytes&& key, std::unordered_map<bytes, boost::any> &&
     return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([k = std::move(key), map = std::move(map)] (auto sstp) mutable {
         return do_with(sstables::key(std::move(k)), [sstp, map = std::move(map)] (auto& key) {
             auto s = uncompressed_schema();
-            return sstp->convert_row(s, key).then([sstp, s, &key, map = std::move(map)] (auto mutation) {
+            return sstp->read_row(s, key).then([sstp, s, &key, map = std::move(map)] (auto mutation) {
                 BOOST_REQUIRE(mutation);
                 auto& mp = mutation->partition();
                 for (auto&& e : mp.range(*s, query::range<clustering_key_prefix>())) {
@@ -180,7 +180,7 @@ future<mutation> generate_clustered(bytes&& key) {
     return reusable_sst("tests/urchin/sstables/complex", Generation).then([k = std::move(key)] (auto sstp) mutable {
         return do_with(sstables::key(std::move(k)), [sstp] (auto& key) {
             auto s = complex_schema();
-            return sstp->convert_row(s, key).then([sstp, s, &key] (auto mutation) {
+            return sstp->read_row(s, key).then([sstp, s, &key] (auto mutation) {
                 BOOST_REQUIRE(mutation);
                 return std::move(*mutation);
             });
