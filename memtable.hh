@@ -1,4 +1,9 @@
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #pragma once
+
 #include <map>
 #include <memory>
 #include "database_fwd.hh"
