@@ -24,12 +24,13 @@
 
 #pragma once
 
-#include "config/ut_meta_data.hh"
 #include "schema.hh"
 
 #include "core/shared_ptr.hh"
 
 #include <unordered_map>
+
+class user_types_metadata;
 
 namespace config {
 
@@ -43,7 +44,7 @@ private:
 public:
     const bool durable_writes;
 
-    const ::shared_ptr<ut_meta_data> user_types;
+    const ::shared_ptr<user_types_metadata> user_types;
 
     ks_meta_data(sstring name_,
                  sstring strategy_name_,
@@ -61,7 +62,7 @@ public:
                        std::unordered_map<sstring, sstring> strategy_options_,
                        bool durable_writes_,
                        std::vector<schema_ptr> cf_defs,
-                       shared_ptr<ut_meta_data> user_types_);
+                       shared_ptr<user_types_metadata> user_types_);
 
     // For new user created keyspaces (through CQL)
     static lw_shared_ptr<ks_meta_data> new_keyspace(sstring name, sstring strategy_name, std::unordered_map<sstring, sstring> options, bool durable_writes);

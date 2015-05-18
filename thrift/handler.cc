@@ -459,7 +459,7 @@ public:
                     std::unordered_map<sstring, sstring>(),//ks_def.strategy_options,
                     ks_def.durable_writes,
                     cf_defs,
-                    shared_ptr<config::ut_meta_data>());
+                    shared_ptr<user_types_metadata>());
             ks.create_replication_strategy(ksm);
         }).then([schema_id = std::move(schema_id)] {
             return make_ready_future<std::string>(std::move(schema_id));

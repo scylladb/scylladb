@@ -24,6 +24,8 @@
 
 #include "config/ks_meta_data.hh"
 
+#include "database.hh"
+
 namespace config {
 
 ks_meta_data::ks_meta_data(sstring name_,
@@ -34,7 +36,7 @@ ks_meta_data::ks_meta_data(sstring name_,
                    std::move(strategy_name_),
                    std::move(strategy_options_),
                    durable_writes_,
-                   {}, ::make_shared<ut_meta_data>()}
+                   {}, ::make_shared<user_types_metadata>()}
 { }
 
 ks_meta_data::ks_meta_data(sstring name_,
@@ -47,7 +49,7 @@ ks_meta_data::ks_meta_data(sstring name_,
                        std::move(strategy_options_),
                        durable_writes_,
                        std::move(cf_defs),
-                       ::make_shared<ut_meta_data>()}
+                       ::make_shared<user_types_metadata>()}
 { }
 
 ks_meta_data::ks_meta_data(sstring name_,
@@ -55,7 +57,7 @@ ks_meta_data::ks_meta_data(sstring name_,
                    std::unordered_map<sstring, sstring> strategy_options_,
                    bool durable_writes_,
                    std::vector<schema_ptr> cf_defs,
-                   shared_ptr<ut_meta_data> user_types_)
+                   shared_ptr<user_types_metadata> user_types_)
     : name{std::move(name_)}
     , strategy_name{strategy_name_.empty() ? "NetworkTopologyStrategy" : strategy_name_}
     , strategy_options{std::move(strategy_options_)}
@@ -79,7 +81,7 @@ lw_shared_ptr<ks_meta_data> ks_meta_data::new_keyspace(sstring name, sstring str
 
 lw_shared_ptr<ks_meta_data> ks_meta_data::new_keyspace(sstring name, sstring strategy_name, std::unordered_map<sstring, sstring> options, bool durables_writes, std::vector<schema_ptr> cf_defs)
 {
-    return ::make_lw_shared<ks_meta_data>(name, strategy_name, options, durables_writes, cf_defs, ::make_shared<ut_meta_data>());
+    return ::make_lw_shared<ks_meta_data>(name, strategy_name, options, durables_writes, cf_defs, ::make_shared<user_types_metadata>());
 }
 
 }

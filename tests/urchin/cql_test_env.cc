@@ -99,7 +99,7 @@ public:
                     std::unordered_map<sstring, sstring>(),
                     false,
                     std::vector<schema_ptr>(),
-                    shared_ptr<config::ut_meta_data>()
+                    shared_ptr<user_types_metadata>()
                     );
             ks.create_replication_strategy(ksm);
         });
