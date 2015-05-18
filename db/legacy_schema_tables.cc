@@ -528,7 +528,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                     mergeFunctions(oldFunctions, newFunctions);
                     mergeAggregates(oldAggregates, newAggregates);
 #endif
-                    return when_all(std::move(keyspaces_to_drop)).then([proxy] (auto&& results) mutable {
+                    return when_all(std::move(keyspaces_to_drop)).then([&proxy] (auto&& results) mutable {
                         auto keyspaces_to_drop = std::move(std::get<std::set<sstring>>(std::get<0>(results).get()));
 
                         return proxy.get_db().invoke_on_all([keyspaces_to_drop = std::move(keyspaces_to_drop)] (database& db) {
