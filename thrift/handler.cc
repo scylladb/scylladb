@@ -126,7 +126,6 @@ public:
                        dk = std::move(dk),
                        column_parent = std::move(column_parent),
                        predicate = std::move(predicate)] (database& db) {
-            std::vector<ColumnOrSuperColumn> ret;
             if (!column_parent.super_column.empty()) {
                 throw unimplemented_exception();
             }
@@ -134,8 +133,9 @@ public:
             if (predicate.__isset.column_names) {
                 throw unimplemented_exception();
             } else if (predicate.__isset.slice_range) {
-                auto&& range = predicate.slice_range;
-                column_family::const_row_ptr rw = cf.find_row(dk, clustering_key::make_empty(*cf.schema()));
+              auto&& range = predicate.slice_range;
+              return cf.find_row(dk, clustering_key::make_empty(*cf.schema())).then([&cf, range = std::move(range)] (column_family::const_row_ptr rw) {
+                std::vector<ColumnOrSuperColumn> ret;
                 if (rw) {
                     auto beg = cf.schema()->regular_begin();
                     if (!range.start.empty()) {
@@ -165,6 +165,7 @@ public:
                     }
                 }
                 return make_foreign(make_lw_shared(std::move(ret)));
+              });
             } else {
                 throw make_exception<InvalidRequestException>("empty SlicePredicate");
             }
