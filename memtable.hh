@@ -20,6 +20,7 @@ public:
     schema_ptr schema() const { return _schema; }
     mutation_partition& find_or_create_partition(const dht::decorated_key& key);
     mutation_partition& find_or_create_partition_slow(partition_key_view key);
+    row& find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key);
     const_mutation_partition_ptr find_partition(const dht::decorated_key& key) const;
     void apply(const mutation& m);
     void apply(const frozen_mutation& m);

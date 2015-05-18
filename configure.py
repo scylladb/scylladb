@@ -481,6 +481,7 @@ deps = {
 for t in urchin_tests:
     deps[t] = urchin_tests_dependencies + [t + '.cc']
 
+deps['tests/urchin/mutation_test'] += boost_test_lib
 deps['tests/urchin/cql_query_test'] += boost_test_lib
 deps['tests/urchin/commitlog_test'] += boost_test_lib
 deps['tests/urchin/config_test'] += boost_test_lib

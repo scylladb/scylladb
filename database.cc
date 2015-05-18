@@ -15,6 +15,7 @@
 #include "query-result-writer.hh"
 #include "nway_merger.hh"
 #include "cql3/column_identifier.hh"
+#include "core/seastar.hh"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include "sstables/sstables.hh"
@@ -32,8 +33,9 @@ memtable::memtable(schema_ptr schema)
         , partitions(dht::decorated_key::less_comparator(_schema)) {
 }
 
-column_family::column_family(schema_ptr schema)
+column_family::column_family(schema_ptr schema, config config)
     : _schema(std::move(schema))
+    , _config(std::move(config))
     , _memtables({memtable(_schema)})
 { }
 
@@ -85,11 +87,6 @@ column_family::find_row(const dht::decorated_key& partition_key, const clusterin
     } else {
         return nullptr;
     }
-}
-
-mutation_partition&
-column_family::find_or_create_partition_slow(const partition_key& key) {
-    return find_or_create_partition(dht::global_partitioner().decorate_key(*_schema, key));
 }
 
 mutation_partition&
@@ -177,7 +174,7 @@ column_family::for_all_partitions_slow(std::function<bool (const dht::decorated_
 
 
 row&
-column_family::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
+memtable::find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key) {
     mutation_partition& p = find_or_create_partition_slow(partition_key);
     return p.clustered_row(clustering_key).cells();
 }
@@ -285,7 +282,22 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
 
 void
 column_family::seal_active_memtable() {
+    auto& old = _memtables.back();
     _memtables.emplace_back(_schema);
+    sstring name = sprint("%s/%s-%s-%d.%d-Data.db",
+            _config.datadir,
+            _schema->ks_name(), _schema->cf_name(),
+            engine().cpu_id(),
+            _sstable_generation++);
+    if (!_config.enable_disk_writes) {
+        return;
+    }
+    // FIXME: write all components
+    sstables::write_datafile(old, name).then_wrapped([name] (future<> ret) {
+        // FIXME: add to read set, or handle exception
+        // FIXME: drop memtable
+        print("Warning: wrote %s/%s, abandoning\n", name);
+    });
     // FIXME: start flushing the previously-active memtable
     // FIXME: remove the flushed memtable when done
     // FIXME: release commit log
@@ -300,7 +312,7 @@ future<> column_family::populate(sstring sstdir) {
     });
 }
 
-const std::vector<memtable>&
+const std::list<memtable>&
 column_family::testonly_all_memtables() const {
     return _memtables;
 }
@@ -409,11 +421,24 @@ database::shard_of(const frozen_mutation& m) {
     return shard_of(dht::global_partitioner().get_token(*schema, m.key(*schema)));
 }
 
-keyspace& database::add_keyspace(sstring name, keyspace k) {
+void database::add_keyspace(sstring name, keyspace k) {
     if (_keyspaces.count(name) != 0) {
         throw std::invalid_argument("Keyspace " + name + " already exists");
     }
-    return _keyspaces.emplace(std::move(name), std::move(k)).first->second;
+    _keyspaces.emplace(std::move(name), std::move(k));
+}
+
+future<>
+create_keyspace(distributed<database>& db, sstring name) {
+    return make_directory(db.local()._cfg->data_file_directories() + "/" + name).then([name, &db] {
+        return db.invoke_on_all([&name] (database& db) {
+            auto cfg = db.make_keyspace_config(name);
+            db.add_keyspace(name, keyspace(cfg));
+        });
+    });
+    // FIXME: rollback on error, or keyspace directory remains on disk, poisoning
+    // everything.
+    // FIXME: sync parent directory?
 }
 
 void database::update_keyspace(const sstring& name) {
@@ -505,7 +530,7 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
 }
 
 void
-keyspace::create_replication_strategy(config::ks_meta_data& ksm) {
+keyspace::create_replication_strategy(::config::ks_meta_data& ksm) {
     static thread_local locator::token_metadata tm;
     static locator::simple_snitch snitch;
     static std::unordered_map<sstring, sstring> options = {{"replication_factor", "3"}};
@@ -525,6 +550,25 @@ keyspace::create_replication_strategy(config::ks_meta_data& ksm) {
 locator::abstract_replication_strategy&
 keyspace::get_replication_strategy() {
     return *_replication_strategy;
+}
+
+column_family::config
+keyspace::make_column_family_config(const schema& s) const {
+    column_family::config cfg;
+    cfg.datadir = column_family_directory(s.cf_name(), s.id());
+    cfg.enable_disk_reads = _config.enable_disk_reads;
+    cfg.enable_disk_writes = _config.enable_disk_writes;
+    return cfg;
+}
+
+sstring
+keyspace::column_family_directory(const sstring& name, utils::UUID uuid) const {
+    return sprint("%s/%s-%s", _config.datadir, name, uuid);
+}
+
+future<>
+keyspace::make_directory_for_column_family(const sstring& name, utils::UUID uuid) {
+    return make_directory(column_family_directory(name, uuid));
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) throw (no_such_column_family) {
@@ -549,7 +593,7 @@ database::find_or_create_keyspace(const sstring& name) {
     if (i != _keyspaces.end()) {
         return i->second;
     }
-    return _keyspaces.emplace(name, keyspace()).first->second;
+    return _keyspaces.emplace(name, keyspace(make_keyspace_config(name))).first->second;
 }
 
 void
@@ -708,6 +752,13 @@ future<> database::apply(const frozen_mutation& m) {
         });
     }
     return apply_in_memory(m);
+}
+
+keyspace::config
+database::make_keyspace_config(sstring name) const {
+    keyspace::config cfg;
+    cfg.datadir = sprint("%s/%s", _cfg->data_file_directories(), name);
+    return cfg;
 }
 
 namespace db {

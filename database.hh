@@ -15,6 +15,7 @@
 #include "utils/hash.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
+#include "core/distributed.hh"
 #include <functional>
 #include <cstdint>
 #include <unordered_map>
@@ -39,6 +40,7 @@
 #include "keys.hh"
 #include "mutation.hh"
 #include "memtable.hh"
+#include <list>
 
 class frozen_mutation;
 
@@ -57,10 +59,20 @@ class config;
 }
 
 class column_family {
+public:
+    struct config {
+        sstring datadir;
+        bool enable_disk_writes = true;
+        bool enable_disk_reads = true;
+    };
+private:
     schema_ptr _schema;
-    std::vector<memtable> _memtables;
+    config _config;
+    std::list<memtable> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
+    unsigned _sstable_generation = 1;
+    unsigned _mutation_count = 0;
 private:
     memtable& active_memtable() { return _memtables.back(); }
     struct merge_comparator;
@@ -72,15 +84,12 @@ public:
     using const_mutation_partition_ptr = std::unique_ptr<const mutation_partition>;
     using const_row_ptr = std::unique_ptr<const row>;
 public:
-    column_family(schema_ptr schema);
+    column_family(schema_ptr schema, config cfg);
     column_family(column_family&&) = default;
     ~column_family();
     schema_ptr schema() const { return _schema; }
-    mutation_partition& find_or_create_partition(const dht::decorated_key& key);
-    mutation_partition& find_or_create_partition_slow(const partition_key& key);
     const_mutation_partition_ptr find_partition(const dht::decorated_key& key) const;
     const_mutation_partition_ptr find_partition_slow(const partition_key& key) const;
-    row& find_or_create_row_slow(const partition_key& partition_key, const clustering_key& clustering_key);
     const_row_ptr find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) const;
     void apply(const frozen_mutation& m);
     void apply(const mutation& m);
@@ -89,7 +98,7 @@ public:
 
     future<> populate(sstring datadir);
     void seal_active_memtable();
-    const std::vector<memtable>& testonly_all_memtables() const;
+    const std::list<memtable>& testonly_all_memtables() const;
 private:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
@@ -97,6 +106,7 @@ private:
     template <typename Func>
     bool for_all_partitions(Func&& func) const;
     future<> probe_file(sstring sstdir, sstring fname);
+    void seal_on_overflow();
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
@@ -125,11 +135,24 @@ public:
 };
 
 class keyspace {
-    std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
 public:
+    struct config {
+        sstring datadir;
+        bool enable_disk_reads = true;
+        bool enable_disk_writes = true;
+    };
+private:
+    std::unique_ptr<locator::abstract_replication_strategy> _replication_strategy;
+    config _config;
+public:
+    explicit keyspace(config cfg) : _config(std::move(cfg)) {}
     user_types_metadata _user_types;
-    void create_replication_strategy(config::ks_meta_data& ksm);
+    void create_replication_strategy(::config::ks_meta_data& ksm);
     locator::abstract_replication_strategy& get_replication_strategy();
+    column_family::config make_column_family_config(const schema& s) const;
+    future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
+private:
+    sstring column_family_directory(const sstring& name, utils::UUID uuid) const;
 };
 
 class no_such_keyspace : public std::runtime_error {
@@ -169,7 +192,8 @@ public:
 
     future<> init_from_data_directory();
 
-    keyspace& add_keyspace(sstring name, keyspace k);
+    // but see: create_keyspace(distributed<database>&, sstring)
+    void add_keyspace(sstring name, keyspace k);
     /** Adds cf with auto-generated UUID. */
     void add_column_family(column_family&&);
     void add_column_family(const utils::UUID&, column_family&&);
@@ -199,28 +223,40 @@ public:
     unsigned shard_of(const frozen_mutation& m);
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
     future<> apply(const frozen_mutation&);
+    keyspace::config make_keyspace_config(sstring name) const;
     friend std::ostream& operator<<(std::ostream& out, const database& db);
+    friend future<> create_keyspace(distributed<database>&, sstring);
 };
+
+// Creates a keyspace.  Keyspaces have a non-sharded
+// component (the directory), so a global function is needed.
+future<> create_keyspace(distributed<database>& db, sstring name);
 
 // FIXME: stub
 class secondary_index_manager {};
 
 inline
-mutation_partition&
-column_family::find_or_create_partition(const dht::decorated_key& key) {
-    return active_memtable().find_or_create_partition(key);
+void
+column_family::apply(const mutation& m) {
+    active_memtable().apply(m);
+    seal_on_overflow();
 }
 
 inline
 void
-column_family::apply(const mutation& m) {
-    return active_memtable().apply(m);
+column_family::seal_on_overflow() {
+    // FIXME: something better
+    if (++_mutation_count == 10000) {
+        _mutation_count = 0;
+        seal_active_memtable();
+    }
 }
 
 inline
 void
 column_family::apply(const frozen_mutation& m) {
-    return active_memtable().apply(m);
+    active_memtable().apply(m);
+    seal_on_overflow();
 }
 
 #endif /* DATABASE_HH_ */

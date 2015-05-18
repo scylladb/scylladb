@@ -93,7 +93,8 @@ public:
             auto cf_schema = make_lw_shared(schema_maker(ks_name));
             cf_schema->set_id(id);
             auto& ks = db.find_or_create_keyspace(ks_name);
-            db.add_column_family(column_family(std::move(cf_schema)));
+            auto cfg = ks.make_column_family_config(*cf_schema);
+            db.add_column_family(column_family(std::move(cf_schema), std::move(cfg)));
             config::ks_meta_data ksm(ks_name,
                     "org.apache.cassandra.locator.SimpleStrategy",
                     std::unordered_map<sstring, sstring>(),
