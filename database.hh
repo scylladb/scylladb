@@ -146,15 +146,26 @@ public:
                  std::unordered_map<sstring, sstring> strategy_options,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
-                 shared_ptr<user_types_metadata> user_types = ::make_shared<user_types_metadata>());
-
+                 shared_ptr<user_types_metadata> user_types = ::make_shared<user_types_metadata>())
+        : _name{std::move(name)}
+        , _strategy_name{strategy_name.empty() ? "NetworkTopologyStrategy" : strategy_name}
+        , _strategy_options{std::move(strategy_options)}
+        , _durable_writes{durable_writes}
+        , _user_types{std::move(user_types)}
+    {
+        for (auto&& s : cf_defs) {
+            _cf_meta_data.emplace(s->cf_name(), s);
+        }
+    }
     static lw_shared_ptr<ks_meta_data>
     new_keyspace(sstring name,
                  sstring strategy_name,
                  std::unordered_map<sstring, sstring> options,
                  bool durables_writes,
-                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
-
+                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{})
+    {
+        return ::make_lw_shared<ks_meta_data>(name, strategy_name, options, durables_writes, cf_defs);
+    }
     const sstring& name() const {
         return _name;
     }
