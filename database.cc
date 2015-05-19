@@ -293,10 +293,10 @@ column_family::seal_active_memtable() {
         return;
     }
     // FIXME: write all components
-    sstables::write_datafile(old, name).then_wrapped([name] (future<> ret) {
+    sstables::write_datafile(old, name).then_wrapped([name, this] (future<> ret) {
         // FIXME: add to read set, or handle exception
         // FIXME: drop memtable
-        print("Warning: wrote %s/%s, abandoning\n", name);
+        print("Warning: wrote %s/%s, abandoning\n", _config.datadir, name);
     });
     // FIXME: start flushing the previously-active memtable
     // FIXME: remove the flushed memtable when done
