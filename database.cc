@@ -697,46 +697,46 @@ struct query_state {
 
 future<lw_shared_ptr<query::result>>
 column_family::query(const query::read_command& cmd) const {
-  return do_with(query_state(cmd), [this] (query_state& qs) {
-    return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
-        auto& cmd = qs.cmd;
-        auto& builder = qs.builder;
-        auto& limit = qs.limit;
-        auto&& range = *qs.current_partition_range++;
-        if (range.is_singular()) {
-          auto& key = range.start_value();
-          return find_partition_slow(key).then([this, &qs, &key] (auto partition) {
+    return do_with(query_state(cmd), [this] (query_state& qs) {
+        return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
             auto& cmd = qs.cmd;
             auto& builder = qs.builder;
             auto& limit = qs.limit;
-            if (!partition) {
-                return;
+            auto&& range = *qs.current_partition_range++;
+            if (range.is_singular()) {
+                auto& key = range.start_value();
+                return find_partition_slow(key).then([this, &qs, &key] (auto partition) {
+                    auto& cmd = qs.cmd;
+                    auto& builder = qs.builder;
+                    auto& limit = qs.limit;
+                    if (!partition) {
+                        return;
+                    }
+                    auto p_builder = builder.add_partition(key);
+                    partition->query(*_schema, cmd.slice, limit, p_builder);
+                    p_builder.finish();
+                    limit -= p_builder.row_count();
+                });
+            } else if (range.is_full()) {
+                return for_all_partitions([&] (const dht::decorated_key& dk, const mutation_partition& partition) {
+                    auto p_builder = builder.add_partition(dk._key);
+                    partition.query(*_schema, cmd.slice, limit, p_builder);
+                    p_builder.finish();
+                    limit -= p_builder.row_count();
+                    if (limit == 0) {
+                        return false;
+                    }
+                    return true;
+                }).discard_result();
+            } else {
+                fail(unimplemented::cause::RANGE_QUERIES);
             }
-            auto p_builder = builder.add_partition(key);
-            partition->query(*_schema, cmd.slice, limit, p_builder);
-            p_builder.finish();
-            limit -= p_builder.row_count();
-          });
-        } else if (range.is_full()) {
-            return for_all_partitions([&] (const dht::decorated_key& dk, const mutation_partition& partition) {
-                auto p_builder = builder.add_partition(dk._key);
-                partition.query(*_schema, cmd.slice, limit, p_builder);
-                p_builder.finish();
-                limit -= p_builder.row_count();
-                if (limit == 0) {
-                    return false;
-                }
-                return true;
-            }).discard_result();
-        } else {
-            fail(unimplemented::cause::RANGE_QUERIES);
-        }
-        return make_ready_future<>();
-    }).then([&qs] {
-        return make_ready_future<lw_shared_ptr<query::result>>(
-                make_lw_shared<query::result>(qs.builder.build()));
+            return make_ready_future<>();
+        }).then([&qs] {
+            return make_ready_future<lw_shared_ptr<query::result>>(
+                    make_lw_shared<query::result>(qs.builder.build()));
+        });
     });
-  });
 }
 
 future<lw_shared_ptr<query::result>>
