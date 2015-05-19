@@ -84,6 +84,8 @@ public:
 
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
+    static const sstring filename(sstring dir, version_types version, unsigned long generation,
+                                  format_types format, component_type component);
 
     future<> load();
     future<> store();
