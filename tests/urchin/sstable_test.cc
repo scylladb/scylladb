@@ -182,10 +182,6 @@ SEASTAR_TEST_CASE(big_summary_query_32) {
     return summary_query<32, 0x400c0000000000, 182>("tests/urchin/sstables/bigsummary", 76);
 }
 
-const sstring filename(sstring dir, sstring version, unsigned long generation, sstring format, sstring component) {
-    return dir + "/" + version + "-" + to_sstring(generation) + "-" + format + "-" + component;
-}
-
 static future<sstable_ptr> do_write_sst(sstring dir, unsigned long generation) {
     auto sst = make_lw_shared<sstable>(dir, generation, la, big);
     return sst->load().then([sst, generation] {
@@ -218,11 +214,11 @@ static future<std::pair<char*, size_t>> read_file(sstring file_path)
     });
 }
 
-static future<> check_component_integrity(sstring component) {
+static future<> check_component_integrity(sstable::component_type component) {
     return write_sst_info("tests/urchin/sstables/compressed", 1).then([component] {
-        auto file_path = filename("tests/urchin/sstables/compressed", "la", 1, "big", component);
+        auto file_path = sstable::filename("tests/urchin/sstables/compressed", la, 1, big, component);
         return read_file(file_path).then([component] (auto ret) {
-            auto file_path = filename("tests/urchin/sstables/compressed", "la", 2, "big", component);
+            auto file_path = sstable::filename("tests/urchin/sstables/compressed", la, 2, big, component);
             return read_file(file_path).then([ret] (auto ret2) {
                 // assert that both files have the same size.
                 BOOST_REQUIRE(ret.second == ret2.second);
@@ -237,7 +233,7 @@ static future<> check_component_integrity(sstring component) {
 }
 
 SEASTAR_TEST_CASE(check_compressed_info_func) {
-    return check_component_integrity("CompressionInfo.db");
+    return check_component_integrity(sstable::component_type::CompressionInfo);
 }
 
 SEASTAR_TEST_CASE(check_summary_func) {
@@ -257,7 +253,7 @@ SEASTAR_TEST_CASE(check_summary_func) {
 }
 
 SEASTAR_TEST_CASE(check_filter_func) {
-    return check_component_integrity("Filter.db");
+    return check_component_integrity(sstable::component_type::Filter);
 }
 
 SEASTAR_TEST_CASE(check_statistics_func) {
