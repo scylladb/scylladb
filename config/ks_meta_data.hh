@@ -49,20 +49,9 @@ public:
     ks_meta_data(sstring name_,
                  sstring strategy_name_,
                  std::unordered_map<sstring, sstring> strategy_options_,
-                 bool durable_writes_);
-
-    ks_meta_data(sstring name_,
-                 sstring strategy_name_,
-                 std::unordered_map<sstring, sstring> strategy_options_,
                  bool durable_writes_,
-                 std::vector<schema_ptr> cf_defs);
-
-    ks_meta_data(sstring name_,
-                       sstring strategy_name_,
-                       std::unordered_map<sstring, sstring> strategy_options_,
-                       bool durable_writes_,
-                       std::vector<schema_ptr> cf_defs,
-                       shared_ptr<user_types_metadata> user_types_);
+                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
+                 shared_ptr<user_types_metadata> user_types_ = ::make_shared<user_types_metadata>());
 
     static lw_shared_ptr<ks_meta_data>
     new_keyspace(sstring name,

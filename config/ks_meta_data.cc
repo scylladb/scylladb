@@ -29,30 +29,6 @@
 namespace config {
 
 ks_meta_data::ks_meta_data(sstring name_,
-             sstring strategy_name_,
-             std::unordered_map<sstring, sstring> strategy_options_,
-             bool durable_writes_)
-    : ks_meta_data{std::move(name_),
-                   std::move(strategy_name_),
-                   std::move(strategy_options_),
-                   durable_writes_,
-                   {}, ::make_shared<user_types_metadata>()}
-{ }
-
-ks_meta_data::ks_meta_data(sstring name_,
-             sstring strategy_name_,
-             std::unordered_map<sstring, sstring> strategy_options_,
-             bool durable_writes_,
-             std::vector<schema_ptr> cf_defs)
-        : ks_meta_data{std::move(name_),
-                       std::move(strategy_name_),
-                       std::move(strategy_options_),
-                       durable_writes_,
-                       std::move(cf_defs),
-                       ::make_shared<user_types_metadata>()}
-{ }
-
-ks_meta_data::ks_meta_data(sstring name_,
                    sstring strategy_name_,
                    std::unordered_map<sstring, sstring> strategy_options_,
                    bool durable_writes_,
