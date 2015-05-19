@@ -43,9 +43,7 @@ class migration_manager {
     private MigrationManager() {}
 #endif
 public:
-    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<keyspace_metadata> ksm);
-
-    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally);
+    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally = false);
 
     static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally);
 

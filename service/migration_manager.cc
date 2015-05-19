@@ -209,12 +209,7 @@ public void notifyDropAggregate(UDAggregate udf)
 }
 #endif
 
-future<> migration_manager::announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<keyspace_metadata> ksm)
-{
-    return announce_new_keyspace(proxy, ksm, false);
-}
-
-future<> migration_manager::announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally)
+future<>migration_manager::announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally)
 {
     return announce_new_keyspace(proxy, ksm, db_clock::now_in_usecs(), announce_locally);
 }
