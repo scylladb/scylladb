@@ -116,11 +116,15 @@ protected:
     data_source* fd() { return &_fd; }
 public:
     // Consumer concept, for consume() method:
+    using unconsumed_remainder = std::experimental::optional<tmp_buf>;
     struct ConsumerConcept {
-        // call done(tmp_buf) to signal end of processing. tmp_buf parameter to
-        // done is unconsumed data
-        template <typename Done>
-        void operator()(tmp_buf data, Done done);
+        // The consumer should operate on the data given to it, and
+        // return a future "unconsumed remainder", which can be undefined
+        // if the consumer consumed all the input given to it and is ready
+        // for more, or defined when the consumer is done (and in that case
+        // the value is the unconsumed part of the last data buffer - this
+        // can also happen to be empty).
+        future<unconsumed_remainder> operator()(tmp_buf data);
     };
     using char_type = CharType;
     input_stream() = default;

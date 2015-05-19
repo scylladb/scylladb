@@ -80,13 +80,14 @@ struct reader {
     std::unique_ptr<reply> _rep;
 
     // for input_stream::consume():
-    template<typename Done>
-    void operator()(temporary_buffer<char> data, Done&& done) {
+    using unconsumed_remainder = std::experimental::optional<temporary_buffer<char>>;
+    future<unconsumed_remainder> operator()(temporary_buffer<char> data) {
         if (data.empty()) {
-            done(std::move(data));
             _rep->done();
+            return make_ready_future<unconsumed_remainder>(std::move(data));
         } else {
             _rep->_content.append(data.get(), data.size());
+            return make_ready_future<unconsumed_remainder>();
         }
     }
 };

@@ -28,6 +28,8 @@
 #include <algorithm>
 #include <memory>
 #include <cassert>
+#include <experimental/optional>
+#include "future.hh"
 
 // Support classes for Ragel parsers
 
@@ -121,16 +123,17 @@ protected:
         return std::move(s);
     }
 public:
-    template <typename Done>
-    void operator()(temporary_buffer<char> buf, Done done) {
+    using unconsumed_remainder = std::experimental::optional<temporary_buffer<char>>;
+    future<unconsumed_remainder> operator()(temporary_buffer<char> buf) {
         char* p = buf.get_write();
         char* pe = p + buf.size();
         char* eof = buf.empty() ? pe : nullptr;
         char* parsed = static_cast<ConcreteParser*>(this)->parse(p, pe, eof);
         if (parsed) {
             buf.trim_front(parsed - p);
-            done(std::move(buf));
+            return make_ready_future<unconsumed_remainder>(std::move(buf));
         }
+        return make_ready_future<unconsumed_remainder>();
     }
 };
 
