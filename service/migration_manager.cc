@@ -228,13 +228,6 @@ future<> migration_manager::announce_new_keyspace(service::storage_proxy& proxy,
     return announce(proxy, std::move(mutations), announce_locally);
 }
 
-#if 0
-public static void announceNewColumnFamily(CFMetaData cfm) throws ConfigurationException
-{
-    announceNewColumnFamily(cfm, false);
-}
-#endif
-
 future<> migration_manager::announce_new_column_family(service::storage_proxy& proxy, schema_ptr cfm, bool announce_locally) {
     warn(unimplemented::cause::MIGRATIONS);
     return make_ready_future<>();
