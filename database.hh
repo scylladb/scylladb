@@ -199,7 +199,7 @@ private:
 public:
     explicit keyspace(config cfg) : _config(std::move(cfg)) {}
     user_types_metadata _user_types;
-    void create_replication_strategy(keyspace_metadata& ksm);
+    void create_replication_strategy(const keyspace_metadata& ksm);
     locator::abstract_replication_strategy& get_replication_strategy();
     column_family::config make_column_family_config(const schema& s) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);

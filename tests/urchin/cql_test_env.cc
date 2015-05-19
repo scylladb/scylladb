@@ -100,7 +100,6 @@ public:
             auto& ks = db.find_or_create_keyspace(ksm);
             auto cfg = ks.make_column_family_config(*cf_schema);
             db.add_column_family(column_family(std::move(cf_schema), std::move(cfg)));
-            ks.create_replication_strategy(ksm);
         });
     }
 

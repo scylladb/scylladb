@@ -433,7 +433,9 @@ create_keyspace(distributed<database>& db, const keyspace_metadata& ksm) {
     return make_directory(db.local()._cfg->data_file_directories() + "/" + ksm.name()).then([&ksm, &db] {
         return db.invoke_on_all([&ksm] (database& db) {
             auto cfg = db.make_keyspace_config(ksm);
-            db.add_keyspace(ksm.name(), keyspace(cfg));
+            keyspace ks(cfg);
+            ks.create_replication_strategy(ksm);
+            db.add_keyspace(ksm.name(), std::move(ks));
         });
     });
     // FIXME: rollback on error, or keyspace directory remains on disk, poisoning
@@ -530,7 +532,7 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
 }
 
 void
-keyspace::create_replication_strategy(keyspace_metadata& ksm) {
+keyspace::create_replication_strategy(const keyspace_metadata& ksm) {
     static thread_local locator::token_metadata tm;
     static locator::simple_snitch snitch;
     static std::unordered_map<sstring, sstring> options = {{"replication_factor", "3"}};
@@ -593,7 +595,9 @@ database::find_or_create_keyspace(const keyspace_metadata& ksm) {
     if (i != _keyspaces.end()) {
         return i->second;
     }
-    return _keyspaces.emplace(ksm.name(), keyspace(make_keyspace_config(ksm))).first->second;
+    keyspace ks(make_keyspace_config(ksm));
+    ks.create_replication_strategy(ksm);
+    return _keyspaces.emplace(ksm.name(), std::move(ks)).first->second;
 }
 
 void
