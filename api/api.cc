@@ -5,6 +5,7 @@
 #include "api.hh"
 #include "http/api_docs.hh"
 #include "storage_service.hh"
+#include "commitlog.hh"
 
 namespace api {
 
@@ -16,6 +17,9 @@ future<> set_server(http_context& ctx) {
         rb->register_function(r, "storage_service",
                                 "The storage service API");
         set_storage_service(ctx,r);
+        rb->register_function(r, "commitlog",
+                                "The commit log API");
+        set_commitlog(ctx,r);
     });
 }
 
