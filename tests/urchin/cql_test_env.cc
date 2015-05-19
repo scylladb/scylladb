@@ -98,9 +98,7 @@ public:
             ks_meta_data ksm(ks_name,
                     "org.apache.cassandra.locator.SimpleStrategy",
                     std::unordered_map<sstring, sstring>(),
-                    false,
-                    std::vector<schema_ptr>(),
-                    shared_ptr<user_types_metadata>()
+                    false
                     );
             ks.create_replication_strategy(ksm);
         });

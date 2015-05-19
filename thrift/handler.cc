@@ -467,8 +467,7 @@ public:
                         to_sstring(ks_def.strategy_class),
                         std::unordered_map<sstring, sstring>(),//ks_def.strategy_options,
                         ks_def.durable_writes,
-                        cf_defs,
-                        shared_ptr<user_types_metadata>());
+                        cf_defs);
                 auto& ks = db.find_keyspace(ks_def.name);
                 ks.create_replication_strategy(ksm);
             });
