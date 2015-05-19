@@ -6,7 +6,6 @@
 #define DATABASE_HH_
 
 #include "dht/i_partitioner.hh"
-#include "config/ks_meta_data.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
@@ -134,6 +133,48 @@ public:
     }
 };
 
+class ks_meta_data final {
+    sstring _name;
+    sstring _strategy_name;
+    std::unordered_map<sstring, sstring> _strategy_options;
+    std::unordered_map<sstring, schema_ptr> _cf_meta_data;
+    bool _durable_writes;
+    ::shared_ptr<user_types_metadata> _user_types;
+public:
+    ks_meta_data(sstring name,
+                 sstring strategy_name,
+                 std::unordered_map<sstring, sstring> strategy_options,
+                 bool durable_writes,
+                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
+                 shared_ptr<user_types_metadata> user_types = ::make_shared<user_types_metadata>());
+
+    static lw_shared_ptr<ks_meta_data>
+    new_keyspace(sstring name,
+                 sstring strategy_name,
+                 std::unordered_map<sstring, sstring> options,
+                 bool durables_writes,
+                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
+
+    const sstring& name() const {
+        return _name;
+    }
+    const sstring& strategy_name() const {
+        return _strategy_name;
+    }
+    const std::unordered_map<sstring, sstring>& strategy_options() const {
+        return _strategy_options;
+    }
+    const std::unordered_map<sstring, schema_ptr>& cf_meta_data() const {
+        return _cf_meta_data;
+    }
+    bool durable_writes() const {
+        return _durable_writes;
+    }
+    const ::shared_ptr<user_types_metadata>& user_types() const {
+        return _user_types;
+    }
+};
+
 class keyspace {
 public:
     struct config {
@@ -147,7 +188,7 @@ private:
 public:
     explicit keyspace(config cfg) : _config(std::move(cfg)) {}
     user_types_metadata _user_types;
-    void create_replication_strategy(::config::ks_meta_data& ksm);
+    void create_replication_strategy(ks_meta_data& ksm);
     locator::abstract_replication_strategy& get_replication_strategy();
     column_family::config make_column_family_config(const schema& s) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);

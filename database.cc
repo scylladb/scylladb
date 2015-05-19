@@ -530,7 +530,7 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
 }
 
 void
-keyspace::create_replication_strategy(::config::ks_meta_data& ksm) {
+keyspace::create_replication_strategy(ks_meta_data& ksm) {
     static thread_local locator::token_metadata tm;
     static locator::simple_snitch snitch;
     static std::unordered_map<sstring, sstring> options = {{"replication_factor", "3"}};

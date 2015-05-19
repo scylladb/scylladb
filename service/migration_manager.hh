@@ -25,7 +25,6 @@
 #pragma once
 
 #include "db/legacy_schema_tables.hh"
-#include "config/ks_meta_data.hh"
 
 #if 0
 package org.apache.cassandra.service;
@@ -267,17 +266,17 @@ public:
     }
 #endif
 
-    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<config::ks_meta_data> ksm)
+    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<ks_meta_data> ksm)
     {
         return announce_new_keyspace(proxy, ksm, false);
     }
 
-    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<config::ks_meta_data> ksm, bool announce_locally)
+    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<ks_meta_data> ksm, bool announce_locally)
     {
         return announce_new_keyspace(proxy, ksm, db_clock::now_in_usecs(), announce_locally);
     }
 
-    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<config::ks_meta_data> ksm, api::timestamp_type timestamp, bool announce_locally)
+    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<ks_meta_data> ksm, api::timestamp_type timestamp, bool announce_locally)
     {
 #if 0
         ksm.validate();

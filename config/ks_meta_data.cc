@@ -22,11 +22,7 @@
  * Modified by Cloudius Systems
  */
 
-#include "config/ks_meta_data.hh"
-
 #include "database.hh"
-
-namespace config {
 
 ks_meta_data::ks_meta_data(sstring name,
                            sstring strategy_name,
@@ -53,6 +49,4 @@ ks_meta_data::new_keyspace(sstring name,
                            std::vector<schema_ptr> cf_defs)
 {
     return ::make_lw_shared<ks_meta_data>(name, strategy_name, options, durables_writes, cf_defs);
-}
-
 }

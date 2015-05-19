@@ -27,7 +27,6 @@
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "service/migration_manager.hh"
-#include "config/ks_meta_data.hh"
 #include "transport/event.hh"
 
 #include "core/shared_ptr.hh"
