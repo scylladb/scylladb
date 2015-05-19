@@ -28,17 +28,17 @@
 
 namespace config {
 
-ks_meta_data::ks_meta_data(sstring name_,
-                   sstring strategy_name_,
-                   std::unordered_map<sstring, sstring> strategy_options_,
-                   bool durable_writes_,
-                   std::vector<schema_ptr> cf_defs,
-                   shared_ptr<user_types_metadata> user_types_)
-    : name{std::move(name_)}
-    , strategy_name{strategy_name_.empty() ? "NetworkTopologyStrategy" : strategy_name_}
-    , strategy_options{std::move(strategy_options_)}
-    , durable_writes{durable_writes_}
-    , user_types{std::move(user_types_)}
+ks_meta_data::ks_meta_data(sstring name,
+                           sstring strategy_name,
+                           std::unordered_map<sstring, sstring> strategy_options,
+                           bool durable_writes,
+                           std::vector<schema_ptr> cf_defs,
+                           shared_ptr<user_types_metadata> user_types)
+    : _name{std::move(name)}
+    , _strategy_name{strategy_name.empty() ? "NetworkTopologyStrategy" : strategy_name}
+    , _strategy_options{std::move(strategy_options)}
+    , _durable_writes{durable_writes}
+    , _user_types{std::move(user_types)}
 {
     for (auto&& s : cf_defs) {
         _cf_meta_data.emplace(s->cf_name(), s);

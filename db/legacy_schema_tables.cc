@@ -586,9 +586,9 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
             return proxy.get_db().invoke_on_all([&created, altered = std::move(altered)] (database& db) {
                 for (auto&& kv : created) {
                     auto ksm = create_keyspace_from_schema_partition(kv);
-                    keyspace k(db.make_keyspace_config(ksm->name));
+                    keyspace k(db.make_keyspace_config(ksm->name()));
                     k.create_replication_strategy(*ksm);
-                    db.add_keyspace(ksm->name, std::move(k));
+                    db.add_keyspace(ksm->name(), std::move(k));
                 }
                 for (auto&& name : altered) {
                     db.update_keyspace(name);
@@ -824,11 +824,11 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
     {
         std::vector<mutation> mutations;
         schema_ptr s = keyspaces();
-        auto pkey = partition_key::from_exploded(*s, {utf8_type->decompose(keyspace->name)});
+        auto pkey = partition_key::from_exploded(*s, {utf8_type->decompose(keyspace->name())});
         mutation m(pkey, s);
         exploded_clustering_prefix ckey;
-        m.set_cell(ckey, "durable_writes", keyspace->durable_writes, timestamp);
-        m.set_cell(ckey, "strategy_class", keyspace->strategy_name, timestamp);
+        m.set_cell(ckey, "durable_writes", keyspace->durable_writes(), timestamp);
+        m.set_cell(ckey, "strategy_class", keyspace->strategy_name(), timestamp);
         mutations.emplace_back(std::move(m));
 #if 0
         adder.add("strategy_options", json(keyspace.strategyOptions));
