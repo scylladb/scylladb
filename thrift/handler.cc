@@ -463,12 +463,11 @@ public:
                     db.add_column_family(std::move(cf));
                     cf_defs.push_back(s);
                 }
-                config::ks_meta_data ksm(to_sstring(ks_def.name),
+                keyspace_metadata ksm(to_sstring(ks_def.name),
                         to_sstring(ks_def.strategy_class),
                         std::unordered_map<sstring, sstring>(),//ks_def.strategy_options,
                         ks_def.durable_writes,
-                        cf_defs,
-                        shared_ptr<user_types_metadata>());
+                        cf_defs);
                 auto& ks = db.find_keyspace(ks_def.name);
                 ks.create_replication_strategy(ksm);
             });

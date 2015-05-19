@@ -95,12 +95,10 @@ public:
             auto& ks = db.find_or_create_keyspace(ks_name);
             auto cfg = ks.make_column_family_config(*cf_schema);
             db.add_column_family(column_family(std::move(cf_schema), std::move(cfg)));
-            config::ks_meta_data ksm(ks_name,
+            keyspace_metadata ksm(ks_name,
                     "org.apache.cassandra.locator.SimpleStrategy",
                     std::unordered_map<sstring, sstring>(),
-                    false,
-                    std::vector<schema_ptr>(),
-                    shared_ptr<user_types_metadata>()
+                    false
                     );
             ks.create_replication_strategy(ksm);
         });

@@ -24,7 +24,6 @@
 #pragma once
 
 #include "service/storage_proxy.hh"
-#include "config/ks_meta_data.hh"
 #include "mutation.hh"
 #include "schema.hh"
 
@@ -66,11 +65,11 @@ future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutat
 
 future<std::set<sstring>> merge_keyspaces(service::storage_proxy& proxy, schema_result&& before, schema_result&& after);
 
-std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<::config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
+std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 
-lw_shared_ptr<::config::ks_meta_data> create_keyspace_from_schema_partition(const std::pair<dht::decorated_key, lw_shared_ptr<query::result_set>>& partition);
+lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const std::pair<dht::decorated_key, lw_shared_ptr<query::result_set>>& partition);
 
-mutation make_create_keyspace_mutation(lw_shared_ptr<::config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
+mutation make_create_keyspace_mutation(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 
 void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, const partition_key& pkey, std::vector<mutation>& mutations);
 

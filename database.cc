@@ -530,7 +530,7 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
 }
 
 void
-keyspace::create_replication_strategy(::config::ks_meta_data& ksm) {
+keyspace::create_replication_strategy(keyspace_metadata& ksm) {
     static thread_local locator::token_metadata tm;
     static locator::simple_snitch snitch;
     static std::unordered_map<sstring, sstring> options = {{"replication_factor", "3"}};
@@ -544,7 +544,7 @@ keyspace::create_replication_strategy(::config::ks_meta_data& ksm) {
     tm.update_normal_token({dht::token::kind::key, {d2t(1.0/4).data(), 8}}, to_sstring("127.0.0.2"));
     tm.update_normal_token({dht::token::kind::key, {d2t(2.0/4).data(), 8}}, to_sstring("127.0.0.3"));
     tm.update_normal_token({dht::token::kind::key, {d2t(3.0/4).data(), 8}}, to_sstring("127.0.0.4"));
-    _replication_strategy = locator::abstract_replication_strategy::create_replication_strategy(ksm.name, ksm.strategy_name, tm, snitch, options);
+    _replication_strategy = locator::abstract_replication_strategy::create_replication_strategy(ksm.name(), ksm.strategy_name(), tm, snitch, options);
 }
 
 locator::abstract_replication_strategy&

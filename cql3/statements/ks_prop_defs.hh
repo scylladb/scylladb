@@ -25,7 +25,6 @@
 #pragma once
 
 #include "cql3/statements/property_definitions.hh"
-#include "config/ks_meta_data.hh"
 #include "core/sstring.hh"
 
 #include <experimental/optional>
@@ -83,8 +82,8 @@ public:
         return _strategy_class;
     }
 
-    lw_shared_ptr<config::ks_meta_data> as_ks_metadata(sstring ks_name) {
-        return config::ks_meta_data::new_keyspace(ks_name, get_replication_strategy_class().value(), get_replication_options(), get_boolean(KW_DURABLE_WRITES, true));
+    lw_shared_ptr<keyspace_metadata> as_ks_metadata(sstring ks_name) {
+        return keyspace_metadata::new_keyspace(ks_name, get_replication_strategy_class().value(), get_replication_options(), get_boolean(KW_DURABLE_WRITES, true));
     }
 
 #if 0

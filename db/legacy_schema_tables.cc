@@ -586,9 +586,9 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
             return proxy.get_db().invoke_on_all([&created, altered = std::move(altered)] (database& db) {
                 for (auto&& kv : created) {
                     auto ksm = create_keyspace_from_schema_partition(kv);
-                    keyspace k(db.make_keyspace_config(ksm->name));
+                    keyspace k(db.make_keyspace_config(ksm->name()));
                     k.create_replication_strategy(*ksm);
-                    db.add_keyspace(ksm->name, std::move(k));
+                    db.add_keyspace(ksm->name(), std::move(k));
                 }
                 for (auto&& name : altered) {
                     db.update_keyspace(name);
@@ -820,15 +820,15 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      * Keyspace metadata serialization/deserialization.
      */
 
-    std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<::config::ks_meta_data> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions)
+    std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions)
     {
         std::vector<mutation> mutations;
         schema_ptr s = keyspaces();
-        auto pkey = partition_key::from_exploded(*s, {utf8_type->decompose(keyspace->name)});
+        auto pkey = partition_key::from_exploded(*s, {utf8_type->decompose(keyspace->name())});
         mutation m(pkey, s);
         exploded_clustering_prefix ckey;
-        m.set_cell(ckey, "durable_writes", keyspace->durable_writes, timestamp);
-        m.set_cell(ckey, "strategy_class", keyspace->strategy_name, timestamp);
+        m.set_cell(ckey, "durable_writes", keyspace->durable_writes(), timestamp);
+        m.set_cell(ckey, "strategy_class", keyspace->strategy_name(), timestamp);
         mutations.emplace_back(std::move(m));
 #if 0
         adder.add("strategy_options", json(keyspace.strategyOptions));
@@ -879,7 +879,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      *
      * @param partition Keyspace attributes in serialized form
      */
-    lw_shared_ptr<::config::ks_meta_data> create_keyspace_from_schema_partition(const std::pair<dht::decorated_key, lw_shared_ptr<query::result_set>>& result)
+    lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const std::pair<dht::decorated_key, lw_shared_ptr<query::result_set>>& result)
     {
         auto&& rs = result.second;
         if (rs->empty()) {
@@ -890,7 +890,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         auto strategy_name = row.get_nonnull<sstring>("strategy_class");
         std::unordered_map<sstring, sstring> strategy_options;
         bool durable_writes = row.get_nonnull<bool>("durable_writes");
-        return make_lw_shared<::config::ks_meta_data>(keyspace_name, strategy_name, strategy_options, durable_writes);
+        return make_lw_shared<keyspace_metadata>(keyspace_name, strategy_name, strategy_options, durable_writes);
     }
 
 #if 0
