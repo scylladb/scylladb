@@ -92,14 +92,14 @@ public:
         return _db->invoke_on_all([schema_maker, id, this] (database& db) {
             auto cf_schema = make_lw_shared(schema_maker(ks_name));
             cf_schema->set_id(id);
-            auto& ks = db.find_or_create_keyspace(ks_name);
-            auto cfg = ks.make_column_family_config(*cf_schema);
-            db.add_column_family(column_family(std::move(cf_schema), std::move(cfg)));
             keyspace_metadata ksm(ks_name,
                     "org.apache.cassandra.locator.SimpleStrategy",
                     std::unordered_map<sstring, sstring>(),
                     false
                     );
+            auto& ks = db.find_or_create_keyspace(ksm);
+            auto cfg = ks.make_column_family_config(*cf_schema);
+            db.add_column_family(column_family(std::move(cf_schema), std::move(cfg)));
             ks.create_replication_strategy(ksm);
         });
     }

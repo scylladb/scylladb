@@ -429,11 +429,11 @@ void database::add_keyspace(sstring name, keyspace k) {
 }
 
 future<>
-create_keyspace(distributed<database>& db, sstring name) {
-    return make_directory(db.local()._cfg->data_file_directories() + "/" + name).then([name, &db] {
-        return db.invoke_on_all([&name] (database& db) {
-            auto cfg = db.make_keyspace_config(name);
-            db.add_keyspace(name, keyspace(cfg));
+create_keyspace(distributed<database>& db, const keyspace_metadata& ksm) {
+    return make_directory(db.local()._cfg->data_file_directories() + "/" + ksm.name()).then([&ksm, &db] {
+        return db.invoke_on_all([&ksm] (database& db) {
+            auto cfg = db.make_keyspace_config(ksm);
+            db.add_keyspace(ksm.name(), keyspace(cfg));
         });
     });
     // FIXME: rollback on error, or keyspace directory remains on disk, poisoning
@@ -588,12 +588,12 @@ schema_ptr database::find_schema(const utils::UUID& uuid) const throw (no_such_c
 }
 
 keyspace&
-database::find_or_create_keyspace(const sstring& name) {
-    auto i = _keyspaces.find(name);
+database::find_or_create_keyspace(const keyspace_metadata& ksm) {
+    auto i = _keyspaces.find(ksm.name());
     if (i != _keyspaces.end()) {
         return i->second;
     }
-    return _keyspaces.emplace(name, keyspace(make_keyspace_config(name))).first->second;
+    return _keyspaces.emplace(ksm.name(), keyspace(make_keyspace_config(ksm))).first->second;
 }
 
 void
@@ -755,9 +755,9 @@ future<> database::apply(const frozen_mutation& m) {
 }
 
 keyspace::config
-database::make_keyspace_config(sstring name) const {
+database::make_keyspace_config(const keyspace_metadata& ksm) const {
     keyspace::config cfg;
-    cfg.datadir = sprint("%s/%s", _cfg->data_file_directories(), name);
+    cfg.datadir = sprint("%s/%s", _cfg->data_file_directories(), ksm.name());
     return cfg;
 }
 

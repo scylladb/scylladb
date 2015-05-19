@@ -428,7 +428,12 @@ public:
         boost::for_each(ks_def.cf_defs, [&cf_ids] (auto&&) {
             cf_ids.push_back(utils::UUID_gen::get_time_UUID());
         });
-        create_keyspace(_db, ks_def.name).then([this, ks_def, cf_ids] {
+        keyspace_metadata ksm(to_sstring(ks_def.name),
+                to_sstring(ks_def.strategy_class),
+                std::unordered_map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
+                ks_def.durable_writes,
+                std::vector<schema_ptr>{}); // FIXME
+        create_keyspace(_db, ksm).then([this, ks_def, cf_ids] {
             return parallel_for_each(boost::combine(ks_def.cf_defs, cf_ids), [this, ks_def, cf_ids] (auto&& cf_def_and_id) {
                 // We create the directory on the local shard, since the same directory is
                 // used for all shards.
