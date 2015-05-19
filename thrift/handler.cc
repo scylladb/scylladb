@@ -465,7 +465,7 @@ public:
                 }
                 keyspace_metadata ksm(to_sstring(ks_def.name),
                         to_sstring(ks_def.strategy_class),
-                        std::unordered_map<sstring, sstring>(),//ks_def.strategy_options,
+                        std::unordered_map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
                         ks_def.durable_writes,
                         cf_defs);
                 auto& ks = db.find_keyspace(ks_def.name);
