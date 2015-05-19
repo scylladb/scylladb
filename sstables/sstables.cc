@@ -767,6 +767,8 @@ future<> sstable::write_simple(T& component) {
         }
     });
 }
+template future<> sstable::read_simple<sstable::component_type::Filter>(sstables::filter& f);
+template future<> sstable::write_simple<sstable::component_type::Filter>(sstables::filter& f);
 
 future<> sstable::read_compression() {
      // FIXME: If there is no compression, we should expect a CRC file to be present.

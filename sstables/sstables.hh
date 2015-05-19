@@ -21,6 +21,7 @@
 #include "dht/i_partitioner.hh"
 #include "schema.hh"
 #include "mutation.hh"
+#include "utils/i_filter.hh"
 
 namespace sstables {
 
@@ -100,7 +101,7 @@ private:
     std::unordered_set<component_type, enum_hash<component_type>> _components;
 
     compression _compression;
-    filter _filter;
+    utils::filter_ptr _filter;
     summary _summary;
     statistics _statistics;
     lw_shared_ptr<file> _index_file;
@@ -130,13 +131,9 @@ private:
     future<> read_compression();
     future<> write_compression();
 
-    future<> read_filter() {
-        return read_simple<component_type::Filter>(_filter);
-    }
+    future<> read_filter();
 
-    future<> write_filter() {
-        return write_simple<component_type::Filter>(_filter);
-    }
+    future<> write_filter();
 
     future<> read_summary() {
         return read_simple<component_type::Summary>(_summary);
@@ -178,7 +175,7 @@ private:
     future<summary_entry&> read_summary_entry(size_t i);
 
     // FIXME: pending on Bloom filter implementation
-    bool filter_has_key(const key& key) { return true; }
+    bool filter_has_key(const key& key) { return _filter->is_present(bytes_view(key)); }
     bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }
 public:
     // Allow the test cases from sstable_test.cc to test private methods. We use
