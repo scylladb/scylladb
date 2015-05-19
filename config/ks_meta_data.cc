@@ -71,11 +71,6 @@ ks_meta_data::ks_meta_data(sstring name_,
 
 // For new user created keyspaces (through CQL)
 lw_shared_ptr<ks_meta_data> ks_meta_data::new_keyspace(sstring name, sstring strategy_name, std::unordered_map<sstring, sstring> options, bool durable_writes) {
-#if 0
-    Class<? extends AbstractReplicationStrategy> cls = AbstractReplicationStrategy.getClass(strategyName);
-    if (cls.equals(LocalStrategy.class))
-        throw new ConfigurationException("Unable to use given strategy class: LocalStrategy is reserved for internal use.");
-#endif
     return new_keyspace(name, strategy_name, options, durable_writes, std::vector<schema_ptr>{});
 }
 
