@@ -302,6 +302,7 @@ http = ['http/transformers.cc',
 api = ['api/api.cc',
        'api/api-doc/storage_service.json',
        'api/storage_service.cc',
+       'api/api-doc/commitlog.json',
        ]
 
 boost_test_lib = [
