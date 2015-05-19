@@ -139,14 +139,14 @@ class ks_meta_data final {
     std::unordered_map<sstring, sstring> _strategy_options;
     std::unordered_map<sstring, schema_ptr> _cf_meta_data;
     bool _durable_writes;
-    ::shared_ptr<user_types_metadata> _user_types;
+    lw_shared_ptr<user_types_metadata> _user_types;
 public:
     ks_meta_data(sstring name,
                  sstring strategy_name,
                  std::unordered_map<sstring, sstring> strategy_options,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
-                 shared_ptr<user_types_metadata> user_types = ::make_shared<user_types_metadata>())
+                 lw_shared_ptr<user_types_metadata> user_types = make_lw_shared<user_types_metadata>())
         : _name{std::move(name)}
         , _strategy_name{strategy_name.empty() ? "NetworkTopologyStrategy" : strategy_name}
         , _strategy_options{std::move(strategy_options)}
@@ -181,7 +181,7 @@ public:
     bool durable_writes() const {
         return _durable_writes;
     }
-    const ::shared_ptr<user_types_metadata>& user_types() const {
+    const lw_shared_ptr<user_types_metadata>& user_types() const {
         return _user_types;
     }
 };
