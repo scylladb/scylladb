@@ -246,53 +246,53 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
 }
 
 SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
-  auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
-      {{"p1", int32_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+            {{"p1", int32_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-  column_family::config cfg;
-  cfg.enable_disk_reads = false;
-  cfg.enable_disk_writes = false;
-  return do_with(column_family(s, cfg), [s] (column_family& cf) {
-    std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
+    column_family::config cfg;
+    cfg.enable_disk_reads = false;
+    cfg.enable_disk_writes = false;
+    return do_with(column_family(s, cfg), [s] (column_family& cf) {
+        std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
 
-    const column_definition& r1_col = *s->get_column_definition("r1");
+        const column_definition& r1_col = *s->get_column_definition("r1");
 
-    api::timestamp_type ts = 0;
-    auto insert_row = [&] (int32_t p1, int32_t c1, int32_t r1) {
-        auto key = partition_key::from_exploded(*s, {int32_type->decompose(p1)});
-        auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
-        mutation m(key, s);
-        m.set_clustered_cell(c_key, r1_col, atomic_cell::make_live(ts++, int32_type->decompose(r1)));
-        cf.apply(std::move(m));
-        shadow[p1][c1] = r1;
-    };
-    std::minstd_rand random_engine;
-    std::normal_distribution<> pk_distribution(0, 10);
-    std::normal_distribution<> ck_distribution(0, 5);
-    std::normal_distribution<> r_distribution(0, 100);
-    for (unsigned i = 0; i < 10; ++i) {
-        for (unsigned j = 0; j < 100; ++j) {
-            insert_row(pk_distribution(random_engine), ck_distribution(random_engine), r_distribution(random_engine));
-        }
-        cf.seal_active_memtable();
-    }
-
-    return do_with(std::move(result), [&cf, s, &r1_col, shadow] (auto& result) {
-      return cf.for_all_partitions_slow([&] (const dht::decorated_key& pk, const mutation_partition& mp) {
-        auto p1 = boost::any_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
-        for (const rows_entry& re : mp.range(*s, query::range<clustering_key_prefix>())) {
-            auto c1 = boost::any_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
-            auto cell = re.row().cells().find_cell(r1_col.id);
-            if (cell) {
-                result[p1][c1] = boost::any_cast<int32_t>(int32_type->deserialize(cell->as_atomic_cell().value()));
+        api::timestamp_type ts = 0;
+        auto insert_row = [&] (int32_t p1, int32_t c1, int32_t r1) {
+            auto key = partition_key::from_exploded(*s, {int32_type->decompose(p1)});
+            auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
+            mutation m(key, s);
+            m.set_clustered_cell(c_key, r1_col, atomic_cell::make_live(ts++, int32_type->decompose(r1)));
+            cf.apply(std::move(m));
+            shadow[p1][c1] = r1;
+        };
+        std::minstd_rand random_engine;
+        std::normal_distribution<> pk_distribution(0, 10);
+        std::normal_distribution<> ck_distribution(0, 5);
+        std::normal_distribution<> r_distribution(0, 100);
+        for (unsigned i = 0; i < 10; ++i) {
+            for (unsigned j = 0; j < 100; ++j) {
+                insert_row(pk_distribution(random_engine), ck_distribution(random_engine), r_distribution(random_engine));
             }
+            cf.seal_active_memtable();
         }
-        return true;
-      }).then([&result, shadow] (bool ok) {
-          BOOST_REQUIRE(shadow == result);
-      });
+
+        return do_with(std::move(result), [&cf, s, &r1_col, shadow] (auto& result) {
+            return cf.for_all_partitions_slow([&] (const dht::decorated_key& pk, const mutation_partition& mp) {
+                auto p1 = boost::any_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
+                for (const rows_entry& re : mp.range(*s, query::range<clustering_key_prefix>())) {
+                    auto c1 = boost::any_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
+                    auto cell = re.row().cells().find_cell(r1_col.id);
+                    if (cell) {
+                        result[p1][c1] = boost::any_cast<int32_t>(int32_type->deserialize(cell->as_atomic_cell().value()));
+                    }
+                }
+                return true;
+            }).then([&result, shadow] (bool ok) {
+                BOOST_REQUIRE(shadow == result);
+            });
+        });
     });
-  });
 }
 
 SEASTAR_TEST_CASE(test_cell_ordering) {
