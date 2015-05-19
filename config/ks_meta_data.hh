@@ -64,10 +64,12 @@ public:
                        std::vector<schema_ptr> cf_defs,
                        shared_ptr<user_types_metadata> user_types_);
 
-    // For new user created keyspaces (through CQL)
-    static lw_shared_ptr<ks_meta_data> new_keyspace(sstring name, sstring strategy_name, std::unordered_map<sstring, sstring> options, bool durable_writes);
-
-    static lw_shared_ptr<ks_meta_data> new_keyspace(sstring name, sstring strategy_name, std::unordered_map<sstring, sstring> options, bool durables_writes, std::vector<schema_ptr> cf_defs);
+    static lw_shared_ptr<ks_meta_data>
+    new_keyspace(sstring name,
+                 sstring strategy_name,
+                 std::unordered_map<sstring, sstring> options,
+                 bool durables_writes,
+                 std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{});
 
     const std::unordered_map<sstring, schema_ptr>& cf_meta_data() const {
         return _cf_meta_data;

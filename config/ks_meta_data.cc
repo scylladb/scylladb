@@ -69,12 +69,12 @@ ks_meta_data::ks_meta_data(sstring name_,
     }
 }
 
-// For new user created keyspaces (through CQL)
-lw_shared_ptr<ks_meta_data> ks_meta_data::new_keyspace(sstring name, sstring strategy_name, std::unordered_map<sstring, sstring> options, bool durable_writes) {
-    return new_keyspace(name, strategy_name, options, durable_writes, std::vector<schema_ptr>{});
-}
-
-lw_shared_ptr<ks_meta_data> ks_meta_data::new_keyspace(sstring name, sstring strategy_name, std::unordered_map<sstring, sstring> options, bool durables_writes, std::vector<schema_ptr> cf_defs)
+lw_shared_ptr<ks_meta_data>
+ks_meta_data::new_keyspace(sstring name,
+                           sstring strategy_name,
+                           std::unordered_map<sstring, sstring> options,
+                           bool durables_writes,
+                           std::vector<schema_ptr> cf_defs)
 {
     return ::make_lw_shared<ks_meta_data>(name, strategy_name, options, durables_writes, cf_defs, ::make_shared<user_types_metadata>());
 }
