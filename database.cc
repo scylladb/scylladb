@@ -681,6 +681,23 @@ database::find_or_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     return _keyspaces.emplace(ksm->name(), std::move(ks)).first->second;
 }
 
+std::set<sstring>
+database::existing_index_names(const sstring& cf_to_exclude) const {
+    std::set<sstring> names;
+    for (auto& p : _column_families) {
+        auto& cf = p.second;
+        if (!cf_to_exclude.empty() && cf.schema()->cf_name() == cf_to_exclude) {
+            continue;
+        }
+        for (auto& cd : cf.schema()->all_columns_in_select_order()) {
+            if (cd.idx_info.index_name) {
+                names.emplace(*cd.idx_info.index_name);
+            }
+        }
+    }
+    return names;
+}
+
 void
 memtable::apply(const mutation& m) {
     mutation_partition& p = find_or_create_partition(m.decorated_key());
