@@ -133,7 +133,7 @@ public:
     }
 };
 
-class ks_meta_data final {
+class keyspace_metadata final {
     sstring _name;
     sstring _strategy_name;
     std::unordered_map<sstring, sstring> _strategy_options;
@@ -141,7 +141,7 @@ class ks_meta_data final {
     bool _durable_writes;
     lw_shared_ptr<user_types_metadata> _user_types;
 public:
-    ks_meta_data(sstring name,
+    keyspace_metadata(sstring name,
                  sstring strategy_name,
                  std::unordered_map<sstring, sstring> strategy_options,
                  bool durable_writes,
@@ -157,14 +157,14 @@ public:
             _cf_meta_data.emplace(s->cf_name(), s);
         }
     }
-    static lw_shared_ptr<ks_meta_data>
+    static lw_shared_ptr<keyspace_metadata>
     new_keyspace(sstring name,
                  sstring strategy_name,
                  std::unordered_map<sstring, sstring> options,
                  bool durables_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{})
     {
-        return ::make_lw_shared<ks_meta_data>(name, strategy_name, options, durables_writes, cf_defs);
+        return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, durables_writes, cf_defs);
     }
     const sstring& name() const {
         return _name;
@@ -199,7 +199,7 @@ private:
 public:
     explicit keyspace(config cfg) : _config(std::move(cfg)) {}
     user_types_metadata _user_types;
-    void create_replication_strategy(ks_meta_data& ksm);
+    void create_replication_strategy(keyspace_metadata& ksm);
     locator::abstract_replication_strategy& get_replication_strategy();
     column_family::config make_column_family_config(const schema& s) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
