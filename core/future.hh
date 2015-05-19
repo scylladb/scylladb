@@ -28,6 +28,20 @@
 #include <type_traits>
 #include <assert.h>
 
+namespace seastar {
+
+class thread_context;
+
+namespace thread_impl {
+
+thread_context* get();
+void switch_in(thread_context* to);
+void switch_out(thread_context* from);
+
+}
+
+}
+
 template <class... T>
 class promise;
 
@@ -514,7 +528,20 @@ public:
         }
     }
     std::tuple<T...> get() {
+        if (!state()->available()) {
+            wait();
+        }
         return state()->get();
+    }
+
+    void wait() {
+        auto thread = seastar::thread_impl::get();
+        assert(thread);
+        schedule([this, thread] (future_state<T...>&& new_state) {
+            *state() = std::move(new_state);
+            seastar::thread_impl::switch_in(thread);
+        });
+        seastar::thread_impl::switch_out(thread);
     }
 
     bool available() noexcept {

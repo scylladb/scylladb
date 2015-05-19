@@ -24,6 +24,7 @@
 #include "core/shared_ptr.hh"
 #include "core/semaphore.hh"
 #include "core/future-util.hh"
+#include "core/sleep.hh"
 #include <boost/iterator/counting_iterator.hpp>
 
 class expected_exception : std::runtime_error {
@@ -287,4 +288,12 @@ SEASTAR_TEST_CASE(test_map_reduce) {
         auto m = n - 1; // counting does not include upper bound
         BOOST_REQUIRE_EQUAL(result, (m * (m + 1) * (2*m + 1)) / 6);
     });
+}
+
+// This test doesn't actually test anything - it just waits for the future
+// returned by sleep to complete. However, a bug we had in sleep() caused
+// this test to fail the sanitizer in the debug build, so this is a useful
+// regression test.
+SEASTAR_TEST_CASE(test_sleep) {
+    return sleep(std::chrono::milliseconds(100));
 }

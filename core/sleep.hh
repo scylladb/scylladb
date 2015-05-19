@@ -35,10 +35,12 @@ future<> sleep(std::chrono::duration<Rep, Period> dur) {
         promise<> done;
         timer<Clock> tmr;
         sleeper(std::chrono::duration<Rep, Period> dur)
-            : tmr([this] { done.set_value(); delete this; })
+            : tmr([this] { done.set_value(); })
         {
             tmr.arm(dur);
         }
     };
-    return (new sleeper(dur))->done.get_future();
+    sleeper *s = new sleeper(dur);
+    future<> fut = s->done.get_future();
+    return fut.then([s] { delete s; });
 }

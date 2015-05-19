@@ -35,13 +35,14 @@ struct reader {
     size_t count = 0;
 
     // for input_stream::consume():
-    template <typename Done>
-    void operator()(temporary_buffer<char> data, Done&& done) {
+    using unconsumed_remainder = std::experimental::optional<temporary_buffer<char>>;
+    future<unconsumed_remainder> operator()(temporary_buffer<char> data) {
         if (data.empty()) {
-            done(std::move(data));
+            return make_ready_future<unconsumed_remainder>(std::move(data));
         } else {
             count += std::count(data.begin(), data.end(), '\n');
             // FIXME: last line without \n?
+            return make_ready_future<unconsumed_remainder>();
         }
     }
 };

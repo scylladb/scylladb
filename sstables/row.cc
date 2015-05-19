@@ -93,7 +93,7 @@ private:
         return bytes_view(reinterpret_cast<const byte*>(b.get()), b.size());
     }
 
-
+    using unconsumed_reminder = input_stream<char>::unconsumed_remainder;
 public:
     data_consume_rows_context(row_consumer& consumer,
             input_stream<char> && input, uint64_t maxlen) :
@@ -111,25 +111,26 @@ public:
     }
 
     // called by input_stream::consume():
-    template<typename Done>
-    void operator()(temporary_buffer<char> data, Done&& done) {
+    future<unconsumed_reminder>
+    operator()(temporary_buffer<char> data) {
         if (_remain && data.size() >= _remain) {
             // We've been asked to stop before the end of file, and we've
             // read past the amount we need. So process the beginning of the
             // buffer, and return the rest to the stream with done():
             process(data.share(0, _remain));
             data.trim_front(_remain);
-            done(std::move(data));
             verify_end_state();
+            return make_ready_future<unconsumed_reminder>(std::move(data));
         } else if (data.empty()) {
             // End of file
-            done(std::move(data));
             verify_end_state();
+            return make_ready_future<unconsumed_reminder>(std::move(data));
         } else {
             if (_remain) {
                 _remain -= data.size();
             }
             process(std::move(data));
+            return make_ready_future<unconsumed_reminder>();
         }
     }
 
