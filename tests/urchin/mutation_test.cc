@@ -8,6 +8,7 @@
 #include "core/sstring.hh"
 #include "database.hh"
 #include "utils/UUID_gen.hh"
+#include "core/do_with.hh"
 #include <random>
 
 static sstring some_keyspace("ks");
@@ -228,14 +229,15 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     insert_row(1003, 2003);
 
     auto verify_row = [&] (int32_t c1, int32_t r1) {
-        auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
-        auto r = cf.find_row(dht::global_partitioner().decorate_key(*s, key), c_key);
+      auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
+      return cf.find_row(dht::global_partitioner().decorate_key(*s, key), std::move(c_key)).then([r1, r1_col] (auto r) {
         BOOST_REQUIRE(r);
         auto i = r->find_cell(r1_col.id);
         BOOST_REQUIRE(i);
         auto cell = i->as_atomic_cell();
         BOOST_REQUIRE(cell.is_live());
         BOOST_REQUIRE(int32_type->equal(cell.value(), int32_type->decompose(r1)));
+      });
     };
     verify_row(1001, 2001);
     verify_row(1002, 2002);
@@ -244,13 +246,13 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
 }
 
 SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
-    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
-        {{"p1", int32_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
+  auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+      {{"p1", int32_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-    column_family::config cfg;
-    cfg.enable_disk_reads = false;
-    cfg.enable_disk_writes = false;
-    column_family cf(s, cfg);
+  column_family::config cfg;
+  cfg.enable_disk_reads = false;
+  cfg.enable_disk_writes = false;
+  return do_with(column_family(s, cfg), [s] (column_family& cf) {
     std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
 
     const column_definition& r1_col = *s->get_column_definition("r1");
@@ -275,7 +277,8 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
         cf.seal_active_memtable();
     }
 
-    cf.for_all_partitions_slow([&] (const dht::decorated_key& pk, const mutation_partition& mp) {
+    return do_with(std::move(result), [&cf, s, &r1_col, shadow] (auto& result) {
+      return cf.for_all_partitions_slow([&] (const dht::decorated_key& pk, const mutation_partition& mp) {
         auto p1 = boost::any_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
         for (const rows_entry& re : mp.range(*s, query::range<clustering_key_prefix>())) {
             auto c1 = boost::any_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
@@ -285,9 +288,11 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
             }
         }
         return true;
+      }).then([&result, shadow] (bool ok) {
+          BOOST_REQUIRE(shadow == result);
+      });
     });
-    BOOST_REQUIRE(shadow == result);
-    return make_ready_future<>();
+  });
 }
 
 SEASTAR_TEST_CASE(test_cell_ordering) {

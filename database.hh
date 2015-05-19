@@ -84,12 +84,12 @@ public:
     using const_row_ptr = std::unique_ptr<const row>;
 public:
     column_family(schema_ptr schema, config cfg);
-    column_family(column_family&&) = default;
+    column_family(column_family&&);
     ~column_family();
     schema_ptr schema() const { return _schema; }
-    const_mutation_partition_ptr find_partition(const dht::decorated_key& key) const;
-    const_mutation_partition_ptr find_partition_slow(const partition_key& key) const;
-    const_row_ptr find_row(const dht::decorated_key& partition_key, const clustering_key& clustering_key) const;
+    future<const_mutation_partition_ptr> find_partition(const dht::decorated_key& key) const;
+    future<const_mutation_partition_ptr> find_partition_slow(const partition_key& key) const;
+    future<const_row_ptr> find_row(const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     void apply(const frozen_mutation& m);
     void apply(const mutation& m);
     // Returns at most "cmd.limit" rows
@@ -103,13 +103,13 @@ private:
     // so that iteration can be stopped by returning false.
     // Func signature: bool (const decorated_key& dk, const mutation_partition& mp)
     template <typename Func>
-    bool for_all_partitions(Func&& func) const;
+    future<bool> for_all_partitions(Func&& func) const;
     future<> probe_file(sstring sstdir, sstring fname);
     void seal_on_overflow();
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
-    bool for_all_partitions_slow(std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const;
+    future<bool> for_all_partitions_slow(std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const;
 
     friend std::ostream& operator<<(std::ostream& out, const column_family& cf);
 };
