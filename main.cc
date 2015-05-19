@@ -64,7 +64,7 @@ int main(int ac, char** av) {
     distributed<database> db;
     distributed<cql3::query_processor> qp;
     service::storage_proxy proxy{db};
-    api::http_context ctx;
+    api::http_context ctx(db);
 
     return app.run(ac, av, [&] {
         auto&& opts = app.configuration();
