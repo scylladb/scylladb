@@ -172,6 +172,7 @@ public:
         _timer.arm(std::chrono::milliseconds(cfg.commitlog_sync_period_in_ms));
     }
 
+    std::vector<sstring> get_active_names() const;
 private:
     uint64_t _ids = 0;
     std::vector<sseg_ptr> _segments;
@@ -460,6 +461,9 @@ public:
     bool contains(const replay_position& pos) {
         return pos.id == _desc.id;
     }
+    sstring get_segment_name() const {
+        return _desc.filename();
+    }
 };
 
 const size_t db::commitlog::segment::default_size;
@@ -639,6 +643,17 @@ void db::commitlog::segment_manager::sync() {
     }
     arm();
 }
+
+std::vector<sstring> db::commitlog::segment_manager::get_active_names() const {
+    std::vector<sstring> res;
+    for (auto i: _segments) {
+        if (!i->is_unused()) {
+            // Each shared is located in its own directory
+            res.push_back(cfg.commit_log_location + "/" + i->get_segment_name());
+        }
+    }
+    return res;
+}
 /**
  * Add mutation.
  */
@@ -806,3 +821,6 @@ subscription<temporary_buffer<char>> db::commitlog::read_log_file(file f, commit
     return ret;
 }
 
+std::vector<sstring> db::commitlog::get_active_segment_names() const {
+    return _segment_manager->get_active_names();
+}

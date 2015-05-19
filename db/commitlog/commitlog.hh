@@ -166,6 +166,11 @@ public:
     void discard_completed_segments(const cf_id_type&, const replay_position&);
 
     /**
+     * Returns a vector of the segment names
+     */
+    std::vector<sstring> get_active_segment_names() const;
+
+    /**
      * Returns the largest amount of data that can be written in a single "mutation".
      */
     size_t max_record_size() const;
