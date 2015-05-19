@@ -160,38 +160,38 @@ column_family::for_all_partitions(Func&& func) const {
     merger.create_heap(ptables);
     // Can't use memtable::partitions_type::value_type due do constness
     return do_with(std::move(is), [this] (iteration_state& is) {
-      return do_until(std::bind(&iteration_state::done, &is), [&is, this] {
-        auto& more = is.more;
-        auto& merger = is.merger;
-        more = merger.pop(boost::make_function_output_iterator([&] (const memtable::partitions_type::value_type& e) {
-            auto&& key = e.first;
-            auto&& mp = e.second;
+        return do_until(std::bind(&iteration_state::done, &is), [&is, this] {
+            auto& more = is.more;
+            auto& merger = is.merger;
+            more = merger.pop(boost::make_function_output_iterator([&] (const memtable::partitions_type::value_type& e) {
+                auto&& key = e.first;
+                auto&& mp = e.second;
+                auto& current = is.current;
+                auto& func = is.func;
+                auto& ok = is.ok;
+                // Schema cannot have different keys
+                if (current && !current->first.equal(*_schema, key)) {
+                    ok = func(std::move(current->first), std::move(current->second));
+                    current = std::experimental::nullopt;
+                }
+                if (current) {
+                    // FIXME: handle different schemas
+                    current->second.apply(*_schema, mp);
+                } else {
+                    current = std::make_pair(key, mp);
+                }
+            }));
+            return make_ready_future<>();
+        }).then([this, &is] {
+            auto& ok = is.ok;
             auto& current = is.current;
             auto& func = is.func;
-            auto& ok = is.ok;
-            // Schema cannot have different keys
-            if (current && !current->first.equal(*_schema, key)) {
+            if (ok && current) {
                 ok = func(std::move(current->first), std::move(current->second));
                 current = std::experimental::nullopt;
             }
-            if (current) {
-                // FIXME: handle different schemas
-                current->second.apply(*_schema, mp);
-            } else {
-                current = std::make_pair(key, mp);
-            }
-        }));
-        return make_ready_future<>();
-      }).then([this, &is] {
-          auto& ok = is.ok;
-          auto& current = is.current;
-          auto& func = is.func;
-          if (ok && current) {
-              ok = func(std::move(current->first), std::move(current->second));
-              current = std::experimental::nullopt;
-          }
-          return make_ready_future<bool>(ok);
-      });
+            return make_ready_future<bool>(ok);
+        });
     });
 }
 
