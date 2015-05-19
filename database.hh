@@ -85,7 +85,7 @@ public:
     using const_row_ptr = std::unique_ptr<const row>;
 public:
     column_family(schema_ptr schema, config cfg);
-    column_family(column_family&&) = default;
+    column_family(column_family&&);
     ~column_family();
     schema_ptr schema() const { return _schema; }
     const_mutation_partition_ptr find_partition(const dht::decorated_key& key) const;

@@ -41,6 +41,9 @@ column_family::column_family(schema_ptr schema, config config)
 { }
 
 // define in .cc, since sstable is forward-declared in .hh
+column_family::column_family(column_family&& x) = default;
+
+// define in .cc, since sstable is forward-declared in .hh
 column_family::~column_family() {
 }
 
