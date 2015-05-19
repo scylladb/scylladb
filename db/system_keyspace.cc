@@ -1001,7 +1001,12 @@ std::vector<schema_ptr> all_tables() {
 }
 
 void make(database& db) {
-    auto kscfg = db.make_keyspace_config("system");
+    keyspace_metadata ksm{"system",
+            "org.apache.cassandra.locator.SimpleStrategy",
+            std::unordered_map<sstring, sstring>{},
+            false
+            };
+    auto kscfg = db.make_keyspace_config(ksm);
     keyspace ks{std::move(kscfg)};
     db.add_keyspace("system", std::move(ks));
     for (auto&& table : all_tables()) {

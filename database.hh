@@ -199,7 +199,7 @@ private:
 public:
     explicit keyspace(config cfg) : _config(std::move(cfg)) {}
     user_types_metadata _user_types;
-    void create_replication_strategy(keyspace_metadata& ksm);
+    void create_replication_strategy(const keyspace_metadata& ksm);
     locator::abstract_replication_strategy& get_replication_strategy();
     column_family::config make_column_family_config(const schema& s) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
@@ -255,7 +255,7 @@ public:
     const utils::UUID& find_uuid(const schema_ptr&) const throw (std::out_of_range);
 
     /* below, find* throws no_such_<type> on fail */
-    keyspace& find_or_create_keyspace(const sstring& name);
+    keyspace& find_or_create_keyspace(const keyspace_metadata&);
     keyspace& find_keyspace(const sstring& name) throw (no_such_keyspace);
     const keyspace& find_keyspace(const sstring& name) const throw (no_such_keyspace);
     bool has_keyspace(const sstring& name) const;
@@ -275,14 +275,14 @@ public:
     unsigned shard_of(const frozen_mutation& m);
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
     future<> apply(const frozen_mutation&);
-    keyspace::config make_keyspace_config(sstring name) const;
+    keyspace::config make_keyspace_config(const keyspace_metadata& ksm) const;
     friend std::ostream& operator<<(std::ostream& out, const database& db);
-    friend future<> create_keyspace(distributed<database>&, sstring);
+    friend future<> create_keyspace(distributed<database>&, const keyspace_metadata&);
 };
 
 // Creates a keyspace.  Keyspaces have a non-sharded
 // component (the directory), so a global function is needed.
-future<> create_keyspace(distributed<database>& db, sstring name);
+future<> create_keyspace(distributed<database>& db, const keyspace_metadata&);
 
 // FIXME: stub
 class secondary_index_manager {};
