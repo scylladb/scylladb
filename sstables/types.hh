@@ -54,6 +54,10 @@ struct filter {
 
     template <typename Describer>
     future<> describe_type(Describer f) { return f(hashes, buckets); }
+
+    // Create an always positive filter if nothing else is specified.
+    filter() : hashes(0), buckets({}) {}
+    explicit filter(int hashes, std::vector<uint64_t> buckets) : hashes(hashes), buckets({std::move(buckets)}) {}
 };
 
 struct index_entry {
