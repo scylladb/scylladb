@@ -42,6 +42,8 @@ ipv4_addr::ipv4_addr(const std::string &addr) {
     }
 }
 
+ipv4_addr::ipv4_addr(const std::string &addr, uint16_t port_) : ip(boost::asio::ip::address_v4::from_string(addr).to_ulong()), port(port_) {}
+
 namespace net {
 
 inline
