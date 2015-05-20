@@ -144,6 +144,9 @@ input_stream<CharType>::consume(Consumer& consumer) {
                 _buf = std::move(u.value());
                 return make_ready_future<>();
             }
+            if (_eof) {
+                return make_ready_future<>();
+            }
             // If we're here, consumer consumed entire buffer and is ready for
             // more now. So we do not return, and rather continue the loop.
             // TODO: if we did too many iterations, schedule a call to
