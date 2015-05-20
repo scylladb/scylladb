@@ -833,7 +833,7 @@ future<> sstable::open_data() {
 }
 
 future<> sstable::create_data() {
-    auto oflags = open_flags::wo | open_flags::create | open_flags::truncate;
+    auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
     return when_all(engine().open_file_dma(filename(component_type::Index), oflags),
                     engine().open_file_dma(filename(component_type::Data), oflags)).then([this] (auto files) {
         _index_file = make_lw_shared<file>(std::move(std::get<file>(std::get<0>(files).get())));
@@ -1031,12 +1031,10 @@ static future<> write_static_row(file_writer& out, schema_ptr schema, const row&
     });
 }
 
-future<> write_datafile(const memtable& mt, sstring datafile) {
-    auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
-    return engine().open_file_dma(datafile, oflags).then([&mt] (file f) {
+future<> sstable::write_components(const memtable& mt) {
+    return create_data().then([&mt, this] {
         // TODO: Add compression support by having a specialized output stream.
-        auto out = file_writer(make_lw_shared<file>(std::move(f)), 4096);
-        auto w = make_shared<file_writer>(std::move(out));
+        auto w = make_shared<file_writer>(_data_file, 4096);
 
         // Iterate through CQL partitions, then CQL rows, then CQL columns.
         // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.

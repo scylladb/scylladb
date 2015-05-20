@@ -56,11 +56,13 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
     mt.apply(std::move(m));
 
     auto mtp = make_shared<memtable>(std::move(mt));
+    auto sst = make_lw_shared<sstable>("tests/urchin/sstables", 1, la, big);
 
-    return remove_file("tests/urchin/sstables/Data.tmp.db").then_wrapped([mtp] (future<> ret) {
-        return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data.tmp.db");
-    }).then([mtp, s] {
-        return engine().open_file_dma("tests/urchin/sstables/Data.tmp.db", open_flags::ro).then([] (file f) {
+    auto fname = sstable::filename("tests/urchin/sstables", la, 1, big, sstable::component_type::Data);
+    return remove_file(fname).then_wrapped([mtp, sst] (future<> ret) {
+        return sst->write_components(*mtp);
+    }).then([mtp, sst, s, fname] {
+        return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
             auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -90,7 +92,8 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
                 BOOST_REQUIRE(size == offset);
             });
         }).then([] {
-            return remove_file("tests/urchin/sstables/Data.tmp.db");
+            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 1, big, sstable::component_type::Data)),
+                remove_file(sstable::filename("tests/urchin/sstables", la, 1, big, sstable::component_type::Index))).then([] (auto t) {});
         });
     });
 }
@@ -123,11 +126,13 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
     mt.apply(std::move(m));
 
     auto mtp = make_shared<memtable>(std::move(mt));
+    auto sst = make_lw_shared<sstable>("tests/urchin/sstables", 2, la, big);
 
-    return remove_file("tests/urchin/sstables/Data2.tmp.db").then_wrapped([mtp] (future<> ret) {
-        return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data2.tmp.db");
-    }).then([mtp, s] {
-        return engine().open_file_dma("tests/urchin/sstables/Data2.tmp.db", open_flags::ro).then([] (file f) {
+    auto fname = sstable::filename("tests/urchin/sstables", la, 2, big, sstable::component_type::Data);
+    return remove_file(fname).then_wrapped([mtp, sst] (future<> ret) {
+        return sst->write_components(*mtp);
+    }).then([mtp, sst, s, fname] {
+        return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
             auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -159,7 +164,8 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
                 BOOST_REQUIRE(size == offset);
             });
         }).then([] {
-            return remove_file("tests/urchin/sstables/Data2.tmp.db");
+            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 2, big, sstable::component_type::Data)),
+                remove_file(sstable::filename("tests/urchin/sstables", la, 2, big, sstable::component_type::Index))).then([] (auto t) {});
         });
     });
 }
@@ -192,11 +198,13 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
     mt.apply(std::move(m));
 
     auto mtp = make_shared<memtable>(std::move(mt));
+    auto sst = make_lw_shared<sstable>("tests/urchin/sstables", 3, la, big);
 
-    return remove_file("tests/urchin/sstables/Data3.tmp.db").then_wrapped([mtp] (future<> ret) {
-        return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data3.tmp.db");
-    }).then([mtp, s] {
-        return engine().open_file_dma("tests/urchin/sstables/Data3.tmp.db", open_flags::ro).then([] (file f) {
+    auto fname = sstable::filename("tests/urchin/sstables", la, 3, big, sstable::component_type::Data);
+    return remove_file(fname).then_wrapped([mtp, sst] (future<> ret) {
+        return sst->write_components(*mtp);
+    }).then([mtp, sst, s, fname] {
+        return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
             auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -228,7 +236,8 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
                 BOOST_REQUIRE(size == offset);
             });
         }).then([] {
-            return remove_file("tests/urchin/sstables/Data3.tmp.db");
+            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 3, big, sstable::component_type::Data)),
+                remove_file(sstable::filename("tests/urchin/sstables", la, 3, big, sstable::component_type::Index))).then([] (auto t) {});
         });
     });
 }
@@ -264,11 +273,13 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
     mt.apply(std::move(m));
 
     auto mtp = make_shared<memtable>(std::move(mt));
+    auto sst = make_lw_shared<sstable>("tests/urchin/sstables", 4, la, big);
 
-    return remove_file("tests/urchin/sstables/Data4.tmp.db").then_wrapped([mtp] (future<> f) {
-        return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data4.tmp.db");
-    }).then([mtp, s] {
-        return engine().open_file_dma("tests/urchin/sstables/Data4.tmp.db", open_flags::ro).then([] (file f) {
+    auto fname = sstable::filename("tests/urchin/sstables", la, 4, big, sstable::component_type::Data);
+    return remove_file(fname).then_wrapped([mtp, sst] (future<> f) {
+        return sst->write_components(*mtp);
+    }).then([mtp, sst, s, fname] {
+        return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
             auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -303,7 +314,8 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
                 BOOST_REQUIRE(size == offset);
             });
         }).then([] {
-            return remove_file("tests/urchin/sstables/Data4.tmp.db");
+            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 4, big, sstable::component_type::Data)),
+                remove_file(sstable::filename("tests/urchin/sstables", la, 4, big, sstable::component_type::Index))).then([] (auto t) {});
         });
     });
 }
@@ -335,9 +347,11 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
     mt.apply(std::move(m));
 
     auto mtp = make_shared<memtable>(std::move(mt));
+    auto sst = make_lw_shared<sstable>("tests/urchin/sstables", 5, la, big);
 
-    return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data5.tmp.db").then([mtp, s] {
-        return engine().open_file_dma("tests/urchin/sstables/Data5.tmp.db", open_flags::ro).then([] (file f) {
+    return sst->write_components(*mtp).then([mtp, sst, s] {
+        auto fname = sstable::filename("tests/urchin/sstables", la, 5, big, sstable::component_type::Data);
+        return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
             auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -368,7 +382,8 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
                 BOOST_REQUIRE(size == offset);
             });
         }).then([] {
-            return remove_file("tests/urchin/sstables/Data5.tmp.db");
+            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 5, big, sstable::component_type::Data)),
+                remove_file(sstable::filename("tests/urchin/sstables", la, 5, big, sstable::component_type::Index))).then([] (auto t) {});
         });
     });
 }
@@ -406,9 +421,11 @@ SEASTAR_TEST_CASE(datafile_generation_06) {
     mt.apply(std::move(m));
 
     auto mtp = make_shared<memtable>(std::move(mt));
+    auto sst = make_lw_shared<sstable>("tests/urchin/sstables", 6, la, big);
 
-    return sstables::write_datafile(*mtp, "tests/urchin/sstables/Data6.tmp.db").then([mtp, s] {
-        return engine().open_file_dma("tests/urchin/sstables/Data6.tmp.db", open_flags::ro).then([] (file f) {
+    return sst->write_components(*mtp).then([mtp, sst, s] {
+        auto fname = sstable::filename("tests/urchin/sstables", la, 6, big, sstable::component_type::Data);
+        return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
             auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
             auto fut = f.dma_read(0, bufptr.get(), 4096);
@@ -440,7 +457,8 @@ SEASTAR_TEST_CASE(datafile_generation_06) {
                 BOOST_REQUIRE(size == offset);
             });
         }).then([] {
-            return remove_file("tests/urchin/sstables/Data6.tmp.db");
+            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 6, big, sstable::component_type::Data)),
+                remove_file(sstable::filename("tests/urchin/sstables", la, 6, big, sstable::component_type::Index))).then([] (auto t) {});
         });
     });
 }

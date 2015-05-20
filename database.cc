@@ -339,11 +339,19 @@ column_family::seal_active_memtable() {
     if (!_config.enable_disk_writes) {
         return;
     }
-    // FIXME: write all components
-    sstables::write_datafile(*old, name).then_wrapped([name, this, old] (future<> ret) {
-        // FIXME: add to read set, or handle exception
-        // FIXME: drop memtable
-        print("Warning: wrote %s/%s, abandoning\n", _config.datadir, name);
+
+    sstables::sstable newtab = sstables::sstable(_config.datadir, gen,
+        sstables::sstable::version_types::la,
+        sstables::sstable::format_types::big);
+
+    do_with(std::move(newtab), [&old, name, this] (sstables::sstable& newtab) {
+        // FIXME: write all components
+        newtab.write_components(*old).then_wrapped([name, this] (future<> ret) {
+            // FIXME: add to read set, or handle exception
+            // FIXME: drop memtable
+            print("Warning: wrote %s/%s, abandoning\n", _config.datadir, name);
+        });
+        return make_ready_future<>();
     });
     // FIXME: start flushing the previously-active memtable
     // FIXME: remove the flushed memtable when done
