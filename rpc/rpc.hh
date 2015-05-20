@@ -126,7 +126,7 @@ public:
         std::unordered_map<id_type, std::unique_ptr<reply_handler_base>> _outstanding;
         stats _stats;
     public:
-        client(protocol& proto, ipv4_addr addr);
+        client(protocol& proto, ipv4_addr addr, ipv4_addr local = ipv4_addr());
 
         stats get_stats() const {
             stats res = _stats;

@@ -569,9 +569,9 @@ future<> protocol<Serializer, MsgType>::server::connection::process() {
 }
 
 template<typename Serializer, typename MsgType>
-protocol<Serializer, MsgType>::client::client(protocol<Serializer, MsgType>& proto, ipv4_addr addr) : protocol<Serializer, MsgType>::connection(proto) {
+protocol<Serializer, MsgType>::client::client(protocol<Serializer, MsgType>& proto, ipv4_addr addr, ipv4_addr local) : protocol<Serializer, MsgType>::connection(proto) {
     this->_output_ready = _connected.get_future();
-    engine().net().connect(make_ipv4_address(addr)).then([this] (connected_socket fd) {
+    engine().net().connect(make_ipv4_address(addr), make_ipv4_address(local)).then([this] (connected_socket fd) {
         this->_fd = std::move(fd);
         this->_read_buf = this->_fd.input();
         this->_write_buf = this->_fd.output();
