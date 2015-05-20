@@ -69,10 +69,12 @@ private:
     config _config;
     std::list<memtable> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
-    std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
+    using sstable_list = std::map<unsigned long, lw_shared_ptr<sstables::sstable>>;
+    lw_shared_ptr<sstable_list> _sstables;
     unsigned _sstable_generation = 1;
     unsigned _mutation_count = 0;
 private:
+    void add_sstable(sstables::sstable&& sstable);
     memtable& active_memtable() { return _memtables.back(); }
     struct merge_comparator;
 public:

@@ -38,6 +38,7 @@ column_family::column_family(schema_ptr schema, config config)
     : _schema(std::move(schema))
     , _config(std::move(config))
     , _memtables({memtable(_schema)})
+    , _sstables(make_lw_shared<sstable_list>())
 { }
 
 // define in .cc, since sstable is forward-declared in .hh
@@ -291,13 +292,13 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
         return make_ready_future<>();
     }
 
-    assert(_sstables.count(generation) == 0);
+    assert(_sstables->count(generation) == 0);
 
     try {
         auto sst = std::make_unique<sstables::sstable>(sstdir, generation, version, format);
         auto fut = sst->load();
         return std::move(fut).then([this, generation, sst = std::move(sst)] () mutable {
-            _sstables.emplace(generation, std::move(sst));
+            add_sstable(std::move(*sst));
             return make_ready_future<>();
         });
     } catch (malformed_sstable_exception& e) {
@@ -306,6 +307,13 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
     }
 
     return make_ready_future<>();
+}
+
+void column_family::add_sstable(sstables::sstable&& sstable) {
+    auto generation = sstable.generation();
+    // allow in-progress reads to continue using old list
+    _sstables = make_lw_shared<sstable_list>(*_sstables);
+    _sstables->emplace(generation, make_lw_shared(std::move(sstable)));
 }
 
 void
