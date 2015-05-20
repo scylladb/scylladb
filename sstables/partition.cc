@@ -224,7 +224,7 @@ public:
 
     mp_row_consumer(const key& key, const schema_ptr _schema)
             : _schema(_schema)
-            , _key(key)
+            , _key(key_view(key))
             , mut(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema)
     { }
 

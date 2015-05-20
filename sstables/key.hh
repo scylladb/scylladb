@@ -16,11 +16,14 @@ class key_view {
     bytes_view _bytes;
 public:
     key_view(bytes_view b) : _bytes(b) {}
+    key_view() : _bytes() {}
 
     std::vector<bytes> explode(const schema& s) const;
 
     bool operator==(const key_view& k) const { return k._bytes == _bytes; }
     bool operator!=(const key_view& k) const { return !(k == *this); }
+
+    bool empty() { return _bytes.empty(); }
 
     explicit operator bytes_view() const {
         return _bytes;
