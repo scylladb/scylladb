@@ -67,7 +67,8 @@ public:
 private:
     schema_ptr _schema;
     config _config;
-    std::list<memtable> _memtables;
+    using memtable_list = std::vector<lw_shared_ptr<memtable>>;
+    lw_shared_ptr<memtable_list> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     using sstable_list = std::map<unsigned long, lw_shared_ptr<sstables::sstable>>;
     lw_shared_ptr<sstable_list> _sstables;
@@ -75,7 +76,8 @@ private:
     unsigned _mutation_count = 0;
 private:
     void add_sstable(sstables::sstable&& sstable);
-    memtable& active_memtable() { return _memtables.back(); }
+    void add_memtable();
+    memtable& active_memtable() { return *_memtables->back(); }
     struct merge_comparator;
 public:
     // Queries can be satisfied from multiple data sources, so they are returned

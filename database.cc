@@ -37,9 +37,11 @@ memtable::memtable(schema_ptr schema)
 column_family::column_family(schema_ptr schema, config config)
     : _schema(std::move(schema))
     , _config(std::move(config))
-    , _memtables({memtable(_schema)})
+    , _memtables(make_lw_shared(memtable_list{}))
     , _sstables(make_lw_shared<sstable_list>())
-{ }
+{
+    add_memtable();
+}
 
 // define in .cc, since sstable is forward-declared in .hh
 column_family::column_family(column_family&& x) = default;
@@ -60,8 +62,8 @@ column_family::find_partition(const dht::decorated_key& key) const {
     // FIXME: optimize for 0 or 1 entries found case
     mutation_partition ret(_schema);
     bool any = false;
-    for (auto&& mt : _memtables) {
-        auto mp = mt.find_partition(key);
+    for (auto&& mtp : *_memtables) {
+        auto mp = mtp->find_partition(key);
         if (mp) {
             ret.apply(*_schema, *mp);
             any = true;
@@ -140,20 +142,21 @@ column_family::for_all_partitions(Func&& func) const {
         std::vector<partitions_range*> ptables;
         nway_merger<std::vector<partitions_range*>, merge_comparator> merger;
         std::experimental::optional<std::pair<dht::decorated_key, mutation_partition>> current;
+        lw_shared_ptr<memtable_list> memtables;
         Func func;
         bool ok = true;
         bool more = true;
         bool done() const { return !(ok && more); }
         iteration_state(const column_family& cf, Func&& func)
-                : merger{merge_comparator(cf.schema())}, func(std::move(func)) {
+                : merger{merge_comparator(cf.schema())}, memtables(cf._memtables), func(std::move(func)) {
         }
     };
     iteration_state is(*this, std::move(func));
     auto& tables = is.tables;
     auto& ptables = is.ptables;
     auto& merger = is.merger;
-    for (auto&& mt : _memtables) {
-        tables.push_back(boost::make_iterator_range(mt.all_partitions()));
+    for (auto&& mtp : *is.memtables) {
+        tables.push_back(boost::make_iterator_range(mtp->all_partitions()));
     }
     for (auto&& r : tables) {
         ptables.push_back(&r);
@@ -316,10 +319,16 @@ void column_family::add_sstable(sstables::sstable&& sstable) {
     _sstables->emplace(generation, make_lw_shared(std::move(sstable)));
 }
 
+void column_family::add_memtable() {
+    // allow in-progress reads to continue using old list
+    _memtables = make_lw_shared(memtable_list(*_memtables));
+    _memtables->emplace_back(make_lw_shared<memtable>(_schema));
+}
+
 void
 column_family::seal_active_memtable() {
-    auto& old = _memtables.back();
-    _memtables.emplace_back(_schema);
+    auto old = _memtables->back();
+    add_memtable();
     // FIXME: better way of ensuring we don't attemt to
     //        overwrite an existing table.
     auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
@@ -331,7 +340,7 @@ column_family::seal_active_memtable() {
         return;
     }
     // FIXME: write all components
-    sstables::write_datafile(old, name).then_wrapped([name, this] (future<> ret) {
+    sstables::write_datafile(*old, name).then_wrapped([name, this, old] (future<> ret) {
         // FIXME: add to read set, or handle exception
         // FIXME: drop memtable
         print("Warning: wrote %s/%s, abandoning\n", _config.datadir, name);
