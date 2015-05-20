@@ -91,6 +91,9 @@ public:
     void set_generation(unsigned long generation) {
         _generation = generation;
     }
+    unsigned long generation() const {
+        return _generation;
+    }
 
     future<mutation_opt> read_row(schema_ptr schema, const key& k);
 private:
