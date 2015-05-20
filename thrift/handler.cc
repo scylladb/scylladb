@@ -52,7 +52,22 @@ class delayed_exception_wrapper : public ::apache::thrift::TDelayedException {
 public:
     delayed_exception_wrapper(std::exception_ptr ex) : _ex(std::move(ex)) {}
     virtual void throw_it() override {
-        std::rethrow_exception(std::move(_ex));
+        // Thrift auto-wraps unexpected exceptions (those not derived from TException)
+        // with a TException, but with a fairly bad what().  So detect this, and
+        // provide our own TException with a better what().
+        try {
+            std::rethrow_exception(std::move(_ex));
+        } catch (const ::apache::thrift::TException&) {
+            // It's an expected exception, so assume the message
+            // is fine.  Also, we don't want to change its type.
+            throw;
+        } catch (std::exception& e) {
+            // Unexpected exception, wrap it
+            throw ::apache::thrift::TException(std::string("Internal server error: ") + e.what());
+        } catch (...) {
+            // Unexpected exception, wrap it, unfortunately without any info
+            throw ::apache::thrift::TException("Internal server error");
+        }
     }
 };
 
