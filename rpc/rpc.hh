@@ -131,7 +131,7 @@ public:
         stats get_stats() const {
             stats res = _stats;
             res.wait_reply = _outstanding.size();
-            return _stats;
+            return res;
         }
 
         stats& get_stats_internal() {
