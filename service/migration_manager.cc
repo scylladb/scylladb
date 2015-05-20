@@ -218,10 +218,11 @@ future<> migration_manager::announce_new_keyspace(service::storage_proxy& proxy,
 {
 #if 0
     ksm.validate();
-
-    if (Schema.instance.getKSMetaData(ksm.name) != null)
-        throw new AlreadyExistsException(ksm.name);
-
+#endif
+    if (proxy.get_db().local().has_keyspace(ksm->name())) {
+        throw exceptions::already_exists_exception{ksm->name()};
+    }
+#if 0
     logger.info(String.format("Create new Keyspace: %s", ksm));
 #endif
     auto mutations = db::legacy_schema_tables::make_create_keyspace_mutations(ksm, timestamp);
