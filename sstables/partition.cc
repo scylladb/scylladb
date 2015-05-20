@@ -200,7 +200,7 @@ class mp_row_consumer : public row_consumer {
 
     collection_mutation& pending_collection(const exploded_clustering_prefix& clustering_prefix, const column_definition *cdef) {
         if (_pending_collection.is_new_collection(clustering_prefix, cdef)) {
-            _pending_collection.flush(*_schema, mut);
+            _pending_collection.flush(*_schema, *mut);
 
             if (!cdef->type->is_multi_cell()) {
                 throw malformed_sstable_exception("frozen set should behave like a cell\n");
@@ -220,12 +220,16 @@ class mp_row_consumer : public row_consumer {
     }
 
 public:
-    mutation mut;
+    mutation_opt mut;
 
     mp_row_consumer(const key& key, const schema_ptr _schema)
             : _schema(_schema)
             , _key(key_view(key))
-            , mut(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema)
+            , mut(mutation(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema))
+    { }
+
+    mp_row_consumer(const schema_ptr _schema)
+            : _schema(_schema)
     { }
 
     void validate_row_marker() {
@@ -235,12 +239,14 @@ public:
     }
 
     virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
-        if (key != _key) {
+        if (_key.empty()) {
+            mut = mutation(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema);
+        } else if (key != _key) {
             throw malformed_sstable_exception(sprint("Key mismatch. Got %s while processing %s", to_hex(bytes_view(key)).c_str(), to_hex(bytes_view(_key)).c_str()));
         }
 
         if (!deltime.live()) {
-            mut.partition().apply(tombstone(deltime));
+            mut->partition().apply(tombstone(deltime));
         }
     }
 
@@ -265,18 +271,18 @@ public:
         }
 
         if (col.is_static) {
-            mut.set_static_cell(*(col.cdef), std::move(ac));
+            mut->set_static_cell(*(col.cdef), std::move(ac));
             return;
         }
 
         if (col.cell.size() == 0) {
             auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
-            auto& dr = mut.partition().clustered_row(clustering_key);
+            auto& dr = mut->partition().clustered_row(clustering_key);
             dr.apply(timestamp);
             return;
         }
 
-        mut.set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
+        mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
     }
 
     virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
@@ -293,13 +299,15 @@ public:
         if (col.collection_extra_data.size()) {
             update_pending_collection(clustering_prefix, col.cdef, std::move(col.collection_extra_data), std::move(ac));
         } else if (col.is_static) {
-            mut.set_static_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+            mut->set_static_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
         } else {
-            mut.set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
+            mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
         }
     }
     virtual void consume_row_end() override {
-        _pending_collection.flush(*_schema, mut);
+        if (mut) {
+            _pending_collection.flush(*_schema, *mut);
+        }
     }
 
     virtual void consume_range_tombstone(
@@ -333,7 +341,7 @@ public:
         // Still, it is enough to check if we're dealing with a collection, since any other tombstone
         // won't have a full clustering prefix (otherwise it isn't a range)
         if (start.size() <= _schema->clustering_key_size()) {
-            mut.partition().apply_delete(*_schema, exploded_clustering_prefix(std::move(start)), tombstone(deltime));
+            mut->partition().apply_delete(*_schema, exploded_clustering_prefix(std::move(start)), tombstone(deltime));
         } else {
             auto&& column = pop_back(start);
 
