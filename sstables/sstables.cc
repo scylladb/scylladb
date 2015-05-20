@@ -53,6 +53,32 @@ public:
     }
 };
 
+class file_writer {
+    output_stream<char> _out;
+    size_t _offset = 0;
+public:
+    file_writer(lw_shared_ptr<file> f, size_t buffer_size = 8192)
+        : _out(make_file_output_stream(std::move(f), buffer_size)) {}
+
+    future<> write(const char* buf, size_t n) {
+        _offset += n;
+        return _out.write(buf, n);
+    }
+    future<> write(const bytes& s) {
+        _offset += s.size();
+        return _out.write(s);
+    }
+    future<> flush() {
+        return _out.flush();
+    }
+    future<> close() {
+        return _out.close();
+    }
+    size_t offset() {
+        return _offset;
+    }
+};
+
 // FIXME: We don't use this API, and it can be removed. The compressed reader
 // is only needed for the data file, and for that we have the nicer
 // data_stream_at() API below.
@@ -158,7 +184,7 @@ parse(random_access_reader& in, T& i) {
 
 template <typename T>
 typename std::enable_if_t<std::is_integral<T>::value, future<>>
-write(output_stream<char>& out, T i) {
+write(file_writer& out, T i) {
     auto *nr = reinterpret_cast<const net::packed<T> *>(&i);
     i = net::hton(*nr);
     auto p = reinterpret_cast<const char*>(&i);
@@ -176,7 +202,7 @@ parse(random_access_reader& in, T& i) {
 
 template <typename T>
 typename std::enable_if_t<std::is_enum<T>::value, future<>>
-write(output_stream<char>& out, T i) {
+write(file_writer& out, T i) {
     return write(out, static_cast<typename std::underlying_type<T>::type>(i));
 }
 
@@ -184,7 +210,7 @@ future<> parse(random_access_reader& in, bool& i) {
     return parse(in, reinterpret_cast<uint8_t&>(i));
 }
 
-future<> write(output_stream<char>& out, bool i) {
+future<> write(file_writer& out, bool i) {
     return write(out, static_cast<uint8_t>(i));
 }
 
@@ -210,7 +236,7 @@ future<> parse(random_access_reader& in, double& d) {
     });
 }
 
-future<> write(output_stream<char>& out, double d) {
+future<> write(file_writer& out, double d) {
     auto *nr = reinterpret_cast<const net::packed<unsigned long> *>(&d);
     auto tmp = net::hton(*nr);
     auto p = reinterpret_cast<const char*>(&tmp);
@@ -229,14 +255,14 @@ future<> parse(random_access_reader& in, T& len, bytes& s) {
     });
 }
 
-future<> write(output_stream<char>& out, bytes& s) {
+future<> write(file_writer& out, bytes& s) {
     return out.write(s).then([&out, &s] (...) -> future<> {
         // TODO: handle result
         return make_ready_future<>();
     });
 }
 
-future<> write(output_stream<char>& out, bytes_view s) {
+future<> write(file_writer& out, bytes_view s) {
     return out.write(reinterpret_cast<const char*>(s.data()), s.size());
 }
 
@@ -249,7 +275,7 @@ future<> parse(random_access_reader& in, First& first, Rest&&... rest) {
 }
 
 template<typename First, typename... Rest>
-future<> write(output_stream<char>& out, First& first, Rest&&... rest) {
+future<> write(file_writer& out, First& first, Rest&&... rest) {
     return write(out, first).then([&out, &rest...] {
         return write(out, rest...);
     });
@@ -266,7 +292,7 @@ parse(random_access_reader& in, T& t) {
 
 template <class T>
 typename std::enable_if_t<!std::is_integral<T>::value && !std::is_enum<T>::value, future<>>
-write(output_stream<char>& out, T& t) {
+write(file_writer& out, T& t) {
     return t.describe_type([&out] (auto&&... what) -> future<> {
         return write(out, what...);
     });
@@ -287,7 +313,7 @@ future<> parse(random_access_reader& in, disk_string<Size>& s) {
 }
 
 template <typename Size>
-future<> write(output_stream<char>& out, disk_string<Size>& s) {
+future<> write(file_writer& out, disk_string<Size>& s) {
     Size len = 0;
     check_truncate_and_assign(len, s.value.size());
     return write(out, len).then([&out, &s] {
@@ -296,7 +322,7 @@ future<> write(output_stream<char>& out, disk_string<Size>& s) {
 }
 
 template <typename Size>
-future<> write(output_stream<char>& out, disk_string_view<Size>& s) {
+future<> write(file_writer& out, disk_string_view<Size>& s) {
     Size len;
     check_truncate_and_assign(len, s.value.size());
     return write(out, len, s.value);
@@ -350,7 +376,7 @@ future<> parse(random_access_reader& in, disk_array<Size, Members>& arr) {
 
 template <typename Members>
 typename std::enable_if_t<!std::is_integral<Members>::value, future<>>
-write(output_stream<char>& out, std::vector<Members>& arr) {
+write(file_writer& out, std::vector<Members>& arr) {
 
     auto count = make_lw_shared<size_t>(0);
     auto eoarr = [count, &arr] { return *count == arr.size(); };
@@ -362,7 +388,7 @@ write(output_stream<char>& out, std::vector<Members>& arr) {
 
 template <typename Members>
 typename std::enable_if_t<std::is_integral<Members>::value, future<>>
-write(output_stream<char>& out, std::vector<Members>& arr) {
+write(file_writer& out, std::vector<Members>& arr) {
     std::vector<Members> tmp;
     tmp.resize(arr.size());
     // copy arr into tmp converting each entry into big-endian representation.
@@ -378,7 +404,7 @@ write(output_stream<char>& out, std::vector<Members>& arr) {
 }
 
 template <typename Size, typename Members>
-future<> write(output_stream<char>& out, disk_array<Size, Members>& arr) {
+future<> write(file_writer& out, disk_array<Size, Members>& arr) {
     Size len = 0;
     check_truncate_and_assign(len, arr.elements.size());
     return write(out, len).then([&out, &arr] {
@@ -415,7 +441,7 @@ future<> parse(random_access_reader& in, disk_hash<Size, Key, Value>& h) {
 }
 
 template <typename Key, typename Value>
-future<> write(output_stream<char>& out, std::unordered_map<Key, Value>& map) {
+future<> write(file_writer& out, std::unordered_map<Key, Value>& map) {
     return do_for_each(map.begin(), map.end(), [&out, &map] (auto val) {
         Key key = val.first;
         Value value = val.second;
@@ -424,7 +450,7 @@ future<> write(output_stream<char>& out, std::unordered_map<Key, Value>& map) {
 }
 
 template <typename Size, typename Key, typename Value>
-future<> write(output_stream<char>& out, disk_hash<Size, Key, Value>& h) {
+future<> write(file_writer& out, disk_hash<Size, Key, Value>& h) {
     Size len = 0;
     check_truncate_and_assign(len, h.map.size());
     return write(out, len).then([&out, &h] {
@@ -490,7 +516,7 @@ future<> parse(random_access_reader& in, summary& s) {
     });
 }
 
-future<> write(output_stream<char>& out, summary_entry& entry)
+future<> write(file_writer& out, summary_entry& entry)
 {
     return write(out, entry.key).then([&out, &entry] {
         auto p = reinterpret_cast<const char*>(&entry.position);
@@ -498,7 +524,7 @@ future<> write(output_stream<char>& out, summary_entry& entry)
     });
 }
 
-future<> write(output_stream<char>& out, summary& s) {
+future<> write(file_writer& out, summary& s) {
     using pos_type = typename decltype(summary::positions)::value_type;
 
     // NOTE: positions and entries must be stored in NATIVE BYTE ORDER, not BIG-ENDIAN.
@@ -540,7 +566,7 @@ future<> parse(random_access_reader& in, std::unique_ptr<metadata>& p) {
 }
 
 template <typename Child>
-future<> write(output_stream<char>& out, std::unique_ptr<metadata>& p) {
+future<> write(file_writer& out, std::unique_ptr<metadata>& p) {
     return write(out, *static_cast<Child *>(p.get()));
 }
 
@@ -564,7 +590,7 @@ future<> parse(random_access_reader& in, statistics& s) {
     });
 }
 
-future<> write(output_stream<char>& out, statistics& s) {
+future<> write(file_writer& out, statistics& s) {
     return write(out, s.hash).then([&out, &s] {
         struct kv {
             metadata_type key;
@@ -654,8 +680,8 @@ future<> sstable::write_toc() {
     sstlog.debug("Writing TOC file {} ", file_path);
 
     return engine().open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).then([this] (file f) {
-        auto out = make_file_output_stream(make_lw_shared<file>(std::move(f)), 4096);
-        auto w = make_shared<output_stream<char>>(std::move(out));
+        auto out = file_writer(make_lw_shared<file>(std::move(f)), 4096);
+        auto w = make_shared<file_writer>(std::move(out));
 
         return do_for_each(_components, [this, w] (auto key) {
             // new line character is appended to the end of each component name.
@@ -751,8 +777,8 @@ future<> sstable::write_simple(T& component) {
     sstlog.debug(("Writing " + _component_map[Type] + " file {} ").c_str(), file_path);
     return engine().open_file_dma(file_path, open_flags::wo | open_flags::create | open_flags::truncate).then([this, &component] (file f) {
 
-        auto out = make_file_output_stream(make_lw_shared<file>(std::move(f)), 4096);
-        auto w = make_shared<output_stream<char>>(std::move(out));
+        auto out = file_writer(make_lw_shared<file>(std::move(f)), 4096);
+        auto w = make_shared<file_writer>(std::move(out));
         auto fut = write(*w, component);
         return fut.then([w] {
             return w->flush().then([w] {
@@ -848,7 +874,7 @@ future<> sstable::store() {
     });
 }
 
-static future<> write_composite_component(output_stream<char>& out, disk_string<uint16_t>&& column_name,
+static future<> write_composite_component(file_writer& out, disk_string<uint16_t>&& column_name,
     int8_t end_of_component = 0) {
     // NOTE: end of component can also be -1 and 1 to represent ranges.
     return do_with(std::move(column_name), [&out, end_of_component] (auto& column_name) {
@@ -858,7 +884,7 @@ static future<> write_composite_component(output_stream<char>& out, disk_string<
 
 // @clustering_key: it's expected that clustering key is already in its composite form.
 // NOTE: empty clustering key means that there is no clustering key.
-static future<> write_column_name(output_stream<char>& out, bytes& clustering_key, const bytes& column_name) {
+static future<> write_column_name(file_writer& out, bytes& clustering_key, const bytes& column_name) {
     // FIXME: This code assumes name is always composite, but it wouldn't if "WITH COMPACT STORAGE"
     // was defined in the schema, for example.
 
@@ -883,7 +909,7 @@ static future<> write_column_name(output_stream<char>& out, bytes& clustering_ke
 // magic value for identifying a static column.
 static constexpr uint16_t STATIC_MARKER = 0xffff;
 
-static future<> write_static_column_name(output_stream<char>& out, const bytes& column_name) {
+static future<> write_static_column_name(file_writer& out, const bytes& column_name) {
     // first component of static column name is composed of the 16-bit magic value ff ff,
     // followed by a null composite, i.e. three null bytes.
     uint16_t first_component_size = sizeof(uint16_t) + sizeof(uint16_t) + sizeof(int8_t);
@@ -904,7 +930,7 @@ static future<> write_static_column_name(output_stream<char>& out, const bytes& 
 }
 
 // Intended to write all cell components that follow column name.
-static future<> write_cell(output_stream<char>& out, atomic_cell_view cell) {
+static future<> write_cell(file_writer& out, atomic_cell_view cell) {
     // FIXME: range tombstone and counter cells aren't supported yet.
 
     uint64_t timestamp = cell.timestamp();
@@ -940,7 +966,7 @@ static future<> write_cell(output_stream<char>& out, atomic_cell_view cell) {
     }
 }
 
-static future<> write_row_marker(output_stream<char>& out, const rows_entry& clustered_row, bytes& clustering_key) {
+static future<> write_row_marker(file_writer& out, const rows_entry& clustered_row, bytes& clustering_key) {
     // Missing created_at (api::missing_timestamp) means no row marker.
     if (clustered_row.row().created_at() == api::missing_timestamp) {
         return make_ready_future<>();
@@ -958,7 +984,7 @@ static future<> write_row_marker(output_stream<char>& out, const rows_entry& clu
 
 // write_datafile_clustered_row() is about writing a clustered_row to data file according to SSTables format.
 // clustered_row contains a set of cells sharing the same clustering key.
-static future<> write_clustered_row(output_stream<char>& out, schema_ptr schema, const rows_entry& clustered_row) {
+static future<> write_clustered_row(file_writer& out, schema_ptr schema, const rows_entry& clustered_row) {
     bytes clustering_key = composite_from_clustering_key(*schema, clustered_row.key());
 
     return do_with(std::move(clustering_key), [&out, schema, &clustered_row] (auto& clustering_key) {
@@ -988,7 +1014,7 @@ static future<> write_clustered_row(output_stream<char>& out, schema_ptr schema,
     });
 }
 
-static future<> write_static_row(output_stream<char>& out, schema_ptr schema, const row& static_row) {
+static future<> write_static_row(file_writer& out, schema_ptr schema, const row& static_row) {
     return do_for_each(static_row, [&out, schema] (auto& value) {
         auto column_id = value.first;
         auto&& column_definition = schema->static_column_at(column_id);
@@ -1009,8 +1035,8 @@ future<> write_datafile(const memtable& mt, sstring datafile) {
     auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
     return engine().open_file_dma(datafile, oflags).then([&mt] (file f) {
         // TODO: Add compression support by having a specialized output stream.
-        auto out = make_file_output_stream(make_lw_shared<file>(std::move(f)), 4096);
-        auto w = make_shared<output_stream<char>>(std::move(out));
+        auto out = file_writer(make_lw_shared<file>(std::move(f)), 4096);
+        auto w = make_shared<file_writer>(std::move(out));
 
         // Iterate through CQL partitions, then CQL rows, then CQL columns.
         // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.
