@@ -47,11 +47,11 @@ std::vector<long> bloom_filter::get_hash_buckets(const bytes_view& key, int hash
     std::array<uint64_t, 2> h;
     hash(key, 0, h);
 
-    auto indexes = std::make_unique<std::vector<long>>();
+    auto indexes = std::vector<long>();
 
-    indexes->resize(hash_count);
-    set_indexes(h[0], h[1], hash_count, max, *indexes);
-    return *(indexes.release());
+    indexes.resize(hash_count);
+    set_indexes(h[0], h[1], hash_count, max, indexes);
+    return indexes;
 }
 
 std::vector<long> bloom_filter::indexes(const bytes_view& key) {
