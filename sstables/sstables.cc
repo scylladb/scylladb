@@ -1043,20 +1043,66 @@ static future<> write_index_entry(file_writer& out, disk_string_view<uint16_t>& 
     return write(out, key, pos, promoted_index_size);
 }
 
+static constexpr int BASE_SAMPLING_LEVEL = 128;
+
+static void prepare_summary(summary& s, const memtable& mt) {
+    auto all_partitions = mt.all_partitions();
+    assert(all_partitions.size() >= 1);
+
+    s.header.min_index_interval = BASE_SAMPLING_LEVEL;
+    s.header.sampling_level = BASE_SAMPLING_LEVEL;
+
+    uint64_t max_expected_entries = all_partitions.size() / BASE_SAMPLING_LEVEL + 1;
+    // FIXME: handle case where max_expected_entries is greater than max value stored by uint32_t.
+    assert(max_expected_entries <= std::numeric_limits<uint32_t>::max());
+    s.header.size = max_expected_entries;
+    assert(s.header.size >= 1);
+
+    // memory_size only accounts size of vector positions at this point.
+    s.header.memory_size = s.header.size * sizeof(uint32_t);
+    s.header.size_at_full_sampling = s.header.size;
+
+    s.positions.reserve(s.header.size);
+    s.entries.reserve(s.header.size);
+    s.keys_written = 0;
+
+    auto begin = all_partitions.begin();
+    auto last = --all_partitions.end();
+
+    auto first_key = key::from_partition_key(*mt.schema(), begin->first._key);
+    s.first_key.value = std::move(first_key.get_bytes());
+
+    auto last_key = key::from_partition_key(*mt.schema(), last->first._key);
+    s.last_key.value = std::move(last_key.get_bytes());
+}
+
+static void maybe_add_summary_entry(summary& s, bytes_view key, uint64_t offset) {
+    if ((s.keys_written % s.header.min_index_interval) == 0) {
+        s.positions.push_back(s.header.memory_size);
+        s.entries.push_back({ bytes(key.data(), key.size()), offset });
+        s.header.memory_size += key.size() + sizeof(uint64_t);
+    }
+    s.keys_written++;
+}
+
 future<> sstable::write_components(const memtable& mt) {
     return create_data().then([&mt, this] {
         // TODO: Add compression support by having a specialized output stream.
         auto w = make_shared<file_writer>(_data_file, 4096);
         auto index = make_shared<file_writer>(_index_file, 4096);
 
+        prepare_summary(_summary, mt);
+
         // Iterate through CQL partitions, then CQL rows, then CQL columns.
         // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.
         return do_for_each(mt.all_partitions(),
-                [w, index, &mt] (const std::pair<const dht::decorated_key, mutation_partition>& partition_entry) {
-            // TODO: Write summary file on-the-fly.
+                [w, index, &mt, this] (const std::pair<const dht::decorated_key, mutation_partition>& partition_entry) {
 
             return do_with(key::from_partition_key(*mt.schema(), partition_entry.first._key),
-                    [w, index, &partition_entry] (auto& partition_key) {
+                    [w, index, &partition_entry, this] (auto& partition_key) {
+
+                // Maybe add summary entry into in-memory representation of summary file.
+                maybe_add_summary_entry(_summary, bytes_view(partition_key), index->offset());
 
                 return do_with(disk_string_view<uint16_t>(), [w, index, &partition_key] (auto& p_key) {
                     p_key.value = bytes_view(partition_key);
@@ -1103,6 +1149,8 @@ future<> sstable::write_components(const memtable& mt) {
             return w->close().then([w] {});
         }).then([index] {
             return index->close().then([index] {});
+        }).then([this] {
+            return write_summary();
         });
     });
 }

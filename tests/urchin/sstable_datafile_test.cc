@@ -28,6 +28,12 @@ atomic_cell make_atomic_cell(bytes_view value, uint32_t ttl = 0, uint32_t expira
     }
 }
 
+static inline future<> remove_files(sstring dir, unsigned long generation) {
+    return when_all(remove_file(sstable::filename(dir, la, generation, big, sstable::component_type::Data)),
+        remove_file(sstable::filename(dir, la, generation, big, sstable::component_type::Index)),
+        remove_file(sstable::filename(dir, la, generation, big, sstable::component_type::Summary))).then([] (auto t) {});
+}
+
 SEASTAR_TEST_CASE(datafile_generation_01) {
     // Data file with clustering key
     //
@@ -92,8 +98,7 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
                 BOOST_REQUIRE(size == offset);
             });
         }).then([] {
-            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 1, big, sstable::component_type::Data)),
-                remove_file(sstable::filename("tests/urchin/sstables", la, 1, big, sstable::component_type::Index))).then([] (auto t) {});
+            return remove_files("tests/urchin/sstables", 1);
         });
     });
 }
@@ -164,8 +169,7 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
                 BOOST_REQUIRE(size == offset);
             });
         }).then([] {
-            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 2, big, sstable::component_type::Data)),
-                remove_file(sstable::filename("tests/urchin/sstables", la, 2, big, sstable::component_type::Index))).then([] (auto t) {});
+            return remove_files("tests/urchin/sstables", 2);
         });
     });
 }
@@ -236,8 +240,7 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
                 BOOST_REQUIRE(size == offset);
             });
         }).then([] {
-            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 3, big, sstable::component_type::Data)),
-                remove_file(sstable::filename("tests/urchin/sstables", la, 3, big, sstable::component_type::Index))).then([] (auto t) {});
+            return remove_files("tests/urchin/sstables", 3);
         });
     });
 }
@@ -314,8 +317,7 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
                 BOOST_REQUIRE(size == offset);
             });
         }).then([] {
-            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 4, big, sstable::component_type::Data)),
-                remove_file(sstable::filename("tests/urchin/sstables", la, 4, big, sstable::component_type::Index))).then([] (auto t) {});
+            return remove_files("tests/urchin/sstables", 4);
         });
     });
 }
@@ -382,8 +384,7 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
                 BOOST_REQUIRE(size == offset);
             });
         }).then([] {
-            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 5, big, sstable::component_type::Data)),
-                remove_file(sstable::filename("tests/urchin/sstables", la, 5, big, sstable::component_type::Index))).then([] (auto t) {});
+            return remove_files("tests/urchin/sstables", 5);
         });
     });
 }
@@ -457,8 +458,7 @@ SEASTAR_TEST_CASE(datafile_generation_06) {
                 BOOST_REQUIRE(size == offset);
             });
         }).then([] {
-            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 6, big, sstable::component_type::Data)),
-                remove_file(sstable::filename("tests/urchin/sstables", la, 6, big, sstable::component_type::Index))).then([] (auto t) {});
+            return remove_files("tests/urchin/sstables", 6);
         });
     });
 }
@@ -521,8 +521,84 @@ SEASTAR_TEST_CASE(datafile_generation_07) {
                 BOOST_REQUIRE(size == offset);
             });
         }).then([] {
-            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 7, big, sstable::component_type::Data)),
-                remove_file(sstable::filename("tests/urchin/sstables", la, 7, big, sstable::component_type::Index))).then([] (auto t) {});
+            return remove_files("tests/urchin/sstables", 7);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(datafile_generation_08) {
+    // Data file with multiple rows.
+    // Only summary file is validated in this test case.
+    //
+    // Respective CQL table and CQL insert:
+    // CREATE TABLE test (
+    //    p1 int,
+    //    c1 text,
+    //    r1 int,
+    //    PRIMARY KEY (p1, c1)
+    //  ) WITH compression = {};
+
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", int32_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
+
+    memtable mt(s);
+
+    const column_definition& r1_col = *s->get_column_definition("r1");
+
+    // Create 150 partitions so that summary file store 2 entries, assuming min index
+    // interval is 128.
+    for (int32_t i = 0; i < 150; i++) {
+        auto key = partition_key::from_exploded(*s, {int32_type->decompose(i)});
+        auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
+
+        mutation m(key, s);
+        m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
+        mt.apply(std::move(m));
+    }
+
+    auto mtp = make_shared<memtable>(std::move(mt));
+    auto sst = make_lw_shared<sstable>("tests/urchin/sstables", 8, la, big);
+
+    return sst->write_components(*mtp).then([mtp, sst, s] {
+        auto fname = sstable::filename("tests/urchin/sstables", la, 8, big, sstable::component_type::Summary);
+        return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
+            auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
+
+            auto fut = f.dma_read(0, bufptr.get(), 4096);
+            return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) {
+                auto buf = bufptr.get();
+                size_t offset = 0;
+
+                std::vector<uint8_t> header = { /* min_index_interval */ 0, 0, 0, 0x80, /* size */ 0, 0, 0, 2,
+                    /* memory_size */ 0, 0, 0, 0, 0, 0, 0, 0x20, /* sampling_level */ 0, 0, 0, 0x80,
+                    /* size_at_full_sampling */  0, 0, 0, 2 };
+                BOOST_REQUIRE(::memcmp(header.data(), &buf[offset], header.size()) == 0);
+                offset += header.size();
+
+                std::vector<uint8_t> positions = { 0x8, 0, 0, 0, 0x14, 0, 0, 0 };
+                BOOST_REQUIRE(::memcmp(positions.data(), &buf[offset], positions.size()) == 0);
+                offset += positions.size();
+
+                std::vector<uint8_t> first_entry = { /* key */ 0, 0, 0, 0x17, /* position */ 0, 0, 0, 0, 0, 0, 0, 0 };
+                BOOST_REQUIRE(::memcmp(first_entry.data(), &buf[offset], first_entry.size()) == 0);
+                offset += first_entry.size();
+
+                std::vector<uint8_t> second_entry = { /* key */ 0, 0, 0, 0x65, /* position */ 0, 0x9, 0, 0, 0, 0, 0, 0 };
+                BOOST_REQUIRE(::memcmp(second_entry.data(), &buf[offset], second_entry.size()) == 0);
+                offset += second_entry.size();
+
+                std::vector<uint8_t> first_key = { 0, 0, 0, 0x4, 0, 0, 0, 0x17 };
+                BOOST_REQUIRE(::memcmp(first_key.data(), &buf[offset], first_key.size()) == 0);
+                offset += first_key.size();
+
+                std::vector<uint8_t> last_key = { 0, 0, 0, 0x4, 0, 0, 0, 0x67 };
+                BOOST_REQUIRE(::memcmp(last_key.data(), &buf[offset], last_key.size()) == 0);
+                offset += last_key.size();
+
+                BOOST_REQUIRE(size == offset);
+            });
+        }).then([] {
+            return remove_files("tests/urchin/sstables", 8);
         });
     });
 }
