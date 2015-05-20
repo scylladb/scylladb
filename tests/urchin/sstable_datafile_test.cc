@@ -462,3 +462,67 @@ SEASTAR_TEST_CASE(datafile_generation_06) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(datafile_generation_07) {
+    // Data file with clustering key and two sstable rows.
+    // Only index file is validated in this test case.
+    //
+    // Respective CQL table and CQL insert:
+    // CREATE TABLE test (
+    //    p1 text,
+    //    c1 text,
+    //    r1 int,
+    //    PRIMARY KEY (p1, c1)
+    //  ) WITH compression = {};
+    // INSERT INTO test (p1, c1, r1) VALUES ('key1', 'abc', 1);
+    // INSERT INTO test (p1, c1, r1) VALUES ('key2', 'cde', 1);
+
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
+
+    memtable mt(s);
+
+    const column_definition& r1_col = *s->get_column_definition("r1");
+
+    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+    auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
+
+    mutation m(key, s);
+    m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
+    mt.apply(std::move(m));
+
+    auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
+    auto c_key2 = clustering_key::from_exploded(*s, {to_bytes("cde")});
+
+    mutation m2(key2, s);
+    m2.set_clustered_cell(c_key2, r1_col, make_atomic_cell(int32_type->decompose(1)));
+    mt.apply(std::move(m2));
+
+    auto mtp = make_shared<memtable>(std::move(mt));
+    auto sst = make_lw_shared<sstable>("tests/urchin/sstables", 7, la, big);
+
+    return sst->write_components(*mtp).then([mtp, sst, s] {
+        auto fname = sstable::filename("tests/urchin/sstables", la, 7, big, sstable::component_type::Index);
+        return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
+            auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
+
+            auto fut = f.dma_read(0, bufptr.get(), 4096);
+            return std::move(fut).then([f = std::move(f), bufptr = std::move(bufptr)] (size_t size) {
+                auto buf = bufptr.get();
+                size_t offset = 0;
+                std::vector<uint8_t> key1 = { 0, 4, 'k', 'e', 'y', '1',
+                    /* pos */ 0, 0, 0, 0, 0, 0, 0, 0, /* promoted index */ 0, 0, 0, 0};
+                BOOST_REQUIRE(::memcmp(key1.data(), &buf[offset], key1.size()) == 0);
+                offset += key1.size();
+                std::vector<uint8_t> key2 = { 0, 4, 'k', 'e', 'y', '2',
+                    /* pos */ 0, 0, 0, 0, 0, 0, 0, 0x32, /* promoted index */ 0, 0, 0, 0};
+                BOOST_REQUIRE(::memcmp(key2.data(), &buf[offset], key2.size()) == 0);
+                offset += key2.size();
+                BOOST_REQUIRE(size == offset);
+            });
+        }).then([] {
+            return when_all(remove_file(sstable::filename("tests/urchin/sstables", la, 7, big, sstable::component_type::Data)),
+                remove_file(sstable::filename("tests/urchin/sstables", la, 7, big, sstable::component_type::Index))).then([] (auto t) {});
+        });
+    });
+}

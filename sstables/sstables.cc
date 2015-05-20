@@ -1031,25 +1031,41 @@ static future<> write_static_row(file_writer& out, schema_ptr schema, const row&
     });
 }
 
+///
+/// Write an index entry into an index file.
+/// @param key partition key.
+/// @param pos position of partition key into data file.
+///
+static future<> write_index_entry(file_writer& out, disk_string_view<uint16_t>& key, uint64_t pos) {
+    // FIXME: support promoted indexes.
+    uint32_t promoted_index_size = 0;
+
+    return write(out, key, pos, promoted_index_size);
+}
+
 future<> sstable::write_components(const memtable& mt) {
     return create_data().then([&mt, this] {
         // TODO: Add compression support by having a specialized output stream.
         auto w = make_shared<file_writer>(_data_file, 4096);
+        auto index = make_shared<file_writer>(_index_file, 4096);
 
         // Iterate through CQL partitions, then CQL rows, then CQL columns.
         // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.
         return do_for_each(mt.all_partitions(),
-                [w, &mt] (const std::pair<const dht::decorated_key, mutation_partition>& partition_entry) {
-            // TODO: Write index and summary files on-the-fly.
+                [w, index, &mt] (const std::pair<const dht::decorated_key, mutation_partition>& partition_entry) {
+            // TODO: Write summary file on-the-fly.
 
-            key partition_key = key::from_partition_key(*mt.schema(), partition_entry.first._key);
+            return do_with(key::from_partition_key(*mt.schema(), partition_entry.first._key),
+                    [w, index, &partition_entry] (auto& partition_key) {
 
-            return do_with(std::move(partition_key), [w, &partition_entry] (auto& partition_key) {
-                disk_string_view<uint16_t> p_key;
-                p_key.value = bytes_view(partition_key);
+                return do_with(disk_string_view<uint16_t>(), [w, index, &partition_key] (auto& p_key) {
+                    p_key.value = bytes_view(partition_key);
 
-                return do_with(std::move(p_key), [w] (auto& p_key) {
-                    return write(*w, p_key);
+                    // Write index file entry from partition key into index file.
+                    return write_index_entry(*index, p_key, w->offset()).then([w, &p_key] {
+                        // Write partition key into data file.
+                        return write(*w, p_key);
+                    });
                 }).then([w, &partition_entry] {
                     auto tombstone = partition_entry.second.partition_tombstone();
                     deletion_time d;
@@ -1085,6 +1101,8 @@ future<> sstable::write_components(const memtable& mt) {
             });
         }).then([w] {
             return w->close().then([w] {});
+        }).then([index] {
+            return index->close().then([index] {});
         });
     });
 }
