@@ -17,6 +17,8 @@ class key_view {
 public:
     key_view(bytes_view b) : _bytes(b) {}
 
+    std::vector<bytes> explode(const schema& s) const;
+
     bool operator==(const key_view& k) const { return k._bytes == _bytes; }
     bool operator!=(const key_view& k) const { return !(k == *this); }
 
