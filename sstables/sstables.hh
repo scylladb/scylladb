@@ -22,6 +22,7 @@
 #include "schema.hh"
 #include "mutation.hh"
 #include "utils/i_filter.hh"
+#include "core/stream.hh"
 
 namespace sstables {
 
@@ -100,6 +101,15 @@ public:
     }
 
     future<mutation_opt> read_row(schema_ptr schema, const key& k);
+    /**
+     * @param schema a schema_ptr object describing this table
+     * @param min the minimum token we want to search for (inclusive)
+     * @param max the maximum token we want to search for (inclusive)
+     * @param walker a future-returning function to be called for each mutation found within the specified range
+     * @return a subscription that will call @param walker for every mutation found.
+     */
+    subscription<mutation>
+    read_range_rows(schema_ptr schema, const dht::token& min, const dht::token& max, std::function<future<> (mutation m)> walker);
 
     // Write sstable components from a memtable.
     future<> write_components(const memtable& mt);
