@@ -369,10 +369,7 @@ future<> cql_server::connection::process_request() {
 
 future<> cql_server::connection::process_startup(uint16_t stream, temporary_buffer<char> buf)
 {
-    auto string_map = read_string_map(buf);
-    for (auto&& s : string_map) {
-        print("%s => %s\n", s.first, s.second);
-    }
+    /*auto string_map =*/ read_string_map(buf);
     return write_ready(stream);
 }
 
