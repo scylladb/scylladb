@@ -174,6 +174,8 @@ private:
     // for iteration through all the rows.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len);
 
+    future<size_t> data_end_position(int summary_idx, int index_idx, const index_list& il);
+
     template <typename T>
     int binary_search(const T& entries, const key& sk, const dht::token& token);
 
