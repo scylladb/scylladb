@@ -149,8 +149,8 @@ posix_network_stack::listen(socket_address sa, listen_options opt) {
 }
 
 future<connected_socket>
-posix_network_stack::connect(socket_address sa) {
-    return engine().posix_connect(sa).then([] (pollable_fd fd) {
+posix_network_stack::connect(socket_address sa, socket_address local) {
+    return engine().posix_connect(sa, local).then([] (pollable_fd fd) {
         std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(fd)));
         return make_ready_future<connected_socket>(connected_socket(std::move(csi)));
     });
@@ -168,8 +168,8 @@ posix_ap_network_stack::listen(socket_address sa, listen_options opt) {
 }
 
 future<connected_socket>
-posix_ap_network_stack::connect(socket_address sa) {
-    return engine().posix_connect(sa).then([] (pollable_fd fd) {
+posix_ap_network_stack::connect(socket_address sa, socket_address local) {
+    return engine().posix_connect(sa, local).then([] (pollable_fd fd) {
         std::unique_ptr<connected_socket_impl> csi(new posix_connected_socket_impl(std::move(fd)));
         return make_ready_future<connected_socket>(connected_socket(std::move(csi)));
     });

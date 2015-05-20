@@ -325,8 +325,9 @@ reactor::posix_reuseport_detect() {
 }
 
 future<pollable_fd>
-reactor::posix_connect(socket_address sa) {
+reactor::posix_connect(socket_address sa, socket_address local) {
     file_desc fd = file_desc::socket(sa.u.sa.sa_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    fd.bind(local.u.sa, sizeof(sa.u.sas));
     fd.connect(sa.u.sa, sizeof(sa.u.sas));
     auto pfd = pollable_fd(std::move(fd));
     auto f = pfd.writeable();
