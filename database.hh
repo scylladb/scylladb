@@ -99,7 +99,6 @@ public:
 
     future<> populate(sstring datadir);
     void seal_active_memtable();
-    const std::list<memtable>& testonly_all_memtables() const;
 private:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
