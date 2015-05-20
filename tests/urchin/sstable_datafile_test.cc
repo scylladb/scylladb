@@ -31,7 +31,8 @@ atomic_cell make_atomic_cell(bytes_view value, uint32_t ttl = 0, uint32_t expira
 static inline future<> remove_files(sstring dir, unsigned long generation) {
     return when_all(remove_file(sstable::filename(dir, la, generation, big, sstable::component_type::Data)),
         remove_file(sstable::filename(dir, la, generation, big, sstable::component_type::Index)),
-        remove_file(sstable::filename(dir, la, generation, big, sstable::component_type::Summary))).then([] (auto t) {});
+        remove_file(sstable::filename(dir, la, generation, big, sstable::component_type::Summary)),
+        remove_file(sstable::filename(dir, la, generation, big, sstable::component_type::TOC))).then([] (auto t) {});
 }
 
 SEASTAR_TEST_CASE(datafile_generation_01) {

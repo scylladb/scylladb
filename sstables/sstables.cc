@@ -1151,6 +1151,13 @@ future<> sstable::write_components(const memtable& mt) {
             return index->close().then([index] {});
         }).then([this] {
             return write_summary();
+        }).then([this] {
+            _components.insert(component_type::TOC);
+            _components.insert(component_type::Index);
+            _components.insert(component_type::Summary);
+            _components.insert(component_type::Data);
+
+            return write_toc();
         });
     });
 }
