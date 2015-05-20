@@ -83,7 +83,7 @@ static inline bytes pop_back(std::vector<bytes>& vec) {
 
 class mp_row_consumer : public row_consumer {
     schema_ptr _schema;
-    key _key;
+    key_view _key;
 
     struct column {
         bool is_static;
@@ -235,9 +235,8 @@ public:
     }
 
     virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
-        key_view k(_key);
-        if (key != k) {
-            throw malformed_sstable_exception(sprint("Key mismatch. Got %s while processing %s", to_hex(bytes_view(key)).c_str(), to_hex(bytes_view(k)).c_str()));
+        if (key != _key) {
+            throw malformed_sstable_exception(sprint("Key mismatch. Got %s while processing %s", to_hex(bytes_view(key)).c_str(), to_hex(bytes_view(_key)).c_str()));
         }
 
         if (!deltime.live()) {
