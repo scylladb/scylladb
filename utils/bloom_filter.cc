@@ -36,7 +36,7 @@ namespace utils {
 namespace filter {
 static thread_local auto reusable_indexes = std::vector<long>();
 
-void bloom_filter::set_indexes(uint64_t base, uint64_t inc, int count, long max, std::vector<long>& results) {
+void bloom_filter::set_indexes(int64_t base, int64_t inc, int count, long max, std::vector<long>& results) {
     for (int i = 0; i < count; i++) {
         results[i] = abs(base % max);
         base += inc;

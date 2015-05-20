@@ -43,7 +43,7 @@ private:
     bitmap _bitset;
     int _hash_count;
 
-    void set_indexes(uint64_t base, uint64_t inc, int count, long max, std::vector<long>& results);
+    void set_indexes(int64_t base, int64_t inc, int count, long max, std::vector<long>& results);
     std::vector<long> get_hash_buckets(const bytes_view& key, int hash_count, long max);
     std::vector<long> indexes(const bytes_view& key);
 
