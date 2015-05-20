@@ -349,12 +349,12 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
 
     assert(schema);
 
-    auto& partitioner = dht::global_partitioner();
-    auto token = partitioner.get_token(key_view(key));
-
-    if (!filter_has_key(token)) {
+    if (!filter_has_key(key)) {
         return make_ready_future<mutation_opt>();
     }
+
+    auto& partitioner = dht::global_partitioner();
+    auto token = partitioner.get_token(key_view(key));
 
     auto& summary = _summary;
     auto summary_idx = binary_search(summary.entries, key, token);

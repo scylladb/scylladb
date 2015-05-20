@@ -160,6 +160,7 @@ public:
 class unsupported_operation_exception : public std::runtime_error {
 public:
     unsupported_operation_exception() : std::runtime_error("unsupported operation") {}
+    unsupported_operation_exception(const sstring& msg) : std::runtime_error("unsupported operation: " + msg) {}
 };
 
 }

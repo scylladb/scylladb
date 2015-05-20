@@ -21,6 +21,7 @@
 #include "dht/i_partitioner.hh"
 #include "schema.hh"
 #include "mutation.hh"
+#include "utils/i_filter.hh"
 
 namespace sstables {
 
@@ -100,7 +101,7 @@ private:
     std::unordered_set<component_type, enum_hash<component_type>> _components;
 
     compression _compression;
-    filter _filter;
+    utils::filter_ptr _filter;
     summary _summary;
     statistics _statistics;
     lw_shared_ptr<file> _index_file;
@@ -116,11 +117,11 @@ private:
 
     const sstring filename(component_type f);
 
-    template <typename T, sstable::component_type Type, T sstable::* Comptr>
-    future<> read_simple();
+    template <sstable::component_type Type, typename T>
+    future<> read_simple(T& comp);
 
-    template <typename T, sstable::component_type Type, T sstable::* Comptr>
-    future<> write_simple();
+    template <sstable::component_type Type, typename T>
+    future<> write_simple(T& comp);
 
     size_t data_size();
 
@@ -130,18 +131,15 @@ private:
     future<> read_compression();
     future<> write_compression();
 
-    future<> read_filter() {
-        return read_simple<filter, component_type::Filter, &sstable::_filter>();
-    }
-    future<> write_filter() {
-        return write_simple<filter, component_type::Filter, &sstable::_filter>();
-    }
+    future<> read_filter();
+
+    future<> write_filter();
 
     future<> read_summary() {
-        return read_simple<summary, component_type::Summary, &sstable::_summary>();
+        return read_simple<component_type::Summary>(_summary);
     }
     future<> write_summary() {
-        return write_simple<summary, component_type::Summary, &sstable::_summary>();
+        return write_simple<component_type::Summary>(_summary);
     }
 
     future<> read_statistics();
@@ -177,8 +175,8 @@ private:
     future<summary_entry&> read_summary_entry(size_t i);
 
     // FIXME: pending on Bloom filter implementation
-    bool filter_has_key(const dht::token& dk) { return true; }
-    bool filter_has_key(const dht::decorated_key& dk) { return filter_has_key(dk._token); }
+    bool filter_has_key(const key& key) { return _filter->is_present(bytes_view(key)); }
+    bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }
 public:
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
