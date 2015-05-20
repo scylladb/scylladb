@@ -352,6 +352,9 @@ void column_family::add_memtable() {
 void
 column_family::seal_active_memtable() {
     auto old = _memtables->back();
+    if (old->all_partitions().empty()) {
+        return;
+    }
     add_memtable();
     // FIXME: better way of ensuring we don't attemt to
     //        overwrite an existing table.
