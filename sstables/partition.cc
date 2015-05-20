@@ -364,9 +364,16 @@ static int adjust_binary_search_index(int idx) {
 future<size_t> sstables::sstable::data_end_position(int summary_idx, int index_idx, const index_list& il) {
     if (size_t(index_idx + 1) < il.size()) {
         return make_ready_future<size_t>(il[index_idx + 1].position);
-    } else {
+    } else if (size_t(summary_idx + 1) >= _summary.entries.size()) {
         return make_ready_future<size_t>(data_size());
     }
+
+    // We should only go to the end of the file if we are in the last summary group.
+    // Otherwise, we will determine the end position of the current data read by looking
+    // at the first index in the next summary group.
+    return read_indexes(_summary.entries[summary_idx + 1].position, 128).then([] (auto next_il) {
+        return make_ready_future<size_t>(next_il.front().position);
+    });
 }
 
 future<mutation_opt>
