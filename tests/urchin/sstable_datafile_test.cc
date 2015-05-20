@@ -603,3 +603,48 @@ SEASTAR_TEST_CASE(datafile_generation_08) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(datafile_generation_09) {
+    // Test that generated sstable components can be successfully loaded.
+
+    auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
+        {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
+
+    memtable mt(s);
+
+    const column_definition& r1_col = *s->get_column_definition("r1");
+
+    auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+    auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
+
+    mutation m(key, s);
+    m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
+    mt.apply(std::move(m));
+
+    auto mtp = make_shared<memtable>(std::move(mt));
+    auto sst = make_lw_shared<sstable>("tests/urchin/sstables", 9, la, big);
+
+    return sst->write_components(*mtp).then([mtp, sst, s] {
+        auto sst2 = make_lw_shared<sstable>("tests/urchin/sstables", 9, la, big);
+
+        return sstables::test(sst2).read_summary().then([sst, sst2] {
+            summary& sst1_s = sstables::test(sst).get_summary();
+            summary& sst2_s = sstables::test(sst2).get_summary();
+
+            BOOST_REQUIRE(::memcmp(&sst1_s.header, &sst2_s.header, sizeof(summary::header)) == 0);
+            BOOST_REQUIRE(sst1_s.positions == sst2_s.positions);
+            BOOST_REQUIRE(sst1_s.entries == sst2_s.entries);
+            BOOST_REQUIRE(sst1_s.first_key.value == sst2_s.first_key.value);
+            BOOST_REQUIRE(sst1_s.last_key.value == sst2_s.last_key.value);
+        }).then([sst, sst2] {
+            return sstables::test(sst2).read_toc().then([sst, sst2] {
+                auto& sst1_c = sstables::test(sst).get_components();
+                auto& sst2_c = sstables::test(sst2).get_components();
+
+                BOOST_REQUIRE(sst1_c == sst2_c);
+            });
+        });
+    }).finally([sst] {
+        return remove_files("tests/urchin/sstables", 9);
+    });
+}
