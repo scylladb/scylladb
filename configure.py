@@ -307,6 +307,7 @@ api = ['api/api.cc',
        'api/storage_service.cc',
        'api/api-doc/commitlog.json',
        'api/commitlog.cc',
+       'api/api-doc/gossiper.json',
        ]
 
 boost_test_lib = [
