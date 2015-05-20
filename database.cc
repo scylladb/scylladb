@@ -460,8 +460,8 @@ void database::add_keyspace(sstring name, keyspace k) {
 
 future<>
 create_keyspace(distributed<database>& db, const keyspace_metadata& ksm) {
-    return make_directory(db.local()._cfg->data_file_directories() + "/" + ksm.name()).then([&ksm, &db] {
-        return db.invoke_on_all([&ksm] (database& db) {
+    return make_directory(db.local()._cfg->data_file_directories() + "/" + ksm.name()).then([ksm, &db] {
+        return db.invoke_on_all([ksm] (database& db) {
             auto cfg = db.make_keyspace_config(ksm);
             keyspace ks(cfg);
             ks.create_replication_strategy(ksm);
