@@ -67,13 +67,17 @@ public:
 private:
     schema_ptr _schema;
     config _config;
-    std::list<memtable> _memtables;
+    using memtable_list = std::vector<lw_shared_ptr<memtable>>;
+    lw_shared_ptr<memtable_list> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
-    std::map<unsigned long, std::unique_ptr<sstables::sstable>> _sstables;
+    using sstable_list = std::map<unsigned long, lw_shared_ptr<sstables::sstable>>;
+    lw_shared_ptr<sstable_list> _sstables;
     unsigned _sstable_generation = 1;
     unsigned _mutation_count = 0;
 private:
-    memtable& active_memtable() { return _memtables.back(); }
+    void add_sstable(sstables::sstable&& sstable);
+    void add_memtable();
+    memtable& active_memtable() { return *_memtables->back(); }
     struct merge_comparator;
 public:
     // Queries can be satisfied from multiple data sources, so they are returned
@@ -97,7 +101,6 @@ public:
 
     future<> populate(sstring datadir);
     void seal_active_memtable();
-    const std::list<memtable>& testonly_all_memtables() const;
 private:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
