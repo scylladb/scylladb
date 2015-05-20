@@ -14,13 +14,15 @@
 class mutation final {
 private:
     schema_ptr _schema;
-    const dht::decorated_key _dk;
+    dht::decorated_key _dk;
     mutation_partition _p;
 public:
     mutation(dht::decorated_key key, schema_ptr schema);
     mutation(partition_key key, schema_ptr schema);
     mutation(mutation&&) = default;
     mutation(const mutation&) = default;
+    mutation& operator=(mutation&& x) = default;
+
     void set_static_cell(const column_definition& def, atomic_cell_or_collection value);
     void set_static_cell(const bytes& name, const boost::any& value, api::timestamp_type timestamp, ttl_opt ttl = {});
     void set_clustered_cell(const exploded_clustering_prefix& prefix, const column_definition& def, atomic_cell_or_collection value);
