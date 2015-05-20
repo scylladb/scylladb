@@ -35,6 +35,7 @@ boost_tests = [
     'urchin/mutation_test',
     'urchin/cql_query_test',
     'urchin/sstable_test',
+    'urchin/sstable_mutation_test',
     'urchin/commitlog_test',
     'urchin/hash_test',
     'urchin/serializer_test',
