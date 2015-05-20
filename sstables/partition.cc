@@ -351,6 +351,16 @@ public:
     }
 };
 
+static int adjust_binary_search_index(int idx) {
+    if (idx < 0) {
+        // binary search gives us the first index _greater_ than the key searched for,
+        // i.e., its insertion position
+        auto gt = (idx + 1) * -1;
+        idx = gt - 1;
+    }
+    return idx;
+}
+
 future<mutation_opt>
 sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
 
@@ -364,13 +374,7 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
     auto token = partitioner.get_token(key_view(key));
 
     auto& summary = _summary;
-    auto summary_idx = binary_search(summary.entries, key, token);
-    if (summary_idx < 0) {
-        // binary search gives us the first index _greater_ than the key searched for,
-        // i.e., its insertion position
-        auto gt = (summary_idx + 1) * -1;
-        summary_idx = gt - 1;
-    }
+    auto summary_idx = adjust_binary_search_index(binary_search(summary.entries, key, token));
     if (summary_idx < 0) {
         return make_ready_future<mutation_opt>();
     }
