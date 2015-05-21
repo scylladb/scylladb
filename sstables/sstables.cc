@@ -504,7 +504,8 @@ future<> parse(random_access_reader& in, summary& s) {
                     auto keysize = entrysize - 8;
                     entry.key = bytes(reinterpret_cast<const int8_t*>(buf.get()), keysize);
                     buf.trim_front(keysize);
-                    read_integer(buf, entry.position);
+                    // FIXME: This is a le read. We should make this explicit
+                    entry.position = *(reinterpret_cast<const net::packed<uint64_t> *>(buf.get()));
 
                     return make_ready_future<>();
                 });
