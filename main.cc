@@ -14,6 +14,7 @@
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
+#include "dns.hh"
 
 namespace bpo = boost::program_options;
 
@@ -72,6 +73,7 @@ int main(int ac, char** av) {
         uint16_t cql_port = cfg->native_transport_port();
         uint16_t api_port = opts["api-port"].as<uint16_t>();
         sstring listen_address = cfg->listen_address();
+        sstring rpc_address = cfg->rpc_address();
         auto seed_provider= cfg->seed_provider();
 
         return read_config(opts, *cfg).then([cfg, &db]() {
@@ -85,16 +87,19 @@ int main(int ac, char** av) {
             return qp.start(std::ref(proxy), std::ref(db)).then([&qp] {
                 engine().at_exit([&qp] { return qp.stop(); });
             });
-        }).then([&db, &proxy, &qp, cql_port, thrift_port] {
+        }).then([rpc_address] {
+            return dns::gethostbyname(rpc_address);
+        }).then([&db, &proxy, &qp, cql_port, thrift_port] (dns::hostent e) {
+            auto rpc_address = e.addresses[0].in.s_addr;
             auto cserver = new distributed<cql_server>;
-            cserver->start(std::ref(proxy), std::ref(qp)).then([server = std::move(cserver), cql_port] () mutable {
-                server->invoke_on_all(&cql_server::listen, ipv4_addr{cql_port});
+            cserver->start(std::ref(proxy), std::ref(qp)).then([server = std::move(cserver), cql_port, rpc_address] () mutable {
+                server->invoke_on_all(&cql_server::listen, ipv4_addr{rpc_address, cql_port});
             }).then([cql_port] {
                 std::cout << "CQL server listening on port " << cql_port << " ...\n";
             });
             auto tserver = new distributed<thrift_server>;
-            tserver->start(std::ref(db)).then([server = std::move(tserver), thrift_port] () mutable {
-                server->invoke_on_all(&thrift_server::listen, ipv4_addr{thrift_port});
+            tserver->start(std::ref(db)).then([server = std::move(tserver), thrift_port, rpc_address] () mutable {
+                server->invoke_on_all(&thrift_server::listen, ipv4_addr{rpc_address, thrift_port});
             }).then([thrift_port] {
                 std::cout << "Thrift server listening on port " << thrift_port << " ...\n";
             });
