@@ -373,14 +373,18 @@ column_family::seal_active_memtable() {
 
     do_with(std::move(newtab), [&old, name, this] (sstables::sstable& newtab) {
         // FIXME: write all components
-        return newtab.write_components(*old).then_wrapped([name, this] (future<> ret) {
-            // FIXME: add to read set, or handle exception
-            // FIXME: drop memtable
-            print("Warning: wrote %s/%s, abandoning\n", _config.datadir, name);
+        return newtab.write_components(*old).then_wrapped([name, this, &newtab] (future<> ret) {
+            try {
+                ret.get();
+                add_sstable(std::move(newtab));
+                // FIXME: drop memtable
+            } catch (std::exception& e) {
+                dblog.error("failed to write sstable: {}", e.what());
+            } catch (...) {
+                dblog.error("failed to write sstable: unknown error");
+            }
         });
     });
-    // FIXME: start flushing the previously-active memtable
-    // FIXME: remove the flushed memtable when done
     // FIXME: release commit log
     // FIXME: provide back-pressure to upper layers
 }
