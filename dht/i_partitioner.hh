@@ -64,6 +64,7 @@ public:
 
 token midpoint(const token& t1, const token& t2);
 token minimum_token();
+token maximum_token();
 bool operator==(const token& t1, const token& t2);
 bool operator<(const token& t1, const token& t2);
 std::ostream& operator<<(std::ostream& out, const token& t);
