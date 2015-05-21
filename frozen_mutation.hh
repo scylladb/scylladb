@@ -23,10 +23,10 @@
 class frozen_mutation final {
 private:
     bytes _bytes;
-    frozen_mutation(bytes&& b);
 public:
-    static frozen_mutation from_bytes(bytes representation);
     frozen_mutation(const mutation& m);
+    explicit frozen_mutation(bytes&& b);
+    frozen_mutation(frozen_mutation&& m) = default;
 
     bytes_view representation() const { return _bytes; }
     utils::UUID column_family_id() const;
