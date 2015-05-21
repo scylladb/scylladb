@@ -47,9 +47,16 @@ inline void check_marker(bytes_view component, composite_marker expected) {
 // In order to be able to achieve read and write compatibility for sstables - so they can
 // be imported and exported - we need to always convert a key to this representation.
 class key {
+    enum class kind {
+        before_all_keys,
+        regular,
+        after_all_keys,
+    };
+    kind _kind;
     bytes _bytes;
 public:
-    key(bytes&& b) : _bytes(std::move(b)) {}
+    key(bytes&& b) : _kind(kind::regular), _bytes(std::move(b)) {}
+    key(kind k) : _kind(k) {}
     static key from_bytes(bytes b) { return key(std::move(b)); }
     static key from_deeply_exploded(const schema& s, const std::vector<boost::any>& v);
     static key from_exploded(const schema& s, const std::vector<bytes>& v);
@@ -60,6 +67,12 @@ public:
     std::vector<bytes> explode(const schema& s) const;
 
     int32_t tri_compare(key_view k) const {
+        if (_kind == kind::before_all_keys) {
+            return -1;
+        }
+        if (_kind == kind::after_all_keys) {
+            return 1;
+        }
         return compare_unsigned(bytes_view(_bytes), bytes_view(k));
     }
     operator key_view() const {
@@ -71,6 +84,16 @@ public:
     bytes& get_bytes() {
         return _bytes;
     }
+    friend key minimum_key();
+    friend key maximum_key();
+};
+
+inline key minimum_key() {
+    return key(key::kind::before_all_keys);
+};
+
+inline key maximum_key() {
+    return key(key::kind::after_all_keys);
 };
 
 bytes composite_from_clustering_key(const schema& s, const clustering_key& ck);
