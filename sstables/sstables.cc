@@ -1096,6 +1096,11 @@ future<> sstable::write_components(const memtable& mt) {
         auto index = make_shared<file_writer>(_index_file, 4096);
 
         prepare_summary(_summary, mt);
+        auto filter_fp_chance = mt.schema()->bloom_filter_fp_chance();
+        if (filter_fp_chance != 1.0) {
+            _components.insert(component_type::Filter);
+        }
+        _filter = utils::i_filter::get_filter(mt.all_partitions().size(), filter_fp_chance);
 
         // Iterate through CQL partitions, then CQL rows, then CQL columns.
         // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.
@@ -1107,6 +1112,7 @@ future<> sstable::write_components(const memtable& mt) {
 
                 // Maybe add summary entry into in-memory representation of summary file.
                 maybe_add_summary_entry(_summary, bytes_view(partition_key), index->offset());
+                _filter->add(bytes_view(partition_key));
 
                 return do_with(disk_string_view<uint16_t>(), [w, index, &partition_key] (auto& p_key) {
                     p_key.value = bytes_view(partition_key);
@@ -1155,6 +1161,8 @@ future<> sstable::write_components(const memtable& mt) {
             return index->close().then([index] {});
         }).then([this] {
             return write_summary();
+        }).then([this] {
+            return write_filter();
         }).then([this] {
             _components.insert(component_type::TOC);
             _components.insert(component_type::Index);
