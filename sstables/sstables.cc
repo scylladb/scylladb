@@ -519,6 +519,9 @@ future<> parse(random_access_reader& in, summary& s) {
 
 future<> write(file_writer& out, summary_entry& entry)
 {
+    // FIXME: summary entry is supposedly written in memory order, but that
+    // would prevent portability of summary file between machines of different
+    // endianness. We can treat it as little endian to preserve portability.
     return write(out, entry.key).then([&out, &entry] {
         auto p = reinterpret_cast<const char*>(&entry.position);
         return out.write(p, sizeof(uint64_t));
