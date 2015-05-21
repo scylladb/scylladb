@@ -179,7 +179,7 @@ SEASTAR_TEST_CASE(big_summary_query_0) {
 }
 
 SEASTAR_TEST_CASE(big_summary_query_32) {
-    return summary_query<32, 0x400c0000000000, 182>("tests/urchin/sstables/bigsummary", 76);
+    return summary_query<32, 0xc4000, 182>("tests/urchin/sstables/bigsummary", 76);
 }
 
 static future<sstable_ptr> do_write_sst(sstring dir, unsigned long generation) {
