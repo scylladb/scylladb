@@ -84,8 +84,12 @@ public:
 
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
+    static const sstring filename(sstring dir, version_types version, unsigned long generation,
+                                  format_types format, component_type component);
 
     future<> load();
+    // Used to serialize sstable components, but so far only for the purpose
+    // of testing.
     future<> store();
 
     void set_generation(unsigned long generation) {
@@ -96,6 +100,9 @@ public:
     }
 
     future<mutation_opt> read_row(schema_ptr schema, const key& k);
+
+    // Write sstable components from a memtable.
+    future<> write_components(const memtable& mt);
 private:
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
@@ -186,7 +193,5 @@ public:
     // will then re-export as public every method it needs.
     friend class test;
 };
-
-future<> write_datafile(const memtable& mt, sstring datafile);
 
 }

@@ -60,6 +60,9 @@ public:
     explicit operator bytes_view() const {
         return _bytes;
     }
+    bytes& get_bytes() {
+        return _bytes;
+    }
 };
 
 bytes composite_from_clustering_key(const schema& s, const clustering_key& ck);
