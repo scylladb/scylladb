@@ -59,6 +59,9 @@ public:
 
     std::vector<bytes> explode(const schema& s) const;
 
+    int32_t tri_compare(key_view k) const {
+        return compare_unsigned(bytes_view(_bytes), bytes_view(k));
+    }
     operator key_view() const {
         return key_view(_bytes);
     }

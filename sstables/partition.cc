@@ -40,7 +40,6 @@ int sstable::binary_search(const T& entries, const key& sk, const dht::token& to
     int low = 0, mid = entries.size(), high = mid - 1, result = -1;
 
     auto& partitioner = dht::global_partitioner();
-    auto sk_bytes = bytes_view(sk);
 
     while (low <= high) {
         // The token comparison should yield the right result most of the time.
@@ -53,7 +52,7 @@ int sstable::binary_search(const T& entries, const key& sk, const dht::token& to
         auto mid_token = partitioner.get_token(mid_key);
 
         if (token == mid_token) {
-            result = compare_unsigned(sk_bytes, mid_bytes);
+            result = sk.tri_compare(mid_key);
         } else {
             result = token < mid_token ? -1 : 1;
         }
