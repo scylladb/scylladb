@@ -30,4 +30,5 @@ public:
     void apply(const mutation& m);
     void apply(const frozen_mutation& m);
     const partitions_type& all_partitions() const;
+    bool empty() const { return partitions.empty(); }
 };

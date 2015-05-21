@@ -352,7 +352,7 @@ void column_family::add_memtable() {
 void
 column_family::seal_active_memtable() {
     auto old = _memtables->back();
-    if (old->all_partitions().empty()) {
+    if (old->empty()) {
         return;
     }
     add_memtable();
