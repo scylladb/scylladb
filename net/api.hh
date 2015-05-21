@@ -41,6 +41,10 @@ public:
         ::sockaddr sa;
         ::sockaddr_in in;
     } u;
+    socket_address(sockaddr_in sa) {
+        u.in = sa;
+    }
+    socket_address() = default;
     ::sockaddr& as_posix_sockaddr() { return u.sa; }
     ::sockaddr_in& as_posix_sockaddr_in() { return u.in; }
     const ::sockaddr& as_posix_sockaddr() const { return u.sa; }
