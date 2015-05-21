@@ -1047,7 +1047,7 @@ static future<> write_index_entry(file_writer& out, disk_string_view<uint16_t>& 
 static constexpr int BASE_SAMPLING_LEVEL = 128;
 
 static void prepare_summary(summary& s, const memtable& mt) {
-    auto all_partitions = mt.all_partitions();
+    auto&& all_partitions = mt.all_partitions();
     assert(all_partitions.size() >= 1);
 
     s.header.min_index_interval = BASE_SAMPLING_LEVEL;
