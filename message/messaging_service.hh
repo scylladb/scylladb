@@ -284,7 +284,7 @@ private:
         auto it = _clients.find(id);
         if (it == _clients.end()) {
             auto remote_addr = ipv4_addr(id.addr.raw_addr(), _port);
-            auto client = std::make_unique<rpc::protocol<serializer, messaging_verb>::client>(_rpc, remote_addr);
+            auto client = std::make_unique<rpc::protocol<serializer, messaging_verb>::client>(_rpc, remote_addr, ipv4_addr{_listen_address.raw_addr(), 0});
             it = _clients.emplace(id, shard_info(std::move(client))).first;
             return *it->second.rpc_client;
         } else {
