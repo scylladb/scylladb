@@ -64,18 +64,19 @@ void schedule(std::unique_ptr<task> t);
 void engine_exit(std::exception_ptr eptr = {});
 
 template <typename Func>
-class lambda_task : public task {
+class lambda_task final : public task {
     Func _func;
 public:
     lambda_task(const Func& func) : _func(func) {}
     lambda_task(Func&& func) : _func(std::move(func)) {}
-    virtual void run() noexcept { _func(); }
+    virtual void run() noexcept override { _func(); }
 };
 
 template <typename Func>
+inline
 std::unique_ptr<task>
 make_task(Func&& func) {
-    return std::unique_ptr<task>(new lambda_task<Func>(std::forward<Func>(func)));
+    return std::make_unique<lambda_task<Func>>(std::forward<Func>(func));
 }
 
 void report_failed_future(std::exception_ptr ex);
