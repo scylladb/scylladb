@@ -123,6 +123,10 @@ composite composite::from_clustering_key(const schema& s, const clustering_key& 
     return from_components(ck.begin(s), ck.end(s), s.clustering_key_type()->types(), true);
 }
 
+composite composite::from_exploded(const std::vector<bytes_view>& v) {
+    return from_components(v.begin(), v.end(), std::vector<data_type>(v.size(), bytes_type), true);
+}
+
 inline
 std::vector<bytes> explode_composite(bytes_view _bytes) {
     std::vector<bytes> ret;
