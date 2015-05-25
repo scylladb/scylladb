@@ -1,3 +1,7 @@
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
 #pragma once
 
 #include "core/enum.hh"
