@@ -98,7 +98,7 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
                 offset += end_of_row.size();
                 BOOST_REQUIRE(size == offset);
             });
-        }).then([] {
+        }).finally([] {
             return remove_files("tests/urchin/sstables", 1);
         });
     });
@@ -169,7 +169,7 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
                 offset += end_of_row.size();
                 BOOST_REQUIRE(size == offset);
             });
-        }).then([] {
+        }).finally([] {
             return remove_files("tests/urchin/sstables", 2);
         });
     });
@@ -240,7 +240,7 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
                 offset += end_of_row.size();
                 BOOST_REQUIRE(size == offset);
             });
-        }).then([] {
+        }).finally([] {
             return remove_files("tests/urchin/sstables", 3);
         });
     });
@@ -317,7 +317,7 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
                 offset += end_of_row.size();
                 BOOST_REQUIRE(size == offset);
             });
-        }).then([] {
+        }).finally([] {
             return remove_files("tests/urchin/sstables", 4);
         });
     });
@@ -384,7 +384,7 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
                 offset += end_of_row.size();
                 BOOST_REQUIRE(size == offset);
             });
-        }).then([] {
+        }).finally([] {
             return remove_files("tests/urchin/sstables", 5);
         });
     });
@@ -458,7 +458,7 @@ SEASTAR_TEST_CASE(datafile_generation_06) {
                 offset += end_of_row.size();
                 BOOST_REQUIRE(size == offset);
             });
-        }).then([] {
+        }).finally([] {
             return remove_files("tests/urchin/sstables", 6);
         });
     });
@@ -521,7 +521,7 @@ SEASTAR_TEST_CASE(datafile_generation_07) {
                 offset += key2.size();
                 BOOST_REQUIRE(size == offset);
             });
-        }).then([] {
+        }).finally([] {
             return remove_files("tests/urchin/sstables", 7);
         });
     });
@@ -598,7 +598,7 @@ SEASTAR_TEST_CASE(datafile_generation_08) {
 
                 BOOST_REQUIRE(size == offset);
             });
-        }).then([] {
+        }).finally([] {
             return remove_files("tests/urchin/sstables", 8);
         });
     });
