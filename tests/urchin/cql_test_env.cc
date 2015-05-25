@@ -92,7 +92,7 @@ public:
         return _db->invoke_on_all([schema_maker, id, this] (database& db) {
             auto cf_schema = make_lw_shared(schema_maker(ks_name));
             cf_schema->set_id(id);
-            keyspace_metadata ksm(ks_name,
+            auto ksm = make_lw_shared<keyspace_metadata>(sstring{ks_name},
                     "org.apache.cassandra.locator.SimpleStrategy",
                     std::unordered_map<sstring, sstring>(),
                     false

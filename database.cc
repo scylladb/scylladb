@@ -508,13 +508,13 @@ void database::add_keyspace(sstring name, keyspace k) {
 }
 
 future<>
-create_keyspace(distributed<database>& db, const keyspace_metadata& ksm) {
-    return make_directory(db.local()._cfg->data_file_directories() + "/" + ksm.name()).then([ksm, &db] {
+create_keyspace(distributed<database>& db, const lw_shared_ptr<keyspace_metadata>& ksm) {
+    return make_directory(db.local()._cfg->data_file_directories() + "/" + ksm->name()).then([ksm, &db] {
         return db.invoke_on_all([ksm] (database& db) {
-            auto cfg = db.make_keyspace_config(ksm);
-            keyspace ks(cfg);
-            ks.create_replication_strategy(ksm);
-            db.add_keyspace(ksm.name(), std::move(ks));
+            auto cfg = db.make_keyspace_config(*ksm);
+            keyspace ks(ksm, cfg);
+            ks.create_replication_strategy();
+            db.add_keyspace(ksm->name(), std::move(ks));
         });
     });
     // FIXME: rollback on error, or keyspace directory remains on disk, poisoning
@@ -611,7 +611,7 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
 }
 
 void
-keyspace::create_replication_strategy(const keyspace_metadata& ksm) {
+keyspace::create_replication_strategy() {
     static thread_local locator::token_metadata tm;
     static locator::simple_snitch snitch;
     static std::unordered_map<sstring, sstring> options = {{"replication_factor", "3"}};
@@ -625,7 +625,7 @@ keyspace::create_replication_strategy(const keyspace_metadata& ksm) {
     tm.update_normal_token({dht::token::kind::key, {d2t(1.0/4).data(), 8}}, to_sstring("127.0.0.2"));
     tm.update_normal_token({dht::token::kind::key, {d2t(2.0/4).data(), 8}}, to_sstring("127.0.0.3"));
     tm.update_normal_token({dht::token::kind::key, {d2t(3.0/4).data(), 8}}, to_sstring("127.0.0.4"));
-    _replication_strategy = locator::abstract_replication_strategy::create_replication_strategy(ksm.name(), ksm.strategy_name(), tm, snitch, options);
+    _replication_strategy = locator::abstract_replication_strategy::create_replication_strategy(_metadata->name(), _metadata->strategy_name(), tm, snitch, options);
 }
 
 locator::abstract_replication_strategy&
@@ -669,14 +669,14 @@ schema_ptr database::find_schema(const utils::UUID& uuid) const throw (no_such_c
 }
 
 keyspace&
-database::find_or_create_keyspace(const keyspace_metadata& ksm) {
-    auto i = _keyspaces.find(ksm.name());
+database::find_or_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
+    auto i = _keyspaces.find(ksm->name());
     if (i != _keyspaces.end()) {
         return i->second;
     }
-    keyspace ks(make_keyspace_config(ksm));
-    ks.create_replication_strategy(ksm);
-    return _keyspaces.emplace(ksm.name(), std::move(ks)).first->second;
+    keyspace ks(ksm, std::move(make_keyspace_config(*ksm)));
+    ks.create_replication_strategy();
+    return _keyspaces.emplace(ksm->name(), std::move(ks)).first->second;
 }
 
 void

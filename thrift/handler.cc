@@ -444,7 +444,7 @@ public:
         boost::for_each(ks_def.cf_defs, [&cf_ids] (auto&&) {
             cf_ids.push_back(utils::UUID_gen::get_time_UUID());
         });
-        keyspace_metadata ksm(to_sstring(ks_def.name),
+        auto ksm = make_lw_shared<keyspace_metadata>(to_sstring(ks_def.name),
                 to_sstring(ks_def.strategy_class),
                 std::unordered_map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
                 ks_def.durable_writes,
