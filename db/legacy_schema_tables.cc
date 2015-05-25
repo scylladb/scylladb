@@ -986,7 +986,6 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         // we don't keep a property the user has removed
         schema_ptr s = columnfamilies();
         mutation m{pkey, s};
-        mutations.emplace_back(std::move(m));
         auto ckey = clustering_key::from_single_value(*s, to_bytes(table->cf_name()));
         m.set_clustered_cell(ckey, "cf_id", table->id(), timestamp);
 #if 0
@@ -1043,6 +1042,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                 addTriggerToSchemaMutation(table, trigger, timestamp, mutation);
         }
 #endif
+        mutations.emplace_back(std::move(m));
     }
 
 #if 0
