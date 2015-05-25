@@ -356,3 +356,44 @@ SEASTAR_TEST_CASE(complex_sst3_k2) {
         return make_ready_future<>();
     });
 }
+
+future<> test_range_reads(const dht::token& min, const dht::token& max, std::vector<bytes>& expected) {
+    return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([min, max, &expected] (auto sstp) mutable {
+        auto s = uncompressed_schema();
+
+        auto count = make_lw_shared<size_t>(0);
+        auto expected_size = expected.size();
+        auto subs = sstp->read_range_rows(s, min, max, [&expected, count] (auto mutation) mutable {
+            BOOST_REQUIRE(bytes_view(expected.back()) == bytes_view(mutation.key()));
+            expected.pop_back();
+            (*count)++;
+            return make_ready_future<>();
+        });
+
+        auto sptr = make_lw_shared<subscription<mutation>>(std::move(subs));
+        return sptr->done().then([sptr, sstp, count, expected_size] {
+            BOOST_REQUIRE(*count == expected_size);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(read_range) {
+    std::vector<bytes> expected = { to_bytes("finna"), to_bytes("isak"), to_bytes("gustaf"), to_bytes("vinna") };
+    return do_with(std::move(expected), [] (auto& expected) {
+        return test_range_reads(dht::minimum_token(), dht::maximum_token(), expected);
+    });
+}
+
+SEASTAR_TEST_CASE(read_partial_range) {
+    std::vector<bytes> expected = { to_bytes("finna"), to_bytes("isak") };
+    return do_with(std::move(expected), [] (auto& expected) {
+        return test_range_reads(dht::global_partitioner().get_token(key_view(bytes_view(expected.back()))), dht::maximum_token(), expected);
+    });
+}
+
+SEASTAR_TEST_CASE(read_partial_range_2) {
+    std::vector<bytes> expected = { to_bytes("gustaf"), to_bytes("vinna") };
+    return do_with(std::move(expected), [] (auto& expected) {
+        return test_range_reads(dht::minimum_token(), dht::global_partitioner().get_token(key_view(bytes_view(expected.front()))), expected);
+    });
+}

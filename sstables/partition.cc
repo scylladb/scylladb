@@ -40,7 +40,6 @@ int sstable::binary_search(const T& entries, const key& sk, const dht::token& to
     int low = 0, mid = entries.size(), high = mid - 1, result = -1;
 
     auto& partitioner = dht::global_partitioner();
-    auto sk_bytes = bytes_view(sk);
 
     while (low <= high) {
         // The token comparison should yield the right result most of the time.
@@ -53,7 +52,7 @@ int sstable::binary_search(const T& entries, const key& sk, const dht::token& to
         auto mid_token = partitioner.get_token(mid_key);
 
         if (token == mid_token) {
-            result = compare_unsigned(sk_bytes, mid_bytes);
+            result = sk.tri_compare(mid_key);
         } else {
             result = token < mid_token ? -1 : 1;
         }
@@ -83,7 +82,8 @@ static inline bytes pop_back(std::vector<bytes>& vec) {
 
 class mp_row_consumer : public row_consumer {
     schema_ptr _schema;
-    key _key;
+    key_view _key;
+    std::function<future<> (mutation&& m)> _mutation_to_subscription;
 
     struct column {
         bool is_static;
@@ -200,7 +200,7 @@ class mp_row_consumer : public row_consumer {
 
     collection_mutation& pending_collection(const exploded_clustering_prefix& clustering_prefix, const column_definition *cdef) {
         if (_pending_collection.is_new_collection(clustering_prefix, cdef)) {
-            _pending_collection.flush(*_schema, mut);
+            _pending_collection.flush(*_schema, *mut);
 
             if (!cdef->type->is_multi_cell()) {
                 throw malformed_sstable_exception("frozen set should behave like a cell\n");
@@ -220,12 +220,21 @@ class mp_row_consumer : public row_consumer {
     }
 
 public:
-    mutation mut;
+    mutation_opt mut;
 
     mp_row_consumer(const key& key, const schema_ptr _schema)
             : _schema(_schema)
-            , _key(key)
-            , mut(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema)
+            , _key(key_view(key))
+            , mut(mutation(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema))
+    { }
+
+    mp_row_consumer(const schema_ptr _schema)
+            : _schema(_schema)
+    { }
+
+    mp_row_consumer(const schema_ptr _schema, std::function<future<> (mutation&& m)> sub_fn)
+            : _schema(_schema)
+            , _mutation_to_subscription(sub_fn)
     { }
 
     void validate_row_marker() {
@@ -235,13 +244,14 @@ public:
     }
 
     virtual void consume_row_start(sstables::key_view key, sstables::deletion_time deltime) override {
-        key_view k(_key);
-        if (key != k) {
-            throw malformed_sstable_exception(sprint("Key mismatch. Got %s while processing %s", to_hex(bytes_view(key)).c_str(), to_hex(bytes_view(k)).c_str()));
+        if (_key.empty()) {
+            mut = mutation(partition_key::from_exploded(*_schema, key.explode(*_schema)), _schema);
+        } else if (key != _key) {
+            throw malformed_sstable_exception(sprint("Key mismatch. Got %s while processing %s", to_hex(bytes_view(key)).c_str(), to_hex(bytes_view(_key)).c_str()));
         }
 
         if (!deltime.live()) {
-            mut.partition().apply(tombstone(deltime));
+            mut->partition().apply(tombstone(deltime));
         }
     }
 
@@ -266,18 +276,18 @@ public:
         }
 
         if (col.is_static) {
-            mut.set_static_cell(*(col.cdef), std::move(ac));
+            mut->set_static_cell(*(col.cdef), std::move(ac));
             return;
         }
 
         if (col.cell.size() == 0) {
             auto clustering_key = clustering_key::from_clustering_prefix(*_schema, clustering_prefix);
-            auto& dr = mut.partition().clustered_row(clustering_key);
+            auto& dr = mut->partition().clustered_row(clustering_key);
             dr.apply(timestamp);
             return;
         }
 
-        mut.set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
+        mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
     }
 
     virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
@@ -294,13 +304,18 @@ public:
         if (col.collection_extra_data.size()) {
             update_pending_collection(clustering_prefix, col.cdef, std::move(col.collection_extra_data), std::move(ac));
         } else if (col.is_static) {
-            mut.set_static_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
+            mut->set_static_cell(*(col.cdef), atomic_cell_or_collection(std::move(ac)));
         } else {
-            mut.set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
+            mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
         }
     }
     virtual void consume_row_end() override {
-        _pending_collection.flush(*_schema, mut);
+        if (mut) {
+            _pending_collection.flush(*_schema, *mut);
+            if (_mutation_to_subscription) {
+                _mutation_to_subscription(std::move(*mut));
+            }
+        }
     }
 
     virtual void consume_range_tombstone(
@@ -334,7 +349,7 @@ public:
         // Still, it is enough to check if we're dealing with a collection, since any other tombstone
         // won't have a full clustering prefix (otherwise it isn't a range)
         if (start.size() <= _schema->clustering_key_size()) {
-            mut.partition().apply_delete(*_schema, exploded_clustering_prefix(std::move(start)), tombstone(deltime));
+            mut->partition().apply_delete(*_schema, exploded_clustering_prefix(std::move(start)), tombstone(deltime));
         } else {
             auto&& column = pop_back(start);
 
@@ -343,6 +358,31 @@ public:
         }
     }
 };
+
+static int adjust_binary_search_index(int idx) {
+    if (idx < 0) {
+        // binary search gives us the first index _greater_ than the key searched for,
+        // i.e., its insertion position
+        auto gt = (idx + 1) * -1;
+        idx = gt - 1;
+    }
+    return idx;
+}
+
+future<size_t> sstables::sstable::data_end_position(int summary_idx, int index_idx, const index_list& il) {
+    if (size_t(index_idx + 1) < il.size()) {
+        return make_ready_future<size_t>(il[index_idx + 1].position);
+    } else if (size_t(summary_idx + 1) >= _summary.entries.size()) {
+        return make_ready_future<size_t>(data_size());
+    }
+
+    // We should only go to the end of the file if we are in the last summary group.
+    // Otherwise, we will determine the end position of the current data read by looking
+    // at the first index in the next summary group.
+    return read_indexes(_summary.entries[summary_idx + 1].position, 128).then([] (auto next_il) {
+        return make_ready_future<size_t>(next_il.front().position);
+    });
+}
 
 future<mutation_opt>
 sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
@@ -357,37 +397,105 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
     auto token = partitioner.get_token(key_view(key));
 
     auto& summary = _summary;
-    auto summary_idx = binary_search(summary.entries, key, token);
-    if (summary_idx < 0) {
-        // binary search gives us the first index _greater_ than the key searched for,
-        // i.e., its insertion position
-        auto gt = (summary_idx + 1) * -1;
-        summary_idx = gt - 1;
-    }
+    auto summary_idx = adjust_binary_search_index(binary_search(summary.entries, key, token));
     if (summary_idx < 0) {
         return make_ready_future<mutation_opt>();
     }
 
     auto position = _summary.entries[summary_idx].position;
-    return read_indexes(position).then([this, schema, &key, token] (auto index_list) {
+    return read_indexes(position).then([this, schema, &key, token, summary_idx] (auto index_list) {
         auto index_idx = this->binary_search(index_list, key, token);
         if (index_idx < 0) {
             return make_ready_future<mutation_opt>();
         }
 
         auto position = index_list[index_idx].position;
-        size_t end;
-        if (size_t(index_idx + 1) < index_list.size()) {
-            end = index_list[index_idx + 1].position;
-        } else {
-            end = this->data_size();
-        }
-
-        return do_with(mp_row_consumer(key, schema), [this, position, end] (auto& c) {
-            return this->data_consume_rows_at_once(c, position, end).then([&c] {
-                return make_ready_future<mutation_opt>(std::move(c.mut));
+        return this->data_end_position(summary_idx, index_idx, index_list).then([&key, &schema, this, position] (size_t end) {
+            return do_with(mp_row_consumer(key, schema), [this, position, end] (auto& c) {
+                return this->data_consume_rows_at_once(c, position, end).then([&c] {
+                    return make_ready_future<mutation_opt>(std::move(c.mut));
+                });
             });
         });
     });
+}
+
+subscription<mutation>
+sstables::sstable::read_range_rows(schema_ptr schema, const dht::token& min_token, const dht::token& max_token,
+                                  std::function<future<> (mutation m)> walker) {
+    auto pstream = make_lw_shared<stream<mutation>>();
+
+    auto ret = pstream->listen(std::move(walker));
+    pstream->started().then([this, pstream, schema, min_token, max_token] {
+        if (max_token < min_token) {
+            return make_ready_future<>();
+        }
+        auto& summary = _summary;
+
+        auto min_idx = adjust_binary_search_index(binary_search(summary.entries, minimum_key(), min_token));
+        auto max_idx = adjust_binary_search_index(binary_search(summary.entries, maximum_key(), max_token));
+
+        if (max_idx < 0) {
+            return make_ready_future<>();
+        }
+
+        if (min_idx < 0) {
+            min_idx = 0;
+        }
+
+        auto position = _summary.entries[min_idx].position;
+        auto ipos_fut = read_indexes(position).then([this, min_token] (auto index_list) {
+            // Note that we have to adjust the binary search result here as
+            // well.  We will never find the exact element, since we are not
+            // using real keys.
+            //
+            // So what we really want here is to know in which bucket does the
+            // set of keys that compute the token of interest starts.
+            auto m = adjust_binary_search_index(this->binary_search(index_list, minimum_key(), min_token));
+            auto min_index_idx = m >= 0 ? m : 0;
+
+            // We will be given an element that is guaranteed to be before the
+            // minimum token in token order.  This can happen in two
+            // situations:
+            //
+            //  1) if both elements compute the same token (differing in the key comparator)
+            //  2) if the element returned computes a token that precedes the minimum token.
+            //
+            // In the former case, we will retain the element. But in the
+            // latter we want to discard it.  Otherwise we would be returning a
+            // token that is smaller than the minimum requested.
+            auto candidate = key_view(bytes_view(index_list[min_index_idx]));
+            auto tcandidate = dht::global_partitioner().get_token(candidate);
+            if (tcandidate < min_token) {
+                min_index_idx++;
+            }
+            return make_ready_future<size_t>(index_list[min_index_idx].position);
+        });
+
+        auto epos_fut = read_indexes(position).then([this, max_idx, max_token] (auto index_list) {
+            auto m = adjust_binary_search_index(this->binary_search(index_list, maximum_key(), max_token));
+            auto max_index_idx = m >= 0 ? m : int(index_list.size());
+
+            // For the max case, we don't need to do the index adjustment.
+            // Since we compare greater than any key that computes max_token,
+            // they are all guaranteed to be in the final set.
+            return this->data_end_position(max_idx, max_index_idx, index_list);
+        });
+
+        return when_all(std::move(ipos_fut), std::move(epos_fut)).then([this, schema, pstream] (auto positions) {
+            auto subscription_producer = [pstream] (mutation &&mut) {
+                return pstream->produce(std::move(mut));
+            };
+
+            auto ipos = std::get<size_t>(std::get<0>(positions).get());
+            auto epos = std::get<size_t>(std::get<1>(positions).get());
+            return do_with(mp_row_consumer(schema, subscription_producer), [this, ipos, epos] (auto& c) {
+                return this->data_consume_rows(c, ipos, epos);
+            });
+        });
+    }).then([pstream] {
+        pstream->close();
+    });
+    return ret;
 }
 }

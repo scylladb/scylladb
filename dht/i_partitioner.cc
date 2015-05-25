@@ -12,6 +12,11 @@ minimum_token() {
     return { token::kind::before_all_keys, {} };
 }
 
+token
+maximum_token() {
+    return { token::kind::after_all_keys, {} };
+}
+
 // result + overflow bit
 std::pair<bytes, bool>
 add_bytes(const bytes& b1, const bytes& b2, bool carry = false) {
