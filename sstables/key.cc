@@ -127,6 +127,13 @@ composite composite::from_exploded(const std::vector<bytes_view>& v) {
     return from_components(v.begin(), v.end(), std::vector<data_type>(v.size(), bytes_type), true);
 }
 
+composite composite::static_prefix(const schema& s) {
+    static bytes static_marker(size_t(2), bytes::value_type(0xff));
+
+    std::vector<bytes_view> sv(s.clustering_key_size());
+    return static_marker + from_components(sv.begin(), sv.end(), std::vector<data_type>(sv.size(), bytes_type), true);
+}
+
 inline
 std::vector<bytes> explode_composite(bytes_view _bytes) {
     std::vector<bytes> ret;

@@ -115,6 +115,7 @@ public:
     static composite from_bytes(bytes b) { return composite(std::move(b)); }
     static composite from_clustering_key(const schema& s, const clustering_key& ck);
     static composite from_exploded(const std::vector<bytes_view>& v);
+    static composite static_prefix(const schema& s);
     explicit operator bytes_view() const {
         return _bytes;
     }
