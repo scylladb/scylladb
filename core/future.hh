@@ -74,14 +74,8 @@ public:
 
 template <typename Func>
 std::unique_ptr<task>
-make_task(const Func& func) {
-    return std::unique_ptr<task>(new lambda_task<Func>(func));
-}
-
-template <typename Func>
-std::unique_ptr<task>
 make_task(Func&& func) {
-    return std::unique_ptr<task>(new lambda_task<Func>(std::move(func)));
+    return std::unique_ptr<task>(new lambda_task<Func>(std::forward<Func>(func)));
 }
 
 void report_failed_future(std::exception_ptr ex);
