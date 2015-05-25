@@ -139,6 +139,7 @@ struct future_state {
         }
         x._state = state::invalid;
     }
+    __attribute__((always_inline))
     ~future_state() noexcept {
         switch (_state) {
         case state::invalid:
@@ -324,6 +325,7 @@ public:
         migrated();
     }
     promise(const promise&) = delete;
+    __attribute__((always_inline))
     ~promise() noexcept {
         abandoned();
     }
@@ -364,6 +366,7 @@ private:
         _state = &tws->_state;
         _task = std::move(tws);
     }
+    __attribute__((always_inline))
     void make_ready() noexcept;
     void migrated() noexcept;
     void abandoned() noexcept(move_noexcept);
@@ -514,6 +517,7 @@ public:
         return *this;
     }
     void operator=(const future&) = delete;
+    __attribute__((always_inline))
     ~future() {
         if (_promise) {
             _promise->_future = nullptr;
