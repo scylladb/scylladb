@@ -878,14 +878,6 @@ future<> sstable::store() {
     });
 }
 
-static future<> write_composite_component(file_writer& out, disk_string_view<uint16_t>&& column_name,
-    int8_t end_of_component = 0) {
-    // NOTE: end of component can also be -1 and 1 to represent ranges.
-    return do_with(std::move(column_name), [&out, end_of_component] (auto& column_name) {
-        return write(out, column_name, end_of_component);
-    });
-}
-
 // @clustering_key: it's expected that clustering key is already in its composite form.
 // NOTE: empty clustering key means that there is no clustering key.
 static future<> write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names) {
@@ -897,27 +889,12 @@ static future<> write_column_name(file_writer& out, const composite& clustering_
     return write(out, sz, bytes_view(clustering_key), bytes_view(c));
 }
 
-// magic value for identifying a static column.
-static constexpr uint16_t STATIC_MARKER = 0xffff;
+static future<> write_static_column_name(file_writer& out, const schema& schema, const std::vector<bytes_view>& column_names) {
+    composite sp = composite::static_prefix(schema);
+    composite c = composite::from_exploded(column_names);
+    uint16_t sz = bytes_view(sp).size() + bytes_view(c).size();
 
-static future<> write_static_column_name(file_writer& out, bytes_view column_name) {
-    // first component of static column name is composed of the 16-bit magic value ff ff,
-    // followed by a null composite, i.e. three null bytes.
-    uint16_t first_component_size = sizeof(uint16_t) + sizeof(uint16_t) + sizeof(int8_t);
-    uint16_t second_component_size = column_name.size() + sizeof(uint16_t) + sizeof(int8_t);
-    uint16_t total_size = first_component_size + second_component_size;
-
-    return write(out, total_size).then([&out] {
-
-        return write(out, STATIC_MARKER).then([&out] {
-            return write_composite_component(out, {});
-        });
-    }).then([&out, &column_name] {
-        disk_string_view<uint16_t> c_name;
-        c_name.value = column_name;
-
-        return write_composite_component(out, std::move(c_name));
-    });
+    return write(out, sz, bytes_view(sp), bytes_view(c));
 }
 
 // Intended to write all cell components that follow column name.
@@ -1014,9 +991,7 @@ static future<> write_static_row(file_writer& out, schema_ptr schema, const row&
         }
         assert(column_definition.is_static());
         atomic_cell_view cell = value.second.as_atomic_cell();
-        const bytes& column_name = column_definition.name();
-
-        return write_static_column_name(out, column_name).then([&out, cell] {
+        return write_static_column_name(out, *schema, { bytes_view(column_definition.name()) }).then([&out, cell] {
             return write_cell(out, cell);
         });
     });
