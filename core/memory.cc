@@ -73,9 +73,9 @@
 
 namespace memory {
 
-static constexpr const unsigned cpu_id_shift = 36; // FIXME: make dynamic
-static constexpr const unsigned max_cpus = 256;
-static constexpr const size_t cache_line_size = 64;
+static constexpr unsigned cpu_id_shift = 36; // FIXME: make dynamic
+static constexpr unsigned max_cpus = 256;
+static constexpr size_t cache_line_size = 64;
 
 using pageidx = uint32_t;
 
@@ -227,7 +227,7 @@ small_pool::size_to_idx(unsigned size) {
 
 class small_pool_array {
 public:
-    static constexpr const unsigned nr_small_pools = small_pool::size_to_idx(4 * page_size) + 1;
+    static constexpr unsigned nr_small_pools = small_pool::size_to_idx(4 * page_size) + 1;
 private:
     union u {
         small_pool a[nr_small_pools];
@@ -245,7 +245,7 @@ public:
     small_pool& operator[](unsigned idx) { return _u.a[idx]; }
 };
 
-static constexpr const size_t max_small_allocation
+static constexpr size_t max_small_allocation
     = small_pool::idx_to_size(small_pool_array::nr_small_pools - 1);
 
 struct cross_cpu_free_item {
@@ -262,7 +262,7 @@ struct cpu_pages {
     unsigned cpu_id = -1U;
     std::function<void (std::function<void ()>)> reclaim_hook;
     std::vector<reclaimer*> reclaimers;
-    static constexpr const unsigned nr_span_lists = 32;
+    static constexpr unsigned nr_span_lists = 32;
     union pla {
         pla() {
             for (auto&& e : free_spans) {

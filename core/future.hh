@@ -219,8 +219,8 @@ struct future_state {
 template <>
 struct future_state<> {
     static_assert(sizeof(std::exception_ptr) == sizeof(void*), "exception_ptr not a pointer");
-    static constexpr const bool move_noexcept = true;
-    static constexpr const bool copy_noexcept = true;
+    static constexpr bool move_noexcept = true;
+    static constexpr bool copy_noexcept = true;
     enum class state : uintptr_t {
          invalid = 0,
          future = 1,
@@ -310,8 +310,8 @@ class promise {
     future_state<T...> _local_state;
     future_state<T...>* _state;
     std::unique_ptr<task> _task;
-    static constexpr const bool move_noexcept = future_state<T...>::move_noexcept;
-    static constexpr const bool copy_noexcept = future_state<T...>::copy_noexcept;
+    static constexpr bool move_noexcept = future_state<T...>::move_noexcept;
+    static constexpr bool copy_noexcept = future_state<T...>::copy_noexcept;
 public:
     promise() noexcept : _state(&_local_state) {}
     promise(promise&& x) noexcept(move_noexcept) : _future(x._future), _state(x._state), _task(std::move(x._task)) {
@@ -434,8 +434,8 @@ template <typename... T>
 class future {
     promise<T...>* _promise;
     future_state<T...> _local_state;  // valid if !_promise
-    static constexpr const bool move_noexcept = future_state<T...>::move_noexcept;
-    static constexpr const bool copy_noexcept = future_state<T...>::copy_noexcept;
+    static constexpr bool move_noexcept = future_state<T...>::move_noexcept;
+    static constexpr bool copy_noexcept = future_state<T...>::copy_noexcept;
 private:
     future(promise<T...>* pr) noexcept : _promise(pr) {
         _promise->_future = this;

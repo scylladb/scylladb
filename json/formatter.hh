@@ -129,7 +129,7 @@ public:
 
 private:
 
-    constexpr static const char* TIME_FORMAT = "%a %b %d %I:%M:%S %Z %Y";
+    static constexpr const char* TIME_FORMAT = "%a %b %d %I:%M:%S %Z %Y";
 
 };
 
