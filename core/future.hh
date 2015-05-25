@@ -293,6 +293,17 @@ struct future_state<> {
     void forward_to(promise<>& pr) noexcept;
 };
 
+template <typename Func, typename... T>
+struct continuation final : task {
+    continuation(Func&& func, future_state<T...>&& state) : _state(std::move(state)), _func(std::move(func)) {}
+    continuation(Func&& func) : _func(std::move(func)) {}
+    virtual void run() noexcept override {
+        _func(std::move(_state));
+    }
+    future_state<T...> _state;
+    Func _func;
+};
+
 template <typename... T>
 class promise {
     future<T...>* _future = nullptr;
@@ -349,15 +360,7 @@ public:
 private:
     template <typename Func>
     void schedule(Func&& func) noexcept {
-        struct task_with_state final : task {
-            task_with_state(Func&& func) : _func(std::move(func)) {}
-            virtual void run() noexcept override {
-                _func(std::move(_state));
-            }
-            future_state<T...> _state;
-            Func _func;
-        };
-        auto tws = std::make_unique<task_with_state>(std::move(func));
+        auto tws = std::make_unique<continuation<Func, T...>>(std::move(func));
         _state = &tws->_state;
         _task = std::move(tws);
     }
@@ -456,16 +459,8 @@ private:
     }
     template <typename Func>
     void schedule(Func&& func) noexcept {
-        struct task_with_ready_state final : task {
-            task_with_ready_state(Func&& func, future_state<T...>&& state) : _state(std::move(state)), _func(std::move(func)) {}
-            virtual void run() noexcept override {
-                _func(std::move(_state));
-            }
-            future_state<T...> _state;
-            Func _func;
-        };
         if (state()->available()) {
-            ::schedule(std::make_unique<task_with_ready_state>(std::move(func), std::move(*state())));
+            ::schedule(std::make_unique<continuation<Func, T...>>(std::move(func), std::move(*state())));
         } else {
             _promise->schedule(std::move(func));
             _promise->_future = nullptr;

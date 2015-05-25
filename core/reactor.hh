@@ -729,7 +729,7 @@ public:
     ~reactor() {
         auto eraser = [](auto& list) {
             while (!list.empty()) {
-                auto timer = *list.begin();
+                auto& timer = *list.begin();
                 timer.cancel();
             }
         };
