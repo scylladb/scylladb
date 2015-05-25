@@ -6,8 +6,6 @@
 
 #include "schema.hh"
 
-enum class column_kind { partition_key, clustering_key, static_column, regular_column };
-
 struct schema_builder {
     sstring _ks_name;
     sstring _cf_name;

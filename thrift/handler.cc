@@ -283,7 +283,7 @@ public:
                             if (!def) {
                                 throw make_exception<InvalidRequestException>("column %s not found", col.name);
                             }
-                            if (def->kind != column_definition::column_kind::REGULAR) {
+                            if (def->kind != column_kind::regular_column) {
                                 throw make_exception<InvalidRequestException>("Column %s is not settable", col.name);
                             }
                             gc_clock::duration ttl;

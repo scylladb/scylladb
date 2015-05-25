@@ -25,7 +25,7 @@ schema::make_column_specification(const column_definition& def) {
 }
 
 void
-schema::build_columns(const std::vector<column>& columns, column_definition::column_kind kind,
+schema::build_columns(const std::vector<column>& columns, column_kind kind,
     std::vector<column_definition>& dst)
 {
     dst.reserve(columns.size());
@@ -75,14 +75,14 @@ schema::schema(std::experimental::optional<utils::UUID> id,
     _raw._cf_name = std::move(cf_name);
     _raw._regular_column_name_type = regular_column_name_type;
 
-    build_columns(partition_key, column_definition::column_kind::PARTITION, _raw._partition_key);
-    build_columns(clustering_key, column_definition::column_kind::CLUSTERING, _raw._clustering_key);
+    build_columns(partition_key, column_kind::partition_key, _raw._partition_key);
+    build_columns(clustering_key, column_kind::clustering_key, _raw._clustering_key);
 
     std::sort(regular_columns.begin(), regular_columns.end(), column::name_compare(regular_column_name_type));
-    build_columns(regular_columns, column_definition::column_kind::REGULAR, _raw._regular_columns);
+    build_columns(regular_columns, column_kind::regular_column, _raw._regular_columns);
 
     std::sort(static_columns.begin(), static_columns.end(), column::name_compare(utf8_type));
-    build_columns(static_columns, column_definition::column_kind::STATIC, _raw._static_columns);
+    build_columns(static_columns, column_kind::static_column, _raw._static_columns);
 
     rebuild();
 }

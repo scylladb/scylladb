@@ -19,6 +19,8 @@
 
 using column_id = uint32_t;
 
+enum class column_kind { partition_key, clustering_key, regular_column, static_column,  };
+
 class column_definition final {
 public:
     template<typename ColumnRange>
@@ -30,8 +32,8 @@ public:
 private:
     bytes _name;
 public:
-    enum class column_kind { PARTITION, CLUSTERING, REGULAR, STATIC };
     column_definition(bytes name, data_type type, column_id id, column_kind kind);
+
     data_type type;
 
     // Unique within (kind, schema instance).
@@ -41,11 +43,12 @@ public:
 
     column_kind kind;
     ::shared_ptr<cql3::column_specification> column_specification;
-    bool is_static() const { return kind == column_kind::STATIC; }
-    bool is_regular() const { return kind == column_kind::REGULAR; }
-    bool is_partition_key() const { return kind == column_kind::PARTITION; }
-    bool is_clustering_key() const { return kind == column_kind::CLUSTERING; }
-    bool is_primary_key() const { return kind == column_kind::PARTITION || kind == column_kind::CLUSTERING; }
+
+    bool is_static() const { return kind == column_kind::static_column; }
+    bool is_regular() const { return kind == column_kind::regular_column; }
+    bool is_partition_key() const { return kind == column_kind::partition_key; }
+    bool is_clustering_key() const { return kind == column_kind::clustering_key; }
+    bool is_primary_key() const { return kind == column_kind::partition_key || kind == column_kind::clustering_key; }
     bool is_atomic() const { return !type->is_multi_cell(); }
     bool is_compact_value() const;
     const sstring& name_as_text() const;
@@ -101,7 +104,7 @@ public:
         };
     };
 private:
-    void build_columns(const std::vector<column>& columns, column_definition::column_kind kind, std::vector<column_definition>& dst);
+    void build_columns(const std::vector<column>& columns, column_kind kind, std::vector<column_definition>& dst);
     ::shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def);
     void rebuild();
 public:
@@ -167,7 +170,7 @@ public:
         }
     }
     data_type column_name_type(const column_definition& def) const {
-        return def.kind == column_definition::column_kind::REGULAR ? _raw._regular_column_name_type : utf8_type;
+        return def.kind == column_kind::regular_column ? _raw._regular_column_name_type : utf8_type;
     }
     const column_definition& regular_column_at(column_id id) const {
         return _raw._regular_columns.at(id);
