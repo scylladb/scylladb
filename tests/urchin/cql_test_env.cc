@@ -92,12 +92,7 @@ public:
         return _db->invoke_on_all([schema_maker, id, this] (database& db) {
             auto cf_schema = make_lw_shared(schema_maker(ks_name));
             cf_schema->set_id(id);
-            auto ksm = make_lw_shared<keyspace_metadata>(sstring{ks_name},
-                    "org.apache.cassandra.locator.SimpleStrategy",
-                    std::unordered_map<sstring, sstring>(),
-                    false
-                    );
-            auto& ks = db.find_or_create_keyspace(ksm);
+            auto& ks = db.find_keyspace(ks_name);
             auto cfg = ks.make_column_family_config(*cf_schema);
             db.add_column_family(column_family(std::move(cf_schema), std::move(cfg)));
         });
@@ -159,7 +154,17 @@ public:
     }
 
     future<> start() {
-        return _core_local.start();
+        return _core_local.start().then([this] () {
+            return _db->invoke_on_all([this] (database& db) {
+                auto ksm = make_lw_shared<keyspace_metadata>(sstring{ks_name},
+                        "org.apache.cassandra.locator.SimpleStrategy",
+                        std::unordered_map<sstring, sstring>(),
+                        false
+                        );
+                db.find_or_create_keyspace(ksm);
+                return make_ready_future<>();
+            });
+        });
     }
 
     virtual future<> stop() override {
