@@ -52,5 +52,7 @@ public:
     schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column);
     schema_builder& with_column(bytes name, data_type type, index_info info, column_kind kind = column_kind::regular_column);
 
+    void add_default_index_names(database&);
+
     schema_ptr build();
 };
