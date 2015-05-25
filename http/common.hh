@@ -27,7 +27,35 @@
 
 namespace httpd {
 
-typedef std::unordered_map<sstring, sstring> parameters;
+
+class parameters {
+    std::unordered_map<sstring, sstring> params;
+public:
+    const sstring& path(const sstring& key) const {
+        return params.at(key);
+    }
+
+    sstring operator[](const sstring& key) const {
+        return params.at(key).substr(1);
+    }
+
+    const sstring& at(const sstring& key) const {
+        return path(key);
+    }
+
+    bool exists(const sstring& key) const {
+        return params.find(key) != params.end();
+    }
+
+    void set(const sstring& key, const sstring& value) {
+        params[key] = value;
+    }
+
+    void clear() {
+        params.clear();
+    }
+
+};
 
 enum operation_type {
     GET, POST, PUT, DELETE, NUM_OPERATION
