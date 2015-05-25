@@ -238,7 +238,7 @@ public:
     { }
 
     void validate_row_marker() {
-        if (_schema->is_dense()) {
+        if (_schema->thrift().is_dense()) {
             throw malformed_sstable_exception("row marker found in dense table");
         }
     }

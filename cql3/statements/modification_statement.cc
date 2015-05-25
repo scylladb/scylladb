@@ -221,7 +221,7 @@ modification_statement::create_exploded_clustering_prefix_internal(const query_o
             //   (b) thrift static CF with non-composite comparator
             // Those tables don't have clustering columns so we wouldn't reach this code, thus
             // the check seems redundant.
-            if (require_full_clustering_key() && !s->is_dense()) {
+            if (require_full_clustering_key() && !s->thrift().is_dense()) {
                 throw exceptions::invalid_request_exception(sprint("Missing mandatory PRIMARY KEY part %s", def.name_as_text()));
             }
         } else if (first_empty_key) {
