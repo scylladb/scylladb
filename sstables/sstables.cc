@@ -888,26 +888,13 @@ static future<> write_composite_component(file_writer& out, disk_string_view<uin
 
 // @clustering_key: it's expected that clustering key is already in its composite form.
 // NOTE: empty clustering key means that there is no clustering key.
-static future<> write_column_name(file_writer& out, const composite& clustering_key, const bytes& column_name) {
+static future<> write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names) {
     // FIXME: This code assumes name is always composite, but it wouldn't if "WITH COMPACT STORAGE"
     // was defined in the schema, for example.
+    composite c = composite::from_exploded(column_names);
+    uint16_t sz = bytes_view(clustering_key).size() + bytes_view(c).size();
 
-    // uint16_t and int8_t are about the 16-bit length and end of component, respectively.
-    uint16_t size = bytes_view(clustering_key).size() + column_name.size() + sizeof(uint16_t) + sizeof(int8_t);
-
-    return write(out, size).then([&out, &clustering_key] {
-        if (!bytes_view(clustering_key).size()) {
-            return make_ready_future<>();
-        }
-
-        return write(out, bytes_view(clustering_key));
-    }).then([&out, &column_name] {
-        // if size of column_name is zero, then column_name is a row marker.
-        disk_string_view<uint16_t> c_name;
-        c_name.value = column_name;
-
-        return write_composite_component(out, std::move(c_name));
-    });
+    return write(out, sz, bytes_view(clustering_key), bytes_view(c));
 }
 
 // magic value for identifying a static column.
@@ -977,7 +964,7 @@ static future<> write_row_marker(file_writer& out, const rows_entry& clustered_r
     }
 
     // Write row mark cell to the beginning of clustered row.
-    return write_column_name(out, clustering_key, {}).then([&out, &clustered_row] {
+    return write_column_name(out, clustering_key, { bytes_view() }).then([&out, &clustered_row] {
         column_mask mask = column_mask::none;
         uint64_t timestamp = clustered_row.row().created_at();
         uint32_t value_length = 0;
@@ -1010,7 +997,7 @@ static future<> write_clustered_row(file_writer& out, schema_ptr schema, const r
                 atomic_cell_view cell = value.second.as_atomic_cell();
                 const bytes& column_name = column_definition.name();
 
-                return write_column_name(out, clustering_key, column_name).then([&out, cell] {
+                return write_column_name(out, clustering_key, { bytes_view(column_name) }).then([&out, cell] {
                     return write_cell(out, cell);
                 });
             });
