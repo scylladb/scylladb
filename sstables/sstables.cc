@@ -878,7 +878,7 @@ future<> sstable::store() {
     });
 }
 
-static future<> write_composite_component(file_writer& out, disk_string<uint16_t>&& column_name,
+static future<> write_composite_component(file_writer& out, disk_string_view<uint16_t>&& column_name,
     int8_t end_of_component = 0) {
     // NOTE: end of component can also be -1 and 1 to represent ranges.
     return do_with(std::move(column_name), [&out, end_of_component] (auto& column_name) {
@@ -888,22 +888,22 @@ static future<> write_composite_component(file_writer& out, disk_string<uint16_t
 
 // @clustering_key: it's expected that clustering key is already in its composite form.
 // NOTE: empty clustering key means that there is no clustering key.
-static future<> write_column_name(file_writer& out, bytes& clustering_key, const bytes& column_name) {
+static future<> write_column_name(file_writer& out, const composite& clustering_key, const bytes& column_name) {
     // FIXME: This code assumes name is always composite, but it wouldn't if "WITH COMPACT STORAGE"
     // was defined in the schema, for example.
 
     // uint16_t and int8_t are about the 16-bit length and end of component, respectively.
-    uint16_t size = clustering_key.size() + column_name.size() + sizeof(uint16_t) + sizeof(int8_t);
+    uint16_t size = bytes_view(clustering_key).size() + column_name.size() + sizeof(uint16_t) + sizeof(int8_t);
 
     return write(out, size).then([&out, &clustering_key] {
-        if (!clustering_key.size()) {
+        if (!bytes_view(clustering_key).size()) {
             return make_ready_future<>();
         }
 
-        return write(out, clustering_key);
+        return write(out, bytes_view(clustering_key));
     }).then([&out, &column_name] {
         // if size of column_name is zero, then column_name is a row marker.
-        disk_string<uint16_t> c_name;
+        disk_string_view<uint16_t> c_name;
         c_name.value = column_name;
 
         return write_composite_component(out, std::move(c_name));
@@ -913,7 +913,7 @@ static future<> write_column_name(file_writer& out, bytes& clustering_key, const
 // magic value for identifying a static column.
 static constexpr uint16_t STATIC_MARKER = 0xffff;
 
-static future<> write_static_column_name(file_writer& out, const bytes& column_name) {
+static future<> write_static_column_name(file_writer& out, bytes_view column_name) {
     // first component of static column name is composed of the 16-bit magic value ff ff,
     // followed by a null composite, i.e. three null bytes.
     uint16_t first_component_size = sizeof(uint16_t) + sizeof(uint16_t) + sizeof(int8_t);
@@ -926,7 +926,7 @@ static future<> write_static_column_name(file_writer& out, const bytes& column_n
             return write_composite_component(out, {});
         });
     }).then([&out, &column_name] {
-        disk_string<uint16_t> c_name;
+        disk_string_view<uint16_t> c_name;
         c_name.value = column_name;
 
         return write_composite_component(out, std::move(c_name));
@@ -970,7 +970,7 @@ static future<> write_cell(file_writer& out, atomic_cell_view cell) {
     }
 }
 
-static future<> write_row_marker(file_writer& out, const rows_entry& clustered_row, bytes& clustering_key) {
+static future<> write_row_marker(file_writer& out, const rows_entry& clustered_row, const composite& clustering_key) {
     // Missing created_at (api::missing_timestamp) means no row marker.
     if (clustered_row.row().created_at() == api::missing_timestamp) {
         return make_ready_future<>();
@@ -989,7 +989,7 @@ static future<> write_row_marker(file_writer& out, const rows_entry& clustered_r
 // write_datafile_clustered_row() is about writing a clustered_row to data file according to SSTables format.
 // clustered_row contains a set of cells sharing the same clustering key.
 static future<> write_clustered_row(file_writer& out, schema_ptr schema, const rows_entry& clustered_row) {
-    bytes clustering_key = composite_from_clustering_key(*schema, clustered_row.key());
+    auto clustering_key = composite::from_clustering_key(*schema, clustered_row.key());
 
     return do_with(std::move(clustering_key), [&out, schema, &clustered_row] (auto& clustering_key) {
         return write_row_marker(out, clustered_row, clustering_key).then(

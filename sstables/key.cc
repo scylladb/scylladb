@@ -119,7 +119,7 @@ key key::from_partition_key(const schema& s, const partition_key& pk) {
     return from_components(s, pk.begin(s), pk.end(s));
 }
 
-bytes composite_from_clustering_key(const schema& s, const clustering_key& ck) {
+composite composite::from_clustering_key(const schema& s, const clustering_key& ck) {
     return from_components(ck.begin(s), ck.end(s), s.clustering_key_type()->types(), true);
 }
 
