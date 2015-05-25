@@ -54,7 +54,7 @@ private:
     // because everyone seems pretty accustomed to the default of 8, and users who have
     // already tuned their phi_convict_threshold for their own environments won't need to
     // change.
-    static constexpr const double PHI_FACTOR{1.0 / std::log(10.0)};
+    static constexpr double PHI_FACTOR{1.0 / std::log(10.0)};
 
     // in the event of a long partition, never record an interval longer than the rpc timeout,
     // since if a host is regularly experiencing connectivity problems lasting this long we'd
@@ -88,12 +88,12 @@ public:
  */
 class failure_detector : public i_failure_detector {
 private:
-    static constexpr const int SAMPLE_SIZE = 1000;
+    static constexpr int SAMPLE_SIZE = 1000;
     // this is useless except to provide backwards compatibility in phi_convict_threshold,
     // because everyone seems pretty accustomed to the default of 8, and users who have
     // already tuned their phi_convict_threshold for their own environments won't need to
     // change.
-    static constexpr const double PHI_FACTOR{1.0 / std::log(10.0)}; // 0.434...
+    static constexpr double PHI_FACTOR{1.0 / std::log(10.0)}; // 0.434...
     std::map<inet_address, arrival_window> _arrival_samples;
     std::list<i_failure_detection_event_listener*> _fd_evnt_listeners;
 

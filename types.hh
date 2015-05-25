@@ -338,7 +338,7 @@ class collection_type_impl : public abstract_type {
     static thread_local logging::logger _logger;
     mutable shared_ptr<cql3::cql3_type> _cql3_type;  // initialized on demand, so mutable
 public:
-    static constexpr const size_t max_elements = 65535;
+    static constexpr size_t max_elements = 65535;
 
     class kind {
         std::function<shared_ptr<cql3::column_specification> (shared_ptr<cql3::column_specification> collection, bool is_key)> _impl;

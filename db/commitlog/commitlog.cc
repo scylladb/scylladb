@@ -207,16 +207,16 @@ class db::commitlog::segment: public enable_lw_shared_from_this<segment> {
 
 public:
     // The commit log entry overhead in bytes (int: length + int: head checksum + int: tail checksum)
-    static const constexpr size_t entry_overhead_size = 3 * sizeof(uint32_t);
-    static const constexpr size_t segment_overhead_size = 2 * sizeof(uint32_t);
-    static const constexpr size_t descriptor_header_size = 4 * sizeof(uint32_t);
+    static constexpr size_t entry_overhead_size = 3 * sizeof(uint32_t);
+    static constexpr size_t segment_overhead_size = 2 * sizeof(uint32_t);
+    static constexpr size_t descriptor_header_size = 4 * sizeof(uint32_t);
 
     // The commit log (chained) sync marker/header size in bytes (int: length + int: checksum [segmentId, position])
-    static const constexpr size_t sync_marker_size = 2 * sizeof(uint32_t);
+    static constexpr size_t sync_marker_size = 2 * sizeof(uint32_t);
 
-    static const constexpr size_t alignment = 4096;
+    static constexpr size_t alignment = 4096;
     // TODO : tune initial / default size
-    static const constexpr size_t default_size = 8 * alignment;
+    static constexpr size_t default_size = 8 * alignment;
 
     segment(segment_manager* m, const descriptor& d, file && f)
             : _segment_manager(m), _desc(std::move(d)), _file(std::move(f))
@@ -775,7 +775,7 @@ subscription<temporary_buffer<char>> db::commitlog::read_log_file(file f, commit
 
                    auto eoccond = [w] { return w->pos == w->next; };
                    return do_until(eoccond, [w] {
-                       static const constexpr size_t entry_header_size = segment::entry_overhead_size - sizeof(uint32_t);
+                       static constexpr size_t entry_header_size = segment::entry_overhead_size - sizeof(uint32_t);
                        return w->fin.read_exactly(entry_header_size).then([w](temporary_buffer<char> buf) {
                            data_input in(buf);
 

@@ -112,7 +112,7 @@ private:
     class precision_time {
     public:
         // Our reference time (1 jan 2010, 00:00:00) in milliseconds.
-        static constexpr const db_clock::time_point REFERENCE_TIME{std::chrono::milliseconds(1262304000000)};
+        static constexpr db_clock::time_point REFERENCE_TIME{std::chrono::milliseconds(1262304000000)};
     private:
         static thread_local precision_time _last;
     public:

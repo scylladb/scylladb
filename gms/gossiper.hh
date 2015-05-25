@@ -74,7 +74,7 @@ private:
     distributed<handler> _handlers;
     void init_messaging_service_handler();
     future<gossip_digest_ack> handle_syn_msg(gossip_digest_syn syn_msg);
-    static constexpr const uint32_t _default_cpuid = 0;
+    static constexpr uint32_t _default_cpuid = 0;
     shard_id get_shard_id(inet_address to) {
         return shard_id{to, _default_cpuid};
     }
@@ -115,13 +115,13 @@ public:
 
     const std::vector<sstring> DEAD_STATES = { versioned_value::REMOVING_TOKEN, versioned_value::REMOVED_TOKEN,
                                                versioned_value::STATUS_LEFT, versioned_value::HIBERNATE };
-    static constexpr const int INTERVAL_IN_MILLIS = 1000;
+    static constexpr int INTERVAL_IN_MILLIS = 1000;
     // FIXME: Define StorageService.RING_DELAY -> cassandra.ring_delay_ms
-    static constexpr const int QUARANTINE_DELAY = (30 * 1000) * 2; // StorageService.RING_DELAY * 2;
-    static constexpr const int64_t A_VERY_LONG_TIME = 259200 * 1000; // 3 days in milliseconds
+    static constexpr int QUARANTINE_DELAY = (30 * 1000) * 2; // StorageService.RING_DELAY * 2;
+    static constexpr int64_t A_VERY_LONG_TIME = 259200 * 1000; // 3 days in milliseconds
 
     /** Maximimum difference in generation and version values we are willing to accept about a peer */
-    static constexpr const int64_t MAX_GENERATION_DIFFERENCE = 86400 * 365;
+    static constexpr int64_t MAX_GENERATION_DIFFERENCE = 86400 * 365;
     int64_t fat_client_timeout;
 private:
     std::random_device _random;

@@ -219,7 +219,7 @@ public:
         std::unique_ptr<rpc::protocol<serializer, messaging_verb>::client> rpc_client;
     };
 private:
-    static constexpr const uint16_t _default_port = 7000;
+    static constexpr uint16_t _default_port = 7000;
     gms::inet_address _listen_address;
     uint16_t _port;
     rpc::protocol<serializer, messaging_verb> _rpc;
