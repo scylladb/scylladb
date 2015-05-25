@@ -32,6 +32,7 @@ static inline future<> remove_files(sstring dir, unsigned long generation) {
     return when_all(remove_file(sstable::filename(dir, la, generation, big, sstable::component_type::Data)),
         remove_file(sstable::filename(dir, la, generation, big, sstable::component_type::Index)),
         remove_file(sstable::filename(dir, la, generation, big, sstable::component_type::Summary)),
+        remove_file(sstable::filename(dir, la, generation, big, sstable::component_type::Filter)),
         remove_file(sstable::filename(dir, la, generation, big, sstable::component_type::TOC))).then([] (auto t) {});
 }
 
