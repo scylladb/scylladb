@@ -57,7 +57,17 @@ public:
         }
         throw null_column_value(column_name);
     }
+    friend inline bool operator==(const result_set_row& x, const result_set_row& y);
+    friend inline bool operator!=(const result_set_row& x, const result_set_row& y);
 };
+
+inline bool operator==(const result_set_row& x, const result_set_row& y) {
+    return x._schema == y._schema && x._cells == y._cells;
+}
+
+inline bool operator!=(const result_set_row& x, const result_set_row& y) {
+    return !(x == y);
+}
 
 // Result set is an in-memory representation of query results in
 // deserialized format. To obtain a result set, use the result_set_builder
@@ -77,7 +87,12 @@ public:
         }
         return _rows[idx];
     }
+    friend inline bool operator==(const result_set& x, const result_set& y);
 };
+
+inline bool operator==(const result_set& x, const result_set& y) {
+    return x._rows == y._rows;
+}
 
 // Result set builder is passed as a visitor to query_result::consume()
 // function. You can call the build() method to obtain a result set that
