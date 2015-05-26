@@ -14,52 +14,35 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems
+ * Copyright 2015 Cloudius Systems
  */
-package org.apache.cassandra.dht;
+#pragma once
+#include "gms/inet_address.hh"
+#include "locator/token_metadata.hh"
+#include "dht/i_partitioner.hh"
 
-import java.io.DataInput;
-import java.io.IOException;
-import java.net.InetAddress;
-import java.util.*;
-import java.util.concurrent.ExecutionException;
+namespace dht {
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.config.Schema;
-import org.apache.cassandra.db.Keyspace;
-import org.apache.cassandra.db.TypeSizes;
-import org.apache.cassandra.exceptions.ConfigurationException;
-import org.apache.cassandra.gms.FailureDetector;
-import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.util.DataOutputPlus;
-import org.apache.cassandra.locator.AbstractReplicationStrategy;
-import org.apache.cassandra.locator.TokenMetadata;
-import org.apache.cassandra.service.StorageService;
-
-public class BootStrapper
-{
-    private static final Logger logger = LoggerFactory.getLogger(BootStrapper.class);
-
+class boot_strapper {
+    using inet_address = gms::inet_address;
+    using token_metadata = locator::token_metadata;
+    using token = dht::token;
     /* endpoint that needs to be bootstrapped */
-    protected final InetAddress address;
+    inet_address _address;
     /* token of the node being bootstrapped. */
-    protected final Collection<Token> tokens;
-    protected final TokenMetadata tokenMetadata;
-
-    public BootStrapper(InetAddress address, Collection<Token> tokens, TokenMetadata tmd)
-    {
-        assert address != null;
-        assert tokens != null && !tokens.isEmpty();
-
-        this.address = address;
-        this.tokens = tokens;
-        tokenMetadata = tmd;
+    std::vector<token> _tokens;
+    token_metadata _token_metadata;
+public:
+    boot_strapper(inet_address addr, std::vector<token> tokens, token_metadata tmd)
+        : _address(addr)
+        , _tokens(tokens)
+        , _token_metadata(tmd) {
     }
 
-    public void bootstrap()
-    {
+    void bootstrap() {
+#if 0
         if (logger.isDebugEnabled())
             logger.debug("Beginning bootstrap process");
 
@@ -85,6 +68,7 @@ public class BootStrapper
         {
             throw new RuntimeException("Error during boostrap: " + e.getCause().getMessage(), e.getCause());
         }
+#endif
     }
 
     /**
@@ -92,8 +76,8 @@ public class BootStrapper
      * otherwise, if num_tokens == 1, pick a token to assume half the load of the most-loaded node.
      * else choose num_tokens tokens at random
      */
-    public static Collection<Token> getBootstrapTokens(final TokenMetadata metadata) throws ConfigurationException
-    {
+    static std::set<token> get_bootstrap_tokens(token_metadata metadata) {
+#if 0
         Collection<String> initialTokens = DatabaseDescriptor.getInitialTokens();
         // if user specified tokens, use those
         if (initialTokens.size() > 0)
@@ -109,29 +93,32 @@ public class BootStrapper
             }
             return tokens;
         }
+#endif
+        // FIXME: DatabaseDescriptor.getNumTokens();
+        size_t num_tokens = 256;
+        if (num_tokens < 1) {
+            throw std::runtime_error("num_tokens must be >= 1");
+        }
 
-        int numTokens = DatabaseDescriptor.getNumTokens();
-        if (numTokens < 1)
-            throw new ConfigurationException("num_tokens must be >= 1");
+        // if (numTokens == 1)
+        //     logger.warn("Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
 
-        if (numTokens == 1)
-            logger.warn("Picking random token for a single vnode.  You should probably add more vnodes; failing that, you should probably specify the token manually");
-
-        return getRandomTokens(metadata, numTokens);
+        return get_random_tokens(metadata, num_tokens);
     }
 
-    public static Collection<Token> getRandomTokens(TokenMetadata metadata, int numTokens)
-    {
-        Set<Token> tokens = new HashSet<Token>(numTokens);
-        while (tokens.size() < numTokens)
-        {
-            Token token = StorageService.getPartitioner().getRandomToken();
-            if (metadata.getEndpoint(token) == null)
-                tokens.add(token);
+    static std::set<token> get_random_tokens(token_metadata metadata, size_t num_tokens) {
+        std::set<token> tokens;
+        while (tokens.size() < num_tokens) {
+            auto token = global_partitioner().get_random_token();
+            auto ep = metadata.get_endpoint(token);
+            if (!ep) {
+                tokens.emplace(token);
+            }
         }
         return tokens;
     }
 
+#if 0
     public static class StringSerializer implements IVersionedSerializer<String>
     {
         public static final StringSerializer instance = new StringSerializer();
@@ -151,4 +138,7 @@ public class BootStrapper
             return TypeSizes.NATIVE.sizeof(s);
         }
     }
-}
+#endif
+};
+
+} // namespace dht
