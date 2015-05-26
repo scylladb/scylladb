@@ -28,6 +28,7 @@
 #include "compound.hh"
 #include "core/future.hh"
 #include "cql3/column_specification.hh"
+#include "db/commitlog/replay_position.hh"
 #include <limits>
 #include <cstddef>
 #include "schema.hh"
@@ -94,13 +95,14 @@ public:
     future<const_mutation_partition_ptr> find_partition(const dht::decorated_key& key) const;
     future<const_mutation_partition_ptr> find_partition_slow(const partition_key& key) const;
     future<const_row_ptr> find_row(const dht::decorated_key& partition_key, clustering_key clustering_key) const;
-    void apply(const frozen_mutation& m);
-    void apply(const mutation& m);
+    void apply(const frozen_mutation& m, const db::replay_position& = db::replay_position(), database* = nullptr);
+    void apply(const mutation& m, const db::replay_position& = db::replay_position(), database* = nullptr);
+
     // Returns at most "cmd.limit" rows
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd) const;
 
     future<> populate(sstring datadir);
-    void seal_active_memtable();
+    void seal_active_memtable(database* = nullptr);
 private:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
@@ -108,7 +110,7 @@ private:
     template <typename Func>
     future<bool> for_all_partitions(Func&& func) const;
     future<> probe_file(sstring sstdir, sstring fname);
-    void seal_on_overflow();
+    void seal_on_overflow(database*);
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
@@ -246,7 +248,7 @@ class database {
     std::unique_ptr<db::config> _cfg;
 
     future<> init_commitlog();
-    future<> apply_in_memory(const frozen_mutation&);
+    future<> apply_in_memory(const frozen_mutation&, const db::replay_position&);
     future<> populate(sstring datadir);
 public:
     database();
@@ -306,26 +308,26 @@ class secondary_index_manager {};
 
 inline
 void
-column_family::apply(const mutation& m) {
-    active_memtable().apply(m);
-    seal_on_overflow();
+column_family::apply(const mutation& m, const db::replay_position& rp, database* db) {
+    active_memtable().apply(m, rp);
+    seal_on_overflow(db);
 }
 
 inline
 void
-column_family::seal_on_overflow() {
+column_family::seal_on_overflow(database* db) {
     // FIXME: something better
     if (++_mutation_count == 10000) {
         _mutation_count = 0;
-        seal_active_memtable();
+        seal_active_memtable(db);
     }
 }
 
 inline
 void
-column_family::apply(const frozen_mutation& m) {
-    active_memtable().apply(m);
-    seal_on_overflow();
+column_family::apply(const frozen_mutation& m, const db::replay_position& rp, database* db) {
+    active_memtable().apply(m, rp);
+    seal_on_overflow(db);
 }
 
 #endif /* DATABASE_HH_ */

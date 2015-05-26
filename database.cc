@@ -350,7 +350,7 @@ void column_family::add_memtable() {
 }
 
 void
-column_family::seal_active_memtable() {
+column_family::seal_active_memtable(database* db) {
     auto old = _memtables->back();
     if (old->empty()) {
         return;
@@ -371,13 +371,27 @@ column_family::seal_active_memtable() {
         sstables::sstable::version_types::la,
         sstables::sstable::format_types::big);
 
-    do_with(std::move(newtab), [&old, name, this] (sstables::sstable& newtab) {
+    do_with(std::move(newtab), [&old, name, this, db] (sstables::sstable& newtab) {
         // FIXME: write all components
-        return newtab.write_components(*old).then_wrapped([name, this, &newtab] (future<> ret) {
+        return newtab.write_components(*old).then_wrapped([name, this, &newtab, &old, db] (future<> ret) {
             try {
                 ret.get();
                 add_sstable(std::move(newtab));
                 // FIXME: drop memtable
+
+                // FIXME: until the surrounding function returns a future and
+                // caller ensures ordering (i.e. finish flushing one or more sequential tables before
+                // doing the discard), this below is _not_ correct, since the use of replay_position
+                // depends on us reporting the factual highest position we've actually flushed,
+                // _and_ all positions (for a given UUID) below having been dealt with.
+                //
+                // Note that the whole scheme is also dependent on memtables being "allocated" in order,
+                // i.e. we may not flush a younger memtable before and older, and we need to use the
+                // highest rp.
+                auto cl = db ? db->commitlog() : nullptr;
+                if (cl != nullptr) {
+                    cl->discard_completed_segments(_schema->id(), old->replay_position());
+                }
             } catch (std::exception& e) {
                 dblog.error("failed to write sstable: {}", e.what());
             } catch (...) {
@@ -464,11 +478,6 @@ database::init_commitlog() {
 
         db::commitlog::config cfg(*_cfg);
         cfg.commit_log_location = logdir;
-        // TODO: real config. Real logging.
-        // Right now we just set this up to use a single segment
-        // and discard everything left on disk (not filling it)
-        // with no hope of actually retrieving stuff...
-        cfg.commitlog_total_space_in_mb = 1;
 
         return db::commitlog::create_commitlog(cfg).then([this](db::commitlog&& log) {
             _commitlog = std::make_unique<db::commitlog>(std::move(log));
@@ -682,15 +691,24 @@ database::find_or_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
 }
 
 void
-memtable::apply(const mutation& m) {
-    mutation_partition& p = find_or_create_partition(m.decorated_key());
-    p.apply(*_schema, m.partition());
+memtable::update(const db::replay_position& rp) {
+    if (_replay_position < rp) {
+        _replay_position = rp;
+    }
 }
 
 void
-memtable::apply(const frozen_mutation& m) {
+memtable::apply(const mutation& m, const db::replay_position& rp) {
+    mutation_partition& p = find_or_create_partition(m.decorated_key());
+    p.apply(*_schema, m.partition());
+    update(rp);
+}
+
+void
+memtable::apply(const frozen_mutation& m, const db::replay_position& rp) {
     mutation_partition& p = find_or_create_partition_slow(m.key(*_schema));
     p.apply(*_schema, m.partition());
+    update(rp);
 }
 
 // Based on:
@@ -829,10 +847,10 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     return out;
 }
 
-future<> database::apply_in_memory(const frozen_mutation& m) {
+future<> database::apply_in_memory(const frozen_mutation& m, const db::replay_position& rp) {
     try {
         auto& cf = find_column_family(m.column_family_id());
-        cf.apply(m);
+        cf.apply(m, rp, this);
     } catch (no_such_column_family&) {
         // TODO: log a warning
         // FIXME: load keyspace meta-data from storage
@@ -849,10 +867,10 @@ future<> database::apply(const frozen_mutation& m) {
         bytes_view repr = m.representation();
         auto write_repr = [repr] (data_output& out) { out.write(repr.begin(), repr.end()); };
         return _commitlog->add_mutation(uuid, repr.size(), write_repr).then([&m, this](auto rp) {
-            return this->apply_in_memory(m);
+            return this->apply_in_memory(m, rp);
         });
     }
-    return apply_in_memory(m);
+    return apply_in_memory(m, db::replay_position());
 }
 
 keyspace::config
