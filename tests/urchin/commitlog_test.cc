@@ -12,6 +12,8 @@
 #include "tests/test-utils.hh"
 #include "core/future-util.hh"
 #include "core/scollectd_api.hh"
+#include "core/file.hh"
+#include "core/reactor.hh"
 #include "utils/UUID_gen.hh"
 #include "db/commitlog/commitlog.hh"
 

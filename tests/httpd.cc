@@ -48,7 +48,8 @@ BOOST_AUTO_TEST_CASE(test_param_matcher)
     param_matcher m("param");
     parameters param;
     BOOST_REQUIRE_EQUAL(m.match("/abc/hello", 4, param), 10);
-    BOOST_REQUIRE_EQUAL(param["param"], "/hello");
+    BOOST_REQUIRE_EQUAL(param.path("param"), "/hello");
+    BOOST_REQUIRE_EQUAL(param["param"], "hello");
 
 }
 
@@ -61,7 +62,7 @@ BOOST_AUTO_TEST_CASE(test_match_rule)
     mr.add_str("/hello").add_param("param");
     httpd::handler_base* res = mr.get("/hello/val1", param);
     BOOST_REQUIRE_EQUAL(res, h);
-    BOOST_REQUIRE_EQUAL(param["param"], "/val1");
+    BOOST_REQUIRE_EQUAL(param["param"], "val1");
     res = mr.get("/hell/val1", param);
     httpd::handler_base* nl = nullptr;
     BOOST_REQUIRE_EQUAL(res, nl);

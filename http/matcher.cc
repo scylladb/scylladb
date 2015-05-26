@@ -50,12 +50,12 @@ size_t param_matcher::match(const sstring& url, size_t ind, parameters& param) {
          * empty parameter allows only for the case of entire_path
          */
         if (_entire_path) {
-            param[_name] = "";
+            param.set(_name, "");
             return ind;
         }
         return sstring::npos;
     }
-    param[_name] = url.substr(ind, last - ind);
+    param.set(_name, url.substr(ind, last - ind));
     return last;
 }
 

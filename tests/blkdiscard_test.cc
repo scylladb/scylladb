@@ -22,6 +22,8 @@
 #include <algorithm>
 #include "core/app-template.hh"
 #include "core/future-util.hh"
+#include "core/file.hh"
+#include "core/reactor.hh"
 
 namespace bpo = boost::program_options;
 

@@ -46,7 +46,7 @@ extern thread_local jmp_buf g_unthreaded_context;
 // \c thread itself because \c thread is movable, and we want pointers
 // to this state to be captured.
 class thread_context {
-    static constexpr const size_t _stack_size = 128*1024;
+    static constexpr size_t _stack_size = 128*1024;
     std::unique_ptr<char[]> _stack{new char[_stack_size]};
     std::function<void ()> _func;
     jmp_buf _context;

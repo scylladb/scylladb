@@ -212,17 +212,17 @@ private:
 
     class tcb : public enable_lw_shared_from_this<tcb> {
         using clock_type = lowres_clock;
-        static constexpr const tcp_state CLOSED         = tcp_state::CLOSED;
-        static constexpr const tcp_state LISTEN         = tcp_state::LISTEN;
-        static constexpr const tcp_state SYN_SENT       = tcp_state::SYN_SENT;
-        static constexpr const tcp_state SYN_RECEIVED   = tcp_state::SYN_RECEIVED;
-        static constexpr const tcp_state ESTABLISHED    = tcp_state::ESTABLISHED;
-        static constexpr const tcp_state FIN_WAIT_1     = tcp_state::FIN_WAIT_1;
-        static constexpr const tcp_state FIN_WAIT_2     = tcp_state::FIN_WAIT_2;
-        static constexpr const tcp_state CLOSE_WAIT     = tcp_state::CLOSE_WAIT;
-        static constexpr const tcp_state CLOSING        = tcp_state::CLOSING;
-        static constexpr const tcp_state LAST_ACK       = tcp_state::LAST_ACK;
-        static constexpr const tcp_state TIME_WAIT      = tcp_state::TIME_WAIT;
+        static constexpr tcp_state CLOSED         = tcp_state::CLOSED;
+        static constexpr tcp_state LISTEN         = tcp_state::LISTEN;
+        static constexpr tcp_state SYN_SENT       = tcp_state::SYN_SENT;
+        static constexpr tcp_state SYN_RECEIVED   = tcp_state::SYN_RECEIVED;
+        static constexpr tcp_state ESTABLISHED    = tcp_state::ESTABLISHED;
+        static constexpr tcp_state FIN_WAIT_1     = tcp_state::FIN_WAIT_1;
+        static constexpr tcp_state FIN_WAIT_2     = tcp_state::FIN_WAIT_2;
+        static constexpr tcp_state CLOSE_WAIT     = tcp_state::CLOSE_WAIT;
+        static constexpr tcp_state CLOSING        = tcp_state::CLOSING;
+        static constexpr tcp_state LAST_ACK       = tcp_state::LAST_ACK;
+        static constexpr tcp_state TIME_WAIT      = tcp_state::TIME_WAIT;
         tcp_state _state = CLOSED;
         tcp& _tcp;
         connection* _conn = nullptr;

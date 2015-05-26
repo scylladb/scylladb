@@ -64,24 +64,19 @@ void schedule(std::unique_ptr<task> t);
 void engine_exit(std::exception_ptr eptr = {});
 
 template <typename Func>
-class lambda_task : public task {
+class lambda_task final : public task {
     Func _func;
 public:
     lambda_task(const Func& func) : _func(func) {}
     lambda_task(Func&& func) : _func(std::move(func)) {}
-    virtual void run() noexcept { _func(); }
+    virtual void run() noexcept override { _func(); }
 };
 
 template <typename Func>
-std::unique_ptr<task>
-make_task(const Func& func) {
-    return std::unique_ptr<task>(new lambda_task<Func>(func));
-}
-
-template <typename Func>
+inline
 std::unique_ptr<task>
 make_task(Func&& func) {
-    return std::unique_ptr<task>(new lambda_task<Func>(std::move(func)));
+    return std::make_unique<lambda_task<Func>>(std::forward<Func>(func));
 }
 
 void report_failed_future(std::exception_ptr ex);
@@ -139,6 +134,7 @@ struct future_state {
         }
         x._state = state::invalid;
     }
+    __attribute__((always_inline))
     ~future_state() noexcept {
         switch (_state) {
         case state::invalid:
@@ -219,8 +215,8 @@ struct future_state {
 template <>
 struct future_state<> {
     static_assert(sizeof(std::exception_ptr) == sizeof(void*), "exception_ptr not a pointer");
-    static constexpr const bool move_noexcept = true;
-    static constexpr const bool copy_noexcept = true;
+    static constexpr bool move_noexcept = true;
+    static constexpr bool copy_noexcept = true;
     enum class state : uintptr_t {
          invalid = 0,
          future = 1,
@@ -310,8 +306,8 @@ class promise {
     future_state<T...> _local_state;
     future_state<T...>* _state;
     std::unique_ptr<task> _task;
-    static constexpr const bool move_noexcept = future_state<T...>::move_noexcept;
-    static constexpr const bool copy_noexcept = future_state<T...>::copy_noexcept;
+    static constexpr bool move_noexcept = future_state<T...>::move_noexcept;
+    static constexpr bool copy_noexcept = future_state<T...>::copy_noexcept;
 public:
     promise() noexcept : _state(&_local_state) {}
     promise(promise&& x) noexcept(move_noexcept) : _future(x._future), _state(x._state), _task(std::move(x._task)) {
@@ -324,6 +320,7 @@ public:
         migrated();
     }
     promise(const promise&) = delete;
+    __attribute__((always_inline))
     ~promise() noexcept {
         abandoned();
     }
@@ -364,6 +361,7 @@ private:
         _state = &tws->_state;
         _task = std::move(tws);
     }
+    __attribute__((always_inline))
     void make_ready() noexcept;
     void migrated() noexcept;
     void abandoned() noexcept(move_noexcept);
@@ -434,8 +432,8 @@ template <typename... T>
 class future {
     promise<T...>* _promise;
     future_state<T...> _local_state;  // valid if !_promise
-    static constexpr const bool move_noexcept = future_state<T...>::move_noexcept;
-    static constexpr const bool copy_noexcept = future_state<T...>::copy_noexcept;
+    static constexpr bool move_noexcept = future_state<T...>::move_noexcept;
+    static constexpr bool copy_noexcept = future_state<T...>::copy_noexcept;
 private:
     future(promise<T...>* pr) noexcept : _promise(pr) {
         _promise->_future = this;
@@ -514,6 +512,7 @@ public:
         return *this;
     }
     void operator=(const future&) = delete;
+    __attribute__((always_inline))
     ~future() {
         if (_promise) {
             _promise->_future = nullptr;

@@ -30,9 +30,9 @@
 namespace memory {
 
 // TODO: Use getpagesize() in order to learn a size of a system PAGE.
-static constexpr const size_t page_bits = 12;
-static constexpr const size_t page_size = 1 << page_bits;       // 4K
-static constexpr const size_t huge_page_size = 512 * page_size; // 2M
+static constexpr size_t page_bits = 12;
+static constexpr size_t page_size = 1 << page_bits;       // 4K
+static constexpr size_t huge_page_size = 512 * page_size; // 2M
 
 void configure(std::vector<resource::memory> m,
         std::experimental::optional<std::string> hugetlbfs_path = {});

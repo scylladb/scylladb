@@ -33,6 +33,7 @@
 
 #include "scollectd.hh"
 #include "core/future-util.hh"
+#include "core/reactor.hh"
 #include "net/api.hh"
 #include "scollectd_api.hh"
 

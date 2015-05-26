@@ -21,6 +21,8 @@
 
 #include "core/app-template.hh"
 #include "core/future-util.hh"
+#include "core/reactor.hh"
+#include "net/api.hh"
 
 using namespace net;
 using namespace std::chrono_literals;
