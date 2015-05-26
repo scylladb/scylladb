@@ -28,6 +28,7 @@
 #include "utils/UUID_gen.hh"
 #include "core/distributed.hh"
 #include "dht/i_partitioner.hh"
+#include "dht/boot_strapper.hh"
 
 namespace service {
 /**
@@ -39,6 +40,7 @@ namespace service {
 class storage_service : public gms::i_endpoint_state_change_subscriber
 {
     using token = dht::token;
+    using boot_strapper = dht::boot_strapper;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(StorageService.class);
 
@@ -128,7 +130,7 @@ private:
 
 #endif
 public:
-    std::vector<token> bootstrapTokens;
+    std::set<token> bootstrapTokens;
 #if 0
 
     public void finishBootstrapping()
@@ -666,8 +668,7 @@ private:
             logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
 #endif
         if (should_bootstrap()) {
-            // FIXME:
-            // bootstrapTokens = BootStrapper.getBootstrapTokens(tokenMetadata);
+            bootstrapTokens = boot_strapper::get_bootstrap_tokens(tokenMetadata);
 #if 0
             if (SystemKeyspace.bootstrapInProgress())
                 logger.warn("Detected previous bootstrap failure; retrying");
@@ -770,8 +771,9 @@ private:
             assert !isBootstrapMode; // bootstrap will block until finished
 #endif
         } else {
-            // FIXME:
-            // bootstrapTokens = BootStrapper.getRandomTokens(tokenMetadata, DatabaseDescriptor.getNumTokens());
+            // FIXME: DatabaseDescriptor.getNumTokens()
+            size_t num_tokens = 256;
+            bootstrapTokens = boot_strapper::get_random_tokens(tokenMetadata, num_tokens);
 #if 0
             bootstrapTokens = SystemKeyspace.getSavedTokens();
             if (bootstrapTokens.isEmpty())
