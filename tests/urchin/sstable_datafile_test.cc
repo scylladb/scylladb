@@ -14,6 +14,7 @@
 #include <memory>
 #include "sstable_test.hh"
 #include "core/seastar.hh"
+#include "core/do_with.hh"
 
 #include <stdio.h>
 #include <ftw.h>
@@ -760,5 +761,98 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
                 });
             });
         });
+    });
+}
+
+SEASTAR_TEST_CASE(datafile_generation_11) {
+    return test_setup::do_with_test_directory([] {
+        auto s = complex_schema();
+
+        auto mtp = make_shared<memtable>(s);
+
+        const column_definition& set_col = *s->get_column_definition("reg_set");
+        const column_definition& static_set_col = *s->get_column_definition("static_collection");
+
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto c_key = clustering_key::from_exploded(*s, {to_bytes("c1"), to_bytes("c2")});
+
+        mutation m(key, s);
+
+        tombstone tomb(db_clock::now_in_usecs(), gc_clock::now());
+        set_type_impl::mutation set_mut{{ tomb }, {
+            { to_bytes("1"), make_atomic_cell({}) },
+            { to_bytes("2"), make_atomic_cell({}) },
+            { to_bytes("3"), make_atomic_cell({}) }
+        }};
+
+        auto set_type = static_pointer_cast<const set_type_impl>(set_col.type);
+        m.set_clustered_cell(c_key, set_col, set_type->serialize_mutation_form(set_mut));
+
+        auto static_set_type = static_pointer_cast<const set_type_impl>(static_set_col.type);
+        m.set_static_cell(static_set_col, static_set_type->serialize_mutation_form(set_mut));
+
+        auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
+        mutation m2(key2, s);
+        set_type_impl::mutation set_mut_single{{}, {{ to_bytes("4"), make_atomic_cell({}) }}};
+
+        m2.set_clustered_cell(c_key, set_col, set_type->serialize_mutation_form(set_mut_single));
+
+        mtp->apply(std::move(m));
+        mtp->apply(std::move(m2));
+
+        auto verifier = [s, set_col, c_key] (auto& mutation) {
+
+            auto& mp = mutation->partition();
+            BOOST_REQUIRE(mp.clustered_rows().size() == 1);
+            auto r = mp.find_row(c_key);
+            BOOST_REQUIRE(r);
+            BOOST_REQUIRE(r->size() == 1);
+            auto cell = r->find_cell(set_col.id);
+            BOOST_REQUIRE(cell);
+            auto t = static_pointer_cast<const collection_type_impl>(set_col.type);
+            return t->deserialize_mutation_form(cell->as_collection_mutation());
+        };
+
+        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 11, la, big);
+        return sst->write_components(*mtp).then([s, sst, mtp, verifier, tomb, &static_set_col] {
+            return reusable_sst("tests/urchin/sstables/tests-temporary", 11).then([s, verifier, tomb, &static_set_col] (auto sstp) mutable {
+                return do_with(sstables::key("key1"), [sstp, s, verifier, tomb, &static_set_col] (auto& key) {
+                    return sstp->read_row(s, key).then([sstp, s, verifier, tomb, &static_set_col] (auto mutation) {
+                        auto verify_set = [&tomb] (auto m) {
+                            BOOST_REQUIRE(bool(m.tomb) == true);
+                            BOOST_REQUIRE(m.tomb == tomb);
+                            BOOST_REQUIRE(m.cells.size() == 3);
+                            BOOST_REQUIRE(m.cells[0].first == to_bytes("1"));
+                            BOOST_REQUIRE(m.cells[1].first == to_bytes("2"));
+                            BOOST_REQUIRE(m.cells[2].first == to_bytes("3"));
+                        };
+
+
+                        auto& mp = mutation->partition();
+                        auto& ssr = mp.static_row();
+                        auto scol = ssr.find_cell(static_set_col.id);
+                        BOOST_REQUIRE(scol);
+
+                        // The static set
+                        auto t = static_pointer_cast<const collection_type_impl>(static_set_col.type);
+                        auto mut = t->deserialize_mutation_form(scol->as_collection_mutation());
+                        verify_set(mut);
+
+                        // The clustered set
+                        auto m = verifier(mutation);
+                        verify_set(m);
+                    });
+                }).then([sstp, s, verifier] {
+                    return do_with(sstables::key("key2"), [sstp, s, verifier] (auto& key) {
+                        return sstp->read_row(s, key).then([sstp, s, verifier] (auto mutation) {
+                            auto m = verifier(mutation);
+                            BOOST_REQUIRE(!m.tomb);
+                            BOOST_REQUIRE(m.cells.size() == 1);
+                            BOOST_REQUIRE(m.cells[0].first == to_bytes("4"));
+                        });
+                    });
+                });
+            });
+        }).then([sst, mtp] {});
     });
 }
