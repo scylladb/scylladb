@@ -51,6 +51,9 @@ class storage_service : public gms::i_endpoint_state_change_subscriber
 public:
     static int RING_DELAY; // delay after which we assume ring has stablized
 
+    const locator::token_metadata& get_token_metadata() const {
+        return tokenMetadata;
+    }
 private:
     static int getRingDelay()
     {
@@ -4216,4 +4219,22 @@ inline distributed<storage_service>& get_storage_service() {
 inline storage_service& get_local_storage_service() {
     return _the_storage_service.local();
 }
+
+inline future<std::vector<dht::token>> sorted_tokens() {
+    return smp::submit_to(0, [] {
+        return get_local_storage_service().get_token_metadata().sorted_tokens();
+    });
+}
+inline future<std::vector<dht::token>> get_tokens(const gms::inet_address& addr) {
+    return smp::submit_to(0, [addr] {
+        return get_local_storage_service().get_token_metadata().get_tokens(addr);
+    });
+}
+
+inline future<std::map<dht::token, gms::inet_address>> get_token_to_endpoint() {
+    return smp::submit_to(0, [] {
+        return get_local_storage_service().get_token_metadata().get_token_to_endpoint();
+    });
+}
+
 }
