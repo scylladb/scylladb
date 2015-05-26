@@ -522,6 +522,7 @@ public:
         Runtime.getRuntime().addShutdownHook(drainOnShutdown);
 #endif
         prepare_to_join();
+        join_token_ring(delay);
 #if 0
         // Has to be called after the host id has potentially changed in prepareToJoin().
         for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
@@ -624,11 +625,9 @@ private:
             BatchlogManager.instance.start();
 #endif
         }
-
     }
+    void join_token_ring(int delay) {
 #if 0
-    private void joinTokenRing(int delay) throws ConfigurationException
-    {
         joined = true;
 
         // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
@@ -802,8 +801,9 @@ private:
         {
             logger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
         }
+#endif
     }
-
+#if 0
     public void gossipSnitchInfo()
     {
         IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
