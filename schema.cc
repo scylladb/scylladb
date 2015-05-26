@@ -85,6 +85,26 @@ schema::schema(const raw_schema& raw)
     for (auto& def : _raw._columns) {
         def.column_specification = make_column_specification(def);
         def.id = id - column_offset(def.kind);
+
+        def._thrift_bits = column_definition::thrift_bits();
+
+        {
+            // is_on_all_components
+            // TODO : In origin, this predicate is "componentIndex == null", which is true in
+            // a number of cases, some of which I've most likely missed...
+            switch (def.kind) {
+            case column_kind::partition_key:
+                // In origin, ci == null is true for a PK column where CFMetaData "keyValidator" is non-composite.
+                // Which is true of #pk == 1
+                def._thrift_bits.is_on_all_components = partition_key_size() == 1;
+                break;
+            default:
+                // Or any other column where "comparator" is not compound
+                def._thrift_bits.is_on_all_components = !thrift().has_compound_comparator();
+                break;
+            }
+        }
+
         ++id;
     }
 
@@ -171,6 +191,10 @@ bool
 column_definition::is_compact_value() const {
     warn(unimplemented::cause::COMPACT_TABLES);
     return false;
+}
+
+bool column_definition::is_on_all_components() const {
+    return _thrift_bits.is_on_all_components;
 }
 
 // Based on org.apache.cassandra.config.CFMetaData#generateLegacyCfId

@@ -32,6 +32,8 @@ enum class index_type {
 
 typedef std::unordered_map<sstring, sstring> index_options_map;
 
+class schema;
+
 struct index_info {
     index_info(::index_type = ::index_type::none
             , std::experimental::optional<sstring> index_name = std::experimental::optional<sstring>()
@@ -52,6 +54,17 @@ public:
     }
 private:
     bytes _name;
+
+    struct thrift_bits {
+        thrift_bits()
+            : is_on_all_components(0)
+        {}
+        uint8_t is_on_all_components : 1;
+        // more...?
+    };
+
+    thrift_bits _thrift_bits;
+    friend class schema;
 public:
     column_definition(bytes name, data_type type, column_kind kind, index_info = index_info());
 
@@ -83,6 +96,7 @@ public:
         assert(is_primary_key());
         return id;
     }
+    bool is_on_all_components() const;
 };
 
 /*
