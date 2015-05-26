@@ -418,13 +418,11 @@ private:
     }
 #endif
 public:
-    void init_server()
-    {
-        init_server(RING_DELAY);
+    future<> init_server() {
+        return init_server(RING_DELAY);
     }
 
-    void init_server(int delay)
-    {
+    future<> init_server(int delay) {
 #if 0
         logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
         logger.info("Thrift API version: {}", cassandraConstants.VERSION);
@@ -522,8 +520,10 @@ public:
         }, "StorageServiceShutdownHook");
         Runtime.getRuntime().addShutdownHook(drainOnShutdown);
 #endif
-        prepare_to_join();
-        join_token_ring(delay);
+        return prepare_to_join().then([this, delay] {
+            join_token_ring(delay);
+            return make_ready_future<>();
+        });
 #if 0
         // Has to be called after the host id has potentially changed in prepareToJoin().
         for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
@@ -566,7 +566,7 @@ public:
     }
 #endif
 private:
-    void prepare_to_join()
+    future<> prepare_to_join()
     {
         if (!joined) {
             std::map<gms::application_state, gms::versioned_value> app_states;
@@ -611,7 +611,13 @@ private:
 
             auto& gossiper = gms::get_local_gossiper();
             gossiper.register_(this);
-            gossiper.start(0/*SystemKeyspace.incrementAndGetGeneration()*/, app_states);
+            using namespace std::chrono;
+            auto now = high_resolution_clock::now().time_since_epoch();
+            int generation_number = duration_cast<seconds>(now).count();
+            // FIXME: SystemKeyspace.incrementAndGetGeneration()
+            return gossiper.start(generation_number, app_states).then([] {
+                print("Start gossiper service ...\n");
+            });
 #if 0
             // gossip snitch infos (local DC and rack)
             gossipSnitchInfo();
@@ -626,7 +632,9 @@ private:
             BatchlogManager.instance.start();
 #endif
         }
+        return make_ready_future<>();
     }
+
     void join_token_ring(int delay) {
 #if 0
         joined = true;
