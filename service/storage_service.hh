@@ -27,6 +27,7 @@
 #include "gms/gossiper.hh"
 #include "utils/UUID_gen.hh"
 #include "core/distributed.hh"
+#include "dht/i_partitioner.hh"
 
 namespace service {
 /**
@@ -37,6 +38,7 @@ namespace service {
  */
 class storage_service : public gms::i_endpoint_state_change_subscriber
 {
+    using token = dht::token;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(StorageService.class);
 
@@ -124,7 +126,10 @@ private:
 
     private final ObjectName jmxObjectName;
 
-    private Collection<Token> bootstrapTokens = null;
+#endif
+public:
+    std::vector<token> bootstrapTokens;
+#if 0
 
     public void finishBootstrapping()
     {
@@ -659,8 +664,11 @@ private:
                      DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()));
         if (DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()))
             logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
-        if (should_bootstrap())
-        {
+#endif
+        if (should_bootstrap()) {
+            // FIXME:
+            // bootstrapTokens = BootStrapper.getBootstrapTokens(tokenMetadata);
+#if 0
             if (SystemKeyspace.bootstrapInProgress())
                 logger.warn("Detected previous bootstrap failure; retrying");
             else
@@ -760,9 +768,11 @@ private:
 
             bootstrap(bootstrapTokens);
             assert !isBootstrapMode; // bootstrap will block until finished
-        }
-        else
-        {
+#endif
+        } else {
+            // FIXME:
+            // bootstrapTokens = BootStrapper.getRandomTokens(tokenMetadata, DatabaseDescriptor.getNumTokens());
+#if 0
             bootstrapTokens = SystemKeyspace.getSavedTokens();
             if (bootstrapTokens.isEmpty())
             {
@@ -790,8 +800,9 @@ private:
                 else
                     logger.info("Using saved tokens {}", bootstrapTokens);
             }
+#endif
         }
-
+#if 0
         // if we don't have system_traces keyspace at this point, then create it manually
         if (Schema.instance.getKSMetaData(TraceKeyspace.NAME) == null)
             MigrationManager.announceNewKeyspace(TraceKeyspace.definition(), 0, false);
