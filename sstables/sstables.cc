@@ -389,17 +389,18 @@ write(file_writer& out, std::vector<Members>& arr) {
 template <typename Members>
 typename std::enable_if_t<std::is_integral<Members>::value, future<>>
 write(file_writer& out, std::vector<Members>& arr) {
-    std::vector<Members> tmp;
-    tmp.resize(arr.size());
-    // copy arr into tmp converting each entry into big-endian representation.
-    auto *nr = reinterpret_cast<const net::packed<Members> *>(arr.data());
-    for (size_t i = 0; i < arr.size(); i++) {
-        tmp[i] = net::hton(nr[i]);
-    }
-    auto p = reinterpret_cast<const char*>(tmp.data());
-    auto bytes = tmp.size() * sizeof(Members);
-    return out.write(p, bytes).then([&out] (...) -> future<> {
-        return make_ready_future<>();
+    return do_with(std::vector<Members>(), [&out, &arr] (auto& tmp) {
+        tmp.resize(arr.size());
+        // copy arr into tmp converting each entry into big-endian representation.
+        auto *nr = reinterpret_cast<const net::packed<Members> *>(arr.data());
+        for (size_t i = 0; i < arr.size(); i++) {
+            tmp[i] = net::hton(nr[i]);
+        }
+        auto p = reinterpret_cast<const char*>(tmp.data());
+        auto bytes = tmp.size() * sizeof(Members);
+        return out.write(p, bytes).then([&out] (...) -> future<> {
+            return make_ready_future<>();
+        });
     });
 }
 
