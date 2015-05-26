@@ -21,6 +21,26 @@ using column_id = uint32_t;
 
 enum class column_kind { partition_key, clustering_key, regular_column, static_column,  };
 
+// CMH this is also manually defined in thrift gen file.
+enum class index_type {
+    keys,
+    custom,
+    composites,
+    none, // cwi: added none to avoid "optional" bs.
+};
+
+typedef std::unordered_map<sstring, sstring> index_options_map;
+
+struct index_info {
+    index_info(::index_type = ::index_type::none
+            , std::experimental::optional<sstring> index_name = std::experimental::optional<sstring>()
+            , std::experimental::optional<index_options_map> = std::experimental::optional<index_options_map>());
+
+    enum index_type index_type = ::index_type::none;
+    std::experimental::optional<sstring> index_name;
+    std::experimental::optional<index_options_map> index_options;
+};
+
 class column_definition final {
 public:
     template<typename ColumnRange>
@@ -32,7 +52,7 @@ public:
 private:
     bytes _name;
 public:
-    column_definition(bytes name, data_type type, column_id id, column_kind kind);
+    column_definition(bytes name, data_type type, column_id id, column_kind kind, index_info = index_info());
 
     data_type type;
 
@@ -43,6 +63,7 @@ public:
 
     column_kind kind;
     ::shared_ptr<cql3::column_specification> column_specification;
+    index_info idx_info;
 
     bool is_static() const { return kind == column_kind::static_column; }
     bool is_regular() const { return kind == column_kind::regular_column; }
@@ -95,6 +116,7 @@ public:
     struct column {
         bytes name;
         data_type type;
+        index_info idx_info;
         struct name_compare {
             data_type type;
             name_compare(data_type type) : type(type) {}

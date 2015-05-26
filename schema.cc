@@ -101,12 +101,15 @@ schema::has_collections() const {
     });
 }
 
-column_definition::column_definition(bytes name, data_type type, column_id id, column_kind kind)
-    : _name(std::move(name))
-    , type(std::move(type))
-    , id(id)
-    , kind(kind)
-{ }
+index_info::index_info(::index_type idx_type,
+        std::experimental::optional<sstring> idx_name,
+        std::experimental::optional<index_options_map> idx_options)
+    : index_type(idx_type), index_name(idx_name), index_options(idx_options)
+{}
+
+column_definition::column_definition(bytes name, data_type type, column_id id, column_kind kind, index_info idx)
+        : _name(std::move(name)), type(std::move(type)), id(id), kind(kind), idx_info(std::move(idx))
+{}
 
 const column_definition*
 schema::get_column_definition(const bytes& name) const {
