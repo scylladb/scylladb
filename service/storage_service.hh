@@ -25,6 +25,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "locator/token_metadata.hh"
 #include "gms/gossiper.hh"
+#include "utils/UUID_gen.hh"
 
 namespace service {
 /**
@@ -60,6 +61,7 @@ private:
     }
     /* This abstraction maintains the token/endpoint metadata information */
     locator::token_metadata tokenMetadata;
+    gms::versioned_value::versioned_value_factory value_factory;
 #if 0
     public volatile VersionedValue.VersionedValueFactory valueFactory = new VersionedValue.VersionedValueFactory(getPartitioner());
 
@@ -564,9 +566,8 @@ public:
 private:
     void prepare_to_join()
     {
-        if (!joined)
-        {
-            std::map<gms::application_state, gms::versioned_value> app_state;
+        if (!joined) {
+            std::map<gms::application_state, gms::versioned_value> app_states;
 #if 0
             if (DatabaseDescriptor.isReplacing() && !(Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true"))))
                 throw new ConfigurationException("Cannot set both join_ring=false and attempt to replace a node");
@@ -586,22 +587,29 @@ private:
             {
                 checkForEndpointCollision();
             }
+#endif
 
             // have to start the gossip service before we can see any info on other nodes.  this is necessary
             // for bootstrap to get the load info it needs.
             // (we won't be part of the storage ring though until we add a counterId to our state, below.)
             // Seed the host ID-to-endpoint map with our own ID.
+#if 0
             UUID localHostId = SystemKeyspace.getLocalHostId();
             getTokenMetadata().updateHostId(localHostId, FBUtilities.getBroadcastAddress());
-            appStates.put(ApplicationState.NET_VERSION, valueFactory.networkVersion());
-            appStates.put(ApplicationState.HOST_ID, valueFactory.hostId(localHostId));
-            appStates.put(ApplicationState.RPC_ADDRESS, valueFactory.rpcaddress(DatabaseDescriptor.getBroadcastRpcAddress()));
-            appStates.put(ApplicationState.RELEASE_VERSION, valueFactory.releaseVersion());
-            logger.info("Starting up server gossip");
 #endif
+            // FIXME: SystemKeyspace.getLocalHostId();
+            utils::UUID local_host_id = utils::UUID_gen::get_time_UUID();
+            // FIXME: DatabaseDescriptor.getBroadcastRpcAddress()
+            gms::inet_address broadcast_rpc_address;
+            app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
+            app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
+            app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
+            app_states.emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
+            //logger.info("Starting up server gossip");
+
             auto& gossiper = gms::get_local_gossiper();
             gossiper.register_(this);
-            gossiper.start(0/*SystemKeyspace.incrementAndGetGeneration()*/, app_state);
+            gossiper.start(0/*SystemKeyspace.incrementAndGetGeneration()*/, app_states);
 #if 0
             // gossip snitch infos (local DC and rack)
             gossipSnitchInfo();
