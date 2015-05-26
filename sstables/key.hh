@@ -96,8 +96,6 @@ inline key maximum_key() {
     return key(key::kind::after_all_keys);
 };
 
-bytes composite_from_clustering_key(const schema& s, const clustering_key& ck);
-
 class composite_view {
     bytes_view _bytes;
 public:
@@ -107,6 +105,22 @@ public:
 
     explicit operator bytes_view() const {
         return _bytes;
+    }
+};
+
+class composite {
+    bytes _bytes;
+public:
+    composite (bytes&& b) : _bytes(std::move(b)) {}
+    static composite from_bytes(bytes b) { return composite(std::move(b)); }
+    static composite from_clustering_key(const schema& s, const clustering_key& ck);
+    static composite from_exploded(const std::vector<bytes_view>& v);
+    static composite static_prefix(const schema& s);
+    explicit operator bytes_view() const {
+        return _bytes;
+    }
+    operator composite_view() const {
+        return composite_view(_bytes);
     }
 };
 }
