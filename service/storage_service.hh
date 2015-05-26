@@ -26,6 +26,7 @@
 #include "locator/token_metadata.hh"
 #include "gms/gossiper.hh"
 #include "utils/UUID_gen.hh"
+#include "core/distributed.hh"
 
 namespace service {
 /**
@@ -4175,5 +4176,13 @@ public:
 #endif
 };
 
-extern storage_service storage_service_instance;
+extern distributed<storage_service> _the_storage_service;
+
+inline distributed<storage_service>& get_storage_service() {
+    return _the_storage_service;
+}
+
+inline storage_service& get_local_storage_service() {
+    return _the_storage_service.local();
+}
 }

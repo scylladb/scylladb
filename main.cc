@@ -14,6 +14,7 @@
 #include "message/messaging_service.hh"
 #include "gms/failure_detector.hh"
 #include "gms/gossiper.hh"
+#include "service/storage_service.hh"
 #include "dns.hh"
 
 namespace bpo = boost::program_options;
@@ -24,6 +25,12 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
         return make_ready_future<>();
     }
     return cfg.read_from_file(opts["options-file"].as<sstring>());
+}
+
+future<> init_storage_service() {
+    return service::get_storage_service().start_single().then([] {
+        print("Start Storage service ...\n");
+    });
 }
 
 future<> init_messaging_service(auto listen_address, auto seed_provider) {
@@ -81,6 +88,8 @@ int main(int ac, char** av) {
         }).then([&db] {
             engine().at_exit([&db] { return db.stop(); });
             return db.invoke_on_all(&database::init_from_data_directory);
+        }).then([] {
+            return init_storage_service();
         }).then([listen_address, seed_provider] {
             return init_messaging_service(listen_address, seed_provider);
         }).then([&db, &proxy, &qp] {
