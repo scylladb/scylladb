@@ -6,6 +6,7 @@
 #include "http/api_docs.hh"
 #include "storage_service.hh"
 #include "commitlog.hh"
+#include "gossiper.hh"
 
 namespace api {
 
@@ -20,6 +21,10 @@ future<> set_server(http_context& ctx) {
         rb->register_function(r, "commitlog",
                                 "The commit log API");
         set_commitlog(ctx,r);
+        rb->register_function(r, "gossiper",
+                                "The gossiper API");
+        set_gossiper(ctx,r);
+
     });
 }
 
