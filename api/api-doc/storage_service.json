@@ -24,6 +24,109 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/storage_service/tokens",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns a list of the tokens for this node",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_tokens",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/tokens/{endpoint}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns a list of the tokens for or a specified node",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_node_tokens",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"endpoint",
+                     "description":"The endpoint",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/commitlog",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns the location of the commit log files",
+               "type":"string",
+               "nickname":"get_commitlog",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/tokens_endpoint",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns a list of the tokens endpoint mapping",
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "nickname":"get_token_endpoint",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                  }
+               ]
+            }
+         ]
       }
-   ]
+   ],
+    "models" : {
+        "mapper": {
+           "id": "mapper",
+           "description": "A key value mapping",
+               "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "The key"
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The value"
+                }
+            }
+        }
+    }
 }
