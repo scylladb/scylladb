@@ -559,13 +559,16 @@ public:
         if (drainOnShutdown != null)
             Runtime.getRuntime().removeShutdownHook(drainOnShutdown);
     }
-
-    private boolean shouldBootstrap()
-    {
-        return DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && !DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress());
-    }
 #endif
 private:
+    bool should_bootstrap() {
+        // FIXME: Currently, we do boostrap if we are not a seed node.
+        // return DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && !DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress());
+        auto& gossiper = gms::get_local_gossiper();
+        auto seeds = gossiper.get_seeds();
+        auto broadcast_address = gossiper.get_broadcast_address();
+        return !seeds.count(broadcast_address);
+    }
     future<> prepare_to_join()
     {
         if (!joined) {
@@ -585,7 +588,7 @@ private:
                 appStates.put(ApplicationState.TOKENS, valueFactory.tokens(bootstrapTokens));
                 appStates.put(ApplicationState.STATUS, valueFactory.hibernate(true));
             }
-            else if (shouldBootstrap())
+            else if (should_bootstrap())
             {
                 checkForEndpointCollision();
             }
@@ -656,7 +659,7 @@ private:
                      DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()));
         if (DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()))
             logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
-        if (shouldBootstrap())
+        if (should_bootstrap())
         {
             if (SystemKeyspace.bootstrapInProgress())
                 logger.warn("Detected previous bootstrap failure; retrying");

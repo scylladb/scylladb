@@ -88,13 +88,12 @@ private:
         // FIXME: DatabaseDescriptor.getPartitionerName()
         return "my_partitioner_name";
     }
-private:
+    std::set<inet_address> _seeds_from_config;
+public:
     inet_address get_broadcast_address() {
         // FIXME: Helper for FBUtilities.getBroadcastAddress
         return ms().listen_address();
     }
-    std::set<inet_address> _seeds_from_config;
-public:
     std::set<inet_address> get_seeds() {
         // FIXME: DatabaseDescriptor.getSeeds()
         return _seeds_from_config;
