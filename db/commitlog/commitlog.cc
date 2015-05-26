@@ -216,7 +216,7 @@ public:
 
     static constexpr size_t alignment = 4096;
     // TODO : tune initial / default size
-    static constexpr size_t default_size = 32 * alignment;
+    static constexpr size_t default_size = align_up(128 * 1024, alignment);
 
     segment(segment_manager* m, const descriptor& d, file && f)
             : _segment_manager(m), _desc(std::move(d)), _file(std::move(f))
