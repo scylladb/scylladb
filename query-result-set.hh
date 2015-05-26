@@ -29,9 +29,9 @@ public:
 // including regular column cells, partition keys, as well as static values.
 class result_set_row {
     schema_ptr _schema;
-    std::unordered_map<sstring, boost::any> _cells;
+    std::unordered_map<sstring, data_value> _cells;
 public:
-    result_set_row(schema_ptr schema, std::unordered_map<sstring, boost::any>&& cells)
+    result_set_row(schema_ptr schema, std::unordered_map<sstring, data_value>&& cells)
         : _schema{schema}
         , _cells{std::move(cells)}
     { }
@@ -43,10 +43,11 @@ public:
         if (it == _cells.end()) {
             throw no_such_column(column_name);
         }
-        if (it->second.empty()) {
+        auto&& value = it->second.value();
+        if (value.empty()) {
             return std::experimental::nullopt;
         }
-        return std::experimental::optional<T>{boost::any_cast<T>(it->second)};
+        return std::experimental::optional<T>{boost::any_cast<T>(value)};
     }
     template<typename T>
     T get_nonnull(const sstring& column_name) const throw (no_such_column, null_column_value) {
@@ -84,7 +85,7 @@ public:
 class result_set_builder {
     schema_ptr _schema;
     std::vector<result_set_row> _rows;
-    std::unordered_map<sstring, boost::any> _pkey_cells;
+    std::unordered_map<sstring, data_value> _pkey_cells;
 public:
     result_set_builder(schema_ptr schema);
     lw_shared_ptr<result_set> build() const;
@@ -94,9 +95,9 @@ public:
     void accept_new_row(const result_row_view &static_row, const result_row_view &row);
     void accept_partition_end(const result_row_view& static_row);
 private:
-    std::unordered_map<sstring, boost::any> deserialize(const partition_key& key);
-    std::unordered_map<sstring, boost::any> deserialize(const clustering_key& key);
-    std::unordered_map<sstring, boost::any> deserialize(const result_row_view& row, bool is_static);
+    std::unordered_map<sstring, data_value> deserialize(const partition_key& key);
+    std::unordered_map<sstring, data_value> deserialize(const clustering_key& key);
+    std::unordered_map<sstring, data_value> deserialize(const result_row_view& row, bool is_static);
 };
 
 }
