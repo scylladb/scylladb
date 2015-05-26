@@ -1022,6 +1022,21 @@ void sstable::write_row_marker(file_writer& out, const rows_entry& clustered_row
     write(out, mask, timestamp, value_length).get();
 }
 
+void sstable::write_range_tombstone(file_writer& out, const composite& clustering_prefix, std::vector<bytes_view> suffix, const tombstone t) {
+    if (!t) {
+        return;
+    }
+
+    write_column_name(out, clustering_prefix, suffix, composite_marker::start_range);
+    column_mask mask = column_mask::range_tombstone;
+    write(out, mask).get();
+    write_column_name(out, clustering_prefix, suffix, composite_marker::end_range);
+    uint64_t timestamp = t.timestamp;
+    uint32_t deletion_time = t.deletion_time.time_since_epoch().count();
+
+    write(out, deletion_time, timestamp).get();
+}
+
 // write_datafile_clustered_row() is about writing a clustered_row to data file according to SSTables format.
 // clustered_row contains a set of cells sharing the same clustering key.
 void sstable::write_clustered_row(file_writer& out, schema_ptr schema, const rows_entry& clustered_row) {
