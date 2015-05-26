@@ -25,6 +25,7 @@
 #include <boost/algorithm/cxx11/all_of.hpp>
 #include <boost/function_output_iterator.hpp>
 #include <boost/range/algorithm/heap_algorithm.hpp>
+#include <boost/range/algorithm/find.hpp>
 #include "frozen_mutation.hh"
 #include "mutation_partition_applier.hh"
 #include "core/do_with.hh"
@@ -429,15 +430,15 @@ column_family::seal_active_memtable() {
         sstables::sstable::version_types::la,
         sstables::sstable::format_types::big);
 
-    do_with(std::move(newtab), [&old, name, this] (sstables::sstable& newtab) {
+    do_with(std::move(newtab), [old, name, this] (sstables::sstable& newtab) {
         // FIXME: write all components
         return newtab.write_components(*old).then([&newtab] {
             return newtab.load();
-        }).then_wrapped([name, this, &newtab] (future<> ret) {
+        }).then_wrapped([name, this, &newtab, old] (future<> ret) {
             try {
                 ret.get();
                 add_sstable(std::move(newtab));
-                // FIXME: drop memtable
+                _memtables->erase(boost::find(*_memtables, old));
             } catch (std::exception& e) {
                 dblog.error("failed to write sstable: {}", e.what());
             } catch (...) {
