@@ -7,7 +7,7 @@
 
 #include "http/httpd.hh"
 #include "database.hh"
-
+#include <boost/lexical_cast.hpp>
 namespace api {
 
 struct http_context {
@@ -17,6 +17,15 @@ struct http_context {
 };
 
 future<> set_server(http_context& ctx);
+
+template<class T>
+std::vector<sstring> container_to_vec(const T& container) {
+    std::vector<sstring> res;
+    for (auto i : container) {
+        res.push_back(boost::lexical_cast<sstring>(i));
+    }
+    return res;
+}
 
 }
 
