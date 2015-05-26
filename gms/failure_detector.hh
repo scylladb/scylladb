@@ -174,4 +174,47 @@ inline distributed<failure_detector>& get_failure_detector() {
     return _the_failure_detector;
 }
 
+inline future<> set_phi_convict_threshold(double phi) {
+    return smp::submit_to(0, [phi] {
+        get_local_failure_detector().set_phi_convict_threshold(phi);
+    });
+}
+
+inline  future<double> get_phi_convict_threshold() {
+    return smp::submit_to(0, [] {
+        return get_local_failure_detector().get_phi_convict_threshold();
+    });
+}
+
+inline future<sstring> get_all_endpoint_states() {
+    return smp::submit_to(0, [] {
+        return get_local_failure_detector().get_all_endpoint_states();
+    });
+}
+
+inline future<sstring> get_endpoint_state(sstring address) {
+    return smp::submit_to(0, [address] {
+        return get_local_failure_detector().get_endpoint_state(address);
+    });
+}
+
+inline future<std::map<sstring, sstring>> get_simple_states() {
+    return smp::submit_to(0, [] {
+        return get_local_failure_detector().get_simple_states();
+    });
+}
+
+inline future<int> get_down_endpoint_count() {
+    return smp::submit_to(0, [] {
+        return get_local_failure_detector().get_down_endpoint_count();
+    });
+}
+
+
+inline future<int> get_up_endpoint_count() {
+    return smp::submit_to(0, [] {
+        return get_local_failure_detector().get_up_endpoint_count();
+    });
+}
+
 } // namespace gms
