@@ -27,6 +27,7 @@
 #include "util/serialization.hh"
 #include "utils/UUID.hh"
 #include "version_generator.hh"
+#include "gms/inet_address.hh"
 
 namespace gms {
 
@@ -226,22 +227,26 @@ public:
             return versioned_value(rackId);
         }
 
-#if 0
-        public VersionedValue rpcaddress(InetAddress endpoint)
+        versioned_value rpcaddress(gms::inet_address endpoint)
         {
-            return new VersionedValue(endpoint.getHostAddress());
+            // FIXME: endpoint.getHostAddress()
+            sstring addr;
+            return versioned_value(addr);
         }
 
-        public VersionedValue releaseVersion()
+        versioned_value release_version()
         {
-            return new VersionedValue(FBUtilities.getReleaseVersionString());
+            // FIXME: FBUtilities.getReleaseVersionString()
+            sstring ver("urchin_1_0");
+            return versioned_value(ver);
         }
 
-        public VersionedValue networkVersion()
+        versioned_value network_version()
         {
-            return new VersionedValue(String.valueOf(MessagingService.current_version));
+            // FIXME: MessagingService.current_version
+            sstring ver("ms_1_0");
+            return versioned_value(ver);
         }
-#endif
 
         versioned_value internalIP(const sstring &private_ip)
         {

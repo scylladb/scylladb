@@ -88,13 +88,12 @@ private:
         // FIXME: DatabaseDescriptor.getPartitionerName()
         return "my_partitioner_name";
     }
-private:
+    std::set<inet_address> _seeds_from_config;
+public:
     inet_address get_broadcast_address() {
         // FIXME: Helper for FBUtilities.getBroadcastAddress
         return ms().listen_address();
     }
-    std::set<inet_address> _seeds_from_config;
-public:
     std::set<inet_address> get_seeds() {
         // FIXME: DatabaseDescriptor.getSeeds()
         return _seeds_from_config;
@@ -470,6 +469,7 @@ public:
     static int64_t compute_expire_time();
 public:
     void dump_endpoint_state_map();
+    void debug_show();
 };
 
 extern distributed<gossiper> _the_gossiper;

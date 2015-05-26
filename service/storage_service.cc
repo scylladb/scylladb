@@ -3,11 +3,12 @@
  */
 
 #include "storage_service.hh"
+#include "core/distributed.hh"
 
 namespace service {
 
 int storage_service::RING_DELAY = storage_service::getRingDelay();
 
-storage_service storage_service_instance;
+distributed<storage_service> _the_storage_service;
 
 }

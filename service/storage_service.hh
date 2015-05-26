@@ -25,6 +25,9 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "locator/token_metadata.hh"
 #include "gms/gossiper.hh"
+#include "utils/UUID_gen.hh"
+#include "core/distributed.hh"
+#include "dht/i_partitioner.hh"
 
 namespace service {
 /**
@@ -35,6 +38,7 @@ namespace service {
  */
 class storage_service : public gms::i_endpoint_state_change_subscriber
 {
+    using token = dht::token;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(StorageService.class);
 
@@ -60,6 +64,7 @@ private:
     }
     /* This abstraction maintains the token/endpoint metadata information */
     locator::token_metadata tokenMetadata;
+    gms::versioned_value::versioned_value_factory value_factory;
 #if 0
     public volatile VersionedValue.VersionedValueFactory valueFactory = new VersionedValue.VersionedValueFactory(getPartitioner());
 
@@ -121,7 +126,10 @@ private:
 
     private final ObjectName jmxObjectName;
 
-    private Collection<Token> bootstrapTokens = null;
+#endif
+public:
+    std::vector<token> bootstrapTokens;
+#if 0
 
     public void finishBootstrapping()
     {
@@ -415,13 +423,11 @@ private:
     }
 #endif
 public:
-    void init_server()
-    {
-        init_server(RING_DELAY);
+    future<> init_server() {
+        return init_server(RING_DELAY);
     }
 
-    void init_server(int delay)
-    {
+    future<> init_server(int delay) {
 #if 0
         logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
         logger.info("Thrift API version: {}", cassandraConstants.VERSION);
@@ -519,7 +525,10 @@ public:
         }, "StorageServiceShutdownHook");
         Runtime.getRuntime().addShutdownHook(drainOnShutdown);
 #endif
-        prepare_to_join();
+        return prepare_to_join().then([this, delay] {
+            join_token_ring(delay);
+            return make_ready_future<>();
+        });
 #if 0
         // Has to be called after the host id has potentially changed in prepareToJoin().
         for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
@@ -555,18 +564,20 @@ public:
         if (drainOnShutdown != null)
             Runtime.getRuntime().removeShutdownHook(drainOnShutdown);
     }
-
-    private boolean shouldBootstrap()
-    {
-        return DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && !DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress());
-    }
 #endif
 private:
-    void prepare_to_join()
+    bool should_bootstrap() {
+        // FIXME: Currently, we do boostrap if we are not a seed node.
+        // return DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && !DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress());
+        auto& gossiper = gms::get_local_gossiper();
+        auto seeds = gossiper.get_seeds();
+        auto broadcast_address = gossiper.get_broadcast_address();
+        return !seeds.count(broadcast_address);
+    }
+    future<> prepare_to_join()
     {
-        if (!joined)
-        {
-            std::map<gms::application_state, gms::versioned_value> app_state;
+        if (!joined) {
+            std::map<gms::application_state, gms::versioned_value> app_states;
 #if 0
             if (DatabaseDescriptor.isReplacing() && !(Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true"))))
                 throw new ConfigurationException("Cannot set both join_ring=false and attempt to replace a node");
@@ -582,26 +593,39 @@ private:
                 appStates.put(ApplicationState.TOKENS, valueFactory.tokens(bootstrapTokens));
                 appStates.put(ApplicationState.STATUS, valueFactory.hibernate(true));
             }
-            else if (shouldBootstrap())
+            else if (should_bootstrap())
             {
                 checkForEndpointCollision();
             }
+#endif
 
             // have to start the gossip service before we can see any info on other nodes.  this is necessary
             // for bootstrap to get the load info it needs.
             // (we won't be part of the storage ring though until we add a counterId to our state, below.)
             // Seed the host ID-to-endpoint map with our own ID.
+#if 0
             UUID localHostId = SystemKeyspace.getLocalHostId();
             getTokenMetadata().updateHostId(localHostId, FBUtilities.getBroadcastAddress());
-            appStates.put(ApplicationState.NET_VERSION, valueFactory.networkVersion());
-            appStates.put(ApplicationState.HOST_ID, valueFactory.hostId(localHostId));
-            appStates.put(ApplicationState.RPC_ADDRESS, valueFactory.rpcaddress(DatabaseDescriptor.getBroadcastRpcAddress()));
-            appStates.put(ApplicationState.RELEASE_VERSION, valueFactory.releaseVersion());
-            logger.info("Starting up server gossip");
 #endif
+            // FIXME: SystemKeyspace.getLocalHostId();
+            utils::UUID local_host_id = utils::UUID_gen::get_time_UUID();
+            // FIXME: DatabaseDescriptor.getBroadcastRpcAddress()
+            gms::inet_address broadcast_rpc_address;
+            app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
+            app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
+            app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
+            app_states.emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
+            //logger.info("Starting up server gossip");
+
             auto& gossiper = gms::get_local_gossiper();
             gossiper.register_(this);
-            gossiper.start(0/*SystemKeyspace.incrementAndGetGeneration()*/, app_state);
+            using namespace std::chrono;
+            auto now = high_resolution_clock::now().time_since_epoch();
+            int generation_number = duration_cast<seconds>(now).count();
+            // FIXME: SystemKeyspace.incrementAndGetGeneration()
+            return gossiper.start(generation_number, app_states).then([] {
+                print("Start gossiper service ...\n");
+            });
 #if 0
             // gossip snitch infos (local DC and rack)
             gossipSnitchInfo();
@@ -616,11 +640,11 @@ private:
             BatchlogManager.instance.start();
 #endif
         }
-
+        return make_ready_future<>();
     }
+
+    void join_token_ring(int delay) {
 #if 0
-    private void joinTokenRing(int delay) throws ConfigurationException
-    {
         joined = true;
 
         // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
@@ -640,8 +664,11 @@ private:
                      DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()));
         if (DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()))
             logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
-        if (shouldBootstrap())
-        {
+#endif
+        if (should_bootstrap()) {
+            // FIXME:
+            // bootstrapTokens = BootStrapper.getBootstrapTokens(tokenMetadata);
+#if 0
             if (SystemKeyspace.bootstrapInProgress())
                 logger.warn("Detected previous bootstrap failure; retrying");
             else
@@ -741,9 +768,11 @@ private:
 
             bootstrap(bootstrapTokens);
             assert !isBootstrapMode; // bootstrap will block until finished
-        }
-        else
-        {
+#endif
+        } else {
+            // FIXME:
+            // bootstrapTokens = BootStrapper.getRandomTokens(tokenMetadata, DatabaseDescriptor.getNumTokens());
+#if 0
             bootstrapTokens = SystemKeyspace.getSavedTokens();
             if (bootstrapTokens.isEmpty())
             {
@@ -771,8 +800,9 @@ private:
                 else
                     logger.info("Using saved tokens {}", bootstrapTokens);
             }
+#endif
         }
-
+#if 0
         // if we don't have system_traces keyspace at this point, then create it manually
         if (Schema.instance.getKSMetaData(TraceKeyspace.NAME) == null)
             MigrationManager.announceNewKeyspace(TraceKeyspace.definition(), 0, false);
@@ -794,8 +824,9 @@ private:
         {
             logger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
         }
+#endif
     }
-
+#if 0
     public void gossipSnitchInfo()
     {
         IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
@@ -4167,5 +4198,13 @@ public:
 #endif
 };
 
-extern storage_service storage_service_instance;
+extern distributed<storage_service> _the_storage_service;
+
+inline distributed<storage_service>& get_storage_service() {
+    return _the_storage_service;
+}
+
+inline storage_service& get_local_storage_service() {
+    return _the_storage_service.local();
+}
 }
