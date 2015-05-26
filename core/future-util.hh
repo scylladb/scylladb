@@ -27,9 +27,10 @@
 
 #include "future.hh"
 #include "shared_ptr.hh"
-#include "reactor.hh"
 #include <tuple>
 #include <iterator>
+
+extern __thread size_t task_quota;
 
 // parallel_for_each - run tasks in parallel
 //
