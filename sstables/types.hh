@@ -8,6 +8,9 @@
 #include "bytes.hh"
 #include "gc_clock.hh"
 #include "tombstone.hh"
+#include <vector>
+#include <unordered_map>
+#include <type_traits>
 
 namespace sstables {
 
