@@ -29,6 +29,7 @@
 #include "shared_ptr.hh"
 #include <tuple>
 #include <iterator>
+#include <vector>
 
 extern __thread size_t task_quota;
 
