@@ -30,6 +30,7 @@
 #include "core/shared_ptr.hh"
 #include "core/stream.hh"
 #include "utils/UUID.hh"
+#include "replay_position.hh"
 
 class file;
 
@@ -37,25 +38,7 @@ namespace db {
 
 class config;
 
-using segment_id_type = uint64_t;
-using position_type = uint64_t;
 using cf_id_type = utils::UUID;
-
-struct replay_position {
-    segment_id_type id;
-    position_type pos;
-
-    replay_position(segment_id_type i = 0, position_type p = 0)
-        : id(i), pos(p)
-    { }
-
-    bool operator<(const replay_position & r) const {
-        return id < r.id ? true : (r.id < id ? false : pos < r.pos);
-    }
-    bool operator==(const replay_position & r) const {
-        return id == r.id && pos == r.pos;
-    }
-};
 
 /*
  * Commit Log tracks every write operation into the system. The aim of
