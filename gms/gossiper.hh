@@ -470,6 +470,7 @@ public:
     static int64_t compute_expire_time();
 public:
     void dump_endpoint_state_map();
+    void debug_show();
 };
 
 extern distributed<gossiper> _the_gossiper;
