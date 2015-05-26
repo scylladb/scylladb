@@ -559,7 +559,9 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
          *   that means that a keyspace had been recreated and dropped, and the recreated keyspace had never found a way
          *   to this node
          */
-        auto diff = difference(before, after);
+        auto diff = difference(before, after, [](const lw_shared_ptr<query::result_set>& x, const lw_shared_ptr<query::result_set>& y) -> bool {
+            return *x == *y;
+        });
 
         for (auto&& entry : diff.entries_only_on_right) {
             if (!entry.second->empty()) {

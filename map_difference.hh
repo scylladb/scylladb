@@ -39,12 +39,19 @@ struct map_difference {
     { }
 };
 
-template<typename Key, typename Tp, typename Compare, typename Alloc>
+template<typename Key,
+         typename Tp,
+         typename Compare = std::less<Key>,
+         typename Eq = std::equal_to<Tp>,
+         typename Alloc>
 inline
 map_difference<Key, Tp, Compare, Alloc>
 difference(const std::map<Key, Tp, Compare, Alloc>& left,
            const std::map<Key, Tp, Compare, Alloc>& right,
-           const Compare& key_comp, const Alloc& alloc) {
+           Compare key_comp,
+           Eq equals = Eq(),
+           Alloc alloc = Alloc())
+{
     map_difference<Key, Tp, Compare, Alloc> diff{key_comp, alloc};
     diff.entries_only_on_right = right;
     for (auto&& kv : left) {
@@ -52,9 +59,9 @@ difference(const std::map<Key, Tp, Compare, Alloc>& left,
         auto&& it = right.find(left_key);
         if (it != right.end()) {
             diff.entries_only_on_right.erase(left_key);
-            auto&& left_value = kv.second;
-            auto&& right_value = it->second;
-            if (left_value == right_value) {
+            const Tp& left_value = kv.second;
+            const Tp& right_value = it->second;
+            if (equals(left_value, right_value)) {
                 diff.entries_in_common.emplace(kv);
             } else {
                 value_difference<Tp> value_diff{left_value, right_value};
@@ -67,9 +74,9 @@ difference(const std::map<Key, Tp, Compare, Alloc>& left,
     return diff;
 }
 
-template<typename Key, typename Tp, typename Compare, typename Alloc>
+template<typename Key, typename Tp, typename Compare, typename Eq, typename Alloc>
 inline
 map_difference<Key, Tp, Compare, Alloc>
-difference(const std::map<Key, Tp, Compare, Alloc>& left, const std::map<Key, Tp, Compare, Alloc>& right) {
-    return difference(left, right, left.key_comp(), left.get_allocator());
+difference(const std::map<Key, Tp, Compare, Alloc>& left, const std::map<Key, Tp, Compare, Alloc>& right, Eq equals) {
+    return difference(left, right, left.key_comp(), equals);
 }
