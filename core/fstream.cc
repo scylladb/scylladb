@@ -27,30 +27,39 @@
 class file_data_source_impl : public data_source_impl {
     lw_shared_ptr<file> _file;
     uint64_t _pos;
+    std::experimental::optional<size_t> _fsize;
     size_t _buffer_size;
+private:
+    // Should be called only when _fsize is initialized
+    future<temporary_buffer<char>> do_get() {
+        using buf_type = temporary_buffer<char>;
+
+        if (_pos >= _fsize.value()) {
+            return make_ready_future<buf_type>(std::move(buf_type(0)));
+        }
+
+        return _file->dma_read_bulk<char>(_pos, _buffer_size).then(
+                [this] (buf_type buf) {
+            _pos += buf.size();
+
+            return std::move(buf);
+        });
+    }
 public:
     file_data_source_impl(lw_shared_ptr<file> f, uint64_t pos, size_t buffer_size)
             : _file(std::move(f)), _pos(pos), _buffer_size(buffer_size) {}
+
     virtual future<temporary_buffer<char>> get() override {
-        // must align allocation for dma
-        auto alignment = std::min<size_t>(_buffer_size, 4096);
-        auto buf = temporary_buffer<char>::aligned(alignment, _buffer_size);
-        auto q = buf.get_write(); // alive while "buf" is kept alive
-        auto old_pos = _pos;
-        // dma_read needs to be aligned. It doesn't have to be page-aligned,
-        // though, and we could get away with something much smaller. However, if
-        // we start reading in things outside page boundaries, we will end up with
-        // various pages around, some of them with overlapping ranges. Those would
-        // be very challenging to cache.
-        old_pos &= ~4095;
-        auto front = _pos - old_pos;
-        _pos += _buffer_size - front;
-        return _file->dma_read(old_pos, q, _buffer_size).then(
-                [buf = std::move(buf), front] (size_t size) mutable {
-            buf.trim(size);
-            buf.trim_front(front);
-            return make_ready_future<temporary_buffer<char>>(std::move(buf));
-        });
+        if (!_fsize){
+            return _file->size().then(
+                    [this] (size_t fsize) {
+                _fsize = fsize;
+
+                return do_get();
+            });
+        }
+
+        return do_get();
     }
 };
 
