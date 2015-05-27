@@ -53,7 +53,7 @@ make_min_timeuuid_fct() {
         if (!bb) {
             return {};
         }
-        auto ts_obj = timestamp_type->compose(*bb);
+        auto ts_obj = timestamp_type->deserialize(*bb);
         if (ts_obj.empty()) {
             return {};
         }
@@ -73,7 +73,7 @@ make_max_timeuuid_fct() {
         if (!bb) {
             return {};
         }
-        auto ts_obj = timestamp_type->compose(*bb);
+        auto ts_obj = timestamp_type->deserialize(*bb);
         if (ts_obj.empty()) {
             return {};
         }

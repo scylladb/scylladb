@@ -78,7 +78,7 @@ public:
         } catch (exceptions::marshal_exception e) {
             throw exceptions::invalid_request_exception("Invalid timestamp value");
         }
-        return boost::any_cast<int64_t>(data_type_for<int64_t>()->compose(*tval));
+        return boost::any_cast<int64_t>(data_type_for<int64_t>()->deserialize(*tval));
     }
 
     int32_t get_time_to_live(const query_options& options) {
@@ -97,7 +97,7 @@ public:
             throw exceptions::invalid_request_exception("Invalid TTL value");
         }
 
-        auto ttl = boost::any_cast<int32_t>(data_type_for<int32_t>()->compose(*tval));
+        auto ttl = boost::any_cast<int32_t>(data_type_for<int32_t>()->deserialize(*tval));
         if (ttl < 0) {
             throw exceptions::invalid_request_exception("A TTL must be greater or equal to 0");
         }

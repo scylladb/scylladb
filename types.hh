@@ -268,12 +268,6 @@ protected:
         return is_compatible_with(other);
     }
 public:
-    virtual boost::any compose(const bytes& v) const {
-        return deserialize(v);
-    }
-    data_value compose_value(const bytes& v) const {
-        return deserialize_value(v);
-    }
     bytes decompose(const boost::any& value) const {
         bytes b(bytes::initialized_later(), serialized_size(value));
         auto i = b.begin();

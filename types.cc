@@ -1618,7 +1618,7 @@ tuple_type_impl::make_name(const std::vector<data_type>& types) {
 
 sstring
 user_type_impl::get_name_as_string() const {
-    return boost::any_cast<sstring>(utf8_type->compose(_name));
+    return boost::any_cast<sstring>(utf8_type->deserialize(_name));
 }
 
 shared_ptr<cql3::cql3_type>

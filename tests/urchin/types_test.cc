@@ -113,7 +113,7 @@ BOOST_AUTO_TEST_CASE(test_tuple) {
         return t->decompose(v);
     };
     auto bytes_to_native = [t] (bytes v) {
-        return boost::any_cast<native_type>(t->compose(v));
+        return boost::any_cast<native_type>(t->deserialize(v));
     };
     auto c_to_bytes = [=] (c_type v) {
         return native_to_bytes(c_to_native(v));

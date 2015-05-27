@@ -73,7 +73,7 @@ public:
         if (!values[0]) {
             return;
         }
-        _sum += boost::any_cast<Type>(data_type_for<Type>()->compose(*values[0]));
+        _sum += boost::any_cast<Type>(data_type_for<Type>()->deserialize(*values[0]));
     }
 };
 
@@ -115,7 +115,7 @@ public:
             return;
         }
         ++_count;
-        _sum += boost::any_cast<Type>(data_type_for<Type>()->compose(*values[0]));
+        _sum += boost::any_cast<Type>(data_type_for<Type>()->deserialize(*values[0]));
     }
 };
 
@@ -152,7 +152,7 @@ public:
         if (!values[0]) {
             return;
         }
-        auto val = boost::any_cast<Type>(data_type_for<Type>()->compose(*values[0]));
+        auto val = boost::any_cast<Type>(data_type_for<Type>()->deserialize(*values[0]));
         if (!_max) {
             _max = val;
         } else {
@@ -199,7 +199,7 @@ public:
         if (!values[0]) {
             return;
         }
-        auto val = boost::any_cast<Type>(data_type_for<Type>()->compose(*values[0]));
+        auto val = boost::any_cast<Type>(data_type_for<Type>()->deserialize(*values[0]));
         if (!_min) {
             _min = val;
         } else {
