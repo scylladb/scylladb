@@ -10,6 +10,7 @@
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
 #include "utils/UUID.hh"
+#include <experimental/optional>
 
 namespace locator {
 
@@ -47,7 +48,7 @@ public:
     void update_normal_tokens(std::unordered_map<inet_address, std::unordered_set<token>>& endpoint_tokens);
     const token& first_token(const token& start);
     size_t first_token_index(const token& start);
-    inet_address get_endpoint(const token& token) const;
+    std::experimental::optional<inet_address> get_endpoint(const token& token) const;
 };
 
 }

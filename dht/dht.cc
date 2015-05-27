@@ -7,3 +7,4 @@
 
 #include "ring_position.hh"
 #include "i_partitioner.hh"
+#include "dht/boot_strapper.hh"

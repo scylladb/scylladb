@@ -28,6 +28,7 @@
 #include "keys.hh"
 #include "sstables/key.hh"
 #include <memory>
+#include <random>
 
 namespace dht {
 
@@ -68,6 +69,14 @@ token maximum_token();
 bool operator==(const token& t1, const token& t2);
 bool operator<(const token& t1, const token& t2);
 std::ostream& operator<<(std::ostream& out, const token& t);
+
+template <typename T>
+inline auto get_random_number() {
+    static thread_local std::random_device rd;
+    static thread_local std::default_random_engine re(rd());
+    static thread_local std::uniform_int_distribution<T> dist{};
+    return dist(re);
+}
 
 // Wraps partition_key with its corresponding token.
 //
@@ -143,7 +152,7 @@ public:
     /**
      * @return a randomly generated token
      */
-    token get_random_token();
+    virtual token get_random_token() = 0;
 
     // FIXME: token.tokenFactory
     //virtual token.tokenFactory gettokenFactory() = 0;

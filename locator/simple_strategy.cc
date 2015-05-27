@@ -24,10 +24,11 @@ std::vector<inet_address> simple_strategy::calculate_natural_endpoints(const tok
     auto it = tokens.begin() + _token_metadata.first_token_index(t);
     auto c = tokens.size();
 
-    while(endpoints.size() < replicas && c) {
-        inet_address ep = _token_metadata.get_endpoint(*(it++));
-        if (std::find(endpoints.begin(), endpoints.end(), ep) == endpoints.end()) {
-            endpoints.push_back(ep);
+    while (endpoints.size() < replicas && c) {
+        auto ep = _token_metadata.get_endpoint(*(it++));
+        assert(ep);
+        if (std::find(endpoints.begin(), endpoints.end(), *ep) == endpoints.end()) {
+            endpoints.push_back(*ep);
         }
         c--;
         // wrap around

@@ -3,6 +3,7 @@
  */
 
 #include "token_metadata.hh"
+#include <experimental/optional>
 
 namespace locator {
 
@@ -104,9 +105,13 @@ const token& token_metadata::first_token(const token& start) {
     return _sorted_tokens[first_token_index(start)];
 }
 
-inet_address token_metadata::get_endpoint(const token& token) const {
+std::experimental::optional<inet_address> token_metadata::get_endpoint(const token& token) const {
     auto it = _token_to_endpoint_map.find(token);
-    assert (it != _token_to_endpoint_map.end());
-    return it->second;
+    if (it == _token_to_endpoint_map.end()) {
+        return std::experimental::nullopt;
+    } else {
+        return it->second;
+    }
 }
+
 }
