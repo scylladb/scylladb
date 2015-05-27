@@ -49,6 +49,11 @@ murmur3_partitioner::get_token(const schema& s, partition_key_view key) {
     return get_token(hash[0]);
 }
 
+token murmur3_partitioner::get_random_token() {
+    auto rand = dht::get_random_number<uint64_t>();
+    return get_token(rand);
+}
+
 inline long long_token(const token& t) {
 
     if (t._data.size() != sizeof(long)) {
