@@ -132,8 +132,13 @@ composite composite::from_clustering_element(const schema& s, const ClusteringEl
 template composite composite::from_clustering_element(const schema& s, const clustering_key& ck);
 template composite composite::from_clustering_element(const schema& s, const clustering_key_prefix& ck);
 
-composite composite::from_exploded(const std::vector<bytes_view>& v) {
-    return from_components(v.begin(), v.end(), sstable_serializer());
+composite composite::from_exploded(const std::vector<bytes_view>& v, composite_marker m) {
+    if (v.size() == 0) {
+        return bytes(size_t(1), bytes::value_type(m));
+    }
+    auto b = from_components(v.begin(), v.end(), sstable_serializer());
+    b.back() = bytes::value_type(m);
+    return composite(std::move(b));
 }
 
 composite composite::static_prefix(const schema& s) {

@@ -938,7 +938,7 @@ future<> sstable::store() {
 
 // @clustering_key: it's expected that clustering key is already in its composite form.
 // NOTE: empty clustering key means that there is no clustering key.
-void sstable::write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names) {
+void sstable::write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite_marker m) {
     // FIXME: min_components and max_components also keep track of clustering
     // prefix, so we must merge clustering_key and column_names somehow and
     // pass the result to the functions below.
@@ -947,9 +947,19 @@ void sstable::write_column_name(file_writer& out, const composite& clustering_ke
 
     // FIXME: This code assumes name is always composite, but it wouldn't if "WITH COMPACT STORAGE"
     // was defined in the schema, for example.
-    auto c= composite::from_exploded(column_names);
-    uint16_t sz = clustering_key.size() + c.size();
-    write(out, sz, clustering_key, c).get();
+    auto c= composite::from_exploded(column_names, m);
+    auto ck_bview = bytes_view(clustering_key);
+
+    // The marker is not a component, so if the last component is empty (IOW,
+    // only serializes to the marker), then we just replace the key's last byte
+    // with the marker. If the component however it is not empty, then the
+    // marker should be in the end of it, and we just join them together as we
+    // do for any normal component
+    if (c.size() == 1) {
+        ck_bview.remove_suffix(1);
+    }
+    uint16_t sz = ck_bview.size() + c.size();
+    write(out, sz, ck_bview, c).get();
 }
 
 static inline void update_cell_stats(column_stats& c_stats, uint64_t timestamp) {
