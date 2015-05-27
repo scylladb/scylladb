@@ -955,18 +955,6 @@ future<> sstable::write_column_name(file_writer& out, const composite& clusterin
     });
 }
 
-future<> sstable::write_static_column_name(file_writer& out, const schema& schema, const std::vector<bytes_view>& column_names) {
-    column_name_helper::min_components(_c_stats.min_column_names, column_names);
-    column_name_helper::max_components(_c_stats.max_column_names, column_names);
-
-    return do_with(composite::from_exploded(column_names), [&out, &schema] (composite& c) {
-        return do_with(composite::static_prefix(schema), [&out, &c] (composite& sp) {
-            uint16_t sz = sp.size() + c.size();
-            return write(out, sz, sp, c);
-        });
-    });
-}
-
 static inline void update_cell_stats(column_stats& c_stats, uint64_t timestamp) {
     c_stats.update_min_timestamp(timestamp);
     c_stats.update_max_timestamp(timestamp);
@@ -1073,8 +1061,10 @@ future<> sstable::write_static_row(file_writer& out, schema_ptr schema, const ro
         }
         assert(column_definition.is_static());
         atomic_cell_view cell = value.second.as_atomic_cell();
-        return this->write_static_column_name(out, *schema, { bytes_view(column_definition.name()) }).then([&out, cell, this] {
-            return this->write_cell(out, cell);
+        return do_with(composite::static_prefix(*schema), [this, &out, &column_definition, cell = std::move(cell)] (composite& sp) {
+            return this->write_column_name(out, sp, { bytes_view(column_definition.name()) }).then([this, &out, cell] {
+                return this->write_cell(out, cell);
+            });
         });
     });
 }

@@ -292,7 +292,6 @@ private:
     future<> write_static_row(file_writer& out, schema_ptr schema, const row& static_row);
     future<> write_cell(file_writer& out, atomic_cell_view cell);
     future<> write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names);
-    future<> write_static_column_name(file_writer& out, const schema& schema, const std::vector<bytes_view>& column_names);
 public:
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
