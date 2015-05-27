@@ -39,6 +39,9 @@ future<> init_messaging_service(auto listen_address, auto seed_provider) {
     for (auto& x : seed_provider.parameters) {
         seeds.emplace(x.first);
     }
+    if (seeds.empty()) {
+        seeds.emplace(gms::inet_address("127.0.0.1"));
+    }
     return net::get_messaging_service().start(listen).then([seeds] {
         auto& ms = net::get_local_messaging_service();
         print("Messaging server listening on ip %s port %d ...\n", ms.listen_address(), ms.port());
