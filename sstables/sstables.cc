@@ -1082,7 +1082,9 @@ void sstable::write_static_row(file_writer& out, schema_ptr schema, const row& s
         auto column_id = value.first;
         auto&& column_definition = schema->static_column_at(column_id);
         if (!column_definition.is_atomic()) {
-            fail(unimplemented::cause::NONATOMIC);
+            auto sp = composite::static_prefix(*schema);
+            write_collection(out, sp, column_definition, value.second.as_collection_mutation());
+            return;
         }
         assert(column_definition.is_static());
         atomic_cell_view cell = value.second.as_atomic_cell();
