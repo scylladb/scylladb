@@ -443,7 +443,7 @@ future<> parse(random_access_reader& in, disk_hash<Size, Key, Value>& h) {
 
 template <typename Key, typename Value>
 future<> write(file_writer& out, std::unordered_map<Key, Value>& map) {
-    return do_for_each(map.begin(), map.end(), [&out, &map] (auto val) {
+    return do_for_each(map.begin(), map.end(), [&out, &map] (auto& val) {
         Key key = val.first;
         Value value = val.second;
         return write(out, key, value);
@@ -884,18 +884,19 @@ future<> sstable::store() {
 static future<> write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names) {
     // FIXME: This code assumes name is always composite, but it wouldn't if "WITH COMPACT STORAGE"
     // was defined in the schema, for example.
-    composite c = composite::from_exploded(column_names);
-    uint16_t sz = bytes_view(clustering_key).size() + bytes_view(c).size();
-
-    return write(out, sz, bytes_view(clustering_key), bytes_view(c));
+    return do_with(composite::from_exploded(column_names), [&out, &clustering_key] (composite& c) {
+        uint16_t sz = clustering_key.size() + c.size();
+        return write(out, sz, clustering_key, c);
+    });
 }
 
 static future<> write_static_column_name(file_writer& out, const schema& schema, const std::vector<bytes_view>& column_names) {
-    composite sp = composite::static_prefix(schema);
-    composite c = composite::from_exploded(column_names);
-    uint16_t sz = bytes_view(sp).size() + bytes_view(c).size();
-
-    return write(out, sz, bytes_view(sp), bytes_view(c));
+    return do_with(composite::from_exploded(column_names), [&out, &schema] (composite& c) {
+        return do_with(composite::static_prefix(schema), [&out, &c] (composite& sp) {
+            uint16_t sz = sp.size() + c.size();
+            return write(out, sz, sp, c);
+        });
+    });
 }
 
 // Intended to write all cell components that follow column name.
