@@ -310,6 +310,7 @@ api = ['api/api.cc',
        'api/api-doc/gossiper.json',
        'api/gossiper.cc',
        'api/api-doc/failure_detector.json',
+       'api/failure_detector.cc',
        ]
 
 boost_test_lib = [
