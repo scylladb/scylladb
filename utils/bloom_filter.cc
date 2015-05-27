@@ -39,7 +39,7 @@ static thread_local auto reusable_indexes = std::vector<long>();
 void bloom_filter::set_indexes(int64_t base, int64_t inc, int count, long max, std::vector<long>& results) {
     for (int i = 0; i < count; i++) {
         results[i] = abs(base % max);
-        base += inc;
+        base = static_cast<int64_t>(static_cast<uint64_t>(base) + static_cast<uint64_t>(inc));
     }
 }
 
@@ -62,7 +62,7 @@ std::vector<long> bloom_filter::indexes(const bytes_view& key) {
     hash(key, 0, h);
 
     idx.resize(_hash_count);
-    set_indexes(h[0], h[1], _hash_count, _bitset.size(), idx);
+    set_indexes(h[0], h[1], _hash_count, _bitset.max_size(), idx);
     return idx;
 }
 
