@@ -230,20 +230,21 @@ future<> migration_manager::announce_new_keyspace(service::storage_proxy& proxy,
 }
 
 future<> migration_manager::announce_new_column_family(service::storage_proxy& proxy, schema_ptr cfm, bool announce_locally) {
-    warn(unimplemented::cause::MIGRATIONS);
-    return make_ready_future<>();
 #if 0
     cfm.validate();
-
-    KSMetaData ksm = Schema.instance.getKSMetaData(cfm.ksName);
-    if (ksm == null)
-        throw new ConfigurationException(String.format("Cannot add table '%s' to non existing keyspace '%s'.", cfm.cfName, cfm.ksName));
-    else if (ksm.cfMetaData().containsKey(cfm.cfName))
-        throw new AlreadyExistsException(cfm.ksName, cfm.cfName);
-
-    logger.info(String.format("Create new table: %s", cfm));
-    announce(LegacySchemaTables.makeCreateTableMutation(ksm, cfm, FBUtilities.timestampMicros()), announceLocally);
 #endif
+    try {
+        auto&& keyspace = proxy.get_db().local().find_keyspace(cfm->ks_name());
+#if 0
+        else if (ksm.cfMetaData().containsKey(cfm.cfName))
+            throw new AlreadyExistsException(cfm.ksName, cfm.cfName);
+        logger.info(String.format("Create new table: %s", cfm));
+#endif
+        auto mutations = db::legacy_schema_tables::make_create_table_mutations(keyspace.metadata(), cfm, db_clock::now_in_usecs());
+        return announce(proxy, std::move(mutations), announce_locally);
+    } catch (const no_such_keyspace& e) {
+        throw exceptions::configuration_exception(sprint("Cannot add table '%s' to non existing keyspace '%s'.", cfm->cf_name(), cfm->ks_name()));
+    }
 }
 
 #if 0

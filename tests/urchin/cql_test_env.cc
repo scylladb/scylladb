@@ -155,13 +155,8 @@ public:
 
     future<> start() {
         return _core_local.start().then([this] () {
-            return _db->invoke_on_all([this] (database& db) {
-                auto ksm = make_lw_shared<keyspace_metadata>(sstring{ks_name},
-                        "org.apache.cassandra.locator.SimpleStrategy",
-                        std::unordered_map<sstring, sstring>(),
-                        false
-                        );
-                db.find_or_create_keyspace(ksm);
+            auto query = sprint("create keyspace %s with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };", sstring{ks_name});
+            return execute_cql(query).discard_result().then([] {
                 return make_ready_future<>();
             });
         });

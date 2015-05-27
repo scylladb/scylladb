@@ -17,7 +17,9 @@ BOOST_AUTO_TEST_CASE(both_empty) {
     map<int, int> left;
     map<int, int> right;
 
-    auto diff = difference(left, right);
+    auto diff = difference(left, right, [](int x, int y) -> bool {
+        return x == y;
+    });
 
     BOOST_REQUIRE(diff.entries_only_on_left.empty());
     BOOST_REQUIRE(diff.entries_only_on_right.empty());
@@ -32,7 +34,9 @@ BOOST_AUTO_TEST_CASE(left_empty) {
     right.emplace(1, 100);
     right.emplace(2, 200);
 
-    auto diff = difference(left, right);
+    auto diff = difference(left, right, [](int x, int y) -> bool {
+        return x == y;
+    });
 
     BOOST_REQUIRE(diff.entries_only_on_left.empty());
     BOOST_REQUIRE(diff.entries_only_on_right == right);
@@ -47,7 +51,9 @@ BOOST_AUTO_TEST_CASE(right_empty) {
     left.emplace(1, 100);
     left.emplace(2, 200);
 
-    auto diff = difference(left, right);
+    auto diff = difference(left, right, [](int x, int y) -> bool {
+        return x == y;
+    });
 
     BOOST_REQUIRE(diff.entries_only_on_left == left);
     BOOST_REQUIRE(diff.entries_only_on_right.empty());
@@ -65,7 +71,9 @@ BOOST_AUTO_TEST_CASE(both_same) {
     right.emplace(1, 100);
     right.emplace(2, 200);
 
-    auto diff = difference(left, right);
+    auto diff = difference(left, right, [](int x, int y) -> bool {
+        return x == y;
+    });
 
     BOOST_REQUIRE(diff.entries_only_on_left.empty());
     BOOST_REQUIRE(diff.entries_only_on_right.empty());
@@ -83,7 +91,9 @@ BOOST_AUTO_TEST_CASE(differing_values) {
     right.emplace(1, 1000);
     right.emplace(2, 2000);
 
-    auto diff = difference(left, right);
+    auto diff = difference(left, right, [](int x, int y) -> bool {
+        return x == y;
+    });
 
     BOOST_REQUIRE(diff.entries_only_on_left.empty());
     BOOST_REQUIRE(diff.entries_only_on_right.empty());

@@ -559,7 +559,9 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
          *   that means that a keyspace had been recreated and dropped, and the recreated keyspace had never found a way
          *   to this node
          */
-        auto diff = difference(before, after);
+        auto diff = difference(before, after, [](const lw_shared_ptr<query::result_set>& x, const lw_shared_ptr<query::result_set>& y) -> bool {
+            return *x == *y;
+        });
 
         for (auto&& entry : diff.entries_only_on_right) {
             if (!entry.second->empty()) {
@@ -966,19 +968,21 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 
         return new UserType(keyspace, name, columns, types);
     }
+#endif
 
     /*
      * Table metadata serialization/deserialization.
      */
 
-    public static Mutation makeCreateTableMutation(KSMetaData keyspace, CFMetaData table, long timestamp)
+    std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp)
     {
         // Include the serialized keyspace in case the target node missed a CREATE KEYSPACE migration (see CASSANDRA-5631).
-        Mutation mutation = makeCreateKeyspaceMutation(keyspace, timestamp, false);
-        addTableToSchemaMutation(table, timestamp, true, mutation);
-        return mutation;
+        auto mutations = make_create_keyspace_mutations(keyspace, timestamp, false);
+        schema_ptr s = keyspaces();
+        auto pkey = partition_key::from_exploded(*s, {utf8_type->decompose(keyspace->name())});
+        add_table_to_schema_mutation(table, timestamp, true, pkey, mutations);
+        return mutations;
     }
-#endif
 
     void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, const partition_key& pkey, std::vector<mutation>& mutations)
     {
