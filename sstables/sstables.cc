@@ -1037,6 +1037,18 @@ void sstable::write_range_tombstone(file_writer& out, const composite& clusterin
     write(out, deletion_time, timestamp).get();
 }
 
+void sstable::write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation::view collection) {
+
+    auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
+    auto mview = t->deserialize_mutation_form(collection);
+    const bytes& column_name = cdef.name();
+    write_range_tombstone(out, clustering_key, { bytes_view(column_name) }, mview.tomb);
+    for (auto& cp: mview.cells) {
+        write_column_name(out, clustering_key, { column_name, cp.first });
+        write_cell(out, cp.second);
+    }
+}
+
 // write_datafile_clustered_row() is about writing a clustered_row to data file according to SSTables format.
 // clustered_row contains a set of cells sharing the same clustering key.
 void sstable::write_clustered_row(file_writer& out, schema_ptr schema, const rows_entry& clustered_row) {
@@ -1053,7 +1065,8 @@ void sstable::write_clustered_row(file_writer& out, schema_ptr schema, const row
         // non atomic cell isn't supported yet. atomic cell maps to a single trift cell.
         // non atomic cell maps to multiple trift cell, e.g. collection.
         if (!column_definition.is_atomic()) {
-            fail(unimplemented::cause::NONATOMIC);
+            write_collection(out, clustering_key, column_definition, value.second.as_collection_mutation());
+            return;
         }
         assert(column_definition.is_regular());
         atomic_cell_view cell = value.second.as_atomic_cell();
