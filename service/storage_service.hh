@@ -29,6 +29,7 @@
 #include "core/distributed.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/boot_strapper.hh"
+#include "core/sleep.hh"
 
 namespace service {
 /**
@@ -528,8 +529,7 @@ public:
         Runtime.getRuntime().addShutdownHook(drainOnShutdown);
 #endif
         return prepare_to_join().then([this, delay] {
-            join_token_ring(delay);
-            return make_ready_future<>();
+            return join_token_ring(delay);
         });
 #if 0
         // Has to be called after the host id has potentially changed in prepareToJoin().
@@ -645,7 +645,7 @@ private:
         return make_ready_future<>();
     }
 
-    void join_token_ring(int delay) {
+    future<> join_token_ring(int delay) {
 #if 0
         joined = true;
 
@@ -669,6 +669,7 @@ private:
 #endif
         if (should_bootstrap()) {
             bootstrapTokens = boot_strapper::get_bootstrap_tokens(tokenMetadata);
+            return bootstrap(bootstrapTokens);
 #if 0
             if (SystemKeyspace.bootstrapInProgress())
                 logger.warn("Detected previous bootstrap failure; retrying");
@@ -774,6 +775,7 @@ private:
             // FIXME: DatabaseDescriptor.getNumTokens()
             size_t num_tokens = 256;
             bootstrapTokens = boot_strapper::get_random_tokens(tokenMetadata, num_tokens);
+            return make_ready_future<>();
 #if 0
             bootstrapTokens = SystemKeyspace.getSavedTokens();
             if (bootstrapTokens.isEmpty())
@@ -942,34 +944,39 @@ private:
         else
             logger.debug(logMsg);
     }
+#endif
 
-    private void bootstrap(Collection<Token> tokens)
-    {
-        isBootstrapMode = true;
-        SystemKeyspace.updateTokens(tokens); // DON'T use setToken, that makes us part of the ring locally which is incorrect until we are done bootstrapping
-        if (!DatabaseDescriptor.isReplacing())
-        {
+    future<> bootstrap(std::set<token> tokens) {
+        // isBootstrapMode = true;
+        // SystemKeyspace.updateTokens(tokens); // DON'T use setToken, that makes us part of the ring locally which is incorrect until we are done bootstrapping
+        // FIXME: DatabaseDescriptor.isReplacing()
+        auto is_replacing = false;
+        auto sleep_time = std::chrono::milliseconds(1);
+        if (!is_replacing) {
             // if not an existing token then bootstrap
-            List<Pair<ApplicationState, VersionedValue>> states = new ArrayList<Pair<ApplicationState, VersionedValue>>();
-            states.add(Pair.create(ApplicationState.TOKENS, valueFactory.tokens(tokens)));
-            states.add(Pair.create(ApplicationState.STATUS, valueFactory.bootstrapping(tokens)));
-            Gossiper.instance.addLocalApplicationStates(states);
-            setMode(Mode.JOINING, "sleeping " + RING_DELAY + " ms for pending range setup", true);
-            Uninterruptibles.sleepUninterruptibly(RING_DELAY, TimeUnit.MILLISECONDS);
-        }
-        else
-        {
+            auto& gossiper = gms::get_local_gossiper();
+            gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens));
+            gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(tokens));
+            sleep_time = std::chrono::milliseconds(RING_DELAY);
+            // setMode(Mode.JOINING, "sleeping " + RING_DELAY + " ms for pending range setup", true);
+        } else {
             // Dont set any state for the node which is bootstrapping the existing token...
-            tokenMetadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
-            SystemKeyspace.removeEndpoint(DatabaseDescriptor.getReplaceAddress());
+            // tokenMetadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
+            // SystemKeyspace.removeEndpoint(DatabaseDescriptor.getReplaceAddress());
         }
-        if (!Gossiper.instance.seenAnySeed())
-            throw new IllegalStateException("Unable to contact any seeds!");
-        setMode(Mode.JOINING, "Starting to bootstrap...", true);
-        new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, tokenMetadata).bootstrap(); // handles token update
-        logger.info("Bootstrap completed! for the tokens {}", tokens);
+        return sleep(sleep_time).then([] {
+            auto& gossiper = gms::get_local_gossiper();
+            if (!gossiper.seen_any_seed()) {
+                 throw std::runtime_error("Unable to contact any seeds!");
+            }
+            // setMode(Mode.JOINING, "Starting to bootstrap...", true);
+            // new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, tokenMetadata).bootstrap(); // handles token update
+            // logger.info("Bootstrap completed! for the tokens {}", tokens);
+            return make_ready_future<>();
+        });
     }
 
+#if 0
     public boolean isBootstrapMode()
     {
         return isBootstrapMode;
