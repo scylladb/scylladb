@@ -169,6 +169,28 @@ inline int32_t compare_unsigned(bytes_view v1, bytes_view v2) {
     return (int32_t) (v1.size() - v2.size());
 }
 
+class abstract_type;
+
+using data_type = shared_ptr<const abstract_type>;
+
+class data_value {
+    boost::any _value;
+    data_type _type;
+public:
+    data_value(boost::any&& value, data_type type)
+        : _value{std::move(value)}
+        , _type{type}
+    { }
+    const boost::any& value() const {
+        return _value;
+    }
+    data_type type() const {
+        return _type;
+    }
+    friend inline bool operator==(const data_value& x, const data_value& y);
+    friend inline bool operator!=(const data_value& x, const data_value& y);
+};
+
 class serialized_compare;
 
 class abstract_type : public enable_shared_from_this<abstract_type> {
@@ -198,6 +220,9 @@ public:
         }
     }
     virtual boost::any deserialize(bytes_view v) const = 0;
+    data_value deserialize_value(bytes_view v) const {
+        return data_value{deserialize(v), shared_from_this()};
+    };
     virtual void validate(bytes_view v) const {
         // FIXME
     }
@@ -246,6 +271,9 @@ public:
     virtual boost::any compose(const bytes& v) const {
         return deserialize(v);
     }
+    data_value compose_value(const bytes& v) const {
+        return deserialize_value(v);
+    }
     bytes decompose(const boost::any& value) const {
         bytes b(bytes::initialized_later(), serialized_size(value));
         auto i = b.begin();
@@ -284,7 +312,16 @@ public:
     friend class list_type_impl;
 };
 
-using data_type = shared_ptr<const abstract_type>;
+inline bool operator==(const data_value& x, const data_value& y)
+{
+     return x._type == y._type && x._type->decompose(x._value) == y._type->decompose(y._value);
+}
+
+inline bool operator!=(const data_value& x, const data_value& y)
+{
+    return !(x == y);
+}
+
 using bytes_view_opt = std::experimental::optional<bytes_view>;
 
 static inline
@@ -394,6 +431,9 @@ public:
     collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b) const;
     virtual void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) const = 0;
     virtual boost::any deserialize(bytes_view v, serialization_format sf) const = 0;
+    data_value deserialize_value(bytes_view v, serialization_format sf) const {
+        return data_value{deserialize(v, sf), shared_from_this()};
+    }
     bytes_opt reserialize(serialization_format from, serialization_format to, bytes_view_opt v) const;
 };
 
