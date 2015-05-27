@@ -28,6 +28,8 @@
 #include "utils/UUID.hh"
 #include "version_generator.hh"
 #include "gms/inet_address.hh"
+#include "dht/i_partitioner.hh"
+#include "to_string.hh"
 
 namespace gms {
 
@@ -102,15 +104,12 @@ public:
         return os << "Value(" << x.value << "," << x.version <<  ")";
     }
 
-#if 0
-    private static String versionString(String... args)
-    {
-        return StringUtils.join(args, VersionedValue.DELIMITER);
+    static sstring version_string(const std::initializer_list<sstring>& args) {
+        return ::join(sstring(versioned_value::DELIMITER_STR), args);
     }
-#endif
 
-    class versioned_value_factory
-    {
+    class versioned_value_factory {
+        using token = dht::token;
     public:
 #if 0
         final IPartitioner partitioner;
@@ -126,24 +125,21 @@ public:
             return versioned_value(value.value);
         }
 
-#if 0
-        public versioned_value bootstrapping(const std::vector<token> tokens)
-        {
-            return new versioned_value(versionString(VersionedValue.STATUS_BOOTSTRAPPING,
-                                                    makeTokenString(tokens)));
+        versioned_value bootstrapping(const std::set<token>& tokens) {
+            return versioned_value(version_string({sstring(versioned_value::STATUS_BOOTSTRAPPING),
+                                                   make_token_string(tokens)}));
         }
 
-        public VersionedValue normal(Collection<Token> tokens)
-        {
-            return new VersionedValue(versionString(VersionedValue.STATUS_NORMAL,
-                                                    makeTokenString(tokens)));
+        versioned_value normal(const std::set<token>& tokens) {
+            return versioned_value(version_string({sstring(versioned_value::STATUS_NORMAL),
+                                                   make_token_string(tokens)}));
         }
 
-        private String makeTokenString(Collection<Token> tokens)
-        {
-            return partitioner.getTokenFactory().toString(Iterables.get(tokens, 0));
+        sstring make_token_string(const std::set<token>& tokens) {
+            // FIXME:
+            // return partitioner.getTokenFactory().toString(Iterables.get(tokens, 0));
+            return "TOKENS";
         }
-#endif
 
         static inline versioned_value load(double load)
         {
@@ -155,34 +151,32 @@ public:
             return versioned_value(new_version.to_sstring());
         }
 
-#if 0
-        versioned_value leaving(Collection<Token> tokens)
-        {
-            return new VersionedValue(versionString(VersionedValue.STATUS_LEAVING,
-                                                    makeTokenString(tokens)));
+        versioned_value leaving(const std::set<token>& tokens) {
+            return versioned_value(version_string({sstring(versioned_value::STATUS_LEAVING),
+                                                   make_token_string(tokens)}));
         }
 
-        public VersionedValue left(Collection<Token> tokens, long expireTime)
-        {
-            return new VersionedValue(versionString(VersionedValue.STATUS_LEFT,
-                                                    makeTokenString(tokens),
-                                                    Long.toString(expireTime)));
+        versioned_value left(const std::set<token>& tokens, long expireTime) {
+            return versioned_value(version_string({sstring(versioned_value::STATUS_LEFT),
+                                                   make_token_string(tokens),
+                                                   std::to_string(expireTime)}));
         }
 
-        public VersionedValue moving(Token token)
-        {
-            return new VersionedValue(VersionedValue.STATUS_MOVING + VersionedValue.DELIMITER + partitioner.getTokenFactory().toString(token));
+        versioned_value moving(token t) {
+            std::set<token> tokens = {t};
+            return versioned_value(version_string({sstring(versioned_value::STATUS_MOVING),
+                                                   make_token_string(tokens)}));
         }
-#endif
 
         versioned_value host_id(const utils::UUID& hostId)
         {
             return versioned_value(hostId.to_sstring());
         }
 
+        versioned_value tokens(const std::set<token> tokens) {
+            // FIXME:
+            return versioned_value();
 #if 0
-        public VersionedValue tokens(Collection<Token> tokens)
-        {
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             DataOutputStream out = new DataOutputStream(bos);
             try
@@ -194,8 +188,8 @@ public:
                 throw new RuntimeException(e);
             }
             return new VersionedValue(new String(bos.toByteArray(), ISO_8859_1));
-        }
 #endif
+        }
 
         versioned_value removing_nonlocal(const utils::UUID& hostId)
         {
