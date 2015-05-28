@@ -33,12 +33,16 @@ private:
     // Should be called only when _fsize is initialized
     future<temporary_buffer<char>> do_get() {
         using buf_type = temporary_buffer<char>;
+        size_t read_size = _buffer_size;
+        size_t fsize = _fsize.value();
 
-        if (_pos >= _fsize.value()) {
+        if (_pos >= fsize) {
             return make_ready_future<buf_type>(std::move(buf_type(0)));
+        } else if (_pos + _buffer_size > fsize) {
+            read_size = fsize - _pos;
         }
 
-        return _file->dma_read_bulk<char>(_pos, _buffer_size).then(
+        return _file->dma_read_bulk<char>(_pos, read_size).then(
                 [this] (buf_type buf) {
             _pos += buf.size();
 
