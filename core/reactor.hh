@@ -507,6 +507,7 @@ private:
 };
 
 class thread_pool {
+    uint64_t _aio_threaded_fallbacks = 0;
 #ifndef HAVE_OSV
     // FIXME: implement using reactor_notifier abstraction we used for SMP
     syscall_work_queue inter_thread_wq;
@@ -518,6 +519,7 @@ public:
     ~thread_pool();
     template <typename T, typename Func>
     future<T> submit(Func func) {return inter_thread_wq.submit<T>(std::move(func));}
+    uint64_t operation_count() const { return _aio_threaded_fallbacks; }
 #else
 public:
     template <typename T, typename Func>
@@ -671,6 +673,9 @@ private:
     seastar::timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link>::timer_list_t _expired_lowres_timers;
     io_context_t _io_context;
     semaphore _io_context_available;
+    uint64_t _aio_reads = 0;
+    uint64_t _aio_writes = 0;
+    uint64_t _fsyncs = 0;
     circular_buffer<std::unique_ptr<task>> _pending_tasks;
     circular_buffer<std::unique_ptr<task>> _at_destroy_tasks;
     size_t _task_quota;
@@ -767,6 +772,10 @@ public:
 
     template <typename Func>
     future<io_event> submit_io(Func prepare_io);
+    template <typename Func>
+    future<io_event> submit_io_read(Func prepare_io);
+    template <typename Func>
+    future<io_event> submit_io_write(Func prepare_io);
 
     int run();
     void exit(int ret);

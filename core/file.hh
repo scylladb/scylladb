@@ -240,71 +240,6 @@ public:
         return _file_impl->list_directory(std::move(next));
     }
 
-private:
-    template <typename CharType>
-    struct read_state {
-        typedef temporary_buffer<CharType> tmp_buf_type;
-
-        read_state(uint64_t offset, uint64_t front, size_t to_read)
-        : buf(tmp_buf_type::aligned(dma_alignment,
-                                    align_up(to_read, dma_alignment)))
-        , _offset(offset)
-        , _to_read(to_read)
-        , _front(front) {}
-
-        bool done() const {
-            return eof || pos >= _to_read;
-        }
-
-        /**
-         * Trim the buffer to the actual number of read bytes and cut the
-         * bytes from offset 0 till "_front".
-         *
-         * @note this function has to be called only if we read bytes beyond
-         *       "_front".
-         */
-        void trim_buf_before_ret() {
-            assert(have_good_bytes());
-
-            buf.trim(pos);
-            buf.trim_front(_front);
-        }
-
-        uint64_t cur_offset() const {
-            return _offset + pos;
-        }
-
-        size_t left_space() const {
-            return buf.size() - pos;
-        }
-        
-        size_t left_to_read() const {
-            // positive as long as (done() == false)
-            return _to_read - pos;
-        }
-
-        void append_new_data(tmp_buf_type& new_data) {
-            auto to_copy = std::min(left_space(), new_data.size());
-
-            std::memcpy(buf.get_write() + pos, new_data.get(), to_copy);
-            pos += to_copy;
-        }
-
-        bool have_good_bytes() const {
-            return pos > _front;
-        }
-
-    public:
-        bool         eof      = false;
-        tmp_buf_type buf;
-        size_t       pos      = 0;
-    private:
-        uint64_t     _offset;
-        size_t       _to_read;
-        uint64_t     _front;
-    };
-
-public:
     /**
      * Read a data bulk containing the provided addresses range that starts at
      * the given offset and ends at either the address aligned to
@@ -319,70 +254,12 @@ public:
      */
     template <typename CharType>
     future<temporary_buffer<CharType>>
-    dma_read_bulk(uint64_t offset, size_t range_size) {
-        using tmp_buf_type = typename read_state<CharType>::tmp_buf_type;
-
-        auto front = offset & (dma_alignment - 1);
-        offset -= front;
-        range_size += front;
-
-        auto rstate = make_lw_shared<read_state<CharType>>(offset, front,
-                                                           range_size);
-
-        //
-        // First, try to read directly into the buffer. Most of the reads will
-        // end here.
-        //
-        auto read = dma_read(offset, rstate->buf.get_write(),
-                             rstate->buf.size());
-
-        return read.then([rstate, this] (size_t size) mutable {
-            rstate->pos = size;
-
-            //
-            // If we haven't read all required data at once -
-            // start read-copy sequence. We can't continue with direct reads
-            // into the previously allocated buffer here since we have to ensure
-            // the aligned read length and thus the aligned destination buffer
-            // size.
-            //
-            // The copying will actually take place only when we either reach
-            // EOF or in case of I/O errors, thus this should not happen a lot.
-            //
-            return do_until(
-                [rstate] { return rstate->done(); },
-                [rstate, this] () mutable {
-                return read_maybe_eof<CharType>(
-                    rstate->cur_offset(), rstate->left_to_read()).then_wrapped(
-                        [rstate] (auto f) mutable {
-                    try {
-                        auto buf1 = std::get<0>(f.get());
-                        rstate->append_new_data(buf1);
-
-                        return make_ready_future<>();
-                    } catch (eof_error& e) {
-                        if (rstate->have_good_bytes()){
-                            rstate->eof = true;
-
-                            return make_ready_future<>();
-                        } else {
-                            throw;
-                        }
-                    }
-                });
-            }).then_wrapped([rstate] (auto f) mutable {
-                f.get();
-                //
-                // If we are here we are promised to have read some bytes beyond
-                // "front" so we may trim straight away.
-                //
-                rstate->trim_buf_before_ret();
-                return make_ready_future<tmp_buf_type>(std::move(rstate->buf));
-            });
-        });
-    }
+    dma_read_bulk(uint64_t offset, size_t range_size);
 
 private:
+    template <typename CharType>
+    struct read_state;
+
     /**
      * Try to read from the given position where the previous short read has
      * stopped. Check the EOF condition.
@@ -398,44 +275,177 @@ private:
      * @param pos offset to read from
      * @param len number of bytes to read
      *
-     * @return temporary buffer with read data
-     * @throw appropriate exception in case of I/O error or when "pos" is beyond
-     *        EOF.
+     * @return temporary buffer with read data or zero-sized temporary buffer if
+     *         pos is at or beyond EOF.
+     * @throw appropriate exception in case of I/O error.
      */
     template <typename CharType>
     future<temporary_buffer<CharType>>
-    read_maybe_eof(uint64_t pos, size_t len) {
-        //
-        // We have to allocate a new aligned buffer to make sure we don't get
-        // an EINVAL error due to unaligned destination buffer.
-        //
-        temporary_buffer<CharType> buf = temporary_buffer<CharType>::aligned(
-                   dma_alignment, align_up(len, dma_alignment));
-
-        // try to read a single bulk from the given position
-        return dma_read(pos, buf.get_write(), buf.size()).then_wrapped(
-                [buf = std::move(buf)](future<size_t> f) mutable {
-            try {
-                size_t size = std::get<0>(f.get());
-
-                if (!size) {
-                    throw eof_error();
-                } else {
-                    buf.trim(size);
-
-                    return std::move(buf);
-                }
-            } catch (std::system_error& e) {
-                if (e.code().value() == EINVAL) {
-                    throw eof_error();
-                } else {
-                    throw;
-                }
-            }
-        });
-    }
+    read_maybe_eof(uint64_t pos, size_t len);
 
     friend class reactor;
 };
+
+template <typename CharType>
+struct file::read_state {
+    typedef temporary_buffer<CharType> tmp_buf_type;
+
+    read_state(uint64_t offset, uint64_t front, size_t to_read)
+    : buf(tmp_buf_type::aligned(file::dma_alignment,
+                                align_up(to_read, file::dma_alignment)))
+    , _offset(offset)
+    , _to_read(to_read)
+    , _front(front) {}
+
+    bool done() const {
+        return eof || pos >= _to_read;
+    }
+
+    /**
+     * Trim the buffer to the actual number of read bytes and cut the
+     * bytes from offset 0 till "_front".
+     *
+     * @note this function has to be called only if we read bytes beyond
+     *       "_front".
+     */
+    void trim_buf_before_ret() {
+        assert(have_good_bytes());
+
+        buf.trim(pos);
+        buf.trim_front(_front);
+    }
+
+    uint64_t cur_offset() const {
+        return _offset + pos;
+    }
+
+    size_t left_space() const {
+        return buf.size() - pos;
+    }
+
+    size_t left_to_read() const {
+        // positive as long as (done() == false)
+        return _to_read - pos;
+    }
+
+    void append_new_data(tmp_buf_type& new_data) {
+        auto to_copy = std::min(left_space(), new_data.size());
+
+        std::memcpy(buf.get_write() + pos, new_data.get(), to_copy);
+        pos += to_copy;
+    }
+
+    bool have_good_bytes() const {
+        return pos > _front;
+    }
+
+public:
+    bool         eof      = false;
+    tmp_buf_type buf;
+    size_t       pos      = 0;
+private:
+    uint64_t     _offset;
+    size_t       _to_read;
+    uint64_t     _front;
+};
+
+template <typename CharType>
+future<temporary_buffer<CharType>>
+file::dma_read_bulk(uint64_t offset, size_t range_size) {
+    using tmp_buf_type = typename read_state<CharType>::tmp_buf_type;
+
+    auto front = offset & (dma_alignment - 1);
+    offset -= front;
+    range_size += front;
+
+    auto rstate = make_lw_shared<read_state<CharType>>(offset, front,
+                                                       range_size);
+
+    //
+    // First, try to read directly into the buffer. Most of the reads will
+    // end here.
+    //
+    auto read = dma_read(offset, rstate->buf.get_write(),
+                         rstate->buf.size());
+
+    return read.then([rstate, this] (size_t size) mutable {
+        rstate->pos = size;
+
+        //
+        // If we haven't read all required data at once -
+        // start read-copy sequence. We can't continue with direct reads
+        // into the previously allocated buffer here since we have to ensure
+        // the aligned read length and thus the aligned destination buffer
+        // size.
+        //
+        // The copying will actually take place only if there was a HW glitch.
+        // In EOF case or in case of a persistent I/O error the only overhead is
+        // an extra allocation.
+        //
+        return do_until(
+            [rstate] { return rstate->done(); },
+            [rstate, this] () mutable {
+            return read_maybe_eof<CharType>(
+                rstate->cur_offset(), rstate->left_to_read()).then(
+                    [rstate] (auto buf1) mutable {
+                if (buf1.size()) {
+                    rstate->append_new_data(buf1);
+                } else if (rstate->have_good_bytes()){
+                    rstate->eof = true;
+                } else {
+                    throw eof_error();
+                }
+
+                return make_ready_future<>();
+            });
+        }).then([rstate] () mutable {
+            //
+            // If we are here we are promised to have read some bytes beyond
+            // "front" so we may trim straight away.
+            //
+            rstate->trim_buf_before_ret();
+            return make_ready_future<tmp_buf_type>(std::move(rstate->buf));
+        });
+    });
+}
+
+template <typename CharType>
+future<temporary_buffer<CharType>>
+file::read_maybe_eof(uint64_t pos, size_t len) {
+    //
+    // We have to allocate a new aligned buffer to make sure we don't get
+    // an EINVAL error due to unaligned destination buffer.
+    //
+    temporary_buffer<CharType> buf = temporary_buffer<CharType>::aligned(
+               dma_alignment, align_up(len, dma_alignment));
+
+    // try to read a single bulk from the given position
+    return dma_read(pos, buf.get_write(), buf.size()).then_wrapped(
+            [buf = std::move(buf)](future<size_t> f) mutable {
+        try {
+            size_t size = std::get<0>(f.get());
+
+            buf.trim(size);
+
+            return std::move(buf);
+        } catch (std::system_error& e) {
+            //
+            // TODO: implement a non-trowing file_impl::dma_read() interface to
+            //       avoid the exceptions throwing in a good flow completely.
+            //       Otherwise for users that don't want to care about the
+            //       underlying file size and preventing the attempts to read
+            //       bytes beyond EOF there will always be at least one
+            //       exception throwing at the file end for files with unaligned
+            //       length.
+            //
+            if (e.code().value() == EINVAL) {
+                buf.trim(0);
+                return std::move(buf);
+            } else {
+                throw;
+            }
+        }
+    });
+}
 
 #endif /* FILE_HH_ */

@@ -374,6 +374,20 @@ reactor::submit_io(Func prepare_io) {
     });
 }
 
+template <typename Func>
+future<io_event>
+reactor::submit_io_read(Func prepare_io) {
+    ++_aio_reads;
+    return submit_io(std::move(prepare_io));
+}
+
+template <typename Func>
+future<io_event>
+reactor::submit_io_write(Func prepare_io) {
+    ++_aio_writes;
+    return submit_io(std::move(prepare_io));
+}
+
 bool reactor::process_io()
 {
     io_event ev[max_aio];
@@ -391,7 +405,7 @@ bool reactor::process_io()
 
 future<size_t>
 posix_file_impl::write_dma(uint64_t pos, const void* buffer, size_t len) {
-    return engine().submit_io([this, pos, buffer, len] (iocb& io) {
+    return engine().submit_io_write([this, pos, buffer, len] (iocb& io) {
         io_prep_pwrite(&io, _fd, const_cast<void*>(buffer), len, pos);
     }).then([] (io_event ev) {
         throw_kernel_error(long(ev.res));
@@ -401,7 +415,7 @@ posix_file_impl::write_dma(uint64_t pos, const void* buffer, size_t len) {
 
 future<size_t>
 posix_file_impl::write_dma(uint64_t pos, std::vector<iovec> iov) {
-    return engine().submit_io([this, pos, iov = std::move(iov)] (iocb& io) {
+    return engine().submit_io_write([this, pos, iov = std::move(iov)] (iocb& io) {
         io_prep_pwritev(&io, _fd, iov.data(), iov.size(), pos);
     }).then([] (io_event ev) {
         throw_kernel_error(long(ev.res));
@@ -411,7 +425,7 @@ posix_file_impl::write_dma(uint64_t pos, std::vector<iovec> iov) {
 
 future<size_t>
 posix_file_impl::read_dma(uint64_t pos, void* buffer, size_t len) {
-    return engine().submit_io([this, pos, buffer, len] (iocb& io) {
+    return engine().submit_io_read([this, pos, buffer, len] (iocb& io) {
         io_prep_pread(&io, _fd, buffer, len, pos);
     }).then([] (io_event ev) {
         throw_kernel_error(long(ev.res));
@@ -421,7 +435,7 @@ posix_file_impl::read_dma(uint64_t pos, void* buffer, size_t len) {
 
 future<size_t>
 posix_file_impl::read_dma(uint64_t pos, std::vector<iovec> iov) {
-    return engine().submit_io([this, pos, iov = std::move(iov)] (iocb& io) {
+    return engine().submit_io_read([this, pos, iov = std::move(iov)] (iocb& io) {
         io_prep_preadv(&io, _fd, iov.data(), iov.size(), pos);
     }).then([] (io_event ev) {
         throw_kernel_error(long(ev.res));
@@ -509,6 +523,7 @@ reactor::make_directory(sstring name) {
 
 future<>
 posix_file_impl::flush(void) {
+    ++engine()._fsyncs;
     return engine()._thread_pool.submit<syscall_result<int>>([this] {
         return wrap_syscall<int>(::fsync(_fd));
     }).then([] (syscall_result<int> sr) {
@@ -793,6 +808,31 @@ reactor::register_collectd_metrics() {
                     , "queue_length", "idle")
                     , scollectd::make_typed(scollectd::data_type::GAUGE,
                             [this] () -> uint32_t { return _load * 100; })
+            ),
+            // total_operations value:DERIVE:0:U
+            scollectd::add_polled_metric(scollectd::type_instance_id("reactor"
+                    , scollectd::per_cpu_plugin_instance
+                    , "total_operations", "aio-reads")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE, _aio_reads)
+            ),
+            // total_operations value:DERIVE:0:U
+            scollectd::add_polled_metric(scollectd::type_instance_id("reactor"
+                    , scollectd::per_cpu_plugin_instance
+                    , "total_operations", "aio-writes")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE, _aio_writes)
+            ),
+            // total_operations value:DERIVE:0:U
+            scollectd::add_polled_metric(scollectd::type_instance_id("reactor"
+                    , scollectd::per_cpu_plugin_instance
+                    , "total_operations", "fsyncs")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE, _fsyncs)
+            ),
+            // total_operations value:DERIVE:0:U
+            scollectd::add_polled_metric(scollectd::type_instance_id("reactor"
+                    , scollectd::per_cpu_plugin_instance
+                    , "total_operations", "io-threaded-fallbacks")
+                    , scollectd::make_typed(scollectd::data_type::DERIVE,
+                            std::bind(&thread_pool::operation_count, &_thread_pool))
             ),
             scollectd::add_polled_metric(
                 scollectd::type_instance_id("memory",
