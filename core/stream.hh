@@ -34,8 +34,9 @@
 // To signify no more data is available, call close().
 //
 // A subscription<> is the consumer side.  It is created by a call
-// to stream::listen(), which also registers the data processing
-// callback.  It may register for end-of-stream notifications by
+// to stream::listen().  Calling subscription::start(),
+// which registers the data processing callback, starts processing
+// events.  It may register for end-of-stream notifications by
 // chaining the when_done() future, which also delivers error
 // events (as exceptions).
 //
@@ -64,9 +65,11 @@ public:
     void operator=(stream&&) = delete;
 
     // Returns a subscription that reads value from this
-    // stream.  Each data element will be processed by the
-    // @next function, which returns a future<> to indicate
-    // when it is ready to process more data.
+    // stream.
+    subscription<T...> listen();
+
+    // Returns a subscription that reads value from this
+    // stream, and also sets up the listen function.
     subscription<T...> listen(next_fn next);
 
     // Becomes ready when the listener is ready to accept
@@ -96,14 +99,21 @@ private:
 
 template <typename... T>
 class subscription {
+public:
     using next_fn = typename stream<T...>::next_fn;
+private:
     stream<T...>* _stream;
     next_fn _next;
 private:
-    explicit subscription(stream<T...>* s, next_fn next);
+    explicit subscription(stream<T...>* s);
 public:
     subscription(subscription&& x);
     ~subscription();
+
+    /// \brief Start receiving events from the stream.
+    ///
+    /// \param next Callback to call for each event
+    void start(std::function<future<> (T...)> next);
 
     // Becomes ready when the stream is empty, or when an error
     // happens (in that case, an exception is held).
@@ -124,8 +134,17 @@ stream<T...>::~stream() {
 template <typename... T>
 inline
 subscription<T...>
+stream<T...>::listen() {
+    return subscription<T...>(this);
+}
+
+template <typename... T>
+inline
+subscription<T...>
 stream<T...>::listen(next_fn next) {
-    return subscription<T...>(this, std::move(next));
+    auto sub = subscription<T...>(this);
+    sub.start(std::move(next));
+    return sub;
 }
 
 template <typename... T>
@@ -165,10 +184,17 @@ stream<T...>::set_exception(E ex) {
 
 template <typename... T>
 inline
-subscription<T...>::subscription(stream<T...>* s, next_fn next)
-    : _stream(s), _next(std::move(next)) {
+subscription<T...>::subscription(stream<T...>* s)
+        : _stream(s) {
     assert(!_stream->_sub);
     _stream->_sub = this;
+}
+
+template <typename... T>
+inline
+void
+subscription<T...>::start(std::function<future<> (T...)> next) {
+    _next = std::move(next);
     _stream->_ready.set_value();
 }
 
