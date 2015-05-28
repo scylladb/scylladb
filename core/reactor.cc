@@ -456,7 +456,7 @@ reactor::open_file_dma(sstring name, open_flags flags) {
 future<>
 reactor::remove_file(sstring pathname) {
     return engine()._thread_pool.submit<syscall_result<int>>([this, pathname] {
-        return wrap_syscall<int>(::unlink(pathname.c_str()));
+        return wrap_syscall<int>(::remove(pathname.c_str()));
     }).then([] (syscall_result<int> sr) {
         sr.throw_if_error();
         return make_ready_future<>();
