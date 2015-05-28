@@ -275,9 +275,9 @@ private:
      * @param pos offset to read from
      * @param len number of bytes to read
      *
-     * @return temporary buffer with read data
-     * @throw appropriate exception in case of I/O error or when "pos" is beyond
-     *        EOF.
+     * @return temporary buffer with read data or zero-sized temporary buffer if
+     *         pos is at or beyond EOF.
+     * @throw appropriate exception in case of I/O error.
      */
     template <typename CharType>
     future<temporary_buffer<CharType>>
@@ -378,32 +378,27 @@ file::dma_read_bulk(uint64_t offset, size_t range_size) {
         // the aligned read length and thus the aligned destination buffer
         // size.
         //
-        // The copying will actually take place only when we either reach
-        // EOF or in case of I/O errors, thus this should not happen a lot.
+        // The copying will actually take place only if there was a HW glitch.
+        // In EOF case or in case of a persistent I/O error the only overhead is
+        // an extra allocation.
         //
         return do_until(
             [rstate] { return rstate->done(); },
             [rstate, this] () mutable {
             return read_maybe_eof<CharType>(
-                rstate->cur_offset(), rstate->left_to_read()).then_wrapped(
-                    [rstate] (auto f) mutable {
-                try {
-                    auto buf1 = std::get<0>(f.get());
+                rstate->cur_offset(), rstate->left_to_read()).then(
+                    [rstate] (auto buf1) mutable {
+                if (buf1.size()) {
                     rstate->append_new_data(buf1);
-
-                    return make_ready_future<>();
-                } catch (eof_error& e) {
-                    if (rstate->have_good_bytes()){
-                        rstate->eof = true;
-
-                        return make_ready_future<>();
-                    } else {
-                        throw;
-                    }
+                } else if (rstate->have_good_bytes()){
+                    rstate->eof = true;
+                } else {
+                    throw eof_error();
                 }
+
+                return make_ready_future<>();
             });
-        }).then_wrapped([rstate] (auto f) mutable {
-            f.get();
+        }).then([rstate] () mutable {
             //
             // If we are here we are promised to have read some bytes beyond
             // "front" so we may trim straight away.
@@ -430,16 +425,22 @@ file::read_maybe_eof(uint64_t pos, size_t len) {
         try {
             size_t size = std::get<0>(f.get());
 
-            if (!size) {
-                throw eof_error();
-            } else {
-                buf.trim(size);
+            buf.trim(size);
 
-                return std::move(buf);
-            }
+            return std::move(buf);
         } catch (std::system_error& e) {
+            //
+            // TODO: implement a non-trowing file_impl::dma_read() interface to
+            //       avoid the exceptions throwing in a good flow completely.
+            //       Otherwise for users that don't want to care about the
+            //       underlying file size and preventing the attempts to read
+            //       bytes beyond EOF there will always be at least one
+            //       exception throwing at the file end for files with unaligned
+            //       length.
+            //
             if (e.code().value() == EINVAL) {
-                throw eof_error();
+                buf.trim(0);
+                return std::move(buf);
             } else {
                 throw;
             }
