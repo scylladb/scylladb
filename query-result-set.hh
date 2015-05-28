@@ -59,6 +59,7 @@ public:
     }
     friend inline bool operator==(const result_set_row& x, const result_set_row& y);
     friend inline bool operator!=(const result_set_row& x, const result_set_row& y);
+    friend std::ostream& operator<<(std::ostream& out, const result_set_row& row);
 };
 
 inline bool operator==(const result_set_row& x, const result_set_row& y) {
@@ -88,6 +89,7 @@ public:
         return _rows[idx];
     }
     friend inline bool operator==(const result_set& x, const result_set& y);
+    friend std::ostream& operator<<(std::ostream& out, const result_set& rs);
 };
 
 inline bool operator==(const result_set& x, const result_set& y) {

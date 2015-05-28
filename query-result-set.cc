@@ -6,6 +6,22 @@
 
 namespace query {
 
+std::ostream& operator<<(std::ostream& out, const result_set_row& row) {
+    for (auto&& cell : row._cells) {
+        auto&& type = cell.second.type();
+        auto&& value = cell.second.value();
+        out << cell.first << "=\"" << type->decompose(value) << "\" ";
+    }
+    return out;
+}
+
+std::ostream& operator<<(std::ostream& out, const result_set& rs) {
+    for (auto&& row : rs._rows) {
+        out << row << std::endl;
+    }
+    return out;
+}
+
 result_set_builder::result_set_builder(schema_ptr schema)
     : _schema{schema}
 { }
