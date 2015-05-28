@@ -793,6 +793,23 @@ future<> write_crc(const sstring file_path, checksum& c) {
     });
 }
 
+// Digest file stores the full checksum of data file converted into a string.
+future<> write_digest(const sstring file_path, uint32_t full_checksum) {
+    sstlog.debug("Writing Digest file {} ", file_path);
+
+    auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
+    return engine().open_file_dma(file_path, oflags).then([full_checksum] (file f) {
+        auto out = file_writer(make_lw_shared<file>(std::move(f)), 4096);
+        auto w = make_shared<file_writer>(std::move(out));
+
+        return do_with(to_sstring<bytes>(full_checksum), [w] (bytes& digest) {
+            return write(*w, digest).then([w] {
+                return w->close().then([w] {});
+            });
+        });
+    });
+}
+
 future<index_list> sstable::read_indexes(uint64_t position, uint64_t quantity) {
     struct reader {
         uint64_t count = 0;
@@ -1217,6 +1234,8 @@ future<> sstable::write_components(const memtable& mt) {
                     });
                 });
             });
+        }).then([this, w] {
+            return write_digest(filename(sstable::component_type::Digest), w->full_checksum());
         }).then([this, w, checksum_file] {
             if (checksum_file) {
                 return write_crc(filename(sstable::component_type::CRC), w->finalize_checksum());
@@ -1232,6 +1251,7 @@ future<> sstable::write_components(const memtable& mt) {
             return write_filter();
         }).then([this] {
             _components.insert(component_type::TOC);
+            _components.insert(component_type::Digest);
             _components.insert(component_type::Index);
             _components.insert(component_type::Summary);
             _components.insert(component_type::Data);
