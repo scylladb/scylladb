@@ -56,7 +56,9 @@ public:
             sstables::deletion_time deltime) = 0;
 
     // Called at the end of the row, after all cells.
-    virtual void consume_row_end() = 0;
+    // Returns a future saying when to continue consuming the next row
+    // (can be a ready future to continue immediately).
+    virtual future<> consume_row_end() = 0;
 
     virtual ~row_consumer() { }
 };

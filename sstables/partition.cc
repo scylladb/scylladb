@@ -309,13 +309,14 @@ public:
             mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
         }
     }
-    virtual void consume_row_end() override {
+    virtual future<> consume_row_end() override {
         if (mut) {
             _pending_collection.flush(*_schema, *mut);
             if (_mutation_to_subscription) {
-                _mutation_to_subscription(std::move(*mut));
+                return _mutation_to_subscription(std::move(*mut));
             }
         }
+        return make_ready_future<>();
     }
 
     virtual void consume_range_tombstone(

@@ -10,6 +10,7 @@
 #include "core/future-util.hh"
 #include "core/align.hh"
 #include "core/do_with.hh"
+#include "core/sleep.hh"
 #include "sstables/sstables.hh"
 #include "sstables/key.hh"
 #include "tests/test-utils.hh"
@@ -365,8 +366,9 @@ public:
             sstables::deletion_time deltime) override {
         count_range_tombstone++;
     }
-    virtual void consume_row_end() override {
+    virtual future<> consume_row_end() override {
         count_row_end++;
+        return make_ready_future<>();
     }
 };
 
@@ -449,8 +451,9 @@ public:
     virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
         count_deleted_cell++;
     }
-    virtual void consume_row_end() override {
+    virtual future<> consume_row_end() override {
         count_row_end++;
+        return make_ready_future<>();
     }
     virtual void consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
@@ -490,6 +493,33 @@ SEASTAR_TEST_CASE(compressed_rows_read_all) {
         });
     });
 }
+
+// test reading all the rows one by one, using the feature of the
+// consume_row_end returning a future.
+class pausable_count_row_consumer : public count_row_consumer {
+public:
+    virtual future<> consume_row_end() override {
+        std::cout << "in consume_row_end()\n";
+        count_row_consumer::consume_row_end();
+        return sleep(std::chrono::milliseconds(100));
+    }
+};
+
+SEASTAR_TEST_CASE(pausable_uncompressed_rows_read_all) {
+    return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([] (auto sstp) {
+        return do_with(pausable_count_row_consumer(), [sstp] (auto& c) {
+            return sstp->data_consume_rows(c).then([sstp, &c] {
+                BOOST_REQUIRE(c.count_row_start == 4);
+                BOOST_REQUIRE(c.count_row_end == 4);
+                BOOST_REQUIRE(c.count_cell == 4*3);
+                BOOST_REQUIRE(c.count_deleted_cell == 0);
+                BOOST_REQUIRE(c.count_range_tombstone == 0);
+                return make_ready_future<>();
+            });
+        });
+    });
+}
+
 
 // Test reading range tombstone (which we we have in collections such as set)
 class set_consumer : public count_row_consumer {

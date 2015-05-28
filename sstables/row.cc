@@ -93,7 +93,6 @@ private:
         return bytes_view(reinterpret_cast<const byte*>(b.get()), b.size());
     }
 
-    using unconsumed_reminder = input_stream<char>::unconsumed_remainder;
 public:
     data_consume_rows_context(row_consumer& consumer,
             input_stream<char> && input, uint64_t maxlen) :
@@ -110,27 +109,32 @@ public:
         }
     }
 
+    using unconsumed_remainder = input_stream<char>::unconsumed_remainder;
     // called by input_stream::consume():
-    future<unconsumed_reminder>
+    future<unconsumed_remainder>
     operator()(temporary_buffer<char> data) {
         if (_remain && data.size() >= _remain) {
-            // We've been asked to stop before the end of file, and we've
-            // read past the amount we need. So process the beginning of the
-            // buffer, and return the rest to the stream with done():
-            process(data.share(0, _remain));
+            // We received more data than we actually care about, so process
+            // the beginning of the buffer, and return the rest to the stream
+            auto done = process(data.share(0, _remain));
             data.trim_front(_remain);
-            verify_end_state();
-            return make_ready_future<unconsumed_reminder>(std::move(data));
+            return done.then([this, data = std::move(data)] () mutable {
+                verify_end_state();
+                return unconsumed_remainder(std::move(data));
+            });
         } else if (data.empty()) {
             // End of file
             verify_end_state();
-            return make_ready_future<unconsumed_reminder>(std::move(data));
+            return make_ready_future<unconsumed_remainder>(std::move(data));
         } else {
+            // We need to process the entire buffer, and return an unset
+            // remainder (meaning that we want to consume more).
             if (_remain) {
                 _remain -= data.size();
             }
-            process(std::move(data));
-            return make_ready_future<unconsumed_reminder>();
+            return process(std::move(data)).then([] {
+                    return unconsumed_remainder();
+            });
         }
     }
 
@@ -189,17 +193,29 @@ private:
     }
 
 public:
-    // process() feeds the given data into the state machine
-    void process(temporary_buffer<char> data) {
+    // process() feeds the given data into the state machine.
+    // The consumer may block by returning a future from the
+    // consume_row_end, so process() also returns a future
+    // saying when all the given data has been processed.
+    future<> process(temporary_buffer<char>&& data) {
 #if 0
         // Testing hack: call process() for tiny chunks separately, to verify
         // that primitive types crossing input buffer are handled correctly.
         constexpr size_t tiny_chunk = 1; // try various tiny sizes
         if (data.size() > tiny_chunk) {
             for (unsigned i = 0; i < data.size(); i += tiny_chunk) {
+                future<> fut =
                 process(data.share(i, std::min(tiny_chunk, data.size() - i)));
+                if (!fut.available()) {
+                    // Can't continue yet, need to defer the remainder of the
+                    // buffer until the previous process() is done.
+                    data.trim_front(i + std::min(tiny_chunk, data.size() - i));
+                    return fut.then([this, data = std::move(data)] () mutable {
+                        return process(std::move(data));
+                    });
+                }
             }
-            return;
+            return make_ready_future<>();
         }
 #endif
         while (data || non_consuming(_state, _prestate)) {
@@ -305,8 +321,16 @@ public:
                     _u16 = consume_be<uint16_t>(data);
                     if (_u16 == 0) {
                         // end of row marker
-                        _consumer.consume_row_end();
                         _state = state::ROW_START;
+                        auto fut = _consumer.consume_row_end();
+                        if (!fut.available()) {
+                            // Can't continue yet, need to defer the rest of
+                            // the process() till later. Return a future so
+                            // the inputstream "consume" can wait too.
+                            return fut.then([this, data = std::move(data)] () mutable {
+                                return process(std::move(data));
+                            });
+                        }
                     } else {
                         _state = state::ATOM_NAME_BYTES;
                     }
@@ -321,8 +345,16 @@ public:
             case state::ATOM_START_2:
                 if (_u16 == 0) {
                     // end of row marker
-                    _consumer.consume_row_end();
                     _state = state::ROW_START;
+                    auto fut = _consumer.consume_row_end();
+                    if (!fut.available()) {
+                        // Can't continue yet, need to defer the rest of
+                        // the process() till later. Return a future so
+                        // the inputstream "consume" can wait too.
+                        return fut.then([this, data = std::move(data)] () mutable {
+                            return process(std::move(data));
+                        });
+                    }
                 } else {
                     _state = state::ATOM_NAME_BYTES;
                 }
@@ -473,6 +505,7 @@ public:
                 throw malformed_sstable_exception("unknown state");
             }
         }
+        return make_ready_future<>();
     }
 };
 
