@@ -51,7 +51,10 @@ public:
     int num_hashes() { return _hash_count; }
     bitmap& bits() { return _bitset; }
 
-    bloom_filter(int hashes, bitmap&& bs) : _bitset(bs), _hash_count(hashes) {}
+    bloom_filter(int hashes, bitmap&& bs) : _bitset(bs), _hash_count(hashes) {
+        _bitset.resize(_bitset.num_blocks() * bitmap::bits_per_block);
+    }
+
     virtual void hash(const bytes_view& b, long seed, std::array<uint64_t, 2>& result) = 0;
 
     virtual void add(const bytes_view& key) override {

@@ -62,7 +62,7 @@ std::vector<long> bloom_filter::indexes(const bytes_view& key) {
     hash(key, 0, h);
 
     idx.resize(_hash_count);
-    set_indexes(h[0], h[1], _hash_count, _bitset.max_size(), idx);
+    set_indexes(h[0], h[1], _hash_count, _bitset.size(), idx);
     return idx;
 }
 
