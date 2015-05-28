@@ -308,7 +308,7 @@ public:
 
 inline bool operator==(const data_value& x, const data_value& y)
 {
-     return x._type == y._type && x._type->decompose(x._value) == y._type->decompose(y._value);
+     return x._type == y._type && x._type->equal(x._type->decompose(x._value), y._type->decompose(y._value));
 }
 
 inline bool operator!=(const data_value& x, const data_value& y)
