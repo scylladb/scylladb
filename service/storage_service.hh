@@ -134,8 +134,8 @@ private:
     private final ObjectName jmxObjectName;
 
 #endif
-public:
-    std::set<token> bootstrapTokens;
+private:
+    std::set<token> _bootstrap_tokens;
 #if 0
 
     public void finishBootstrapping()
@@ -595,8 +595,8 @@ private:
                     throw new RuntimeException("Cannot replace address with a node that is already bootstrapped");
                 if (!DatabaseDescriptor.isAutoBootstrap())
                     throw new RuntimeException("Trying to replace_address with auto_bootstrap disabled will not work, check your configuration");
-                bootstrapTokens = prepareReplacementInfo();
-                appStates.put(ApplicationState.TOKENS, valueFactory.tokens(bootstrapTokens));
+                _bootstrap_tokens = prepareReplacementInfo();
+                appStates.put(ApplicationState.TOKENS, valueFactory.tokens(_bootstrap_tokens));
                 appStates.put(ApplicationState.STATUS, valueFactory.hibernate(true));
             }
             else if (should_bootstrap())
@@ -672,8 +672,8 @@ private:
             logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
 #endif
         if (should_bootstrap()) {
-            bootstrapTokens = boot_strapper::get_bootstrap_tokens(_token_metadata);
-            return bootstrap(bootstrapTokens);
+            _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata);
+            return bootstrap(_bootstrap_tokens);
 #if 0
             if (SystemKeyspace.bootstrapInProgress())
                 logger.warn("Detected previous bootstrap failure; retrying");
@@ -723,7 +723,7 @@ private:
                     throw new UnsupportedOperationException(s);
                 }
                 setMode(Mode.JOINING, "getting bootstrap token", true);
-                bootstrapTokens = BootStrapper.getBootstrapTokens(_token_metadata);
+                _bootstrap_tokens = BootStrapper.getBootstrapTokens(_token_metadata);
             }
             else
             {
@@ -741,7 +741,7 @@ private:
                     }
 
                     // check for operator errors...
-                    for (Token token : bootstrapTokens)
+                    for (Token token : _bootstrap_tokens)
                     {
                         InetAddress existing = _token_metadata.getEndpoint(token);
                         if (existing != null)
@@ -769,44 +769,44 @@ private:
                     }
 
                 }
-                setMode(Mode.JOINING, "Replacing a node with token(s): " + bootstrapTokens, true);
+                setMode(Mode.JOINING, "Replacing a node with token(s): " + _bootstrap_tokens, true);
             }
 
-            bootstrap(bootstrapTokens);
+            bootstrap(_bootstrap_tokens);
             assert !isBootstrapMode; // bootstrap will block until finished
 #endif
         } else {
             // FIXME: DatabaseDescriptor.getNumTokens()
             size_t num_tokens = 256;
-            bootstrapTokens = boot_strapper::get_random_tokens(_token_metadata, num_tokens);
+            _bootstrap_tokens = boot_strapper::get_random_tokens(_token_metadata, num_tokens);
             return make_ready_future<>();
 #if 0
-            bootstrapTokens = SystemKeyspace.getSavedTokens();
-            if (bootstrapTokens.isEmpty())
+            _bootstrap_tokens = SystemKeyspace.getSavedTokens();
+            if (_bootstrap_tokens.isEmpty())
             {
                 Collection<String> initialTokens = DatabaseDescriptor.getInitialTokens();
                 if (initialTokens.size() < 1)
                 {
-                    bootstrapTokens = BootStrapper.getRandomTokens(_token_metadata, DatabaseDescriptor.getNumTokens());
+                    _bootstrap_tokens = BootStrapper.getRandomTokens(_token_metadata, DatabaseDescriptor.getNumTokens());
                     if (DatabaseDescriptor.getNumTokens() == 1)
-                        logger.warn("Generated random token {}. Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations", bootstrapTokens);
+                        logger.warn("Generated random token {}. Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations", _bootstrap_tokens);
                     else
-                        logger.info("Generated random tokens. tokens are {}", bootstrapTokens);
+                        logger.info("Generated random tokens. tokens are {}", _bootstrap_tokens);
                 }
                 else
                 {
-                    bootstrapTokens = new ArrayList<Token>(initialTokens.size());
+                    _bootstrap_tokens = new ArrayList<Token>(initialTokens.size());
                     for (String token : initialTokens)
-                        bootstrapTokens.add(getPartitioner().getTokenFactory().fromString(token));
-                    logger.info("Saved tokens not found. Using configuration value: {}", bootstrapTokens);
+                        _bootstrap_tokens.add(getPartitioner().getTokenFactory().fromString(token));
+                    logger.info("Saved tokens not found. Using configuration value: {}", _bootstrap_tokens);
                 }
             }
             else
             {
-                if (bootstrapTokens.size() != DatabaseDescriptor.getNumTokens())
-                    throw new ConfigurationException("Cannot change the number of tokens from " + bootstrapTokens.size() + " to " + DatabaseDescriptor.getNumTokens());
+                if (_bootstrap_tokens.size() != DatabaseDescriptor.getNumTokens())
+                    throw new ConfigurationException("Cannot change the number of tokens from " + _bootstrap_tokens.size() + " to " + DatabaseDescriptor.getNumTokens());
                 else
-                    logger.info("Using saved tokens {}", bootstrapTokens);
+                    logger.info("Using saved tokens {}", _bootstrap_tokens);
             }
 #endif
         }
@@ -819,7 +819,7 @@ private:
         {
             // start participating in the ring.
             SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
-            setTokens(bootstrapTokens);
+            setTokens(_bootstrap_tokens);
             // remove the existing info about the replaced node.
             if (!current.isEmpty())
                 for (InetAddress existing : current)
