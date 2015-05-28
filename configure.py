@@ -313,6 +313,7 @@ api = ['api/api.cc',
        'api/api-doc/failure_detector.json',
        'api/failure_detector.cc',
        'api/api-doc/column_family.json',
+       'api/column_family.cc',
        ]
 
 boost_test_lib = [

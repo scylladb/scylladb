@@ -8,6 +8,7 @@
 #include "commitlog.hh"
 #include "gossiper.hh"
 #include "failure_detector.hh"
+#include "column_family.hh"
 
 namespace api {
 
@@ -25,6 +26,9 @@ future<> set_server(http_context& ctx) {
         rb->register_function(r, "gossiper",
                                 "The gossiper API");
         set_gossiper(ctx,r);
+        rb->register_function(r, "column_family",
+                                        "The column family API");
+        set_column_family(ctx, r);
         rb->register_function(r, "failure_detector",
                                 "The failure detector API");
         set_failure_detector(ctx,r);
