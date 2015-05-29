@@ -1940,20 +1940,16 @@ private:
     }
 #endif
 public:
-    void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override
-    {
+    void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
         ss_debug("SS::on_join endpoint=%s\n", endpoint);
         auto tokens = get_tokens_for(endpoint);
         for (auto t : tokens) {
             ss_debug("t=%s\n", t);
         }
-#if 0
-        for (Map.Entry<ApplicationState, VersionedValue> entry : epState.getApplicationStateMap().entrySet())
-        {
-            onChange(endpoint, entry.getKey(), entry.getValue());
+        for (auto e : ep_state.get_application_state_map()) {
+            on_change(endpoint, e.first, e.second);
         }
-        MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
-#endif
+        // MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
     }
 
     void on_alive(gms::inet_address endpoint, gms::endpoint_state state) override
