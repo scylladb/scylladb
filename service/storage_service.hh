@@ -66,6 +66,10 @@ public:
         return _token_metadata;
     }
 private:
+    inet_address get_broadcast_address() {
+        auto& gossiper = gms::get_local_gossiper();
+        return gossiper.get_broadcast_address();
+    }
     static int getRingDelay()
     {
 #if 0
@@ -546,8 +550,7 @@ private:
         // return DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && !DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress());
         auto& gossiper = gms::get_local_gossiper();
         auto seeds = gossiper.get_seeds();
-        auto broadcast_address = gossiper.get_broadcast_address();
-        return !seeds.count(broadcast_address);
+        return !seeds.count(get_broadcast_address());
     }
     future<> prepare_to_join()
     {
