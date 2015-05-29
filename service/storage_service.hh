@@ -30,6 +30,7 @@
 #include "dht/i_partitioner.hh"
 #include "dht/boot_strapper.hh"
 #include "core/sleep.hh"
+#include "gms/application_state.hh"
 
 namespace service {
 
@@ -50,6 +51,8 @@ class storage_service : public gms::i_endpoint_state_change_subscriber
     using token = dht::token;
     using boot_strapper = dht::boot_strapper;
     using token_metadata = locator::token_metadata;
+    using application_state = gms::application_state;
+    using inet_address = gms::inet_address;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(StorageService.class);
 
@@ -151,19 +154,23 @@ private:
     }
 
     /** This method updates the local token on disk  */
-    public void setTokens(Collection<Token> tokens)
-    {
-        if (logger.isDebugEnabled())
-            logger.debug("Setting tokens to {}", tokens);
-        SystemKeyspace.updateTokens(tokens);
-        _token_metadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
-        Collection<Token> localTokens = getLocalTokens();
-        List<Pair<ApplicationState, VersionedValue>> states = new ArrayList<Pair<ApplicationState, VersionedValue>>();
-        states.add(Pair.create(ApplicationState.TOKENS, valueFactory.tokens(localTokens)));
-        states.add(Pair.create(ApplicationState.STATUS, valueFactory.normal(localTokens)));
-        Gossiper.instance.addLocalApplicationStates(states);
-        setMode(Mode.NORMAL, false);
+
+#endif
+
+    void set_tokens(std::set<token> tokens) {
+        // if (logger.isDebugEnabled())
+        //     logger.debug("Setting tokens to {}", tokens);
+        // SystemKeyspace.updateTokens(tokens);
+        // _token_metadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
+        // Collection<Token> localTokens = getLocalTokens();
+        auto local_tokens = _bootstrap_tokens;
+        auto& gossiper = gms::get_local_gossiper();
+        gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
+        gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(local_tokens));
+        //setMode(Mode.NORMAL, false);
     }
+
+#if 0
 
     public StorageService()
     {
@@ -826,7 +833,7 @@ private:
         {
             // start participating in the ring.
             SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
-            setTokens(_bootstrap_tokens);
+            set_tokens(_bootstrap_tokens);
             // remove the existing info about the replaced node.
             if (!current.isEmpty())
                 for (InetAddress existing : current)
@@ -867,7 +874,7 @@ private:
         }
         else if (isSurveyMode)
         {
-            setTokens(SystemKeyspace.getSavedTokens());
+            set_tokens(SystemKeyspace.getSavedTokens());
             SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
             isSurveyMode = false;
             logger.info("Leaving write survey mode and joining ring at operator request");
@@ -3381,7 +3388,7 @@ public:
             setMode(Mode.MOVING, "No ranges to fetch/stream", true);
         }
 
-        setTokens(Collections.singleton(newToken)); // setting new token as we have everything settled
+        set_tokens(Collections.singleton(newToken)); // setting new token as we have everything settled
 
         if (logger.isDebugEnabled())
             logger.debug("Successfully moved to new token {}", getLocalTokens().iterator().next());
