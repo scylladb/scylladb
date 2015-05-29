@@ -53,6 +53,7 @@ class storage_service : public gms::i_endpoint_state_change_subscriber
     using token_metadata = locator::token_metadata;
     using application_state = gms::application_state;
     using inet_address = gms::inet_address;
+    using versioned_value = gms::versioned_value;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(StorageService.class);
 
@@ -1293,82 +1294,56 @@ public:
      * Note: Any time a node state changes from STATUS_NORMAL, it will not be visible to new nodes. So it follows that
      * you should never bootstrap a new node during a removenode, decommission or move.
      */
-    void on_change(gms::inet_address endpoint, gms::application_state state, gms::versioned_value value) override
-    {
+    void on_change(inet_address endpoint, application_state state, versioned_value value) override {
         ss_debug("SS::on_change endpoint=%s\n", endpoint);
-#if 0
-        if (state == ApplicationState.STATUS)
-        {
-            String apStateValue = value.value;
-            String[] pieces = apStateValue.split(VersionedValue.DELIMITER_STR, -1);
-            assert (pieces.length > 0);
-
-            String moveName = pieces[0];
-
-            switch (moveName)
-            {
-                case VersionedValue.STATUS_BOOTSTRAPPING:
-                    handle_state_bootstrap(endpoint);
-                    break;
-                case VersionedValue.STATUS_NORMAL:
-                    handle_state_normal(endpoint);
-                    break;
-                case VersionedValue.REMOVING_TOKEN:
-                case VersionedValue.REMOVED_TOKEN:
-                    handle_state_removing(endpoint, pieces);
-                    break;
-                case VersionedValue.STATUS_LEAVING:
-                    handle_state_leaving(endpoint);
-                    break;
-                case VersionedValue.STATUS_LEFT:
-                    handle_state_left(endpoint, pieces);
-                    break;
-                case VersionedValue.STATUS_MOVING:
-                    handle_state_moving(endpoint, pieces);
-                    break;
+        if (state == application_state::STATUS) {
+            std::vector<sstring> pieces;
+            boost::split(pieces, value.value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
+            assert(pieces.size() > 0);
+            sstring move_name = pieces[0];
+            if (move_name == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
+                handle_state_bootstrap(endpoint);
+            } else if (move_name == sstring(versioned_value::STATUS_NORMAL)) {
+                handle_state_normal(endpoint);
+            } else if (move_name == sstring(versioned_value::REMOVING_TOKEN) ||
+                       move_name == sstring(versioned_value::REMOVED_TOKEN)) {
+                handle_state_removing(endpoint, pieces);
+            } else if (move_name == sstring(versioned_value::STATUS_LEAVING)) {
+                handle_state_leaving(endpoint);
+            } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
+                handle_state_left(endpoint, pieces);
+            } else if (move_name == sstring(versioned_value::STATUS_MOVING)) {
+                handle_state_moving(endpoint, pieces);
             }
-        }
-        else
-        {
-            EndpointState epState = Gossiper.instance.getEndpointStateForEndpoint(endpoint);
-            if (epState == null || Gossiper.instance.isDeadState(epState))
-            {
-                logger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
+        } else {
+            auto& gossiper = gms::get_local_gossiper();
+            auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
+            if (!ep_state || gossiper.is_dead_state(*ep_state)) {
+                // logger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
                 return;
             }
 
-            switch (state)
-            {
-                case RELEASE_VERSION:
-                    SystemKeyspace.updatePeerInfo(endpoint, "release_version", value.value);
-                    break;
-                case DC:
-                    SystemKeyspace.updatePeerInfo(endpoint, "data_center", value.value);
-                    break;
-                case RACK:
-                    SystemKeyspace.updatePeerInfo(endpoint, "rack", value.value);
-                    break;
-                case RPC_ADDRESS:
-                    try
-                    {
-                        SystemKeyspace.updatePeerInfo(endpoint, "rpc_address", InetAddress.getByName(value.value));
-                    }
-                    catch (UnknownHostException e)
-                    {
-                        throw new RuntimeException(e);
-                    }
-                    break;
-                case SCHEMA:
-                    SystemKeyspace.updatePeerInfo(endpoint, "schema_version", UUID.fromString(value.value));
-                    MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
-                    break;
-                case HOST_ID:
-                    SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(value.value));
-                    break;
+            if (state == application_state::RELEASE_VERSION) {
+                // SystemKeyspace.updatePeerInfo(endpoint, "release_version", value.value);
+            } else if (state == application_state::DC) {
+                // SystemKeyspace.updatePeerInfo(endpoint, "data_center", value.value);
+            } else if (state == application_state::RACK) {
+                // SystemKeyspace.updatePeerInfo(endpoint, "rack", value.value);
+            } else if (state == application_state::RPC_ADDRESS) {
+                // try {
+                //     SystemKeyspace.updatePeerInfo(endpoint, "rpc_address", InetAddress.getByName(value.value));
+                // } catch (UnknownHostException e) {
+                //     throw new RuntimeException(e);
+                // }
+            } else if (state == application_state::SCHEMA) {
+                // SystemKeyspace.updatePeerInfo(endpoint, "schema_version", UUID.fromString(value.value));
+                // MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
+            } else if (state == application_state::HOST_ID) {
+                // SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(value.value));
             }
         }
-#endif
     }
+
 #if 0
     private void updatePeerInfo(InetAddress endpoint)
     {
