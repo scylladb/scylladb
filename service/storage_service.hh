@@ -1308,23 +1308,23 @@ public:
             switch (moveName)
             {
                 case VersionedValue.STATUS_BOOTSTRAPPING:
-                    handleStateBootstrap(endpoint);
+                    handle_state_bootstrap(endpoint);
                     break;
                 case VersionedValue.STATUS_NORMAL:
-                    handleStateNormal(endpoint);
+                    handle_state_normal(endpoint);
                     break;
                 case VersionedValue.REMOVING_TOKEN:
                 case VersionedValue.REMOVED_TOKEN:
-                    handleStateRemoving(endpoint, pieces);
+                    handle_state_removing(endpoint, pieces);
                     break;
                 case VersionedValue.STATUS_LEAVING:
-                    handleStateLeaving(endpoint);
+                    handle_state_leaving(endpoint);
                     break;
                 case VersionedValue.STATUS_LEFT:
-                    handleStateLeft(endpoint, pieces);
+                    handle_state_left(endpoint, pieces);
                     break;
                 case VersionedValue.STATUS_MOVING:
-                    handleStateMoving(endpoint, pieces);
+                    handle_state_moving(endpoint, pieces);
                     break;
             }
         }
@@ -1435,14 +1435,14 @@ private:
         return ret;
     }
 
-#if 0
+private:
     /**
      * Handle node bootstrap
      *
      * @param endpoint bootstrapping node
      */
-    private void handleStateBootstrap(InetAddress endpoint)
-    {
+    void handle_state_bootstrap(inet_address endpoint) {
+#if 0
         Collection<Token> tokens;
         // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
         tokens = get_tokens_for(endpoint);
@@ -1470,6 +1470,7 @@ private:
 
         if (Gossiper.instance.usesHostId(endpoint))
             _token_metadata.updateHostId(Gossiper.instance.getHostId(endpoint), endpoint);
+#endif
     }
 
     /**
@@ -1478,8 +1479,8 @@ private:
      *
      * @param endpoint node
      */
-    private void handleStateNormal(final InetAddress endpoint)
-    {
+    void handle_state_normal(inet_address endpoint) {
+#if 0
         Collection<Token> tokens;
 
         tokens = get_tokens_for(endpoint);
@@ -1603,6 +1604,7 @@ private:
         }
 
         PendingRangeCalculatorService.instance.update();
+#endif
     }
 
     /**
@@ -1610,8 +1612,8 @@ private:
      *
      * @param endpoint node
      */
-    private void handleStateLeaving(InetAddress endpoint)
-    {
+    void handle_state_leaving(inet_address endpoint) {
+#if 0
         Collection<Token> tokens;
         tokens = get_tokens_for(endpoint);
 
@@ -1636,6 +1638,7 @@ private:
         // normally
         _token_metadata.addLeavingEndpoint(endpoint);
         PendingRangeCalculatorService.instance.update();
+#endif
     }
 
     /**
@@ -1644,8 +1647,8 @@ private:
      * @param endpoint If reason for leaving is decommission, endpoint is the leaving node.
      * @param pieces STATE_LEFT,token
      */
-    private void handleStateLeft(InetAddress endpoint, String[] pieces)
-    {
+    void handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
+#if 0
         assert pieces.length >= 2;
         Collection<Token> tokens;
         tokens = get_tokens_for(endpoint);
@@ -1654,6 +1657,7 @@ private:
             logger.debug("Node {} state left, tokens {}", endpoint, tokens);
 
         excise(tokens, endpoint, extractExpireTime(pieces));
+#endif
     }
 
     /**
@@ -1662,8 +1666,8 @@ private:
      * @param endpoint moving endpoint address
      * @param pieces STATE_MOVING, token
      */
-    private void handleStateMoving(InetAddress endpoint, String[] pieces)
-    {
+    void handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
+#if 0
         assert pieces.length >= 2;
         Token token = getPartitioner().getTokenFactory().fromString(pieces[1]);
 
@@ -1673,6 +1677,7 @@ private:
         _token_metadata.addMovingEndpoint(token, endpoint);
 
         PendingRangeCalculatorService.instance.update();
+#endif
     }
 
     /**
@@ -1681,8 +1686,8 @@ private:
      * @param endpoint node
      * @param pieces either REMOVED_TOKEN (node is gone) or REMOVING_TOKEN (replicas need to be restored)
      */
-    private void handleStateRemoving(InetAddress endpoint, String[] pieces)
-    {
+    void handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
+#if 0
         assert (pieces.length > 0);
 
         if (endpoint.equals(FBUtilities.getBroadcastAddress()))
@@ -1729,7 +1734,10 @@ private:
                 addExpireTimeIfFound(endpoint, extractExpireTime(pieces));
             removeEndpoint(endpoint);
         }
+#endif
     }
+
+#if 0
 
     private void excise(Collection<Token> tokens, InetAddress endpoint)
     {
