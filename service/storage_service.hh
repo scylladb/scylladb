@@ -165,7 +165,9 @@ private:
         // if (logger.isDebugEnabled())
         //     logger.debug("Setting tokens to {}", tokens);
         // SystemKeyspace.updateTokens(tokens);
-        // _token_metadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
+        for (auto t : tokens) {
+            _token_metadata.update_normal_token(t, get_broadcast_address());
+        }
         // Collection<Token> localTokens = getLocalTokens();
         auto local_tokens = _bootstrap_tokens;
         auto& gossiper = gms::get_local_gossiper();
@@ -944,7 +946,9 @@ private:
             // setMode(Mode.JOINING, "sleeping " + RING_DELAY + " ms for pending range setup", true);
         } else {
             // Dont set any state for the node which is bootstrapping the existing token...
-            // _token_metadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
+            for (auto t : tokens) {
+                _token_metadata.update_normal_token(t, get_broadcast_address());
+            }
             // SystemKeyspace.removeEndpoint(DatabaseDescriptor.getReplaceAddress());
         }
         return sleep(sleep_time).then([] {
