@@ -174,8 +174,15 @@ public:
         }
 
         versioned_value tokens(const std::set<token> tokens) {
+            sstring tokens_string;
+            for (auto it = tokens.cbegin(); it != tokens.cend(); ) {
+                tokens_string += to_hex(it->_data);
+                if (++it != tokens.cend()) {
+                    tokens_string += ";";
+                }
+            }
             // FIXME:
-            return versioned_value();
+            return versioned_value(tokens_string);
 #if 0
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             DataOutputStream out = new DataOutputStream(bos);
