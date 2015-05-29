@@ -95,7 +95,7 @@ public:
         }
 #endif
         // FIXME: DatabaseDescriptor.getNumTokens();
-        size_t num_tokens = 256;
+        size_t num_tokens = 3;
         if (num_tokens < 1) {
             throw std::runtime_error("num_tokens must be >= 1");
         }

@@ -777,7 +777,7 @@ private:
 #endif
         } else {
             // FIXME: DatabaseDescriptor.getNumTokens()
-            size_t num_tokens = 256;
+            size_t num_tokens = 3;
             _bootstrap_tokens = boot_strapper::get_random_tokens(_token_metadata, num_tokens);
             return make_ready_future<>();
 #if 0
