@@ -664,6 +664,7 @@ private:
     }
 
     future<> join_token_ring(int delay) {
+        auto f = make_ready_future<>();
 #if 0
         joined = true;
 
@@ -687,7 +688,7 @@ private:
 #endif
         if (should_bootstrap()) {
             _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata);
-            return bootstrap(_bootstrap_tokens);
+            f = bootstrap(_bootstrap_tokens);
 #if 0
             if (SystemKeyspace.bootstrapInProgress())
                 logger.warn("Detected previous bootstrap failure; retrying");
@@ -793,7 +794,6 @@ private:
             // FIXME: DatabaseDescriptor.getNumTokens()
             size_t num_tokens = 3;
             _bootstrap_tokens = boot_strapper::get_random_tokens(_token_metadata, num_tokens);
-            return make_ready_future<>();
 #if 0
             _bootstrap_tokens = SystemKeyspace.getSavedTokens();
             if (_bootstrap_tokens.isEmpty())
@@ -824,6 +824,9 @@ private:
             }
 #endif
         }
+
+        return f.then([this] {
+            set_tokens(_bootstrap_tokens);
 #if 0
         // if we don't have system_traces keyspace at this point, then create it manually
         if (Schema.instance.getKSMetaData(TraceKeyspace.NAME) == null)
@@ -847,6 +850,7 @@ private:
             logger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
         }
 #endif
+        });
     }
 #if 0
     public void gossipSnitchInfo()
