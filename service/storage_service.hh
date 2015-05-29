@@ -645,6 +645,9 @@ private:
             // FIXME: SystemKeyspace.incrementAndGetGeneration()
             return gossiper.start(generation_number, app_states).then([] {
                 print("Start gossiper service ...\n");
+#if SS_DEBUG
+                gms::get_local_gossiper().debug_show();
+#endif
             });
 #if 0
             // gossip snitch infos (local DC and rack)
@@ -1330,6 +1333,7 @@ public:
      */
     void on_change(gms::inet_address endpoint, gms::application_state state, gms::versioned_value value) override
     {
+        ss_debug("SS::on_change endpoint=%s\n", endpoint);
 #if 0
         if (state == ApplicationState.STATUS)
         {
@@ -1976,6 +1980,11 @@ private:
 public:
     void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override
     {
+        ss_debug("SS::on_join endpoint=%s\n", endpoint);
+        auto tokens = get_tokens_for(endpoint);
+        for (auto t : tokens) {
+            ss_debug("t=%s\n", t);
+        }
 #if 0
         for (Map.Entry<ApplicationState, VersionedValue> entry : epState.getApplicationStateMap().entrySet())
         {
@@ -1987,6 +1996,7 @@ public:
 
     void on_alive(gms::inet_address endpoint, gms::endpoint_state state) override
     {
+        ss_debug("SS::on_alive endpoint=%s\n", endpoint);
 #if 0
         MigrationManager.instance.scheduleSchemaPull(endpoint, state);
 
