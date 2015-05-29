@@ -71,8 +71,7 @@ private:
         auto& gossiper = gms::get_local_gossiper();
         return gossiper.get_broadcast_address();
     }
-    static int getRingDelay()
-    {
+    static int get_ring_delay() {
 #if 0
         String newdelay = System.getProperty("cassandra.ring_delay_ms");
         if (newdelay != null)

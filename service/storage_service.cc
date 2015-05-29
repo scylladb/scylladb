@@ -7,7 +7,7 @@
 
 namespace service {
 
-int storage_service::RING_DELAY = storage_service::getRingDelay();
+int storage_service::RING_DELAY = storage_service::get_ring_delay();
 
 distributed<storage_service> _the_storage_service;
 
