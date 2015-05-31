@@ -166,24 +166,6 @@ struct serializer {
             });
         });
     }
-
-    // For std::tuple<int, long>
-    inline auto operator()(output_stream<char>& out, std::tuple<int, long>& v) {
-        auto& x = std::get<0>(v);
-        auto f = operator()(out, x);
-        return f.then([this, &out, &v]{
-            auto& y = std::get<1>(v);
-            return operator()(out, y);
-        });
-    }
-    inline auto operator()(input_stream<char>& in, std::tuple<int, long>& v) {
-        auto& x = std::get<0>(v);
-        auto f = operator()(in, x);
-        return f.then([this, &in, &v]{
-            auto& y = std::get<1>(v);
-            return operator()(in, y);
-        });
-    }
 };
 
 class messaging_service {

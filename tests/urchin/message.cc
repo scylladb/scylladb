@@ -78,8 +78,7 @@ public:
         });
         ms.register_handler(messaging_verb::ECHO, [] (int x, int y) {
             print("Server got echo msg = (%d, %ld) \n", x, y);
-            std::tuple<int, long> ret(x*x, y*y);
-            return make_ready_future<decltype(ret)>(std::move(ret));
+            return make_ready_future<int, long>(x*x, y*y);
         });
         ms.register_handler(messaging_verb::UNUSED_1, [] (int x, int y) {
             print("Server got echo msg = (%d, %ld) \n", x, y);
@@ -132,10 +131,10 @@ public:
     future<> test_echo() {
         print("=== %s ===\n", __func__);
         auto id = get_shard_id();
-        using RetMsg = std::tuple<int, long>;
-        return ms.send_message<RetMsg>(messaging_verb::ECHO, id, 30, 60).then_wrapped([] (future<RetMsg> f) {
+        using RetMsg = future<int, long>;
+        return ms.send_message<RetMsg>(messaging_verb::ECHO, id, 30, 60).then_wrapped([] (future<int, long> f) {
             try {
-                auto msg = std::get<0>(f.get());
+                auto msg = f.get();
                 print("Client sent echo got reply = (%d , %ld)\n", std::get<0>(msg), std::get<1>(msg));
                 return sleep(100ms).then([]{
                     return make_ready_future<>();
