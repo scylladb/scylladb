@@ -159,36 +159,6 @@ uint32_t checksum_adler32(const char* input, size_t input_len) {
             input_len);
 }
 
-// Start one dma_read() operation to read the given given byte range from a
-// file into a new temporary buffer.
-//
-// Because O_DIRECT requires the read start and end to be multiples of some
-// block size, this function can read more than actually requested, but does
-// not return the unrequested part. This leads to some inefficiency when two
-// adjacent unaligned read_exactly() calls end up reading the same overlap
-// block(s) twice.
-static future<temporary_buffer<char>>
-read_exactly(lw_shared_ptr<file> f, uint64_t start, uint64_t len) {
-    // O_DIRECT reading requires that buffer, offset, and read length, are
-    // all aligned. Alignment of 4096 was necessary in the past, but no longer
-    // is - 512 is usually enough; But we'll need to use BLKSSZGET ioctl to
-    // be sure it is really enough on this filesystem. 4096 is always safe.
-    constexpr uint64_t alignment = 4096;
-    auto front = start & (alignment - 1);
-    start -= front;
-    len += front;
-
-    auto buf = temporary_buffer<char>::aligned(
-            alignment, align_up(len, alignment));
-    auto read = f->dma_read(start, buf.get_write(), buf.size());
-    return read.then(
-            [buf = std::move(buf), front, len] (size_t size) mutable {
-        buf.trim(std::min(size, len));
-        buf.trim_front(front);
-        return std::move(buf);
-    });
-}
-
 class compressed_file_data_source_impl : public data_source_impl {
     lw_shared_ptr<file> _file;
     sstables::compression* _compression_metadata;
@@ -204,11 +174,8 @@ public:
             return make_ready_future<temporary_buffer<char>>();
         }
         auto addr = _compression_metadata->locate(_pos);
-        return read_exactly(_file, addr.chunk_start, addr.chunk_len).
+        return _file->dma_read_exactly<char>(addr.chunk_start, addr.chunk_len).
             then([this, addr](temporary_buffer<char> buf) {
-                if (addr.chunk_len != buf.size()) {
-                    throw std::runtime_error("couldn't read entire chunk");
-                }
                 // The last 4 bytes of the chunk are the adler32 checksum
                 // of the rest of the (compressed) chunk.
                 auto compressed_len = addr.chunk_len - 4;
