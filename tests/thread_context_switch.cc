@@ -20,6 +20,7 @@
  * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
+#include <experimental/optional>
 #include "core/thread.hh"
 #include "core/semaphore.hh"
 #include "core/app-template.hh"
