@@ -49,7 +49,7 @@
 ///
 /// \brief
 /// The normal way of working with futures is to chain continuations
-/// to them.  A continuation is a block of code (usually a lamba)
+/// to them.  A continuation is a block of code (usually a lamdba)
 /// that is called when the future is assigned a value (the future
 /// is resolved); the continuation can then access the actual value.
 ///
@@ -96,9 +96,9 @@ future<T...> make_ready_future(A&&... value);
 /// \brief Creates a \ref future in an available, failed state.
 ///
 /// Creates a \ref future object that is already resolved in a failed
-/// state.  This no I/O needs to be performed to perform a computation
-/// (for example, because the connection is closed and we cannot read
-/// from it).
+/// state.  This is useful when no I/O needs to be performed to perform
+/// a computation (for example, because the connection is closed and
+/// we cannot read from it).
 template <typename... T>
 future<T...> make_exception_future(std::exception_ptr value) noexcept;
 
