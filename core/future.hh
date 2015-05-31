@@ -16,13 +16,14 @@
  * under the License.
  */
 /*
- * Copyright (C) 2014 Cloudius Systems, Ltd.
+ * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
 #ifndef FUTURE_HH_
 #define FUTURE_HH_
 
 #include "apply.hh"
+#include "task.hh"
 #include <stdexcept>
 #include <memory>
 #include <type_traits>
@@ -54,30 +55,7 @@ future<T...> make_ready_future(A&&... value);
 template <typename... T>
 future<T...> make_exception_future(std::exception_ptr value) noexcept;
 
-class task {
-public:
-    virtual ~task() noexcept {}
-    virtual void run() noexcept = 0;
-};
-
-void schedule(std::unique_ptr<task> t);
 void engine_exit(std::exception_ptr eptr = {});
-
-template <typename Func>
-class lambda_task final : public task {
-    Func _func;
-public:
-    lambda_task(const Func& func) : _func(func) {}
-    lambda_task(Func&& func) : _func(std::move(func)) {}
-    virtual void run() noexcept override { _func(); }
-};
-
-template <typename Func>
-inline
-std::unique_ptr<task>
-make_task(Func&& func) {
-    return std::make_unique<lambda_task<Func>>(std::forward<Func>(func));
-}
 
 void report_failed_future(std::exception_ptr ex);
 

@@ -25,6 +25,7 @@
 #ifndef CORE_FUTURE_UTIL_HH_
 #define CORE_FUTURE_UTIL_HH_
 
+#include "task.hh"
 #include "future.hh"
 #include "shared_ptr.hh"
 #include <tuple>

@@ -20,6 +20,7 @@
  */
 
 #include <sys/syscall.h>
+#include "task.hh"
 #include "reactor.hh"
 #include "memory.hh"
 #include "core/posix.hh"
