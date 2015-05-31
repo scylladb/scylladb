@@ -218,6 +218,22 @@ clustering_key_prefix_view db::serializer<clustering_key_prefix_view>::read(inpu
     return clustering_key_prefix_view::from_bytes(in.read_view(len));
 }
 
+template<>
+db::serializer<frozen_mutation>::serializer(const frozen_mutation& mutation)
+    : _item(mutation), _size(sizeof(uint32_t) /* size */ + mutation.representation().size()) {
+}
+
+template<>
+void db::serializer<frozen_mutation>::write(output& out, const frozen_mutation& mutation) {
+    bytes_view v = mutation.representation();
+    out.write(v);
+}
+
+template<>
+frozen_mutation db::serializer<frozen_mutation>::read(input& in) {
+    return frozen_mutation(bytes_serializer::read(in));
+}
+
 template class db::serializer<tombstone> ;
 template class db::serializer<bytes> ;
 template class db::serializer<bytes_view> ;
@@ -228,3 +244,4 @@ template class db::serializer<utils::UUID> ;
 template class db::serializer<partition_key_view> ;
 template class db::serializer<clustering_key_view> ;
 template class db::serializer<clustering_key_prefix_view> ;
+template class db::serializer<frozen_mutation> ;

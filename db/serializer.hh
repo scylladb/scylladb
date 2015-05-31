@@ -11,6 +11,7 @@
 #include "mutation.hh"
 #include "keys.hh"
 #include "database_fwd.hh"
+#include "frozen_mutation.hh"
 
 namespace db {
 /**
@@ -83,6 +84,11 @@ template<> serializer<collection_mutation::view>::serializer(const collection_mu
 template<> void serializer<collection_mutation::view>::write(output&, const type&);
 template<> void serializer<collection_mutation::view>::read(collection_mutation::view&, input&);
 
+template<> serializer<frozen_mutation>::serializer(const frozen_mutation &);
+template<> void serializer<frozen_mutation>::write(output&, const type&);
+template<> void serializer<frozen_mutation>::read(frozen_mutation&, input&) = delete;
+template<> frozen_mutation serializer<frozen_mutation>::read(input&);
+
 template<> serializer<partition_key_view>::serializer(const partition_key_view &);
 template<> void serializer<partition_key_view>::write(output&, const partition_key_view&);
 template<> void serializer<partition_key_view>::read(partition_key_view&, input&);
@@ -125,6 +131,7 @@ typedef serializer<utils::UUID> uuid_serializer;
 typedef serializer<partition_key_view> partition_key_view_serializer;
 typedef serializer<clustering_key_view> clustering_key_view_serializer;
 typedef serializer<clustering_key_prefix_view> clustering_key_prefix_view_serializer;
+typedef serializer<frozen_mutation> frozen_mutation_serializer;
 
 }
 
