@@ -49,6 +49,10 @@ public:
     const token& first_token(const token& start);
     size_t first_token_index(const token& start);
     std::experimental::optional<inet_address> get_endpoint(const token& token) const;
+    std::vector<token> get_tokens(const inet_address& addr) const;
+    const std::map<token, inet_address>& get_token_to_endpoint() const {
+        return _token_to_endpoint_map;
+    }
 };
 
 }

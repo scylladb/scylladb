@@ -27,6 +27,15 @@ const std::vector<token>& token_metadata::sorted_tokens() const {
     return _sorted_tokens;
 }
 
+std::vector<token> token_metadata::get_tokens(const inet_address& addr) const {
+    std::vector<token> res;
+    for (auto&& i : _token_to_endpoint_map) {
+        if (i.second == addr) {
+            res.push_back(i.first);
+        }
+    }
+    return res;
+}
 /**
  * Update token map with a single token/endpoint pair in normal state.
  */
