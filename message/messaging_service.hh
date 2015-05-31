@@ -15,12 +15,15 @@
 #include "rpc/rpc.hh"
 #include <unordered_map>
 #include "db/config.hh"
+#include "frozen_mutation.hh"
+#include "db/serializer.hh"
 
 namespace net {
 
 /* All verb handler identifiers */
 enum class messaging_verb : int32_t {
     MUTATION,
+    MUTATION_DONE,
     BINARY, // Deprecated
     READ_REPAIR,
     READ,
@@ -168,6 +171,34 @@ struct serializer {
                 bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), serialize_string_size);
                 new (&v) sstring(read_simple_short_string(bv));
                 return make_ready_future<>();
+            });
+        });
+    }
+
+    // For frozen_mutation
+    inline auto operator()(output_stream<char>& out, const frozen_mutation& v) {
+        db::frozen_mutation_serializer s(v);
+        uint32_t sz = s.size() + data_output::serialized_size(sz);
+        bytes b(bytes::initialized_later(), sz);
+        data_output o(b);
+        o.write<uint32_t>(sz - data_output::serialized_size(sz));
+        db::frozen_mutation_serializer::write(o, v);
+        return out.write(reinterpret_cast<const char*>(b.c_str()), sz);
+    }
+    inline auto operator()(input_stream<char>& in, frozen_mutation& v) {
+        static auto sz = data_output::serialized_size<uint32_t>();
+        return in.read_exactly(sz).then([&v, &in] (temporary_buffer<char> buf) mutable {
+            if (buf.size() != sz) {
+                throw rpc::closed_error();
+            }
+            data_input i(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), sz));
+            size_t msz = i.read<int32_t>();
+            return in.read_exactly(msz).then([&v, msz] (temporary_buffer<char> buf) {
+                if (buf.size() != msz) {
+                    throw rpc::closed_error();
+                }
+                data_input i(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), msz));
+                new (&v) frozen_mutation(db::frozen_mutation_serializer::read(i));
             });
         });
     }

@@ -59,6 +59,8 @@ int main(int ac, char** av) {
                 return service::init_storage_service();
             }).then([listen_address, seed_provider] {
                 return net::init_messaging_service(listen_address, seed_provider);
+            }).then([&proxy] {
+                proxy.init_messaging_service();
             }).then([&db, &proxy, &qp] {
                 return qp.start(std::ref(proxy), std::ref(db)).then([&qp] {
                     engine().at_exit([&qp] { return qp.stop(); });

@@ -33,6 +33,8 @@ enum class cause {
     REVERSED,
     COMPRESSION,
     NONATOMIC,
+    CONSISTENCY,
+    HINT,
 };
 
 void fail(cause what) __attribute__((noreturn));

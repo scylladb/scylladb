@@ -33,13 +33,41 @@
 
 namespace service {
 
+class abstract_write_response_handler;
+
 class storage_proxy /*implements StorageProxyMBean*/ {
+    struct rh_entry {
+        std::unique_ptr<abstract_write_response_handler> handler;
+        timer<> expire_timer;
+        rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb);
+    };
+public:
+    using response_id_type = uint64_t;
 private:
     distributed<database>& _db;
+    response_id_type _next_response_id = 0;
+    std::unordered_map<response_id_type, rh_entry> _response_handlers;
+    constexpr static size_t _max_hints_in_progress = 128; // origin multiplies by FBUtilities.getAvailableProcessors() but we already sharded
+    size_t _total_hints_in_progress = 0;
+    std::unordered_map<gms::inet_address, size_t> _hints_in_progress;
+private:
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl);
+    response_id_type register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h);
+    void remove_response_handler(response_id_type id);
+    void got_response(response_id_type id, gms::inet_address from);
+    future<> response_wait(response_id_type id);
+    abstract_write_response_handler& get_write_response_handler(storage_proxy::response_id_type id);
+    response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints);
+    future<> send_to_live_endpoints(response_id_type response_id,  sstring local_data_center);
+    template<typename Range>
+    size_t hint_to_dead_endpoints(const frozen_mutation& m, const Range& targets);
+    bool cannot_hint(gms::inet_address target);
+    size_t get_hints_in_progress_for(gms::inet_address target);
+    bool should_hint(gms::inet_address ep);
+    bool submit_hint(const frozen_mutation& m, gms::inet_address target);
 public:
-    storage_proxy(distributed<database>& db) : _db(db) {}
-
+    storage_proxy(distributed<database>& db);
+    ~storage_proxy();
     distributed<database>& get_db() {
         return _db;
     }
@@ -76,6 +104,7 @@ public:
     future<foreign_ptr<lw_shared_ptr<query::result>>> query(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl);
 
     future<lw_shared_ptr<query::result_set>> query_local(const sstring& ks_name, const sstring& cf_name, const dht::decorated_key& key);
+    future<> init_messaging_service();
 };
 
 }
