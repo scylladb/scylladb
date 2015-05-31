@@ -28,7 +28,7 @@
 /// concurrency server applications.
 ///
 /// Please see:
-///   - \ref future Documentation on futures and promises, which are
+///   - \ref future-module Documentation on futures and promises, which are
 ///          the seastar building blocks.
 ///   - \ref future-util Utililty functions for working with futures
 

@@ -30,7 +30,7 @@
 #include <assert.h>
 
 
-/// \defgroup future Futures and Promises
+/// \defgroup future-module Futures and Promises
 ///
 /// \brief
 /// Futures and promises are the basic tools for asynchronous
@@ -75,7 +75,7 @@ void switch_out(thread_context* from);
 }
 
 
-/// \addtogroup future
+/// \addtogroup future-module
 /// @{
 
 template <class... T>
@@ -528,7 +528,7 @@ using futurize_t = typename futurize<T>::type;
 
 /// @}
 
-/// \addtogroup future
+/// \addtogroup future-module
 /// @{
 
 /// \brief A representation of a possibly not-yet-computed value.
