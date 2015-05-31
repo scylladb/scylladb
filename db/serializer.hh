@@ -83,20 +83,6 @@ template<> serializer<collection_mutation::view>::serializer(const collection_mu
 template<> void serializer<collection_mutation::view>::write(output&, const type&);
 template<> void serializer<collection_mutation::view>::read(collection_mutation::view&, input&);
 
-template<> serializer<row>::serializer(const row &);
-template<> void serializer<row>::write(output&, const type&);
-template<> void serializer<row>::read(row&, input&);
-
-template<> serializer<mutation_partition>::serializer(const mutation_partition &);
-template<> void serializer<mutation_partition>::write(output&, const type&);
-template<> void serializer<mutation_partition>::read(mutation_partition&, input&);
-template<> mutation_partition serializer<mutation_partition>::read(input&) = delete;
-
-template<> serializer<mutation>::serializer(const mutation &);
-template<> void serializer<mutation>::write(output&, const type&);
-template<> void serializer<mutation>::read(mutation&, input&) = delete;
-template<> mutation serializer<mutation>::read(input&);
-
 template<> serializer<partition_key_view>::serializer(const partition_key_view &);
 template<> void serializer<partition_key_view>::write(output&, const partition_key_view&);
 template<> void serializer<partition_key_view>::read(partition_key_view&, input&);
