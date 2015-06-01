@@ -1247,7 +1247,9 @@ storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const
     return _db.invoke_on(shard, [cmd] (database& db) {
         return db.query(*cmd).then([] (lw_shared_ptr<query::result>&& result) {
             return make_foreign(std::move(result));
-        }).finally([cmd] {});
+        });
+    }).finally([cmd] {
+        // keep cmd alive while db.query() executes above
     }).then([this, schema, slice] (auto&& result) {
         query::result_set_builder builder{schema};
         bytes_ostream w(result->buf());
