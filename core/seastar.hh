@@ -31,6 +31,7 @@
 ///   - \ref future-module Documentation on futures and promises, which are
 ///          the seastar building blocks.
 ///   - \ref future-util Utililty functions for working with futures
+///   - \ref memory-module Memory management
 
 
 #include "sstring.hh"

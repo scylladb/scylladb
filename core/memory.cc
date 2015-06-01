@@ -19,6 +19,9 @@
  * Copyright (C) 2014 Cloudius Systems, Ltd.
  */
 
+
+/// \cond internal
+
 //
 // Seastar memory allocator
 //
@@ -1198,3 +1201,5 @@ void operator delete[](void* ptr, with_alignment wa) {
 }
 
 #endif
+
+/// \endcond
