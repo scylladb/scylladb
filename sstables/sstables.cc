@@ -1162,6 +1162,14 @@ static void maybe_add_summary_entry(summary& s, bytes_view key, uint64_t offset)
     s.keys_written++;
 }
 
+static void add_validation_metadata(statistics& s, bytes partitioner, double bloom_filter_fp_chance)
+{
+    validation_metadata m;
+    m.partitioner.value = partitioner;
+    m.filter_chance = bloom_filter_fp_chance;
+    s.contents[metadata_type::Validation] = std::make_unique<validation_metadata>(std::move(m));
+}
+
 future<> sstable::write_components(const memtable& mt) {
     return create_data().then([&mt, this] {
         bool checksum_file = true;
@@ -1180,6 +1188,10 @@ future<> sstable::write_components(const memtable& mt) {
             _components.insert(component_type::Filter);
         }
         _filter = utils::i_filter::get_filter(mt.all_partitions().size(), filter_fp_chance);
+
+        // NOTE: Cassandra gets partition name by calling getClass().getCanonicalName() on
+        // partition class.
+        add_validation_metadata(_statistics, dht::global_partitioner().name(), filter_fp_chance);
 
         // Iterate through CQL partitions, then CQL rows, then CQL columns.
         // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.

@@ -12,6 +12,7 @@ namespace dht {
 
 class murmur3_partitioner final : public i_partitioner {
 public:
+    virtual const bytes name() { return "Murmur3Partitioner"; }
     virtual token get_token(const schema& s, partition_key_view key) override;
     virtual token get_token(const sstables::key_view& key) override;
     virtual token get_random_token() override;
