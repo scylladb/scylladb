@@ -74,7 +74,7 @@ public:
     };
 private:
     static constexpr int DEFAULT_COUNT_PAGE_SIZE = 10000;
-    static const ::shared_ptr<parameters> _default_parameters;
+    static thread_local const ::shared_ptr<parameters> _default_parameters;
     schema_ptr _schema;
     uint32_t _bound_terms;
     ::shared_ptr<parameters> _parameters;

@@ -33,7 +33,7 @@ namespace cql3 {
 
 namespace statements {
 
-const shared_ptr<select_statement::parameters> select_statement::_default_parameters = ::make_shared<select_statement::parameters>();
+thread_local const shared_ptr<select_statement::parameters> select_statement::_default_parameters = ::make_shared<select_statement::parameters>();
 
 select_statement::select_statement(schema_ptr schema,
     uint32_t bound_terms,
