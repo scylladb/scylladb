@@ -53,6 +53,8 @@ private:
     /** Maintains endpoint to host ID map of every node in the cluster */
     std::unordered_map<inet_address, utils::UUID> _endpoint_to_host_id_map;
 
+    std::unordered_map<token, inet_address> _bootstrap_tokens;
+
     std::vector<token> _sorted_tokens;
 
     topology _topology;
@@ -165,7 +167,7 @@ public:
         lock.readLock().lock();
         try
         {
-            for (Token token : bootstrapTokens.keySet())
+            for (Token token : _bootstrap_tokens.keySet())
                 for (Range<Token> range : sourceRanges)
                     if (range.contains(token))
                         n++;
@@ -216,7 +218,7 @@ public:
 
                 assert tokens != null && !tokens.isEmpty();
 
-                bootstrapTokens.removeValue(endpoint);
+                _bootstrap_tokens.removeValue(endpoint);
                 tokenToEndpointMap.removeValue(endpoint);
                 topology.addEndpoint(endpoint);
                 leavingEndpoints.remove(endpoint);
@@ -262,62 +264,12 @@ public:
     /** @return a copy of the endpoint-to-id map for read-only operations */
     const auto& get_endpoint_to_host_id_map_for_reading();
 
+    void add_bootstrap_token(token t, inet_address endpoint);
+
+    void add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint);
+
+    void remove_bootstrap_tokens(std::unordered_set<token> tokens);
 #if 0
-
-    @Deprecated
-    public void addBootstrapToken(Token token, InetAddress endpoint)
-    {
-        addBootstrapTokens(Collections.singleton(token), endpoint);
-    }
-
-    public void addBootstrapTokens(Collection<Token> tokens, InetAddress endpoint)
-    {
-        assert tokens != null && !tokens.isEmpty();
-        assert endpoint != null;
-
-        lock.writeLock().lock();
-        try
-        {
-
-            InetAddress oldEndpoint;
-
-            for (Token token : tokens)
-            {
-                oldEndpoint = bootstrapTokens.get(token);
-                if (oldEndpoint != null && !oldEndpoint.equals(endpoint))
-                    throw new RuntimeException("Bootstrap Token collision between " + oldEndpoint + " and " + endpoint + " (token " + token);
-
-                oldEndpoint = tokenToEndpointMap.get(token);
-                if (oldEndpoint != null && !oldEndpoint.equals(endpoint))
-                    throw new RuntimeException("Bootstrap Token collision between " + oldEndpoint + " and " + endpoint + " (token " + token);
-            }
-
-            bootstrapTokens.removeValue(endpoint);
-
-            for (Token token : tokens)
-                bootstrapTokens.put(token, endpoint);
-        }
-        finally
-        {
-            lock.writeLock().unlock();
-        }
-    }
-
-    public void removeBootstrapTokens(Collection<Token> tokens)
-    {
-        assert tokens != null && !tokens.isEmpty();
-
-        lock.writeLock().lock();
-        try
-        {
-            for (Token token : tokens)
-                bootstrapTokens.remove(token);
-        }
-        finally
-        {
-            lock.writeLock().unlock();
-        }
-    }
 
     public void addLeavingEndpoint(InetAddress endpoint)
     {
@@ -362,7 +314,7 @@ public:
         lock.writeLock().lock();
         try
         {
-            bootstrapTokens.removeValue(endpoint);
+            _bootstrap_tokens.removeValue(endpoint);
             tokenToEndpointMap.removeValue(endpoint);
             topology.removeEndpoint(endpoint);
             leavingEndpoints.remove(endpoint);
@@ -661,7 +613,7 @@ public:
         {
             Multimap<Range<Token>, InetAddress> newPendingRanges = HashMultimap.create();
 
-            if (bootstrapTokens.isEmpty() && leavingEndpoints.isEmpty() && movingEndpoints.isEmpty())
+            if (_bootstrap_tokens.isEmpty() && leavingEndpoints.isEmpty() && movingEndpoints.isEmpty())
             {
                 if (logger.isDebugEnabled())
                     logger.debug("No bootstrapping, leaving or moving nodes -> empty pending ranges for {}", keyspaceName);
@@ -695,7 +647,7 @@ public:
 
             // For each of the bootstrapping nodes, simply add and remove them one by one to
             // allLeftMetadata and check in between what their ranges would be.
-            Multimap<InetAddress, Token> bootstrapAddresses = bootstrapTokens.inverse();
+            Multimap<InetAddress, Token> bootstrapAddresses = _bootstrap_tokens.inverse();
             for (InetAddress endpoint : bootstrapAddresses.keySet())
             {
                 Collection<Token> tokens = bootstrapAddresses.get(endpoint);
@@ -759,7 +711,7 @@ public:
         lock.readLock().lock();
         try
         {
-            return new BiMultiValMap<Token, InetAddress>(bootstrapTokens);
+            return new BiMultiValMap<Token, InetAddress>(_bootstrap_tokens);
         }
         finally
         {
@@ -879,7 +831,7 @@ public:
         {
             tokenToEndpointMap.clear();
             _endpoint_to_host_id_map.clear();
-            bootstrapTokens.clear();
+            _bootstrap_tokens.clear();
             leavingEndpoints.clear();
             pendingRanges.clear();
             movingEndpoints.clear();
@@ -914,11 +866,11 @@ public:
                 }
             }
 
-            if (!bootstrapTokens.isEmpty())
+            if (!_bootstrap_tokens.isEmpty())
             {
                 sb.append("Bootstrapping Tokens:" );
                 sb.append(System.getProperty("line.separator"));
-                for (Map.Entry<Token, InetAddress> entry : bootstrapTokens.entrySet())
+                for (Map.Entry<Token, InetAddress> entry : _bootstrap_tokens.entrySet())
                 {
                     sb.append(entry.getValue()).append(":").append(entry.getKey());
                     sb.append(System.getProperty("line.separator"));
@@ -1017,9 +969,9 @@ public:
         lock.readLock().lock();
         try
         {
-            Map<Token, InetAddress> map = new HashMap<Token, InetAddress>(tokenToEndpointMap.size() + bootstrapTokens.size());
+            Map<Token, InetAddress> map = new HashMap<Token, InetAddress>(tokenToEndpointMap.size() + _bootstrap_tokens.size());
             map.putAll(tokenToEndpointMap);
-            map.putAll(bootstrapTokens);
+            map.putAll(_bootstrap_tokens);
             return map;
         }
         finally

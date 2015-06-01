@@ -188,4 +188,45 @@ bool token_metadata::is_member(inet_address endpoint) {
     });
 }
 
+void token_metadata::add_bootstrap_token(token t, inet_address endpoint) {
+    std::unordered_set<token> tokens{t};
+    add_bootstrap_tokens(tokens, endpoint);
+}
+
+void token_metadata::add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
+    for (auto t : tokens) {
+        auto old_endpoint = _bootstrap_tokens.find(t);
+        if (old_endpoint != _bootstrap_tokens.end() && (*old_endpoint).second != endpoint) {
+            auto msg = sprint("Bootstrap Token collision between %s and %s (token %s", (*old_endpoint).second, endpoint, t);
+            throw std::runtime_error(msg);
+        }
+
+        auto old_endpoint2 = _token_to_endpoint_map.find(t);
+        if (old_endpoint2 != _token_to_endpoint_map.end() && (*old_endpoint2).second != endpoint) {
+            auto msg = sprint("Bootstrap Token collision between %s and %s (token %s", (*old_endpoint2).second, endpoint, t);
+            throw std::runtime_error(msg);
+        }
+    }
+
+    // Unfortunately, std::remove_if does not work with std::map
+    for (auto it = _bootstrap_tokens.begin(); it != _bootstrap_tokens.end();) {
+        if ((*it).second == endpoint) {
+            it = _bootstrap_tokens.erase(it);
+        } else {
+            it++;
+        }
+    }
+
+    for (auto t : tokens) {
+        _bootstrap_tokens[t] = endpoint;
+    }
+}
+
+void token_metadata::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
+    assert(!tokens.empty());
+    for (auto t : tokens) {
+        _bootstrap_tokens.erase(t);
+    }
+}
+
 }
