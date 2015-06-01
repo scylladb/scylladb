@@ -11,6 +11,7 @@
 #include "tombstone.hh"
 #include "streaming_histogram.hh"
 #include "estimated_histogram.hh"
+#include "column_name_helper.hh"
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
@@ -110,6 +111,13 @@ struct replay_position {
     uint64_t segment;
     uint32_t position;
 
+    replay_position() {}
+
+    replay_position(uint64_t seg, uint32_t pos) {
+        segment = seg;
+        position = pos;
+    }
+
     template <typename Describer>
     future<> describe_type(Describer f) { return f(segment, position); }
 };
@@ -120,6 +128,10 @@ struct metadata {
 struct validation_metadata : public metadata {
     disk_string<uint16_t> partitioner;
     double filter_chance;
+
+    size_t serialized_size() {
+        return sizeof(uint16_t) + partitioner.value.size() + sizeof(filter_chance);
+    }
 
     template <typename Describer>
     future<> describe_type(Describer f) { return f(partitioner, filter_chance); }
@@ -205,6 +217,10 @@ namespace sstables {
 struct statistics {
     disk_hash<uint32_t, metadata_type, uint32_t> hash;
     std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
+
+    // NOTE: offset isn't part of on-disk format. Instead, it's used to help
+    // generation of statistics file by keeping track of its offset.
+    size_t offset;
 };
 
 struct deletion_time {
