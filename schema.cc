@@ -5,6 +5,7 @@
 #include "utils/UUID_gen.hh"
 #include "cql3/column_identifier.hh"
 #include "schema.hh"
+#include "schema_builder.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
 
@@ -177,4 +178,48 @@ column_definition::is_compact_value() const {
 utils::UUID
 generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
     return utils::UUID_gen::get_name_UUID(ks_name + cf_name);
+}
+
+schema_builder::schema_builder(const sstring& ks_name, const sstring& cf_name,
+        std::experimental::optional<utils::UUID> id, data_type rct)
+        : _raw(id ? *id : utils::UUID_gen::get_time_UUID())
+{
+    _raw._ks_name = ks_name;
+    _raw._cf_name = cf_name;
+    _raw._regular_column_name_type = rct;
+}
+
+schema_builder::schema_builder(const schema_ptr s)
+    : schema_builder(s->_raw)
+{}
+
+schema_builder::schema_builder(const schema::raw_schema& raw)
+    : _raw(raw)
+{}
+
+column_definition& schema_builder::find_column(const cql3::column_identifier& c) {
+    auto i = std::find_if(_raw._columns.begin(), _raw._columns.end(), [c](auto& p) {
+        return p.name() == c.name();
+     });
+    if (i != _raw._columns.end()) {
+        return *i;
+    }
+    throw std::invalid_argument(sprint("No such column %s", c.name()));
+}
+
+schema_builder& schema_builder::with_column(const column_definition& c) {
+    return with_column(bytes(c.name()), data_type(c.type), index_info(c.idx_info), column_kind(c.kind));
+}
+
+schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind) {
+    return with_column(name, type, index_info(), kind);
+}
+
+schema_builder& schema_builder::with_column(bytes name, data_type type, index_info info, column_kind kind) {
+    _raw._columns.emplace_back(name, type, kind, info);
+    return *this;
+}
+
+schema_ptr schema_builder::build() {
+    return make_lw_shared<schema>(schema(_raw));
 }

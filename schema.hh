@@ -85,6 +85,8 @@ public:
     }
 };
 
+class schema_builder;
+
 /*
  * Effectively immutable.
  * Not safe to access across cores because of shared_ptr's.
@@ -120,6 +122,7 @@ private:
     lw_shared_ptr<compound_type<allow_prefixes::no>> _clustering_key_type;
     lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_prefix_type;
 
+    friend class schema_builder;
 public:
     typedef std::vector<column_definition> columns_type;
     typedef typename columns_type::iterator iterator;

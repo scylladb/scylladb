@@ -7,44 +7,50 @@
 #include "schema.hh"
 
 struct schema_builder {
-    sstring _ks_name;
-    sstring _cf_name;
-    std::vector<schema::column> _partition_key;
-    std::vector<schema::column> _clustering_key;
-    std::vector<schema::column> _static_columns;
-    std::vector<schema::column> _regular_columns;
+    schema::raw_schema _raw;
+
+    schema_builder(const schema::raw_schema&);
 public:
-    schema_builder(const sstring& ks_name, const sstring& cf_name)
-        : _ks_name(ks_name)
-        , _cf_name(cf_name)
-    { }
+    schema_builder(const sstring& ks_name, const sstring& cf_name,
+            std::experimental::optional<utils::UUID> = { },
+            data_type regular_column_name_type = utf8_type);
+    schema_builder(const schema_ptr);
 
-    schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column) {
-        switch (kind) {
-            case column_kind::partition_key:
-                _partition_key.emplace_back(schema::column{name, type});
-                break;
-            case column_kind::clustering_key:
-                _clustering_key.emplace_back(schema::column{name, type});
-                break;
-            case column_kind::static_column:
-                _static_columns.emplace_back(schema::column{name, type});
-                break;
-            case column_kind::regular_column:
-                _regular_columns.emplace_back(schema::column{name, type});
-                break;
-        };
-        return *this;
+    void set_uuid(const utils::UUID& id) {
+        _raw._id = id;
+    }
+    const utils::UUID& uuid() const {
+        return _raw._id;
+    }
+    void set_regular_column_name_type(const data_type& t) {
+        _raw._regular_column_name_type = t;
+    }
+    const data_type& regular_column_name_type() const {
+        return _raw._regular_column_name_type;
+    }
+    const sstring& ks_name() const {
+        return _raw._ks_name;
+    }
+    const sstring& cf_name() const {
+        return _raw._cf_name;
+    }
+    void set_comment(const sstring& s) {
+        _raw._comment = s;
+    }
+    const sstring& comment() const {
+        return _raw._comment;
+    }
+    void set_default_time_to_live(gc_clock::duration t) {
+        _raw._default_time_to_live = t;
+    }
+    gc_clock::duration default_time_to_live() const {
+        return _raw._default_time_to_live;
     }
 
-    schema_ptr build() {
-        return make_lw_shared<schema>(schema({},
-            _ks_name,
-            _cf_name,
-            _partition_key,
-            _clustering_key,
-            _regular_columns,
-            _static_columns,
-            utf8_type));
-    }
+    column_definition& find_column(const cql3::column_identifier&);
+    schema_builder& with_column(const column_definition& c);
+    schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column);
+    schema_builder& with_column(bytes name, data_type type, index_info info, column_kind kind = column_kind::regular_column);
+
+    schema_ptr build();
 };
