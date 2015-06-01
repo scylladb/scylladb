@@ -133,7 +133,7 @@ void do_until_continued(StopCondition&& stop_cond, AsyncAction&& action, promise
 /// \param stop_cond a callable taking no arguments, returning a boolean that
 ///                  evalutes to true when you don't want to call \c action
 ///                  any longer
-/// \param action a callable taking to arguments, returning a future<>.  Will
+/// \param action a callable taking no arguments, returning a future<>.  Will
 ///               be called again as soon as the future resolves, unless the
 ///               future fails, or \c stop_cond returns \c true.
 /// \return a ready future if we stopped successfully, or a failed future if
