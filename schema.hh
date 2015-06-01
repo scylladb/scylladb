@@ -97,6 +97,7 @@ public:
         return id;
     }
     bool is_on_all_components() const;
+    friend bool operator==(const column_definition&, const column_definition&);
 };
 
 /*
@@ -108,6 +109,8 @@ public:
     bool is_dense() const;
     bool has_compound_comparator() const;
 };
+
+bool operator==(const column_definition&, const column_definition&);
 
 class schema_builder;
 
@@ -314,7 +317,10 @@ public:
     const data_type& regular_column_name_type() const {
         return _raw._regular_column_name_type;
     }
+    friend bool operator==(const schema&, const schema&);
 };
+
+bool operator==(const schema&, const schema&);
 
 using schema_ptr = lw_shared_ptr<const schema>;
 

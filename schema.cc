@@ -158,6 +158,18 @@ schema::has_collections() const {
     });
 }
 
+bool operator==(const schema& x, const schema& y)
+{
+    return x._raw._id == y._raw._id
+        && x._raw._ks_name == y._raw._ks_name
+        && x._raw._cf_name == y._raw._cf_name
+        && x._raw._columns == y._raw._columns
+        && x._raw._comment == y._raw._comment
+        && x._raw._default_time_to_live == y._raw._default_time_to_live
+        && x._raw._regular_column_name_type->equals(y._raw._regular_column_name_type)
+        && x._raw._bloom_filter_fp_chance == y._raw._bloom_filter_fp_chance;
+}
+
 index_info::index_info(::index_type idx_type,
         std::experimental::optional<sstring> idx_name,
         std::experimental::optional<index_options_map> idx_options)
@@ -195,6 +207,14 @@ column_definition::is_compact_value() const {
 
 bool column_definition::is_on_all_components() const {
     return _thrift_bits.is_on_all_components;
+}
+
+bool operator==(const column_definition& x, const column_definition& y)
+{
+    return x._name == y._name
+        && x.type->equals(y.type)
+        && x.id == y.id
+        && x.kind == y.kind;
 }
 
 // Based on org.apache.cassandra.config.CFMetaData#generateLegacyCfId
