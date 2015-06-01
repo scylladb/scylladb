@@ -229,4 +229,8 @@ void token_metadata::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
     }
 }
 
+bool token_metadata::is_leaving(inet_address endpoint) {
+    return _leaving_endpoints.count(endpoint);
 }
+
+} // namespace locator

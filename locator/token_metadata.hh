@@ -54,6 +54,8 @@ private:
     std::unordered_map<inet_address, utils::UUID> _endpoint_to_host_id_map;
 
     std::unordered_map<token, inet_address> _bootstrap_tokens;
+    std::unordered_set<inet_address> _leaving_endpoints;
+    std::unordered_map<token, inet_address> _moving_endpoints;
 
     std::vector<token> _sorted_tokens;
 
@@ -120,7 +122,7 @@ public:
     private final ConcurrentMap<String, Multimap<Range<Token>, InetAddress>> pendingRanges = new ConcurrentHashMap<String, Multimap<Range<Token>, InetAddress>>();
 
     // nodes which are migrating to the new tokens in the ring
-    private final Set<Pair<Token, InetAddress>> movingEndpoints = new HashSet<Pair<Token, InetAddress>>();
+    private final Set<Pair<Token, InetAddress>> _moving_endpoints = new HashSet<Pair<Token, InetAddress>>();
 
     /* Use this lock for manipulating the token map */
     private final ReadWriteLock lock = new ReentrantReadWriteLock(true);
@@ -221,7 +223,7 @@ public:
                 _bootstrap_tokens.removeValue(endpoint);
                 tokenToEndpointMap.removeValue(endpoint);
                 topology.addEndpoint(endpoint);
-                leavingEndpoints.remove(endpoint);
+                _leaving_endpoints.remove(endpoint);
                 removeFromMoving(endpoint); // also removing this endpoint from moving
 
                 for (Token token : tokens)
@@ -278,7 +280,7 @@ public:
         lock.writeLock().lock();
         try
         {
-            leavingEndpoints.add(endpoint);
+            _leaving_endpoints.add(endpoint);
         }
         finally
         {
@@ -299,7 +301,7 @@ public:
 
         try
         {
-            movingEndpoints.add(Pair.create(token, endpoint));
+            _moving_endpoints.add(Pair.create(token, endpoint));
         }
         finally
         {
@@ -317,7 +319,7 @@ public:
             _bootstrap_tokens.removeValue(endpoint);
             tokenToEndpointMap.removeValue(endpoint);
             topology.removeEndpoint(endpoint);
-            leavingEndpoints.remove(endpoint);
+            _leaving_endpoints.remove(endpoint);
             _endpoint_to_host_id_map.remove(endpoint);
             sortedTokens = sortTokens();
             invalidateCachedRings();
@@ -339,11 +341,11 @@ public:
         lock.writeLock().lock();
         try
         {
-            for (Pair<Token, InetAddress> pair : movingEndpoints)
+            for (Pair<Token, InetAddress> pair : _moving_endpoints)
             {
                 if (pair.right.equals(endpoint))
                 {
-                    movingEndpoints.remove(pair);
+                    _moving_endpoints.remove(pair);
                     break;
                 }
             }
@@ -382,44 +384,17 @@ public:
 
     bool is_member(inet_address endpoint);
 
-#if 0
-    public boolean isLeaving(InetAddress endpoint)
-    {
-        assert endpoint != null;
+    bool is_leaving(inet_address endpoint);
 
-        lock.readLock().lock();
-        try
-        {
-            return leavingEndpoints.contains(endpoint);
-        }
-        finally
-        {
-            lock.readLock().unlock();
-        }
-    }
-
-    public boolean isMoving(InetAddress endpoint)
-    {
-        assert endpoint != null;
-
-        lock.readLock().lock();
-
-        try
-        {
-            for (Pair<Token, InetAddress> pair : movingEndpoints)
-            {
-                if (pair.right.equals(endpoint))
-                    return true;
+    bool is_moving(inet_address endpoint) {
+        for (auto x : _moving_endpoints) {
+            if (x.second == endpoint) {
+                return true;
             }
-
-            return false;
         }
-        finally
-        {
-            lock.readLock().unlock();
-        }
+        return false;
     }
-
+#if 0
     private final AtomicReference<TokenMetadata> cachedTokenMap = new AtomicReference<TokenMetadata>();
 
     /**
@@ -479,7 +454,7 @@ public:
         {
             TokenMetadata allLeftMetadata = cloneOnlyTokenMap();
 
-            for (InetAddress endpoint : leavingEndpoints)
+            for (InetAddress endpoint : _leaving_endpoints)
                 allLeftMetadata.removeEndpoint(endpoint);
 
             return allLeftMetadata;
@@ -504,11 +479,11 @@ public:
         {
             TokenMetadata metadata = cloneOnlyTokenMap();
 
-            for (InetAddress endpoint : leavingEndpoints)
+            for (InetAddress endpoint : _leaving_endpoints)
                 metadata.removeEndpoint(endpoint);
 
 
-            for (Pair<Token, InetAddress> pair : movingEndpoints)
+            for (Pair<Token, InetAddress> pair : _moving_endpoints)
                 metadata.updateNormalToken(pair.left, pair.right);
 
             return metadata;
@@ -613,7 +588,7 @@ public:
         {
             Multimap<Range<Token>, InetAddress> newPendingRanges = HashMultimap.create();
 
-            if (_bootstrap_tokens.isEmpty() && leavingEndpoints.isEmpty() && movingEndpoints.isEmpty())
+            if (_bootstrap_tokens.isEmpty() && _leaving_endpoints.isEmpty() && _moving_endpoints.isEmpty())
             {
                 if (logger.isDebugEnabled())
                     logger.debug("No bootstrapping, leaving or moving nodes -> empty pending ranges for {}", keyspaceName);
@@ -629,7 +604,7 @@ public:
 
             // get all ranges that will be affected by leaving nodes
             Set<Range<Token>> affectedRanges = new HashSet<Range<Token>>();
-            for (InetAddress endpoint : leavingEndpoints)
+            for (InetAddress endpoint : _leaving_endpoints)
                 affectedRanges.addAll(addressRanges.get(endpoint));
 
             // for each of those ranges, find what new nodes will be responsible for the range when
@@ -663,7 +638,7 @@ public:
 
             // For each of the moving nodes, we do the same thing we did for bootstrapping:
             // simply add and remove them one by one to allLeftMetadata and check in between what their ranges would be.
-            for (Pair<Token, InetAddress> moving : movingEndpoints)
+            for (Pair<Token, InetAddress> moving : _moving_endpoints)
             {
                 InetAddress endpoint = moving.right; // address of the moving node
 
@@ -732,13 +707,13 @@ public:
         }
     }
 
-    /** caller should not modify leavingEndpoints */
+    /** caller should not modify _leaving_endpoints */
     public Set<InetAddress> getLeavingEndpoints()
     {
         lock.readLock().lock();
         try
         {
-            return ImmutableSet.copyOf(leavingEndpoints);
+            return ImmutableSet.copyOf(_leaving_endpoints);
         }
         finally
         {
@@ -755,7 +730,7 @@ public:
         lock.readLock().lock();
         try
         {
-            return ImmutableSet.copyOf(movingEndpoints);
+            return ImmutableSet.copyOf(_moving_endpoints);
         }
         finally
         {
@@ -832,9 +807,9 @@ public:
             tokenToEndpointMap.clear();
             _endpoint_to_host_id_map.clear();
             _bootstrap_tokens.clear();
-            leavingEndpoints.clear();
+            _leaving_endpoints.clear();
             pendingRanges.clear();
-            movingEndpoints.clear();
+            _moving_endpoints.clear();
             sortedTokens.clear();
             topology.clear();
             invalidateCachedRings();
@@ -877,11 +852,11 @@ public:
                 }
             }
 
-            if (!leavingEndpoints.isEmpty())
+            if (!_leaving_endpoints.isEmpty())
             {
                 sb.append("Leaving Endpoints:");
                 sb.append(System.getProperty("line.separator"));
-                for (InetAddress ep : leavingEndpoints)
+                for (InetAddress ep : _leaving_endpoints)
                 {
                     sb.append(ep);
                     sb.append(System.getProperty("line.separator"));
