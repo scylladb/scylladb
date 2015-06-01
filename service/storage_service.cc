@@ -309,5 +309,271 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
     });
 }
 
+void storage_service::handle_state_bootstrap(inet_address endpoint) {
+#if 0
+    Collection<Token> tokens;
+    // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
+    tokens = get_tokens_for(endpoint);
 
+    if (logger.isDebugEnabled())
+        logger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
+
+    // if this node is present in token metadata, either we have missed intermediate states
+    // or the node had crashed. Print warning if needed, clear obsolete stuff and
+    // continue.
+    if (_token_metadata.isMember(endpoint))
+    {
+        // If isLeaving is false, we have missed both LEAVING and LEFT. However, if
+        // isLeaving is true, we have only missed LEFT. Waiting time between completing
+        // leave operation and rebootstrapping is relatively short, so the latter is quite
+        // common (not enough time for gossip to spread). Therefore we report only the
+        // former in the log.
+        if (!_token_metadata.isLeaving(endpoint))
+            logger.info("Node {} state jump to bootstrap", endpoint);
+        _token_metadata.removeEndpoint(endpoint);
+    }
+
+    _token_metadata.addBootstrapTokens(tokens, endpoint);
+    PendingRangeCalculatorService.instance.update();
+
+    if (Gossiper.instance.usesHostId(endpoint))
+        _token_metadata.update_host_id(Gossiper.instance.getHostId(endpoint), endpoint);
+#endif
 }
+
+void storage_service::handle_state_normal(inet_address endpoint) {
+#if 0
+    Collection<Token> tokens;
+
+    tokens = get_tokens_for(endpoint);
+
+    Set<Token> tokensToUpdateInMetadata = new HashSet<>();
+    Set<Token> tokensToUpdateInSystemKeyspace = new HashSet<>();
+    Set<Token> localTokensToRemove = new HashSet<>();
+    Set<InetAddress> endpointsToRemove = new HashSet<>();
+
+
+    if (logger.isDebugEnabled())
+        logger.debug("Node {} state normal, token {}", endpoint, tokens);
+
+    if (_token_metadata.isMember(endpoint))
+        logger.info("Node {} state jump to normal", endpoint);
+
+    updatePeerInfo(endpoint);
+    // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
+    if (Gossiper.instance.usesHostId(endpoint))
+    {
+        UUID hostId = Gossiper.instance.getHostId(endpoint);
+        InetAddress existing = _token_metadata.getEndpointForHostId(hostId);
+        if (DatabaseDescriptor.isReplacing() && Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()) != null && (hostId.equals(Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress()))))
+            logger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
+        else
+        {
+            if (existing != null && !existing.equals(endpoint))
+            {
+                if (existing.equals(FBUtilities.getBroadcastAddress()))
+                {
+                    logger.warn("Not updating host ID {} for {} because it's mine", hostId, endpoint);
+                    _token_metadata.removeEndpoint(endpoint);
+                    endpointsToRemove.add(endpoint);
+                }
+                else if (Gossiper.instance.compareEndpointStartup(endpoint, existing) > 0)
+                {
+                    logger.warn("Host ID collision for {} between {} and {}; {} is the new owner", hostId, existing, endpoint, endpoint);
+                    _token_metadata.removeEndpoint(existing);
+                    endpointsToRemove.add(existing);
+                    _token_metadata.update_host_id(hostId, endpoint);
+                }
+                else
+                {
+                    logger.warn("Host ID collision for {} between {} and {}; ignored {}", hostId, existing, endpoint, endpoint);
+                    _token_metadata.removeEndpoint(endpoint);
+                    endpointsToRemove.add(endpoint);
+                }
+            }
+            else
+                _token_metadata.update_host_id(hostId, endpoint);
+        }
+    }
+
+    for (final Token token : tokens)
+    {
+        // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
+        InetAddress currentOwner = _token_metadata.getEndpoint(token);
+        if (currentOwner == null)
+        {
+            logger.debug("New node {} at token {}", endpoint, token);
+            tokensToUpdateInMetadata.add(token);
+            tokensToUpdateInSystemKeyspace.add(token);
+        }
+        else if (endpoint.equals(currentOwner))
+        {
+            // set state back to normal, since the node may have tried to leave, but failed and is now back up
+            tokensToUpdateInMetadata.add(token);
+            tokensToUpdateInSystemKeyspace.add(token);
+        }
+        else if (Gossiper.instance.compareEndpointStartup(endpoint, currentOwner) > 0)
+        {
+            tokensToUpdateInMetadata.add(token);
+            tokensToUpdateInSystemKeyspace.add(token);
+
+            // currentOwner is no longer current, endpoint is.  Keep track of these moves, because when
+            // a host no longer has any tokens, we'll want to remove it.
+            Multimap<InetAddress, Token> epToTokenCopy = getTokenMetadata().getEndpointToTokenMapForReading();
+            epToTokenCopy.get(currentOwner).remove(token);
+            if (epToTokenCopy.get(currentOwner).size() < 1)
+                endpointsToRemove.add(currentOwner);
+
+            logger.info(String.format("Nodes %s and %s have the same token %s.  %s is the new owner",
+                                      endpoint,
+                                      currentOwner,
+                                      token,
+                                      endpoint));
+        }
+        else
+        {
+            logger.info(String.format("Nodes %s and %s have the same token %s.  Ignoring %s",
+                                       endpoint,
+                                       currentOwner,
+                                       token,
+                                       endpoint));
+        }
+    }
+
+    boolean isMoving = _token_metadata.isMoving(endpoint); // capture because updateNormalTokens clears moving status
+    _token_metadata.updateNormalTokens(tokensToUpdateInMetadata, endpoint);
+    for (InetAddress ep : endpointsToRemove)
+    {
+        removeEndpoint(ep);
+        if (DatabaseDescriptor.isReplacing() && DatabaseDescriptor.getReplaceAddress().equals(ep))
+            Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
+    }
+    if (!tokensToUpdateInSystemKeyspace.isEmpty())
+        SystemKeyspace.updateTokens(endpoint, tokensToUpdateInSystemKeyspace);
+    if (!localTokensToRemove.isEmpty())
+        SystemKeyspace.updateLocalTokens(Collections.<Token>emptyList(), localTokensToRemove);
+
+    if (isMoving)
+    {
+        _token_metadata.removeFromMoving(endpoint);
+        for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
+            subscriber.onMove(endpoint);
+    }
+    else
+    {
+        for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
+            subscriber.onJoinCluster(endpoint);
+    }
+
+    PendingRangeCalculatorService.instance.update();
+#endif
+}
+
+void storage_service::handle_state_leaving(inet_address endpoint) {
+#if 0
+    Collection<Token> tokens;
+    tokens = get_tokens_for(endpoint);
+
+    if (logger.isDebugEnabled())
+        logger.debug("Node {} state leaving, tokens {}", endpoint, tokens);
+
+    // If the node is previously unknown or tokens do not match, update tokenmetadata to
+    // have this node as 'normal' (it must have been using this token before the
+    // leave). This way we'll get pending ranges right.
+    if (!_token_metadata.isMember(endpoint))
+    {
+        logger.info("Node {} state jump to leaving", endpoint);
+        _token_metadata.updateNormalTokens(tokens, endpoint);
+    }
+    else if (!_token_metadata.getTokens(endpoint).containsAll(tokens))
+    {
+        logger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
+        _token_metadata.updateNormalTokens(tokens, endpoint);
+    }
+
+    // at this point the endpoint is certainly a member with this token, so let's proceed
+    // normally
+    _token_metadata.addLeavingEndpoint(endpoint);
+    PendingRangeCalculatorService.instance.update();
+#endif
+}
+
+void storage_service::handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
+#if 0
+    assert pieces.length >= 2;
+    Collection<Token> tokens;
+    tokens = get_tokens_for(endpoint);
+
+    if (logger.isDebugEnabled())
+        logger.debug("Node {} state left, tokens {}", endpoint, tokens);
+
+    excise(tokens, endpoint, extractExpireTime(pieces));
+#endif
+}
+
+void storage_service::handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
+#if 0
+    assert pieces.length >= 2;
+    Token token = getPartitioner().getTokenFactory().fromString(pieces[1]);
+
+    if (logger.isDebugEnabled())
+        logger.debug("Node {} state moving, new token {}", endpoint, token);
+
+    _token_metadata.addMovingEndpoint(token, endpoint);
+
+    PendingRangeCalculatorService.instance.update();
+#endif
+}
+
+void storage_service::handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
+#if 0
+    assert (pieces.length > 0);
+
+    if (endpoint.equals(FBUtilities.getBroadcastAddress()))
+    {
+        logger.info("Received removenode gossip about myself. Is this node rejoining after an explicit removenode?");
+        try
+        {
+            drain();
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException(e);
+        }
+        return;
+    }
+    if (_token_metadata.isMember(endpoint))
+    {
+        String state = pieces[0];
+        Collection<Token> removeTokens = _token_metadata.getTokens(endpoint);
+
+        if (VersionedValue.REMOVED_TOKEN.equals(state))
+        {
+            excise(removeTokens, endpoint, extractExpireTime(pieces));
+        }
+        else if (VersionedValue.REMOVING_TOKEN.equals(state))
+        {
+            if (logger.isDebugEnabled())
+                logger.debug("Tokens {} removed manually (endpoint was {})", removeTokens, endpoint);
+
+            // Note that the endpoint is being removed
+            _token_metadata.addLeavingEndpoint(endpoint);
+            PendingRangeCalculatorService.instance.update();
+
+            // find the endpoint coordinating this removal that we need to notify when we're done
+            String[] coordinator = Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(ApplicationState.REMOVAL_COORDINATOR).value.split(VersionedValue.DELIMITER_STR, -1);
+            UUID hostId = UUID.fromString(coordinator[1]);
+            // grab any data we are now responsible for and notify responsible node
+            restoreReplicaCount(endpoint, _token_metadata.getEndpointForHostId(hostId));
+        }
+    }
+    else // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
+    {
+        if (VersionedValue.REMOVED_TOKEN.equals(pieces[0]))
+            addExpireTimeIfFound(endpoint, extractExpireTime(pieces));
+        removeEndpoint(endpoint);
+    }
+#endif
+}
+
+} // namespace service
