@@ -1014,5 +1014,27 @@ void make(database& db) {
     }
 }
 
+utils::UUID get_local_host_id() {
+#if 0
+    String req = "SELECT host_id FROM system.%s WHERE key='%s'";
+    UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
+
+    // Look up the Host UUID (return it if found)
+    if (!result.isEmpty() && result.one().has("host_id"))
+        return result.one().getUUID("host_id");
+#endif
+
+    // ID not found, generate a new one, persist, and then return it.
+    auto host_id = utils::make_random_uuid();
+    //logger.warn("No host ID found, created {} (Note: This should happen exactly once per node).", hostId);
+    return set_local_host_id(host_id);
+}
+
+utils::UUID set_local_host_id(const utils::UUID& host_id) {
+    // String req = "INSERT INTO system.%s (key, host_id) VALUES ('%s', ?)";
+    // executeInternal(String.format(req, LOCAL, LOCAL), hostId);
+    return host_id;
+}
+
 } // namespace system_keyspace
 } // namespace db

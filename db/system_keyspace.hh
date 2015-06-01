@@ -25,6 +25,7 @@
 
 #include "schema.hh"
 #include "legacy_schema_tables.hh"
+#include "utils/UUID.hh"
 
 namespace db {
 namespace system_keyspace {
@@ -578,35 +579,20 @@ void make(database& db);
         mutation.delete(BUILT_INDEXES, BuiltIndexes.comparator.makeCellName(indexName), FBUtilities.timestampMicros());
         mutation.apply();
     }
+#endif
 
     /**
      * Read the host ID from the system keyspace, creating (and storing) one if
      * none exists.
      */
-    public static UUID getLocalHostId()
-    {
-        String req = "SELECT host_id FROM system.%s WHERE key='%s'";
-        UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
-
-        // Look up the Host UUID (return it if found)
-        if (!result.isEmpty() && result.one().has("host_id"))
-            return result.one().getUUID("host_id");
-
-        // ID not found, generate a new one, persist, and then return it.
-        UUID hostId = UUID.randomUUID();
-        logger.warn("No host ID found, created {} (Note: This should happen exactly once per node).", hostId);
-        return setLocalHostId(hostId);
-    }
+    utils::UUID get_local_host_id();
 
     /**
      * Sets the local host ID explicitly.  Should only be called outside of SystemTable when replacing a node.
      */
-    public static UUID setLocalHostId(UUID hostId)
-    {
-        String req = "INSERT INTO system.%s (key, host_id) VALUES ('%s', ?)";
-        executeInternal(String.format(req, LOCAL, LOCAL), hostId);
-        return hostId;
-    }
+    utils::UUID set_local_host_id(const utils::UUID& host_id);
+
+#if 0
 
     public static PaxosState loadPaxosState(ByteBuffer key, CFMetaData metadata)
     {
