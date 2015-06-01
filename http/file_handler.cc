@@ -98,10 +98,13 @@ future<std::unique_ptr<reply>> file_interaction_handler::read(
     sstring extension = get_extension(file_name);
     rep->set_content_type(extension);
     return engine().open_file_dma(file_name, open_flags::ro).then(
-            [rep = std::move(rep)](file f) mutable {
+            [rep = std::move(rep), extension, this, req = std::move(req)](file f) mutable {
                 std::shared_ptr<reader> r = std::make_shared<reader>(std::move(f), std::move(rep));
 
-                return r->is.consume(*r).then([r]() {
+                return r->is.consume(*r).then([r, extension, this, req = std::move(req)]() {
+                            if (transformer != nullptr) {
+                                transformer->transform(r->_rep->_content, *req, extension);
+                            }
                             r->_rep->done();
                             return make_ready_future<std::unique_ptr<reply>>(std::move(r->_rep));
                         });

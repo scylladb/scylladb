@@ -16,17 +16,49 @@
  * under the License.
  */
 /*
- * Copyright (C) 2014 Cloudius Systems, Ltd.
+ * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
 #ifndef FUTURE_HH_
 #define FUTURE_HH_
 
 #include "apply.hh"
+#include "task.hh"
 #include <stdexcept>
 #include <memory>
 #include <type_traits>
 #include <assert.h>
+
+
+/// \defgroup future-module Futures and Promises
+///
+/// \brief
+/// Futures and promises are the basic tools for asynchronous
+/// programming in seastar.  A future represents a result that
+/// may not have been computed yet, for example a buffer that
+/// is being read from the disk, or the result of a function
+/// that is executed on another cpu.  A promise object allows
+/// the future to be eventually resolved by assigning it a value.
+///
+/// \brief
+/// Another way to look at futures and promises are as the reader
+/// and writer sides, respectively, of a single-item, single use
+/// queue.  You read from the future, and write to the promise,
+/// and the system takes care that it works no matter what the
+/// order of operations is.
+///
+/// \brief
+/// The normal way of working with futures is to chain continuations
+/// to them.  A continuation is a block of code (usually a lamdba)
+/// that is called when the future is assigned a value (the future
+/// is resolved); the continuation can then access the actual value.
+///
+
+/// \defgroup future-util Future Utilities
+///
+/// \brief
+/// These utilities are provided to help perform operations on futures.
+
 
 namespace seastar {
 
@@ -42,44 +74,39 @@ void switch_out(thread_context* from);
 
 }
 
+
+/// \addtogroup future-module
+/// @{
+
 template <class... T>
 class promise;
 
 template <class... T>
 class future;
 
+/// \brief Creates a \ref future in an available, value state.
+///
+/// Creates a \ref future object that is already resolved.  This
+/// is useful when it is determined that no I/O needs to be performed
+/// to perform a computation (for example, because the data is cached
+/// in some buffer).
 template <typename... T, typename... A>
 future<T...> make_ready_future(A&&... value);
 
+/// \brief Creates a \ref future in an available, failed state.
+///
+/// Creates a \ref future object that is already resolved in a failed
+/// state.  This is useful when no I/O needs to be performed to perform
+/// a computation (for example, because the connection is closed and
+/// we cannot read from it).
 template <typename... T>
 future<T...> make_exception_future(std::exception_ptr value) noexcept;
 
-class task {
-public:
-    virtual ~task() noexcept {}
-    virtual void run() noexcept = 0;
-};
-
-void schedule(std::unique_ptr<task> t);
+/// \cond internal
 void engine_exit(std::exception_ptr eptr = {});
 
-template <typename Func>
-class lambda_task final : public task {
-    Func _func;
-public:
-    lambda_task(const Func& func) : _func(func) {}
-    lambda_task(Func&& func) : _func(std::move(func)) {}
-    virtual void run() noexcept override { _func(); }
-};
-
-template <typename Func>
-inline
-std::unique_ptr<task>
-make_task(Func&& func) {
-    return std::make_unique<lambda_task<Func>>(std::forward<Func>(func));
-}
-
 void report_failed_future(std::exception_ptr ex);
+/// \endcond
 
 //
 // A future/promise pair maintain one logical value (a future_state).
@@ -99,6 +126,7 @@ void report_failed_future(std::exception_ptr ex);
 // called) or due to the promise or future being mobved around.
 //
 
+/// \cond internal
 template <typename... T>
 struct future_state {
     static constexpr bool move_noexcept = std::is_nothrow_move_constructible<std::tuple<T...>>::value;
@@ -299,7 +327,11 @@ struct continuation final : task {
     future_state<T...> _state;
     Func _func;
 };
+/// \endcond
 
+/// \brief promise - allows a future value to be made available at a later time.
+///
+///
 template <typename... T>
 class promise {
     future<T...>* _future = nullptr;
@@ -309,7 +341,12 @@ class promise {
     static constexpr bool move_noexcept = future_state<T...>::move_noexcept;
     static constexpr bool copy_noexcept = future_state<T...>::copy_noexcept;
 public:
+    /// \brief Constructs an empty \c promise.
+    ///
+    /// Creates promise with no associated future yet (see get_future()).
     promise() noexcept : _state(&_local_state) {}
+
+    /// \brief Moves a \c promise object.
     promise(promise&& x) noexcept(move_noexcept) : _future(x._future), _state(x._state), _task(std::move(x._task)) {
         if (_state == &x._local_state) {
             _state = &_local_state;
@@ -332,24 +369,56 @@ public:
         return *this;
     }
     void operator=(const promise&) = delete;
+
+    /// \brief Gets the promise's associated future.
+    ///
+    /// The future and promise will be remember each other, even if either or
+    /// both are moved.  When \c set_value() or \c set_exception() are called
+    /// on the promise, the future will be become ready, and if a continuation
+    /// was attached to the future, it will run.
     future<T...> get_future() noexcept;
+
+    /// \brief Sets the promise's value (as tuple; by copying)
+    ///
+    /// Copies the tuple argument and makes it available to the associated
+    /// future.  May be called either before or after \c get_future().
     void set_value(const std::tuple<T...>& result) noexcept(copy_noexcept) {
         _state->set(result);
         make_ready();
     }
+
+    /// \brief Sets the promises value (as tuple; by moving)
+    ///
+    /// Moves the tuple argument and makes it available to the associated
+    /// future.  May be called either before or after \c get_future().
     void set_value(std::tuple<T...>&& result) noexcept(move_noexcept) {
         _state->set(std::move(result));
         make_ready();
     }
+
+    /// \brief Sets the promises value (variadic)
+    ///
+    /// Forwards the arguments and makes them available to the associated
+    /// future.  May be called either before or after \c get_future().
     template <typename... A>
     void set_value(A&&... a) noexcept {
         _state->set(std::forward<A>(a)...);
         make_ready();
     }
+
+    /// \brief Marks the promise as failed
+    ///
+    /// Forwards the exception argument to the future and makes it
+    /// available.  May be called either before or after \c get_future().
     void set_exception(std::exception_ptr ex) noexcept {
         _state->set_exception(std::move(ex));
         make_ready();
     }
+
+    /// \brief Marks the promise as failed
+    ///
+    /// Forwards the exception argument to the future and makes it
+    /// available.  May be called either before or after \c get_future().
     template<typename Exception>
     void set_exception(Exception&& e) noexcept {
         set_exception(make_exception_ptr(std::forward<Exception>(e)));
@@ -370,10 +439,29 @@ private:
     friend class future;
 };
 
+/// \brief Specialization of \c promise<void>
+///
+/// This is an alias for \c promise<>, for generic programming purposes.
+/// For example, You may have a \c promise<T> where \c T can legally be
+/// \c void.
 template<>
 class promise<void> : public promise<> {};
 
+/// @}
+
+/// \addtogroup future-util
+/// @{
+
+
+/// \brief Check whether a type is a future
+///
+/// This is a type trait evaluating to \c true if the given type is a
+/// future.
+///
 template <typename... T> struct is_future : std::false_type {};
+
+/// \cond internal
+/// \addtogroup future-util
 template <typename... T> struct is_future<future<T...>> : std::true_type {};
 
 struct ready_future_marker {};
@@ -381,25 +469,34 @@ struct ready_future_from_tuple_marker {};
 struct exception_future_marker {};
 
 extern __thread size_t future_avail_count;
+/// \endcond
 
-// Converts a type to a future type, if it isn't already.
-//
-// Result in member type 'type'.
+
+/// \brief Converts a type to a future type, if it isn't already.
+///
+/// \return Result in member type 'type'.
 template <typename T>
 struct futurize;
 
 template <typename T>
 struct futurize {
+    /// If \c T is a future, \c T; otherwise \c future<T>
     using type = future<T>;
+    /// The promise type associated with \c type.
     using promise_type = promise<T>;
 
+    /// Apply a function to an argument list (expressed as a tuple)
+    /// and return the result, as a future (if it wasn't already).
     template<typename Func, typename... FuncArgs>
     static inline type apply(Func&& func, std::tuple<FuncArgs...>&& args);
 
+    /// Apply a function to an argument list
+    /// and return the result, as a future (if it wasn't already).
     template<typename Func, typename... FuncArgs>
     static inline type apply(Func&& func, FuncArgs&&... args);
 };
 
+/// \cond internal
 template <>
 struct futurize<void> {
     using type = future<>;
@@ -423,11 +520,30 @@ struct futurize<future<Args...>> {
     template<typename Func, typename... FuncArgs>
     static inline type apply(Func&& func, FuncArgs&&... args);
 };
+/// \endcond
 
 // Converts a type to a future type, if it isn't already.
 template <typename T>
 using futurize_t = typename futurize<T>::type;
 
+/// @}
+
+/// \addtogroup future-module
+/// @{
+
+/// \brief A representation of a possibly not-yet-computed value.
+///
+/// A \c future represents a value that has not yet been computed
+/// (an asynchronous computation).  It can be in one of several
+/// states:
+///    - unavailable: the computation has not been completed yet
+///    - value: the computation has been completed successfully and a
+///      value is available.
+///    - failed: the computation completed with an exception.
+///
+/// methods in \c future allow querying the state and, most importantly,
+/// scheduling a \c continuation to be executed when the future becomes
+/// available.  Only one such continuation may be scheduled.
 template <typename... T>
 class future {
     promise<T...>* _promise;
@@ -492,8 +608,11 @@ private:
     }
 
 public:
+    /// \brief The data type carried by the future.
     using value_type = std::tuple<T...>;
+    /// \brief The data type carried by the future.
     using promise_type = promise<T...>;
+    /// \brief Moves the future into a new object.
     future(future&& x) noexcept(move_noexcept) : _promise(x._promise) {
         if (!_promise) {
             _local_state = std::move(x._local_state);
@@ -521,6 +640,15 @@ public:
             report_failed_future(state()->get_exception());
         }
     }
+    /// \brief gets the value returned by the computation
+    ///
+    /// Requires that the future be available.  If the value
+    /// was computed successfully, it is returned (as an
+    /// \c std::tuple).  Otherwise, an exception is thrown.
+    ///
+    /// If get() is called in a \ref seastar::thread context,
+    /// then it need not be available; instead, the thread will
+    /// be paused until the future becomes available.
     std::tuple<T...> get() {
         if (!state()->available()) {
             wait();
@@ -528,6 +656,7 @@ public:
         return state()->get();
     }
 
+    /// \cond internal
     void wait() {
         auto thread = seastar::thread_impl::get();
         assert(thread);
@@ -537,26 +666,73 @@ public:
         });
         seastar::thread_impl::switch_out(thread);
     }
+    /// \endcond
 
+    /// \brief Checks whether the future is available.
+    ///
+    /// \return \c true if the future has a value, or has failed.
     bool available() noexcept {
         return state()->available();
     }
 
+    /// \brief Checks whether the future has failed.
+    ///
+    /// \return \c true if the future is availble and has failed.
     bool failed() noexcept {
         return state()->failed();
     }
 
+    /// \brief Schedule a block of code to run when the future is ready.
+    ///
+    /// Schedules a function (often a lambda) to run when the future becomes
+    /// available.  The function is called with the result of this future's
+    /// computation as parameters.  The return value of the function becomes
+    /// the return value of then(), itself as a future; this allows then()
+    /// calls to be chained.
+    ///
+    /// If the future failed, the function is not called, and the exception
+    /// is propagated into the return value of then().
+    ///
+    /// \param func - function to be called when the future becomes available,
+    ///               unless it has failed.
+    /// \return a \c future representing the return value of \c func, applied
+    ///         to the eventual value of this future.
     template <typename Func>
     futurize_t<std::result_of_t<Func(T&&...)>> then(Func&& func) noexcept {
         return then<std::result_of_t<Func(T&&...)>>(std::forward<Func>(func), [] (future_state<T...>&& state) { return state.get(); });
     }
 
+    /// \brief Schedule a block of code to run when the future is ready, allowing
+    ///        for exception handling.
+    ///
+    /// Schedules a function (often a lambda) to run when the future becomes
+    /// available.  The function is called with the this future as a parameter;
+    /// it will be in an available state.  The return value of the function becomes
+    /// the return value of then_wrapped(), itself as a future; this allows
+    /// then_wrapped() calls to be chained.
+    ///
+    /// Unlike then(), the function will be called for both value and exceptional
+    /// futures.
+    ///
+    /// \param func - function to be called when the future becomes available,
+    /// \return a \c future representing the return value of \c func, applied
+    ///         to the eventual value of this future.
     template <typename Func>
     futurize_t<std::result_of_t<Func(future<T...>)>>
     then_wrapped(Func&& func) noexcept {
         return then<std::result_of_t<Func(future<T...>)>>(std::forward<Func>(func), [] (future_state<T...>&& state) { return future(std::move(state)); });
     }
 
+    /// \brief Satisfy some \ref promise object with this future as a result.
+    ///
+    /// Arranges so that when this future is resolve, it will be used to
+    /// satisfy an unrelated promise.  This is similar to scheduling a
+    /// continuation that moves the result of this future into the promise
+    /// (using promise::set_value() or promise::set_exception(), except
+    /// that it is more efficient.
+    ///
+    /// \param pr a promise that will be fulfilled with the results of this
+    /// future.
     void forward_to(promise<T...>&& pr) noexcept {
         if (state()->available()) {
             state()->forward_to(pr);
@@ -588,6 +764,10 @@ public:
         });
     }
 
+    /// \brief Terminate the program if this future fails.
+    ///
+    /// Terminates the entire program is this future resolves
+    /// to an exception.  Use with caution.
     future<> or_terminate() noexcept {
         return then_wrapped([] (auto&& f) {
             try {
@@ -598,10 +778,15 @@ public:
         });
     }
 
+    /// \brief Discards the value carried by this future.
+    ///
+    /// Converts the future into a no-value \c future<>, by
+    /// ignorting any result.  Exceptions are propagated unchanged.
     future<> discard_result() noexcept {
         return then([] (T&&...) {});
     }
 
+    /// \cond internal
     template <typename... U>
     friend class promise;
     template <typename... U, typename... A>
@@ -610,6 +795,7 @@ public:
     friend future<U...> make_exception_future(std::exception_ptr ex) noexcept;
     template <typename... U, typename Exception>
     friend future<U...> make_exception_future(Exception&& ex) noexcept;
+    /// \endcond
 };
 
 inline
@@ -670,11 +856,21 @@ future<T...> make_exception_future(std::exception_ptr ex) noexcept {
     return future<T...>(exception_future_marker(), std::move(ex));
 }
 
+/// \brief Creates a \ref future in an available, failed state.
+///
+/// Creates a \ref future object that is already resolved in a failed
+/// state.  This no I/O needs to be performed to perform a computation
+/// (for example, because the connection is closed and we cannot read
+/// from it).
 template <typename... T, typename Exception>
 inline
 future<T...> make_exception_future(Exception&& ex) noexcept {
     return make_exception_future<T...>(std::make_exception_ptr(std::forward<Exception>(ex)));
 }
+
+/// @}
+
+/// \cond internal
 
 template<typename T>
 template<typename Func, typename... FuncArgs>
@@ -711,5 +907,7 @@ template<typename Func, typename... FuncArgs>
 typename futurize<future<Args...>>::type futurize<future<Args...>>::apply(Func&& func, FuncArgs&&... args) {
     return func(std::forward<FuncArgs>(args)...);
 }
+
+/// \endcond
 
 #endif /* FUTURE_HH_ */

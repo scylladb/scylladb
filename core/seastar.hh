@@ -22,6 +22,18 @@
 
 #pragma once
 
+/// \mainpage
+///
+/// Seastar is a high performance C++ application framework for high
+/// concurrency server applications.
+///
+/// Please see:
+///   - \ref future-module Documentation on futures and promises, which are
+///          the seastar building blocks.
+///   - \ref future-util Utililty functions for working with futures
+///   - \ref memory-module Memory management
+
+
 #include "sstring.hh"
 #include "future.hh"
 

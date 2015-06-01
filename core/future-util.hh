@@ -25,20 +25,35 @@
 #ifndef CORE_FUTURE_UTIL_HH_
 #define CORE_FUTURE_UTIL_HH_
 
+#include "task.hh"
 #include "future.hh"
 #include "shared_ptr.hh"
 #include <tuple>
 #include <iterator>
 #include <vector>
 
+/// \cond internal
 extern __thread size_t task_quota;
+/// \endcond
 
-// parallel_for_each - run tasks in parallel
-//
-// Given a range [@begin, @end) of objects, run func(*i) for each i in
-// the range, and return a future<> that resolves when all the functions
-// complete.  @func should return a future<> that indicates when it is
-// complete.
+
+/// \addtogroup future-util
+/// @{
+
+/// Run tasks in parallel (iterator version).
+///
+/// Given a range [\c begin, \c end) of objects, run \c func on each \c *i in
+/// the range, and return a future<> that resolves when all the functions
+/// complete.  \c func should return a future<> that indicates when it is
+/// complete.  All invocations are performed in parallel.
+///
+/// \param begin an \c InputIterator designating the beginning of the range
+/// \param end an \c InputIterator designating the end of the range
+/// \param func Function to apply to each element in the range (returning
+///             a \c future<>)
+/// \return a \c future<> that resolves when all the function invocations
+///         complete.  If one or more return an exception, the return value
+///         contains one of the exceptions.
 template <typename Iterator, typename Func>
 inline
 future<>
@@ -53,12 +68,12 @@ parallel_for_each(Iterator begin, Iterator end, Func&& func) {
     return ret;
 }
 
-/// \brief parallel_for_each - run tasks in parallel
+/// Run tasks in parallel (range version).
 ///
-/// Given a range [\c begin, \c end) of objects, run \c func(object) for
-/// each object in the range, and return a future<> that resolves when all
-/// the functions complete.  @func should return a future<> that indicates
-/// when it is complete.
+/// Given a \c range of objects, apply \c func to each object
+/// in the range, and return a future<> that resolves when all
+/// the functions complete.  \c func should return a future<> that indicates
+/// when it is complete.  All invocations are performed in parallel.
 ///
 /// \param range A range of objects to iterate run \c func on
 /// \param func  A callable, accepting reference to the range's
@@ -79,6 +94,7 @@ parallel_for_each(Range&& range, Func&& func) {
 // the actual function invocation. It is represented by a function which
 // returns a future which resolves when the action is done.
 
+/// \cond internal
 template<typename AsyncAction, typename StopCondition>
 static inline
 void do_until_continued(StopCondition&& stop_cond, AsyncAction&& action, promise<> p) {
@@ -110,8 +126,18 @@ void do_until_continued(StopCondition&& stop_cond, AsyncAction&& action, promise
 
     p.set_value();
 }
+/// \endcond
 
-// Invokes given action until it fails or given condition evaluates to true.
+/// Invokes given action until it fails or given condition evaluates to true.
+///
+/// \param stop_cond a callable taking no arguments, returning a boolean that
+///                  evalutes to true when you don't want to call \c action
+///                  any longer
+/// \param action a callable taking no arguments, returning a future<>.  Will
+///               be called again as soon as the future resolves, unless the
+///               future fails, or \c stop_cond returns \c true.
+/// \return a ready future if we stopped successfully, or a failed future if
+///         a call to to \c action failed.
 template<typename AsyncAction, typename StopCondition>
 static inline
 future<> do_until(StopCondition&& stop_cond, AsyncAction&& action) {
@@ -122,7 +148,13 @@ future<> do_until(StopCondition&& stop_cond, AsyncAction&& action) {
     return f;
 }
 
-// Invoke given action until it fails.
+/// Invoke given action until it fails.
+///
+/// Calls \c action repeatedly until it returns a failed future.
+///
+/// \param action a callable taking no arguments, returning a \c future<>
+///        that becomes ready when you wish it to be called again.
+/// \return a future<> that will resolve to the first failure of \c action
 template<typename AsyncAction>
 static inline
 future<> keep_doing(AsyncAction&& action) {
@@ -150,6 +182,18 @@ future<> keep_doing(AsyncAction&& action) {
     return f;
 }
 
+/// Call a function for each item in a range, sequentially (iterator version).
+///
+/// For each item in a range, call a function, waiting for the previous
+/// invocation to complete before calling the next one.
+///
+/// \param begin an \c InputIterator designating the beginning of the range
+/// \param end an \c InputIterator designating the endof the range
+/// \param action a callable, taking a reference to objects from the range
+///               as a parameter, and returning a \c future<> that resolves
+///               when it is acceptable to process the next item.
+/// \return a ready future on success, or the first failed future if
+///         \c action failed.
 template<typename Iterator, typename AsyncAction>
 static inline
 future<> do_for_each(Iterator begin, Iterator end, AsyncAction&& action) {
@@ -173,12 +217,24 @@ future<> do_for_each(Iterator begin, Iterator end, AsyncAction&& action) {
     }
 }
 
+/// Call a function for each item in a range, sequentially (range version).
+///
+/// For each item in a range, call a function, waiting for the previous
+/// invocation to complete before calling the next one.
+///
+/// \param range an \c Range object designating input values
+/// \param action a callable, taking a reference to objects from the range
+///               as a parameter, and returning a \c future<> that resolves
+///               when it is acceptable to process the next item.
+/// \return a ready future on success, or the first failed future if
+///         \c action failed.
 template<typename Container, typename AsyncAction>
 static inline
 future<> do_for_each(Container& c, AsyncAction&& action) {
     return do_for_each(std::begin(c), std::end(c), std::forward<AsyncAction>(action));
 }
 
+/// \cond internal
 inline
 future<std::tuple<>>
 when_all() {
@@ -194,7 +250,18 @@ struct do_when_all {
         return when_all(std::move(fut)...);
     }
 };
+/// \endcond
 
+/// Wait for many futures to complete, capturing possible errors (variadic version).
+///
+/// Given a variable number of futures as input, wait for all of them
+/// to resolve (either successfully or with an exception), and return
+/// them as a tuple so individual values or exceptions can be examined.
+///
+/// \param fut the first future to wait for
+/// \param rest more futures to wait for
+/// \return an \c std::tuple<> of all the futures in the input; when
+///         ready, all contained futures will be ready as well.
 template <typename... FutureArgs, typename... Rest>
 inline
 future<std::tuple<future<FutureArgs...>, Rest...>>
@@ -210,6 +277,7 @@ when_all(future<FutureArgs...>&& fut, Rest&&... rest) {
     });
 }
 
+/// \cond internal
 template <typename Iterator, typename IteratorCategory>
 inline
 size_t
@@ -245,11 +313,18 @@ complete_when_all(std::vector<Future>&& futures, typename std::vector<Future>::i
         return complete_when_all(std::move(futures), pos);
     });
 }
+/// \endcond
 
-// Given a range of futures (denoted by an iterator pair), wait for
-// all of them to be available, and return a future containing a
-// vector of each input future (in available state, with either a
-// value or exception stored).
+/// Wait for many futures to complete, capturing possible errors (iterator version).
+///
+/// Given a range of futures as input, wait for all of them
+/// to resolve (either successfully or with an exception), and return
+/// them as a \c std::vector so individual values or exceptions can be examined.
+///
+/// \param begin an \c InputIterator designating the beginning of the range of futures
+/// \param end an \c InputIterator designating the end of the range of futures
+/// \return an \c std::vector<> of all the futures in the input; when
+///         ready, all contained futures will be ready as well.
 template <typename FutureIterator>
 inline
 future<std::vector<typename std::iterator_traits<FutureIterator>::value_type>>
@@ -363,5 +438,7 @@ static inline
 future<> now() {
     return make_ready_future<>();
 }
+
+/// @}
 
 #endif /* CORE_FUTURE_UTIL_HH_ */

@@ -22,6 +22,7 @@
 #ifndef SHARED_PTR_HH_
 #define SHARED_PTR_HH_
 
+#include "shared_ptr_debug_helper.hh"
 #include <utility>
 #include <type_traits>
 #include <functional>
@@ -45,6 +46,12 @@
 // Both variants support shared_from_this() via enable_shared_from_this<>
 // and lw_enable_shared_from_this<>().
 //
+
+#ifndef DEBUG_SHARED_PTR
+using shared_ptr_counter_type = long;
+#else
+using shared_ptr_counter_type = debug_shared_ptr_counter_type;
+#endif
 
 template <typename T>
 class lw_shared_ptr;
@@ -103,7 +110,7 @@ shared_ptr<T> const_pointer_cast(const shared_ptr<U>& p);
 // CRTP from this to enable shared_from_this:
 template <typename T>
 class enable_lw_shared_from_this {
-    long _count = 0;
+    shared_ptr_counter_type _count = 0;
     using ctor = T;
     T* to_value() { return static_cast<T*>(this); }
     T* to_internal_object() { return static_cast<T*>(this); }
@@ -119,7 +126,7 @@ public:
 
 template <typename T>
 struct shared_ptr_no_esft {
-    long _count = 0;
+    shared_ptr_counter_type _count = 0;
     T _value;
     using ctor = shared_ptr_no_esft;
 
@@ -298,7 +305,7 @@ std::ostream& operator<<(std::ostream& out, const lw_shared_ptr<T>& p) {
 struct shared_ptr_count_base {
     // destructor is responsible for fully-typed deletion
     virtual ~shared_ptr_count_base() {}
-    long count = 0;
+    shared_ptr_counter_type count = 0;
 };
 
 template <typename T>
