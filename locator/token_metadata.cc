@@ -123,4 +123,19 @@ std::experimental::optional<inet_address> token_metadata::get_endpoint(const tok
     }
 }
 
+void token_metadata::debug_show() {
+    auto reporter = std::make_shared<timer<lowres_clock>>();
+    reporter->set_callback ([reporter, this] {
+        print("Endpoint -> Token\n");
+        for (auto x : _token_to_endpoint_map) {
+            print("inet_address=%s, token=%s\n", x.second, x.first);
+        }
+        print("Endpoint -> UUID\n");
+        for (auto x: _endpoint_to_host_id_map) {
+            print("inet_address=%s, uuid=%s\n", x.first, x.second);
+        }
+    });
+    reporter->arm_periodic(std::chrono::seconds(1));
+}
+
 }

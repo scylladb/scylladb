@@ -73,6 +73,7 @@ public:
     const std::map<token, inet_address>& get_token_to_endpoint() const {
         return _token_to_endpoint_map;
     }
+    void debug_show();
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(TokenMetadata.class);
 
