@@ -24,22 +24,9 @@ schema::make_column_specification(const column_definition& def) {
     return ::make_shared<cql3::column_specification>(_raw._ks_name, _raw._cf_name, std::move(id), def.type);
 }
 
-void
-schema::build_columns(const std::vector<column>& columns, column_kind kind,
-    std::vector<column_definition>& dst)
-{
-    dst.reserve(columns.size());
-    for (column_id i = 0; i < columns.size(); i++) {
-        auto& col = columns[i];
-        dst.emplace_back(std::move(col.name), std::move(col.type), i, kind);
-        column_definition& def = dst.back();
-        def.column_specification = make_column_specification(def);
-    }
-}
-
 void schema::rebuild() {
-    _partition_key_type = make_lw_shared<compound_type<>>(get_column_types(_raw._partition_key));
-    _clustering_key_type = make_lw_shared<compound_type<>>(get_column_types(_raw._clustering_key));
+    _partition_key_type = make_lw_shared<compound_type<>>(get_column_types(partition_key_columns()));
+    _clustering_key_type = make_lw_shared<compound_type<>>(get_column_types(clustering_key_columns()));
     _clustering_key_prefix_type = make_lw_shared(_clustering_key_type->as_prefix());
 
     _columns_by_name.clear();
@@ -58,6 +45,52 @@ schema::raw_schema::raw_schema(utils::UUID id)
     : _id(id)
 { }
 
+schema::schema(const raw_schema& raw)
+    : _raw(raw)
+    , _offsets([this] {
+        auto& cols = _raw._columns;
+        std::array<size_t, 4> count = { 0, 0, 0, 0 };
+        auto i = cols.begin();
+        auto e = cols.end();
+        for (auto k : { column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column }) {
+            auto j = std::partition(i, e, [k](const auto& c) {
+                return c.kind == k;
+            });
+            count[size_t(k)] = std::distance(i, j);
+            i = j;
+        }
+        return std::array<size_t, 3> { count[0], count[0] + count[1], count[0] + count[1] + count[2] };
+    }())
+    , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
+{
+    struct name_compare {
+        data_type type;
+        name_compare(data_type type) : type(type) {}
+        bool operator()(const column_definition& cd1, const column_definition& cd2) const {
+            return type->less(cd1.name(), cd2.name());
+        }
+    };
+
+    std::sort(
+            _raw._columns.begin() + column_offset(column_kind::static_column),
+            _raw._columns.begin()
+                    + column_offset(column_kind::regular_column),
+            name_compare(utf8_type));
+    std::sort(
+            _raw._columns.begin()
+                    + column_offset(column_kind::regular_column),
+            _raw._columns.end(), name_compare(regular_column_name_type()));
+
+    column_id id = 0;
+    for (auto& def : _raw._columns) {
+        def.column_specification = make_column_specification(def);
+        def.id = id - column_offset(def.kind);
+        ++id;
+    }
+
+    rebuild();
+}
+
 schema::schema(std::experimental::optional<utils::UUID> id,
     sstring ks_name,
     sstring cf_name,
@@ -67,28 +100,32 @@ schema::schema(std::experimental::optional<utils::UUID> id,
     std::vector<column> static_columns,
     data_type regular_column_name_type,
     sstring comment)
-        : _raw(id ? *id : utils::UUID_gen::get_time_UUID())
-        , _regular_columns_by_name(serialized_compare(regular_column_name_type))
-{
-    _raw._comment = std::move(comment);
-    _raw._ks_name = std::move(ks_name);
-    _raw._cf_name = std::move(cf_name);
-    _raw._regular_column_name_type = regular_column_name_type;
+    : schema([&] {
+        raw_schema raw(id ? *id : utils::UUID_gen::get_time_UUID());
 
-    build_columns(partition_key, column_kind::partition_key, _raw._partition_key);
-    build_columns(clustering_key, column_kind::clustering_key, _raw._clustering_key);
+        raw._comment = std::move(comment);
+        raw._ks_name = std::move(ks_name);
+        raw._cf_name = std::move(cf_name);
+        raw._regular_column_name_type = regular_column_name_type;
 
-    std::sort(regular_columns.begin(), regular_columns.end(), column::name_compare(regular_column_name_type));
-    build_columns(regular_columns, column_kind::regular_column, _raw._regular_columns);
+        auto build_columns = [&raw](std::vector<column>& columns, column_kind kind) {
+            for (auto& sc : columns) {
+                raw._columns.emplace_back(std::move(sc.name), std::move(sc.type), kind);
+            }
+        };
 
-    std::sort(static_columns.begin(), static_columns.end(), column::name_compare(utf8_type));
-    build_columns(static_columns, column_kind::static_column, _raw._static_columns);
+        build_columns(partition_key, column_kind::partition_key);
+        build_columns(clustering_key, column_kind::clustering_key);
+        build_columns(static_columns, column_kind::static_column);
+        build_columns(regular_columns, column_kind::regular_column);
 
-    rebuild();
-}
+        return raw;
+    }())
+{}
 
 schema::schema(const schema& o)
     : _raw(o._raw)
+    , _offsets(o._offsets)
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
 {
     rebuild();
@@ -107,8 +144,8 @@ index_info::index_info(::index_type idx_type,
     : index_type(idx_type), index_name(idx_name), index_options(idx_options)
 {}
 
-column_definition::column_definition(bytes name, data_type type, column_id id, column_kind kind, index_info idx)
-        : _name(std::move(name)), type(std::move(type)), id(id), kind(kind), idx_info(std::move(idx))
+column_definition::column_definition(bytes name, data_type type, column_kind kind, index_info idx)
+        : _name(std::move(name)), type(std::move(type)), kind(kind), idx_info(std::move(idx))
 {}
 
 const column_definition*
