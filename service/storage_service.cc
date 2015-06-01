@@ -310,35 +310,35 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
 }
 
 void storage_service::handle_state_bootstrap(inet_address endpoint) {
-#if 0
-    Collection<Token> tokens;
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
-    tokens = get_tokens_for(endpoint);
+    auto tokens = get_tokens_for(endpoint);
 
-    if (logger.isDebugEnabled())
-        logger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
+    // if (logger.isDebugEnabled())
+    //     logger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
 
     // if this node is present in token metadata, either we have missed intermediate states
     // or the node had crashed. Print warning if needed, clear obsolete stuff and
     // continue.
-    if (_token_metadata.isMember(endpoint))
-    {
+    if (_token_metadata.is_member(endpoint)) {
         // If isLeaving is false, we have missed both LEAVING and LEFT. However, if
         // isLeaving is true, we have only missed LEFT. Waiting time between completing
         // leave operation and rebootstrapping is relatively short, so the latter is quite
         // common (not enough time for gossip to spread). Therefore we report only the
         // former in the log.
-        if (!_token_metadata.isLeaving(endpoint))
-            logger.info("Node {} state jump to bootstrap", endpoint);
-        _token_metadata.removeEndpoint(endpoint);
+        if (!_token_metadata.is_leaving(endpoint)) {
+            // logger.info("Node {} state jump to bootstrap", endpoint);
+        }
+        // _token_metadata.removeEndpoint(endpoint);
     }
 
-    _token_metadata.addBootstrapTokens(tokens, endpoint);
-    PendingRangeCalculatorService.instance.update();
+    _token_metadata.add_bootstrap_tokens(tokens, endpoint);
+    // FIXME
+    // PendingRangeCalculatorService.instance.update();
 
-    if (Gossiper.instance.usesHostId(endpoint))
-        _token_metadata.update_host_id(Gossiper.instance.getHostId(endpoint), endpoint);
-#endif
+    auto& gossiper = gms::get_local_gossiper();
+    if (gossiper.uses_host_id(endpoint)) {
+        _token_metadata.update_host_id(gossiper.get_host_id(endpoint), endpoint);
+    }
 }
 
 void storage_service::handle_state_normal(inet_address endpoint) {
