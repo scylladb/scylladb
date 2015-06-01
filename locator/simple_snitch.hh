@@ -22,6 +22,7 @@
 #pragma once
 #include "snitch_base.hh"
 #include "utils/fb_utilities.hh"
+#include <memory>
 
 namespace locator {
 
@@ -30,12 +31,19 @@ namespace locator {
  * allowing non-read-repaired reads to prefer a single endpoint, which improves
  * cache locality.
  */
-struct simple_snitch : public snitch_base {
+class simple_snitch : public snitch_base {
+    template <typename SnitchClass, typename... A>
+    friend future<snitch_ptr> make_snitch(A&&... a);
+
     simple_snitch() {
         _my_dc = get_datacenter(utils::fb_utilities::get_broadcast_address());
         _my_rack = get_rack(utils::fb_utilities::get_broadcast_address());
+
+        // This snitch is ready on creation
+        _snitch_is_ready.set_value();
     }
 
+public:
     virtual sstring get_rack(inet_address endpoint) override {
         return "rack1";
     }
@@ -65,6 +73,12 @@ struct simple_snitch : public snitch_base {
         // implementation and some installations may depend on it.
         //
         return 0;
+    }
+
+    // noop
+    virtual future<> stop() override {
+        _state = snitch_state::stopped;
+        return make_ready_future<>();
     }
 };
 

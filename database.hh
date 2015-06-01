@@ -214,12 +214,19 @@ public:
     const lw_shared_ptr<keyspace_metadata>& metadata() const {
         return _metadata;
     }
-    void create_replication_strategy();
+    future<> create_replication_strategy();
     locator::abstract_replication_strategy& get_replication_strategy();
     column_family::config make_column_family_config(const schema& s) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
     void add_column_family(const schema_ptr& s) {
         _metadata->add_column_family(s);
+    }
+    future<> stop() {
+        if (_replication_strategy) {
+            return _replication_strategy->stop();
+        }
+
+        return make_ready_future<>();
     }
 private:
     sstring column_family_directory(const sstring& name, utils::UUID uuid) const;
@@ -276,7 +283,7 @@ public:
     const utils::UUID& find_uuid(const schema_ptr&) const throw (std::out_of_range);
 
     /* below, find* throws no_such_<type> on fail */
-    keyspace& find_or_create_keyspace(const lw_shared_ptr<keyspace_metadata>&);
+    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&);
     keyspace& find_keyspace(const sstring& name) throw (no_such_keyspace);
     const keyspace& find_keyspace(const sstring& name) const throw (no_such_keyspace);
     bool has_keyspace(const sstring& name) const;

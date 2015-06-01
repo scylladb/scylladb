@@ -797,11 +797,16 @@ SEASTAR_TEST_CASE(test_user_type) {
                 false
                 );
         // We don't have "CREATE TYPE" yet, so we must insert the type manually
-        e.local_db().find_or_create_keyspace(ksm)._user_types.add_type(make_user_type());
-        return e.create_table([make_user_type] (auto ks_name) {
+        return e.local_db().create_keyspace(ksm).then(
+                [&e, make_user_type, ksm] {
+            keyspace& ks = e.local_db().find_keyspace(ksm->name());
+            ks._user_types.add_type(make_user_type());
+
+            return e.create_table([make_user_type] (auto ks_name) {
             // CQL: "create table cf (id int primary key, t ut1)";
-            return schema({}, ks_name, "cf",
-                {{"id", int32_type}}, {}, {{"t", make_user_type()}}, {}, utf8_type);
+                return schema({}, ks_name, "cf",
+                    {{"id", int32_type}}, {}, {{"t", make_user_type()}}, {}, utf8_type);
+            });
         }).then([&e] {
             return e.execute_cql("insert into cf (id, t) values (1, (1001, 2001, 'abc1'));").discard_result();
         }).then([&e] {

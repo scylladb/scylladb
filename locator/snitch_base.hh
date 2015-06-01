@@ -25,10 +25,17 @@
 #include <vector>
 
 #include "gms/inet_address.hh"
+#include "core/shared_ptr.hh"
 
 namespace locator {
 
-using inet_address = gms::inet_address;
+struct i_endpoint_snitch;
+
+typedef gms::inet_address inet_address;
+typedef std::unique_ptr<i_endpoint_snitch> snitch_ptr;
+
+template <typename SnitchClass, typename... A>
+static future<snitch_ptr> make_snitch(A&&... a);
 
 struct i_endpoint_snitch
 {
@@ -79,8 +86,45 @@ struct i_endpoint_snitch
         std::vector<inet_address>& l1,
         std::vector<inet_address>& l2) = 0;
 
-    virtual ~i_endpoint_snitch() {};
+    virtual ~i_endpoint_snitch() { assert(_state == snitch_state::stopped); };
+
+    virtual future<> stop() = 0;
+
+    template <typename SnitchClass, typename... A>
+    friend future<snitch_ptr> make_snitch(A&&... a);
+
+protected:
+    promise<> _snitch_is_ready;
+    enum class snitch_state {
+        initializing,
+        running,
+        stopping,
+        stopped
+    } _state = snitch_state::initializing;
 };
+
+template <typename SnitchClass, typename... A>
+static future<snitch_ptr> make_snitch(A&&... a) {
+    snitch_ptr s(new SnitchClass(std::forward<A>(a)...));
+
+    auto fu = s->_snitch_is_ready.get_future();
+    return fu.then_wrapped([s = std::move(s)] (auto&& f) mutable {
+        try {
+            f.get();
+
+            return make_ready_future<snitch_ptr>(std::move(s));
+        } catch (...) {
+            auto eptr = std::current_exception();
+            auto fu = s->stop();
+
+            return fu.then([eptr, s = std::move(s)] () mutable {
+                std::rethrow_exception(eptr);
+                // just to make a compiler happy
+                return make_ready_future<snitch_ptr>(std::move(s));
+            });
+        }
+    });
+}
 
 class snitch_base : public i_endpoint_snitch {
 public:
