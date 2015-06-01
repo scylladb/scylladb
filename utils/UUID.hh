@@ -25,6 +25,7 @@ private:
     int64_t most_sig_bits;
     int64_t least_sig_bits;
 public:
+    UUID() : most_sig_bits(0), least_sig_bits(0) {}
     UUID(int64_t most_sig_bits, int64_t least_sig_bits)
         : most_sig_bits(most_sig_bits), least_sig_bits(least_sig_bits) {}
 
