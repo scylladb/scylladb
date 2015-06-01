@@ -65,7 +65,7 @@ public:
             virtual ::shared_ptr<terminal> bind(const query_options& options) override { return {}; }
             virtual sstring to_string() const override { return "null"; }
         };
-        static const ::shared_ptr<terminal> NULL_VALUE;
+        static thread_local const ::shared_ptr<terminal> NULL_VALUE;
     public:
         virtual ::shared_ptr<term> prepare(database& db, const sstring& keyspace, ::shared_ptr<column_specification> receiver) override {
             if (!is_assignable(test_assignment(db, keyspace, receiver))) {
@@ -87,7 +87,7 @@ public:
         }
     };
 
-    static const ::shared_ptr<term::raw> NULL_LITERAL;
+    static thread_local const ::shared_ptr<term::raw> NULL_LITERAL;
 
     class literal : public term::raw {
     private:
