@@ -9,6 +9,7 @@
 #include "bytes.hh"
 #include "gc_clock.hh"
 #include "tombstone.hh"
+#include "streaming_histogram.hh"
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
@@ -125,14 +126,6 @@ struct replay_position {
 
     template <typename Describer>
     future<> describe_type(Describer f) { return f(segment, position); }
-};
-
-struct streaming_histogram {
-    uint32_t max_bin_size;
-    disk_hash<uint32_t, double, uint64_t> hash;
-
-    template <typename Describer>
-    future<> describe_type(Describer f) { return f(max_bin_size, hash); }
 };
 
 struct metadata {

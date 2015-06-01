@@ -15,17 +15,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.utils;
 
-import java.io.DataInput;
-import java.io.IOException;
-import java.util.*;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import com.google.common.base.Objects;
+#pragma once
 
-import org.apache.cassandra.db.TypeSizes;
-import org.apache.cassandra.io.ISerializer;
-import org.apache.cassandra.io.util.DataOutputPlus;
+#include "disk_types.hh"
+
+namespace sstables {
 
 /**
  * Histogram that can be constructed from streaming of data.
@@ -34,37 +35,34 @@ import org.apache.cassandra.io.util.DataOutputPlus;
  * Yael Ben-Haim and Elad Tom-Tov, "A Streaming Parallel Decision Tree Algorithm" (2010)
  * http://jmlr.csail.mit.edu/papers/volume11/ben-haim10a/ben-haim10a.pdf
  */
-public class StreamingHistogram
-{
-    public static final StreamingHistogramSerializer serializer = new StreamingHistogramSerializer();
-
+struct streaming_histogram {
     // TreeMap to hold bins of histogram.
-    private final TreeMap<Double, Long> bin;
+    disk_hash<uint32_t, double, uint64_t> bin;
 
     // maximum bin size for this histogram
-    private final int maxBinSize;
+    uint32_t max_bin_size;
+
+    streaming_histogram() {}
 
     /**
      * Creates a new histogram with max bin size of maxBinSize
      * @param maxBinSize maximum number of bins this histogram can have
      */
-    public StreamingHistogram(int maxBinSize)
-    {
-        this.maxBinSize = maxBinSize;
-        bin = new TreeMap<>();
+    streaming_histogram(int max_bin_size_p) {
+        max_bin_size = max_bin_size_p;
     }
 
-    private StreamingHistogram(int maxBinSize, Map<Double, Long> bin)
+    streaming_histogram(int max_bin_size_p, disk_hash<uint32_t, double, uint64_t>&& bin_p)
     {
-        this.maxBinSize = maxBinSize;
-        this.bin = new TreeMap<>(bin);
+        max_bin_size = max_bin_size_p;
+        bin = std::move(bin_p);
     }
 
     /**
      * Adds new point p to this histogram.
      * @param p
      */
-    public void update(double p)
+    void update(double p)
     {
         update(p, 1);
     }
@@ -74,20 +72,18 @@ public class StreamingHistogram
      * @param p
      * @param m
      */
-    public void update(double p, long m)
-    {
-        Long mi = bin.get(p);
-        if (mi != null)
-        {
-            // we found the same p so increment that counter
-            bin.put(p, mi + m);
-        }
-        else
-        {
-            bin.put(p, m);
+    void update(double p, uint64_t m) {
+        auto it = bin.map.find(p);
+        if (it != bin.map.end()) {
+            bin.map[p] = it->second + m;
+        } else {
+            bin.map[p] = m;
             // if bin size exceeds maximum bin size then trim down to max size
-            while (bin.size() > maxBinSize)
-            {
+            while (bin.map.size() > max_bin_size) {
+#if 1
+                // FIXME: convert Java code below.
+                assert(0);
+#else
                 // find points p1, p2 which have smallest difference
                 Iterator<Double> keys = bin.keySet().iterator();
                 double p1 = keys.next();
@@ -110,24 +106,35 @@ public class StreamingHistogram
                 long k1 = bin.remove(q1);
                 long k2 = bin.remove(q2);
                 bin.put((q1 * k1 + q2 * k2) / (k1 + k2), k1 + k2);
+#endif
             }
         }
     }
+
 
     /**
      * Merges given histogram with this histogram.
      *
      * @param other histogram to merge
      */
-    public void merge(StreamingHistogram other)
+    void merge(streaming_histogram& other)
     {
-        if (other == null)
+        if (!other.bin.map.size())
             return;
 
-        for (Map.Entry<Double, Long> entry : other.getAsMap().entrySet())
-            update(entry.getKey(), entry.getValue());
+        for (auto& it : other.bin.map) {
+            update(it.first, it.second);
+        }
     }
 
+    /**
+     * Function used to describe the type.
+     */
+    template <typename Describer>
+    future<> describe_type(Describer f) { return f(max_bin_size, bin); }
+
+    // FIXME: convert Java code below.
+#if 0
     /**
      * Calculates estimated number of points in interval [-inf,b].
      *
@@ -224,5 +231,7 @@ public class StreamingHistogram
     {
         return Objects.hashCode(bin.hashCode(), maxBinSize);
     }
+#endif
+};
 
 }
