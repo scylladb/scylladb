@@ -251,28 +251,7 @@ public:
      * @param hostId
      * @param endpoint
      */
-    void update_host_id(const UUID& host_id, inet_address endpoint) {
-#if 0
-        assert host_id != null;
-        assert endpoint != null;
-
-        InetAddress storedEp = _endpoint_to_host_id_map.inverse().get(host_id);
-        if (storedEp != null) {
-            if (!storedEp.equals(endpoint) && (FailureDetector.instance.isAlive(storedEp))) {
-                throw new RuntimeException(String.format("Host ID collision between active endpoint %s and %s (id=%s)",
-                                                         storedEp,
-                                                         endpoint,
-                                                         host_id));
-            }
-        }
-
-        UUID storedId = _endpoint_to_host_id_map.get(endpoint);
-        // if ((storedId != null) && (!storedId.equals(host_id)))
-            logger.warn("Changing {}'s host ID from {} to {}", endpoint, storedId, host_id);
-#endif
-        _endpoint_to_host_id_map[endpoint] = host_id;
-    }
-
+    void update_host_id(const UUID& host_id, inet_address endpoint);
 #if 0
     /** Return the unique host ID for an end-point. */
     public UUID getHostId(InetAddress endpoint)
