@@ -426,21 +426,11 @@ public:
         return getTokens(endpoint).iterator().next();
     }
 
-    public boolean isMember(InetAddress endpoint)
-    {
-        assert endpoint != null;
+#endif
 
-        lock.readLock().lock();
-        try
-        {
-            return tokenToEndpointMap.inverse().containsKey(endpoint);
-        }
-        finally
-        {
-            lock.readLock().unlock();
-        }
-    }
+    bool is_member(inet_address endpoint);
 
+#if 0
     public boolean isLeaving(InetAddress endpoint)
     {
         assert endpoint != null;

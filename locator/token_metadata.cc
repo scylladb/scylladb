@@ -180,6 +180,12 @@ const auto& token_metadata::get_endpoint_to_host_id_map_for_reading() {
     return _endpoint_to_host_id_map;
 }
 
-
+bool token_metadata::is_member(inet_address endpoint) {
+    auto beg = _token_to_endpoint_map.cbegin();
+    auto end = _token_to_endpoint_map.cend();
+    return end != std::find_if(beg, end, [endpoint] (const auto& x) {
+        return x.second == endpoint;
+    });
+}
 
 }
