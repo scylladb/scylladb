@@ -138,7 +138,7 @@ std::ostream& operator<<(std::ostream& out, const token& t) {
     auto flags = out.flags();
     for (auto c : t._data) {
         unsigned char x = c;
-        out << std::hex << +x << " ";
+        out << std::hex << std::setw(2) << std::setfill('0') << +x << " ";
     }
     out.flags(flags);
     return out;
