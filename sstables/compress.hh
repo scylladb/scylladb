@@ -63,7 +63,10 @@ enum class compressor {
     deflate,
 };
 
+uint32_t init_checksum_adler32();
 uint32_t checksum_adler32(const char* input, size_t input_len);
+uint32_t checksum_adler32(uint32_t adler, const char* input, size_t input_len);
+uint32_t checksum_adler32_combine(uint32_t adler1, uint32_t adler2, size_t input_len2);
 
 namespace sstables {
 
