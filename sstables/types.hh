@@ -10,6 +10,7 @@
 #include "gc_clock.hh"
 #include "tombstone.hh"
 #include "streaming_histogram.hh"
+#include "estimated_histogram.hh"
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
@@ -104,21 +105,6 @@ struct summary_la {
     // this structure removed from it. Anyway, let's pay attention to it.
 };
 using summary = summary_la;
-
-struct estimated_histogram {
-    struct eh_elem {
-        uint64_t offset;
-        uint64_t bucket;
-
-        template <typename Describer>
-        future<> describe_type(Describer f) { return f(offset, bucket); }
-    };
-
-    disk_array<uint32_t, eh_elem> elements;
-
-    template <typename Describer>
-    future<> describe_type(Describer f) { return f(elements); }
-};
 
 struct replay_position {
     uint64_t segment;

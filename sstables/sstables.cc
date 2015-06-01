@@ -704,6 +704,59 @@ future<> write(file_writer& out, statistics& s) {
     });
 }
 
+future<> parse(random_access_reader& in, estimated_histogram& eh) {
+    auto len = std::make_unique<uint32_t>();
+
+    auto f = parse(in, *len);
+    return f.then([&in, &eh, len = std::move(len)] {
+        uint32_t length = *len;
+
+        assert(length > 0);
+        eh.bucket_offsets.resize(length - 1);
+        eh.buckets.resize(length);
+
+        auto type_size = sizeof(uint64_t) * 2;
+        return in.read_exactly(length * type_size).then([&eh, length, type_size] (auto buf) {
+            check_buf_size(buf, length * type_size);
+
+            auto *nr = reinterpret_cast<const net::packed<uint64_t> *>(buf.get());
+            size_t j = 0;
+            for (size_t i = 0; i < length; ++i) {
+                eh.bucket_offsets[i == 0 ? 0 : i - 1] = net::ntoh(nr[j++]);
+                eh.buckets[i] = net::ntoh(nr[j++]);
+            }
+            return make_ready_future<>();
+        });
+    });
+}
+
+future<> write(file_writer& out, estimated_histogram& eh) {
+    uint32_t len = 0;
+    check_truncate_and_assign(len, eh.buckets.size());
+
+    return write(out, len).then([&out, &eh] {
+        struct element {
+            uint64_t offsets;
+            uint64_t buckets;
+        };
+        std::vector<element> elements;
+        elements.resize(eh.buckets.size());
+
+        auto *offsets_nr = reinterpret_cast<const net::packed<uint64_t> *>(eh.bucket_offsets.data());
+        auto *buckets_nr = reinterpret_cast<const net::packed<uint64_t> *>(eh.buckets.data());
+        for (size_t i = 0; i < eh.buckets.size(); i++) {
+            elements[i].offsets = net::hton(offsets_nr[i == 0 ? 0 : i - 1]);
+            elements[i].buckets = net::hton(buckets_nr[i]);
+        }
+
+        return do_with(std::move(elements), [&out] (auto& elements) {
+            auto p = reinterpret_cast<const char*>(elements.data());
+            auto bytes = elements.size() * sizeof(element);
+            return out.write(p, bytes);
+        });
+    });
+}
+
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc() {

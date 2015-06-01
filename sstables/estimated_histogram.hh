@@ -15,25 +15,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.utils;
 
-import java.io.DataInput;
-import java.io.IOException;
-import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicLongArray;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import com.google.common.base.Objects;
+#pragma once
 
-import org.apache.cassandra.db.TypeSizes;
-import org.apache.cassandra.io.ISerializer;
-import org.apache.cassandra.io.util.DataOutputPlus;
+#include "disk_types.hh"
+#include <cmath>
+#include <algorithm>
+#include <vector>
 
-import org.slf4j.Logger;
+namespace sstables {
 
-public class EstimatedHistogram
-{
-    public static final EstimatedHistogramSerializer serializer = new EstimatedHistogramSerializer();
-
+struct estimated_histogram {
     /**
      * The series of values to which the counts in `buckets` correspond:
      * 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 17, 20, etc.
@@ -45,70 +43,67 @@ public class EstimatedHistogram
      *
      * Each bucket represents values from (previous bucket offset, current offset].
      */
-    private final long[] bucketOffsets;
+    std::vector<uint64_t> bucket_offsets;
 
     // buckets is one element longer than bucketOffsets -- the last element is values greater than the last offset
-    final AtomicLongArray buckets;
+    std::vector<uint64_t> buckets;
 
-    public EstimatedHistogram()
-    {
-        this(90);
+    estimated_histogram() {
+        estimated_histogram(90);
     }
 
-    public EstimatedHistogram(int bucketCount)
-    {
-        bucketOffsets = newOffsets(bucketCount);
-        buckets = new AtomicLongArray(bucketOffsets.length + 1);
+    estimated_histogram(int bucket_count) {
+        new_offsets(bucket_count);
+        buckets.resize(bucket_offsets.size() + 1);
+        std::fill(buckets.begin(), buckets.end(), 0);
     }
-
+    // FIXME: convert Java code below.
+#if 0
     public EstimatedHistogram(long[] offsets, long[] bucketData)
     {
         assert bucketData.length == offsets.length +1;
         bucketOffsets = offsets;
         buckets = new AtomicLongArray(bucketData);
     }
-
-    private static long[] newOffsets(int size)
-    {
-        long[] result = new long[size];
-        long last = 1;
-        result[0] = last;
-        for (int i = 1; i < size; i++)
-        {
-            long next = Math.round(last * 1.2);
-            if (next == last)
+#endif
+private:
+    void new_offsets(int size) {
+        bucket_offsets.resize(size);
+        uint64_t last = 1;
+        bucket_offsets[0] = last;
+        for (int i = 1; i < size; i++) {
+            uint64_t next = round(last * 1.2);
+            if (next == last) {
                 next++;
-            result[i] = next;
+            }
+            bucket_offsets[i] = next;
             last = next;
         }
-
-        return result;
     }
-
+public:
     /**
      * @return the histogram values corresponding to each bucket index
      */
-    public long[] getBucketOffsets()
+    std::vector<uint64_t>& get_bucket_offsets()
     {
-        return bucketOffsets;
+        return bucket_offsets;
     }
 
     /**
      * Increments the count of the bucket closest to n, rounding UP.
      * @param n
      */
-    public void add(long n)
-    {
-        int index = Arrays.binarySearch(bucketOffsets, n);
-        if (index < 0)
-        {
-            // inexact match, take the first bucket higher than n
-            index = -index - 1;
+    void add(uint64_t n) {
+        auto low = std::lower_bound(bucket_offsets.begin(), bucket_offsets.end(), n);
+        if (low == bucket_offsets.end()) {
+            low--;
         }
-        // else exact match; we're good
-        buckets.incrementAndGet(index);
+        auto pos = low - bucket_offsets.begin();
+        buckets.at(pos)++;
     }
 
+    // FIXME: convert Java code below.
+#if 0
     /**
      * @return the count in the given bucket
      */
@@ -358,4 +353,7 @@ public class EstimatedHistogram
             return size;
         }
     }
+#endif
+};
+
 }
