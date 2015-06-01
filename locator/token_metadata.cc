@@ -7,7 +7,7 @@
 
 namespace locator {
 
-token_metadata::token_metadata(std::map<token, inet_address> token_to_endpoint_map, boost::bimap<inet_address, utils::UUID> endpoints_map, topology topology) :
+token_metadata::token_metadata(std::map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology) :
     _token_to_endpoint_map(token_to_endpoint_map), _endpoint_to_host_id_map(endpoints_map), _topology(topology) {
     _sorted_tokens = sorted_tokens();
 }
@@ -122,5 +122,43 @@ std::experimental::optional<inet_address> token_metadata::get_endpoint(const tok
         return it->second;
     }
 }
+
+void token_metadata::debug_show() {
+    auto reporter = std::make_shared<timer<lowres_clock>>();
+    reporter->set_callback ([reporter, this] {
+        print("Endpoint -> Token\n");
+        for (auto x : _token_to_endpoint_map) {
+            print("inet_address=%s, token=%s\n", x.second, x.first);
+        }
+        print("Endpoint -> UUID\n");
+        for (auto x: _endpoint_to_host_id_map) {
+            print("inet_address=%s, uuid=%s\n", x.first, x.second);
+        }
+    });
+    reporter->arm_periodic(std::chrono::seconds(1));
+}
+
+void token_metadata::update_host_id(const UUID& host_id, inet_address endpoint) {
+#if 0
+    assert host_id != null;
+    assert endpoint != null;
+
+    InetAddress storedEp = _endpoint_to_host_id_map.inverse().get(host_id);
+    if (storedEp != null) {
+        if (!storedEp.equals(endpoint) && (FailureDetector.instance.isAlive(storedEp))) {
+            throw new RuntimeException(String.format("Host ID collision between active endpoint %s and %s (id=%s)",
+                                                     storedEp,
+                                                     endpoint,
+                                                     host_id));
+        }
+    }
+
+    UUID storedId = _endpoint_to_host_id_map.get(endpoint);
+    // if ((storedId != null) && (!storedId.equals(host_id)))
+        logger.warn("Changing {}'s host ID from {} to {}", endpoint, storedId, host_id);
+#endif
+    _endpoint_to_host_id_map[endpoint] = host_id;
+}
+
 
 }

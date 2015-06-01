@@ -30,8 +30,17 @@
 #include "dht/i_partitioner.hh"
 #include "dht/boot_strapper.hh"
 #include "core/sleep.hh"
+#include "gms/application_state.hh"
+#include "db/system_keyspace.hh"
 
 namespace service {
+
+template <typename... Args>
+void ss_debug(const char* fmt, Args&&... args) {
+#if SS_DEBUG
+    print(fmt, std::forward<Args>(args)...);
+#endif
+}
 /**
  * This abstraction contains the token/identifier of this node
  * on the identifier space. This token gets gossiped around.
@@ -42,6 +51,10 @@ class storage_service : public gms::i_endpoint_state_change_subscriber
 {
     using token = dht::token;
     using boot_strapper = dht::boot_strapper;
+    using token_metadata = locator::token_metadata;
+    using application_state = gms::application_state;
+    using inet_address = gms::inet_address;
+    using versioned_value = gms::versioned_value;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(StorageService.class);
 
@@ -52,11 +65,14 @@ public:
     static int RING_DELAY; // delay after which we assume ring has stablized
 
     const locator::token_metadata& get_token_metadata() const {
-        return tokenMetadata;
+        return _token_metadata;
     }
 private:
-    static int getRingDelay()
-    {
+    inet_address get_broadcast_address() {
+        auto& gossiper = gms::get_local_gossiper();
+        return gossiper.get_broadcast_address();
+    }
+    static int get_ring_delay() {
 #if 0
         String newdelay = System.getProperty("cassandra.ring_delay_ms");
         if (newdelay != null)
@@ -69,7 +85,7 @@ private:
             return 30 * 1000;
     }
     /* This abstraction maintains the token/endpoint metadata information */
-    locator::token_metadata tokenMetadata;
+    token_metadata _token_metadata;
     gms::versioned_value::versioned_value_factory value_factory;
 #if 0
     public volatile VersionedValue.VersionedValueFactory valueFactory = new VersionedValue.VersionedValueFactory(getPartitioner());
@@ -133,8 +149,8 @@ private:
     private final ObjectName jmxObjectName;
 
 #endif
-public:
-    std::set<token> bootstrapTokens;
+private:
+    std::set<token> _bootstrap_tokens;
 #if 0
 
     public void finishBootstrapping()
@@ -143,64 +159,25 @@ public:
     }
 
     /** This method updates the local token on disk  */
-    public void setTokens(Collection<Token> tokens)
-    {
-        if (logger.isDebugEnabled())
-            logger.debug("Setting tokens to {}", tokens);
-        SystemKeyspace.updateTokens(tokens);
-        tokenMetadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
-        Collection<Token> localTokens = getLocalTokens();
-        List<Pair<ApplicationState, VersionedValue>> states = new ArrayList<Pair<ApplicationState, VersionedValue>>();
-        states.add(Pair.create(ApplicationState.TOKENS, valueFactory.tokens(localTokens)));
-        states.add(Pair.create(ApplicationState.STATUS, valueFactory.normal(localTokens)));
-        Gossiper.instance.addLocalApplicationStates(states);
-        setMode(Mode.NORMAL, false);
+
+#endif
+
+    void set_tokens(std::set<token> tokens) {
+        // if (logger.isDebugEnabled())
+        //     logger.debug("Setting tokens to {}", tokens);
+        // SystemKeyspace.updateTokens(tokens);
+        for (auto t : tokens) {
+            _token_metadata.update_normal_token(t, get_broadcast_address());
+        }
+        // Collection<Token> localTokens = getLocalTokens();
+        auto local_tokens = _bootstrap_tokens;
+        auto& gossiper = gms::get_local_gossiper();
+        gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
+        gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(local_tokens));
+        //setMode(Mode.NORMAL, false);
     }
 
-    public StorageService()
-    {
-        MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
-        try
-        {
-            jmxObjectName = new ObjectName("org.apache.cassandra.db:type=StorageService");
-            mbs.registerMBean(this, jmxObjectName);
-            mbs.registerMBean(StreamManager.instance, new ObjectName(StreamManager.OBJECT_NAME));
-        }
-        catch (Exception e)
-        {
-            throw new RuntimeException(e);
-        }
-
-        /* register the verb handlers */
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.MUTATION, new MutationVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.READ_REPAIR, new ReadRepairVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.READ, new ReadVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.RANGE_SLICE, new RangeSliceVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.PAGED_RANGE, new RangeSliceVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.COUNTER_MUTATION, new CounterMutationVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.TRUNCATE, new TruncateVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.PAXOS_PREPARE, new PrepareVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.PAXOS_PROPOSE, new ProposeVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.PAXOS_COMMIT, new CommitVerbHandler());
-
-        // see BootStrapper for a summary of how the bootstrap verbs interact
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.REPLICATION_FINISHED, new ReplicationFinishedVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.REQUEST_RESPONSE, new ResponseVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.INTERNAL_RESPONSE, new ResponseVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.REPAIR_MESSAGE, new RepairMessageVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.GOSSIP_SHUTDOWN, new GossipShutdownVerbHandler());
-
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.GOSSIP_DIGEST_SYN, new GossipDigestSynVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.GOSSIP_DIGEST_ACK, new GossipDigestAckVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.GOSSIP_DIGEST_ACK2, new GossipDigestAck2VerbHandler());
-
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.DEFINITIONS_UPDATE, new DefinitionsUpdateVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.SCHEMA_CHECK, new SchemaCheckVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.MIGRATION_REQUEST, new MigrationRequestVerbHandler());
-
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.SNAPSHOT, new SnapshotVerbHandler());
-        MessagingService.instance().registerVerbHandlers(MessagingService.Verb.ECHO, new EchoVerbHandler());
-    }
+#if 0
 
     public void registerDaemon(CassandraDaemon daemon)
     {
@@ -375,7 +352,7 @@ public:
         {
             if (Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()).getApplicationState(ApplicationState.TOKENS) == null)
                 throw new RuntimeException("Could not find tokens for " + DatabaseDescriptor.getReplaceAddress() + " to replace");
-            Collection<Token> tokens = TokenSerializer.deserialize(getPartitioner(), new DataInputStream(new ByteArrayInputStream(getApplicationStateValue(DatabaseDescriptor.getReplaceAddress(), ApplicationState.TOKENS))));
+            Collection<Token> tokens = TokenSerializer.deserialize(getPartitioner(), new DataInputStream(new ByteArrayInputStream(get_application_state_value(DatabaseDescriptor.getReplaceAddress(), ApplicationState.TOKENS))));
 
             SystemKeyspace.setLocalHostId(hostId); // use the replacee's host Id as our own so we receive hints, etc
             Gossiper.instance.resetEndpointStateMap(); // clean up since we have what we need
@@ -467,9 +444,9 @@ public:
                 }
                 else
                 {
-                    tokenMetadata.updateNormalTokens(loadedTokens.get(ep), ep);
+                    _token_metadata.updateNormalTokens(loadedTokens.get(ep), ep);
                     if (loadedHostIds.containsKey(ep))
-                        tokenMetadata.updateHostId(loadedHostIds.get(ep), ep);
+                        _token_metadata.update_host_id(loadedHostIds.get(ep), ep);
                     Gossiper.instance.addSavedEndpoint(ep);
                 }
             }
@@ -549,7 +526,7 @@ public:
             Collection<Token> tokens = SystemKeyspace.getSavedTokens();
             if (!tokens.isEmpty())
             {
-                tokenMetadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
+                _token_metadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
                 // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
                 List<Pair<ApplicationState, VersionedValue>> states = new ArrayList<Pair<ApplicationState, VersionedValue>>();
                 states.add(Pair.create(ApplicationState.TOKENS, valueFactory.tokens(tokens)));
@@ -571,268 +548,9 @@ public:
     }
 #endif
 private:
-    bool should_bootstrap() {
-        // FIXME: Currently, we do boostrap if we are not a seed node.
-        // return DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && !DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress());
-        auto& gossiper = gms::get_local_gossiper();
-        auto seeds = gossiper.get_seeds();
-        auto broadcast_address = gossiper.get_broadcast_address();
-        return !seeds.count(broadcast_address);
-    }
-    future<> prepare_to_join()
-    {
-        if (!joined) {
-            std::map<gms::application_state, gms::versioned_value> app_states;
-#if 0
-            if (DatabaseDescriptor.isReplacing() && !(Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true"))))
-                throw new ConfigurationException("Cannot set both join_ring=false and attempt to replace a node");
-            if (DatabaseDescriptor.getReplaceTokens().size() > 0 || DatabaseDescriptor.getReplaceNode() != null)
-                throw new RuntimeException("Replace method removed; use cassandra.replace_address instead");
-            if (DatabaseDescriptor.isReplacing())
-            {
-                if (SystemKeyspace.bootstrapComplete())
-                    throw new RuntimeException("Cannot replace address with a node that is already bootstrapped");
-                if (!DatabaseDescriptor.isAutoBootstrap())
-                    throw new RuntimeException("Trying to replace_address with auto_bootstrap disabled will not work, check your configuration");
-                bootstrapTokens = prepareReplacementInfo();
-                appStates.put(ApplicationState.TOKENS, valueFactory.tokens(bootstrapTokens));
-                appStates.put(ApplicationState.STATUS, valueFactory.hibernate(true));
-            }
-            else if (should_bootstrap())
-            {
-                checkForEndpointCollision();
-            }
-#endif
-
-            // have to start the gossip service before we can see any info on other nodes.  this is necessary
-            // for bootstrap to get the load info it needs.
-            // (we won't be part of the storage ring though until we add a counterId to our state, below.)
-            // Seed the host ID-to-endpoint map with our own ID.
-#if 0
-            UUID localHostId = SystemKeyspace.getLocalHostId();
-            getTokenMetadata().updateHostId(localHostId, FBUtilities.getBroadcastAddress());
-#endif
-            // FIXME: SystemKeyspace.getLocalHostId();
-            utils::UUID local_host_id = utils::UUID_gen::get_time_UUID();
-            // FIXME: DatabaseDescriptor.getBroadcastRpcAddress()
-            gms::inet_address broadcast_rpc_address;
-            app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
-            app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
-            app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
-            app_states.emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
-            //logger.info("Starting up server gossip");
-
-            auto& gossiper = gms::get_local_gossiper();
-            gossiper.register_(this);
-            using namespace std::chrono;
-            auto now = high_resolution_clock::now().time_since_epoch();
-            int generation_number = duration_cast<seconds>(now).count();
-            // FIXME: SystemKeyspace.incrementAndGetGeneration()
-            return gossiper.start(generation_number, app_states).then([] {
-                print("Start gossiper service ...\n");
-            });
-#if 0
-            // gossip snitch infos (local DC and rack)
-            gossipSnitchInfo();
-            // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
-            Schema.instance.updateVersionAndAnnounce(); // Ensure we know our own actual Schema UUID in preparation for updates
-
-            if (!MessagingService.instance().isListening())
-                MessagingService.instance().listen(FBUtilities.getLocalAddress());
-            LoadBroadcaster.instance.startBroadcasting();
-
-            HintedHandOffManager.instance.start();
-            BatchlogManager.instance.start();
-#endif
-        }
-        return make_ready_future<>();
-    }
-
-    future<> join_token_ring(int delay) {
-#if 0
-        joined = true;
-
-        // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
-        // If we are a seed, or if the user manually sets auto_bootstrap to false,
-        // we'll skip streaming data from other nodes and jump directly into the ring.
-        //
-        // The seed check allows us to skip the RING_DELAY sleep for the single-node cluster case,
-        // which is useful for both new users and testing.
-        //
-        // We attempted to replace this with a schema-presence check, but you need a meaningful sleep
-        // to get schema info from gossip which defeats the purpose.  See CASSANDRA-4427 for the gory details.
-        Set<InetAddress> current = new HashSet<>();
-        logger.debug("Bootstrap variables: {} {} {} {}",
-                     DatabaseDescriptor.isAutoBootstrap(),
-                     SystemKeyspace.bootstrapInProgress(),
-                     SystemKeyspace.bootstrapComplete(),
-                     DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()));
-        if (DatabaseDescriptor.isAutoBootstrap() && !SystemKeyspace.bootstrapComplete() && DatabaseDescriptor.getSeeds().contains(FBUtilities.getBroadcastAddress()))
-            logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
-#endif
-        if (should_bootstrap()) {
-            bootstrapTokens = boot_strapper::get_bootstrap_tokens(tokenMetadata);
-            return bootstrap(bootstrapTokens);
-#if 0
-            if (SystemKeyspace.bootstrapInProgress())
-                logger.warn("Detected previous bootstrap failure; retrying");
-            else
-                SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.IN_PROGRESS);
-            setMode(Mode.JOINING, "waiting for ring information", true);
-            // first sleep the delay to make sure we see all our peers
-            for (int i = 0; i < delay; i += 1000)
-            {
-                // if we see schema, we can proceed to the next check directly
-                if (!Schema.instance.getVersion().equals(Schema.emptyVersion))
-                {
-                    logger.debug("got schema: {}", Schema.instance.getVersion());
-                    break;
-                }
-                Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
-            }
-            // if our schema hasn't matched yet, keep sleeping until it does
-            // (post CASSANDRA-1391 we don't expect this to be necessary very often, but it doesn't hurt to be careful)
-            while (!MigrationManager.isReadyForBootstrap())
-            {
-                setMode(Mode.JOINING, "waiting for schema information to complete", true);
-                Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
-            }
-            setMode(Mode.JOINING, "schema complete, ready to bootstrap", true);
-            setMode(Mode.JOINING, "waiting for pending range calculation", true);
-            PendingRangeCalculatorService.instance.blockUntilFinished();
-            setMode(Mode.JOINING, "calculation complete, ready to bootstrap", true);
-
-
-            if (logger.isDebugEnabled())
-                logger.debug("... got ring + schema info");
-
-            if (Boolean.parseBoolean(System.getProperty("cassandra.consistent.rangemovement", "true")) &&
-                    (
-                        tokenMetadata.getBootstrapTokens().valueSet().size() > 0 ||
-                        tokenMetadata.getLeavingEndpoints().size() > 0 ||
-                        tokenMetadata.getMovingEndpoints().size() > 0
-                    ))
-                throw new UnsupportedOperationException("Other bootstrapping/leaving/moving nodes detected, cannot bootstrap while cassandra.consistent.rangemovement is true");
-
-            if (!DatabaseDescriptor.isReplacing())
-            {
-                if (tokenMetadata.isMember(FBUtilities.getBroadcastAddress()))
-                {
-                    String s = "This node is already a member of the token ring; bootstrap aborted. (If replacing a dead node, remove the old one from the ring first.)";
-                    throw new UnsupportedOperationException(s);
-                }
-                setMode(Mode.JOINING, "getting bootstrap token", true);
-                bootstrapTokens = BootStrapper.getBootstrapTokens(tokenMetadata);
-            }
-            else
-            {
-                if (!DatabaseDescriptor.getReplaceAddress().equals(FBUtilities.getBroadcastAddress()))
-                {
-                    try
-                    {
-                        // Sleep additionally to make sure that the server actually is not alive
-                        // and giving it more time to gossip if alive.
-                        Thread.sleep(LoadBroadcaster.BROADCAST_INTERVAL);
-                    }
-                    catch (InterruptedException e)
-                    {
-                        throw new AssertionError(e);
-                    }
-
-                    // check for operator errors...
-                    for (Token token : bootstrapTokens)
-                    {
-                        InetAddress existing = tokenMetadata.getEndpoint(token);
-                        if (existing != null)
-                        {
-                            long nanoDelay = delay * 1000000L;
-                            if (Gossiper.instance.getEndpointStateForEndpoint(existing).getUpdateTimestamp() > (System.nanoTime() - nanoDelay))
-                                throw new UnsupportedOperationException("Cannot replace a live node... ");
-                            current.add(existing);
-                        }
-                        else
-                        {
-                            throw new UnsupportedOperationException("Cannot replace token " + token + " which does not exist!");
-                        }
-                    }
-                }
-                else
-                {
-                    try
-                    {
-                        Thread.sleep(RING_DELAY);
-                    }
-                    catch (InterruptedException e)
-                    {
-                        throw new AssertionError(e);
-                    }
-
-                }
-                setMode(Mode.JOINING, "Replacing a node with token(s): " + bootstrapTokens, true);
-            }
-
-            bootstrap(bootstrapTokens);
-            assert !isBootstrapMode; // bootstrap will block until finished
-#endif
-        } else {
-            // FIXME: DatabaseDescriptor.getNumTokens()
-            size_t num_tokens = 256;
-            bootstrapTokens = boot_strapper::get_random_tokens(tokenMetadata, num_tokens);
-            return make_ready_future<>();
-#if 0
-            bootstrapTokens = SystemKeyspace.getSavedTokens();
-            if (bootstrapTokens.isEmpty())
-            {
-                Collection<String> initialTokens = DatabaseDescriptor.getInitialTokens();
-                if (initialTokens.size() < 1)
-                {
-                    bootstrapTokens = BootStrapper.getRandomTokens(tokenMetadata, DatabaseDescriptor.getNumTokens());
-                    if (DatabaseDescriptor.getNumTokens() == 1)
-                        logger.warn("Generated random token {}. Random tokens will result in an unbalanced ring; see http://wiki.apache.org/cassandra/Operations", bootstrapTokens);
-                    else
-                        logger.info("Generated random tokens. tokens are {}", bootstrapTokens);
-                }
-                else
-                {
-                    bootstrapTokens = new ArrayList<Token>(initialTokens.size());
-                    for (String token : initialTokens)
-                        bootstrapTokens.add(getPartitioner().getTokenFactory().fromString(token));
-                    logger.info("Saved tokens not found. Using configuration value: {}", bootstrapTokens);
-                }
-            }
-            else
-            {
-                if (bootstrapTokens.size() != DatabaseDescriptor.getNumTokens())
-                    throw new ConfigurationException("Cannot change the number of tokens from " + bootstrapTokens.size() + " to " + DatabaseDescriptor.getNumTokens());
-                else
-                    logger.info("Using saved tokens {}", bootstrapTokens);
-            }
-#endif
-        }
-#if 0
-        // if we don't have system_traces keyspace at this point, then create it manually
-        if (Schema.instance.getKSMetaData(TraceKeyspace.NAME) == null)
-            MigrationManager.announceNewKeyspace(TraceKeyspace.definition(), 0, false);
-
-        if (!isSurveyMode)
-        {
-            // start participating in the ring.
-            SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
-            setTokens(bootstrapTokens);
-            // remove the existing info about the replaced node.
-            if (!current.isEmpty())
-                for (InetAddress existing : current)
-                    Gossiper.instance.replacedEndpoint(existing);
-            assert tokenMetadata.sortedTokens().size() > 0;
-
-            Auth.setup();
-        }
-        else
-        {
-            logger.info("Startup complete, but write survey mode is active, not becoming an active ring member. Use JMX (StorageService->joinRing()) to finalize ring joining.");
-        }
-#endif
-    }
+    bool should_bootstrap();
+    future<> prepare_to_join();
+    future<> join_token_ring(int delay);
 #if 0
     public void gossipSnitchInfo()
     {
@@ -859,11 +577,11 @@ private:
         }
         else if (isSurveyMode)
         {
-            setTokens(SystemKeyspace.getSavedTokens());
+            set_tokens(SystemKeyspace.getSavedTokens());
             SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
             isSurveyMode = false;
             logger.info("Leaving write survey mode and joining ring at operator request");
-            assert tokenMetadata.sortedTokens().size() > 0;
+            assert _token_metadata.sortedTokens().size() > 0;
 
             Auth.setup();
         }
@@ -878,7 +596,7 @@ private:
     {
         logger.info("rebuild from dc: {}", sourceDc == null ? "(any dc)" : sourceDc);
 
-        RangeStreamer streamer = new RangeStreamer(tokenMetadata, FBUtilities.getBroadcastAddress(), "Rebuild");
+        RangeStreamer streamer = new RangeStreamer(_token_metadata, FBUtilities.getBroadcastAddress(), "Rebuild");
         streamer.addSourceFilter(new RangeStreamer.FailureDetectorSourceFilter(FailureDetector.instance));
         if (sourceDc != null)
             streamer.addSourceFilter(new RangeStreamer.SingleDatacenterFilter(DatabaseDescriptor.getEndpointSnitch(), sourceDc));
@@ -949,36 +667,7 @@ private:
     }
 #endif
 
-    future<> bootstrap(std::set<token> tokens) {
-        // isBootstrapMode = true;
-        // SystemKeyspace.updateTokens(tokens); // DON'T use setToken, that makes us part of the ring locally which is incorrect until we are done bootstrapping
-        // FIXME: DatabaseDescriptor.isReplacing()
-        auto is_replacing = false;
-        auto sleep_time = std::chrono::milliseconds(1);
-        if (!is_replacing) {
-            // if not an existing token then bootstrap
-            auto& gossiper = gms::get_local_gossiper();
-            gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens));
-            gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(tokens));
-            sleep_time = std::chrono::milliseconds(RING_DELAY);
-            // setMode(Mode.JOINING, "sleeping " + RING_DELAY + " ms for pending range setup", true);
-        } else {
-            // Dont set any state for the node which is bootstrapping the existing token...
-            // tokenMetadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
-            // SystemKeyspace.removeEndpoint(DatabaseDescriptor.getReplaceAddress());
-        }
-        return sleep(sleep_time).then([] {
-            auto& gossiper = gms::get_local_gossiper();
-            if (!gossiper.seen_any_seed()) {
-                 throw std::runtime_error("Unable to contact any seeds!");
-            }
-            // setMode(Mode.JOINING, "Starting to bootstrap...", true);
-            // new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, tokenMetadata).bootstrap(); // handles token update
-            // logger.info("Bootstrap completed! for the tokens {}", tokens);
-            return make_ready_future<>();
-        });
-    }
-
+    future<> bootstrap(std::set<token> tokens);
 #if 0
     public boolean isBootstrapMode()
     {
@@ -987,7 +676,7 @@ private:
 
     public TokenMetadata getTokenMetadata()
     {
-        return tokenMetadata;
+        return _token_metadata;
     }
 
     /**
@@ -1068,7 +757,7 @@ private:
             keyspace = Schema.instance.getNonSystemKeyspaces().get(0);
 
         Map<List<String>, List<String>> map = new HashMap<>();
-        for (Map.Entry<Range<Token>, Collection<InetAddress>> entry : tokenMetadata.getPendingRanges(keyspace).entrySet())
+        for (Map.Entry<Range<Token>, Collection<InetAddress>> entry : _token_metadata.getPendingRanges(keyspace).entrySet())
         {
             List<InetAddress> l = new ArrayList<>(entry.getValue());
             map.put(entry.getKey().asList(), stringify(l));
@@ -1078,7 +767,7 @@ private:
 
     public Map<Range<Token>, List<InetAddress>> getRangeToAddressMap(String keyspace)
     {
-        return getRangeToAddressMap(keyspace, tokenMetadata.sortedTokens());
+        return getRangeToAddressMap(keyspace, _token_metadata.sortedTokens());
     }
 
     public Map<Range<Token>, List<InetAddress>> getRangeToAddressMapInLocalDC(String keyspace)
@@ -1105,9 +794,9 @@ private:
     private List<Token> getTokensInLocalDC()
     {
         List<Token> filteredTokens = Lists.newArrayList();
-        for (Token token : tokenMetadata.sortedTokens())
+        for (Token token : _token_metadata.sortedTokens())
         {
-            InetAddress endpoint = tokenMetadata.getEndpoint(token);
+            InetAddress endpoint = _token_metadata.getEndpoint(token);
             if (isLocalDC(endpoint))
                 filteredTokens.add(token);
         }
@@ -1230,7 +919,7 @@ private:
 
     public Map<String, String> getTokenToEndpointMap()
     {
-        Map<Token, InetAddress> mapInetAddress = tokenMetadata.getNormalAndBootstrappingTokenToEndpointMap();
+        Map<Token, InetAddress> mapInetAddress = _token_metadata.getNormalAndBootstrappingTokenToEndpointMap();
         // in order to preserve tokens in ascending order, we use LinkedHashMap here
         Map<String, String> mapString = new LinkedHashMap<>(mapInetAddress.size());
         List<Token> tokens = new ArrayList<>(mapInetAddress.keySet());
@@ -1309,81 +998,56 @@ public:
      * Note: Any time a node state changes from STATUS_NORMAL, it will not be visible to new nodes. So it follows that
      * you should never bootstrap a new node during a removenode, decommission or move.
      */
-    void on_change(gms::inet_address endpoint, gms::application_state state, gms::versioned_value value) override
-    {
-#if 0
-        if (state == ApplicationState.STATUS)
-        {
-            String apStateValue = value.value;
-            String[] pieces = apStateValue.split(VersionedValue.DELIMITER_STR, -1);
-            assert (pieces.length > 0);
-
-            String moveName = pieces[0];
-
-            switch (moveName)
-            {
-                case VersionedValue.STATUS_BOOTSTRAPPING:
-                    handleStateBootstrap(endpoint);
-                    break;
-                case VersionedValue.STATUS_NORMAL:
-                    handleStateNormal(endpoint);
-                    break;
-                case VersionedValue.REMOVING_TOKEN:
-                case VersionedValue.REMOVED_TOKEN:
-                    handleStateRemoving(endpoint, pieces);
-                    break;
-                case VersionedValue.STATUS_LEAVING:
-                    handleStateLeaving(endpoint);
-                    break;
-                case VersionedValue.STATUS_LEFT:
-                    handleStateLeft(endpoint, pieces);
-                    break;
-                case VersionedValue.STATUS_MOVING:
-                    handleStateMoving(endpoint, pieces);
-                    break;
+    void on_change(inet_address endpoint, application_state state, versioned_value value) override {
+        ss_debug("SS::on_change endpoint=%s\n", endpoint);
+        if (state == application_state::STATUS) {
+            std::vector<sstring> pieces;
+            boost::split(pieces, value.value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
+            assert(pieces.size() > 0);
+            sstring move_name = pieces[0];
+            if (move_name == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
+                handle_state_bootstrap(endpoint);
+            } else if (move_name == sstring(versioned_value::STATUS_NORMAL)) {
+                handle_state_normal(endpoint);
+            } else if (move_name == sstring(versioned_value::REMOVING_TOKEN) ||
+                       move_name == sstring(versioned_value::REMOVED_TOKEN)) {
+                handle_state_removing(endpoint, pieces);
+            } else if (move_name == sstring(versioned_value::STATUS_LEAVING)) {
+                handle_state_leaving(endpoint);
+            } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
+                handle_state_left(endpoint, pieces);
+            } else if (move_name == sstring(versioned_value::STATUS_MOVING)) {
+                handle_state_moving(endpoint, pieces);
             }
-        }
-        else
-        {
-            EndpointState epState = Gossiper.instance.getEndpointStateForEndpoint(endpoint);
-            if (epState == null || Gossiper.instance.isDeadState(epState))
-            {
-                logger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
+        } else {
+            auto& gossiper = gms::get_local_gossiper();
+            auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
+            if (!ep_state || gossiper.is_dead_state(*ep_state)) {
+                // logger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
                 return;
             }
 
-            switch (state)
-            {
-                case RELEASE_VERSION:
-                    SystemKeyspace.updatePeerInfo(endpoint, "release_version", value.value);
-                    break;
-                case DC:
-                    SystemKeyspace.updatePeerInfo(endpoint, "data_center", value.value);
-                    break;
-                case RACK:
-                    SystemKeyspace.updatePeerInfo(endpoint, "rack", value.value);
-                    break;
-                case RPC_ADDRESS:
-                    try
-                    {
-                        SystemKeyspace.updatePeerInfo(endpoint, "rpc_address", InetAddress.getByName(value.value));
-                    }
-                    catch (UnknownHostException e)
-                    {
-                        throw new RuntimeException(e);
-                    }
-                    break;
-                case SCHEMA:
-                    SystemKeyspace.updatePeerInfo(endpoint, "schema_version", UUID.fromString(value.value));
-                    MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
-                    break;
-                case HOST_ID:
-                    SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(value.value));
-                    break;
+            if (state == application_state::RELEASE_VERSION) {
+                // SystemKeyspace.updatePeerInfo(endpoint, "release_version", value.value);
+            } else if (state == application_state::DC) {
+                // SystemKeyspace.updatePeerInfo(endpoint, "data_center", value.value);
+            } else if (state == application_state::RACK) {
+                // SystemKeyspace.updatePeerInfo(endpoint, "rack", value.value);
+            } else if (state == application_state::RPC_ADDRESS) {
+                // try {
+                //     SystemKeyspace.updatePeerInfo(endpoint, "rpc_address", InetAddress.getByName(value.value));
+                // } catch (UnknownHostException e) {
+                //     throw new RuntimeException(e);
+                // }
+            } else if (state == application_state::SCHEMA) {
+                // SystemKeyspace.updatePeerInfo(endpoint, "schema_version", UUID.fromString(value.value));
+                // MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
+            } else if (state == application_state::HOST_ID) {
+                // SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(value.value));
             }
         }
-#endif
     }
+
 #if 0
     private void updatePeerInfo(InetAddress endpoint)
     {
@@ -1420,35 +1084,47 @@ public:
             }
         }
     }
-
-    private byte[] getApplicationStateValue(InetAddress endpoint, ApplicationState appstate)
-    {
-        String vvalue = Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(appstate).value;
-        return vvalue.getBytes(ISO_8859_1);
+#endif
+private:
+    sstring get_application_state_value(inet_address endpoint, application_state appstate) {
+        auto& gossiper = gms::get_local_gossiper();
+        auto eps = gossiper.get_endpoint_state_for_endpoint(endpoint);
+        if (!eps) {
+            return {};
+        }
+        auto v = eps->get_application_state(appstate);
+        if (!v) {
+            return {};
+        }
+        return v->value;
     }
 
-    private Collection<Token> getTokensFor(InetAddress endpoint)
-    {
-        try
-        {
-            return TokenSerializer.deserialize(getPartitioner(), new DataInputStream(new ByteArrayInputStream(getApplicationStateValue(endpoint, ApplicationState.TOKENS))));
+    std::set<token> get_tokens_for(inet_address endpoint) {
+        auto tokens_string = get_application_state_value(endpoint, application_state::TOKENS);
+        ss_debug("endpoint=%s, tokens_string=%s\n", endpoint, tokens_string);
+        std::vector<sstring> tokens;
+        std::set<token> ret;
+        boost::split(tokens, tokens_string, boost::is_any_of(";"));
+        for (auto str : tokens) {
+            ss_debug("token=%s\n", str);
+            sstring_view sv(str);
+            bytes b = from_hex(sv);
+            ret.emplace(token::kind::key, b);
         }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);
-        }
+        return ret;
     }
 
+private:
     /**
      * Handle node bootstrap
      *
      * @param endpoint bootstrapping node
      */
-    private void handleStateBootstrap(InetAddress endpoint)
-    {
+    void handle_state_bootstrap(inet_address endpoint) {
+#if 0
         Collection<Token> tokens;
         // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
-        tokens = getTokensFor(endpoint);
+        tokens = get_tokens_for(endpoint);
 
         if (logger.isDebugEnabled())
             logger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
@@ -1456,23 +1132,24 @@ public:
         // if this node is present in token metadata, either we have missed intermediate states
         // or the node had crashed. Print warning if needed, clear obsolete stuff and
         // continue.
-        if (tokenMetadata.isMember(endpoint))
+        if (_token_metadata.isMember(endpoint))
         {
             // If isLeaving is false, we have missed both LEAVING and LEFT. However, if
             // isLeaving is true, we have only missed LEFT. Waiting time between completing
             // leave operation and rebootstrapping is relatively short, so the latter is quite
             // common (not enough time for gossip to spread). Therefore we report only the
             // former in the log.
-            if (!tokenMetadata.isLeaving(endpoint))
+            if (!_token_metadata.isLeaving(endpoint))
                 logger.info("Node {} state jump to bootstrap", endpoint);
-            tokenMetadata.removeEndpoint(endpoint);
+            _token_metadata.removeEndpoint(endpoint);
         }
 
-        tokenMetadata.addBootstrapTokens(tokens, endpoint);
+        _token_metadata.addBootstrapTokens(tokens, endpoint);
         PendingRangeCalculatorService.instance.update();
 
         if (Gossiper.instance.usesHostId(endpoint))
-            tokenMetadata.updateHostId(Gossiper.instance.getHostId(endpoint), endpoint);
+            _token_metadata.update_host_id(Gossiper.instance.getHostId(endpoint), endpoint);
+#endif
     }
 
     /**
@@ -1481,11 +1158,11 @@ public:
      *
      * @param endpoint node
      */
-    private void handleStateNormal(final InetAddress endpoint)
-    {
+    void handle_state_normal(inet_address endpoint) {
+#if 0
         Collection<Token> tokens;
 
-        tokens = getTokensFor(endpoint);
+        tokens = get_tokens_for(endpoint);
 
         Set<Token> tokensToUpdateInMetadata = new HashSet<>();
         Set<Token> tokensToUpdateInSystemKeyspace = new HashSet<>();
@@ -1496,7 +1173,7 @@ public:
         if (logger.isDebugEnabled())
             logger.debug("Node {} state normal, token {}", endpoint, tokens);
 
-        if (tokenMetadata.isMember(endpoint))
+        if (_token_metadata.isMember(endpoint))
             logger.info("Node {} state jump to normal", endpoint);
 
         updatePeerInfo(endpoint);
@@ -1504,7 +1181,7 @@ public:
         if (Gossiper.instance.usesHostId(endpoint))
         {
             UUID hostId = Gossiper.instance.getHostId(endpoint);
-            InetAddress existing = tokenMetadata.getEndpointForHostId(hostId);
+            InetAddress existing = _token_metadata.getEndpointForHostId(hostId);
             if (DatabaseDescriptor.isReplacing() && Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()) != null && (hostId.equals(Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress()))))
                 logger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
             else
@@ -1514,32 +1191,32 @@ public:
                     if (existing.equals(FBUtilities.getBroadcastAddress()))
                     {
                         logger.warn("Not updating host ID {} for {} because it's mine", hostId, endpoint);
-                        tokenMetadata.removeEndpoint(endpoint);
+                        _token_metadata.removeEndpoint(endpoint);
                         endpointsToRemove.add(endpoint);
                     }
                     else if (Gossiper.instance.compareEndpointStartup(endpoint, existing) > 0)
                     {
                         logger.warn("Host ID collision for {} between {} and {}; {} is the new owner", hostId, existing, endpoint, endpoint);
-                        tokenMetadata.removeEndpoint(existing);
+                        _token_metadata.removeEndpoint(existing);
                         endpointsToRemove.add(existing);
-                        tokenMetadata.updateHostId(hostId, endpoint);
+                        _token_metadata.update_host_id(hostId, endpoint);
                     }
                     else
                     {
                         logger.warn("Host ID collision for {} between {} and {}; ignored {}", hostId, existing, endpoint, endpoint);
-                        tokenMetadata.removeEndpoint(endpoint);
+                        _token_metadata.removeEndpoint(endpoint);
                         endpointsToRemove.add(endpoint);
                     }
                 }
                 else
-                    tokenMetadata.updateHostId(hostId, endpoint);
+                    _token_metadata.update_host_id(hostId, endpoint);
             }
         }
 
         for (final Token token : tokens)
         {
             // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
-            InetAddress currentOwner = tokenMetadata.getEndpoint(token);
+            InetAddress currentOwner = _token_metadata.getEndpoint(token);
             if (currentOwner == null)
             {
                 logger.debug("New node {} at token {}", endpoint, token);
@@ -1580,8 +1257,8 @@ public:
             }
         }
 
-        boolean isMoving = tokenMetadata.isMoving(endpoint); // capture because updateNormalTokens clears moving status
-        tokenMetadata.updateNormalTokens(tokensToUpdateInMetadata, endpoint);
+        boolean isMoving = _token_metadata.isMoving(endpoint); // capture because updateNormalTokens clears moving status
+        _token_metadata.updateNormalTokens(tokensToUpdateInMetadata, endpoint);
         for (InetAddress ep : endpointsToRemove)
         {
             removeEndpoint(ep);
@@ -1595,7 +1272,7 @@ public:
 
         if (isMoving)
         {
-            tokenMetadata.removeFromMoving(endpoint);
+            _token_metadata.removeFromMoving(endpoint);
             for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
                 subscriber.onMove(endpoint);
         }
@@ -1606,6 +1283,7 @@ public:
         }
 
         PendingRangeCalculatorService.instance.update();
+#endif
     }
 
     /**
@@ -1613,10 +1291,10 @@ public:
      *
      * @param endpoint node
      */
-    private void handleStateLeaving(InetAddress endpoint)
-    {
+    void handle_state_leaving(inet_address endpoint) {
+#if 0
         Collection<Token> tokens;
-        tokens = getTokensFor(endpoint);
+        tokens = get_tokens_for(endpoint);
 
         if (logger.isDebugEnabled())
             logger.debug("Node {} state leaving, tokens {}", endpoint, tokens);
@@ -1624,21 +1302,22 @@ public:
         // If the node is previously unknown or tokens do not match, update tokenmetadata to
         // have this node as 'normal' (it must have been using this token before the
         // leave). This way we'll get pending ranges right.
-        if (!tokenMetadata.isMember(endpoint))
+        if (!_token_metadata.isMember(endpoint))
         {
             logger.info("Node {} state jump to leaving", endpoint);
-            tokenMetadata.updateNormalTokens(tokens, endpoint);
+            _token_metadata.updateNormalTokens(tokens, endpoint);
         }
-        else if (!tokenMetadata.getTokens(endpoint).containsAll(tokens))
+        else if (!_token_metadata.getTokens(endpoint).containsAll(tokens))
         {
             logger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
-            tokenMetadata.updateNormalTokens(tokens, endpoint);
+            _token_metadata.updateNormalTokens(tokens, endpoint);
         }
 
         // at this point the endpoint is certainly a member with this token, so let's proceed
         // normally
-        tokenMetadata.addLeavingEndpoint(endpoint);
+        _token_metadata.addLeavingEndpoint(endpoint);
         PendingRangeCalculatorService.instance.update();
+#endif
     }
 
     /**
@@ -1647,16 +1326,17 @@ public:
      * @param endpoint If reason for leaving is decommission, endpoint is the leaving node.
      * @param pieces STATE_LEFT,token
      */
-    private void handleStateLeft(InetAddress endpoint, String[] pieces)
-    {
+    void handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
+#if 0
         assert pieces.length >= 2;
         Collection<Token> tokens;
-        tokens = getTokensFor(endpoint);
+        tokens = get_tokens_for(endpoint);
 
         if (logger.isDebugEnabled())
             logger.debug("Node {} state left, tokens {}", endpoint, tokens);
 
         excise(tokens, endpoint, extractExpireTime(pieces));
+#endif
     }
 
     /**
@@ -1665,17 +1345,18 @@ public:
      * @param endpoint moving endpoint address
      * @param pieces STATE_MOVING, token
      */
-    private void handleStateMoving(InetAddress endpoint, String[] pieces)
-    {
+    void handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
+#if 0
         assert pieces.length >= 2;
         Token token = getPartitioner().getTokenFactory().fromString(pieces[1]);
 
         if (logger.isDebugEnabled())
             logger.debug("Node {} state moving, new token {}", endpoint, token);
 
-        tokenMetadata.addMovingEndpoint(token, endpoint);
+        _token_metadata.addMovingEndpoint(token, endpoint);
 
         PendingRangeCalculatorService.instance.update();
+#endif
     }
 
     /**
@@ -1684,8 +1365,8 @@ public:
      * @param endpoint node
      * @param pieces either REMOVED_TOKEN (node is gone) or REMOVING_TOKEN (replicas need to be restored)
      */
-    private void handleStateRemoving(InetAddress endpoint, String[] pieces)
-    {
+    void handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
+#if 0
         assert (pieces.length > 0);
 
         if (endpoint.equals(FBUtilities.getBroadcastAddress()))
@@ -1701,10 +1382,10 @@ public:
             }
             return;
         }
-        if (tokenMetadata.isMember(endpoint))
+        if (_token_metadata.isMember(endpoint))
         {
             String state = pieces[0];
-            Collection<Token> removeTokens = tokenMetadata.getTokens(endpoint);
+            Collection<Token> removeTokens = _token_metadata.getTokens(endpoint);
 
             if (VersionedValue.REMOVED_TOKEN.equals(state))
             {
@@ -1716,14 +1397,14 @@ public:
                     logger.debug("Tokens {} removed manually (endpoint was {})", removeTokens, endpoint);
 
                 // Note that the endpoint is being removed
-                tokenMetadata.addLeavingEndpoint(endpoint);
+                _token_metadata.addLeavingEndpoint(endpoint);
                 PendingRangeCalculatorService.instance.update();
 
                 // find the endpoint coordinating this removal that we need to notify when we're done
                 String[] coordinator = Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(ApplicationState.REMOVAL_COORDINATOR).value.split(VersionedValue.DELIMITER_STR, -1);
                 UUID hostId = UUID.fromString(coordinator[1]);
                 // grab any data we are now responsible for and notify responsible node
-                restoreReplicaCount(endpoint, tokenMetadata.getEndpointForHostId(hostId));
+                restoreReplicaCount(endpoint, _token_metadata.getEndpointForHostId(hostId));
             }
         }
         else // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
@@ -1732,15 +1413,18 @@ public:
                 addExpireTimeIfFound(endpoint, extractExpireTime(pieces));
             removeEndpoint(endpoint);
         }
+#endif
     }
+
+#if 0
 
     private void excise(Collection<Token> tokens, InetAddress endpoint)
     {
         logger.info("Removing tokens {} for {}", tokens, endpoint);
         HintedHandOffManager.instance.deleteHintsForEndpoint(endpoint);
         removeEndpoint(endpoint);
-        tokenMetadata.removeEndpoint(endpoint);
-        tokenMetadata.removeBootstrapTokens(tokens);
+        _token_metadata.removeEndpoint(endpoint);
+        _token_metadata.removeBootstrapTokens(tokens);
 
         for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
             subscriber.onLeaveCluster(endpoint);
@@ -1783,7 +1467,7 @@ public:
     private Multimap<InetAddress, Range<Token>> getNewSourceRanges(String keyspaceName, Set<Range<Token>> ranges)
     {
         InetAddress myAddress = FBUtilities.getBroadcastAddress();
-        Multimap<Range<Token>, InetAddress> rangeAddresses = Keyspace.open(keyspaceName).getReplicationStrategy().getRangeAddresses(tokenMetadata.cloneOnlyTokenMap());
+        Multimap<Range<Token>, InetAddress> rangeAddresses = Keyspace.open(keyspaceName).getReplicationStrategy().getRangeAddresses(_token_metadata.cloneOnlyTokenMap());
         Multimap<InetAddress, Range<Token>> sourceRanges = HashMultimap.create();
         IFailureDetector failureDetector = FailureDetector.instance;
 
@@ -1909,11 +1593,11 @@ public:
         Map<Range<Token>, List<InetAddress>> currentReplicaEndpoints = new HashMap<>(ranges.size());
 
         // Find (for each range) all nodes that store replicas for these ranges as well
-        TokenMetadata metadata = tokenMetadata.cloneOnlyTokenMap(); // don't do this in the loop! #7758
+        TokenMetadata metadata = _token_metadata.cloneOnlyTokenMap(); // don't do this in the loop! #7758
         for (Range<Token> range : ranges)
             currentReplicaEndpoints.put(range, Keyspace.open(keyspaceName).getReplicationStrategy().calculateNaturalEndpoints(range.right, metadata));
 
-        TokenMetadata temp = tokenMetadata.cloneAfterAllLeft();
+        TokenMetadata temp = _token_metadata.cloneAfterAllLeft();
 
         // endpoint might or might not be 'leaving'. If it was not leaving (that is, removenode
         // command was used), it is still present in temp and must be removed.
@@ -1943,23 +1627,25 @@ public:
     }
 #endif
 public:
-    void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override
-    {
-#if 0
-        for (Map.Entry<ApplicationState, VersionedValue> entry : epState.getApplicationStateMap().entrySet())
-        {
-            onChange(endpoint, entry.getKey(), entry.getValue());
+    void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
+        ss_debug("SS::on_join endpoint=%s\n", endpoint);
+        auto tokens = get_tokens_for(endpoint);
+        for (auto t : tokens) {
+            ss_debug("t=%s\n", t);
         }
-        MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
-#endif
+        for (auto e : ep_state.get_application_state_map()) {
+            on_change(endpoint, e.first, e.second);
+        }
+        // MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
     }
 
     void on_alive(gms::inet_address endpoint, gms::endpoint_state state) override
     {
+        ss_debug("SS::on_alive endpoint=%s\n", endpoint);
 #if 0
         MigrationManager.instance.scheduleSchemaPull(endpoint, state);
 
-        if (tokenMetadata.isMember(endpoint))
+        if (_token_metadata.isMember(endpoint))
         {
             HintedHandOffManager.instance.scheduleHintDelivery(endpoint, true);
             for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
@@ -1971,7 +1657,7 @@ public:
     void on_remove(gms::inet_address endpoint) override
     {
 #if 0
-        tokenMetadata.removeEndpoint(endpoint);
+        _token_metadata.removeEndpoint(endpoint);
         PendingRangeCalculatorService.instance.update();
 #endif
     }
@@ -2070,14 +1756,14 @@ public:
 
     public List<String> getLeavingNodes()
     {
-        return stringify(tokenMetadata.getLeavingEndpoints());
+        return stringify(_token_metadata.getLeavingEndpoints());
     }
 
     public List<String> getMovingNodes()
     {
         List<String> endpoints = new ArrayList<>();
 
-        for (Pair<Token, InetAddress> node : tokenMetadata.getMovingEndpoints())
+        for (Pair<Token, InetAddress> node : _token_metadata.getMovingEndpoints())
         {
             endpoints.add(node.right.getHostAddress());
         }
@@ -2087,7 +1773,7 @@ public:
 
     public List<String> getJoiningNodes()
     {
-        return stringify(tokenMetadata.getBootstrapTokens().valueSet());
+        return stringify(_token_metadata.getBootstrapTokens().valueSet());
     }
 
     public List<String> getLiveNodes()
@@ -2598,7 +2284,7 @@ public:
         // Break up given range to match ring layout in TokenMetadata
         ArrayList<Range<Token>> repairingRange = new ArrayList<>();
 
-        ArrayList<Token> tokens = new ArrayList<>(tokenMetadata.sortedTokens());
+        ArrayList<Token> tokens = new ArrayList<>(_token_metadata.sortedTokens());
         if (!tokens.contains(parsedBeginToken))
         {
             tokens.add(parsedBeginToken);
@@ -2906,7 +2592,7 @@ public:
     {
         AbstractReplicationStrategy strategy = Keyspace.open(keyspace).getReplicationStrategy();
         Collection<Range<Token>> primaryRanges = new HashSet<>();
-        TokenMetadata metadata = tokenMetadata.cloneOnlyTokenMap();
+        TokenMetadata metadata = _token_metadata.cloneOnlyTokenMap();
         for (Token token : metadata.sortedTokens())
         {
             List<InetAddress> endpoints = strategy.calculateNaturalEndpoints(token, metadata);
@@ -2926,7 +2612,7 @@ public:
      */
     public Collection<Range<Token>> getPrimaryRangeForEndpointWithinDC(String keyspace, InetAddress referenceEndpoint)
     {
-        TokenMetadata metadata = tokenMetadata.cloneOnlyTokenMap();
+        TokenMetadata metadata = _token_metadata.cloneOnlyTokenMap();
         String localDC = DatabaseDescriptor.getEndpointSnitch().getDatacenter(referenceEndpoint);
         Collection<InetAddress> localDcNodes = metadata.getTopology().getDatacenterEndpoints().get(localDC);
         AbstractReplicationStrategy strategy = Keyspace.open(keyspace).getReplicationStrategy();
@@ -3151,26 +2837,26 @@ public:
     }
 
     /**
-     * Broadcast leaving status and update local tokenMetadata accordingly
+     * Broadcast leaving status and update local _token_metadata accordingly
      */
     private void startLeaving()
     {
         Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, valueFactory.leaving(getLocalTokens()));
-        tokenMetadata.addLeavingEndpoint(FBUtilities.getBroadcastAddress());
+        _token_metadata.addLeavingEndpoint(FBUtilities.getBroadcastAddress());
         PendingRangeCalculatorService.instance.update();
     }
 
     public void decommission() throws InterruptedException
     {
-        if (!tokenMetadata.isMember(FBUtilities.getBroadcastAddress()))
+        if (!_token_metadata.isMember(FBUtilities.getBroadcastAddress()))
             throw new UnsupportedOperationException("local node is not a member of the token ring yet");
-        if (tokenMetadata.cloneAfterAllLeft().sortedTokens().size() < 2)
+        if (_token_metadata.cloneAfterAllLeft().sortedTokens().size() < 2)
             throw new UnsupportedOperationException("no other normal nodes in the ring; decommission would be pointless");
 
         PendingRangeCalculatorService.instance.blockUntilFinished();
         for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
         {
-            if (tokenMetadata.getPendingRanges(keyspaceName, FBUtilities.getBroadcastAddress()).size() > 0)
+            if (_token_metadata.getPendingRanges(keyspaceName, FBUtilities.getBroadcastAddress()).size() > 0)
                 throw new UnsupportedOperationException("data is currently moving to this node; unable to leave the ring");
         }
 
@@ -3199,7 +2885,7 @@ public:
     private void leaveRing()
     {
         SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.NEEDS_BOOTSTRAP);
-        tokenMetadata.removeEndpoint(FBUtilities.getBroadcastAddress());
+        _token_metadata.removeEndpoint(FBUtilities.getBroadcastAddress());
         PendingRangeCalculatorService.instance.update();
 
         Gossiper.instance.addLocalApplicationState(ApplicationState.STATUS, valueFactory.left(getLocalTokens(),Gossiper.computeExpireTime()));
@@ -3325,7 +3011,7 @@ public:
         if (newToken == null)
             throw new IOException("Can't move to the undefined (null) token.");
 
-        if (tokenMetadata.sortedTokens().contains(newToken))
+        if (_token_metadata.sortedTokens().contains(newToken))
             throw new IOException("target token " + newToken + " is already owned by another node.");
 
         // address of the current node
@@ -3344,7 +3030,7 @@ public:
         // checking if data is moving to this node
         for (String keyspaceName : keyspacesToProcess)
         {
-            if (tokenMetadata.getPendingRanges(keyspaceName, localAddress).size() > 0)
+            if (_token_metadata.getPendingRanges(keyspaceName, localAddress).size() > 0)
                 throw new UnsupportedOperationException("data is currently moving to this node; unable to leave the ring");
         }
 
@@ -3373,7 +3059,7 @@ public:
             setMode(Mode.MOVING, "No ranges to fetch/stream", true);
         }
 
-        setTokens(Collections.singleton(newToken)); // setting new token as we have everything settled
+        set_tokens(Collections.singleton(newToken)); // setting new token as we have everything settled
 
         if (logger.isDebugEnabled())
             logger.debug("Successfully moved to new token {}", getLocalTokens().iterator().next());
@@ -3392,9 +3078,9 @@ public:
         {
             InetAddress localAddress = FBUtilities.getBroadcastAddress();
             IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
-            TokenMetadata tokenMetaCloneAllSettled = tokenMetadata.cloneAfterAllSettled();
+            TokenMetadata tokenMetaCloneAllSettled = _token_metadata.cloneAfterAllSettled();
             // clone to avoid concurrent modification in calculateNaturalEndpoints
-            TokenMetadata tokenMetaClone = tokenMetadata.cloneOnlyTokenMap();
+            TokenMetadata tokenMetaClone = _token_metadata.cloneOnlyTokenMap();
 
             for (String keyspace : keyspaceNames)
             {
@@ -3531,7 +3217,7 @@ public:
             return "No token removals in process.";
         }
         return String.format("Removing token (%s). Waiting for replication confirmation from [%s].",
-                             tokenMetadata.getToken(removingNode),
+                             _token_metadata.getToken(removingNode),
                              StringUtils.join(replicatingNodes, ","));
     }
 
@@ -3542,14 +3228,14 @@ public:
      */
     public void forceRemoveCompletion()
     {
-        if (!replicatingNodes.isEmpty()  || !tokenMetadata.getLeavingEndpoints().isEmpty())
+        if (!replicatingNodes.isEmpty()  || !_token_metadata.getLeavingEndpoints().isEmpty())
         {
             logger.warn("Removal not confirmed for for {}", StringUtils.join(this.replicatingNodes, ","));
-            for (InetAddress endpoint : tokenMetadata.getLeavingEndpoints())
+            for (InetAddress endpoint : _token_metadata.getLeavingEndpoints())
             {
-                UUID hostId = tokenMetadata.getHostId(endpoint);
+                UUID hostId = _token_metadata.getHostId(endpoint);
                 Gossiper.instance.advertiseTokenRemoved(endpoint, hostId);
-                excise(tokenMetadata.getTokens(endpoint), endpoint);
+                excise(_token_metadata.getTokens(endpoint), endpoint);
             }
             replicatingNodes.clear();
             removingNode = null;
@@ -3572,14 +3258,14 @@ public:
     public void removeNode(String hostIdString)
     {
         InetAddress myAddress = FBUtilities.getBroadcastAddress();
-        UUID localHostId = tokenMetadata.getHostId(myAddress);
+        UUID localHostId = _token_metadata.getHostId(myAddress);
         UUID hostId = UUID.fromString(hostIdString);
-        InetAddress endpoint = tokenMetadata.getEndpointForHostId(hostId);
+        InetAddress endpoint = _token_metadata.getEndpointForHostId(hostId);
 
         if (endpoint == null)
             throw new UnsupportedOperationException("Host ID not found.");
 
-        Collection<Token> tokens = tokenMetadata.getTokens(endpoint);
+        Collection<Token> tokens = _token_metadata.getTokens(endpoint);
 
         if (endpoint.equals(myAddress))
              throw new UnsupportedOperationException("Cannot remove self");
@@ -3588,7 +3274,7 @@ public:
             throw new UnsupportedOperationException("Node " + endpoint + " is alive and owns this ID. Use decommission command to remove it from the ring");
 
         // A leaving endpoint that is dead is already being removed.
-        if (tokenMetadata.isLeaving(endpoint))
+        if (_token_metadata.isLeaving(endpoint))
             logger.warn("Node {} is already being removed, continuing removal anyway", endpoint);
 
         if (!replicatingNodes.isEmpty())
@@ -3615,7 +3301,7 @@ public:
         }
         removingNode = endpoint;
 
-        tokenMetadata.addLeavingEndpoint(endpoint);
+        _token_metadata.addLeavingEndpoint(endpoint);
         PendingRangeCalculatorService.instance.update();
 
         // the gossiper will handle spoofing this node's state to REMOVING_TOKEN for us
@@ -3761,8 +3447,8 @@ public:
 
     TokenMetadata setTokenMetadataUnsafe(TokenMetadata tmd)
     {
-        TokenMetadata old = tokenMetadata;
-        tokenMetadata = tmd;
+        TokenMetadata old = _token_metadata;
+        _token_metadata = tmd;
         return old;
     }
 
@@ -3780,13 +3466,13 @@ public:
 
     public Map<InetAddress, Float> getOwnership()
     {
-        List<Token> sortedTokens = tokenMetadata.sortedTokens();
+        List<Token> sortedTokens = _token_metadata.sortedTokens();
         // describeOwnership returns tokens in an unspecified order, let's re-order them
         Map<Token, Float> tokenMap = new TreeMap<Token, Float>(getPartitioner().describeOwnership(sortedTokens));
         Map<InetAddress, Float> nodeMap = new LinkedHashMap<>();
         for (Map.Entry<Token, Float> entry : tokenMap.entrySet())
         {
-            InetAddress endpoint = tokenMetadata.getEndpoint(entry.getKey());
+            InetAddress endpoint = _token_metadata.getEndpoint(entry.getKey());
             Float tokenOwnership = entry.getValue();
             if (nodeMap.containsKey(endpoint))
                 nodeMap.put(endpoint, nodeMap.get(endpoint) + tokenOwnership);
@@ -3833,7 +3519,7 @@ public:
         	keyspace = "system_traces";
     	}
     	
-        TokenMetadata metadata = tokenMetadata.cloneOnlyTokenMap();
+        TokenMetadata metadata = _token_metadata.cloneOnlyTokenMap();
 
         Collection<Collection<InetAddress>> endpointsGroupedByDc = new ArrayList<>();
         // mapping of dc's to nodes, use sorted map so that we get dcs sorted
@@ -3842,7 +3528,7 @@ public:
         for (Collection<InetAddress> endpoints : sortedDcsToEndpoints.values())
             endpointsGroupedByDc.add(endpoints);
 
-        Map<Token, Float> tokenOwnership = getPartitioner().describeOwnership(tokenMetadata.sortedTokens());
+        Map<Token, Float> tokenOwnership = getPartitioner().describeOwnership(_token_metadata.sortedTokens());
         LinkedHashMap<InetAddress, Float> finalOwnership = Maps.newLinkedHashMap();
 
         // calculate ownership per dc
