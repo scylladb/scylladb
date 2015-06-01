@@ -173,7 +173,7 @@ private:
         auto local_tokens = _bootstrap_tokens;
         auto& gossiper = gms::get_local_gossiper();
         gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
-        gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(local_tokens));
+        gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens));
         //setMode(Mode.NORMAL, false);
     }
 
