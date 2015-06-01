@@ -2,6 +2,7 @@
  * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
+#include "utils/UUID.hh"
 #include "token_metadata.hh"
 #include <experimental/optional>
 
@@ -159,6 +160,26 @@ void token_metadata::update_host_id(const UUID& host_id, inet_address endpoint) 
 #endif
     _endpoint_to_host_id_map[endpoint] = host_id;
 }
+
+utils::UUID token_metadata::get_host_id(inet_address endpoint) {
+    assert(_endpoint_to_host_id_map.count(endpoint));
+    return _endpoint_to_host_id_map.at(endpoint);
+}
+
+gms::inet_address token_metadata::get_endpoint_for_host_id(UUID host_id) {
+    auto beg = _endpoint_to_host_id_map.cbegin();
+    auto end = _endpoint_to_host_id_map.cend();
+    auto it = std::find_if(beg, end, [host_id] (auto x) {
+        return x.second == host_id;
+    });
+    assert(it != end);
+    return (*it).first;
+}
+
+const auto& token_metadata::get_endpoint_to_host_id_map_for_reading() {
+    return _endpoint_to_host_id_map;
+}
+
 
 
 }

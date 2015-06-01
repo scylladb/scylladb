@@ -252,50 +252,17 @@ public:
      * @param endpoint
      */
     void update_host_id(const UUID& host_id, inet_address endpoint);
-#if 0
+
     /** Return the unique host ID for an end-point. */
-    public UUID getHostId(InetAddress endpoint)
-    {
-        lock.readLock().lock();
-        try
-        {
-            return _endpoint_to_host_id_map.get(endpoint);
-        }
-        finally
-        {
-            lock.readLock().unlock();
-        }
-    }
+    UUID get_host_id(inet_address endpoint);
 
     /** Return the end-point for a unique host ID */
-    public InetAddress getEndpointForHostId(UUID hostId)
-    {
-        lock.readLock().lock();
-        try
-        {
-            return _endpoint_to_host_id_map.inverse().get(hostId);
-        }
-        finally
-        {
-            lock.readLock().unlock();
-        }
-    }
+    inet_address get_endpoint_for_host_id(UUID host_id);
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
-    public Map<InetAddress, UUID> getEndpointToHostIdMapForReading()
-    {
-        lock.readLock().lock();
-        try
-        {
-            Map<InetAddress, UUID> readMap = new HashMap<InetAddress, UUID>();
-            readMap.putAll(_endpoint_to_host_id_map);
-            return readMap;
-        }
-        finally
-        {
-            lock.readLock().unlock();
-        }
-    }
+    const auto& get_endpoint_to_host_id_map_for_reading();
+
+#if 0
 
     @Deprecated
     public void addBootstrapToken(Token token, InetAddress endpoint)
