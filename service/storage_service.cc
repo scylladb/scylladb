@@ -310,6 +310,7 @@ future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
 }
 
 void storage_service::handle_state_bootstrap(inet_address endpoint) {
+    ss_debug("SS::handle_state_bootstrap endpoint=%s\n", endpoint);
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
     auto tokens = get_tokens_for(endpoint);
 
@@ -342,80 +343,73 @@ void storage_service::handle_state_bootstrap(inet_address endpoint) {
 }
 
 void storage_service::handle_state_normal(inet_address endpoint) {
-#if 0
-    Collection<Token> tokens;
+    ss_debug("SS::handle_state_bootstrap endpoint=%s\n", endpoint);
+    auto tokens = get_tokens_for(endpoint);
+    auto& gossiper = gms::get_local_gossiper();
 
-    tokens = get_tokens_for(endpoint);
+    std::unordered_set<token> tokensToUpdateInMetadata;
+    std::unordered_set<token> tokensToUpdateInSystemKeyspace;
+    std::unordered_set<token> localTokensToRemove;
+    std::unordered_set<inet_address> endpointsToRemove;
 
-    Set<Token> tokensToUpdateInMetadata = new HashSet<>();
-    Set<Token> tokensToUpdateInSystemKeyspace = new HashSet<>();
-    Set<Token> localTokensToRemove = new HashSet<>();
-    Set<InetAddress> endpointsToRemove = new HashSet<>();
+    // if (logger.isDebugEnabled())
+    //     logger.debug("Node {} state normal, token {}", endpoint, tokens);
 
-
-    if (logger.isDebugEnabled())
-        logger.debug("Node {} state normal, token {}", endpoint, tokens);
-
-    if (_token_metadata.isMember(endpoint))
-        logger.info("Node {} state jump to normal", endpoint);
-
-    updatePeerInfo(endpoint);
+    if (_token_metadata.is_member(endpoint)) {
+        // logger.info("Node {} state jump to normal", endpoint);
+    }
+    // FIXME:
+    // updatePeerInfo(endpoint);
+#if 1
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
-    if (Gossiper.instance.usesHostId(endpoint))
-    {
-        UUID hostId = Gossiper.instance.getHostId(endpoint);
-        InetAddress existing = _token_metadata.getEndpointForHostId(hostId);
-        if (DatabaseDescriptor.isReplacing() && Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()) != null && (hostId.equals(Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress()))))
-            logger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
-        else
-        {
-            if (existing != null && !existing.equals(endpoint))
-            {
-                if (existing.equals(FBUtilities.getBroadcastAddress()))
-                {
+    if (gossiper.uses_host_id(endpoint)) {
+        auto host_id = gossiper.get_host_id(endpoint);
+        //inet_address existing = _token_metadata.get_endpoint_for_host_id(host_id);
+        // if (DatabaseDescriptor.isReplacing() &&
+        //     Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()) != null &&
+        //     (hostId.equals(Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress())))) {
+        if (false) {
+            // logger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
+        } else {
+            if (false /*existing != null && !existing.equals(endpoint)*/) {
+#if 0
+                if (existing == get_broadcast_address()) {
                     logger.warn("Not updating host ID {} for {} because it's mine", hostId, endpoint);
                     _token_metadata.removeEndpoint(endpoint);
                     endpointsToRemove.add(endpoint);
-                }
-                else if (Gossiper.instance.compareEndpointStartup(endpoint, existing) > 0)
-                {
+                } else if (gossiper.compare_endpoint_startup(endpoint, existing) > 0) {
                     logger.warn("Host ID collision for {} between {} and {}; {} is the new owner", hostId, existing, endpoint, endpoint);
                     _token_metadata.removeEndpoint(existing);
                     endpointsToRemove.add(existing);
                     _token_metadata.update_host_id(hostId, endpoint);
-                }
-                else
-                {
+                } else {
                     logger.warn("Host ID collision for {} between {} and {}; ignored {}", hostId, existing, endpoint, endpoint);
                     _token_metadata.removeEndpoint(endpoint);
                     endpointsToRemove.add(endpoint);
                 }
+#endif
+            } else {
+                _token_metadata.update_host_id(host_id, endpoint);
             }
-            else
-                _token_metadata.update_host_id(hostId, endpoint);
         }
     }
+#endif
 
-    for (final Token token : tokens)
-    {
+    for (auto t : tokens) {
         // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
-        InetAddress currentOwner = _token_metadata.getEndpoint(token);
-        if (currentOwner == null)
-        {
-            logger.debug("New node {} at token {}", endpoint, token);
-            tokensToUpdateInMetadata.add(token);
-            tokensToUpdateInSystemKeyspace.add(token);
-        }
-        else if (endpoint.equals(currentOwner))
-        {
+        auto current_owner = _token_metadata.get_endpoint(t);
+        if (!current_owner) {
+            // logger.debug("New node {} at token {}", endpoint, t);
+            tokensToUpdateInMetadata.insert(t);
+            tokensToUpdateInSystemKeyspace.insert(t);
+        } else if (endpoint == *current_owner) {
             // set state back to normal, since the node may have tried to leave, but failed and is now back up
-            tokensToUpdateInMetadata.add(token);
-            tokensToUpdateInSystemKeyspace.add(token);
-        }
-        else if (Gossiper.instance.compareEndpointStartup(endpoint, currentOwner) > 0)
-        {
-            tokensToUpdateInMetadata.add(token);
-            tokensToUpdateInSystemKeyspace.add(token);
+            tokensToUpdateInMetadata.insert(t);
+            tokensToUpdateInSystemKeyspace.insert(t);
+        } else if (gossiper.compare_endpoint_startup(endpoint, *current_owner) > 0) {
+            tokensToUpdateInMetadata.insert(t);
+            tokensToUpdateInSystemKeyspace.insert(t);
+#if 0
 
             // currentOwner is no longer current, endpoint is.  Keep track of these moves, because when
             // a host no longer has any tokens, we'll want to remove it.
@@ -429,44 +423,42 @@ void storage_service::handle_state_normal(inet_address endpoint) {
                                       currentOwner,
                                       token,
                                       endpoint));
-        }
-        else
-        {
+#endif
+        } else {
+#if 0
             logger.info(String.format("Nodes %s and %s have the same token %s.  Ignoring %s",
                                        endpoint,
                                        currentOwner,
                                        token,
                                        endpoint));
+#endif
         }
     }
 
-    boolean isMoving = _token_metadata.isMoving(endpoint); // capture because updateNormalTokens clears moving status
-    _token_metadata.updateNormalTokens(tokensToUpdateInMetadata, endpoint);
-    for (InetAddress ep : endpointsToRemove)
-    {
-        removeEndpoint(ep);
-        if (DatabaseDescriptor.isReplacing() && DatabaseDescriptor.getReplaceAddress().equals(ep))
-            Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
+    bool is_moving = _token_metadata.is_moving(endpoint); // capture because updateNormalTokens clears moving status
+    _token_metadata.update_normal_tokens(tokensToUpdateInMetadata, endpoint);
+    // for (auto ep : endpointsToRemove) {
+        // removeEndpoint(ep);
+        // if (DatabaseDescriptor.isReplacing() && DatabaseDescriptor.getReplaceAddress().equals(ep))
+        //     Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
+    // }
+    if (!tokensToUpdateInSystemKeyspace.empty()) {
+        // SystemKeyspace.updateTokens(endpoint, tokensToUpdateInSystemKeyspace);
     }
-    if (!tokensToUpdateInSystemKeyspace.isEmpty())
-        SystemKeyspace.updateTokens(endpoint, tokensToUpdateInSystemKeyspace);
-    if (!localTokensToRemove.isEmpty())
-        SystemKeyspace.updateLocalTokens(Collections.<Token>emptyList(), localTokensToRemove);
-
-    if (isMoving)
-    {
-        _token_metadata.removeFromMoving(endpoint);
-        for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-            subscriber.onMove(endpoint);
-    }
-    else
-    {
-        for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-            subscriber.onJoinCluster(endpoint);
+    if (!localTokensToRemove.empty()) {
+        // SystemKeyspace.updateLocalTokens(Collections.<Token>emptyList(), localTokensToRemove);
     }
 
-    PendingRangeCalculatorService.instance.update();
-#endif
+    if (is_moving) {
+        // _token_metadata.remove_from_moving(endpoint);
+        // for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
+        //     subscriber.onMove(endpoint);
+    } else {
+        // for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
+        //     subscriber.onJoinCluster(endpoint);
+    }
+
+    // PendingRangeCalculatorService.instance.update();
 }
 
 void storage_service::handle_state_leaving(inet_address endpoint) {
