@@ -31,6 +31,7 @@
 #include "dht/boot_strapper.hh"
 #include "core/sleep.hh"
 #include "gms/application_state.hh"
+#include "db/system_keyspace.hh"
 
 namespace service {
 
@@ -554,8 +555,7 @@ private:
         auto seeds = gossiper.get_seeds();
         return !seeds.count(get_broadcast_address());
     }
-    future<> prepare_to_join()
-    {
+    future<> prepare_to_join() {
         if (!joined) {
             std::map<gms::application_state, gms::versioned_value> app_states;
 #if 0
@@ -583,12 +583,8 @@ private:
             // for bootstrap to get the load info it needs.
             // (we won't be part of the storage ring though until we add a counterId to our state, below.)
             // Seed the host ID-to-endpoint map with our own ID.
-#if 0
-            UUID localHostId = SystemKeyspace.getLocalHostId();
-            getTokenMetadata().update_host_id(localHostId, FBUtilities.getBroadcastAddress());
-#endif
-            // FIXME: SystemKeyspace.getLocalHostId();
-            utils::UUID local_host_id = utils::UUID_gen::get_time_UUID();
+            auto local_host_id = db::system_keyspace::get_local_host_id();
+            _token_metadata.update_host_id(local_host_id, get_broadcast_address());
             // FIXME: DatabaseDescriptor.getBroadcastRpcAddress()
             gms::inet_address broadcast_rpc_address;
             app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
