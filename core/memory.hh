@@ -27,8 +27,31 @@
 #include <functional>
 #include <vector>
 
+
+/// \defgroup memory-module Memory management
+///
+/// Functions and classes for managing memory.
+///
+/// Memory management in seastar consists of the following:
+///
+///   - Low-level memory management in the \ref memory namespace.
+///   - Various smart pointers: \ref shared_ptr, \ref lw_shared_ptr,
+///     and \ref foreign_ptr.
+///   - zero-copy support: \ref temporary_buffer and \ref deleter.
+
+/// Low-level memory management support
+///
+/// The \c memory namespace provides functions and classes for interfacing
+/// with the seastar memory allocator.
+///
+/// The seastar memory allocator splits system memory into a pool per
+/// logical core (lcore).  Memory allocated one an lcore should be freed
+/// on the same lcore; failing to do so carries a severe performance
+/// penalty.  It is possible to share memory with another core, but this
+/// should be limited to avoid cache coherency traffic.
 namespace memory {
 
+/// \cond internal
 // TODO: Use getpagesize() in order to learn a size of a system PAGE.
 static constexpr size_t page_bits = 12;
 static constexpr size_t page_size = 1 << page_bits;       // 4K
@@ -53,11 +76,12 @@ public:
 // Returns @true if any work was actually performed.
 bool drain_cross_cpu_freelist();
 
+
 // We don't want the memory code calling back into the rest of
 // the system, so allow the rest of the system to tell the memory
 // code how to initiate reclaim.
 //
-// When memory is low, calling hook(fn) will result in fn being called
+// When memory is low, calling \c hook(fn) will result in fn being called
 // in a safe place wrt. allocations.
 void set_reclaim_hook(
         std::function<void (std::function<void ()>)> hook);
@@ -78,9 +102,14 @@ struct translation {
 // translation is not known.
 translation translate(const void* addr, size_t size);
 
+/// \endcond
+
 class statistics;
+
+/// Capture a snapshot of memory allocation statistics for this lcore.
 statistics stats();
 
+/// Memory allocation statistics.
 class statistics {
     uint64_t _mallocs;
     uint64_t _frees;
@@ -89,9 +118,14 @@ private:
     statistics(uint64_t mallocs, uint64_t frees, uint64_t cross_cpu_frees)
         : _mallocs(mallocs), _frees(frees), _cross_cpu_frees(cross_cpu_frees) {}
 public:
+    /// Total number of memory allocations calls since the system was started.
     uint64_t mallocs() const { return _mallocs; }
+    /// Total number of memory deallocations calls since the system was started.
     uint64_t frees() const { return _frees; }
+    /// Total number of memory deallocations that occured on a different lcore
+    /// than the one on which they were allocated.
     uint64_t cross_cpu_frees() const { return _cross_cpu_frees; }
+    /// Total number of objects which were allocated but not freed.
     size_t live_objects() const { return mallocs() - frees(); }
     friend statistics stats();
 };
