@@ -36,7 +36,7 @@ namespace cql3 {
 
 namespace statements {
 
-::shared_ptr<column_identifier> modification_statement::CAS_RESULT_COLUMN = ::make_shared<column_identifier>("[applied]", false);
+thread_local const ::shared_ptr<column_identifier> modification_statement::CAS_RESULT_COLUMN = ::make_shared<column_identifier>("[applied]", false);
 
 std::ostream&
 operator<<(std::ostream& out, modification_statement::statement_type t) {

@@ -54,7 +54,7 @@ namespace statements {
  */
 class modification_statement : public cql_statement {
 private:
-    static ::shared_ptr<column_identifier> CAS_RESULT_COLUMN;
+    static thread_local const ::shared_ptr<column_identifier> CAS_RESULT_COLUMN;
 
 public:
     enum class statement_type { INSERT, UPDATE, DELETE };
