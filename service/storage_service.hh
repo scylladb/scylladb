@@ -961,11 +961,8 @@ private:
     }
 #endif
 public:
-    void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, gms::versioned_value new_value) override
-    {
-        // no-op
-    }
-
+    virtual void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
+    virtual void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, gms::versioned_value new_value) override;
     /*
      * Handle the reception of a new particular ApplicationState for a particular endpoint. Note that the value of the
      * ApplicationState has not necessarily "changed" since the last known value, if we already received the same update
@@ -998,56 +995,11 @@ public:
      * Note: Any time a node state changes from STATUS_NORMAL, it will not be visible to new nodes. So it follows that
      * you should never bootstrap a new node during a removenode, decommission or move.
      */
-    void on_change(inet_address endpoint, application_state state, versioned_value value) override {
-        ss_debug("SS::on_change endpoint=%s\n", endpoint);
-        if (state == application_state::STATUS) {
-            std::vector<sstring> pieces;
-            boost::split(pieces, value.value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
-            assert(pieces.size() > 0);
-            sstring move_name = pieces[0];
-            if (move_name == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
-                handle_state_bootstrap(endpoint);
-            } else if (move_name == sstring(versioned_value::STATUS_NORMAL)) {
-                handle_state_normal(endpoint);
-            } else if (move_name == sstring(versioned_value::REMOVING_TOKEN) ||
-                       move_name == sstring(versioned_value::REMOVED_TOKEN)) {
-                handle_state_removing(endpoint, pieces);
-            } else if (move_name == sstring(versioned_value::STATUS_LEAVING)) {
-                handle_state_leaving(endpoint);
-            } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
-                handle_state_left(endpoint, pieces);
-            } else if (move_name == sstring(versioned_value::STATUS_MOVING)) {
-                handle_state_moving(endpoint, pieces);
-            }
-        } else {
-            auto& gossiper = gms::get_local_gossiper();
-            auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
-            if (!ep_state || gossiper.is_dead_state(*ep_state)) {
-                // logger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
-                return;
-            }
-
-            if (state == application_state::RELEASE_VERSION) {
-                // SystemKeyspace.updatePeerInfo(endpoint, "release_version", value.value);
-            } else if (state == application_state::DC) {
-                // SystemKeyspace.updatePeerInfo(endpoint, "data_center", value.value);
-            } else if (state == application_state::RACK) {
-                // SystemKeyspace.updatePeerInfo(endpoint, "rack", value.value);
-            } else if (state == application_state::RPC_ADDRESS) {
-                // try {
-                //     SystemKeyspace.updatePeerInfo(endpoint, "rpc_address", InetAddress.getByName(value.value));
-                // } catch (UnknownHostException e) {
-                //     throw new RuntimeException(e);
-                // }
-            } else if (state == application_state::SCHEMA) {
-                // SystemKeyspace.updatePeerInfo(endpoint, "schema_version", UUID.fromString(value.value));
-                // MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
-            } else if (state == application_state::HOST_ID) {
-                // SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(value.value));
-            }
-        }
-    }
-
+    virtual void on_change(inet_address endpoint, application_state state, versioned_value value) override;
+    virtual void on_alive(gms::inet_address endpoint, gms::endpoint_state state) override;
+    virtual void on_dead(gms::inet_address endpoint, gms::endpoint_state state) override;
+    virtual void on_remove(gms::inet_address endpoint) override;
+    virtual void on_restart(gms::inet_address endpoint, gms::endpoint_state state) override;
 #if 0
     private void updatePeerInfo(InetAddress endpoint)
     {
@@ -1369,61 +1321,7 @@ private:
 
         return changedRanges;
     }
-#endif
-public:
-    void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
-        ss_debug("SS::on_join endpoint=%s\n", endpoint);
-        auto tokens = get_tokens_for(endpoint);
-        for (auto t : tokens) {
-            ss_debug("t=%s\n", t);
-        }
-        for (auto e : ep_state.get_application_state_map()) {
-            on_change(endpoint, e.first, e.second);
-        }
-        // MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
-    }
 
-    void on_alive(gms::inet_address endpoint, gms::endpoint_state state) override
-    {
-        ss_debug("SS::on_alive endpoint=%s\n", endpoint);
-#if 0
-        MigrationManager.instance.scheduleSchemaPull(endpoint, state);
-
-        if (_token_metadata.isMember(endpoint))
-        {
-            HintedHandOffManager.instance.scheduleHintDelivery(endpoint, true);
-            for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-                subscriber.onUp(endpoint);
-        }
-#endif
-    }
-
-    void on_remove(gms::inet_address endpoint) override
-    {
-#if 0
-        _token_metadata.removeEndpoint(endpoint);
-        PendingRangeCalculatorService.instance.update();
-#endif
-    }
-
-    void on_dead(gms::inet_address endpoint, gms::endpoint_state state) override
-    {
-#if 0
-        MessagingService.instance().convict(endpoint);
-        for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-            subscriber.onDown(endpoint);
-#endif
-    }
-
-    void on_restart(gms::inet_address endpoint, gms::endpoint_state state) override
-    {
-#if 0
-        // If we have restarted before the node was even marked down, we need to reset the connection pool
-        if (state.isAlive())
-            onDead(endpoint, state);
-#endif
-    }
-#if 0
     /** raw load value */
     public double getLoad()
     {
