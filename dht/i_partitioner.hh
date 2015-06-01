@@ -61,7 +61,7 @@ public:
     //     [0x00, 0x80] == 1/512
     //     [0xff, 0x80] == 1 - 1/512
     bytes _data;
-    token(kind k, bytes d) : _kind(k), _data(d) {
+    token(kind k, bytes d) : _kind(std::move(k)), _data(std::move(d)) {
     }
 };
 
