@@ -150,7 +150,7 @@ private:
 
 #endif
 private:
-    std::set<token> _bootstrap_tokens;
+    std::unordered_set<token> _bootstrap_tokens;
 #if 0
 
     public void finishBootstrapping()
@@ -162,7 +162,7 @@ private:
 
 #endif
 
-    void set_tokens(std::set<token> tokens) {
+    void set_tokens(std::unordered_set<token> tokens) {
         // if (logger.isDebugEnabled())
         //     logger.debug("Setting tokens to {}", tokens);
         // SystemKeyspace.updateTokens(tokens);
@@ -667,7 +667,7 @@ private:
     }
 #endif
 
-    future<> bootstrap(std::set<token> tokens);
+    future<> bootstrap(std::unordered_set<token> tokens);
 #if 0
     public boolean isBootstrapMode()
     {
@@ -1099,11 +1099,11 @@ private:
         return v->value;
     }
 
-    std::set<token> get_tokens_for(inet_address endpoint) {
+    std::unordered_set<token> get_tokens_for(inet_address endpoint) {
         auto tokens_string = get_application_state_value(endpoint, application_state::TOKENS);
         ss_debug("endpoint=%s, tokens_string=%s\n", endpoint, tokens_string);
         std::vector<sstring> tokens;
-        std::set<token> ret;
+        std::unordered_set<token> ret;
         boost::split(tokens, tokens_string, boost::is_any_of(";"));
         for (auto str : tokens) {
             ss_debug("token=%s\n", str);

@@ -22,6 +22,7 @@
 #include "gms/inet_address.hh"
 #include "locator/token_metadata.hh"
 #include "dht/i_partitioner.hh"
+#include <unordered_set>
 
 namespace dht {
 
@@ -76,7 +77,7 @@ public:
      * otherwise, if num_tokens == 1, pick a token to assume half the load of the most-loaded node.
      * else choose num_tokens tokens at random
      */
-    static std::set<token> get_bootstrap_tokens(token_metadata metadata) {
+    static std::unordered_set<token> get_bootstrap_tokens(token_metadata metadata) {
 #if 0
         Collection<String> initialTokens = DatabaseDescriptor.getInitialTokens();
         // if user specified tokens, use those
@@ -106,8 +107,8 @@ public:
         return get_random_tokens(metadata, num_tokens);
     }
 
-    static std::set<token> get_random_tokens(token_metadata metadata, size_t num_tokens) {
-        std::set<token> tokens;
+    static std::unordered_set<token> get_random_tokens(token_metadata metadata, size_t num_tokens) {
+        std::unordered_set<token> tokens;
         while (tokens.size() < num_tokens) {
             auto token = global_partitioner().get_random_token();
             auto ep = metadata.get_endpoint(token);

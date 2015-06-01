@@ -21,7 +21,6 @@
 
 #pragma once
 
-#include <vector>
 #include "types.hh"
 #include "core/sstring.hh"
 #include "util/serialization.hh"
@@ -30,6 +29,8 @@
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
 #include "to_string.hh"
+#include <unordered_set>
+#include <vector>
 
 namespace gms {
 
@@ -125,17 +126,17 @@ public:
             return versioned_value(value.value);
         }
 
-        versioned_value bootstrapping(const std::set<token>& tokens) {
+        versioned_value bootstrapping(const std::unordered_set<token>& tokens) {
             return versioned_value(version_string({sstring(versioned_value::STATUS_BOOTSTRAPPING),
                                                    make_token_string(tokens)}));
         }
 
-        versioned_value normal(const std::set<token>& tokens) {
+        versioned_value normal(const std::unordered_set<token>& tokens) {
             return versioned_value(version_string({sstring(versioned_value::STATUS_NORMAL),
                                                    make_token_string(tokens)}));
         }
 
-        sstring make_token_string(const std::set<token>& tokens) {
+        sstring make_token_string(const std::unordered_set<token>& tokens) {
             // FIXME:
             // return partitioner.getTokenFactory().toString(Iterables.get(tokens, 0));
             return "TOKENS";
@@ -151,19 +152,19 @@ public:
             return versioned_value(new_version.to_sstring());
         }
 
-        versioned_value leaving(const std::set<token>& tokens) {
+        versioned_value leaving(const std::unordered_set<token>& tokens) {
             return versioned_value(version_string({sstring(versioned_value::STATUS_LEAVING),
                                                    make_token_string(tokens)}));
         }
 
-        versioned_value left(const std::set<token>& tokens, long expireTime) {
+        versioned_value left(const std::unordered_set<token>& tokens, long expireTime) {
             return versioned_value(version_string({sstring(versioned_value::STATUS_LEFT),
                                                    make_token_string(tokens),
                                                    std::to_string(expireTime)}));
         }
 
         versioned_value moving(token t) {
-            std::set<token> tokens = {t};
+            std::unordered_set<token> tokens = {t};
             return versioned_value(version_string({sstring(versioned_value::STATUS_MOVING),
                                                    make_token_string(tokens)}));
         }
@@ -173,7 +174,7 @@ public:
             return versioned_value(hostId.to_sstring());
         }
 
-        versioned_value tokens(const std::set<token> tokens) {
+        versioned_value tokens(const std::unordered_set<token> tokens) {
             sstring tokens_string;
             for (auto it = tokens.cbegin(); it != tokens.cend(); ) {
                 tokens_string += to_hex(it->_data);

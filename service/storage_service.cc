@@ -277,7 +277,7 @@ future<> storage_service::join_token_ring(int delay) {
     });
 }
 
-future<> storage_service::bootstrap(std::set<token> tokens) {
+future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
     // isBootstrapMode = true;
     // SystemKeyspace.updateTokens(tokens); // DON'T use setToken, that makes us part of the ring locally which is incorrect until we are done bootstrapping
     // FIXME: DatabaseDescriptor.isReplacing()
