@@ -41,8 +41,13 @@ auto& storage_service_value_factory() {
     return the_value_factory;
 }
 
-gossiper::gossiper()
-    : _scheduled_gossip_task([this] { run(); }) {
+gossiper::gossiper() {
+    // Gossiper's stuff below runs only on CPU0
+    if (engine().cpu_id() != 0) {
+        return;
+    }
+
+    _scheduled_gossip_task.set_callback([this] { run(); });
     // half of QUARATINE_DELAY, to ensure _just_removed_endpoints has enough leeway to prevent re-gossip
     fat_client_timeout = (int64_t) (QUARANTINE_DELAY / 2);
     /* register with the Failure Detector for receiving Failure detector events */
@@ -51,6 +56,10 @@ gossiper::gossiper()
 }
 
 gossiper::~gossiper() {
+    if (engine().cpu_id() != 0) {
+        return;
+    }
+
     get_local_failure_detector().unregister_failure_detection_event_listener(this);
 }
 

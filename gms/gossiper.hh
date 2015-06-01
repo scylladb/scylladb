@@ -478,7 +478,6 @@ public:
 
 extern distributed<gossiper> _the_gossiper;
 inline gossiper& get_local_gossiper() {
-    assert(engine().cpu_id() == 0);
     return _the_gossiper.local();
 }
 inline distributed<gossiper>& get_gossiper() {
