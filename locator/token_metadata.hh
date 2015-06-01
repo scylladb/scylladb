@@ -23,7 +23,6 @@
 
 #include <map>
 #include <unordered_set>
-#include <boost/bimap.hpp>
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
 #include "utils/UUID.hh"
@@ -39,6 +38,10 @@ class topology {
 };
 
 class token_metadata final {
+public:
+    using UUID = utils::UUID;
+    using inet_address = gms::inet_address;
+private:
     /**
      * Maintains token to endpoint map of every node in the cluster.
      * Each Token is associated with exactly one Address, but each Address may have
@@ -48,7 +51,7 @@ class token_metadata final {
     std::map<token, inet_address> _token_to_endpoint_map;
 
     /** Maintains endpoint to host ID map of every node in the cluster */
-    boost::bimap<inet_address, utils::UUID> _endpoint_to_host_id_map;
+    std::unordered_map<inet_address, utils::UUID> _endpoint_to_host_id_map;
 
     std::vector<token> _sorted_tokens;
 
@@ -56,7 +59,7 @@ class token_metadata final {
 
     std::vector<token> sort_tokens();
 
-    token_metadata(std::map<token, inet_address> token_to_endpoint_map, boost::bimap<inet_address, utils::UUID> endpoints_map, topology topology);
+    token_metadata(std::map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
 public:
     token_metadata() {};
     const std::vector<token>& sorted_tokens() const;
@@ -81,7 +84,7 @@ public:
     private final BiMultiValMap<Token, InetAddress> tokenToEndpointMap;
 
     /** Maintains endpoint to host ID map of every node in the cluster */
-    private final BiMap<InetAddress, UUID> endpointToHostIdMap;
+    private final BiMap<InetAddress, UUID> _endpoint_to_host_id_map;
 
     // Prior to CASSANDRA-603, we just had <tt>Map<Range, InetAddress> pendingRanges<tt>,
     // which was added to when a node began bootstrap and removed from when it finished.
@@ -144,7 +147,7 @@ public:
     {
         this.tokenToEndpointMap = tokenToEndpointMap;
         this.topology = topology;
-        endpointToHostIdMap = endpointsMap;
+        _endpoint_to_host_id_map = endpointsMap;
         sortedTokens = sortTokens();
     }
 
@@ -238,6 +241,7 @@ public:
             lock.writeLock().unlock();
         }
     }
+#endif
 
     /**
      * Store an end-point to host ID mapping.  Each ID must be unique, and
@@ -246,46 +250,36 @@ public:
      * @param hostId
      * @param endpoint
      */
-    public void updateHostId(UUID hostId, InetAddress endpoint)
-    {
-        assert hostId != null;
+    void update_host_id(const UUID& host_id, inet_address endpoint) {
+#if 0
+        assert host_id != null;
         assert endpoint != null;
 
-        lock.writeLock().lock();
-        try
-        {
-            InetAddress storedEp = endpointToHostIdMap.inverse().get(hostId);
-            if (storedEp != null)
-            {
-                if (!storedEp.equals(endpoint) && (FailureDetector.instance.isAlive(storedEp)))
-                {
-                    throw new RuntimeException(String.format("Host ID collision between active endpoint %s and %s (id=%s)",
-                                                             storedEp,
-                                                             endpoint,
-                                                             hostId));
-                }
+        InetAddress storedEp = _endpoint_to_host_id_map.inverse().get(host_id);
+        if (storedEp != null) {
+            if (!storedEp.equals(endpoint) && (FailureDetector.instance.isAlive(storedEp))) {
+                throw new RuntimeException(String.format("Host ID collision between active endpoint %s and %s (id=%s)",
+                                                         storedEp,
+                                                         endpoint,
+                                                         host_id));
             }
-
-            UUID storedId = endpointToHostIdMap.get(endpoint);
-            if ((storedId != null) && (!storedId.equals(hostId)))
-                logger.warn("Changing {}'s host ID from {} to {}", endpoint, storedId, hostId);
-    
-            endpointToHostIdMap.forcePut(endpoint, hostId);
-        }
-        finally
-        {
-            lock.writeLock().unlock();
         }
 
+        UUID storedId = _endpoint_to_host_id_map.get(endpoint);
+        // if ((storedId != null) && (!storedId.equals(host_id)))
+            logger.warn("Changing {}'s host ID from {} to {}", endpoint, storedId, host_id);
+#endif
+        _endpoint_to_host_id_map[endpoint] = host_id;
     }
 
+#if 0
     /** Return the unique host ID for an end-point. */
     public UUID getHostId(InetAddress endpoint)
     {
         lock.readLock().lock();
         try
         {
-            return endpointToHostIdMap.get(endpoint);
+            return _endpoint_to_host_id_map.get(endpoint);
         }
         finally
         {
@@ -299,7 +293,7 @@ public:
         lock.readLock().lock();
         try
         {
-            return endpointToHostIdMap.inverse().get(hostId);
+            return _endpoint_to_host_id_map.inverse().get(hostId);
         }
         finally
         {
@@ -314,7 +308,7 @@ public:
         try
         {
             Map<InetAddress, UUID> readMap = new HashMap<InetAddress, UUID>();
-            readMap.putAll(endpointToHostIdMap);
+            readMap.putAll(_endpoint_to_host_id_map);
             return readMap;
         }
         finally
@@ -425,7 +419,7 @@ public:
             tokenToEndpointMap.removeValue(endpoint);
             topology.removeEndpoint(endpoint);
             leavingEndpoints.remove(endpoint);
-            endpointToHostIdMap.remove(endpoint);
+            _endpoint_to_host_id_map.remove(endpoint);
             sortedTokens = sortTokens();
             invalidateCachedRings();
         }
@@ -549,7 +543,7 @@ public:
         try
         {
             return new TokenMetadata(SortedBiMultiValMap.<Token, InetAddress>create(tokenToEndpointMap, null, inetaddressCmp),
-                                     HashBiMap.create(endpointToHostIdMap),
+                                     HashBiMap.create(_endpoint_to_host_id_map),
                                      new Topology(topology));
         }
         finally
@@ -841,7 +835,7 @@ public:
         lock.readLock().lock();
         try
         {
-            return ImmutableSet.copyOf(endpointToHostIdMap.keySet());
+            return ImmutableSet.copyOf(_endpoint_to_host_id_map.keySet());
         }
         finally
         {
@@ -947,7 +941,7 @@ public:
         try
         {
             tokenToEndpointMap.clear();
-            endpointToHostIdMap.clear();
+            _endpoint_to_host_id_map.clear();
             bootstrapTokens.clear();
             leavingEndpoints.clear();
             pendingRanges.clear();

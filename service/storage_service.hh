@@ -445,7 +445,7 @@ public:
                 {
                     _token_metadata.updateNormalTokens(loadedTokens.get(ep), ep);
                     if (loadedHostIds.containsKey(ep))
-                        _token_metadata.updateHostId(loadedHostIds.get(ep), ep);
+                        _token_metadata.update_host_id(loadedHostIds.get(ep), ep);
                     Gossiper.instance.addSavedEndpoint(ep);
                 }
             }
@@ -585,7 +585,7 @@ private:
             // Seed the host ID-to-endpoint map with our own ID.
 #if 0
             UUID localHostId = SystemKeyspace.getLocalHostId();
-            getTokenMetadata().updateHostId(localHostId, FBUtilities.getBroadcastAddress());
+            getTokenMetadata().update_host_id(localHostId, FBUtilities.getBroadcastAddress());
 #endif
             // FIXME: SystemKeyspace.getLocalHostId();
             utils::UUID local_host_id = utils::UUID_gen::get_time_UUID();
@@ -1443,7 +1443,7 @@ private:
         PendingRangeCalculatorService.instance.update();
 
         if (Gossiper.instance.usesHostId(endpoint))
-            _token_metadata.updateHostId(Gossiper.instance.getHostId(endpoint), endpoint);
+            _token_metadata.update_host_id(Gossiper.instance.getHostId(endpoint), endpoint);
 #endif
     }
 
@@ -1494,7 +1494,7 @@ private:
                         logger.warn("Host ID collision for {} between {} and {}; {} is the new owner", hostId, existing, endpoint, endpoint);
                         _token_metadata.removeEndpoint(existing);
                         endpointsToRemove.add(existing);
-                        _token_metadata.updateHostId(hostId, endpoint);
+                        _token_metadata.update_host_id(hostId, endpoint);
                     }
                     else
                     {
@@ -1504,7 +1504,7 @@ private:
                     }
                 }
                 else
-                    _token_metadata.updateHostId(hostId, endpoint);
+                    _token_metadata.update_host_id(hostId, endpoint);
             }
         }
 
