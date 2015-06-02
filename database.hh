@@ -277,6 +277,7 @@ public:
     bool has_keyspace(const sstring& name) const;
     void update_keyspace(const sstring& name);
     void drop_keyspace(const sstring& name);
+    const auto& keyspaces() const { return _keyspaces; }
     column_family& find_column_family(const sstring& ks, const sstring& name) throw (no_such_column_family);
     const column_family& find_column_family(const sstring& ks, const sstring& name) const throw (no_such_column_family);
     column_family& find_column_family(const utils::UUID&) throw (no_such_column_family);
