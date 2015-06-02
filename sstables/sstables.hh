@@ -23,6 +23,7 @@
 #include "mutation.hh"
 #include "utils/i_filter.hh"
 #include "core/stream.hh"
+#include "writer.hh"
 
 namespace sstables {
 
