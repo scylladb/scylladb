@@ -16,6 +16,7 @@
 #include "utils/UUID_gen.hh"
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <boost/move/iterator.hpp>
+#include "utils/class_registrator.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -61,6 +62,8 @@ public:
             // It's an expected exception, so assume the message
             // is fine.  Also, we don't want to change its type.
             throw;
+        } catch (no_such_class& nc) {
+            throw make_exception<InvalidRequestException>("unable to find class '%s'", nc.what());
         } catch (std::exception& e) {
             // Unexpected exception, wrap it
             throw ::apache::thrift::TException(std::string("Internal server error: ") + e.what());
