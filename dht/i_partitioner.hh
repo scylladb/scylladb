@@ -104,6 +104,7 @@ public:
 class i_partitioner {
 public:
     virtual ~i_partitioner() {}
+
     /**
      * Transform key to object representation of the on-disk format.
      *
@@ -176,6 +177,10 @@ public:
 
     virtual data_type get_token_validator() = 0;
 
+    /**
+     * @return name of partitioner.
+     */
+    virtual const bytes name() = 0;
 protected:
     /**
      * @return true if t1's _data array is equal t2's. _kind comparison should be done separately.

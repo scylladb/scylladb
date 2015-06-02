@@ -4,48 +4,19 @@
 
 #pragma once
 
+#include "disk_types.hh"
 #include "core/enum.hh"
 #include "bytes.hh"
 #include "gc_clock.hh"
 #include "tombstone.hh"
+#include "streaming_histogram.hh"
+#include "estimated_histogram.hh"
+#include "column_name_helper.hh"
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
 
 namespace sstables {
-
-// Some in-disk structures have an associated integer (of varying sizes) that
-// represents how large they are. They can be a byte-length, in the case of a
-// string, number of elements, in the case of an array, etc.
-//
-// For those elements, we encapsulate the underlying type in an outter
-// structure that embeds how large is the in-disk size. It is a lot more
-// convenient to embed it in the size than explicitly writing it in the parser.
-// This way, we don't need to encode this information in multiple places at
-// once - it is already part of the type.
-template <typename Size>
-struct disk_string {
-    bytes value;
-    explicit operator bytes_view() const {
-        return value;
-    }
-};
-
-template <typename Size>
-struct disk_string_view {
-    bytes_view value;
-};
-
-template <typename Size, typename Members>
-struct disk_array {
-    static_assert(std::is_integral<Size>::value, "Length type must be convertible to integer");
-    std::vector<Members> elements;
-};
-
-template <typename Size, typename Key, typename Value>
-struct disk_hash {
-    std::unordered_map<Key, Value, std::hash<Key>> map;
-};
 
 struct option {
     disk_string<uint16_t> key;
@@ -136,35 +107,19 @@ struct summary_la {
 };
 using summary = summary_la;
 
-struct estimated_histogram {
-    struct eh_elem {
-        uint64_t offset;
-        uint64_t bucket;
-
-        template <typename Describer>
-        future<> describe_type(Describer f) { return f(offset, bucket); }
-    };
-
-    disk_array<uint32_t, eh_elem> elements;
-
-    template <typename Describer>
-    future<> describe_type(Describer f) { return f(elements); }
-};
-
 struct replay_position {
     uint64_t segment;
     uint32_t position;
 
+    replay_position() {}
+
+    replay_position(uint64_t seg, uint32_t pos) {
+        segment = seg;
+        position = pos;
+    }
+
     template <typename Describer>
     future<> describe_type(Describer f) { return f(segment, position); }
-};
-
-struct streaming_histogram {
-    uint32_t max_bin_size;
-    disk_hash<uint32_t, double, uint64_t> hash;
-
-    template <typename Describer>
-    future<> describe_type(Describer f) { return f(max_bin_size, hash); }
 };
 
 struct metadata {
@@ -173,6 +128,10 @@ struct metadata {
 struct validation_metadata : public metadata {
     disk_string<uint16_t> partitioner;
     double filter_chance;
+
+    size_t serialized_size() {
+        return sizeof(uint16_t) + partitioner.value.size() + sizeof(filter_chance);
+    }
 
     template <typename Describer>
     future<> describe_type(Describer f) { return f(partitioner, filter_chance); }
@@ -258,6 +217,10 @@ namespace sstables {
 struct statistics {
     disk_hash<uint32_t, metadata_type, uint32_t> hash;
     std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
+
+    // NOTE: offset isn't part of on-disk format. Instead, it's used to help
+    // generation of statistics file by keeping track of its offset.
+    size_t offset;
 };
 
 struct deletion_time {

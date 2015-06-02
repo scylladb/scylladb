@@ -17,6 +17,7 @@
 #include "types.hh"
 #include "sstables.hh"
 #include "compress.hh"
+#include "metadata_collector.hh"
 #include <boost/algorithm/string.hpp>
 
 namespace sstables {
@@ -704,6 +705,59 @@ future<> write(file_writer& out, statistics& s) {
     });
 }
 
+future<> parse(random_access_reader& in, estimated_histogram& eh) {
+    auto len = std::make_unique<uint32_t>();
+
+    auto f = parse(in, *len);
+    return f.then([&in, &eh, len = std::move(len)] {
+        uint32_t length = *len;
+
+        assert(length > 0);
+        eh.bucket_offsets.resize(length - 1);
+        eh.buckets.resize(length);
+
+        auto type_size = sizeof(uint64_t) * 2;
+        return in.read_exactly(length * type_size).then([&eh, length, type_size] (auto buf) {
+            check_buf_size(buf, length * type_size);
+
+            auto *nr = reinterpret_cast<const net::packed<uint64_t> *>(buf.get());
+            size_t j = 0;
+            for (size_t i = 0; i < length; ++i) {
+                eh.bucket_offsets[i == 0 ? 0 : i - 1] = net::ntoh(nr[j++]);
+                eh.buckets[i] = net::ntoh(nr[j++]);
+            }
+            return make_ready_future<>();
+        });
+    });
+}
+
+future<> write(file_writer& out, estimated_histogram& eh) {
+    uint32_t len = 0;
+    check_truncate_and_assign(len, eh.buckets.size());
+
+    return write(out, len).then([&out, &eh] {
+        struct element {
+            uint64_t offsets;
+            uint64_t buckets;
+        };
+        std::vector<element> elements;
+        elements.resize(eh.buckets.size());
+
+        auto *offsets_nr = reinterpret_cast<const net::packed<uint64_t> *>(eh.bucket_offsets.data());
+        auto *buckets_nr = reinterpret_cast<const net::packed<uint64_t> *>(eh.buckets.data());
+        for (size_t i = 0; i < eh.buckets.size(); i++) {
+            elements[i].offsets = net::hton(offsets_nr[i == 0 ? 0 : i - 1]);
+            elements[i].buckets = net::hton(buckets_nr[i]);
+        }
+
+        return do_with(std::move(elements), [&out] (auto& elements) {
+            auto p = reinterpret_cast<const char*>(elements.data());
+            auto bytes = elements.size() * sizeof(element);
+            return out.write(p, bytes);
+        });
+    });
+}
+
 // This is small enough, and well-defined. Easier to just read it all
 // at once
 future<> sstable::read_toc() {
@@ -988,9 +1042,21 @@ future<> sstable::store() {
     });
 }
 
+// FIXME: It's terrible to have column_stats as a global variable because of
+// bad design, but that was needed so as not to pass column_stats for every
+// function that ends up updating any of its fields.
+// column_stats is used to keep track of statistics for each row.
+static __thread column_stats* c_stats;
+
 // @clustering_key: it's expected that clustering key is already in its composite form.
 // NOTE: empty clustering key means that there is no clustering key.
 static future<> write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names) {
+    // FIXME: min_components and max_components also keep track of clustering
+    // prefix, so we must merge clustering_key and column_names somehow and
+    // pass the result to the functions below.
+    column_name_helper::min_components(c_stats->min_column_names, column_names);
+    column_name_helper::max_components(c_stats->max_column_names, column_names);
+
     // FIXME: This code assumes name is always composite, but it wouldn't if "WITH COMPACT STORAGE"
     // was defined in the schema, for example.
     return do_with(composite::from_exploded(column_names), [&out, &clustering_key] (composite& c) {
@@ -1000,6 +1066,9 @@ static future<> write_column_name(file_writer& out, const composite& clustering_
 }
 
 static future<> write_static_column_name(file_writer& out, const schema& schema, const std::vector<bytes_view>& column_names) {
+    column_name_helper::min_components(c_stats->min_column_names, column_names);
+    column_name_helper::max_components(c_stats->max_column_names, column_names);
+
     return do_with(composite::from_exploded(column_names), [&out, &schema] (composite& c) {
         return do_with(composite::static_prefix(schema), [&out, &c] (composite& sp) {
             uint16_t sz = sp.size() + c.size();
@@ -1008,11 +1077,19 @@ static future<> write_static_column_name(file_writer& out, const schema& schema,
     });
 }
 
+static inline void update_cell_stats(uint64_t timestamp) {
+    c_stats->update_min_timestamp(timestamp);
+    c_stats->update_max_timestamp(timestamp);
+    c_stats->column_count++;
+}
+
 // Intended to write all cell components that follow column name.
 static future<> write_cell(file_writer& out, atomic_cell_view cell) {
     // FIXME: range tombstone and counter cells aren't supported yet.
 
     uint64_t timestamp = cell.timestamp();
+
+    update_cell_stats(timestamp);
 
     if (cell.is_live_and_has_ttl()) {
         // expiring cell
@@ -1031,6 +1108,8 @@ static future<> write_cell(file_writer& out, atomic_cell_view cell) {
         column_mask mask = column_mask::deletion;
         uint32_t deletion_time_size = sizeof(uint32_t);
         uint32_t deletion_time = cell.deletion_time().time_since_epoch().count();
+
+        c_stats->tombstone_histogram.update(deletion_time);
 
         return write(out, mask, timestamp, deletion_time_size, deletion_time);
     } else {
@@ -1056,6 +1135,8 @@ static future<> write_row_marker(file_writer& out, const rows_entry& clustered_r
         column_mask mask = column_mask::none;
         uint64_t timestamp = clustered_row.row().created_at();
         uint32_t value_length = 0;
+
+        update_cell_stats(timestamp);
 
         return write(out, mask, timestamp, value_length);
     });
@@ -1153,6 +1234,22 @@ static void prepare_summary(summary& s, const memtable& mt) {
     s.last_key.value = std::move(last_key.get_bytes());
 }
 
+// In the beginning of the statistics file, there is a disk_hash used to
+// describe where each type of metadata lies. Key is the metadata_type, and
+// Value the offset.
+// The purpose of this function is to initialize the field offset, used to
+// help the computation of the offset value for each metadata type.
+static void prepare_statistics(statistics& s) {
+    // FIXME: When compaction metadata is supported, METADATA_TYPE_COUNT must be 3 instead.
+    static constexpr int METADATA_TYPE_COUNT = 2;
+
+    s.offset = 0;
+    // account disk_hash size.
+    s.offset += sizeof(uint32_t);
+    // account disk_hash members.
+    s.offset += (METADATA_TYPE_COUNT * (sizeof(metadata_type) + sizeof(uint32_t)));
+}
+
 static void maybe_add_summary_entry(summary& s, bytes_view key, uint64_t offset) {
     if ((s.keys_written % s.header.min_index_interval) == 0) {
         s.positions.push_back(s.header.memory_size);
@@ -1160,6 +1257,27 @@ static void maybe_add_summary_entry(summary& s, bytes_view key, uint64_t offset)
         s.header.memory_size += key.size() + sizeof(uint64_t);
     }
     s.keys_written++;
+}
+
+static void add_validation_metadata(statistics& s, const bytes partitioner, double bloom_filter_fp_chance)
+{
+    size_t old_offset = s.offset;
+    validation_metadata m;
+
+    m.partitioner.value = partitioner;
+    m.filter_chance = bloom_filter_fp_chance;
+    s.offset += m.serialized_size();
+    s.contents[metadata_type::Validation] = std::make_unique<validation_metadata>(std::move(m));
+    s.hash.map[metadata_type::Validation] = old_offset;
+}
+
+static void add_stats_metadata(statistics& s, metadata_collector& collector) {
+    stats_metadata m;
+    collector.construct_stats(m);
+    s.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(m));
+    s.hash.map[metadata_type::Stats] = s.offset;
+    // FIXME: method serialized_size of stats_metadata must be implemented for
+    // compaction_metadata to get supported, then increment s.offset using it.
 }
 
 future<> sstable::write_components(const memtable& mt) {
@@ -1181,10 +1299,21 @@ future<> sstable::write_components(const memtable& mt) {
         }
         _filter = utils::i_filter::get_filter(mt.all_partitions().size(), filter_fp_chance);
 
+        prepare_statistics(_statistics);
+        // NOTE: Cassandra gets partition name by calling getClass().getCanonicalName() on
+        // partition class.
+        add_validation_metadata(_statistics, dht::global_partitioner().name(), filter_fp_chance);
+        auto collector = make_lw_shared<metadata_collector>();
+
         // Iterate through CQL partitions, then CQL rows, then CQL columns.
         // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.
         return do_for_each(mt.all_partitions(),
-                [w, index, &mt, this] (const std::pair<const dht::decorated_key, mutation_partition>& partition_entry) {
+                [w, index, &mt, collector, this] (const std::pair<const dht::decorated_key, mutation_partition>& partition_entry) {
+
+            // Initialize column stats and set current index of data to later compute row size.
+            c_stats = new column_stats();
+            // FIXME: it's likely that we need to set both sstable_level and repaired_at at this point.
+            c_stats->start_offset = w->offset();
 
             return do_with(key::from_partition_key(*mt.schema(), partition_entry.first._key),
                     [w, index, &partition_entry, this] (auto& partition_key) {
@@ -1208,6 +1337,11 @@ future<> sstable::write_components(const memtable& mt) {
                     if (tombstone) {
                         d.local_deletion_time = tombstone.deletion_time.time_since_epoch().count();
                         d.marked_for_delete_at = tombstone.timestamp;
+
+                        c_stats->tombstone_histogram.update(d.local_deletion_time);
+                        c_stats->update_max_local_deletion_time(d.local_deletion_time);
+                        c_stats->update_min_timestamp(d.marked_for_delete_at);
+                        c_stats->update_max_timestamp(d.marked_for_delete_at);
                     } else {
                         // Default values for live, undeleted rows.
                         d.local_deletion_time = std::numeric_limits<int32_t>::max();
@@ -1233,6 +1367,13 @@ future<> sstable::write_components(const memtable& mt) {
                         return write(*w, end_of_row);
                     });
                 });
+            }).then([w, collector] {
+                // compute size of the current row.
+                c_stats->row_size = w->offset() - c_stats->start_offset;
+                // update is about merging column_stats with the data being stored by collector.
+                collector->update(*c_stats);
+                delete c_stats;
+                return make_ready_future<>();
             });
         }).then([this, w] {
             return write_digest(filename(sstable::component_type::Digest), w->full_checksum());
@@ -1249,8 +1390,12 @@ future<> sstable::write_components(const memtable& mt) {
             return write_summary();
         }).then([this] {
             return write_filter();
+        }).then([this, collector] {
+            add_stats_metadata(_statistics, *collector);
+            return write_statistics();
         }).then([this] {
             _components.insert(component_type::TOC);
+            _components.insert(component_type::Statistics);
             _components.insert(component_type::Digest);
             _components.insert(component_type::Index);
             _components.insert(component_type::Summary);
