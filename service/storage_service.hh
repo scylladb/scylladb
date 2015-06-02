@@ -129,7 +129,7 @@ private:
 
     bool _initialized;
 
-    bool joined = false;
+    bool _joined = false;
 
 #if 0
     /* the probability for tracing any particular request, 0 disables tracing and 1 enables for all */
@@ -584,12 +584,11 @@ private:
             Auth.setup();
         }
     }
-
-    public boolean isJoined()
-    {
-        return joined;
+#endif
+    bool is_joined() {
+        return _joined;
     }
-
+#if 0
     public void rebuild(String sourceDc)
     {
         logger.info("rebuild from dc: {}", sourceDc == null ? "(any dc)" : sourceDc);

@@ -20,7 +20,7 @@ bool storage_service::should_bootstrap() {
 }
 
 future<> storage_service::prepare_to_join() {
-    if (!joined) {
+    if (!_joined) {
         std::map<gms::application_state, gms::versioned_value> app_states;
 #if 0
         if (DatabaseDescriptor.isReplacing() && !(Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true"))))
@@ -89,9 +89,8 @@ future<> storage_service::prepare_to_join() {
 
 future<> storage_service::join_token_ring(int delay) {
     auto f = make_ready_future<>();
+    _joined = true;
 #if 0
-    joined = true;
-
     // We bootstrap if we haven't successfully bootstrapped before, as long as we are not a seed.
     // If we are a seed, or if the user manually sets auto_bootstrap to false,
     // we'll skip streaming data from other nodes and jump directly into the ring.
