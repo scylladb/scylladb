@@ -18,7 +18,7 @@ public:
     static void register_class(sstring name, creator_type creator);
     template<typename T>
     static void register_class(sstring name);
-    static std::unique_ptr<BaseType> create(const sstring& name, Args...);
+    static std::unique_ptr<BaseType> create(const sstring& name, Args&&...);
 
     static std::unordered_map<sstring, creator_type>& classes() {
         static std::unordered_map<sstring, creator_type> _classes;
@@ -51,12 +51,13 @@ struct class_registrator {
 };
 
 template<typename BaseType, typename... Args>
-std::unique_ptr<BaseType> class_registry<BaseType, Args...>::create(const sstring& name, Args... args) {
+std::unique_ptr<BaseType> class_registry<BaseType, Args...>::create(const sstring& name, Args&&... args) {
     auto it = classes().find(name);
     if (it == classes().end()) {
         throw no_such_class(sstring("unable to find class '") + name + sstring("'"));
     }
-    return it->second(args...);
+
+    return it->second(std::forward<Args>(args)...);
 }
 
 template<typename BaseType, typename... Args>
