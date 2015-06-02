@@ -1247,6 +1247,11 @@ void sstable::do_write_components(const memtable& mt) {
         auto& static_row = partition.static_row();
 
         write_static_row(*w, mt.schema(), static_row);
+        for (const auto& rt: partition.row_tombstones()) {
+            auto prefix = composite::from_clustering_element(*mt.schema(), rt.prefix());
+            write_range_tombstone(*w, prefix, {}, rt.t());
+        }
+
         // Write all CQL rows from a given mutation partition.
         for (auto& clustered_row: partition.clustered_rows()) {
             write_clustered_row(*w, mt.schema(), clustered_row);
