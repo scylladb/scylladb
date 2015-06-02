@@ -976,44 +976,8 @@ public:
     virtual void on_dead(gms::inet_address endpoint, gms::endpoint_state state) override;
     virtual void on_remove(gms::inet_address endpoint) override;
     virtual void on_restart(gms::inet_address endpoint, gms::endpoint_state state) override;
-#if 0
-    private void updatePeerInfo(InetAddress endpoint)
-    {
-        EndpointState epState = Gossiper.instance.getEndpointStateForEndpoint(endpoint);
-        for (Map.Entry<ApplicationState, VersionedValue> entry : epState.getApplicationStateMap().entrySet())
-        {
-            switch (entry.getKey())
-            {
-                case RELEASE_VERSION:
-                    SystemKeyspace.updatePeerInfo(endpoint, "release_version", entry.getValue().value);
-                    break;
-                case DC:
-                    SystemKeyspace.updatePeerInfo(endpoint, "data_center", entry.getValue().value);
-                    break;
-                case RACK:
-                    SystemKeyspace.updatePeerInfo(endpoint, "rack", entry.getValue().value);
-                    break;
-                case RPC_ADDRESS:
-                    try
-                    {
-                        SystemKeyspace.updatePeerInfo(endpoint, "rpc_address", InetAddress.getByName(entry.getValue().value));
-                    }
-                    catch (UnknownHostException e)
-                    {
-                        throw new RuntimeException(e);
-                    }
-                    break;
-                case SCHEMA:
-                    SystemKeyspace.updatePeerInfo(endpoint, "schema_version", UUID.fromString(entry.getValue().value));
-                    break;
-                case HOST_ID:
-                    SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(entry.getValue().value));
-                    break;
-            }
-        }
-    }
-#endif
 private:
+    void update_peer_info(inet_address endpoint);
     sstring get_application_state_value(inet_address endpoint, application_state appstate) {
         auto& gossiper = gms::get_local_gossiper();
         auto eps = gossiper.get_endpoint_state_for_endpoint(endpoint);

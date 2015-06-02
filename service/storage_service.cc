@@ -381,8 +381,7 @@ void storage_service::handle_state_normal(inet_address endpoint) {
     if (_token_metadata.is_member(endpoint)) {
         // logger.info("Node {} state jump to normal", endpoint);
     }
-    // FIXME:
-    // updatePeerInfo(endpoint);
+    update_peer_info(endpoint);
 #if 1
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
     if (gossiper.uses_host_id(endpoint)) {
@@ -693,6 +692,32 @@ void storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state
     if (state.isAlive())
         onDead(endpoint, state);
 #endif
+}
+
+void storage_service::update_peer_info(gms::inet_address endpoint) {
+    using namespace gms;
+    auto& gossiper = gms::get_local_gossiper();
+    auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
+    if (!ep_state) {
+        return;
+    }
+    for (auto& entry : ep_state->get_application_state_map()) {
+        auto& app_state = entry.first;
+        //auto& value = entry.second.value
+        if (app_state == application_state::RELEASE_VERSION) {
+            // SystemKeyspace.updatePeerInfo(endpoint, "release_version", value);
+        } else if (app_state == application_state::DC) {
+            // SystemKeyspace.updatePeerInfo(endpoint, "data_center", value);
+        } else if (app_state == application_state::RACK) {
+            // SystemKeyspace.updatePeerInfo(endpoint, "rack", value);
+        } else if (app_state == application_state::RPC_ADDRESS) {
+            // SystemKeyspace.updatePeerInfo(endpoint, "rpc_address", InetAddress.getByName(value));
+        } else if (app_state == application_state::SCHEMA) {
+            // SystemKeyspace.updatePeerInfo(endpoint, "schema_version", UUID.fromString(value));
+        } else if (app_state == application_state::HOST_ID) {
+            // SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(value));
+        }
+    }
 }
 
 
