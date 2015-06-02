@@ -258,16 +258,16 @@ public:
         builder.new_row();
         for (auto&& def : stmt._selection->get_columns()) {
             switch (def->kind) {
-                case column_definition::column_kind::PARTITION:
+                case column_kind::partition_key:
                     builder.add(_partition_key[def->component_index()]);
                     break;
-                case column_definition::column_kind::CLUSTERING:
+                case column_kind::clustering_key:
                     builder.add(_clustering_key[def->component_index()]);
                     break;
-                case column_definition::column_kind::REGULAR:
+                case column_kind::regular_column:
                     add_value(*def, row_iterator);
                     break;
-                case column_definition::column_kind::STATIC:
+                case column_kind::static_column:
                     add_value(*def, static_row_iterator);
                     break;
                 default:

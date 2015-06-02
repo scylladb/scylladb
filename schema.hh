@@ -19,6 +19,29 @@
 
 using column_id = uint32_t;
 
+// make sure these match the order we like columns back from schema
+enum class column_kind { partition_key, clustering_key, static_column, regular_column,  };
+
+// CMH this is also manually defined in thrift gen file.
+enum class index_type {
+    keys,
+    custom,
+    composites,
+    none, // cwi: added none to avoid "optional" bs.
+};
+
+typedef std::unordered_map<sstring, sstring> index_options_map;
+
+struct index_info {
+    index_info(::index_type = ::index_type::none
+            , std::experimental::optional<sstring> index_name = std::experimental::optional<sstring>()
+            , std::experimental::optional<index_options_map> = std::experimental::optional<index_options_map>());
+
+    enum index_type index_type = ::index_type::none;
+    std::experimental::optional<sstring> index_name;
+    std::experimental::optional<index_options_map> index_options;
+};
+
 class column_definition final {
 public:
     template<typename ColumnRange>
@@ -30,22 +53,25 @@ public:
 private:
     bytes _name;
 public:
-    enum class column_kind { PARTITION, CLUSTERING, REGULAR, STATIC };
-    column_definition(bytes name, data_type type, column_id id, column_kind kind);
+    column_definition(bytes name, data_type type, column_kind kind, index_info = index_info());
+
     data_type type;
 
     // Unique within (kind, schema instance).
     // schema::position() and component_index() depend on the fact that for PK columns this is
     // equivalent to component index.
-    column_id id;
+    // Note: set by schema::build()
+    column_id id = 0;
 
     column_kind kind;
     ::shared_ptr<cql3::column_specification> column_specification;
-    bool is_static() const { return kind == column_kind::STATIC; }
-    bool is_regular() const { return kind == column_kind::REGULAR; }
-    bool is_partition_key() const { return kind == column_kind::PARTITION; }
-    bool is_clustering_key() const { return kind == column_kind::CLUSTERING; }
-    bool is_primary_key() const { return kind == column_kind::PARTITION || kind == column_kind::CLUSTERING; }
+    index_info idx_info;
+
+    bool is_static() const { return kind == column_kind::static_column; }
+    bool is_regular() const { return kind == column_kind::regular_column; }
+    bool is_partition_key() const { return kind == column_kind::partition_key; }
+    bool is_clustering_key() const { return kind == column_kind::clustering_key; }
+    bool is_primary_key() const { return kind == column_kind::partition_key || kind == column_kind::clustering_key; }
     bool is_atomic() const { return !type->is_multi_cell(); }
     bool is_compact_value() const;
     const sstring& name_as_text() const;
@@ -58,6 +84,8 @@ public:
         return id;
     }
 };
+
+class schema_builder;
 
 /*
  * Effectively immutable.
@@ -72,38 +100,45 @@ private:
         utils::UUID _id;
         sstring _ks_name;
         sstring _cf_name;
-        std::vector<column_definition> _partition_key;
-        std::vector<column_definition> _clustering_key;
-        std::vector<column_definition> _regular_columns; // sorted by name
-        std::vector<column_definition> _static_columns; // sorted by name, present only when there's any clustering column
+        // regular columns are sorted by name
+        // static columns are sorted by name, but present only when there's any clustering column
+        std::vector<column_definition> _columns;
         sstring _comment;
         gc_clock::duration _default_time_to_live = gc_clock::duration::zero();
         data_type _regular_column_name_type;
         double _bloom_filter_fp_chance = 0.01;
     };
     raw_schema _raw;
-private:
+
+    const std::array<size_t, 3> _offsets;
+
+    inline size_t column_offset(column_kind k) const {
+        return k == column_kind::partition_key ? 0 : _offsets[size_t(k) - 1];
+    }
+
     std::unordered_map<bytes, const column_definition*> _columns_by_name;
     std::map<bytes, const column_definition*, serialized_compare> _regular_columns_by_name;
     lw_shared_ptr<compound_type<allow_prefixes::no>> _partition_key_type;
     lw_shared_ptr<compound_type<allow_prefixes::no>> _clustering_key_type;
     lw_shared_ptr<compound_type<allow_prefixes::yes>> _clustering_key_prefix_type;
+
+    friend class schema_builder;
 public:
+    typedef std::vector<column_definition> columns_type;
+    typedef typename columns_type::iterator iterator;
+    typedef typename columns_type::const_iterator const_iterator;
+    typedef boost::iterator_range<iterator> iterator_range_type;
+    typedef boost::iterator_range<const_iterator> const_iterator_range_type;
+
     struct column {
         bytes name;
         data_type type;
-        struct name_compare {
-            data_type type;
-            name_compare(data_type type) : type(type) {}
-            bool operator()(const column& cd1, const column& cd2) const {
-                return type->less(cd1.name, cd2.name);
-            }
-        };
+        index_info idx_info;
     };
 private:
-    void build_columns(const std::vector<column>& columns, column_definition::column_kind kind, std::vector<column_definition>& dst);
     ::shared_ptr<cql3::column_specification> make_column_specification(const column_definition& def);
     void rebuild();
+    schema(const raw_schema&);
 public:
     schema(std::experimental::optional<utils::UUID> id,
         sstring ks_name,
@@ -142,77 +177,93 @@ public:
         return false;
     }
     const column_definition* get_column_definition(const bytes& name) const;
-    auto regular_begin() const {
-        return _raw._regular_columns.begin();
+    const_iterator regular_begin() const {
+        return regular_columns().begin();
     }
-    auto regular_end() const {
-        return _raw._regular_columns.end();
+    const_iterator regular_end() const {
+        return regular_columns().end();
     }
-    auto regular_lower_bound(const bytes& name) const {
+    const_iterator regular_lower_bound(const bytes& name) const {
         // TODO: use regular_columns and a version of std::lower_bound() with heterogeneous comparator
         auto i = _regular_columns_by_name.lower_bound(name);
         if (i == _regular_columns_by_name.end()) {
             return regular_end();
         } else {
-            return _raw._regular_columns.begin() + i->second->id;
+            return regular_begin() + i->second->id;
         }
     }
-    auto regular_upper_bound(const bytes& name) const {
+    const_iterator regular_upper_bound(const bytes& name) const {
         // TODO: use regular_columns and a version of std::upper_bound() with heterogeneous comparator
         auto i = _regular_columns_by_name.upper_bound(name);
         if (i == _regular_columns_by_name.end()) {
             return regular_end();
         } else {
-            return _raw._regular_columns.begin() + i->second->id;
+            return regular_begin() + i->second->id;
         }
     }
     data_type column_name_type(const column_definition& def) const {
-        return def.kind == column_definition::column_kind::REGULAR ? _raw._regular_column_name_type : utf8_type;
+        return def.kind == column_kind::regular_column ? _raw._regular_column_name_type : utf8_type;
     }
     const column_definition& regular_column_at(column_id id) const {
-        return _raw._regular_columns.at(id);
+        if (id > regular_columns_count()) {
+            throw std::out_of_range("column_id");
+        }
+        return _raw._columns.at(column_offset(column_kind::regular_column) + id);
     }
     const column_definition& static_column_at(column_id id) const {
-        return _raw._static_columns.at(id);
+        if (id > static_columns_count()) {
+            throw std::out_of_range("column_id");
+        }
+        return _raw._columns.at(column_offset(column_kind::static_column) + id);
     }
     bool is_last_partition_key(const column_definition& def) const {
-        return &_raw._partition_key[_raw._partition_key.size() - 1] == &def;
+        return &_raw._columns.at(partition_key_size() - 1) == &def;
     }
     bool has_collections() const ;
     bool has_static_columns() const {
-        return !_raw._static_columns.empty();
+        return !static_columns().empty();
     }
-    size_t partition_key_size() const { return _raw._partition_key.size(); }
-    size_t clustering_key_size() const { return _raw._clustering_key.size(); }
-    size_t static_columns_count() const { return _raw._static_columns.size(); }
-    size_t regular_columns_count() const { return _raw._regular_columns.size(); }
-    // Returns a range of column definitions
-    auto partition_key_columns() const {
-        return boost::make_iterator_range(_raw._partition_key.begin(), _raw._partition_key.end());
+    size_t partition_key_size() const {
+        return column_offset(column_kind::clustering_key);
     }
-    // Returns a range of column definitions
-    auto clustering_key_columns() const {
-        return boost::make_iterator_range(_raw._clustering_key.begin(), _raw._clustering_key.end());
+    size_t clustering_key_size() const {
+        return column_offset(column_kind::static_column) - column_offset(column_kind::clustering_key);
     }
-    // Returns a range of column definitions
-    auto static_columns() const {
-        return boost::make_iterator_range(_raw._static_columns.begin(), _raw._static_columns.end());
+    size_t static_columns_count() const {
+        return column_offset(column_kind::regular_column) - column_offset(column_kind::static_column);
+    }
+    size_t regular_columns_count() const {
+        return _raw._columns.size() - column_offset(column_kind::static_column);
     }
     // Returns a range of column definitions
-    auto regular_columns() const {
-        return boost::make_iterator_range(_raw._regular_columns.begin(), _raw._regular_columns.end());
+    const_iterator_range_type partition_key_columns() const {
+        return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::partition_key)
+                , _raw._columns.begin() + column_offset(column_kind::clustering_key));
     }
     // Returns a range of column definitions
-    auto all_columns_in_select_order() const {
-        return boost::range::join(partition_key_columns(),
-            boost::range::join(clustering_key_columns(),
-            boost::range::join(static_columns(), regular_columns())));
+    const_iterator_range_type clustering_key_columns() const {
+        return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::clustering_key)
+                , _raw._columns.begin() + column_offset(column_kind::static_column));
+    }
+    // Returns a range of column definitions
+    const_iterator_range_type static_columns() const {
+        return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::static_column)
+                , _raw._columns.begin() + column_offset(column_kind::regular_column));
+    }
+    // Returns a range of column definitions
+    const_iterator_range_type regular_columns() const {
+        return boost::make_iterator_range(_raw._columns.begin() + column_offset(column_kind::regular_column)
+                , _raw._columns.end());
+    }
+    // Returns a range of column definitions
+    const columns_type& all_columns_in_select_order() const {
+        return _raw._columns;
     }
     uint32_t position(const column_definition& column) const {
         if (column.is_primary_key()) {
             return column.id;
         }
-        return _raw._clustering_key.size();
+        return clustering_key_size();
     }
     gc_clock::duration default_time_to_live() const {
         return _raw._default_time_to_live;
