@@ -411,7 +411,7 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
         }
 
         auto position = index_list[index_idx].position;
-        return this->data_end_position(summary_idx, index_idx, index_list).then([&key, &schema, this, position] (size_t end) {
+        return this->data_end_position(summary_idx, index_idx, index_list).then([&key, schema, this, position] (size_t end) {
             return do_with(mp_row_consumer(key, schema), [this, position, end] (auto& c) {
                 return this->data_consume_rows_at_once(c, position, end).then([&c] {
                     return make_ready_future<mutation_opt>(std::move(c.mut));
