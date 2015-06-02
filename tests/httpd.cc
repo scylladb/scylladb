@@ -10,6 +10,7 @@
 #include "http/routes.hh"
 #include "http/exception.hh"
 #include "http/transformers.hh"
+#include "core/future-util.hh"
 #include "tests/test-utils.hh"
 
 using namespace httpd;
@@ -101,39 +102,40 @@ SEASTAR_TEST_CASE(test_routes) {
     std::unique_ptr<request> req = std::make_unique<request>();
     std::unique_ptr<reply> rep = std::make_unique<reply>();
 
-    BOOST_CHECK_NO_THROW(
+    auto f1 =
             route.handle("/api", std::move(req), std::move(rep)).then(
-                    [&rep](std::unique_ptr<reply> _rep) {
-                        rep = std::move(_rep);
-                    }));
-    BOOST_REQUIRE_EQUAL((int )rep->_status, (int )reply::status_type::ok);
+                    [] (std::unique_ptr<reply> rep) {
+                        BOOST_REQUIRE_EQUAL((int )rep->_status, (int )reply::status_type::ok);
+                    });
     req.reset(new request);
     rep.reset(new reply);
 
-    BOOST_CHECK_NO_THROW(
+    auto f2 =
             route.handle("/", std::move(req), std::move(rep)).then(
-                    [&rep](std::unique_ptr<reply> _rep) {
-                        rep = std::move(_rep);
-                    }));
-    BOOST_REQUIRE_EQUAL((int )rep->_status, (int )reply::status_type::ok);
+                    [] (std::unique_ptr<reply> rep) {
+                        BOOST_REQUIRE_EQUAL((int )rep->_status, (int )reply::status_type::ok);
+                    });
     req.reset(new request);
     rep.reset(new reply);
-    BOOST_CHECK_NO_THROW(
+    auto f3 =
             route.handle("/api/abc", std::move(req), std::move(rep)).then(
-                    [&rep](std::unique_ptr<reply> _rep) {
-                        rep = std::move(_rep);
-                    }));
+                    [] (std::unique_ptr<reply> rep) {
+                    });
     req.reset(new request);
     rep.reset(new reply);
-    BOOST_CHECK_NO_THROW(
+    auto f4 =
             route.handle("/ap", std::move(req), std::move(rep)).then(
-                    [&rep](std::unique_ptr<reply> _rep) {
-                        rep = std::move(_rep);
-                    }));
-    BOOST_REQUIRE_EQUAL((int )rep->_status,
-            (int )reply::status_type::not_found);
-
-    return make_ready_future<>();
+                    [] (std::unique_ptr<reply> rep) {
+                        BOOST_REQUIRE_EQUAL((int )rep->_status,
+                                            (int )reply::status_type::not_found);
+                    });
+    return when_all(std::move(f1), std::move(f2), std::move(f3), std::move(f4))
+            .then([] (std::tuple<future<>, future<>, future<>, future<>> fs) {
+        std::get<0>(fs).get();
+        std::get<1>(fs).get();
+        std::get<2>(fs).get();
+        std::get<3>(fs).get();
+    });
 }
 
 SEASTAR_TEST_CASE(test_transformer) {
