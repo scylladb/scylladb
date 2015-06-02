@@ -111,12 +111,12 @@ public:
     }
 
     void set_keyspace(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
-        try {
+        if (!_db.local().has_keyspace(keyspace)) {
+            complete_with_exception<InvalidRequestException>(std::move(exn_cob),
+                "keyspace %s does not exist", keyspace);
+        } else {
             _ks_name = keyspace;
             cob();
-        } catch (std::out_of_range& e) {
-            return complete_with_exception<InvalidRequestException>(std::move(exn_cob),
-                    "keyspace %s does not exist", keyspace);
         }
     }
 
