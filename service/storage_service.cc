@@ -276,6 +276,30 @@ future<> storage_service::join_token_ring(int delay) {
     });
 }
 
+void storage_service::join_ring() {
+#if 0
+    if (!joined) {
+        logger.info("Joining ring by operator request");
+        try
+        {
+            joinTokenRing(0);
+        }
+        catch (ConfigurationException e)
+        {
+            throw new IOException(e.getMessage());
+        }
+    } else if (isSurveyMode) {
+        set_tokens(SystemKeyspace.getSavedTokens());
+        SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
+        isSurveyMode = false;
+        logger.info("Leaving write survey mode and joining ring at operator request");
+        assert _token_metadata.sortedTokens().size() > 0;
+
+        Auth.setup();
+    }
+#endif
+}
+
 future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
     _is_bootstrap_mode = true;
     // SystemKeyspace.updateTokens(tokens); // DON'T use setToken, that makes us part of the ring locally which is incorrect until we are done bootstrapping

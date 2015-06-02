@@ -558,33 +558,9 @@ private:
         Gossiper.instance.addLocalApplicationState(ApplicationState.DC, StorageService.instance.valueFactory.datacenter(dc));
         Gossiper.instance.addLocalApplicationState(ApplicationState.RACK, StorageService.instance.valueFactory.rack(rack));
     }
-
-    public synchronized void joinRing() throws IOException
-    {
-        if (!joined)
-        {
-            logger.info("Joining ring by operator request");
-            try
-            {
-                joinTokenRing(0);
-            }
-            catch (ConfigurationException e)
-            {
-                throw new IOException(e.getMessage());
-            }
-        }
-        else if (isSurveyMode)
-        {
-            set_tokens(SystemKeyspace.getSavedTokens());
-            SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
-            isSurveyMode = false;
-            logger.info("Leaving write survey mode and joining ring at operator request");
-            assert _token_metadata.sortedTokens().size() > 0;
-
-            Auth.setup();
-        }
-    }
 #endif
+public:
+    void join_ring();
     bool is_joined() {
         return _joined;
     }
