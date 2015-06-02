@@ -188,10 +188,9 @@ SEASTAR_TEST_CASE(test_future_forwarding__ready_to_unarmed) {
     std::move(f1).forward_to(std::move(p2));
     BOOST_REQUIRE(f2.available());
 
-    auto called = std::move(f2).then([] {});
-    BOOST_REQUIRE(called.available());
-
-    return make_ready_future<>();
+    return std::move(f2).then_wrapped([] (future<> f) {
+        BOOST_REQUIRE(!f.failed());
+    });
 }
 
 SEASTAR_TEST_CASE(test_future_forwarding__ready_to_armed) {
