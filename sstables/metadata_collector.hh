@@ -65,6 +65,10 @@ struct column_stats {
         has_legacy_counter_shards = false;
     }
 
+    void reset() {
+        *this = column_stats();
+    }
+
     void update_min_timestamp(uint64_t potential_min) {
         min_timestamp = std::min(min_timestamp, potential_min);
     }
