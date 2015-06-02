@@ -232,6 +232,18 @@ enum class metadata_type : uint32_t {
     Stats = 2,
 };
 
+
+static constexpr int DEFAULT_CHUNK_SIZE = 65536;
+
+// checksums are generated using adler32 algorithm.
+struct checksum {
+    uint32_t chunk_size;
+    std::vector<uint32_t> checksums;
+
+    template <typename Describer>
+    future<> describe_type(Describer f) { return f(chunk_size, checksums); }
+};
+
 }
 
 namespace std {

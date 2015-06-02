@@ -152,11 +152,24 @@ size_t compress_snappy(const char* input, size_t input_len,
     fail(unimplemented::cause::COMPRESSION);
 }
 
+uint32_t init_checksum_adler32() {
+    return adler32(0, Z_NULL, 0);
+}
+
 uint32_t checksum_adler32(const char* input, size_t input_len) {
     auto init = adler32(0, Z_NULL, 0);
     // yuck, zlib uses unsigned char while we use char :-(
     return adler32(init, reinterpret_cast<const unsigned char *>(input),
             input_len);
+}
+
+uint32_t checksum_adler32(uint32_t adler, const char* input, size_t input_len) {
+    return adler32(adler, reinterpret_cast<const unsigned char *>(input),
+            input_len);
+}
+
+uint32_t checksum_adler32_combine(uint32_t adler1, uint32_t adler2, size_t input_len2) {
+    return adler32_combine(adler1, adler2, input_len2);
 }
 
 class compressed_file_data_source_impl : public data_source_impl {

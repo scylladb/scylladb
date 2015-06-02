@@ -60,11 +60,11 @@ public:
     file_writer(lw_shared_ptr<file> f, size_t buffer_size = 8192)
         : _out(make_file_output_stream(std::move(f), buffer_size)) {}
 
-    future<> write(const char* buf, size_t n) {
+    virtual future<> write(const char* buf, size_t n) {
         _offset += n;
         return _out.write(buf, n);
     }
-    future<> write(const bytes& s) {
+    virtual future<> write(const bytes& s) {
         _offset += s.size();
         return _out.write(s);
     }
@@ -76,6 +76,84 @@ public:
     }
     size_t offset() {
         return _offset;
+    }
+
+    friend class checksummed_file_writer;
+};
+
+class checksummed_file_writer : public file_writer {
+    checksum _c;
+    uint32_t _per_chunk_checksum;
+    uint32_t _full_checksum;
+    bool _checksum_file;
+private:
+    void close_checksum() {
+        if (!_checksum_file) {
+            return;
+        }
+        if ((_offset % _c.chunk_size) != 0) {
+            _c.checksums.push_back(_per_chunk_checksum);
+        }
+    }
+
+    // NOTE: adler32 is the algorithm used to compute checksum.
+    void do_compute_checksum(const char* buf, size_t n) {
+        uint32_t buf_checksum = checksum_adler32(buf, n);
+
+        _offset += n;
+        if (_checksum_file) {
+            _per_chunk_checksum = checksum_adler32_combine(_per_chunk_checksum, buf_checksum, n);
+        }
+        _full_checksum = checksum_adler32_combine(_full_checksum, buf_checksum, n);
+    }
+
+    // compute a checksum per chunk of size _c.chunk_size
+    void compute_checksum(const char* buf, size_t n) {
+        if (!_checksum_file) {
+            do_compute_checksum(buf, n);
+            return;
+        }
+
+        size_t remaining = n;
+        while (remaining) {
+            // available means available space in the current chunk.
+            size_t available = _c.chunk_size - (_offset % _c.chunk_size);
+
+            if (remaining < available) {
+                do_compute_checksum(buf, remaining);
+                remaining = 0;
+            } else {
+                do_compute_checksum(buf, available);
+                _c.checksums.push_back(_per_chunk_checksum);
+                _per_chunk_checksum = init_checksum_adler32();
+                buf += available;
+                remaining -= available;
+            }
+        }
+    }
+public:
+    checksummed_file_writer(lw_shared_ptr<file> f, size_t buffer_size = 8192, bool checksum_file = false)
+            : file_writer(std::move(f), buffer_size) {
+        _checksum_file = checksum_file;
+        _c.chunk_size = DEFAULT_CHUNK_SIZE;
+        _per_chunk_checksum = init_checksum_adler32();
+        _full_checksum = init_checksum_adler32();
+    }
+
+    virtual future<> write(const char* buf, size_t n) {
+        compute_checksum(buf, n);
+        return _out.write(buf, n);
+    }
+    virtual future<> write(const bytes& s) {
+        compute_checksum(reinterpret_cast<const char*>(s.c_str()), s.size());
+        return _out.write(s);
+    }
+    checksum& finalize_checksum() {
+        close_checksum();
+        return _c;
+    }
+    uint32_t full_checksum() {
+        return _full_checksum;
     }
 };
 
@@ -701,6 +779,37 @@ future<> sstable::write_toc() {
     });
 }
 
+future<> write_crc(const sstring file_path, checksum& c) {
+    sstlog.debug("Writing CRC file {} ", file_path);
+
+    auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
+    return engine().open_file_dma(file_path, oflags).then([&c] (file f) {
+        auto out = file_writer(make_lw_shared<file>(std::move(f)), 4096);
+        auto w = make_shared<file_writer>(std::move(out));
+
+        return write(*w, c).then([w] {
+            return w->close().then([w] {});
+        });
+    });
+}
+
+// Digest file stores the full checksum of data file converted into a string.
+future<> write_digest(const sstring file_path, uint32_t full_checksum) {
+    sstlog.debug("Writing Digest file {} ", file_path);
+
+    auto oflags = open_flags::wo | open_flags::create | open_flags::exclusive;
+    return engine().open_file_dma(file_path, oflags).then([full_checksum] (file f) {
+        auto out = file_writer(make_lw_shared<file>(std::move(f)), 4096);
+        auto w = make_shared<file_writer>(std::move(out));
+
+        return do_with(to_sstring<bytes>(full_checksum), [w] (bytes& digest) {
+            return write(*w, digest).then([w] {
+                return w->close().then([w] {});
+            });
+        });
+    });
+}
+
 future<index_list> sstable::read_indexes(uint64_t position, uint64_t quantity) {
     struct reader {
         uint64_t count = 0;
@@ -1055,8 +1164,14 @@ static void maybe_add_summary_entry(summary& s, bytes_view key, uint64_t offset)
 
 future<> sstable::write_components(const memtable& mt) {
     return create_data().then([&mt, this] {
+        bool checksum_file = true;
+        // FIXME: CRC component must only be present when compression isn't enabled.
+        if (checksum_file) {
+            _components.insert(component_type::CRC);
+        }
+
         // TODO: Add compression support by having a specialized output stream.
-        auto w = make_shared<file_writer>(_data_file, 4096);
+        auto w = make_shared<checksummed_file_writer>(_data_file, 4096, checksum_file);
         auto index = make_shared<file_writer>(_index_file, 4096);
 
         prepare_summary(_summary, mt);
@@ -1119,6 +1234,13 @@ future<> sstable::write_components(const memtable& mt) {
                     });
                 });
             });
+        }).then([this, w] {
+            return write_digest(filename(sstable::component_type::Digest), w->full_checksum());
+        }).then([this, w, checksum_file] {
+            if (checksum_file) {
+                return write_crc(filename(sstable::component_type::CRC), w->finalize_checksum());
+            }
+            return make_ready_future<>();
         }).then([w] {
             return w->close().then([w] {});
         }).then([index] {
@@ -1129,6 +1251,7 @@ future<> sstable::write_components(const memtable& mt) {
             return write_filter();
         }).then([this] {
             _components.insert(component_type::TOC);
+            _components.insert(component_type::Digest);
             _components.insert(component_type::Index);
             _components.insert(component_type::Summary);
             _components.insert(component_type::Data);
