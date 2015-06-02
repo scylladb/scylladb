@@ -282,7 +282,7 @@ SEASTAR_TEST_CASE(test_parser_returns_eof_state_when_no_command_follows) {
             BOOST_REQUIRE(p->_state == parser_type::state::cmd_get);
         }).then([is, p] {
             p->init();
-            return is->consume(*p).then([p] {
+            return is->consume(*p).then([p, is] {
                 BOOST_REQUIRE(p->_state == parser_type::state::eof);
             });
         });
@@ -298,7 +298,7 @@ SEASTAR_TEST_CASE(test_incomplete_command_is_an_error) {
             BOOST_REQUIRE(p->_state == parser_type::state::error);
         }).then([is, p] {
             p->init();
-            return is->consume(*p).then([p] {
+            return is->consume(*p).then([p, is] {
                 BOOST_REQUIRE(p->_state == parser_type::state::eof);
             });
         });
@@ -320,7 +320,7 @@ SEASTAR_TEST_CASE(test_multiple_requests_in_one_stream) {
             BOOST_REQUIRE(p->_blob == "data1");
         }).then([is, p] {
             p->init();
-            return is->consume(*p).then([p] {
+            return is->consume(*p).then([p, is] {
                 BOOST_REQUIRE(p->_state == parser_type::state::cmd_set);
                 BOOST_REQUIRE(p->_key.key() == "key2");
                 BOOST_REQUIRE(p->_flags_str == "2");
