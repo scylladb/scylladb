@@ -16,6 +16,7 @@
 #include "utils/UUID_gen.hh"
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <boost/move/iterator.hpp>
+#include "utils/class_registrator.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -61,6 +62,8 @@ public:
             // It's an expected exception, so assume the message
             // is fine.  Also, we don't want to change its type.
             throw;
+        } catch (no_such_class& nc) {
+            throw make_exception<InvalidRequestException>("unable to find class '%s'", nc.what());
         } catch (std::exception& e) {
             // Unexpected exception, wrap it
             throw ::apache::thrift::TException(std::string("Internal server error: ") + e.what());
@@ -111,12 +114,12 @@ public:
     }
 
     void set_keyspace(tcxx::function<void()> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
-        try {
+        if (!_db.local().has_keyspace(keyspace)) {
+            complete_with_exception<InvalidRequestException>(std::move(exn_cob),
+                "keyspace %s does not exist", keyspace);
+        } else {
             _ks_name = keyspace;
             cob();
-        } catch (std::out_of_range& e) {
-            return complete_with_exception<InvalidRequestException>(std::move(exn_cob),
-                    "keyspace %s does not exist", keyspace);
         }
     }
 
@@ -349,9 +352,11 @@ public:
     }
 
     void describe_keyspaces(tcxx::function<void(std::vector<KsDef>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob) {
-        std::vector<KsDef>  _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        std::vector<KsDef>  ret;
+        for (auto&& ks : _db.local().keyspaces()) {
+            ret.emplace_back(get_keyspace_definition(ks.second));
+        }
+        cob(ret);
     }
 
     void describe_cluster_name(tcxx::function<void(std::string const& _return)> cob) {
@@ -397,9 +402,15 @@ public:
     }
 
     void describe_keyspace(tcxx::function<void(KsDef const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& keyspace) {
-        KsDef _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
+        try {
+            auto& ks = _db.local().find_keyspace(keyspace);
+            KsDef ret = get_keyspace_definition(ks);
+            cob(ret);
+        }
+        catch (no_such_keyspace& nsk) {
+            complete_with_exception<InvalidRequestException>(std::move(exn_cob),
+                "keyspace %s does not exist", keyspace);
+        }
     }
 
     void describe_splits(tcxx::function<void(std::vector<std::string>  const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& cfName, const std::string& start_token, const std::string& end_token, const int32_t keys_per_split) {
@@ -556,6 +567,80 @@ public:
     }
 
 private:
+    static sstring class_from_data_type(const data_type& dt) {
+        static const std::unordered_map<sstring, sstring> types = {
+            { "boolean", "BooleanType" },
+            { "bytes", "BytesType" },
+            { "double", "DoubleType" },
+            { "int32", "Int32Type" },
+            { "long", "LongType" },
+            { "timestamp", "DateType" },
+            { "timeuuid", "TimeUUIDType" },
+            { "utf8", "UTF8Type" },
+            { "uuid", "UUIDType" },
+            // FIXME: missing types
+        };
+        auto it = types.find(dt->name());
+        if (it == types.end()) {
+            return sstring("<unknown> ") + dt->name();
+        }
+        return sstring("org.apache.cassandra.db.marshal.") + it->second;
+    }
+    static sstring class_from_compound_type(const compound_type<allow_prefixes::no>& ct) {
+        if (ct.is_singular()) {
+            return class_from_data_type(ct.types().front());
+        }
+        sstring type = "org.apache.cassandra.db.marshal.CompositeType(";
+        for (auto& dt : ct.types()) {
+            type += class_from_data_type(dt);
+            if (&dt != &*ct.types().rbegin()) {
+                type += ",";
+            }
+        }
+        type += ")";
+        return type;
+    }
+    static KsDef get_keyspace_definition(const keyspace& ks) {
+        auto&& meta = ks.metadata();
+        KsDef def;
+        def.__set_name(meta->name());
+        def.__set_strategy_class(meta->strategy_name());
+        std::map<std::string, std::string> options(
+            meta->strategy_options().begin(),
+            meta->strategy_options().end());
+        def.__set_strategy_options(options);
+        std::vector<CfDef> cfs;
+        for (auto&& cf : meta->cf_meta_data()) {
+            // FIXME: skip cql3 column families
+            auto&& s = cf.second;
+            CfDef cf_def;
+            cf_def.__set_keyspace(s->ks_name());
+            cf_def.__set_name(s->cf_name());
+            cf_def.__set_key_validation_class(class_from_compound_type(*s->partition_key_type()));
+            if (s->clustering_key_size()) {
+                cf_def.__set_comparator_type(class_from_compound_type(*s->clustering_key_type()));
+            } else {
+                cf_def.__set_comparator_type(class_from_data_type(s->regular_column_name_type()));
+            }
+            cf_def.__set_comment(s->comment());
+            cf_def.__set_bloom_filter_fp_chance(s->bloom_filter_fp_chance());
+            if (s->regular_columns_count()) {
+                std::vector<ColumnDef> columns;
+                for (auto&& c : s->regular_columns()) {
+                    ColumnDef c_def;
+                    c_def.__set_name(c.name_as_text());
+                    c_def.__set_validation_class(class_from_data_type(c.type));
+                    columns.emplace_back(std::move(c_def));
+                }
+                cf_def.__set_column_metadata(columns);
+            }
+            // FIXME: there are more fields that should be filled...
+            cfs.emplace_back(std::move(cf_def));
+        }
+        def.__set_cf_defs(cfs);
+        def.__set_durable_writes(meta->durable_writes());
+        return std::move(def);
+    }
     static column_family& lookup_column_family(database& db, const sstring& ks_name, const sstring& cf_name) {
         try {
             return db.find_column_family(ks_name, cf_name);

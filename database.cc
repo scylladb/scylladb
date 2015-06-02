@@ -531,7 +531,8 @@ void database::drop_keyspace(const sstring& name) {
 }
 
 void database::add_column_family(const utils::UUID& uuid, column_family&& cf) {
-    if (_keyspaces.count(cf.schema()->ks_name()) == 0) {
+    auto ks = _keyspaces.find(cf.schema()->ks_name());
+    if (ks == _keyspaces.end()) {
         throw std::invalid_argument("Keyspace " + cf.schema()->ks_name() + " not defined");
     }
     if (_column_families.count(uuid) != 0) {
@@ -541,6 +542,7 @@ void database::add_column_family(const utils::UUID& uuid, column_family&& cf) {
     if (_ks_cf_to_uuid.count(kscf) != 0) {
         throw std::invalid_argument("Column family " + cf.schema()->cf_name() + " exists");
     }
+    ks->second.add_column_family(cf.schema());
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
 }

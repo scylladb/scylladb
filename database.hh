@@ -187,6 +187,9 @@ public:
     const lw_shared_ptr<user_types_metadata>& user_types() const {
         return _user_types;
     }
+    void add_column_family(const schema_ptr& s) {
+        _cf_meta_data.emplace(s->cf_name(), s);
+    }
 };
 
 class keyspace {
@@ -213,6 +216,9 @@ public:
     locator::abstract_replication_strategy& get_replication_strategy();
     column_family::config make_column_family_config(const schema& s) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
+    void add_column_family(const schema_ptr& s) {
+        _metadata->add_column_family(s);
+    }
 private:
     sstring column_family_directory(const sstring& name, utils::UUID uuid) const;
 };
@@ -271,6 +277,7 @@ public:
     bool has_keyspace(const sstring& name) const;
     void update_keyspace(const sstring& name);
     void drop_keyspace(const sstring& name);
+    const auto& keyspaces() const { return _keyspaces; }
     column_family& find_column_family(const sstring& ks, const sstring& name) throw (no_such_column_family);
     const column_family& find_column_family(const sstring& ks, const sstring& name) const throw (no_such_column_family);
     column_family& find_column_family(const utils::UUID&) throw (no_such_column_family);

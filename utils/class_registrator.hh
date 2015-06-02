@@ -4,6 +4,11 @@
 
 #pragma once
 
+class no_such_class : public std::runtime_error {
+public:
+    using runtime_error::runtime_error;
+};
+
 // BaseType is a base type of a type hierarchy that this registry will hold
 // Args... are parameters for object's constructor
 template<typename BaseType, typename... Args>
@@ -45,7 +50,11 @@ struct class_registrator {
 
 template<typename BaseType, typename... Args>
 std::unique_ptr<BaseType> class_registry<BaseType, Args...>::create(const sstring& name, Args... args) {
-    return _classes[name](args...);
+    auto it = _classes.find(name);
+    if (it == _classes.end()) {
+        throw no_such_class(name);
+    }
+    return it->second(args...);
 }
 
 template<typename BaseType, typename... Args>

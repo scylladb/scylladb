@@ -55,7 +55,7 @@ public:
 
     compound_type(compound_type&&) = default;
 
-    auto const& types() {
+    auto const& types() const {
         return _types;
     }
 
