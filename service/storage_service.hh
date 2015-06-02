@@ -161,21 +161,7 @@ public:
     }
 
     /** This method updates the local token on disk  */
-    void set_tokens(std::unordered_set<token> tokens) {
-        // if (logger.isDebugEnabled())
-        //     logger.debug("Setting tokens to {}", tokens);
-        // SystemKeyspace.updateTokens(tokens);
-        for (auto t : tokens) {
-            _token_metadata.update_normal_token(t, get_broadcast_address());
-        }
-        // Collection<Token> localTokens = getLocalTokens();
-        auto local_tokens = _bootstrap_tokens;
-        auto& gossiper = gms::get_local_gossiper();
-        gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
-        gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens));
-        //setMode(Mode.NORMAL, false);
-    }
-
+    void set_tokens(std::unordered_set<token> tokens);
 #if 0
 
     public void registerDaemon(CassandraDaemon daemon)
@@ -410,133 +396,7 @@ public:
         return init_server(RING_DELAY);
     }
 
-    future<> init_server(int delay) {
-#if 0
-        logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
-        logger.info("Thrift API version: {}", cassandraConstants.VERSION);
-        logger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
-#endif
-        _initialized = true;
-#if 0
-        try
-        {
-            // Ensure StorageProxy is initialized on start-up; see CASSANDRA-3797.
-            Class.forName("org.apache.cassandra.service.StorageProxy");
-            // also IndexSummaryManager, which is otherwise unreferenced
-            Class.forName("org.apache.cassandra.io.sstable.IndexSummaryManager");
-        }
-        catch (ClassNotFoundException e)
-        {
-            throw new AssertionError(e);
-        }
-
-        if (Boolean.parseBoolean(System.getProperty("cassandra.load_ring_state", "true")))
-        {
-            logger.info("Loading persisted ring state");
-            Multimap<InetAddress, Token> loadedTokens = SystemKeyspace.loadTokens();
-            Map<InetAddress, UUID> loadedHostIds = SystemKeyspace.loadHostIds();
-            for (InetAddress ep : loadedTokens.keySet())
-            {
-                if (ep.equals(FBUtilities.getBroadcastAddress()))
-                {
-                    // entry has been mistakenly added, delete it
-                    SystemKeyspace.removeEndpoint(ep);
-                }
-                else
-                {
-                    _token_metadata.updateNormalTokens(loadedTokens.get(ep), ep);
-                    if (loadedHostIds.containsKey(ep))
-                        _token_metadata.update_host_id(loadedHostIds.get(ep), ep);
-                    Gossiper.instance.addSavedEndpoint(ep);
-                }
-            }
-        }
-
-        // daemon threads, like our executors', continue to run while shutdown hooks are invoked
-        drainOnShutdown = new Thread(new WrappedRunnable()
-        {
-            @Override
-            public void runMayThrow() throws InterruptedException
-            {
-                ExecutorService counterMutationStage = StageManager.getStage(Stage.COUNTER_MUTATION);
-                ExecutorService mutationStage = StageManager.getStage(Stage.MUTATION);
-                if (mutationStage.isShutdown() && counterMutationStage.isShutdown())
-                    return; // drained already
-
-                if (daemon != null)
-                	shutdownClientServers();
-                ScheduledExecutors.optionalTasks.shutdown();
-                Gossiper.instance.stop();
-
-                // In-progress writes originating here could generate hints to be written, so shut down MessagingService
-                // before mutation stage, so we can get all the hints saved before shutting down
-                MessagingService.instance().shutdown();
-                counterMutationStage.shutdown();
-                mutationStage.shutdown();
-                counterMutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-                mutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-                StorageProxy.instance.verifyNoHintsInProgress();
-
-                List<Future<?>> flushes = new ArrayList<>();
-                for (Keyspace keyspace : Keyspace.all())
-                {
-                    KSMetaData ksm = Schema.instance.getKSMetaData(keyspace.getName());
-                    if (!ksm.durableWrites)
-                    {
-                        for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
-                            flushes.add(cfs.forceFlush());
-                    }
-                }
-                try
-                {
-                    FBUtilities.waitOnFutures(flushes);
-                }
-                catch (Throwable t)
-                {
-                    JVMStabilityInspector.inspectThrowable(t);
-                    // don't let this stop us from shutting down the commitlog and other thread pools
-                    logger.warn("Caught exception while waiting for memtable flushes during shutdown hook", t);
-                }
-
-                CommitLog.instance.shutdownBlocking();
-
-                // wait for miscellaneous tasks like sstable and commitlog segment deletion
-                ScheduledExecutors.nonPeriodicTasks.shutdown();
-                if (!ScheduledExecutors.nonPeriodicTasks.awaitTermination(1, TimeUnit.MINUTES))
-                    logger.warn("Miscellaneous task executor still busy after one minute; proceeding with shutdown");
-            }
-        }, "StorageServiceShutdownHook");
-        Runtime.getRuntime().addShutdownHook(drainOnShutdown);
-#endif
-        return prepare_to_join().then([this, delay] {
-            return join_token_ring(delay);
-        });
-#if 0
-        // Has to be called after the host id has potentially changed in prepareToJoin().
-        for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
-            if (cfs.metadata.isCounter())
-                cfs.initCounterCache();
-
-        if (Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true")))
-        {
-            joinTokenRing(delay);
-        }
-        else
-        {
-            Collection<Token> tokens = SystemKeyspace.getSavedTokens();
-            if (!tokens.isEmpty())
-            {
-                _token_metadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
-                // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
-                List<Pair<ApplicationState, VersionedValue>> states = new ArrayList<Pair<ApplicationState, VersionedValue>>();
-                states.add(Pair.create(ApplicationState.TOKENS, valueFactory.tokens(tokens)));
-                states.add(Pair.create(ApplicationState.STATUS, valueFactory.hibernate(true)));
-                Gossiper.instance.addLocalApplicationStates(states);
-            }
-            logger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
-        }
-#endif
-    }
+    future<> init_server(int delay);
 #if 0
     /**
      * In the event of forceful termination we need to remove the shutdown hook to prevent hanging (OOM for instance)
@@ -978,34 +838,8 @@ public:
     virtual void on_restart(gms::inet_address endpoint, gms::endpoint_state state) override;
 private:
     void update_peer_info(inet_address endpoint);
-    sstring get_application_state_value(inet_address endpoint, application_state appstate) {
-        auto& gossiper = gms::get_local_gossiper();
-        auto eps = gossiper.get_endpoint_state_for_endpoint(endpoint);
-        if (!eps) {
-            return {};
-        }
-        auto v = eps->get_application_state(appstate);
-        if (!v) {
-            return {};
-        }
-        return v->value;
-    }
-
-    std::unordered_set<token> get_tokens_for(inet_address endpoint) {
-        auto tokens_string = get_application_state_value(endpoint, application_state::TOKENS);
-        ss_debug("endpoint=%s, tokens_string=%s\n", endpoint, tokens_string);
-        std::vector<sstring> tokens;
-        std::unordered_set<token> ret;
-        boost::split(tokens, tokens_string, boost::is_any_of(";"));
-        for (auto str : tokens) {
-            ss_debug("token=%s\n", str);
-            sstring_view sv(str);
-            bytes b = from_hex(sv);
-            ret.emplace(token::kind::key, b);
-        }
-        return ret;
-    }
-
+    sstring get_application_state_value(inet_address endpoint, application_state appstate);
+    std::unordered_set<token> get_tokens_for(inet_address endpoint);
 private:
     /**
      * Handle node bootstrap
