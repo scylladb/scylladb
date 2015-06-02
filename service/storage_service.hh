@@ -127,7 +127,7 @@ private:
     /* Are we starting this node in bootstrap mode? */
     bool _is_bootstrap_mode;
 
-    bool initialized;
+    bool _initialized;
 
     bool joined = false;
 
@@ -194,22 +194,22 @@ public:
     // should only be called via JMX
     public void stopGossiping()
     {
-        if (initialized)
+        if (_initialized)
         {
             logger.warn("Stopping gossip by operator request");
             Gossiper.instance.stop();
-            initialized = false;
+            _initialized = false;
         }
     }
 
     // should only be called via JMX
     public void startGossiping()
     {
-        if (!initialized)
+        if (!_initialized)
         {
             logger.warn("Starting gossip by operator request");
             Gossiper.instance.start((int) (System.currentTimeMillis() / 1000));
-            initialized = true;
+            _initialized = true;
         }
     }
 
@@ -318,11 +318,12 @@ public:
         Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
         StageManager.shutdownNow();
     }
-
-    public boolean isInitialized()
-    {
-        return initialized;
+#endif
+public:
+    bool is_initialized() {
+        return _initialized;
     }
+#if 0
 
     public void stopDaemon()
     {
@@ -394,7 +395,7 @@ public:
     // for testing only
     public void unsafeInitialize() throws ConfigurationException
     {
-        initialized = true;
+        _initialized = true;
         Gossiper.instance.register(this);
         Gossiper.instance.start((int) (System.currentTimeMillis() / 1000)); // needed for node-ring gathering.
         Gossiper.instance.addLocalApplicationState(ApplicationState.NET_VERSION, valueFactory.networkVersion());
@@ -413,7 +414,7 @@ public:
         logger.info("Thrift API version: {}", cassandraConstants.VERSION);
         logger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
 #endif
-        initialized = true;
+        _initialized = true;
 #if 0
         try
         {
