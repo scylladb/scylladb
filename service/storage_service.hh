@@ -119,13 +119,14 @@ private:
 
     private InetAddress removingNode;
 
-    /* Are we starting this node in bootstrap mode? */
-    private boolean isBootstrapMode;
-
     /* we bootstrap but do NOT join the ring unless told to do so */
     private boolean isSurveyMode= Boolean.parseBoolean(System.getProperty("cassandra.write_survey", "false"));
 #endif
+
 private:
+    /* Are we starting this node in bootstrap mode? */
+    bool _is_bootstrap_mode;
+
     bool initialized;
 
     bool joined = false;
@@ -151,17 +152,13 @@ private:
 #endif
 private:
     std::unordered_set<token> _bootstrap_tokens;
-#if 0
 
-    public void finishBootstrapping()
-    {
-        isBootstrapMode = false;
+public:
+    void finish_bootstrapping() {
+        _is_bootstrap_mode = false;
     }
 
     /** This method updates the local token on disk  */
-
-#endif
-
     void set_tokens(std::unordered_set<token> tokens) {
         // if (logger.isDebugEnabled())
         //     logger.debug("Setting tokens to {}", tokens);
@@ -668,11 +665,12 @@ private:
 #endif
 
     future<> bootstrap(std::unordered_set<token> tokens);
-#if 0
-    public boolean isBootstrapMode()
-    {
-        return isBootstrapMode;
+
+    bool is_bootstrap_mode() {
+        return _is_bootstrap_mode;
     }
+
+#if 0
 
     public TokenMetadata getTokenMetadata()
     {

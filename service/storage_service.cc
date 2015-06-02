@@ -212,7 +212,7 @@ future<> storage_service::join_token_ring(int delay) {
         }
 
         bootstrap(_bootstrap_tokens);
-        assert !isBootstrapMode; // bootstrap will block until finished
+        assert !_is_bootstrap_mode; // bootstrap will block until finished
 #endif
     } else {
         // FIXME: DatabaseDescriptor.getNumTokens()
@@ -278,7 +278,7 @@ future<> storage_service::join_token_ring(int delay) {
 }
 
 future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
-    // isBootstrapMode = true;
+    _is_bootstrap_mode = true;
     // SystemKeyspace.updateTokens(tokens); // DON'T use setToken, that makes us part of the ring locally which is incorrect until we are done bootstrapping
     // FIXME: DatabaseDescriptor.isReplacing()
     auto is_replacing = false;
