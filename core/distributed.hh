@@ -287,9 +287,29 @@ Service& distributed<Service>::local() {
     return *_instances[engine().cpu_id()];
 }
 
-// Smart pointer wrapper which makes it safe to move across CPUs.
-// An armed pointer will be deleted on the CPU on which it was wrapped.
-// Empty pointer will be deleted on the current CPU so it must be SMP-safe.
+/// Smart pointer wrapper which makes it safe to move across CPUs.
+///
+/// \c foreign_ptr<> is a smart pointer wrapper which, unlike
+/// \ref shared_ptr and \ref lw_shared_ptr, is safe to move to a
+/// different core.
+///
+/// As seastar avoids locking, any but the most trivial objects must
+/// be destroyed on the same core they were created on, so that,
+/// for example, their destructors can unlink references to the
+/// object from various containers.  In addition, for performance
+/// reasons, the shared pointer types do not use atomic operations
+/// to manage their reference counts.  As a result they cannot be
+/// used on multiple cores in parallel.
+///
+/// \c foreign_ptr<> provides a solution to that problem.
+/// \c foreign_ptr<> wraps any pointer type -- raw pointer,
+/// \ref shared_ptr<>, or similar, and remembers on what core this
+/// happened.  When the \c foreign_ptr<> object is destroyed, it
+/// sends a message to the original core so that the wrapped object
+/// can be safely destroyed.
+///
+/// \c foreign_ptr<> is a move-only object; it cannot be copied.
+///
 template <typename PtrType>
 class foreign_ptr {
 private:
@@ -302,11 +322,14 @@ private:
 public:
     using element_type = typename PtrType::element_type;
 
+    /// Constructs a null \c foreign_ptr<>.
     foreign_ptr()
         : _value(PtrType())
         , _cpu(engine().cpu_id()) {
     }
+    /// Constructs a null \c foreign_ptr<>.
     foreign_ptr(std::nullptr_t) : foreign_ptr() {}
+    /// Wraps a pointer object and remembers the current core.
     foreign_ptr(PtrType value)
         : _value(std::move(value))
         , _cpu(engine().cpu_id()) {
@@ -314,7 +337,9 @@ public:
     // The type is intentionally non-copyable because copies
     // are expensive because each copy requires across-CPU call.
     foreign_ptr(const foreign_ptr&) = delete;
+    /// Moves a \c foreign_ptr<> to another object.
     foreign_ptr(foreign_ptr&& other) = default;
+    /// Destroys the wrapped object on its original cpu.
     ~foreign_ptr() {
         if (_value && !on_origin()) {
             smp::submit_to(_cpu, [v = std::move(_value)] () mutable {
@@ -322,12 +347,19 @@ public:
             });
         }
     }
+    /// Accesses the wrapped object.
     element_type& operator*() const { return *_value; }
+    /// Accesses the wrapped object.
     element_type* operator->() const { return &*_value; }
+    /// Checks whether the wrapped pointer is non-null.
     operator bool() const { return static_cast<bool>(_value); }
+    /// Move-assigns a \c foreign_ptr<>.
     foreign_ptr& operator=(foreign_ptr&& other) = default;
 };
 
+/// Wraps a raw or smart pointer object in a \ref foreign_ptr<>.
+///
+/// \relates foreign_ptr
 template <typename T>
 foreign_ptr<T> make_foreign(T ptr) {
     return foreign_ptr<T>(std::move(ptr));
