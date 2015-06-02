@@ -10,6 +10,7 @@
 #include "map_difference.hh"
 
 #include <map>
+#include <set>
 
 using namespace std;
 
@@ -34,12 +35,16 @@ BOOST_AUTO_TEST_CASE(left_empty) {
     right.emplace(1, 100);
     right.emplace(2, 200);
 
+    set<int> keys;
+    keys.emplace(1);
+    keys.emplace(2);
+
     auto diff = difference(left, right, [](int x, int y) -> bool {
         return x == y;
     });
 
     BOOST_REQUIRE(diff.entries_only_on_left.empty());
-    BOOST_REQUIRE(diff.entries_only_on_right == right);
+    BOOST_REQUIRE(diff.entries_only_on_right == keys);
     BOOST_REQUIRE(diff.entries_in_common.empty());
     BOOST_REQUIRE(diff.entries_differing.empty());
 }
@@ -51,11 +56,15 @@ BOOST_AUTO_TEST_CASE(right_empty) {
     left.emplace(1, 100);
     left.emplace(2, 200);
 
+    set<int> keys;
+    keys.emplace(1);
+    keys.emplace(2);
+
     auto diff = difference(left, right, [](int x, int y) -> bool {
         return x == y;
     });
 
-    BOOST_REQUIRE(diff.entries_only_on_left == left);
+    BOOST_REQUIRE(diff.entries_only_on_left == keys);
     BOOST_REQUIRE(diff.entries_only_on_right.empty());
     BOOST_REQUIRE(diff.entries_in_common.empty());
     BOOST_REQUIRE(diff.entries_differing.empty());
@@ -71,13 +80,17 @@ BOOST_AUTO_TEST_CASE(both_same) {
     right.emplace(1, 100);
     right.emplace(2, 200);
 
+    set<int> keys;
+    keys.emplace(1);
+    keys.emplace(2);
+
     auto diff = difference(left, right, [](int x, int y) -> bool {
         return x == y;
     });
 
     BOOST_REQUIRE(diff.entries_only_on_left.empty());
     BOOST_REQUIRE(diff.entries_only_on_right.empty());
-    BOOST_REQUIRE(diff.entries_in_common == left);
+    BOOST_REQUIRE(diff.entries_in_common == keys);
     BOOST_REQUIRE(diff.entries_differing.empty());
 }
 

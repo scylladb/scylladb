@@ -5,37 +5,27 @@
 #pragma once
 
 #include <map>
+#include <set>
 
-template<typename Tp>
-struct value_difference {
-    Tp left_value;
-    Tp right_value;
-
-    value_difference(const Tp& left_value_, const Tp& right_value_)
-        : left_value(left_value_)
-        , right_value(right_value_)
-    { }
-};
-
-template<typename Key, typename Tp, typename Compare, typename Alloc>
+template<typename Key>
 struct map_difference {
     // Entries in left map whose keys don't exist in the right map.
-    std::map<Key, Tp, Compare> entries_only_on_left;
+    std::set<Key> entries_only_on_left;
 
     // Entries in right map whose keys don't exist in the left map.
-    std::map<Key, Tp, Compare> entries_only_on_right;
+    std::set<Key> entries_only_on_right;
 
     // Entries that appear in both maps with the same value.
-    std::map<Key, Tp, Compare> entries_in_common;
+    std::set<Key> entries_in_common;
 
     // Entries that appear in both maps but have different values.
-    std::map<Key, value_difference<Tp>, Compare> entries_differing;
+    std::set<Key> entries_differing;
 
-    map_difference(const Compare& cmp, const Alloc& alloc)
-        : entries_only_on_left{cmp, alloc}
-        , entries_only_on_right{cmp, alloc}
-        , entries_in_common{cmp, alloc}
-        , entries_differing{cmp, alloc}
+    map_difference()
+        : entries_only_on_left{}
+        , entries_only_on_right{}
+        , entries_in_common{}
+        , entries_differing{}
     { }
 };
 
@@ -45,15 +35,17 @@ template<typename Key,
          typename Eq = std::equal_to<Tp>,
          typename Alloc>
 inline
-map_difference<Key, Tp, Compare, Alloc>
+map_difference<Key>
 difference(const std::map<Key, Tp, Compare, Alloc>& left,
            const std::map<Key, Tp, Compare, Alloc>& right,
            Compare key_comp,
            Eq equals = Eq(),
            Alloc alloc = Alloc())
 {
-    map_difference<Key, Tp, Compare, Alloc> diff{key_comp, alloc};
-    diff.entries_only_on_right = right;
+    map_difference<Key> diff{};
+    for (auto&& kv : right) {
+        diff.entries_only_on_right.emplace(kv.first);
+    }
     for (auto&& kv : left) {
         auto&& left_key = kv.first;
         auto&& it = right.find(left_key);
@@ -62,13 +54,12 @@ difference(const std::map<Key, Tp, Compare, Alloc>& left,
             const Tp& left_value = kv.second;
             const Tp& right_value = it->second;
             if (equals(left_value, right_value)) {
-                diff.entries_in_common.emplace(kv);
+                diff.entries_in_common.emplace(left_key);
             } else {
-                value_difference<Tp> value_diff{left_value, right_value};
-                diff.entries_differing.emplace(left_key, std::move(value_diff));
+                diff.entries_differing.emplace(left_key);
             }
         } else {
-            diff.entries_only_on_left.emplace(kv);
+            diff.entries_only_on_left.emplace(left_key);
         }
     }
     return diff;
@@ -76,7 +67,7 @@ difference(const std::map<Key, Tp, Compare, Alloc>& left,
 
 template<typename Key, typename Tp, typename Compare, typename Eq, typename Alloc>
 inline
-map_difference<Key, Tp, Compare, Alloc>
+map_difference<Key>
 difference(const std::map<Key, Tp, Compare, Alloc>& left, const std::map<Key, Tp, Compare, Alloc>& right, Eq equals) {
     return difference(left, right, left.key_comp(), equals);
 }

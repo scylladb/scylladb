@@ -556,23 +556,24 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
             return *x == *y;
         });
 
-        for (auto&& entry : diff.entries_only_on_right) {
-            if (!entry.second->empty()) {
-                created.emplace_back(std::move(entry));
+        for (auto&& key : diff.entries_only_on_right) {
+            auto&& value = before[key];
+            if (!value->empty()) {
+                created.emplace_back(std::make_pair(key, std::move(value)));
             }
         }
-        for (auto&& entry : diff.entries_differing) {
-            sstring keyspace_name = entry.first;
+        for (auto&& key : diff.entries_differing) {
+            sstring keyspace_name = key;
 
-            auto&& pre  = entry.second.left_value;
-            auto&& post = entry.second.right_value;
+            auto&& pre  = before[key];
+            auto&& post = after[key];
 
             if (!pre->empty() && !post->empty()) {
                 altered.emplace_back(keyspace_name);
             } else if (!pre->empty()) {
                 dropped.emplace(keyspace_name);
             } else if (!post->empty()) { // a (re)created keyspace
-                created.emplace_back(entry.first, std::move(post));
+                created.emplace_back(std::make_pair(key, std::move(post)));
             }
         }
         return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
