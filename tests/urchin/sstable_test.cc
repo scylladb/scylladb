@@ -366,9 +366,9 @@ public:
             sstables::deletion_time deltime) override {
         count_range_tombstone++;
     }
-    virtual future<> consume_row_end() override {
+    virtual proceed consume_row_end() override {
         count_row_end++;
-        return make_ready_future<>();
+        return proceed::yes;
     }
 };
 
@@ -405,7 +405,9 @@ SEASTAR_TEST_CASE(compressed_row_read_at_once) {
 SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
     return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([] (auto sstp) {
         return do_with(test_row_consumer(1418656871665302), [sstp] (auto& c) {
-            return sstp->data_consume_rows(c, 0, 95).then([sstp, &c] {
+            auto context = sstp->data_consume_rows(c, 0, 95);
+            auto fut = context.read();
+            return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 3);
                 BOOST_REQUIRE(c.count_deleted_cell == 0);
@@ -420,7 +422,9 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_one) {
 SEASTAR_TEST_CASE(compressed_rows_read_one) {
     return reusable_sst("tests/urchin/sstables/compressed", 1).then([] (auto sstp) {
         return do_with(test_row_consumer(1418654707438005), [sstp] (auto& c) {
-            return sstp->data_consume_rows(c, 0, 95).then([sstp, &c] {
+            auto context = sstp->data_consume_rows(c, 0, 95);
+            auto fut = context.read();
+            return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 3);
                 BOOST_REQUIRE(c.count_deleted_cell == 0);
@@ -451,9 +455,9 @@ public:
     virtual void consume_deleted_cell(bytes_view col_name, sstables::deletion_time deltime) override {
         count_deleted_cell++;
     }
-    virtual future<> consume_row_end() override {
+    virtual proceed consume_row_end() override {
         count_row_end++;
-        return make_ready_future<>();
+        return proceed::yes;
     }
     virtual void consume_range_tombstone(
             bytes_view start_col, bytes_view end_col,
@@ -467,7 +471,9 @@ public:
 SEASTAR_TEST_CASE(uncompressed_rows_read_all) {
     return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([] (auto sstp) {
         return do_with(count_row_consumer(), [sstp] (auto& c) {
-            return sstp->data_consume_rows(c).then([sstp, &c] {
+            auto context = sstp->data_consume_rows(c);
+            auto fut = context.read();
+            return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 4);
                 BOOST_REQUIRE(c.count_row_end == 4);
                 BOOST_REQUIRE(c.count_cell == 4*3);
@@ -482,7 +488,9 @@ SEASTAR_TEST_CASE(uncompressed_rows_read_all) {
 SEASTAR_TEST_CASE(compressed_rows_read_all) {
     return reusable_sst("tests/urchin/sstables/compressed", 1).then([] (auto sstp) {
         return do_with(count_row_consumer(), [sstp] (auto& c) {
-            return sstp->data_consume_rows(c).then([sstp, &c] {
+            auto context = sstp->data_consume_rows(c);
+            auto fut = context.read();
+            return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 4);
                 BOOST_REQUIRE(c.count_row_end == 4);
                 BOOST_REQUIRE(c.count_cell == 4*3);
@@ -495,26 +503,38 @@ SEASTAR_TEST_CASE(compressed_rows_read_all) {
 }
 
 // test reading all the rows one by one, using the feature of the
-// consume_row_end returning a future.
+// consume_row_end returning proceed::no message
 class pausable_count_row_consumer : public count_row_consumer {
 public:
-    virtual future<> consume_row_end() override {
-        std::cout << "in consume_row_end()\n";
+    virtual proceed consume_row_end() override {
         count_row_consumer::consume_row_end();
-        return sleep(std::chrono::milliseconds(100));
+        return proceed::no;
     }
 };
 
 SEASTAR_TEST_CASE(pausable_uncompressed_rows_read_all) {
     return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([] (auto sstp) {
         return do_with(pausable_count_row_consumer(), [sstp] (auto& c) {
-            return sstp->data_consume_rows(c).then([sstp, &c] {
-                BOOST_REQUIRE(c.count_row_start == 4);
-                BOOST_REQUIRE(c.count_row_end == 4);
-                BOOST_REQUIRE(c.count_cell == 4*3);
+            auto context = sstp->data_consume_rows(c);
+            auto fut = context.read();
+            return fut.then([sstp, &c, context = std::move(context)] () mutable {
+                // After one read, we only get one row
+                BOOST_REQUIRE(c.count_row_start == 1);
+                BOOST_REQUIRE(c.count_row_end == 1);
+                BOOST_REQUIRE(c.count_cell == 1*3);
                 BOOST_REQUIRE(c.count_deleted_cell == 0);
                 BOOST_REQUIRE(c.count_range_tombstone == 0);
-                return make_ready_future<>();
+                auto fut = context.read();
+                return fut.then([&c, context = std::move(context)] () mutable {
+                    // After two reads
+                    BOOST_REQUIRE(c.count_row_start == 2);
+                    BOOST_REQUIRE(c.count_row_end == 2);
+                    BOOST_REQUIRE(c.count_cell == 2*3);
+                    BOOST_REQUIRE(c.count_deleted_cell == 0);
+                    BOOST_REQUIRE(c.count_range_tombstone == 0);
+                    return make_ready_future<>();
+                    // FIXME: read until the last row.
+                });
             });
         });
     });
@@ -541,7 +561,9 @@ public:
 SEASTAR_TEST_CASE(read_set) {
     return reusable_sst("tests/urchin/sstables/set", 1).then([] (auto sstp) {
         return do_with(set_consumer(), [sstp] (auto& c) {
-            return sstp->data_consume_rows(c).then([sstp, &c] {
+            auto context = sstp->data_consume_rows(c);
+            auto fut = context.read();
+            return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_row_end == 1);
                 BOOST_REQUIRE(c.count_cell == 3);
@@ -594,7 +616,9 @@ public:
 SEASTAR_TEST_CASE(ttl_read) {
     return reusable_sst("tests/urchin/sstables/ttl", 1).then([] (auto sstp) {
         return do_with(ttl_row_consumer(1430151018675502), [sstp] (auto& c) {
-            return sstp->data_consume_rows(c).then([sstp, &c] {
+            auto context = sstp->data_consume_rows(c);
+            auto fut = context.read();
+            return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 2);
                 BOOST_REQUIRE(c.count_deleted_cell == 0);
@@ -629,7 +653,9 @@ public:
 SEASTAR_TEST_CASE(deleted_cell_read) {
     return reusable_sst("tests/urchin/sstables/deleted_cell", 2).then([] (auto sstp) {
         return do_with(deleted_cell_row_consumer(), [sstp] (auto& c) {
-            return sstp->data_consume_rows(c).then([sstp, &c] {
+            auto context = sstp->data_consume_rows(c);
+            auto fut = context.read();
+            return fut.then([sstp, &c, context = std::move(context)] {
                 BOOST_REQUIRE(c.count_row_start == 1);
                 BOOST_REQUIRE(c.count_cell == 0);
                 BOOST_REQUIRE(c.count_deleted_cell == 1);

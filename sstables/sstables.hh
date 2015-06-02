@@ -28,6 +28,63 @@
 
 namespace sstables {
 
+// data_consume_context is an object returned by sstable::data_consume_rows()
+// which allows knowing when the consumer stops reading, and starting it again
+// (e.g., when the consumer wants to stop after every sstable row).
+//
+// The read() method initiates reading into the consumer, and continues to
+// read and feed data into the consumer until one of the consumer's callbacks
+// requests to stop,  or until we reach the end of the data range originally
+// requested. read() returns a future which completes when reading stopped.
+// If we're at the end-of-file, the read may complete without reading anything
+// so it's the consumer class's task to check if anything was consumed.
+// Note:
+// The caller MUST ensure that between calling read() on this object,
+// and the time the returned future is completed, the object lives on.
+// Moreover, the sstable object used for the sstable::data_consume_rows()
+// call which created this data_consume_context, must also be kept alive.
+class data_consume_context {
+    class impl;
+    std::unique_ptr<impl> _pimpl;
+    // This object can only be constructed by sstable::data_consume_rows()
+    data_consume_context(std::unique_ptr<impl>);
+    friend class sstable;
+public:
+    future<> read();
+    // Define (as defaults) the destructor and move operations in the source
+    // file, so here we don't need to know the incomplete impl type.
+    ~data_consume_context();
+    data_consume_context(data_consume_context&&);
+    data_consume_context& operator=(data_consume_context&&);
+};
+
+// mutation_reader is an object returned by sstable::read_rows() et al. which
+// allows getting each sstable row in sequence, in mutation format.
+//
+// The read() method reads the next mutation, returning a disengaged optional
+// on EOF. As usual for future-returning functions, a caller which starts a
+// read() MUST ensure that the mutation_reader object continues to live until
+// the returned future is fulfilled.  Moreover, the sstable whose read_rows()
+// method was used to open this mutation_reader must also live between the
+// time read() is called and its future ends.
+// As soon as the future returned by read() completes, the object may safely
+// be deleted. In other words, when the read() future is fulfilled, we can
+// be sure there are no background tasks still scheduled.
+class mutation_reader {
+    class impl;
+    std::unique_ptr<impl> _pimpl;
+    // This object can only be constructed by sstable::read_rows() et al.
+    mutation_reader(std::unique_ptr<impl>);
+    friend class sstable;
+public:
+    future<mutation_opt> read();
+    // Define (as defaults) the destructor and move operations in the source
+    // file, so here we don't need to know the incomplete impl type.
+    ~mutation_reader();
+    mutation_reader(mutation_reader&&);
+    mutation_reader& operator=(mutation_reader&&);
+};
+
 class key;
 
 class malformed_sstable_exception : public std::exception {
@@ -76,14 +133,25 @@ public:
     // object lives until then (e.g., using the do_with() idiom).
     future<> data_consume_rows_at_once(row_consumer& consumer, uint64_t pos, uint64_t end);
 
-    // Iterate over all rows in the data file (or rows in a particular range),
-    // feeding them into the consumer. The iteration is done as efficiently as
-    // possible - reading only the data file (not the summary or index files)
-    // and reading data in batches.
-    // The function returns a future which completes after all the data has
-    // been fed into the consumer. The caller needs to ensure the "consumer"
-    // object lives until then (e.g., using the do_with() idiom).
-    future<> data_consume_rows(row_consumer& consumer, uint64_t start = 0, uint64_t end = 0);
+
+    // data_consume_rows() iterates over all rows in the data file (or rows in
+    // a particular range), feeding them into the consumer. The iteration is
+    // done as efficiently as possible - reading only the data file (not the
+    // summary or index files) and reading data in batches.
+    //
+    // The consumer object may request the iteration to stop before reaching
+    // the end of the requested data range (e.g. stop after each sstable row).
+    // A context object is returned which allows to resume this consumption:
+    // This context's read() method requests that consumption begins, and
+    // returns a future which will be resolved when it ends (because the
+    // consumer asked to stop, or the data range ended). Only after the
+    // returned future is resolved, may read() be called again to consume
+    // more.
+    // The caller must ensure (e.g., using do_with()) that the context object,
+    // as well as the sstable, remains alive as long as a read() is in
+    // progress (i.e., returned a future which hasn't completed yet).
+    data_consume_context data_consume_rows(row_consumer& consumer,
+            uint64_t start = 0, uint64_t end = 0);
 
     static version_types version_from_sstring(sstring& s);
     static format_types format_from_sstring(sstring& s);
@@ -107,11 +175,24 @@ public:
      * @param schema a schema_ptr object describing this table
      * @param min the minimum token we want to search for (inclusive)
      * @param max the maximum token we want to search for (inclusive)
-     * @param walker a future-returning function to be called for each mutation found within the specified range
-     * @return a subscription that will call @param walker for every mutation found.
+     * @return a mutation_reader object that can be used to iterate over
+     * mutations.
      */
-    subscription<mutation>
-    read_range_rows(schema_ptr schema, const dht::token& min, const dht::token& max, std::function<future<> (mutation m)> walker);
+    mutation_reader read_range_rows(schema_ptr schema,
+            const dht::token& min, const dht::token& max);
+
+    // read_rows() returns each of the rows in the sstable, in sequence,
+    // converted to a "mutation" data structure.
+    // This function is implemented efficiently - doing buffered, sequential
+    // read of the data file (no need to access the index file).
+    // A "mutation_reader" object is returned with which the caller can
+    // fetch mutations in sequence, and allows stop iteration any time
+    // after getting each row.
+    //
+    // The caller must ensure (e.g., using do_with()) that the context object,
+    // as well as the sstable, remains alive as long as a read() is in
+    // progress (i.e., returned a future which hasn't completed yet).
+    mutation_reader read_rows(schema_ptr schema);
 
     // Write sstable components from a memtable.
     future<> write_components(const memtable& mt);

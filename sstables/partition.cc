@@ -309,14 +309,11 @@ public:
             mut->set_cell(clustering_prefix, *(col.cdef), atomic_cell_or_collection(std::move(ac)));
         }
     }
-    virtual future<> consume_row_end() override {
+    virtual proceed consume_row_end() override {
         if (mut) {
             _pending_collection.flush(*_schema, *mut);
-            if (_mutation_to_subscription) {
-                return _mutation_to_subscription(std::move(*mut));
-            }
         }
-        return make_ready_future<>();
+        return proceed::no;
     }
 
     virtual void consume_range_tombstone(
@@ -421,82 +418,123 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
     });
 }
 
-subscription<mutation>
-sstables::sstable::read_range_rows(schema_ptr schema, const dht::token& min_token, const dht::token& max_token,
-                                  std::function<future<> (mutation m)> walker) {
-    auto pstream = make_lw_shared<stream<mutation>>();
+class mutation_reader::impl {
+private:
+    mp_row_consumer _consumer;
+    std::experimental::optional<data_consume_context> _context;
+    std::experimental::optional<future<data_consume_context>> _context_future;
+public:
+    impl(sstable& sst, schema_ptr schema, uint64_t start = 0, uint64_t end = 0)
+        : _consumer(schema)
+        , _context(sst.data_consume_rows(_consumer, start, end)) { }
+    impl(sstable& sst, schema_ptr schema, future<uint64_t> start, future<uint64_t> end)
+        : _consumer(schema)
+        , _context_future(start.then([this, &sst, end = std::move(end)] (uint64_t start) mutable {
+                      return end.then([this, &sst, start] (uint64_t end) mutable {
+                          return sst.data_consume_rows(_consumer, start, end);
+                      });
+                    })) { }
+    impl() : _consumer({}) { }
 
-    auto ret = pstream->listen(std::move(walker));
-    pstream->started().then([this, pstream, schema, min_token, max_token] {
-        if (max_token < min_token) {
-            return make_ready_future<>();
-        }
-        auto& summary = _summary;
-
-        auto min_idx = adjust_binary_search_index(binary_search(summary.entries, minimum_key(), min_token));
-        auto max_idx = adjust_binary_search_index(binary_search(summary.entries, maximum_key(), max_token));
-
-        if (max_idx < 0) {
-            return make_ready_future<>();
-        }
-
-        if (min_idx < 0) {
-            min_idx = 0;
-        }
-
-        auto position = _summary.entries[min_idx].position;
-        auto ipos_fut = read_indexes(position).then([this, min_token] (auto index_list) {
-            // Note that we have to adjust the binary search result here as
-            // well.  We will never find the exact element, since we are not
-            // using real keys.
-            //
-            // So what we really want here is to know in which bucket does the
-            // set of keys that compute the token of interest starts.
-            auto m = adjust_binary_search_index(this->binary_search(index_list, minimum_key(), min_token));
-            auto min_index_idx = m >= 0 ? m : 0;
-
-            // We will be given an element that is guaranteed to be before the
-            // minimum token in token order.  This can happen in two
-            // situations:
-            //
-            //  1) if both elements compute the same token (differing in the key comparator)
-            //  2) if the element returned computes a token that precedes the minimum token.
-            //
-            // In the former case, we will retain the element. But in the
-            // latter we want to discard it.  Otherwise we would be returning a
-            // token that is smaller than the minimum requested.
-            auto candidate = key_view(bytes_view(index_list[min_index_idx]));
-            auto tcandidate = dht::global_partitioner().get_token(candidate);
-            if (tcandidate < min_token) {
-                min_index_idx++;
-            }
-            return make_ready_future<size_t>(index_list[min_index_idx].position);
-        });
-
-        auto epos_fut = read_indexes(position).then([this, max_idx, max_token] (auto index_list) {
-            auto m = adjust_binary_search_index(this->binary_search(index_list, maximum_key(), max_token));
-            auto max_index_idx = m >= 0 ? m : int(index_list.size());
-
-            // For the max case, we don't need to do the index adjustment.
-            // Since we compare greater than any key that computes max_token,
-            // they are all guaranteed to be in the final set.
-            return this->data_end_position(max_idx, max_index_idx, index_list);
-        });
-
-        return when_all(std::move(ipos_fut), std::move(epos_fut)).then([this, schema, pstream] (auto positions) {
-            auto subscription_producer = [pstream] (mutation &&mut) {
-                return pstream->produce(std::move(mut));
-            };
-
-            auto ipos = std::get<size_t>(std::get<0>(positions).get());
-            auto epos = std::get<size_t>(std::get<1>(positions).get());
-            return do_with(mp_row_consumer(schema, subscription_producer), [this, ipos, epos] (auto& c) {
-                return this->data_consume_rows(c, ipos, epos);
+    future<mutation_opt> read() {
+        if (_context) {
+            return _context->read().then([this] {
+                // We want after returning a mutation that _consumer.mut()
+                // will be left in unengaged state (so on EOF we return an
+                // unengaged optional). Moving _consumer.mut is *not* enough.
+                auto ret = std::move(_consumer.mut);
+                _consumer.mut = {};
+                return std::move(ret);
             });
-        });
-    }).then([pstream] {
-        pstream->close();
-    });
-    return ret;
+        } else if (_context_future) {
+            return _context_future->then([this] (auto context) {
+                _context = std::move(context);
+                return _context->read().then([this] {
+                    auto ret = std::move(_consumer.mut);
+                    _consumer.mut = {};
+                    return std::move(ret);
+                });
+            });
+        } else {
+            // empty mutation reader returns EOF immediately
+            return make_ready_future<mutation_opt>();
+        }
+    }
+};
+
+mutation_reader::~mutation_reader() = default;
+mutation_reader::mutation_reader(mutation_reader&&) = default;
+mutation_reader& mutation_reader::operator=(mutation_reader&&) = default;
+mutation_reader::mutation_reader(std::unique_ptr<impl> p)
+    : _pimpl(std::move(p)) { }
+future<mutation_opt> mutation_reader::read() {
+    return _pimpl->read();
 }
+
+mutation_reader sstable::read_rows(schema_ptr schema) {
+    return std::make_unique<mutation_reader::impl>(*this, schema);
+}
+
+mutation_reader sstable::read_range_rows(schema_ptr schema,
+        const dht::token& min_token, const dht::token& max_token) {
+    if (max_token < min_token) {
+        return std::make_unique<mutation_reader::impl>();
+    }
+    auto& summary = _summary;
+
+    auto min_idx = adjust_binary_search_index(binary_search(summary.entries, minimum_key(), min_token));
+    auto max_idx = adjust_binary_search_index(binary_search(summary.entries, maximum_key(), max_token));
+
+    if (max_idx < 0) {
+        return std::make_unique<mutation_reader::impl>();
+    }
+
+    if (min_idx < 0) {
+        min_idx = 0;
+    }
+
+    auto position = _summary.entries[min_idx].position;
+    auto ipos_fut = read_indexes(position).then([this, min_token] (auto index_list) {
+        // Note that we have to adjust the binary search result here as
+        // well.  We will never find the exact element, since we are not
+        // using real keys.
+        //
+        // So what we really want here is to know in which bucket does the
+        // set of keys that compute the token of interest starts.
+        auto m = adjust_binary_search_index(this->binary_search(index_list, minimum_key(), min_token));
+        auto min_index_idx = m >= 0 ? m : 0;
+
+        // We will be given an element that is guaranteed to be before the
+        // minimum token in token order.  This can happen in two
+        // situations:
+        //
+        //  1) if both elements compute the same token (differing in the key comparator)
+        //  2) if the element returned computes a token that precedes the minimum token.
+        //
+        // In the former case, we will retain the element. But in the
+        // latter we want to discard it.  Otherwise we would be returning a
+        // token that is smaller than the minimum requested.
+        auto candidate = key_view(bytes_view(index_list[min_index_idx]));
+        auto tcandidate = dht::global_partitioner().get_token(candidate);
+        if (tcandidate < min_token) {
+            min_index_idx++;
+        }
+        return make_ready_future<size_t>(index_list[min_index_idx].position);
+    });
+
+    auto epos_fut = read_indexes(position).then([this, max_idx, max_token] (auto index_list) {
+        auto m = adjust_binary_search_index(this->binary_search(index_list, maximum_key(), max_token));
+        auto max_index_idx = m >= 0 ? m : int(index_list.size());
+
+        // For the max case, we don't need to do the index adjustment.
+        // Since we compare greater than any key that computes max_token,
+        // they are all guaranteed to be in the final set.
+        return this->data_end_position(max_idx, max_index_idx, index_list);
+    });
+
+    return std::make_unique<mutation_reader::impl>(
+            *this, schema, std::move(ipos_fut), std::move(epos_fut));
+}
+
+
 }

@@ -360,20 +360,28 @@ SEASTAR_TEST_CASE(complex_sst3_k2) {
 future<> test_range_reads(const dht::token& min, const dht::token& max, std::vector<bytes>& expected) {
     return reusable_sst("tests/urchin/sstables/uncompressed", 1).then([min, max, &expected] (auto sstp) mutable {
         auto s = uncompressed_schema();
-
         auto count = make_lw_shared<size_t>(0);
         auto expected_size = expected.size();
-        auto subs = sstp->read_range_rows(s, min, max, [&expected, count] (auto mutation) mutable {
-            BOOST_REQUIRE(bytes_view(expected.back()) == bytes_view(mutation.key()));
-            expected.pop_back();
-            (*count)++;
-            return make_ready_future<>();
-        });
-
-        auto sptr = make_lw_shared<subscription<mutation>>(std::move(subs));
-        return sptr->done().then([sptr, sstp, count, expected_size] {
-            BOOST_REQUIRE(*count == expected_size);
-        });
+        auto mutations = sstp->read_range_rows(s, min, max);
+        auto stop = make_lw_shared<bool>(false);
+        return do_until([stop] { return *stop; },
+                // Note: The data in the following lambda, including
+                // "mutations", continues to live until after the last
+                // iteration's future completes, so its lifetime is safe.
+                [sstp, mutations = std::move(mutations), &expected, expected_size, count, stop] () mutable {
+                    return mutations.read().then([&expected, expected_size, count, stop] (mutation_opt mutation) mutable {
+                        if (mutation) {
+                            BOOST_REQUIRE(*count < expected_size);
+                            BOOST_REQUIRE(bytes_view(expected.back()) == bytes_view(mutation->key()));
+                            expected.pop_back();
+                            (*count)++;
+                        } else {
+                            *stop = true;
+                        }
+                    });
+            }).then([count, expected_size] {
+                BOOST_REQUIRE(*count == expected_size);
+            });
     });
 }
 
