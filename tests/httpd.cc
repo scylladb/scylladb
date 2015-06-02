@@ -2,11 +2,6 @@
  * Copyright 2015 Cloudius Systems
  */
 
-#define BOOST_TEST_DYN_LINK
-#define BOOST_TEST_MODULE core
-
-#include <boost/test/included/unit_test.hpp>
-
 #include "http/httpd.hh"
 #include "http/handlers.hh"
 #include "http/matcher.hh"
@@ -15,6 +10,7 @@
 #include "http/routes.hh"
 #include "http/exception.hh"
 #include "http/transformers.hh"
+#include "tests/test-utils.hh"
 
 using namespace httpd;
 
@@ -27,22 +23,24 @@ public:
     }
 };
 
-BOOST_AUTO_TEST_CASE(test_reply)
+SEASTAR_TEST_CASE(test_reply)
 {
     reply r;
     r.set_content_type("txt");
     BOOST_REQUIRE_EQUAL(r._headers["Content-Type"], sstring("text/plain"));
+    return make_ready_future<>();
 }
 
-BOOST_AUTO_TEST_CASE(test_str_matcher)
+SEASTAR_TEST_CASE(test_str_matcher)
 {
 
     str_matcher m("/hello");
     parameters param;
     BOOST_REQUIRE_EQUAL(m.match("/abc/hello", 4, param), 10);
+    return make_ready_future<>();
 }
 
-BOOST_AUTO_TEST_CASE(test_param_matcher)
+SEASTAR_TEST_CASE(test_param_matcher)
 {
 
     param_matcher m("param");
@@ -50,10 +48,10 @@ BOOST_AUTO_TEST_CASE(test_param_matcher)
     BOOST_REQUIRE_EQUAL(m.match("/abc/hello", 4, param), 10);
     BOOST_REQUIRE_EQUAL(param.path("param"), "/hello");
     BOOST_REQUIRE_EQUAL(param["param"], "hello");
-
+    return make_ready_future<>();
 }
 
-BOOST_AUTO_TEST_CASE(test_match_rule)
+SEASTAR_TEST_CASE(test_match_rule)
 {
 
     parameters param;
@@ -66,9 +64,10 @@ BOOST_AUTO_TEST_CASE(test_match_rule)
     res = mr.get("/hell/val1", param);
     httpd::handler_base* nl = nullptr;
     BOOST_REQUIRE_EQUAL(res, nl);
+    return make_ready_future<>();
 }
 
-BOOST_AUTO_TEST_CASE(test_formatter)
+SEASTAR_TEST_CASE(test_formatter)
 {
     BOOST_REQUIRE_EQUAL(json::formatter::to_json(true), "true");
     BOOST_REQUIRE_EQUAL(json::formatter::to_json(false), "false");
@@ -77,10 +76,10 @@ BOOST_AUTO_TEST_CASE(test_formatter)
     BOOST_REQUIRE_EQUAL(json::formatter::to_json(txt), "\"efg\"");
     sstring str = "abc";
     BOOST_REQUIRE_EQUAL(json::formatter::to_json(str), "\"abc\"");
-
+    return make_ready_future<>();
 }
 
-BOOST_AUTO_TEST_CASE(test_decode_url) {
+SEASTAR_TEST_CASE(test_decode_url) {
     request req;
     req._url = "/a?q=%23%24%23";
     sstring url = http_server::connection::set_query_param(req);
@@ -90,9 +89,10 @@ BOOST_AUTO_TEST_CASE(test_decode_url) {
     http_server::connection::set_query_param(req);
     BOOST_REQUIRE_EQUAL(req.get_query_param("a"), "#$#");
     BOOST_REQUIRE_EQUAL(req.get_query_param("b"), "\"&\"");
+    return make_ready_future<>();
 }
 
-BOOST_AUTO_TEST_CASE(test_routes) {
+SEASTAR_TEST_CASE(test_routes) {
     handl* h1 = new handl();
     handl* h2 = new handl();
     routes route;
@@ -133,9 +133,10 @@ BOOST_AUTO_TEST_CASE(test_routes) {
     BOOST_REQUIRE_EQUAL((int )rep->_status,
             (int )reply::status_type::not_found);
 
+    return make_ready_future<>();
 }
 
-BOOST_AUTO_TEST_CASE(test_transformer) {
+SEASTAR_TEST_CASE(test_transformer) {
     request req;
     content_replace cr("json");
     sstring content = "hello-{{Protocol}}-xyz-{{Host}}";
@@ -144,4 +145,5 @@ BOOST_AUTO_TEST_CASE(test_transformer) {
     req._headers["Host"] = "localhost";
     cr.transform(content, req, "json");
     BOOST_REQUIRE_EQUAL(content, "hello-http-xyz-localhost");
+    return make_ready_future<>();
 }
