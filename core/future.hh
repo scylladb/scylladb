@@ -327,6 +327,13 @@ struct continuation final : task {
     future_state<T...> _state;
     Func _func;
 };
+
+#ifndef DEBUG
+static constexpr unsigned max_inlined_continuations = 256;
+#else
+static constexpr unsigned max_inlined_continuations = 1;
+#endif
+
 /// \endcond
 
 /// \brief promise - allows a future value to be made available at a later time.
@@ -586,7 +593,7 @@ private:
     futurize_t<Ret> then(Func&& func, Param&& param) noexcept {
         using futurator = futurize<Ret>;
         using P = typename futurator::promise_type;
-        if (state()->available() && (++future_avail_count % 256)) {
+        if (state()->available() && (++future_avail_count % max_inlined_continuations)) {
             try {
                 return futurator::apply(std::forward<Func>(func), param(std::move(*state())));
             } catch (...) {
