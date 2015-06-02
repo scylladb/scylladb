@@ -119,13 +119,15 @@ private:
 
     private InetAddress removingNode;
 
-    /* we bootstrap but do NOT join the ring unless told to do so */
-    private boolean isSurveyMode= Boolean.parseBoolean(System.getProperty("cassandra.write_survey", "false"));
 #endif
 
 private:
     /* Are we starting this node in bootstrap mode? */
     bool _is_bootstrap_mode;
+
+    /* we bootstrap but do NOT join the ring unless told to do so */
+    // FIXME: System.getProperty("cassandra.write_survey", "false")
+    bool _is_survey_mode = false;
 
     bool _initialized;
 

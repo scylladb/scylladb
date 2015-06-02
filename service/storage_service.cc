@@ -255,7 +255,7 @@ future<> storage_service::join_token_ring(int delay) {
     if (Schema.instance.getKSMetaData(TraceKeyspace.NAME) == null)
         MigrationManager.announceNewKeyspace(TraceKeyspace.definition(), 0, false);
 
-    if (!isSurveyMode)
+    if (!_is_survey_mode)
     {
         // start participating in the ring.
         SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
@@ -288,10 +288,10 @@ void storage_service::join_ring() {
         {
             throw new IOException(e.getMessage());
         }
-    } else if (isSurveyMode) {
+    } else if (_is_survey_mode) {
         set_tokens(SystemKeyspace.getSavedTokens());
         SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
-        isSurveyMode = false;
+        _is_survey_mode = false;
         logger.info("Leaving write survey mode and joining ring at operator request");
         assert _token_metadata.sortedTokens().size() > 0;
 
