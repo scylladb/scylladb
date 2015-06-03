@@ -24,21 +24,28 @@
 #include <utility>
 #include <memory>
 
-// do_with() holds an object alive for the duration until a future
-// completes, and allow the code involved in making the future
-// complete to have easy access to this object.
-//
-// do_with() takes two arguments: The first is an temporary object (rvalue),
-// the second is a function returning a future (a so-called "promise").
-// The function is given (a moved copy of) this temporary object, by
-// reference, and it is ensured that the object will not be destructed until
-// the completion of the future returned by the function.
-//
-// do_with() returns a future which resolves to whatever value the given future
-// (returned by the given function) resolves to. This returned value must not
-// contain references to the temporary object, as at that point the temporary
-// is destructed.
+/// \addtogroup future-util
+/// @{
 
+/// do_with() holds an object alive for the duration until a future
+/// completes, and allow the code involved in making the future
+/// complete to have easy access to this object.
+///
+/// do_with() takes two arguments: The first is an temporary object (rvalue),
+/// the second is a function returning a future (a so-called "promise").
+/// The function is given (a moved copy of) this temporary object, by
+/// reference, and it is ensured that the object will not be destructed until
+/// the completion of the future returned by the function.
+///
+/// do_with() returns a future which resolves to whatever value the given future
+/// (returned by the given function) resolves to. This returned value must not
+/// contain references to the temporary object, as at that point the temporary
+/// is destructed.
+///
+/// \param rvalue a temporary value to protect while \c f is running
+/// \param f a callable, accepting an lvalue reference of the same type
+///          as \c rvalue, that will be accessible while \c f runs
+/// \return whatever \c f returns
 template<typename T, typename F>
 inline
 auto do_with(T&& rvalue, F&& f) {
@@ -46,3 +53,5 @@ auto do_with(T&& rvalue, F&& f) {
     auto fut = f(*obj);
     return fut.finally([obj = std::move(obj)] () {});
 }
+
+/// @}
