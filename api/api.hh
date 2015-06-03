@@ -27,6 +27,16 @@ std::vector<sstring> container_to_vec(const T& container) {
     return res;
 }
 
+template<class T>
+std::vector<T> map_to_key_value(const std::map<sstring, sstring>& map) {
+    std::vector<T> res;
+    for (auto i : map) {
+        res.push_back(T());
+        res.back().key = i.first;
+        res.back().value = i.second;
+    }
+    return res;
+}
 }
 
 #endif /* API_API_HH_ */
