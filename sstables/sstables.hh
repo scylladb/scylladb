@@ -23,6 +23,8 @@
 #include "mutation.hh"
 #include "utils/i_filter.hh"
 #include "core/stream.hh"
+#include "writer.hh"
+#include "metadata_collector.hh"
 
 namespace sstables {
 
@@ -124,6 +126,7 @@ private:
     utils::filter_ptr _filter;
     summary _summary;
     statistics _statistics;
+    column_stats _c_stats;
     lw_shared_ptr<file> _index_file;
     lw_shared_ptr<file> _data_file;
     size_t _data_file_size;
@@ -199,6 +202,14 @@ private:
     // FIXME: pending on Bloom filter implementation
     bool filter_has_key(const key& key) { return _filter->is_present(bytes_view(key)); }
     bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }
+
+    // NOTE: functions used to generate sstable components.
+    future<> write_row_marker(file_writer& out, const rows_entry& clustered_row, const composite& clustering_key);
+    future<> write_clustered_row(file_writer& out, schema_ptr schema, const rows_entry& clustered_row);
+    future<> write_static_row(file_writer& out, schema_ptr schema, const row& static_row);
+    future<> write_cell(file_writer& out, atomic_cell_view cell);
+    future<> write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names);
+    future<> write_static_column_name(file_writer& out, const schema& schema, const std::vector<bytes_view>& column_names);
 public:
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
