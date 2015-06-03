@@ -137,9 +137,9 @@ public:
 
     // The batch itself will be validated in either Parsed#prepare() - for regular CQL3 batches,
     //   or in QueryProcessor.processBatch() - for native protocol batches.
-    virtual void validate(const service::client_state& state) override {
+    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) override {
         for (auto&& s : _statements) {
-            s->validate(state);
+            s->validate(proxy, state);
         }
     }
 

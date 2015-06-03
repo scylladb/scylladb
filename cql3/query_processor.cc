@@ -67,7 +67,7 @@ query_processor::process_statement(::shared_ptr<cql_statement> statement, servic
 #endif
     auto& client_state = query_state.get_client_state();
     statement->check_access(client_state);
-    statement->validate(client_state);
+    statement->validate(_proxy, client_state);
 
     return statement->execute(_proxy, query_state, options)
         .then([statement] (auto msg) {

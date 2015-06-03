@@ -54,7 +54,7 @@ public:
 #endif
     }
 
-    virtual void validate(const service::client_state& state) override {
+    virtual void validate(service::storage_proxy&, const service::client_state& state) override {
         throw std::runtime_error("not implemented");
 #if 0
         ThriftValidation.validateColumnFamily(keyspace(), columnFamily());

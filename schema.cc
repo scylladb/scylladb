@@ -8,7 +8,6 @@
 #include "schema_builder.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
-
 template<typename Sequence>
 std::vector<data_type>
 get_column_types(const Sequence& column_definitions) {
@@ -86,6 +85,26 @@ schema::schema(const raw_schema& raw)
     for (auto& def : _raw._columns) {
         def.column_specification = make_column_specification(def);
         def.id = id - column_offset(def.kind);
+
+        def._thrift_bits = column_definition::thrift_bits();
+
+        {
+            // is_on_all_components
+            // TODO : In origin, this predicate is "componentIndex == null", which is true in
+            // a number of cases, some of which I've most likely missed...
+            switch (def.kind) {
+            case column_kind::partition_key:
+                // In origin, ci == null is true for a PK column where CFMetaData "keyValidator" is non-composite.
+                // Which is true of #pk == 1
+                def._thrift_bits.is_on_all_components = partition_key_size() == 1;
+                break;
+            default:
+                // Or any other column where "comparator" is not compound
+                def._thrift_bits.is_on_all_components = !thrift().has_compound_comparator();
+                break;
+            }
+        }
+
         ++id;
     }
 
@@ -174,10 +193,25 @@ column_definition::is_compact_value() const {
     return false;
 }
 
+bool column_definition::is_on_all_components() const {
+    return _thrift_bits.is_on_all_components;
+}
+
 // Based on org.apache.cassandra.config.CFMetaData#generateLegacyCfId
 utils::UUID
 generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
     return utils::UUID_gen::get_name_UUID(ks_name + cf_name);
+}
+
+bool thrift_schema::is_dense() const {
+    warn(unimplemented::cause::COMPACT_TABLES);
+    return false;
+}
+
+bool thrift_schema::has_compound_comparator() const {
+    // until we "map" compact storage, at which point it might not be "true".
+    warn(unimplemented::cause::COMPACT_TABLES);
+    return true;
 }
 
 schema_builder::schema_builder(const sstring& ks_name, const sstring& cf_name,
@@ -205,6 +239,50 @@ column_definition& schema_builder::find_column(const cql3::column_identifier& c)
         return *i;
     }
     throw std::invalid_argument(sprint("No such column %s", c.name()));
+}
+
+void schema_builder::add_default_index_names(database& db) {
+    auto s = db.find_schema(ks_name(), cf_name());
+
+    if (s) {
+        for (auto& sc : _raw._columns) {
+            if (sc.idx_info.index_type == index_type::none) {
+                continue;
+            }
+            auto* c = s->get_column_definition(sc.name());
+            if (c == nullptr || !c->idx_info.index_name) {
+                continue;
+            }
+            if (sc.idx_info.index_name
+                    && sc.idx_info.index_name != c->idx_info.index_name) {
+                throw new exceptions::configuration_exception(
+                        sprint(
+                                "Can't modify index name: was '%s' changed to '%s'",
+                                *c->idx_info.index_name,
+                                *sc.idx_info.index_name));
+
+            }
+            sc.idx_info.index_name = c->idx_info.index_name;
+        }
+    }
+
+
+    auto existing_names = db.existing_index_names();
+    for (auto& sc : _raw._columns) {
+        if (sc.idx_info.index_type != index_type::none && sc.idx_info.index_name) {
+            sstring base_name = cf_name() + "_" + *sc.idx_info.index_name + "_idx";
+            auto i = std::remove_if(base_name.begin(), base_name.end(), [](char c) {
+               return ::isspace(c);
+            });
+            base_name.erase(i, base_name.end());
+            auto index_name = base_name;
+            int n = 0;
+            while (existing_names.count(index_name)) {
+                index_name = base_name + "_" + to_sstring(++n);
+            }
+            sc.idx_info.index_name = index_name;
+        }
+    }
 }
 
 schema_builder& schema_builder::with_column(const column_definition& c) {

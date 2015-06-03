@@ -169,7 +169,7 @@ public:
 #endif
     }
 
-    virtual void validate(const service::client_state& state);
+    void validate(service::storage_proxy&, const service::client_state& state) override;
 
     void add_operation(::shared_ptr<operation> op) {
         if (op->column.is_static()) {

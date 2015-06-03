@@ -84,7 +84,7 @@ void select_statement::check_access(const service::client_state& state) {
 #endif
 }
 
-void select_statement::validate(const service::client_state& state) {
+void select_statement::validate(service::storage_proxy&, const service::client_state& state) {
     // Nothing to do, all validation has been done by raw_statemet::prepare()
 }
 

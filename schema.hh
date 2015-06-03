@@ -32,6 +32,8 @@ enum class index_type {
 
 typedef std::unordered_map<sstring, sstring> index_options_map;
 
+class schema;
+
 struct index_info {
     index_info(::index_type = ::index_type::none
             , std::experimental::optional<sstring> index_name = std::experimental::optional<sstring>()
@@ -52,6 +54,17 @@ public:
     }
 private:
     bytes _name;
+
+    struct thrift_bits {
+        thrift_bits()
+            : is_on_all_components(0)
+        {}
+        uint8_t is_on_all_components : 1;
+        // more...?
+    };
+
+    thrift_bits _thrift_bits;
+    friend class schema;
 public:
     column_definition(bytes name, data_type type, column_kind kind, index_info = index_info());
 
@@ -83,6 +96,17 @@ public:
         assert(is_primary_key());
         return id;
     }
+    bool is_on_all_components() const;
+};
+
+/*
+ * Sub-schema for thrift aspects, i.e. not currently supported stuff.
+ * But might be, and should be kept isolated (and starved)
+ */
+class thrift_schema {
+public:
+    bool is_dense() const;
+    bool has_compound_comparator() const;
 };
 
 class schema_builder;
@@ -109,6 +133,7 @@ private:
         double _bloom_filter_fp_chance = 0.01;
     };
     raw_schema _raw;
+    thrift_schema _thrift;
 
     const std::array<size_t, 3> _offsets;
 
@@ -158,6 +183,12 @@ public:
         return *this;
     }
 
+    thrift_schema& thrift() {
+        return _thrift;
+    }
+    const thrift_schema& thrift() const {
+        return _thrift;
+    }
     const utils::UUID& id() const {
         return _raw._id;
     }
@@ -169,9 +200,6 @@ public:
     }
     void set_id(utils::UUID new_id) {
         _raw._id = new_id;
-    }
-    bool is_dense() const {
-        return false;
     }
     bool is_counter() const {
         return false;

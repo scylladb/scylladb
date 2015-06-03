@@ -74,7 +74,7 @@ public:
      *
      * @throws InvalidRequestException if arguments are missing or unacceptable
      */
-    virtual void validate(const service::client_state& state) override {
+    virtual void validate(service::storage_proxy&, const service::client_state& state) override {
 #if 0
         ThriftValidation.validateKeyspaceNotSystem(name);
 
