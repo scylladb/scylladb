@@ -11,6 +11,7 @@
 
 #include "tests/test-utils.hh"
 #include "core/future-util.hh"
+#include "core/do_with.hh"
 #include "core/scollectd_api.hh"
 #include "core/file.hh"
 #include "core/reactor.hh"
@@ -117,12 +118,13 @@ static future<size_t> count_files_with_size(sstring path) {
         return parallel_for_each(l->contents().begin(), l->contents().end(), [n, path](directory_entry de) {
             if (de.type == directory_entry_type::regular) {
                 return engine().open_file_dma(path + "/" + de.name, open_flags::ro).then([n](file f) {
-                    return f.stat().then([n](struct stat s) {
-                                if (s.st_size > 0) {
-                                    ++(*n);
-                                }
-                                return make_ready_future();
-                            });
+                    return do_with(std::move(f), [n] (auto& f) {
+                        return f.stat().then([n](struct stat s) {
+                            if (s.st_size > 0) {
+                                ++(*n);
+                            }
+                        });
+                    });
                 });
             }
             return make_ready_future();
