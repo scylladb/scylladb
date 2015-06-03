@@ -371,9 +371,9 @@ column_family::seal_active_memtable(database* db) {
         sstables::sstable::version_types::la,
         sstables::sstable::format_types::big);
 
-    do_with(std::move(newtab), [&old, name, this, db] (sstables::sstable& newtab) {
+    do_with(std::move(newtab), [old, name, this, db] (sstables::sstable& newtab) {
         // FIXME: write all components
-        return newtab.write_components(*old).then_wrapped([name, this, &newtab, &old, db] (future<> ret) {
+        return newtab.write_components(*old).then_wrapped([name, this, &newtab, old, db] (future<> ret) {
             try {
                 ret.get();
                 add_sstable(std::move(newtab));
