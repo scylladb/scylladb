@@ -21,8 +21,6 @@
 
 #include "formatter.hh"
 #include "json_elements.hh"
-#include <float.h>
-#include <boost/math/special_functions/fpclassify.hpp>
 
 using namespace std;
 
@@ -48,13 +46,21 @@ sstring formatter::to_json(long n) {
 }
 
 sstring formatter::to_json(float f) {
-    int inf;
-    if ((inf = boost::math::isinf(f))) {
-        f = inf * FLT_MAX;
-    } else if (boost::math::isnan(f)) {
-        f = 0;
+    if (std::isinf(f)) {
+        throw out_of_range("Infinite float value is not supported");
+    } else if (std::isnan(f)) {
+        throw invalid_argument("Invalid float value");
     }
-    return to_string(f);
+    return to_sstring(f);
+}
+
+sstring formatter::to_json(double d) {
+    if (std::isinf(d)) {
+        throw out_of_range("Infinite double value is not supported");
+    } else if (std::isnan(d)) {
+        throw invalid_argument("Invalid double value");
+    }
+    return to_sstring(d);
 }
 
 sstring formatter::to_json(bool b) {

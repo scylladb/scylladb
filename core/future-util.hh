@@ -386,17 +386,41 @@ map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Reducer&& r)
     return reducer_traits<Reducer>::maybe_call_get(std::move(ret), r_ptr);
 }
 
-// Variant of map_reduce() that accepts an initial value
-// and binary function instead of a reducer object
-// (equivalent to a left fold, or std::accumulate).
-//
-// Requirements:
-//   Iterator: InputIterator.
-//   Mapper: unary function taking Iterator::value_type and producing a future<...>.
-//   Initial: any value type
-//   Reduce: a binary function taking two Initial values and returning an Initial
-// Returns:
-//   Initial
+/// Asynchronous map/reduce transformation.
+///
+/// Given a range of objects, an asynchronous unary function
+/// operating on these objects, an initial value, and a
+/// binary function for reducing, map_reduce() will
+/// transform each object in the range, then apply
+/// the the reducing function to the result.
+///
+/// Example:
+///
+/// Calculate the total size of several files:
+///
+/// \code
+///  map_reduce(files.begin(), files.end(),
+///             std::mem_fn(file::size),
+///             size_t(0),
+///             std::plus<size_t>())
+/// \endcode
+///
+/// Requirements:
+///    - Iterator: an InputIterator.
+///    - Mapper: unary function taking Iterator::value_type and producing a future<...>.
+///    - Initial: any value type
+///    - Reduce: a binary function taking two Initial values and returning an Initial
+///
+/// Return type:
+///    - future<Initial>
+///
+/// \param begin beginning of object range to operate on
+/// \param end end of object range to operate on
+/// \param mapper map function to call on each object, returning a future
+/// \param initial initial input value to reduce function
+/// \param reduce binary function for merging two result values from \c mapper
+///
+/// \return equivalent to \c reduce(reduce(initial, mapper(obj0)), mapper(obj1)) ...
 template <typename Iterator, typename Mapper, typename Initial, typename Reduce>
 inline
 future<Initial>
