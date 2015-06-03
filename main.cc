@@ -28,7 +28,7 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
 }
 
 future<> init_storage_service() {
-    return service::get_storage_service().start_single().then([] {
+    return service::get_storage_service().start().then([] {
         print("Start Storage service ...\n");
     });
 }

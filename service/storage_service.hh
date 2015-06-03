@@ -32,6 +32,7 @@
 #include "core/sleep.hh"
 #include "gms/application_state.hh"
 #include "db/system_keyspace.hh"
+#include "core/semaphore.hh"
 
 namespace service {
 
@@ -840,6 +841,8 @@ private:
     void update_peer_info(inet_address endpoint);
     sstring get_application_state_value(inet_address endpoint, application_state appstate);
     std::unordered_set<token> get_tokens_for(inet_address endpoint);
+    void replicate_to_all_cores();
+    semaphore _replicate_task{1};
 private:
     /**
      * Handle node bootstrap

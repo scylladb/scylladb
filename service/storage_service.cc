@@ -668,6 +668,7 @@ void storage_service::on_change(inet_address endpoint, application_state state, 
             // SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(value.value));
         }
     }
+    replicate_to_all_cores();
 }
 
 
@@ -761,6 +762,7 @@ void storage_service::set_tokens(std::unordered_set<token> tokens) {
     gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
     gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens));
     //setMode(Mode.NORMAL, false);
+    replicate_to_all_cores();
 }
 
 future<> storage_service::init_server(int delay) {
@@ -889,6 +891,27 @@ future<> storage_service::init_server(int delay) {
         logger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
     }
 #endif
+}
+
+void storage_service::replicate_to_all_cores() {
+    assert(engine().cpu_id() == 0);
+    // FIXME: There is no back pressure. If the remote cores are slow, and
+    // replication is called often, it will queue tasks to the semaphore
+    // without end.
+    _replicate_task.wait().then([this] {
+        return _the_storage_service.invoke_on_all([tm = _token_metadata] (storage_service& local_ss) {
+            if (engine().cpu_id() != 0) {
+                local_ss._token_metadata = tm;
+            }
+        });
+    }).then_wrapped([this] (auto&& f) {
+        try {
+            _replicate_task.signal();
+            f.get();
+        } catch (...) {
+            print("storage_service: Fail to replicate _token_metadata\n");
+        }
+    });
 }
 
 } // namespace service
