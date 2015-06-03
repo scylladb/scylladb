@@ -418,14 +418,14 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
     }
 #endif
 
-    future<std::pair<sstring, lw_shared_ptr<query::result_set>>>
+    future<schema_result::value_type>
     read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
     {
         auto schema = proxy.get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
         auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
             partition_key::from_single_value(*schema, to_bytes(keyspace_name)));
         return proxy.query_local(system_keyspace::NAME, schema_table_name, keyspace_key).then([keyspace_name] (auto&& rs) {
-            return std::make_pair(keyspace_name, std::move(rs));
+            return schema_result::value_type{keyspace_name, std::move(rs)};
         });
     }
 
@@ -538,7 +538,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 
     future<std::set<sstring>> merge_keyspaces(service::storage_proxy& proxy, schema_result&& before, schema_result&& after)
     {
-        std::vector<std::pair<sstring, lw_shared_ptr<query::result_set>>> created;
+        std::vector<schema_result::value_type> created;
         std::vector<sstring> altered;
         std::set<sstring> dropped;
 
@@ -552,14 +552,14 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
          *   that means that a keyspace had been recreated and dropped, and the recreated keyspace had never found a way
          *   to this node
          */
-        auto diff = difference(before, after, [](const lw_shared_ptr<query::result_set>& x, const lw_shared_ptr<query::result_set>& y) -> bool {
+        auto diff = difference(before, after, [](const auto& x, const auto& y) -> bool {
             return *x == *y;
         });
 
         for (auto&& key : diff.entries_only_on_right) {
             auto&& value = after[key];
             if (!value->empty()) {
-                created.emplace_back(std::make_pair(key, std::move(value)));
+                created.emplace_back(schema_result::value_type{key, std::move(value)});
             }
         }
         for (auto&& key : diff.entries_differing) {
@@ -573,7 +573,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
             } else if (!pre->empty()) {
                 dropped.emplace(keyspace_name);
             } else if (!post->empty()) { // a (re)created keyspace
-                created.emplace_back(std::make_pair(key, std::move(post)));
+                created.emplace_back(schema_result::value_type{key, std::move(post)});
             }
         }
         return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
@@ -873,7 +873,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      *
      * @param partition Keyspace attributes in serialized form
      */
-    lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const std::pair<sstring, lw_shared_ptr<query::result_set>>& result)
+    lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result::value_type& result)
     {
         auto&& rs = result.second;
         if (rs->empty()) {

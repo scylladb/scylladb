@@ -52,7 +52,7 @@ extern std::vector<const char*> ALL;
 
 std::vector<schema_ptr> all_tables();
 
-future<std::pair<sstring, lw_shared_ptr<query::result_set>>>
+future<schema_result::value_type>
 read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name);
 
 future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations);
@@ -63,7 +63,7 @@ future<std::set<sstring>> merge_keyspaces(service::storage_proxy& proxy, schema_
 
 std::vector<mutation> make_create_keyspace_mutations(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 
-lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const std::pair<sstring, lw_shared_ptr<query::result_set>>& partition);
+lw_shared_ptr<keyspace_metadata> create_keyspace_from_schema_partition(const schema_result::value_type& partition);
 
 mutation make_create_keyspace_mutation(lw_shared_ptr<keyspace_metadata> keyspace, api::timestamp_type timestamp, bool with_tables_and_types_and_functions = true);
 
