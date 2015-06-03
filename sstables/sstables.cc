@@ -1177,9 +1177,11 @@ future<> sstable::write_components(const memtable& mt) {
             _components.insert(component_type::CRC);
         }
 
+        constexpr size_t sstable_buffer_size = 64*1024;
+
         // TODO: Add compression support by having a specialized output stream.
-        auto w = make_shared<checksummed_file_writer>(_data_file, 4096, checksum_file);
-        auto index = make_shared<file_writer>(_index_file, 4096);
+        auto w = make_shared<checksummed_file_writer>(_data_file, sstable_buffer_size, checksum_file);
+        auto index = make_shared<file_writer>(_index_file, sstable_buffer_size);
 
         prepare_summary(_summary, mt);
         auto filter_fp_chance = mt.schema()->bloom_filter_fp_chance();
