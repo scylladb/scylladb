@@ -119,9 +119,13 @@ key key::from_partition_key(const schema& s, const partition_key& pk) {
     return from_components(s, pk.begin(s), pk.end(s));
 }
 
-composite composite::from_clustering_key(const schema& s, const clustering_key& ck) {
-    return from_components(ck.begin(s), ck.end(s), s.clustering_key_type()->types(), true);
+template <typename ClusteringElement>
+composite composite::from_clustering_element(const schema& s, const ClusteringElement& ce) {
+    return from_components(ce.begin(s), ce.end(s), ClusteringElement::get_compound_type(s)->types(), true);
 }
+
+template composite composite::from_clustering_element(const schema& s, const clustering_key& ck);
+template composite composite::from_clustering_element(const schema& s, const clustering_key_prefix& ck);
 
 composite composite::from_exploded(const std::vector<bytes_view>& v) {
     return from_components(v.begin(), v.end(), std::vector<data_type>(v.size(), bytes_type), true);

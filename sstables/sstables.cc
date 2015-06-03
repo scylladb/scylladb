@@ -1015,7 +1015,7 @@ void sstable::write_row_marker(file_writer& out, const rows_entry& clustered_row
 // write_datafile_clustered_row() is about writing a clustered_row to data file according to SSTables format.
 // clustered_row contains a set of cells sharing the same clustering key.
 void sstable::write_clustered_row(file_writer& out, schema_ptr schema, const rows_entry& clustered_row) {
-    auto clustering_key = composite::from_clustering_key(*schema, clustered_row.key());
+    auto clustering_key = composite::from_clustering_element(*schema, clustered_row.key());
 
     write_row_marker(out, clustered_row, clustering_key);
     // FIXME: Before writing cells, range tombstone must be written if the row has any (deletable_row::t).

@@ -117,7 +117,8 @@ public:
     future<> describe_type(Describer f) const { return f(const_cast<bytes&>(_bytes)); }
 
     static composite from_bytes(bytes b) { return composite(std::move(b)); }
-    static composite from_clustering_key(const schema& s, const clustering_key& ck);
+    template <typename ClusteringElement>
+    static composite from_clustering_element(const schema& s, const ClusteringElement& ce);
     static composite from_exploded(const std::vector<bytes_view>& v);
     static composite static_prefix(const schema& s);
     size_t size() const { return _bytes.size(); }
