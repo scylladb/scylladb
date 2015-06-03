@@ -29,6 +29,7 @@
 #include "frozen_mutation.hh"
 #include "mutation_partition_applier.hh"
 #include "core/do_with.hh"
+#include "service/storage_service.hh"
 
 thread_local logging::logger dblog("database");
 
@@ -684,20 +685,10 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
 
 void
 keyspace::create_replication_strategy() {
-    static thread_local locator::token_metadata tm;
     static locator::simple_snitch snitch;
     static std::unordered_map<sstring, sstring> options = {{"replication_factor", "3"}};
-    auto d2t = [](double d) {
-        unsigned long l = net::hton(static_cast<unsigned long>(d*(std::numeric_limits<unsigned long>::max())));
-        std::array<int8_t, 8> a;
-        memcpy(a.data(), &l, 8);
-        return a;
-    };
-    tm.update_normal_token({dht::token::kind::key, {d2t(0).data(), 8}}, to_sstring("127.0.0.1"));
-    tm.update_normal_token({dht::token::kind::key, {d2t(1.0/4).data(), 8}}, to_sstring("127.0.0.2"));
-    tm.update_normal_token({dht::token::kind::key, {d2t(2.0/4).data(), 8}}, to_sstring("127.0.0.3"));
-    tm.update_normal_token({dht::token::kind::key, {d2t(3.0/4).data(), 8}}, to_sstring("127.0.0.4"));
-    _replication_strategy = locator::abstract_replication_strategy::create_replication_strategy(_metadata->name(), _metadata->strategy_name(), tm, snitch, options);
+    auto& ss = service::get_local_storage_service();
+    _replication_strategy = locator::abstract_replication_strategy::create_replication_strategy(_metadata->name(), _metadata->strategy_name(), ss.get_token_metadata(), snitch, options);
 }
 
 locator::abstract_replication_strategy&
