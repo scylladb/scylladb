@@ -132,8 +132,12 @@ void token_metadata::debug_show() {
             print("inet_address=%s, token=%s\n", x.second, x.first);
         }
         print("Endpoint -> UUID\n");
-        for (auto x: _endpoint_to_host_id_map) {
+        for (auto x : _endpoint_to_host_id_map) {
             print("inet_address=%s, uuid=%s\n", x.first, x.second);
+        }
+        print("Sorted Token\n");
+        for (auto x : _sorted_tokens) {
+            print("token=%s\n", x);
         }
     });
     reporter->arm_periodic(std::chrono::seconds(1));
