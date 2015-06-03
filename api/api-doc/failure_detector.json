@@ -1,0 +1,153 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/failure_detector",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/failure_detector/phi",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the phi convict threshold",
+               "type":"string",
+               "nickname":"get_phi_convict_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set the phi convict threshold",
+               "type":"double",
+               "nickname":"set_phi_convict_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                 {
+                     "name":"phi",
+                     "description":"The new phi value",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"double",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/failure_detector/endpoints/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all endpoint states",
+               "type":"string",
+               "nickname":"get_all_endpoint_states",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/failure_detector/endpoints/states/{addr}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get endpoint states",
+               "type":"string",
+               "nickname":"get_endpoint_state",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"addr",
+                     "description":"The endpoint address",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/failure_detector/count/endpoint/down",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get count down endpoint",
+               "type":"int",
+               "nickname":"get_down_endpoint_count",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/failure_detector/count/endpoint/up",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get count up endpoint",
+               "type":"int",
+               "nickname":"get_up_endpoint_count",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/failure_detector/simple_states",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get simple_states",
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "nickname":"get_simple_states",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      }
+   ],
+    "models" : {
+        "mapper": {
+           "id": "mapper",
+           "description": "Holds a key value",
+               "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "The key"
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The value"
+                }
+            }
+        }
+    }
+}
