@@ -557,7 +557,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         });
 
         for (auto&& key : diff.entries_only_on_right) {
-            auto&& value = before[key];
+            auto&& value = after[key];
             if (!value->empty()) {
                 created.emplace_back(std::make_pair(key, std::move(value)));
             }
