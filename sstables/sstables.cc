@@ -1105,6 +1105,50 @@ future<> sstable::write_clustered_row(file_writer& out, schema_ptr schema, const
     });
 }
 
+void sstable::write_row_marker_t(file_writer& out, const rows_entry& clustered_row, const composite& clustering_key) {
+    // Missing created_at (api::missing_timestamp) means no row marker.
+    if (clustered_row.row().created_at() == api::missing_timestamp) {
+        return;
+    }
+
+    // Write row mark cell to the beginning of clustered row.
+    write_column_name(out, clustering_key, { bytes_view() });
+    column_mask mask = column_mask::none;
+    uint64_t timestamp = clustered_row.row().created_at();
+    uint32_t value_length = 0;
+
+    update_cell_stats(_c_stats, timestamp);
+
+    write(out, mask, timestamp, value_length).get();
+}
+
+// write_datafile_clustered_row() is about writing a clustered_row to data file according to SSTables format.
+// clustered_row contains a set of cells sharing the same clustering key.
+void sstable::write_clustered_row_t(file_writer& out, schema_ptr schema, const rows_entry& clustered_row) {
+    auto clustering_key = composite::from_clustering_key(*schema, clustered_row.key());
+
+    write_row_marker(out, clustered_row, clustering_key);
+    // FIXME: Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
+    assert(!clustered_row.row().deleted_at());
+
+    // Write all cells of a partition's row.
+    for (auto& value: clustered_row.row().cells()) {
+        auto column_id = value.first;
+        auto&& column_definition = schema->regular_column_at(column_id);
+        // non atomic cell isn't supported yet. atomic cell maps to a single trift cell.
+        // non atomic cell maps to multiple trift cell, e.g. collection.
+        if (!column_definition.is_atomic()) {
+            fail(unimplemented::cause::NONATOMIC);
+        }
+        assert(column_definition.is_regular());
+        atomic_cell_view cell = value.second.as_atomic_cell();
+        const bytes& column_name = column_definition.name();
+
+        write_column_name(out, clustering_key, { bytes_view(column_name) });
+        write_cell(out, cell);
+    }
+}
+
 future<> sstable::write_static_row(file_writer& out, schema_ptr schema, const row& static_row) {
     return do_for_each(static_row, [&out, schema, this] (auto& value) {
         auto column_id = value.first;
@@ -1430,6 +1474,18 @@ void sstable::do_write_components(const memtable& mt) {
         auto& static_row = partition.static_row();
 
         write_static_row_t(*w, mt.schema(), static_row);
+        // Write all CQL rows from a given mutation partition.
+        for (auto& clustered_row: partition.clustered_rows()) {
+            write_clustered_row_t(*w, mt.schema(), clustered_row);
+            int16_t end_of_row = 0;
+            write(*w, end_of_row).get();
+        }
+
+        // compute size of the current row.
+        _c_stats.row_size = w->offset() - _c_stats.start_offset;
+        // update is about merging column_stats with the data being stored by collector.
+        collector->update(_c_stats);
+        _c_stats.reset();
     }
 
     w->close().get();

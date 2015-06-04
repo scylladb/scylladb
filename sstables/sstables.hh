@@ -293,6 +293,8 @@ private:
     future<> write_cell(file_writer& out, atomic_cell_view cell);
     future<> write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names);
 
+    void write_row_marker_t(file_writer& out, const rows_entry& clustered_row, const composite& clustering_key);
+    void write_clustered_row_t(file_writer& out, schema_ptr schema, const rows_entry& clustered_row);
     void write_static_row_t(file_writer& out, schema_ptr schema, const row& static_row);
     void write_cell_t(file_writer& out, atomic_cell_view cell);
     void write_column_name_t(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names);
