@@ -195,6 +195,8 @@ public:
     mutation_reader read_rows(schema_ptr schema);
 
     // Write sstable components from a memtable.
+    void do_write_components(const memtable& mt);
+    future<> write_components_t(const memtable& mt);
     future<> write_components(const memtable& mt);
 private:
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;

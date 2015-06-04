@@ -12,6 +12,7 @@
 #include "core/fstream.hh"
 #include "core/shared_ptr.hh"
 #include "core/do_with.hh"
+#include "core/thread.hh"
 #include <iterator>
 
 #include "types.hh"
@@ -1293,6 +1294,18 @@ future<> sstable::write_components(const memtable& mt) {
 
             return write_toc();
         });
+    });
+}
+
+void sstable::do_write_components(const memtable& mt) {
+}
+
+future<> sstable::write_components_t(const memtable& mt) {
+    return create_data().then([this, &mt] {
+        auto w = [this] (const memtable& mt) {
+            this->do_write_components(mt);
+        };
+        return seastar::async(w, mt);
     });
 }
 
