@@ -27,8 +27,10 @@
 #include "core/semaphore.hh"
 #include "core/do_with.hh"
 #include "core/future-util.hh"
+#include "core/sleep.hh"
 
 using namespace seastar;
+using namespace std::chrono_literals;
 
 SEASTAR_TEST_CASE(test_thread_1) {
     return do_with(sstring(), [] (sstring& x) {
@@ -64,5 +66,17 @@ SEASTAR_TEST_CASE(test_thread_2) {
             BOOST_REQUIRE_EQUAL(x.counter, n);
             return parallel_for_each(x.threads.begin(), x.threads.end(), std::mem_fn(&thread::join));
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_thread_async) {
+    sstring x = "x";
+    sstring y = "y";
+    auto concat = [] (sstring x, sstring y) {
+        sleep(10ms).get();
+        return x + y;
+    };
+    return async(concat, x, y).then([] (sstring xy) {
+        BOOST_REQUIRE_EQUAL(xy, "xy");
     });
 }
