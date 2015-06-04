@@ -955,6 +955,22 @@ future<> sstable::write_column_name(file_writer& out, const composite& clusterin
     });
 }
 
+// @clustering_key: it's expected that clustering key is already in its composite form.
+// NOTE: empty clustering key means that there is no clustering key.
+void sstable::write_column_name_t(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names) {
+    // FIXME: min_components and max_components also keep track of clustering
+    // prefix, so we must merge clustering_key and column_names somehow and
+    // pass the result to the functions below.
+    column_name_helper::min_components(_c_stats.min_column_names, column_names);
+    column_name_helper::max_components(_c_stats.max_column_names, column_names);
+
+    // FIXME: This code assumes name is always composite, but it wouldn't if "WITH COMPACT STORAGE"
+    // was defined in the schema, for example.
+    auto c= composite::from_exploded(column_names);
+    uint16_t sz = clustering_key.size() + c.size();
+    write(out, sz, clustering_key, c).get();
+}
+
 static inline void update_cell_stats(column_stats& c_stats, uint64_t timestamp) {
     c_stats.update_min_timestamp(timestamp);
     c_stats.update_max_timestamp(timestamp);
@@ -999,6 +1015,43 @@ future<> sstable::write_cell(file_writer& out, atomic_cell_view cell) {
         return do_with(std::move(cell_value), [&out, mask, timestamp] (auto& cell_value) {
             return write(out, mask, timestamp, cell_value);
         });
+    }
+}
+
+// Intended to write all cell components that follow column name.
+void sstable::write_cell_t(file_writer& out, atomic_cell_view cell) {
+    // FIXME: range tombstone and counter cells aren't supported yet.
+
+    uint64_t timestamp = cell.timestamp();
+
+    update_cell_stats(_c_stats, timestamp);
+
+    if (cell.is_live_and_has_ttl()) {
+        // expiring cell
+
+        column_mask mask = column_mask::expiration;
+        uint32_t ttl = cell.ttl().count();
+        uint32_t expiration = cell.expiry().time_since_epoch().count();
+        disk_string_view<uint32_t> cell_value { cell.value() };
+
+        write(out, mask, ttl, expiration, timestamp, cell_value).get();
+    } else if (cell.is_dead()) {
+        // tombstone cell
+
+        column_mask mask = column_mask::deletion;
+        uint32_t deletion_time_size = sizeof(uint32_t);
+        uint32_t deletion_time = cell.deletion_time().time_since_epoch().count();
+
+        _c_stats.tombstone_histogram.update(deletion_time);
+
+        write(out, mask, timestamp, deletion_time_size, deletion_time).get();
+    } else {
+        // regular cell
+
+        column_mask mask = column_mask::none;
+        disk_string_view<uint32_t> cell_value { cell.value() };
+
+        write(out, mask, timestamp, cell_value).get();
     }
 }
 
@@ -1067,6 +1120,21 @@ future<> sstable::write_static_row(file_writer& out, schema_ptr schema, const ro
             });
         });
     });
+}
+
+void sstable::write_static_row_t(file_writer& out, schema_ptr schema, const row& static_row) {
+    for (auto& value: static_row) {
+        auto column_id = value.first;
+        auto&& column_definition = schema->static_column_at(column_id);
+        if (!column_definition.is_atomic()) {
+            fail(unimplemented::cause::NONATOMIC);
+        }
+        assert(column_definition.is_static());
+        atomic_cell_view cell = value.second.as_atomic_cell();
+        auto sp = composite::static_prefix(*schema);
+        write_column_name_t(out, sp, { bytes_view(column_definition.name()) });
+        write_cell_t(out, cell);
+    }
 }
 
 ///
@@ -1358,6 +1426,10 @@ void sstable::do_write_components(const memtable& mt) {
         }
         write(*w, d).get();
 
+        auto& partition = partition_entry.second;
+        auto& static_row = partition.static_row();
+
+        write_static_row_t(*w, mt.schema(), static_row);
     }
 
     w->close().get();
