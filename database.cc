@@ -452,7 +452,7 @@ column_family::seal_active_memtable(database* db) {
                 if (cl != nullptr) {
                     cl->discard_completed_segments(_schema->id(), old->replay_position());
                 }
-                _memtables->erase(boost::find(*_memtables, old));
+                _memtables->erase(boost::range::find(*_memtables, old));
             } catch (std::exception& e) {
                 dblog.error("failed to write sstable: {}", e.what());
             } catch (...) {
