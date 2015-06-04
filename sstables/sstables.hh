@@ -196,7 +196,6 @@ public:
 
     // Write sstable components from a memtable.
     void do_write_components(const memtable& mt);
-    future<> write_components_t(const memtable& mt);
     future<> write_components(const memtable& mt);
 private:
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
@@ -287,17 +286,11 @@ private:
     bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }
 
     // NOTE: functions used to generate sstable components.
-    future<> write_row_marker(file_writer& out, const rows_entry& clustered_row, const composite& clustering_key);
-    future<> write_clustered_row(file_writer& out, schema_ptr schema, const rows_entry& clustered_row);
-    future<> write_static_row(file_writer& out, schema_ptr schema, const row& static_row);
-    future<> write_cell(file_writer& out, atomic_cell_view cell);
-    future<> write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names);
-
-    void write_row_marker_t(file_writer& out, const rows_entry& clustered_row, const composite& clustering_key);
-    void write_clustered_row_t(file_writer& out, schema_ptr schema, const rows_entry& clustered_row);
-    void write_static_row_t(file_writer& out, schema_ptr schema, const row& static_row);
-    void write_cell_t(file_writer& out, atomic_cell_view cell);
-    void write_column_name_t(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names);
+    void write_row_marker(file_writer& out, const rows_entry& clustered_row, const composite& clustering_key);
+    void write_clustered_row(file_writer& out, schema_ptr schema, const rows_entry& clustered_row);
+    void write_static_row(file_writer& out, schema_ptr schema, const row& static_row);
+    void write_cell(file_writer& out, atomic_cell_view cell);
+    void write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names);
 public:
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
