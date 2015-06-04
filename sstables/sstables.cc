@@ -1346,6 +1346,28 @@ void sstable::do_write_components(const memtable& mt) {
         // Write index file entry from partition key into index file.
 
         write_index_entry_t(*index, p_key, w->offset());
+
+        // Write partition key into data file.
+        write(*w, p_key).get();
+
+        auto tombstone = partition_entry.second.partition_tombstone();
+        deletion_time d;
+
+        if (tombstone) {
+            d.local_deletion_time = tombstone.deletion_time.time_since_epoch().count();
+            d.marked_for_delete_at = tombstone.timestamp;
+
+            _c_stats.tombstone_histogram.update(d.local_deletion_time);
+            _c_stats.update_max_local_deletion_time(d.local_deletion_time);
+            _c_stats.update_min_timestamp(d.marked_for_delete_at);
+            _c_stats.update_max_timestamp(d.marked_for_delete_at);
+        } else {
+            // Default values for live, undeleted rows.
+            d.local_deletion_time = std::numeric_limits<int32_t>::max();
+            d.marked_for_delete_at = std::numeric_limits<int64_t>::min();
+        }
+        write(*w, d).get();
+
     }
 
     w->close().get();
