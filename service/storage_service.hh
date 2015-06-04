@@ -32,6 +32,7 @@
 #include "core/sleep.hh"
 #include "gms/application_state.hh"
 #include "db/system_keyspace.hh"
+#include "core/semaphore.hh"
 
 namespace service {
 
@@ -64,7 +65,7 @@ class storage_service : public gms::i_endpoint_state_change_subscriber
 public:
     static int RING_DELAY; // delay after which we assume ring has stablized
 
-    const locator::token_metadata& get_token_metadata() const {
+    locator::token_metadata& get_token_metadata() {
         return _token_metadata;
     }
 private:
@@ -82,7 +83,7 @@ private:
         }
         else
 #endif
-            return 30 * 1000;
+            return 5 * 1000;
     }
     /* This abstraction maintains the token/endpoint metadata information */
     token_metadata _token_metadata;
@@ -119,16 +120,19 @@ private:
 
     private InetAddress removingNode;
 
+#endif
+
+private:
     /* Are we starting this node in bootstrap mode? */
-    private boolean isBootstrapMode;
+    bool _is_bootstrap_mode;
 
     /* we bootstrap but do NOT join the ring unless told to do so */
-    private boolean isSurveyMode= Boolean.parseBoolean(System.getProperty("cassandra.write_survey", "false"));
-#endif
-private:
-    bool initialized;
+    // FIXME: System.getProperty("cassandra.write_survey", "false")
+    bool _is_survey_mode = false;
 
-    bool joined = false;
+    bool _initialized;
+
+    bool _joined = false;
 
 #if 0
     /* the probability for tracing any particular request, 0 disables tracing and 1 enables for all */
@@ -150,33 +154,15 @@ private:
 
 #endif
 private:
-    std::set<token> _bootstrap_tokens;
-#if 0
+    std::unordered_set<token> _bootstrap_tokens;
 
-    public void finishBootstrapping()
-    {
-        isBootstrapMode = false;
+public:
+    void finish_bootstrapping() {
+        _is_bootstrap_mode = false;
     }
 
     /** This method updates the local token on disk  */
-
-#endif
-
-    void set_tokens(std::set<token> tokens) {
-        // if (logger.isDebugEnabled())
-        //     logger.debug("Setting tokens to {}", tokens);
-        // SystemKeyspace.updateTokens(tokens);
-        for (auto t : tokens) {
-            _token_metadata.update_normal_token(t, get_broadcast_address());
-        }
-        // Collection<Token> localTokens = getLocalTokens();
-        auto local_tokens = _bootstrap_tokens;
-        auto& gossiper = gms::get_local_gossiper();
-        gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
-        gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(local_tokens));
-        //setMode(Mode.NORMAL, false);
-    }
-
+    void set_tokens(std::unordered_set<token> tokens);
 #if 0
 
     public void registerDaemon(CassandraDaemon daemon)
@@ -197,22 +183,22 @@ private:
     // should only be called via JMX
     public void stopGossiping()
     {
-        if (initialized)
+        if (_initialized)
         {
             logger.warn("Stopping gossip by operator request");
             Gossiper.instance.stop();
-            initialized = false;
+            _initialized = false;
         }
     }
 
     // should only be called via JMX
     public void startGossiping()
     {
-        if (!initialized)
+        if (!_initialized)
         {
             logger.warn("Starting gossip by operator request");
             Gossiper.instance.start((int) (System.currentTimeMillis() / 1000));
-            initialized = true;
+            _initialized = true;
         }
     }
 
@@ -321,11 +307,12 @@ private:
         Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
         StageManager.shutdownNow();
     }
-
-    public boolean isInitialized()
-    {
-        return initialized;
+#endif
+public:
+    bool is_initialized() {
+        return _initialized;
     }
+#if 0
 
     public void stopDaemon()
     {
@@ -397,7 +384,7 @@ private:
     // for testing only
     public void unsafeInitialize() throws ConfigurationException
     {
-        initialized = true;
+        _initialized = true;
         Gossiper.instance.register(this);
         Gossiper.instance.start((int) (System.currentTimeMillis() / 1000)); // needed for node-ring gathering.
         Gossiper.instance.addLocalApplicationState(ApplicationState.NET_VERSION, valueFactory.networkVersion());
@@ -410,133 +397,7 @@ public:
         return init_server(RING_DELAY);
     }
 
-    future<> init_server(int delay) {
-#if 0
-        logger.info("Cassandra version: {}", FBUtilities.getReleaseVersionString());
-        logger.info("Thrift API version: {}", cassandraConstants.VERSION);
-        logger.info("CQL supported versions: {} (default: {})", StringUtils.join(ClientState.getCQLSupportedVersion(), ","), ClientState.DEFAULT_CQL_VERSION);
-#endif
-        initialized = true;
-#if 0
-        try
-        {
-            // Ensure StorageProxy is initialized on start-up; see CASSANDRA-3797.
-            Class.forName("org.apache.cassandra.service.StorageProxy");
-            // also IndexSummaryManager, which is otherwise unreferenced
-            Class.forName("org.apache.cassandra.io.sstable.IndexSummaryManager");
-        }
-        catch (ClassNotFoundException e)
-        {
-            throw new AssertionError(e);
-        }
-
-        if (Boolean.parseBoolean(System.getProperty("cassandra.load_ring_state", "true")))
-        {
-            logger.info("Loading persisted ring state");
-            Multimap<InetAddress, Token> loadedTokens = SystemKeyspace.loadTokens();
-            Map<InetAddress, UUID> loadedHostIds = SystemKeyspace.loadHostIds();
-            for (InetAddress ep : loadedTokens.keySet())
-            {
-                if (ep.equals(FBUtilities.getBroadcastAddress()))
-                {
-                    // entry has been mistakenly added, delete it
-                    SystemKeyspace.removeEndpoint(ep);
-                }
-                else
-                {
-                    _token_metadata.updateNormalTokens(loadedTokens.get(ep), ep);
-                    if (loadedHostIds.containsKey(ep))
-                        _token_metadata.update_host_id(loadedHostIds.get(ep), ep);
-                    Gossiper.instance.addSavedEndpoint(ep);
-                }
-            }
-        }
-
-        // daemon threads, like our executors', continue to run while shutdown hooks are invoked
-        drainOnShutdown = new Thread(new WrappedRunnable()
-        {
-            @Override
-            public void runMayThrow() throws InterruptedException
-            {
-                ExecutorService counterMutationStage = StageManager.getStage(Stage.COUNTER_MUTATION);
-                ExecutorService mutationStage = StageManager.getStage(Stage.MUTATION);
-                if (mutationStage.isShutdown() && counterMutationStage.isShutdown())
-                    return; // drained already
-
-                if (daemon != null)
-                	shutdownClientServers();
-                ScheduledExecutors.optionalTasks.shutdown();
-                Gossiper.instance.stop();
-
-                // In-progress writes originating here could generate hints to be written, so shut down MessagingService
-                // before mutation stage, so we can get all the hints saved before shutting down
-                MessagingService.instance().shutdown();
-                counterMutationStage.shutdown();
-                mutationStage.shutdown();
-                counterMutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-                mutationStage.awaitTermination(3600, TimeUnit.SECONDS);
-                StorageProxy.instance.verifyNoHintsInProgress();
-
-                List<Future<?>> flushes = new ArrayList<>();
-                for (Keyspace keyspace : Keyspace.all())
-                {
-                    KSMetaData ksm = Schema.instance.getKSMetaData(keyspace.getName());
-                    if (!ksm.durableWrites)
-                    {
-                        for (ColumnFamilyStore cfs : keyspace.getColumnFamilyStores())
-                            flushes.add(cfs.forceFlush());
-                    }
-                }
-                try
-                {
-                    FBUtilities.waitOnFutures(flushes);
-                }
-                catch (Throwable t)
-                {
-                    JVMStabilityInspector.inspectThrowable(t);
-                    // don't let this stop us from shutting down the commitlog and other thread pools
-                    logger.warn("Caught exception while waiting for memtable flushes during shutdown hook", t);
-                }
-
-                CommitLog.instance.shutdownBlocking();
-
-                // wait for miscellaneous tasks like sstable and commitlog segment deletion
-                ScheduledExecutors.nonPeriodicTasks.shutdown();
-                if (!ScheduledExecutors.nonPeriodicTasks.awaitTermination(1, TimeUnit.MINUTES))
-                    logger.warn("Miscellaneous task executor still busy after one minute; proceeding with shutdown");
-            }
-        }, "StorageServiceShutdownHook");
-        Runtime.getRuntime().addShutdownHook(drainOnShutdown);
-#endif
-        return prepare_to_join().then([this, delay] {
-            return join_token_ring(delay);
-        });
-#if 0
-        // Has to be called after the host id has potentially changed in prepareToJoin().
-        for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
-            if (cfs.metadata.isCounter())
-                cfs.initCounterCache();
-
-        if (Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true")))
-        {
-            joinTokenRing(delay);
-        }
-        else
-        {
-            Collection<Token> tokens = SystemKeyspace.getSavedTokens();
-            if (!tokens.isEmpty())
-            {
-                _token_metadata.updateNormalTokens(tokens, FBUtilities.getBroadcastAddress());
-                // order is important here, the gossiper can fire in between adding these two states.  It's ok to send TOKENS without STATUS, but *not* vice versa.
-                List<Pair<ApplicationState, VersionedValue>> states = new ArrayList<Pair<ApplicationState, VersionedValue>>();
-                states.add(Pair.create(ApplicationState.TOKENS, valueFactory.tokens(tokens)));
-                states.add(Pair.create(ApplicationState.STATUS, valueFactory.hibernate(true)));
-                Gossiper.instance.addLocalApplicationStates(states);
-            }
-            logger.info("Not joining ring as requested. Use JMX (StorageService->joinRing()) to initiate ring joining");
-        }
-#endif
-    }
+    future<> init_server(int delay);
 #if 0
     /**
      * In the event of forceful termination we need to remove the shutdown hook to prevent hanging (OOM for instance)
@@ -560,38 +421,13 @@ private:
         Gossiper.instance.addLocalApplicationState(ApplicationState.DC, StorageService.instance.valueFactory.datacenter(dc));
         Gossiper.instance.addLocalApplicationState(ApplicationState.RACK, StorageService.instance.valueFactory.rack(rack));
     }
-
-    public synchronized void joinRing() throws IOException
-    {
-        if (!joined)
-        {
-            logger.info("Joining ring by operator request");
-            try
-            {
-                joinTokenRing(0);
-            }
-            catch (ConfigurationException e)
-            {
-                throw new IOException(e.getMessage());
-            }
-        }
-        else if (isSurveyMode)
-        {
-            set_tokens(SystemKeyspace.getSavedTokens());
-            SystemKeyspace.setBootstrapState(SystemKeyspace.BootstrapState.COMPLETED);
-            isSurveyMode = false;
-            logger.info("Leaving write survey mode and joining ring at operator request");
-            assert _token_metadata.sortedTokens().size() > 0;
-
-            Auth.setup();
-        }
+#endif
+public:
+    void join_ring();
+    bool is_joined() {
+        return _joined;
     }
-
-    public boolean isJoined()
-    {
-        return joined;
-    }
-
+#if 0
     public void rebuild(String sourceDc)
     {
         logger.info("rebuild from dc: {}", sourceDc == null ? "(any dc)" : sourceDc);
@@ -667,12 +503,13 @@ private:
     }
 #endif
 
-    future<> bootstrap(std::set<token> tokens);
-#if 0
-    public boolean isBootstrapMode()
-    {
-        return isBootstrapMode;
+    future<> bootstrap(std::unordered_set<token> tokens);
+
+    bool is_bootstrap_mode() {
+        return _is_bootstrap_mode;
     }
+
+#if 0
 
     public TokenMetadata getTokenMetadata()
     {
@@ -961,11 +798,8 @@ private:
     }
 #endif
 public:
-    void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, gms::versioned_value new_value) override
-    {
-        // no-op
-    }
-
+    virtual void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override;
+    virtual void before_change(gms::inet_address endpoint, gms::endpoint_state current_state, gms::application_state new_state_key, gms::versioned_value new_value) override;
     /*
      * Handle the reception of a new particular ApplicationState for a particular endpoint. Note that the value of the
      * ApplicationState has not necessarily "changed" since the last known value, if we already received the same update
@@ -998,159 +832,24 @@ public:
      * Note: Any time a node state changes from STATUS_NORMAL, it will not be visible to new nodes. So it follows that
      * you should never bootstrap a new node during a removenode, decommission or move.
      */
-    void on_change(inet_address endpoint, application_state state, versioned_value value) override {
-        ss_debug("SS::on_change endpoint=%s\n", endpoint);
-        if (state == application_state::STATUS) {
-            std::vector<sstring> pieces;
-            boost::split(pieces, value.value, boost::is_any_of(sstring(versioned_value::DELIMITER_STR)));
-            assert(pieces.size() > 0);
-            sstring move_name = pieces[0];
-            if (move_name == sstring(versioned_value::STATUS_BOOTSTRAPPING)) {
-                handle_state_bootstrap(endpoint);
-            } else if (move_name == sstring(versioned_value::STATUS_NORMAL)) {
-                handle_state_normal(endpoint);
-            } else if (move_name == sstring(versioned_value::REMOVING_TOKEN) ||
-                       move_name == sstring(versioned_value::REMOVED_TOKEN)) {
-                handle_state_removing(endpoint, pieces);
-            } else if (move_name == sstring(versioned_value::STATUS_LEAVING)) {
-                handle_state_leaving(endpoint);
-            } else if (move_name == sstring(versioned_value::STATUS_LEFT)) {
-                handle_state_left(endpoint, pieces);
-            } else if (move_name == sstring(versioned_value::STATUS_MOVING)) {
-                handle_state_moving(endpoint, pieces);
-            }
-        } else {
-            auto& gossiper = gms::get_local_gossiper();
-            auto ep_state = gossiper.get_endpoint_state_for_endpoint(endpoint);
-            if (!ep_state || gossiper.is_dead_state(*ep_state)) {
-                // logger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
-                return;
-            }
-
-            if (state == application_state::RELEASE_VERSION) {
-                // SystemKeyspace.updatePeerInfo(endpoint, "release_version", value.value);
-            } else if (state == application_state::DC) {
-                // SystemKeyspace.updatePeerInfo(endpoint, "data_center", value.value);
-            } else if (state == application_state::RACK) {
-                // SystemKeyspace.updatePeerInfo(endpoint, "rack", value.value);
-            } else if (state == application_state::RPC_ADDRESS) {
-                // try {
-                //     SystemKeyspace.updatePeerInfo(endpoint, "rpc_address", InetAddress.getByName(value.value));
-                // } catch (UnknownHostException e) {
-                //     throw new RuntimeException(e);
-                // }
-            } else if (state == application_state::SCHEMA) {
-                // SystemKeyspace.updatePeerInfo(endpoint, "schema_version", UUID.fromString(value.value));
-                // MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
-            } else if (state == application_state::HOST_ID) {
-                // SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(value.value));
-            }
-        }
-    }
-
-#if 0
-    private void updatePeerInfo(InetAddress endpoint)
-    {
-        EndpointState epState = Gossiper.instance.getEndpointStateForEndpoint(endpoint);
-        for (Map.Entry<ApplicationState, VersionedValue> entry : epState.getApplicationStateMap().entrySet())
-        {
-            switch (entry.getKey())
-            {
-                case RELEASE_VERSION:
-                    SystemKeyspace.updatePeerInfo(endpoint, "release_version", entry.getValue().value);
-                    break;
-                case DC:
-                    SystemKeyspace.updatePeerInfo(endpoint, "data_center", entry.getValue().value);
-                    break;
-                case RACK:
-                    SystemKeyspace.updatePeerInfo(endpoint, "rack", entry.getValue().value);
-                    break;
-                case RPC_ADDRESS:
-                    try
-                    {
-                        SystemKeyspace.updatePeerInfo(endpoint, "rpc_address", InetAddress.getByName(entry.getValue().value));
-                    }
-                    catch (UnknownHostException e)
-                    {
-                        throw new RuntimeException(e);
-                    }
-                    break;
-                case SCHEMA:
-                    SystemKeyspace.updatePeerInfo(endpoint, "schema_version", UUID.fromString(entry.getValue().value));
-                    break;
-                case HOST_ID:
-                    SystemKeyspace.updatePeerInfo(endpoint, "host_id", UUID.fromString(entry.getValue().value));
-                    break;
-            }
-        }
-    }
-#endif
+    virtual void on_change(inet_address endpoint, application_state state, versioned_value value) override;
+    virtual void on_alive(gms::inet_address endpoint, gms::endpoint_state state) override;
+    virtual void on_dead(gms::inet_address endpoint, gms::endpoint_state state) override;
+    virtual void on_remove(gms::inet_address endpoint) override;
+    virtual void on_restart(gms::inet_address endpoint, gms::endpoint_state state) override;
 private:
-    sstring get_application_state_value(inet_address endpoint, application_state appstate) {
-        auto& gossiper = gms::get_local_gossiper();
-        auto eps = gossiper.get_endpoint_state_for_endpoint(endpoint);
-        if (!eps) {
-            return {};
-        }
-        auto v = eps->get_application_state(appstate);
-        if (!v) {
-            return {};
-        }
-        return v->value;
-    }
-
-    std::set<token> get_tokens_for(inet_address endpoint) {
-        auto tokens_string = get_application_state_value(endpoint, application_state::TOKENS);
-        ss_debug("endpoint=%s, tokens_string=%s\n", endpoint, tokens_string);
-        std::vector<sstring> tokens;
-        std::set<token> ret;
-        boost::split(tokens, tokens_string, boost::is_any_of(";"));
-        for (auto str : tokens) {
-            ss_debug("token=%s\n", str);
-            sstring_view sv(str);
-            bytes b = from_hex(sv);
-            ret.emplace(token::kind::key, b);
-        }
-        return ret;
-    }
-
+    void update_peer_info(inet_address endpoint);
+    sstring get_application_state_value(inet_address endpoint, application_state appstate);
+    std::unordered_set<token> get_tokens_for(inet_address endpoint);
+    void replicate_to_all_cores();
+    semaphore _replicate_task{1};
 private:
     /**
      * Handle node bootstrap
      *
      * @param endpoint bootstrapping node
      */
-    void handle_state_bootstrap(inet_address endpoint) {
-#if 0
-        Collection<Token> tokens;
-        // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
-        tokens = get_tokens_for(endpoint);
-
-        if (logger.isDebugEnabled())
-            logger.debug("Node {} state bootstrapping, token {}", endpoint, tokens);
-
-        // if this node is present in token metadata, either we have missed intermediate states
-        // or the node had crashed. Print warning if needed, clear obsolete stuff and
-        // continue.
-        if (_token_metadata.isMember(endpoint))
-        {
-            // If isLeaving is false, we have missed both LEAVING and LEFT. However, if
-            // isLeaving is true, we have only missed LEFT. Waiting time between completing
-            // leave operation and rebootstrapping is relatively short, so the latter is quite
-            // common (not enough time for gossip to spread). Therefore we report only the
-            // former in the log.
-            if (!_token_metadata.isLeaving(endpoint))
-                logger.info("Node {} state jump to bootstrap", endpoint);
-            _token_metadata.removeEndpoint(endpoint);
-        }
-
-        _token_metadata.addBootstrapTokens(tokens, endpoint);
-        PendingRangeCalculatorService.instance.update();
-
-        if (Gossiper.instance.usesHostId(endpoint))
-            _token_metadata.update_host_id(Gossiper.instance.getHostId(endpoint), endpoint);
-#endif
-    }
+    void handle_state_bootstrap(inet_address endpoint);
 
     /**
      * Handle node move to normal state. That is, node is entering token ring and participating
@@ -1158,167 +857,14 @@ private:
      *
      * @param endpoint node
      */
-    void handle_state_normal(inet_address endpoint) {
-#if 0
-        Collection<Token> tokens;
-
-        tokens = get_tokens_for(endpoint);
-
-        Set<Token> tokensToUpdateInMetadata = new HashSet<>();
-        Set<Token> tokensToUpdateInSystemKeyspace = new HashSet<>();
-        Set<Token> localTokensToRemove = new HashSet<>();
-        Set<InetAddress> endpointsToRemove = new HashSet<>();
-
-
-        if (logger.isDebugEnabled())
-            logger.debug("Node {} state normal, token {}", endpoint, tokens);
-
-        if (_token_metadata.isMember(endpoint))
-            logger.info("Node {} state jump to normal", endpoint);
-
-        updatePeerInfo(endpoint);
-        // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
-        if (Gossiper.instance.usesHostId(endpoint))
-        {
-            UUID hostId = Gossiper.instance.getHostId(endpoint);
-            InetAddress existing = _token_metadata.getEndpointForHostId(hostId);
-            if (DatabaseDescriptor.isReplacing() && Gossiper.instance.getEndpointStateForEndpoint(DatabaseDescriptor.getReplaceAddress()) != null && (hostId.equals(Gossiper.instance.getHostId(DatabaseDescriptor.getReplaceAddress()))))
-                logger.warn("Not updating token metadata for {} because I am replacing it", endpoint);
-            else
-            {
-                if (existing != null && !existing.equals(endpoint))
-                {
-                    if (existing.equals(FBUtilities.getBroadcastAddress()))
-                    {
-                        logger.warn("Not updating host ID {} for {} because it's mine", hostId, endpoint);
-                        _token_metadata.removeEndpoint(endpoint);
-                        endpointsToRemove.add(endpoint);
-                    }
-                    else if (Gossiper.instance.compareEndpointStartup(endpoint, existing) > 0)
-                    {
-                        logger.warn("Host ID collision for {} between {} and {}; {} is the new owner", hostId, existing, endpoint, endpoint);
-                        _token_metadata.removeEndpoint(existing);
-                        endpointsToRemove.add(existing);
-                        _token_metadata.update_host_id(hostId, endpoint);
-                    }
-                    else
-                    {
-                        logger.warn("Host ID collision for {} between {} and {}; ignored {}", hostId, existing, endpoint, endpoint);
-                        _token_metadata.removeEndpoint(endpoint);
-                        endpointsToRemove.add(endpoint);
-                    }
-                }
-                else
-                    _token_metadata.update_host_id(hostId, endpoint);
-            }
-        }
-
-        for (final Token token : tokens)
-        {
-            // we don't want to update if this node is responsible for the token and it has a later startup time than endpoint.
-            InetAddress currentOwner = _token_metadata.getEndpoint(token);
-            if (currentOwner == null)
-            {
-                logger.debug("New node {} at token {}", endpoint, token);
-                tokensToUpdateInMetadata.add(token);
-                tokensToUpdateInSystemKeyspace.add(token);
-            }
-            else if (endpoint.equals(currentOwner))
-            {
-                // set state back to normal, since the node may have tried to leave, but failed and is now back up
-                tokensToUpdateInMetadata.add(token);
-                tokensToUpdateInSystemKeyspace.add(token);
-            }
-            else if (Gossiper.instance.compareEndpointStartup(endpoint, currentOwner) > 0)
-            {
-                tokensToUpdateInMetadata.add(token);
-                tokensToUpdateInSystemKeyspace.add(token);
-
-                // currentOwner is no longer current, endpoint is.  Keep track of these moves, because when
-                // a host no longer has any tokens, we'll want to remove it.
-                Multimap<InetAddress, Token> epToTokenCopy = getTokenMetadata().getEndpointToTokenMapForReading();
-                epToTokenCopy.get(currentOwner).remove(token);
-                if (epToTokenCopy.get(currentOwner).size() < 1)
-                    endpointsToRemove.add(currentOwner);
-
-                logger.info(String.format("Nodes %s and %s have the same token %s.  %s is the new owner",
-                                          endpoint,
-                                          currentOwner,
-                                          token,
-                                          endpoint));
-            }
-            else
-            {
-                logger.info(String.format("Nodes %s and %s have the same token %s.  Ignoring %s",
-                                           endpoint,
-                                           currentOwner,
-                                           token,
-                                           endpoint));
-            }
-        }
-
-        boolean isMoving = _token_metadata.isMoving(endpoint); // capture because updateNormalTokens clears moving status
-        _token_metadata.updateNormalTokens(tokensToUpdateInMetadata, endpoint);
-        for (InetAddress ep : endpointsToRemove)
-        {
-            removeEndpoint(ep);
-            if (DatabaseDescriptor.isReplacing() && DatabaseDescriptor.getReplaceAddress().equals(ep))
-                Gossiper.instance.replacementQuarantine(ep); // quarantine locally longer than normally; see CASSANDRA-8260
-        }
-        if (!tokensToUpdateInSystemKeyspace.isEmpty())
-            SystemKeyspace.updateTokens(endpoint, tokensToUpdateInSystemKeyspace);
-        if (!localTokensToRemove.isEmpty())
-            SystemKeyspace.updateLocalTokens(Collections.<Token>emptyList(), localTokensToRemove);
-
-        if (isMoving)
-        {
-            _token_metadata.removeFromMoving(endpoint);
-            for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-                subscriber.onMove(endpoint);
-        }
-        else
-        {
-            for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-                subscriber.onJoinCluster(endpoint);
-        }
-
-        PendingRangeCalculatorService.instance.update();
-#endif
-    }
+    void handle_state_normal(inet_address endpoint);
 
     /**
      * Handle node preparing to leave the ring
      *
      * @param endpoint node
      */
-    void handle_state_leaving(inet_address endpoint) {
-#if 0
-        Collection<Token> tokens;
-        tokens = get_tokens_for(endpoint);
-
-        if (logger.isDebugEnabled())
-            logger.debug("Node {} state leaving, tokens {}", endpoint, tokens);
-
-        // If the node is previously unknown or tokens do not match, update tokenmetadata to
-        // have this node as 'normal' (it must have been using this token before the
-        // leave). This way we'll get pending ranges right.
-        if (!_token_metadata.isMember(endpoint))
-        {
-            logger.info("Node {} state jump to leaving", endpoint);
-            _token_metadata.updateNormalTokens(tokens, endpoint);
-        }
-        else if (!_token_metadata.getTokens(endpoint).containsAll(tokens))
-        {
-            logger.warn("Node {} 'leaving' token mismatch. Long network partition?", endpoint);
-            _token_metadata.updateNormalTokens(tokens, endpoint);
-        }
-
-        // at this point the endpoint is certainly a member with this token, so let's proceed
-        // normally
-        _token_metadata.addLeavingEndpoint(endpoint);
-        PendingRangeCalculatorService.instance.update();
-#endif
-    }
+    void handle_state_leaving(inet_address endpoint);
 
     /**
      * Handle node leaving the ring. This will happen when a node is decommissioned
@@ -1326,18 +872,7 @@ private:
      * @param endpoint If reason for leaving is decommission, endpoint is the leaving node.
      * @param pieces STATE_LEFT,token
      */
-    void handle_state_left(inet_address endpoint, std::vector<sstring> pieces) {
-#if 0
-        assert pieces.length >= 2;
-        Collection<Token> tokens;
-        tokens = get_tokens_for(endpoint);
-
-        if (logger.isDebugEnabled())
-            logger.debug("Node {} state left, tokens {}", endpoint, tokens);
-
-        excise(tokens, endpoint, extractExpireTime(pieces));
-#endif
-    }
+    void handle_state_left(inet_address endpoint, std::vector<sstring> pieces);
 
     /**
      * Handle node moving inside the ring.
@@ -1345,19 +880,7 @@ private:
      * @param endpoint moving endpoint address
      * @param pieces STATE_MOVING, token
      */
-    void handle_state_moving(inet_address endpoint, std::vector<sstring> pieces) {
-#if 0
-        assert pieces.length >= 2;
-        Token token = getPartitioner().getTokenFactory().fromString(pieces[1]);
-
-        if (logger.isDebugEnabled())
-            logger.debug("Node {} state moving, new token {}", endpoint, token);
-
-        _token_metadata.addMovingEndpoint(token, endpoint);
-
-        PendingRangeCalculatorService.instance.update();
-#endif
-    }
+    void handle_state_moving(inet_address endpoint, std::vector<sstring> pieces);
 
     /**
      * Handle notification that a node being actively removed from the ring via 'removenode'
@@ -1365,59 +888,9 @@ private:
      * @param endpoint node
      * @param pieces either REMOVED_TOKEN (node is gone) or REMOVING_TOKEN (replicas need to be restored)
      */
-    void handle_state_removing(inet_address endpoint, std::vector<sstring> pieces) {
-#if 0
-        assert (pieces.length > 0);
-
-        if (endpoint.equals(FBUtilities.getBroadcastAddress()))
-        {
-            logger.info("Received removenode gossip about myself. Is this node rejoining after an explicit removenode?");
-            try
-            {
-                drain();
-            }
-            catch (Exception e)
-            {
-                throw new RuntimeException(e);
-            }
-            return;
-        }
-        if (_token_metadata.isMember(endpoint))
-        {
-            String state = pieces[0];
-            Collection<Token> removeTokens = _token_metadata.getTokens(endpoint);
-
-            if (VersionedValue.REMOVED_TOKEN.equals(state))
-            {
-                excise(removeTokens, endpoint, extractExpireTime(pieces));
-            }
-            else if (VersionedValue.REMOVING_TOKEN.equals(state))
-            {
-                if (logger.isDebugEnabled())
-                    logger.debug("Tokens {} removed manually (endpoint was {})", removeTokens, endpoint);
-
-                // Note that the endpoint is being removed
-                _token_metadata.addLeavingEndpoint(endpoint);
-                PendingRangeCalculatorService.instance.update();
-
-                // find the endpoint coordinating this removal that we need to notify when we're done
-                String[] coordinator = Gossiper.instance.getEndpointStateForEndpoint(endpoint).getApplicationState(ApplicationState.REMOVAL_COORDINATOR).value.split(VersionedValue.DELIMITER_STR, -1);
-                UUID hostId = UUID.fromString(coordinator[1]);
-                // grab any data we are now responsible for and notify responsible node
-                restoreReplicaCount(endpoint, _token_metadata.getEndpointForHostId(hostId));
-            }
-        }
-        else // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
-        {
-            if (VersionedValue.REMOVED_TOKEN.equals(pieces[0]))
-                addExpireTimeIfFound(endpoint, extractExpireTime(pieces));
-            removeEndpoint(endpoint);
-        }
-#endif
-    }
+    void handle_state_removing(inet_address endpoint, std::vector<sstring> pieces);
 
 #if 0
-
     private void excise(Collection<Token> tokens, InetAddress endpoint)
     {
         logger.info("Removing tokens {} for {}", tokens, endpoint);
@@ -1625,61 +1098,7 @@ private:
 
         return changedRanges;
     }
-#endif
-public:
-    void on_join(gms::inet_address endpoint, gms::endpoint_state ep_state) override {
-        ss_debug("SS::on_join endpoint=%s\n", endpoint);
-        auto tokens = get_tokens_for(endpoint);
-        for (auto t : tokens) {
-            ss_debug("t=%s\n", t);
-        }
-        for (auto e : ep_state.get_application_state_map()) {
-            on_change(endpoint, e.first, e.second);
-        }
-        // MigrationManager.instance.scheduleSchemaPull(endpoint, epState);
-    }
 
-    void on_alive(gms::inet_address endpoint, gms::endpoint_state state) override
-    {
-        ss_debug("SS::on_alive endpoint=%s\n", endpoint);
-#if 0
-        MigrationManager.instance.scheduleSchemaPull(endpoint, state);
-
-        if (_token_metadata.isMember(endpoint))
-        {
-            HintedHandOffManager.instance.scheduleHintDelivery(endpoint, true);
-            for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-                subscriber.onUp(endpoint);
-        }
-#endif
-    }
-
-    void on_remove(gms::inet_address endpoint) override
-    {
-#if 0
-        _token_metadata.removeEndpoint(endpoint);
-        PendingRangeCalculatorService.instance.update();
-#endif
-    }
-
-    void on_dead(gms::inet_address endpoint, gms::endpoint_state state) override
-    {
-#if 0
-        MessagingService.instance().convict(endpoint);
-        for (IEndpointLifecycleSubscriber subscriber : lifecycleSubscribers)
-            subscriber.onDown(endpoint);
-#endif
-    }
-
-    void on_restart(gms::inet_address endpoint, gms::endpoint_state state) override
-    {
-#if 0
-        // If we have restarted before the node was even marked down, we need to reset the connection pool
-        if (state.isAlive())
-            onDead(endpoint, state);
-#endif
-    }
-#if 0
     /** raw load value */
     public double getLoad()
     {

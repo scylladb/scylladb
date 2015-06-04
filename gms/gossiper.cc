@@ -787,9 +787,7 @@ utils::UUID gossiper::get_host_id(inet_address endpoint) {
         throw std::runtime_error(sprint("Host %s does not use new-style tokens!", endpoint));
     }
     sstring uuid = get_endpoint_state_for_endpoint(endpoint)->get_application_state(application_state::HOST_ID)->value;
-    // FIXME: Add UUID(const sstring& id) constructor
-    warn(unimplemented::cause::GOSSIP);
-    return utils::UUID(0, 0);
+    return utils::UUID(uuid);
 }
 
 std::experimental::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_address for_endpoint, int version) {
@@ -1238,6 +1236,22 @@ void gossiper::debug_show() {
         gossiper.dump_endpoint_state_map();
     });
     reporter->arm_periodic(std::chrono::milliseconds(1000));
+}
+
+bool gossiper::is_alive(inet_address ep) {
+    if (ep == get_broadcast_address()) {
+        return true;
+    }
+    auto eps = get_endpoint_state_for_endpoint(ep);
+    // we could assert not-null, but having isAlive fail screws a node over so badly that
+    // it's worth being defensive here so minor bugs don't cause disproportionate
+    // badness.  (See CASSANDRA-1463 for an example).
+    if (eps) {
+        return eps->is_alive();
+    } else {
+        // logger.error("unknown endpoint {}", ep);
+        return false;
+    }
 }
 
 } // namespace gms

@@ -20,7 +20,7 @@ int main(int ac, char ** av) {
             auto port = server.port();
             auto listen = server.listen_address();
             print("Messaging server listening on ip %s port %d ...\n", listen, port);
-            gms::get_failure_detector().start_single().then([config] {
+            gms::get_failure_detector().start().then([config] {
                 gms::get_gossiper().start_single().then([config] {
                     std::set<gms::inet_address> seeds;
                     for (auto s : config["seed"].as<std::vector<std::string>>()) {

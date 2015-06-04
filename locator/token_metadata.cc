@@ -2,6 +2,7 @@
  * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
+#include "utils/UUID.hh"
 #include "token_metadata.hh"
 #include <experimental/optional>
 
@@ -131,8 +132,12 @@ void token_metadata::debug_show() {
             print("inet_address=%s, token=%s\n", x.second, x.first);
         }
         print("Endpoint -> UUID\n");
-        for (auto x: _endpoint_to_host_id_map) {
+        for (auto x : _endpoint_to_host_id_map) {
             print("inet_address=%s, uuid=%s\n", x.first, x.second);
+        }
+        print("Sorted Token\n");
+        for (auto x : _sorted_tokens) {
+            print("token=%s\n", x);
         }
     });
     reporter->arm_periodic(std::chrono::seconds(1));
@@ -160,5 +165,76 @@ void token_metadata::update_host_id(const UUID& host_id, inet_address endpoint) 
     _endpoint_to_host_id_map[endpoint] = host_id;
 }
 
-
+utils::UUID token_metadata::get_host_id(inet_address endpoint) {
+    assert(_endpoint_to_host_id_map.count(endpoint));
+    return _endpoint_to_host_id_map.at(endpoint);
 }
+
+gms::inet_address token_metadata::get_endpoint_for_host_id(UUID host_id) {
+    auto beg = _endpoint_to_host_id_map.cbegin();
+    auto end = _endpoint_to_host_id_map.cend();
+    auto it = std::find_if(beg, end, [host_id] (auto x) {
+        return x.second == host_id;
+    });
+    assert(it != end);
+    return (*it).first;
+}
+
+const auto& token_metadata::get_endpoint_to_host_id_map_for_reading() {
+    return _endpoint_to_host_id_map;
+}
+
+bool token_metadata::is_member(inet_address endpoint) {
+    auto beg = _token_to_endpoint_map.cbegin();
+    auto end = _token_to_endpoint_map.cend();
+    return end != std::find_if(beg, end, [endpoint] (const auto& x) {
+        return x.second == endpoint;
+    });
+}
+
+void token_metadata::add_bootstrap_token(token t, inet_address endpoint) {
+    std::unordered_set<token> tokens{t};
+    add_bootstrap_tokens(tokens, endpoint);
+}
+
+void token_metadata::add_bootstrap_tokens(std::unordered_set<token> tokens, inet_address endpoint) {
+    for (auto t : tokens) {
+        auto old_endpoint = _bootstrap_tokens.find(t);
+        if (old_endpoint != _bootstrap_tokens.end() && (*old_endpoint).second != endpoint) {
+            auto msg = sprint("Bootstrap Token collision between %s and %s (token %s", (*old_endpoint).second, endpoint, t);
+            throw std::runtime_error(msg);
+        }
+
+        auto old_endpoint2 = _token_to_endpoint_map.find(t);
+        if (old_endpoint2 != _token_to_endpoint_map.end() && (*old_endpoint2).second != endpoint) {
+            auto msg = sprint("Bootstrap Token collision between %s and %s (token %s", (*old_endpoint2).second, endpoint, t);
+            throw std::runtime_error(msg);
+        }
+    }
+
+    // Unfortunately, std::remove_if does not work with std::map
+    for (auto it = _bootstrap_tokens.begin(); it != _bootstrap_tokens.end();) {
+        if ((*it).second == endpoint) {
+            it = _bootstrap_tokens.erase(it);
+        } else {
+            it++;
+        }
+    }
+
+    for (auto t : tokens) {
+        _bootstrap_tokens[t] = endpoint;
+    }
+}
+
+void token_metadata::remove_bootstrap_tokens(std::unordered_set<token> tokens) {
+    assert(!tokens.empty());
+    for (auto t : tokens) {
+        _bootstrap_tokens.erase(t);
+    }
+}
+
+bool token_metadata::is_leaving(inet_address endpoint) {
+    return _leaving_endpoints.count(endpoint);
+}
+
+} // namespace locator

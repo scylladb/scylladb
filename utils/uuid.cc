@@ -7,6 +7,9 @@
 #include "net/byteorder.hh"
 #include <random>
 #include <boost/iterator/function_input_iterator.hpp>
+#include <boost/algorithm/string.hpp>
+#include <string>
+#include "core/sstring.hh"
 
 namespace utils {
 
@@ -33,6 +36,18 @@ make_random_uuid() {
 
 std::ostream& operator<<(std::ostream& out, const UUID& uuid) {
     return out << uuid.to_sstring();
+}
+
+UUID::UUID(const sstring& uuid) {
+    auto uuid_string = uuid;
+    boost::erase_all(uuid_string, "-");
+    auto size = uuid_string.size() / 2;
+    assert(size == 16);
+    sstring most = sstring(uuid_string.begin(), uuid_string.begin() + size);
+    sstring least = sstring(uuid_string.begin() + size, uuid_string.end());
+    int base = 16;
+    this->most_sig_bits = std::stoull(most, nullptr, base);
+    this->least_sig_bits = std::stoull(least, nullptr, base);
 }
 
 }

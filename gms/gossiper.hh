@@ -360,6 +360,7 @@ private:
     void handle_major_state_change(inet_address ep, endpoint_state eps);
 
 public:
+    bool is_alive(inet_address ep);
     bool is_dead_state(endpoint_state eps);
 
     void apply_state_locally(std::map<inet_address, endpoint_state>& map);
