@@ -10,7 +10,7 @@
 
 SEASTAR_TEST_CASE(test_boot_shutdown){
     return net::get_messaging_service().start(gms::inet_address("127.0.0.1")).then( [] () {
-        return gms::get_failure_detector().start_single().then([] {
+        return gms::get_failure_detector().start().then([] {
             return gms::get_gossiper().start_single().then([] {
                 return gms::get_gossiper().stop().then( [] (){
                     return gms::get_failure_detector().stop().then( [] (){

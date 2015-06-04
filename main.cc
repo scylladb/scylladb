@@ -45,7 +45,7 @@ future<> init_messaging_service(auto listen_address, auto seed_provider) {
     return net::get_messaging_service().start(listen).then([seeds] {
         auto& ms = net::get_local_messaging_service();
         print("Messaging server listening on ip %s port %d ...\n", ms.listen_address(), ms.port());
-        return gms::get_failure_detector().start_single().then([seeds] {
+        return gms::get_failure_detector().start().then([seeds] {
             return gms::get_gossiper().start_single().then([seeds] {
                 auto& gossiper = gms::get_local_gossiper();
                 gossiper.set_seeds(seeds);
