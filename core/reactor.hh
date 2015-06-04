@@ -225,24 +225,44 @@ public:
     virtual output_stream<char> output() = 0;
 };
 
+/// \addtogroup networking-module
+/// @{
+
+/// A TCP (or other stream-based protocol) connection.
+///
+/// A \c connected_socket represents a full-duplex stream between
+/// two endpoints, a local endpoint and a remote endpoint.
 class connected_socket {
     std::unique_ptr<connected_socket_impl> _csi;
 public:
+    /// Constructs a \c connected_socket not corresponding to a connection
     connected_socket() {};
+    /// \cond internal
     explicit connected_socket(std::unique_ptr<connected_socket_impl> csi)
         : _csi(std::move(csi)) {}
+    /// \endcond
+    /// Moves a \c connected_socket object.
     connected_socket(connected_socket&& cs) = default;
+    /// Move-assigns a \c connected_socket object.
     connected_socket& operator=(connected_socket&& cs) = default;
+    /// Gets the input stream.
+    ///
+    /// Gets an object returning data sent from the remote endpoint.
     input_stream<char> input();
+    /// Gets the output stream.
+    ///
+    /// Gets an object that sends data to the remote endpoint.
     output_stream<char> output();
 };
+/// @}
 
+/// \cond internal
 class server_socket_impl {
 public:
     virtual ~server_socket_impl() {}
     virtual future<connected_socket, socket_address> accept() = 0;
 };
-
+/// \endcond
 
 namespace std {
 
@@ -257,15 +277,30 @@ struct hash<::sockaddr_in> {
 
 bool operator==(const ::sockaddr_in a, const ::sockaddr_in b);
 
+/// \addtogroup networking-module
+/// @{
+
+/// A listening socket, waiting to accept incoming network connections.
 class server_socket {
     std::unique_ptr<server_socket_impl> _ssi;
 public:
+    /// \cond internal
     explicit server_socket(std::unique_ptr<server_socket_impl> ssi)
         : _ssi(std::move(ssi)) {}
+    /// \endcond
+
+    /// Accepts the next connection to successfully connect to this socket.
+    ///
+    /// \return a \ref connected_socket representing the connection, and
+    ///         a \ref socket_address describing the remote endpoint.
+    ///
+    /// \see listen(socket_address sa)
+    /// \see listen(socket_address sa, listen_options opts)
     future<connected_socket, socket_address> accept() {
         return _ssi->accept();
     }
 };
+/// @}
 
 class network_stack {
 public:

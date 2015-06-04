@@ -32,7 +32,7 @@
 ///          the seastar building blocks.
 ///   - \ref future-util Utililty functions for working with futures
 ///   - \ref memory-module Memory management
-
+///   - \ref networking-module TCP/IP networking
 
 #include "sstring.hh"
 #include "future.hh"
@@ -52,9 +52,55 @@ class file;
 enum class open_flags;
 
 // Networking API
+
+/// \defgroup networking-module Networking
+///
+/// Seastar provides a simple networking API, backed by two
+/// TCP/IP stacks: the POSIX stack, utilizing the kernel's
+/// BSD socket APIs, and the native stack, implement fully
+/// within seastar and able to drive network cards directly.
+/// The native stack supports zero-copy on both transmit
+/// and receive, and is implemented using seastar's high
+/// performance, lockless sharded design.  The network stack
+/// can be selected with the \c --network-stack command-line
+/// parameter.
+
+/// \addtogroup networking-module
+/// @{
+
+/// Listen for connections on a given port
+///
+/// Starts listening on a given address for incoming connections.
+///
+/// \param sa socket address to listen on
+///
+/// \return \ref server_socket object ready to accept connections.
+///
+/// \see listen(socket_address sa, listen_options opts)
 server_socket listen(socket_address sa);
+
+/// Listen for connections on a given port
+///
+/// Starts listening on a given address for incoming connections.
+///
+/// \param sa socket address to listen on
+/// \param opts options controlling the listen operation
+///
+/// \return \ref server_socket object ready to accept connections.
+///
+/// \see listen(socket_address sa)
 server_socket listen(socket_address sa, listen_options opts);
+
+/// Establishes a connection to a given address
+///
+/// Attempts to connect to the given address.
+///
+/// \param sa socket address to connect to
+///
+/// \return a \ref connected_socket object, or an exception
 future<connected_socket> connect(socket_address sa);
+
+/// @}
 
 // File API
 future<file> open_file_dma(sstring name, open_flags flags);

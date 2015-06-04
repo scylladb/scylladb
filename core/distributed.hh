@@ -190,6 +190,9 @@ public:
 
     // Returns reference to the local instance.
     Service& local();
+
+    // Returns TRUE if a local service has been initialized
+    bool local_is_initialized();
 };
 
 template <typename Service>
@@ -284,7 +287,14 @@ distributed<Service>::invoke_on_all(Func&& func) {
 
 template <typename Service>
 Service& distributed<Service>::local() {
+    assert(local_is_initialized());
     return *_instances[engine().cpu_id()];
+}
+
+template <typename Service>
+inline bool distributed<Service>::local_is_initialized() {
+    return _instances.size() > engine().cpu_id() &&
+           _instances[engine().cpu_id()];
 }
 
 /// Smart pointer wrapper which makes it safe to move across CPUs.
