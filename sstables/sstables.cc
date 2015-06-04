@@ -1490,6 +1490,19 @@ void sstable::do_write_components(const memtable& mt) {
 
     w->close().get();
     index->close().get();
+
+    _components.insert(component_type::TOC);
+    _components.insert(component_type::Statistics);
+    _components.insert(component_type::Digest);
+    _components.insert(component_type::Index);
+    _components.insert(component_type::Summary);
+    _components.insert(component_type::Data);
+
+    add_stats_metadata(_statistics, *collector);
+    write_digest(filename(sstable::component_type::Digest), w->full_checksum()).get();
+    if (checksum_file) {
+        write_crc(filename(sstable::component_type::CRC), w->finalize_checksum()).get();
+    }
 }
 
 future<> sstable::write_components_t(const memtable& mt) {
@@ -1497,7 +1510,15 @@ future<> sstable::write_components_t(const memtable& mt) {
         auto w = [this] (const memtable& mt) {
             this->do_write_components(mt);
         };
-        return seastar::async(w, mt);
+        return seastar::async(w, mt).then([this] {
+            return write_summary();
+        }).then([this] {
+            return write_filter();
+        }).then([this] {
+            return write_statistics();
+        }).then([this] {
+            return write_toc();
+        });
     });
 }
 
