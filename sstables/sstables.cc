@@ -1091,6 +1091,14 @@ static future<> write_index_entry(file_writer& out, disk_string_view<uint16_t>& 
     return write(out, key, pos, promoted_index_size);
 }
 
+static void write_index_entry_t(file_writer& out, disk_string_view<uint16_t>& key, uint64_t pos) {
+    // FIXME: support promoted indexes.
+    uint32_t promoted_index_size = 0;
+
+    write(out, key, pos, promoted_index_size).get();
+}
+
+
 static constexpr int BASE_SAMPLING_LEVEL = 128;
 
 static void prepare_summary(summary& s, const memtable& mt) {
@@ -1332,7 +1340,16 @@ void sstable::do_write_components(const memtable& mt) {
         // Maybe add summary entry into in-memory representation of summary file.
         maybe_add_summary_entry(_summary, bytes_view(partition_key), index->offset());
         _filter->add(bytes_view(partition_key));
+
+        auto p_key = disk_string_view<uint16_t>();
+        p_key.value = bytes_view(partition_key);
+        // Write index file entry from partition key into index file.
+
+        write_index_entry_t(*index, p_key, w->offset());
     }
+
+    w->close().get();
+    index->close().get();
 }
 
 future<> sstable::write_components_t(const memtable& mt) {
