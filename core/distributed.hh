@@ -357,6 +357,17 @@ public:
             });
         }
     }
+    /// release the wrapped object on a local cpu. If executed on cpu
+    /// other than the one object was created on object will be copied
+    /// to local memory.
+    typename std::pointer_traits<PtrType>::element_type make_local_and_release() {
+        if (on_origin()) {
+            return std::move(*_value);
+        } else {
+            // copied to caller's cpu here
+            return *_value;
+        }
+    }
     /// Accesses the wrapped object.
     element_type& operator*() const { return *_value; }
     /// Accesses the wrapped object.
