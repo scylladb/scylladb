@@ -65,136 +65,23 @@ private:
     const ::shared_ptr<cf_prop_defs> _properties;
     const bool _if_not_exists;
 public:
-    create_table_statement(::shared_ptr<cf_name> name, ::shared_ptr<cf_prop_defs> properties, bool if_not_exists, std::set<::shared_ptr<column_identifier>> static_columns)
-        : schema_altering_statement{name}
-        , _static_columns{static_columns}
-        , _properties{properties}
-        , _if_not_exists{if_not_exists}
-    {
-#if 0
-        try
-        {
-            if (!this.properties.hasProperty(CFPropDefs.KW_COMPRESSION) && CFMetaData.DEFAULT_COMPRESSOR != null)
-                this.properties.addProperty(CFPropDefs.KW_COMPRESSION,
-                                            new HashMap<String, String>()
-                                            {{
-                                                put(CompressionParameters.SSTABLE_COMPRESSION, CFMetaData.DEFAULT_COMPRESSOR);
-                                            }});
-        }
-        catch (SyntaxException e)
-        {
-            throw new AssertionError(e);
-        }
-#endif
-    }
+    create_table_statement(::shared_ptr<cf_name> name,
+                           ::shared_ptr<cf_prop_defs> properties,
+                           bool if_not_exists,
+                           std::set<::shared_ptr<column_identifier>> static_columns);
 
-    virtual void check_access(const service::client_state& state) override {
-        warn(unimplemented::cause::PERMISSIONS);
-#if 0
-        state.hasKeyspaceAccess(keyspace(), Permission.CREATE);
-#endif
-    }
+    virtual void check_access(const service::client_state& state) override;
 
-    virtual void validate(service::storage_proxy&, const service::client_state& state) override {
-        // validated in announceMigration()
-    }
+    virtual void validate(service::storage_proxy&, const service::client_state& state) override;
 
-#if 0
-    // Column definitions
-    private List<ColumnDefinition> getColumns(CFMetaData cfm)
-    {
-        List<ColumnDefinition> columnDefs = new ArrayList<>(columns.size());
-        Integer componentIndex = comparator.isCompound() ? comparator.clusteringPrefixSize() : null;
-        for (Map.Entry<ColumnIdentifier, AbstractType> col : columns.entrySet())
-        {
-            ColumnIdentifier id = col.getKey();
-            columnDefs.add(staticColumns.contains(id)
-                           ? ColumnDefinition.staticDef(cfm, col.getKey().bytes, col.getValue(), componentIndex)
-                           : ColumnDefinition.regularDef(cfm, col.getKey().bytes, col.getValue(), componentIndex));
-        }
+    virtual future<bool> announce_migration(service::storage_proxy& proxy, bool is_local_only) override;
 
-        return columnDefs;
-    }
-#endif
+    virtual shared_ptr<transport::event::schema_change> change_event() override;
 
-    virtual future<bool> announce_migration(service::storage_proxy& proxy, bool is_local_only) override {
-        return service::migration_manager::announce_new_column_family(proxy, get_cf_meta_data(), is_local_only).then_wrapped([this] (auto&& f) {
-            try {
-                f.get();
-                return true;
-            } catch (const exceptions::already_exists_exception& e) {
-                if (_if_not_exists) {
-                    return false;
-                }
-                throw e;
-            }
-        });
-    }
+    schema_ptr get_cf_meta_data();
 
-    virtual shared_ptr<transport::event::schema_change> change_event() override {
-        return make_shared<transport::event::schema_change>(transport::event::schema_change::change_type::CREATED, transport::event::schema_change::target_type::TABLE, keyspace(), column_family());
-    }
+    void apply_properties_to(schema* s);
 
-    /**
-     * Returns a CFMetaData instance based on the parameters parsed from this
-     * <code>CREATE</code> statement, or defaults where applicable.
-     *
-     * @return a CFMetaData instance corresponding to the values parsed from this statement
-     * @throws InvalidRequestException on failure to validate parsed parameters
-     */
-    schema_ptr get_cf_meta_data() {
-        auto s = make_lw_shared(schema({}, keyspace(), column_family(),
-            // partition key
-            {},
-            // clustering key
-            {},
-            // regular columns
-            {},
-            // static columns
-            {},
-            // regular column name type
-            utf8_type,
-            // comment
-            ""
-        ));
-        apply_properties_to(s.get());
-        return s;
-    }
-
-    void apply_properties_to(schema* s) {
-#if 0
-        cfmd.defaultValidator(defaultValidator)
-            .keyValidator(keyValidator)
-            .addAllColumnDefinitions(getColumns(cfmd))
-            .isDense(isDense);
-
-        addColumnMetadataFromAliases(cfmd, keyAliases, keyValidator, ColumnDefinition.Kind.PARTITION_KEY);
-        addColumnMetadataFromAliases(cfmd, columnAliases, comparator.asAbstractType(), ColumnDefinition.Kind.CLUSTERING_COLUMN);
-        if (valueAlias != null)
-            addColumnMetadataFromAliases(cfmd, Collections.singletonList(valueAlias), defaultValidator, ColumnDefinition.Kind.COMPACT_VALUE);
-#endif
-
-        _properties->apply_to_schema(s);
-    }
-
-#if 0
-    private void addColumnMetadataFromAliases(CFMetaData cfm, List<ByteBuffer> aliases, AbstractType<?> comparator, ColumnDefinition.Kind kind)
-    {
-        if (comparator instanceof CompositeType)
-        {
-            CompositeType ct = (CompositeType)comparator;
-            for (int i = 0; i < aliases.size(); ++i)
-                if (aliases.get(i) != null)
-                    cfm.addOrReplaceColumnDefinition(new ColumnDefinition(cfm, aliases.get(i), ct.types.get(i), i, kind));
-        }
-        else
-        {
-            assert aliases.size() <= 1;
-            if (!aliases.isEmpty() && aliases.get(0) != null)
-                cfm.addOrReplaceColumnDefinition(new ColumnDefinition(cfm, aliases.get(0), comparator, null, kind));
-        }
-    }
-#endif
     class raw_statement;
 };
 
