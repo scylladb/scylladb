@@ -389,19 +389,19 @@ future<> write(file_writer& out, disk_array<Size, Members>& arr) {
 
 template <typename Size, typename Key, typename Value>
 future<> parse(random_access_reader& in, Size& len, std::unordered_map<Key, Value>& map) {
-    auto count = make_lw_shared<Size>();
-    auto eos = [len, count] { return len == *count; };
-    return do_until(eos, [len, count, &in, &map] {
-        struct kv {
-            Key key;
-            Value value;
-        };
-        ++*count;
+    return do_with(Size(), [&in, len, &map] (Size& count) {
+        auto eos = [len, &count] { return len == count++; };
+        return do_until(eos, [len, &in, &map] {
+            struct kv {
+                Key key;
+                Value value;
+            };
 
-        auto el = std::make_unique<kv>();
-        auto f = parse(in, el->key, el->value);
-        return f.then([el = std::move(el), &map] {
-            map.emplace(el->key, el->value);
+            return do_with(kv(), [&in, &map] (auto& el) {
+                return parse(in, el.key, el.value).then([&el, &map] {
+                    map.emplace(el.key, el.value);
+                });
+            });
         });
     });
 }
