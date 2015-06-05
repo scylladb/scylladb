@@ -418,9 +418,7 @@ future<> parse(random_access_reader& in, disk_hash<Size, Key, Value>& h) {
 template <typename Key, typename Value>
 future<> write(file_writer& out, std::unordered_map<Key, Value>& map) {
     return do_for_each(map.begin(), map.end(), [&out, &map] (auto& val) {
-        Key key = val.first;
-        Value value = val.second;
-        return write(out, key, value);
+        return write(out, val.first, val.second);
     });
 }
 
