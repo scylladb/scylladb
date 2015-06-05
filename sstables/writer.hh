@@ -55,20 +55,11 @@ private:
     }
 
     // NOTE: adler32 is the algorithm used to compute checksum.
-    void do_compute_checksum(const char* buf, size_t n) {
-        uint32_t buf_checksum = checksum_adler32(buf, n);
-
-        _offset += n;
-        if (_checksum_file) {
-            _per_chunk_checksum = checksum_adler32_combine(_per_chunk_checksum, buf_checksum, n);
-        }
-        _full_checksum = checksum_adler32_combine(_full_checksum, buf_checksum, n);
-    }
-
     // compute a checksum per chunk of size _c.chunk_size
     void compute_checksum(const char* buf, size_t n) {
         if (!_checksum_file) {
-            do_compute_checksum(buf, n);
+            _offset += n;
+            _full_checksum = checksum_adler32(_full_checksum, buf, n);
             return;
         }
 
@@ -78,10 +69,13 @@ private:
             size_t available = _c.chunk_size - (_offset % _c.chunk_size);
 
             if (remaining < available) {
-                do_compute_checksum(buf, remaining);
+                _offset += remaining;
+                _per_chunk_checksum = checksum_adler32(_per_chunk_checksum, buf, remaining);
                 remaining = 0;
             } else {
-                do_compute_checksum(buf, available);
+                _offset += available;
+                _per_chunk_checksum = checksum_adler32(_per_chunk_checksum, buf, available);
+                _full_checksum = checksum_adler32_combine(_full_checksum, _per_chunk_checksum, _c.chunk_size);
                 _c.checksums.push_back(_per_chunk_checksum);
                 _per_chunk_checksum = init_checksum_adler32();
                 buf += available;
@@ -111,7 +105,10 @@ public:
         return _c;
     }
     uint32_t full_checksum() {
-        return _full_checksum;
+        if (!_checksum_file) {
+            return _full_checksum;
+        }
+        return checksum_adler32_combine(_full_checksum, _per_chunk_checksum, _offset % _c.chunk_size);
     }
 };
 
