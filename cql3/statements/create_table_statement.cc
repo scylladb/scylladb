@@ -24,6 +24,8 @@
 
 #include "cql3/statements/create_table_statement.hh"
 
+#include "schema_builder.hh"
+
 namespace cql3 {
 
 namespace statements {
@@ -109,25 +111,12 @@ shared_ptr<transport::event::schema_change> create_table_statement::change_event
  * @throws InvalidRequestException on failure to validate parsed parameters
  */
 schema_ptr create_table_statement::get_cf_meta_data() {
-    auto s = make_lw_shared(schema({}, keyspace(), column_family(),
-        // partition key
-        {},
-        // clustering key
-        {},
-        // regular columns
-        {},
-        // static columns
-        {},
-        // regular column name type
-        utf8_type,
-        // comment
-        ""
-    ));
-    apply_properties_to(s.get());
-    return s;
+    schema_builder builder{keyspace(), column_family()};
+    apply_properties_to(builder);
+    return builder.build();
 }
 
-void create_table_statement::apply_properties_to(schema* s) {
+void create_table_statement::apply_properties_to(schema_builder& builder) {
 #if 0
     cfmd.defaultValidator(defaultValidator)
         .keyValidator(keyValidator)
@@ -140,7 +129,7 @@ void create_table_statement::apply_properties_to(schema* s) {
         addColumnMetadataFromAliases(cfmd, Collections.singletonList(valueAlias), defaultValidator, ColumnDefinition.Kind.COMPACT_VALUE);
 #endif
 
-    _properties->apply_to_schema(s);
+    _properties->apply_to_builder(builder);
 }
 
 #if 0

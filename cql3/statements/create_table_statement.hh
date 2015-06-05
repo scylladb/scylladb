@@ -80,7 +80,7 @@ public:
 
     schema_ptr get_cf_meta_data();
 
-    void apply_properties_to(schema* s);
+    void apply_properties_to(schema_builder& builder);
 
     class raw_statement;
 };
