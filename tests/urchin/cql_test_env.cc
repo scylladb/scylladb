@@ -120,7 +120,7 @@ public:
                                       ks_name = std::move(ks_name),
                                       column_name = std::move(column_name),
                                       expected = std::move(expected),
-                                      table_name = std::move(table_name)] (database& db) {
+                                      table_name = std::move(table_name)] (database& db) mutable {
           auto& cf = db.find_column_family(ks_name, table_name);
           auto schema = cf.schema();
           return cf.find_partition_slow(pkey).then([schema, ck, column_name, expected] (column_family::const_mutation_partition_ptr p) {
