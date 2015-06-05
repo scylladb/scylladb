@@ -330,7 +330,7 @@ private:
         return engine().cpu_id() == _cpu;
     }
 public:
-    using element_type = typename PtrType::element_type;
+    using element_type = typename std::pointer_traits<PtrType>::element_type;
 
     /// Constructs a null \c foreign_ptr<>.
     foreign_ptr()
@@ -360,7 +360,7 @@ public:
     /// release the wrapped object on a local cpu. If executed on cpu
     /// other than the one object was created on object will be copied
     /// to local memory.
-    typename std::pointer_traits<PtrType>::element_type make_local_and_release() {
+    element_type make_local_and_release() {
         if (on_origin()) {
             return std::move(*_value);
         } else {
