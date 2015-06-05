@@ -403,7 +403,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         auto schema = proxy.get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
         auto map = [&proxy, schema_table_name] (sstring keyspace_name) { return read_schema_partition_for_keyspace(proxy, schema_table_name, keyspace_name); };
         auto insert = [] (schema_result&& result, auto&& schema_entity) {
-            if (schema_entity.second) {
+            if (!schema_entity.second->empty()) {
                 result.insert(std::move(schema_entity));
             }
             return std::move(result);
