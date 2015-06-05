@@ -67,23 +67,19 @@ void create_table_statement::validate(service::storage_proxy&, const service::cl
     // validated in announceMigration()
 }
 
-#if 0
 // Column definitions
-private List<ColumnDefinition> getColumns(CFMetaData cfm)
+std::vector<column_definition> create_table_statement::get_columns()
 {
-    List<ColumnDefinition> columnDefs = new ArrayList<>(columns.size());
-    Integer componentIndex = comparator.isCompound() ? comparator.clusteringPrefixSize() : null;
-    for (Map.Entry<ColumnIdentifier, AbstractType> col : columns.entrySet())
-    {
-        ColumnIdentifier id = col.getKey();
-        columnDefs.add(staticColumns.contains(id)
-                       ? ColumnDefinition.staticDef(cfm, col.getKey().bytes, col.getValue(), componentIndex)
-                       : ColumnDefinition.regularDef(cfm, col.getKey().bytes, col.getValue(), componentIndex));
+    std::vector<column_definition> column_defs;
+    for (auto&& col : _columns) {
+        column_kind kind = column_kind::regular_column;
+        if (_static_columns.count(col.first)) {
+            kind = column_kind::static_column;
+        }
+        column_defs.emplace_back(col.first->name(), col.second, kind);
     }
-
-    return columnDefs;
+    return column_defs;
 }
-#endif
 
 future<bool> create_table_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) {
     return service::migration_manager::announce_new_column_family(proxy, get_cf_meta_data(), is_local_only).then_wrapped([this] (auto&& f) {
@@ -117,13 +113,19 @@ schema_ptr create_table_statement::get_cf_meta_data() {
 }
 
 void create_table_statement::apply_properties_to(schema_builder& builder) {
+    auto&& columns = get_columns();
+    for (auto&& column : columns) {
+        builder.with_column(column);
+    }
 #if 0
     cfmd.defaultValidator(defaultValidator)
         .keyValidator(keyValidator)
         .addAllColumnDefinitions(getColumns(cfmd))
         .isDense(isDense);
+#endif
 
-    addColumnMetadataFromAliases(cfmd, keyAliases, keyValidator, ColumnDefinition.Kind.PARTITION_KEY);
+    add_column_metadata_from_aliases(builder, _key_aliases, _key_validator, column_kind::partition_key);
+#if 0
     addColumnMetadataFromAliases(cfmd, columnAliases, comparator.asAbstractType(), ColumnDefinition.Kind.CLUSTERING_COLUMN);
     if (valueAlias != null)
         addColumnMetadataFromAliases(cfmd, Collections.singletonList(valueAlias), defaultValidator, ColumnDefinition.Kind.COMPACT_VALUE);
@@ -132,9 +134,9 @@ void create_table_statement::apply_properties_to(schema_builder& builder) {
     _properties->apply_to_builder(builder);
 }
 
-#if 0
-private void addColumnMetadataFromAliases(CFMetaData cfm, List<ByteBuffer> aliases, AbstractType<?> comparator, ColumnDefinition.Kind kind)
+void create_table_statement::add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, data_type comparator, column_kind kind)
 {
+#if 0
     if (comparator instanceof CompositeType)
     {
         CompositeType ct = (CompositeType)comparator;
@@ -144,12 +146,14 @@ private void addColumnMetadataFromAliases(CFMetaData cfm, List<ByteBuffer> alias
     }
     else
     {
-        assert aliases.size() <= 1;
-        if (!aliases.isEmpty() && aliases.get(0) != null)
-            cfm.addOrReplaceColumnDefinition(new ColumnDefinition(cfm, aliases.get(0), comparator, null, kind));
-    }
-}
 #endif
+        assert(aliases.size() <= 1);
+        if (!aliases.empty())
+            builder.with_column(aliases[0], comparator, kind);
+#if 0
+    }
+#endif
+}
 
 }
 

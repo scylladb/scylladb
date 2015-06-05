@@ -51,16 +51,17 @@ class create_table_statement : public schema_altering_statement {
 private:
 #if 0
     private AbstractType<?> defaultValidator;
-    private AbstractType<?> keyValidator;
-
-    private final List<ByteBuffer> keyAliases = new ArrayList<ByteBuffer>();
+#endif
+    data_type _key_validator;
+    std::vector<bytes> _key_aliases;
+#if 0
     private final List<ByteBuffer> columnAliases = new ArrayList<ByteBuffer>();
     private ByteBuffer valueAlias;
 
     private boolean isDense;
-
-    private final Map<ColumnIdentifier, AbstractType> columns = new HashMap<ColumnIdentifier, AbstractType>();
 #endif
+
+    std::map<::shared_ptr<column_identifier>, data_type> _columns;
     const std::set<::shared_ptr<column_identifier>> _static_columns;
     const ::shared_ptr<cf_prop_defs> _properties;
     const bool _if_not_exists;
@@ -80,9 +81,15 @@ public:
 
     schema_ptr get_cf_meta_data();
 
+    class raw_statement;
+
+    friend raw_statement;
+private:
+    std::vector<column_definition> get_columns();
+
     void apply_properties_to(schema_builder& builder);
 
-    class raw_statement;
+    void add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, data_type comparator, column_kind kind);
 };
 
 class create_table_statement::raw_statement : public cf_statement {
@@ -122,39 +129,39 @@ public:
 
         auto stmt = ::make_shared<create_table_statement>(_cf_name, properties, _if_not_exists, _static_columns);
 
-#if 0
-        Map<ByteBuffer, CollectionType> definedMultiCellCollections = null;
-        for (Map.Entry<ColumnIdentifier, CQL3Type.Raw> entry : definitions.entrySet())
-        {
-            ColumnIdentifier id = entry.getKey();
-            CQL3Type pt = entry.getValue().prepare(keyspace());
-            if (pt.isCollection() && ((CollectionType) pt.getType()).isMultiCell())
-            {
-                if (definedMultiCellCollections == null)
-                    definedMultiCellCollections = new HashMap<>();
-                definedMultiCellCollections.put(id.bytes, (CollectionType) pt.getType());
+        std::map<bytes, data_type> defined_multi_cell_collections;
+        for (auto&& entry : _definitions) {
+            ::shared_ptr<column_identifier> id = entry.first;
+            ::shared_ptr<cql3_type> pt = entry.second->prepare(db, keyspace());
+            if (pt->is_collection() && pt->get_type()->is_multi_cell()) {
+                defined_multi_cell_collections.emplace(id->name(), pt->get_type());
             }
-            stmt.columns.put(id, pt.getType()); // we'll remove what is not a column below
+            stmt->_columns.emplace(id, pt->get_type()); // we'll remove what is not a column below
+        }
+        if (_key_aliases.empty()) {
+            throw exceptions::invalid_request_exception("No PRIMARY KEY specifed (exactly one required)");
+        } else if (_key_aliases.size() > 1) {
+            throw exceptions::invalid_request_exception("Multiple PRIMARY KEYs specifed (exactly one required)");
         }
 
-        if (keyAliases.isEmpty())
-            throw new InvalidRequestException("No PRIMARY KEY specifed (exactly one required)");
-        else if (keyAliases.size() > 1)
-            throw new InvalidRequestException("Multiple PRIMARY KEYs specifed (exactly one required)");
-
-        List<ColumnIdentifier> kAliases = keyAliases.get(0);
-
-        List<AbstractType<?>> keyTypes = new ArrayList<AbstractType<?>>(kAliases.size());
-        for (ColumnIdentifier alias : kAliases)
-        {
-            stmt.keyAliases.add(alias.bytes);
-            AbstractType<?> t = getTypeAndRemove(stmt.columns, alias);
-            if (t instanceof CounterColumnType)
-                throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", alias));
-            if (staticColumns.contains(alias))
-                throw new InvalidRequestException(String.format("Static column %s cannot be part of the PRIMARY KEY", alias));
-            keyTypes.add(t);
+        auto& key_aliases = _key_aliases[0];
+        std::vector<data_type> key_types;
+        for (auto&& alias : key_aliases) {
+            stmt->_key_aliases.emplace_back(alias->name());
+            auto t = get_type_and_remove(stmt->_columns, alias);
+            if (t->is_counter()) {
+                throw exceptions::invalid_request_exception(sprint("counter type is not supported for PRIMARY KEY part %s", alias->text()));
+            }
+            if (_static_columns.count(alias) > 0) {
+                throw exceptions::invalid_request_exception(sprint("Static column %s cannot be part of the PRIMARY KEY", alias->text()));
+            }
+            key_types.emplace_back(t);
         }
+        if (key_types.size() > 1) {
+            throw std::runtime_error("compound key types are not supported");
+        }
+        stmt->_key_validator = key_types[0];
+#if 0
         stmt.keyValidator = keyTypes.size() == 1 ? keyTypes.get(0) : CompositeType.getInstance(keyTypes);
 
         // Dense means that no part of the comparator stores a CQL column name. This means
@@ -305,20 +312,23 @@ public:
         return ::make_shared<parsed_statement::prepared>(stmt);
     }
 
-#if 0
-        private AbstractType<?> getTypeAndRemove(Map<ColumnIdentifier, AbstractType> columns, ColumnIdentifier t) throws InvalidRequestException
-        {
-            AbstractType type = columns.get(t);
-            if (type == null)
-                throw new InvalidRequestException(String.format("Unknown definition %s referenced in PRIMARY KEY", t));
-            if (type.isCollection() && type.isMultiCell())
-                throw new InvalidRequestException(String.format("Invalid collection type for PRIMARY KEY component %s", t));
-
-            columns.remove(t);
-            Boolean isReversed = definedOrdering.get(t);
-            return isReversed != null && isReversed ? ReversedType.getInstance(type) : type;
+    data_type get_type_and_remove(std::map<::shared_ptr<column_identifier>, data_type>& columns, ::shared_ptr<column_identifier> t)
+    {
+        if (columns.count(t) == 0) {
+            throw exceptions::invalid_request_exception(sprint("Unknown definition %s referenced in PRIMARY KEY", t->text()));
         }
+        auto type = columns.at(t);
+        if (type->is_collection() && type->is_multi_cell()) {
+            throw exceptions::invalid_request_exception(sprint("Invalid collection type for PRIMARY KEY component %s", t->text()));
+        }
+        columns.erase(t);
+#if 0
+        // FIXME: reversed types are not supported
+        Boolean isReversed = definedOrdering.get(t);
+        return isReversed != null && isReversed ? ReversedType.getInstance(type) : type;
 #endif
+        return type;
+    }
 
     void add_definition(::shared_ptr<column_identifier> def, ::shared_ptr<cql3_type::raw> type, bool is_static) {
         _defined_names.emplace(def);
