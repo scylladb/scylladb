@@ -77,7 +77,8 @@ public:
                 std::smatch m;
                 // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
                     std::regex rx(FILENAME_PREFIX + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
-                    if (!std::regex_match(std::string(filename), m, rx)) {
+                    std::string sfilename = filename;
+                    if (!std::regex_match(sfilename, m, rx)) {
                         throw std::runtime_error("Cannot parse the version of the file: " + filename);
                     }
                     if (m[3].length() == 0) {
