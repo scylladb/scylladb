@@ -589,13 +589,22 @@ private:
         }
     }
 
+    future_state<T...> get_available_state() {
+        auto st = state();
+        if (_promise) {
+            _promise->_future = nullptr;
+            _promise = nullptr;
+        }
+        return std::move(*st);
+    }
+
     template <typename Ret, typename Func, typename Param>
     futurize_t<Ret> then(Func&& func, Param&& param) noexcept {
         using futurator = futurize<Ret>;
         using P = typename futurator::promise_type;
         if (state()->available() && (++future_avail_count % max_inlined_continuations)) {
             try {
-                return futurator::apply(std::forward<Func>(func), param(std::move(*state())));
+                return futurator::apply(std::forward<Func>(func), param(get_available_state()));
             } catch (...) {
                 P p;
                 p.set_exception(std::current_exception());
@@ -659,6 +668,11 @@ public:
     std::tuple<T...> get() {
         if (!state()->available()) {
             wait();
+        }
+        // detach from promise, so that promise::abandoned() doesn't trigger
+        if (_promise) {
+            _promise->_future = nullptr;
+            _promise = nullptr;
         }
         return state()->get();
     }

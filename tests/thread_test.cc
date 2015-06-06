@@ -80,3 +80,9 @@ SEASTAR_TEST_CASE(test_thread_async) {
         BOOST_REQUIRE_EQUAL(xy, "xy");
     });
 }
+
+SEASTAR_TEST_CASE(test_thread_async_immed) {
+    return async([] { return 3; }).then([] (int three) {
+        BOOST_REQUIRE_EQUAL(three, 3);
+    });
+}
