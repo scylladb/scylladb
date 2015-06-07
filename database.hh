@@ -305,7 +305,7 @@ public:
 
 // Creates a keyspace.  Keyspaces have a non-sharded
 // component (the directory), so a global function is needed.
-future<> create_keyspace(distributed<database>& db, const keyspace_metadata&);
+future<> create_keyspace(distributed<database>& db, const lw_shared_ptr<keyspace_metadata>&);
 
 // FIXME: stub
 class secondary_index_manager {};
