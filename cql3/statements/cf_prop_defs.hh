@@ -25,8 +25,10 @@
 #pragma once
 
 #include "cql3/statements/property_definitions.hh"
-
+ 
 #include "schema.hh"
+#include "database.hh"
+#include "schema_builder.hh"
 
 namespace cql3 {
 
@@ -173,6 +175,14 @@ public:
     }
 #endif
 
+    // Keep this in sync with apply_to_schema().
+    void apply_to_builder(schema_builder& builder) {
+        if (has_property(KW_COMMENT)) {
+            builder.set_comment(get_string(KW_COMMENT, ""));
+        }
+    }
+
+    // Keep this in sync with apply_to_builder().
     void apply_to_schema(schema* s) {
         if (has_property(KW_COMMENT)) {
             s->set_comment(get_string(KW_COMMENT, ""));

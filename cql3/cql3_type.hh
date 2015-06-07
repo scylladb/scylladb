@@ -43,6 +43,7 @@ public:
     cql3_type(sstring name, data_type type, bool native = true)
             : _name(std::move(name)), _type(std::move(type)), _native(native) {}
     bool is_collection() const { return _type->is_collection(); }
+    bool is_counter() const { return _type->is_counter(); }
     bool is_native() const { return _native; }
     data_type get_type() const { return _type; }
     sstring to_string() const { return _name; }

@@ -24,10 +24,7 @@ public:
     }
 
     virtual bool is_counter() const {
-        throw std::runtime_error("not implemented");
-#if 0
-        return type == Native.COUNTER;
-#endif
+        return _type->is_counter();
     }
 
     virtual sstring to_string() const {
