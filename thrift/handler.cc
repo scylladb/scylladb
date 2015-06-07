@@ -43,6 +43,7 @@
 #include "thrift/thrift_validation.hh"
 #include "service/storage_service.hh"
 #include "service/query_state.hh"
+#include "cql3/query_processor.hh"
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
@@ -156,11 +157,13 @@ std::string bytes_to_string(bytes_view v) {
 
 class thrift_handler : public CassandraCobSvIf {
     distributed<database>& _db;
+    distributed<cql3::query_processor>& _query_processor;
     sstring _cql_version;
     service::query_state _query_state;
 public:
-    explicit thrift_handler(distributed<database>& db)
+    explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp)
         : _db(db)
+        , _query_processor(qp)
         , _query_state(service::client_state::for_external_calls())
     { }
 
@@ -875,11 +878,14 @@ private:
 
 class handler_factory : public CassandraCobSvIfFactory {
     distributed<database>& _db;
+    distributed<cql3::query_processor>& _query_processor;
 public:
-    explicit handler_factory(distributed<database>& db) : _db(db) {}
+    explicit handler_factory(distributed<database>& db,
+                             distributed<cql3::query_processor>& qp)
+        : _db(db), _query_processor(qp) {}
     typedef CassandraCobSvIf Handler;
     virtual CassandraCobSvIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) {
-        return new thrift_handler(_db);
+        return new thrift_handler(_db, _query_processor);
     }
     virtual void releaseHandler(CassandraCobSvIf* handler) {
         delete handler;
@@ -887,6 +893,6 @@ public:
 };
 
 std::unique_ptr<CassandraCobSvIfFactory>
-create_handler_factory(distributed<database>& db) {
-    return std::make_unique<handler_factory>(db);
+create_handler_factory(distributed<database>& db, distributed<cql3::query_processor>& qp) {
+    return std::make_unique<handler_factory>(db, qp);
 }

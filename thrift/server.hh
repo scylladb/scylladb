@@ -24,6 +24,7 @@
 
 #include "core/reactor.hh"
 #include "core/distributed.hh"
+#include "cql3/query_processor.hh"
 #include <memory>
 #include <cstdint>
 
@@ -62,7 +63,7 @@ class thrift_server {
     uint64_t _current_connections = 0;
     uint64_t _requests_served = 0;
 public:
-    thrift_server(distributed<database>& db);
+    thrift_server(distributed<database>& db, distributed<cql3::query_processor>& qp);
     ~thrift_server();
     future<> listen(ipv4_addr addr, bool keepalive);
     future<> stop();
