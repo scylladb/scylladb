@@ -1210,9 +1210,9 @@ void sstable::do_write_components(const memtable& mt) {
         // Write all CQL rows from a given mutation partition.
         for (auto& clustered_row: partition.clustered_rows()) {
             write_clustered_row(*w, mt.schema(), clustered_row);
-            int16_t end_of_row = 0;
-            write(*w, end_of_row).get();
         }
+        int16_t end_of_row = 0;
+        write(*w, end_of_row).get();
 
         // compute size of the current row.
         _c_stats.row_size = w->offset() - _c_stats.start_offset;
