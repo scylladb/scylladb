@@ -330,7 +330,7 @@ private:
         return engine().cpu_id() == _cpu;
     }
 public:
-    using element_type = typename PtrType::element_type;
+    using element_type = typename std::pointer_traits<PtrType>::element_type;
 
     /// Constructs a null \c foreign_ptr<>.
     foreign_ptr()
@@ -355,6 +355,17 @@ public:
             smp::submit_to(_cpu, [v = std::move(_value)] () mutable {
                 auto local(std::move(v));
             });
+        }
+    }
+    /// release the wrapped object on a local cpu. If executed on cpu
+    /// other than the one object was created on object will be copied
+    /// to local memory.
+    element_type make_local_and_release() {
+        if (on_origin()) {
+            return std::move(*_value);
+        } else {
+            // copied to caller's cpu here
+            return *_value;
         }
     }
     /// Accesses the wrapped object.
