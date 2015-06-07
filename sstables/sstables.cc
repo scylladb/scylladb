@@ -1051,8 +1051,8 @@ void sstable::write_collection(file_writer& out, const composite& clustering_key
 
 // write_datafile_clustered_row() is about writing a clustered_row to data file according to SSTables format.
 // clustered_row contains a set of cells sharing the same clustering key.
-void sstable::write_clustered_row(file_writer& out, schema_ptr schema, const rows_entry& clustered_row) {
-    auto clustering_key = composite::from_clustering_element(*schema, clustered_row.key());
+void sstable::write_clustered_row(file_writer& out, const schema& schema, const rows_entry& clustered_row) {
+    auto clustering_key = composite::from_clustering_element(schema, clustered_row.key());
 
     write_row_marker(out, clustered_row, clustering_key);
     // FIXME: Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
@@ -1061,7 +1061,7 @@ void sstable::write_clustered_row(file_writer& out, schema_ptr schema, const row
     // Write all cells of a partition's row.
     for (auto& value: clustered_row.row().cells()) {
         auto column_id = value.first;
-        auto&& column_definition = schema->regular_column_at(column_id);
+        auto&& column_definition = schema.regular_column_at(column_id);
         // non atomic cell isn't supported yet. atomic cell maps to a single trift cell.
         // non atomic cell maps to multiple trift cell, e.g. collection.
         if (!column_definition.is_atomic()) {
@@ -1077,18 +1077,18 @@ void sstable::write_clustered_row(file_writer& out, schema_ptr schema, const row
     }
 }
 
-void sstable::write_static_row(file_writer& out, schema_ptr schema, const row& static_row) {
+void sstable::write_static_row(file_writer& out, const schema& schema, const row& static_row) {
     for (auto& value: static_row) {
         auto column_id = value.first;
-        auto&& column_definition = schema->static_column_at(column_id);
+        auto&& column_definition = schema.static_column_at(column_id);
         if (!column_definition.is_atomic()) {
-            auto sp = composite::static_prefix(*schema);
+            auto sp = composite::static_prefix(schema);
             write_collection(out, sp, column_definition, value.second.as_collection_mutation());
             return;
         }
         assert(column_definition.is_static());
         atomic_cell_view cell = value.second.as_atomic_cell();
-        auto sp = composite::static_prefix(*schema);
+        auto sp = composite::static_prefix(schema);
         write_column_name(out, sp, { bytes_view(column_definition.name()) });
         write_cell(out, cell);
     }
@@ -1246,7 +1246,7 @@ void sstable::do_write_components(const memtable& mt) {
         auto& partition = partition_entry.second;
         auto& static_row = partition.static_row();
 
-        write_static_row(*w, mt.schema(), static_row);
+        write_static_row(*w, *mt.schema(), static_row);
         for (const auto& rt: partition.row_tombstones()) {
             auto prefix = composite::from_clustering_element(*mt.schema(), rt.prefix());
             write_range_tombstone(*w, prefix, {}, rt.t());
@@ -1254,7 +1254,7 @@ void sstable::do_write_components(const memtable& mt) {
 
         // Write all CQL rows from a given mutation partition.
         for (auto& clustered_row: partition.clustered_rows()) {
-            write_clustered_row(*w, mt.schema(), clustered_row);
+            write_clustered_row(*w, *mt.schema(), clustered_row);
         }
         int16_t end_of_row = 0;
         write(*w, end_of_row).get();

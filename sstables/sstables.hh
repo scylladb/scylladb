@@ -287,8 +287,8 @@ private:
 
     // NOTE: functions used to generate sstable components.
     void write_row_marker(file_writer& out, const rows_entry& clustered_row, const composite& clustering_key);
-    void write_clustered_row(file_writer& out, schema_ptr schema, const rows_entry& clustered_row);
-    void write_static_row(file_writer& out, schema_ptr schema, const row& static_row);
+    void write_clustered_row(file_writer& out, const schema& schema, const rows_entry& clustered_row);
+    void write_static_row(file_writer& out, const schema& schema, const row& static_row);
     void write_cell(file_writer& out, atomic_cell_view cell);
     void write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite_marker m = composite_marker::none);
     void write_range_tombstone(file_writer& out, const composite& clustering_prefix, std::vector<bytes_view> suffix, const tombstone t);
