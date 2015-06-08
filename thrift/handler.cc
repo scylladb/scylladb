@@ -164,7 +164,7 @@ public:
     explicit thrift_handler(distributed<database>& db, distributed<cql3::query_processor>& qp)
         : _db(db)
         , _query_processor(qp)
-        , _query_state(service::client_state::for_external_calls())
+        , _query_state(service::client_state::for_external_thrift_calls())
     { }
 
     const sstring& current_keyspace() const {
