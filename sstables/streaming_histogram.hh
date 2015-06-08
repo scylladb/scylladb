@@ -131,7 +131,7 @@ struct streaming_histogram {
      * Function used to describe the type.
      */
     template <typename Describer>
-    future<> describe_type(Describer f) { return f(max_bin_size, bin); }
+    auto describe_type(Describer f) { return f(max_bin_size, bin); }
 
     // FIXME: convert Java code below.
 #if 0

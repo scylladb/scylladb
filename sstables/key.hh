@@ -114,7 +114,7 @@ class composite {
 public:
     composite (bytes&& b) : _bytes(std::move(b)) {}
     template <typename Describer>
-    future<> describe_type(Describer f) const { return f(const_cast<bytes&>(_bytes)); }
+    auto describe_type(Describer f) const { return f(const_cast<bytes&>(_bytes)); }
 
     static composite from_bytes(bytes b) { return composite(std::move(b)); }
     template <typename ClusteringElement>

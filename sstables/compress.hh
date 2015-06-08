@@ -94,7 +94,7 @@ struct compression {
     disk_array<uint32_t, uint64_t> offsets;
 
     template <typename Describer>
-    future<> describe_type(Describer f) { return f(name, options, chunk_len, data_len, offsets); }
+    auto describe_type(Describer f) { return f(name, options, chunk_len, data_len, offsets); }
 
 private:
     // Variables determined from the above deserialized values, held for convenience:

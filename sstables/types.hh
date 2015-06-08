@@ -23,7 +23,7 @@ struct option {
     disk_string<uint16_t> value;
 
     template <typename Describer>
-    future<> describe_type(Describer f) { return f(key, value); }
+    auto describe_type(Describer f) { return f(key, value); }
 };
 
 struct filter {
@@ -31,7 +31,7 @@ struct filter {
     disk_array<uint32_t, uint64_t> buckets;
 
     template <typename Describer>
-    future<> describe_type(Describer f) { return f(hashes, buckets); }
+    auto describe_type(Describer f) { return f(hashes, buckets); }
 
     // Create an always positive filter if nothing else is specified.
     filter() : hashes(0), buckets({}) {}
@@ -119,7 +119,7 @@ struct replay_position {
     }
 
     template <typename Describer>
-    future<> describe_type(Describer f) { return f(segment, position); }
+    auto describe_type(Describer f) { return f(segment, position); }
 };
 
 struct metadata {
@@ -134,7 +134,7 @@ struct validation_metadata : public metadata {
     }
 
     template <typename Describer>
-    future<> describe_type(Describer f) { return f(partitioner, filter_chance); }
+    auto describe_type(Describer f) { return f(partitioner, filter_chance); }
 };
 
 struct compaction_metadata : public metadata {
@@ -142,7 +142,7 @@ struct compaction_metadata : public metadata {
     disk_array<uint32_t, uint8_t> cardinality;
 
     template <typename Describer>
-    future<> describe_type(Describer f) { return f(ancestors, cardinality); }
+    auto describe_type(Describer f) { return f(ancestors, cardinality); }
 };
 
 struct la_stats_metadata : public metadata {
@@ -161,7 +161,7 @@ struct la_stats_metadata : public metadata {
     bool has_legacy_counter_shards;
 
     template <typename Describer>
-    future<> describe_type(Describer f) {
+    auto describe_type(Describer f) {
         return f(
             estimated_row_size,
             estimated_column_count,
@@ -200,7 +200,7 @@ struct checksum {
     std::vector<uint32_t> checksums;
 
     template <typename Describer>
-    future<> describe_type(Describer f) { return f(chunk_size, checksums); }
+    auto describe_type(Describer f) { return f(chunk_size, checksums); }
 };
 
 }
@@ -228,7 +228,7 @@ struct deletion_time {
     int64_t marked_for_delete_at;
 
     template <typename Describer>
-    future<> describe_type(Describer f) { return f(local_deletion_time, marked_for_delete_at); }
+    auto describe_type(Describer f) { return f(local_deletion_time, marked_for_delete_at); }
 
     bool live() const {
         return (local_deletion_time == std::numeric_limits<int32_t>::max()) &&
