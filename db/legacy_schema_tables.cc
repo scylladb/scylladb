@@ -32,6 +32,7 @@
 #include "map_difference.hh"
 
 #include "core/do_with.hh"
+#include "json.hh"
 
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/map.hpp>
@@ -852,10 +853,9 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         exploded_clustering_prefix ckey;
         m.set_cell(ckey, "durable_writes", keyspace->durable_writes(), timestamp);
         m.set_cell(ckey, "strategy_class", keyspace->strategy_name(), timestamp);
+        auto raw = json::to_json(keyspace->strategy_options());
+        m.set_cell(ckey, "strategy_options", raw, timestamp);
         mutations.emplace_back(std::move(m));
-#if 0
-        adder.add("strategy_options", json(keyspace.strategyOptions));
-#endif
 
         if (with_tables_and_types_and_functions) {
 #if 0
@@ -911,7 +911,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         auto&& row = rs->row(0);
         auto keyspace_name = row.get_nonnull<sstring>("keyspace_name");
         auto strategy_name = row.get_nonnull<sstring>("strategy_class");
-        std::unordered_map<sstring, sstring> strategy_options;
+        auto raw = row.get_nonnull<sstring>("strategy_options");
+        std::map<sstring, sstring> strategy_options = json::to_map(raw);
         bool durable_writes = row.get_nonnull<bool>("durable_writes");
         return make_lw_shared<keyspace_metadata>(keyspace_name, strategy_name, strategy_options, durable_writes);
     }
