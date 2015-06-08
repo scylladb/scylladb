@@ -111,9 +111,7 @@ public:
         return _file->dma_write(pos, p, buf_size).then(
             [this, buf = std::move(buf), truncate] (size_t size) {
             if (truncate) {
-                return _file->truncate(_pos).then([this] {
-                    return _file->flush();
-                });
+                return _file->truncate(_pos);
             }
             return make_ready_future<>();
         });

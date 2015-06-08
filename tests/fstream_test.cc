@@ -52,7 +52,7 @@ SEASTAR_TEST_CASE(test_fstream) {
             buf[4095] = ']';
             w->out.write(buf, 4096).then([buf, w] {
                 ::free(buf);
-                return w->out.flush();
+                return make_ready_future<>();
             }).then([w] {
                 auto buf = static_cast<char*>(::malloc(8192));
                 memset(buf, 0, 8192);
@@ -61,7 +61,7 @@ SEASTAR_TEST_CASE(test_fstream) {
                 buf[8191] = ']';
                 return w->out.write(buf, 8192).then([buf, w] {
                     ::free(buf);
-                    return w->out.flush();
+                    return w->out.close().then([w] {});
                 });
             }).then([] {
                 return engine().open_file_dma("testfile.tmp", open_flags::ro);
@@ -105,7 +105,7 @@ SEASTAR_TEST_CASE(test_fstream_unaligned) {
         buf[39] = ']';
         w->out.write(buf, 40).then([buf, w] {
             ::free(buf);
-            return w->out.flush().then([w] {});
+            return w->out.close().then([w] {});
         }).then([] {
             return engine().open_file_dma("testfile.tmp", open_flags::ro);
         }).then([] (file f) {
