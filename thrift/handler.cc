@@ -89,6 +89,8 @@ public:
             throw NotFoundException();
         } catch (no_such_keyspace&) {
             throw NotFoundException();
+        } catch (exceptions::syntax_exception& se) {
+            throw make_exception<InvalidRequestException>("syntax error: %s", se.what());
         } catch (std::exception& e) {
             // Unexpected exception, wrap it
             throw ::apache::thrift::TException(std::string("Internal server error: ") + e.what());
@@ -618,14 +620,43 @@ public:
         return pass_unimplemented(exn_cob);
     }
 
+    class cql3_result_visitor final : public ::transport::messages::result_message::visitor {
+        CqlResult _result;
+    public:
+        const CqlResult& result() const {
+            return _result;
+        }
+        virtual void visit(const ::transport::messages::result_message::void_message&) override {
+            _result.__set_type(CqlResultType::VOID);
+        }
+        virtual void visit(const ::transport::messages::result_message::set_keyspace& m) override {
+            _result.__set_type(CqlResultType::VOID);
+        }
+        virtual void visit(const ::transport::messages::result_message::prepared& m) override {
+            throw make_exception<InvalidRequestException>("Cannot convert prepared query result to CqlResult");
+        }
+        virtual void visit(const ::transport::messages::result_message::schema_change& m) override {
+            _result.__set_type(CqlResultType::VOID);
+        }
+        virtual void visit(const ::transport::messages::result_message::rows& m) override {
+            _result = to_thrift_result(m.rs());
+        }
+    };
+
     void execute_cql3_query(tcxx::function<void(CqlResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression, const ConsistencyLevel::type consistency) {
-        print("warning: ignoring query %s\n", query);
-        cob({});
-#if 0
-        CqlResult _return;
-        // FIXME: implement
-        return pass_unimplemented(exn_cob);
-#endif
+        return with_exn_cob(std::move(exn_cob), [&] {
+            if (compression != Compression::type::NONE) {
+                throw make_exception<InvalidRequestException>("Compressed query strings are not supported");
+            }
+            auto opts = std::make_unique<cql3::query_options>(cl_from_thrift(consistency), stdx::nullopt, std::vector<bytes_view_opt>(),
+                            false, cql3::query_options::specific_options::DEFAULT, cql_serialization_format::latest());
+            auto f = _query_processor.local().process(query, _query_state, *opts);
+            return f.then([cob = std::move(cob), opts = std::move(opts)](auto&& ret) {
+                cql3_result_visitor visitor;
+                ret->accept(visitor);
+                return cob(visitor.result());
+            });
+        });
     }
 
     void prepare_cql_query(tcxx::function<void(CqlPreparedResult const& _return)> cob, tcxx::function<void(::apache::thrift::TDelayedException* _throw)> exn_cob, const std::string& query, const Compression::type compression) {
@@ -686,6 +717,49 @@ private:
             std::move(types.begin(), types.end(), std::back_inserter(ret));
         }
         return ret;
+    }
+    static CqlResult to_thrift_result(const cql3::result_set& rs) {
+        CqlResult result;
+        result.__set_type(CqlResultType::ROWS);
+
+        constexpr static const char* utf8 = "UTF8Type";
+
+        CqlMetadata mtd;
+        std::map<std::string, std::string> name_types;
+        std::map<std::string, std::string> value_types;
+        for (auto&& c : rs.get_metadata().get_names()) {
+            auto&& name = c->name->to_string();
+            name_types.emplace(name, utf8);
+            value_types.emplace(name, c->type->name());
+        }
+        mtd.__set_name_types(name_types);
+        mtd.__set_value_types(value_types);
+        mtd.__set_default_name_type(utf8);
+        mtd.__set_default_value_type(utf8);
+        result.__set_schema(mtd);
+
+        std::vector<CqlRow> rows;
+        rows.reserve(rs.rows().size());
+        for (auto&& row : rs.rows()) {
+            std::vector<Column> columns;
+            columns.reserve(rs.get_metadata().column_count());
+            for (unsigned i = 0; i < row.size(); i++) { // iterator
+                auto& col = rs.get_metadata().get_names()[i];
+                Column c;
+                c.__set_name(col->name->to_string());
+                auto& data = row[i];
+                if (data) {
+                    c.__set_value(bytes_to_string(*data));
+                }
+                columns.emplace_back(std::move(c));
+            }
+            CqlRow r;
+            r.__set_key(std::string());
+            r.__set_columns(columns);
+            rows.emplace_back(std::move(r));
+        }
+        result.__set_rows(rows);
+        return result;
     }
     static KsDef get_keyspace_definition(const keyspace& ks) {
         auto make_options = [](auto&& m) {
