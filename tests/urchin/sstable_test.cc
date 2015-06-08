@@ -15,6 +15,7 @@
 #include "sstables/key.hh"
 #include "tests/test-utils.hh"
 #include "schema.hh"
+#include "compress.hh"
 #include "database.hh"
 #include <memory>
 #include "sstable_test.hh"

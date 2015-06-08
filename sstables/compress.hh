@@ -37,6 +37,7 @@
 #include "core/reactor.hh"
 #include "core/shared_ptr.hh"
 #include "types.hh"
+#include "../compress.hh"
 
 // An "uncompress_func" is a function which uncompresses the given compressed
 // input chunk, and writes the uncompressed data into the given output buffer.
@@ -57,12 +58,6 @@ typedef size_t compress_func(const char* input, size_t input_len,
 compress_func compress_lz4;
 compress_func compress_snappy;
 compress_func compress_deflate;
-
-enum class compressor {
-    lz4,
-    snappy,
-    deflate,
-};
 
 inline uint32_t init_checksum_adler32() {
     return adler32(0, Z_NULL, 0);

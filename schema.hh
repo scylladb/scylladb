@@ -16,6 +16,7 @@
 #include "gc_clock.hh"
 #include "unimplemented.hh"
 #include "utils/UUID.hh"
+#include "compress.hh"
 
 using column_id = uint32_t;
 
@@ -134,6 +135,7 @@ private:
         gc_clock::duration _default_time_to_live = gc_clock::duration::zero();
         data_type _regular_column_name_type;
         double _bloom_filter_fp_chance = 0.01;
+        compressor _compressor = compressor::none;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -184,6 +186,13 @@ public:
     schema& set_bloom_filter_fp_chance(double fp) {
         _raw._bloom_filter_fp_chance = fp;
         return *this;
+    }
+
+    void set_compressor(compressor c) {
+        _raw._compressor = c;
+    }
+    const compressor get_compressor() const {
+        return _raw._compressor;
     }
 
     thrift_schema& thrift() {
