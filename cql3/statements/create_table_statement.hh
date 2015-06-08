@@ -60,8 +60,12 @@ private:
 
     private boolean isDense;
 #endif
-
-    std::map<::shared_ptr<column_identifier>, data_type> _columns;
+    using column_map_type =
+        std::unordered_map<::shared_ptr<column_identifier>,
+                           data_type,
+                           shared_ptr_value_hash<column_identifier>,
+                           shared_ptr_equal_by_value<column_identifier>>;
+    column_map_type _columns;
     const std::set<::shared_ptr<column_identifier>> _static_columns;
     const ::shared_ptr<cf_prop_defs> _properties;
     const bool _if_not_exists;
@@ -312,12 +316,13 @@ public:
         return ::make_shared<parsed_statement::prepared>(stmt);
     }
 
-    data_type get_type_and_remove(std::map<::shared_ptr<column_identifier>, data_type>& columns, ::shared_ptr<column_identifier> t)
+    data_type get_type_and_remove(column_map_type& columns, ::shared_ptr<column_identifier> t)
     {
-        if (columns.count(t) == 0) {
+        auto it = columns.find(t);
+        if (it == columns.end()) {
             throw exceptions::invalid_request_exception(sprint("Unknown definition %s referenced in PRIMARY KEY", t->text()));
         }
-        auto type = columns.at(t);
+        auto type = it->second;
         if (type->is_collection() && type->is_multi_cell()) {
             throw exceptions::invalid_request_exception(sprint("Invalid collection type for PRIMARY KEY component %s", t->text()));
         }
