@@ -63,7 +63,7 @@ public:
             // is fine.  Also, we don't want to change its type.
             throw;
         } catch (no_such_class& nc) {
-            throw make_exception<InvalidRequestException>("unable to find class '%s'", nc.what());
+            throw make_exception<InvalidRequestException>(nc.what());
         } catch (std::exception& e) {
             // Unexpected exception, wrap it
             throw ::apache::thrift::TException(std::string("Internal server error: ") + e.what());

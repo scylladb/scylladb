@@ -52,7 +52,7 @@ template<typename BaseType, typename... Args>
 std::unique_ptr<BaseType> class_registry<BaseType, Args...>::create(const sstring& name, Args... args) {
     auto it = _classes.find(name);
     if (it == _classes.end()) {
-        throw no_such_class(name);
+        throw no_such_class(sstring("unable to find class '") + name + sstring("'"));
     }
     return it->second(args...);
 }
