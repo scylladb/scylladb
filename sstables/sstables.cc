@@ -938,7 +938,7 @@ future<> sstable::store() {
 
 // @clustering_key: it's expected that clustering key is already in its composite form.
 // NOTE: empty clustering key means that there is no clustering key.
-void sstable::write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names) {
+void sstable::write_column_name(file_writer& out, const composite& clustering_key, const std::vector<bytes_view>& column_names, composite_marker m) {
     // FIXME: min_components and max_components also keep track of clustering
     // prefix, so we must merge clustering_key and column_names somehow and
     // pass the result to the functions below.
@@ -947,9 +947,19 @@ void sstable::write_column_name(file_writer& out, const composite& clustering_ke
 
     // FIXME: This code assumes name is always composite, but it wouldn't if "WITH COMPACT STORAGE"
     // was defined in the schema, for example.
-    auto c= composite::from_exploded(column_names);
-    uint16_t sz = clustering_key.size() + c.size();
-    write(out, sz, clustering_key, c).get();
+    auto c= composite::from_exploded(column_names, m);
+    auto ck_bview = bytes_view(clustering_key);
+
+    // The marker is not a component, so if the last component is empty (IOW,
+    // only serializes to the marker), then we just replace the key's last byte
+    // with the marker. If the component however it is not empty, then the
+    // marker should be in the end of it, and we just join them together as we
+    // do for any normal component
+    if (c.size() == 1) {
+        ck_bview.remove_suffix(1);
+    }
+    uint16_t sz = ck_bview.size() + c.size();
+    write(out, sz, ck_bview, c).get();
 }
 
 static inline void update_cell_stats(column_stats& c_stats, uint64_t timestamp) {
@@ -1012,10 +1022,37 @@ void sstable::write_row_marker(file_writer& out, const rows_entry& clustered_row
     write(out, mask, timestamp, value_length).get();
 }
 
+void sstable::write_range_tombstone(file_writer& out, const composite& clustering_prefix, std::vector<bytes_view> suffix, const tombstone t) {
+    if (!t) {
+        return;
+    }
+
+    write_column_name(out, clustering_prefix, suffix, composite_marker::start_range);
+    column_mask mask = column_mask::range_tombstone;
+    write(out, mask).get();
+    write_column_name(out, clustering_prefix, suffix, composite_marker::end_range);
+    uint64_t timestamp = t.timestamp;
+    uint32_t deletion_time = t.deletion_time.time_since_epoch().count();
+
+    write(out, deletion_time, timestamp).get();
+}
+
+void sstable::write_collection(file_writer& out, const composite& clustering_key, const column_definition& cdef, collection_mutation::view collection) {
+
+    auto t = static_pointer_cast<const collection_type_impl>(cdef.type);
+    auto mview = t->deserialize_mutation_form(collection);
+    const bytes& column_name = cdef.name();
+    write_range_tombstone(out, clustering_key, { bytes_view(column_name) }, mview.tomb);
+    for (auto& cp: mview.cells) {
+        write_column_name(out, clustering_key, { column_name, cp.first });
+        write_cell(out, cp.second);
+    }
+}
+
 // write_datafile_clustered_row() is about writing a clustered_row to data file according to SSTables format.
 // clustered_row contains a set of cells sharing the same clustering key.
-void sstable::write_clustered_row(file_writer& out, schema_ptr schema, const rows_entry& clustered_row) {
-    auto clustering_key = composite::from_clustering_key(*schema, clustered_row.key());
+void sstable::write_clustered_row(file_writer& out, const schema& schema, const rows_entry& clustered_row) {
+    auto clustering_key = composite::from_clustering_element(schema, clustered_row.key());
 
     write_row_marker(out, clustered_row, clustering_key);
     // FIXME: Before writing cells, range tombstone must be written if the row has any (deletable_row::t).
@@ -1024,11 +1061,12 @@ void sstable::write_clustered_row(file_writer& out, schema_ptr schema, const row
     // Write all cells of a partition's row.
     for (auto& value: clustered_row.row().cells()) {
         auto column_id = value.first;
-        auto&& column_definition = schema->regular_column_at(column_id);
+        auto&& column_definition = schema.regular_column_at(column_id);
         // non atomic cell isn't supported yet. atomic cell maps to a single trift cell.
         // non atomic cell maps to multiple trift cell, e.g. collection.
         if (!column_definition.is_atomic()) {
-            fail(unimplemented::cause::NONATOMIC);
+            write_collection(out, clustering_key, column_definition, value.second.as_collection_mutation());
+            return;
         }
         assert(column_definition.is_regular());
         atomic_cell_view cell = value.second.as_atomic_cell();
@@ -1039,16 +1077,18 @@ void sstable::write_clustered_row(file_writer& out, schema_ptr schema, const row
     }
 }
 
-void sstable::write_static_row(file_writer& out, schema_ptr schema, const row& static_row) {
+void sstable::write_static_row(file_writer& out, const schema& schema, const row& static_row) {
     for (auto& value: static_row) {
         auto column_id = value.first;
-        auto&& column_definition = schema->static_column_at(column_id);
+        auto&& column_definition = schema.static_column_at(column_id);
         if (!column_definition.is_atomic()) {
-            fail(unimplemented::cause::NONATOMIC);
+            auto sp = composite::static_prefix(schema);
+            write_collection(out, sp, column_definition, value.second.as_collection_mutation());
+            return;
         }
         assert(column_definition.is_static());
         atomic_cell_view cell = value.second.as_atomic_cell();
-        auto sp = composite::static_prefix(*schema);
+        auto sp = composite::static_prefix(schema);
         write_column_name(out, sp, { bytes_view(column_definition.name()) });
         write_cell(out, cell);
     }
@@ -1206,13 +1246,18 @@ void sstable::do_write_components(const memtable& mt) {
         auto& partition = partition_entry.second;
         auto& static_row = partition.static_row();
 
-        write_static_row(*w, mt.schema(), static_row);
+        write_static_row(*w, *mt.schema(), static_row);
+        for (const auto& rt: partition.row_tombstones()) {
+            auto prefix = composite::from_clustering_element(*mt.schema(), rt.prefix());
+            write_range_tombstone(*w, prefix, {}, rt.t());
+        }
+
         // Write all CQL rows from a given mutation partition.
         for (auto& clustered_row: partition.clustered_rows()) {
-            write_clustered_row(*w, mt.schema(), clustered_row);
-            int16_t end_of_row = 0;
-            write(*w, end_of_row).get();
+            write_clustered_row(*w, *mt.schema(), clustered_row);
         }
+        int16_t end_of_row = 0;
+        write(*w, end_of_row).get();
 
         // compute size of the current row.
         _c_stats.row_size = w->offset() - _c_stats.start_offset;

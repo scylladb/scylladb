@@ -5,8 +5,8 @@
 #pragma once
 
 #include "core/iostream.hh"
+#include "core/fstream.hh"
 #include "types.hh"
-#include "sstables.hh"
 #include "compress.hh"
 
 namespace sstables {

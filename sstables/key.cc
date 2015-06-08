@@ -12,66 +12,71 @@
 
 namespace sstables {
 
-inline size_t serialized_size(data_type& t, const boost::any& value) {
-    return t->serialized_size(value);
-}
+class internal_serializer {
+    using t_type = std::vector<data_type>;
+    using it_type = t_type::iterator;
 
-inline void serialize(data_type& t, const boost::any& value, bytes::iterator& out) {
-    t->serialize(value, out);
-}
+    t_type _t;
+    it_type _it;
 
-inline size_t serialized_size(data_type& t, const bytes& value) {
-    return value.size();
-}
+public:
+    internal_serializer(t_type types) : _t(types),  _it(_t.begin()) {}
 
-inline void serialize(data_type& t, const bytes& value, bytes::iterator& out) {
-    out = std::copy_n(value.begin(), value.size(), out);
-}
+    inline void reset() {
+        _it = _t.begin();
+    }
 
-inline size_t serialized_size(data_type& t, const bytes_view& value) {
-    return value.size();
-}
+    inline void advance() {
+        assert(_it != _t.end());
+        _it++;
+    }
 
-inline void serialize(data_type& t, const bytes_view& value, bytes::iterator& out) {
-    out = std::copy_n(value.begin(), value.size(), out);
-}
+    inline size_t serialized_size(const boost::any& value) {
+        return (*_it)->serialized_size(value);
+    }
+
+    inline void serialize(const boost::any& value, bytes::iterator& out) {
+        (*_it)->serialize(value, out);
+    }
+};
+
+class sstable_serializer {
+public:
+    inline void reset() {}
+    inline void advance() {}
+    inline size_t serialized_size(bytes_view value) {
+        return value.size();
+    }
+
+    inline void serialize(bytes_view value, bytes::iterator& out) {
+        out = std::copy_n(value.begin(), value.size(), out);
+    }
+};
 
 // The iterator has to provide successive elements that are from one of the
 // type above ( so we know how to serialize them)
-template <typename Iterator, typename Type>
+template <typename Iterator, typename Serializer>
 inline
-bytes from_components(Iterator begin, Iterator end, Type types, bool always_composite = false) {
-    bool composite = types.size() > 1 || always_composite;
-
+bytes from_components(Iterator begin, Iterator end, Serializer&& serializer, bool composite = true) {
     size_t len = 0;
-    auto i = types.begin();
+
     for (auto c = begin; c != end; ++c) {
         auto& component = *c;
 
-        assert(i != types.end());
-        auto& type = *i++;
-
-        if (composite) {
-            len += sizeof(uint16_t);
-        }
-        len += serialized_size(type, component);
-
-        if (composite) {
-            len += 1;
-        }
+        len += uint8_t(composite) * sizeof(uint16_t);
+        len += serializer.serialized_size(component);
+        len += uint8_t(composite);
+        serializer.advance();
     }
 
     bytes b(bytes::initialized_later(), len);
     auto bi = b.begin();
-    i = types.begin();
 
+    serializer.reset();
     for (auto c = begin; c != end; ++c) {
         auto& component = *c;
 
-        assert(i != types.end());
-        auto& type = *i++;
-
-        auto sz = serialized_size(type, component);
+        auto sz = serializer.serialized_size(component);
         if (sz > std::numeric_limits<uint16_t>::max()) {
             throw runtime_exception(sprint("Cannot serialize component: value too big (%ld bytes)", sz));
         }
@@ -80,7 +85,7 @@ bytes from_components(Iterator begin, Iterator end, Type types, bool always_comp
             write<uint16_t>(bi, sz);
         }
 
-        serialize(type, component, bi);
+        serializer.serialize(component, bi);
 
         if (composite) {
             // Range tombstones are not keys. For collections, only frozen
@@ -89,49 +94,58 @@ bytes from_components(Iterator begin, Iterator end, Type types, bool always_comp
             // keys, it is safe to assume the trailing byte is always zero.
             write<uint8_t>(bi, uint8_t(0));
         }
+        serializer.advance();
     }
     return b;
 }
 
-template <typename Iterator>
-inline
-key from_components(const schema& s, Iterator begin, Iterator end) {
-    bytes&& b = from_components(begin, end, s.partition_key_type()->types(), false);
-    return key::from_bytes(std::move(b));
-}
-
 key key::from_deeply_exploded(const schema& s, const std::vector<boost::any>& v) {
-    return from_components(s, v.begin(), v.end());
+    auto &pt = s.partition_key_type()->types();
+    bool composite = pt.size() > 1;
+    return from_components(v.begin(), v.end(), internal_serializer(pt), composite);
 }
 
 key key::from_exploded(const schema& s, const std::vector<bytes>& v) {
-    return from_components(s, v.begin(), v.end());
+    auto &pt = s.partition_key_type()->types();
+    bool composite = pt.size() > 1;
+    return from_components(v.begin(), v.end(), sstable_serializer(), composite);
 }
 
 key key::from_exploded(const schema& s, std::vector<bytes>&& v) {
     if (s.partition_key_type()->types().size() == 1) {
         return key(std::move(v[0]));
     }
-    return from_components(s, v.begin(), v.end());
+    return from_components(v.begin(), v.end(), sstable_serializer());
 }
 
 key key::from_partition_key(const schema& s, const partition_key& pk) {
-    return from_components(s, pk.begin(s), pk.end(s));
+    auto &pt = s.partition_key_type()->types();
+    bool composite = pt.size() > 1;
+    return from_components(pk.begin(s), pk.end(s), sstable_serializer(), composite);
 }
 
-composite composite::from_clustering_key(const schema& s, const clustering_key& ck) {
-    return from_components(ck.begin(s), ck.end(s), s.clustering_key_type()->types(), true);
+template <typename ClusteringElement>
+composite composite::from_clustering_element(const schema& s, const ClusteringElement& ce) {
+    return from_components(ce.begin(s), ce.end(s), sstable_serializer());
 }
 
-composite composite::from_exploded(const std::vector<bytes_view>& v) {
-    return from_components(v.begin(), v.end(), std::vector<data_type>(v.size(), bytes_type), true);
+template composite composite::from_clustering_element(const schema& s, const clustering_key& ck);
+template composite composite::from_clustering_element(const schema& s, const clustering_key_prefix& ck);
+
+composite composite::from_exploded(const std::vector<bytes_view>& v, composite_marker m) {
+    if (v.size() == 0) {
+        return bytes(size_t(1), bytes::value_type(m));
+    }
+    auto b = from_components(v.begin(), v.end(), sstable_serializer());
+    b.back() = bytes::value_type(m);
+    return composite(std::move(b));
 }
 
 composite composite::static_prefix(const schema& s) {
     static bytes static_marker(size_t(2), bytes::value_type(0xff));
 
     std::vector<bytes_view> sv(s.clustering_key_size());
-    return static_marker + from_components(sv.begin(), sv.end(), std::vector<data_type>(sv.size(), bytes_type), true);
+    return static_marker + from_components(sv.begin(), sv.end(), sstable_serializer());
 }
 
 inline
