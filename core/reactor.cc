@@ -368,11 +368,31 @@ reactor::submit_io(Func prepare_io) {
         iocb io;
         prepare_io(io);
         io.data = pr.get();
-        iocb* p = &io;
-        auto r = ::io_submit(_io_context, 1, &p);
-        throw_kernel_error(r);
+        _pending_aio.push_back(io);
+        if (_pending_aio.size() >= max_aio / 4) {
+            flush_pending_aio();
+        }
         return pr.release()->get_future();
     });
+}
+
+bool
+reactor::flush_pending_aio() {
+    while (!_pending_aio.empty()) {
+        auto nr = _pending_aio.size();
+        struct iocb* iocbs[max_aio];
+        for (size_t i = 0; i < nr; ++i) {
+            iocbs[i] = &_pending_aio[i];
+        }
+        auto r = ::io_submit(_io_context, nr, iocbs);
+        throw_kernel_error(r);
+        if (size_t(r) == nr) {
+            _pending_aio.clear();
+        } else {
+            _pending_aio.erase(_pending_aio.begin(), _pending_aio.begin() + r);
+        }
+    }
+    return false; // We always submit all pending aios
 }
 
 template <typename Func>
@@ -573,6 +593,7 @@ posix_file_impl::discard(uint64_t offset, uint64_t length) {
 
 future<>
 posix_file_impl::allocate(uint64_t position, uint64_t length) {
+#ifdef FALLOC_FL_ZERO_RANGE
     // FALLOC_FL_ZERO_RANGE is fairly new, so don't fail if it's not supported.
     static bool supported = true;
     if (!supported) {
@@ -589,6 +610,9 @@ posix_file_impl::allocate(uint64_t position, uint64_t length) {
         sr.throw_if_error();
         return make_ready_future<>();
     });
+#else
+    return make_ready_future<>();
+#endif
 }
 
 future<>
@@ -912,6 +936,7 @@ int reactor::run() {
 #endif
 
     poller sig_poller([&] { return _signals.poll_signal(); } );
+    poller aio_poller(std::bind(&reactor::flush_pending_aio, this));
 
     if (_id == 0) {
        if (_handle_sigint) {
