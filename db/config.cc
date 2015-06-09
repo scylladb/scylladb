@@ -47,6 +47,32 @@ struct convert<sstring> {
         return true;
     }
 };
+
+template <>
+struct convert<db::config::string_list> {
+    static Node encode(const db::config::string_list& rhs) {
+        Node node(NodeType::Sequence);
+        for (auto& s : rhs) {
+            node.push_back(convert<sstring>::encode(s));
+        }
+        return node;
+    }
+    static bool decode(const Node& node, db::config::string_list& rhs) {
+        if (!node.IsSequence()) {
+            return false;
+        }
+        rhs.clear();
+        for (auto& n : node) {
+            sstring tmp;
+            if (!convert<sstring>::decode(n,tmp)) {
+                return false;
+            }
+            rhs.push_back(tmp);
+        }
+        return true;
+    }
+};
+
 template<typename K, typename V>
 struct convert<std::unordered_map<K, V>> {
     static Node encode(const std::unordered_map<K, V>& rhs) {
@@ -196,6 +222,13 @@ public:
 template<class T>
 inline typed_value_ex<T>* value_ex(T* v) {
     typed_value_ex<T>* r = new typed_value_ex<T>(v);
+    return r;
+}
+
+template<class T>
+inline typed_value_ex<std::vector<T>>* value_ex(std::vector<T>* v) {
+    auto r = new typed_value_ex<std::vector<T>>(v);
+    r->multitoken();
     return r;
 }
 

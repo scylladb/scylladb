@@ -520,7 +520,8 @@ future<> database::populate(sstring datadir) {
 
 future<>
 database::init_from_data_directory() {
-    return populate(_cfg->data_file_directories()).then([this]() {
+    // FIXME support multiple directories
+    return populate(_cfg->data_file_directories()[0]).then([this]() {
         return init_commitlog();
     });
 }
@@ -579,7 +580,8 @@ void database::add_keyspace(sstring name, keyspace k) {
 
 future<>
 create_keyspace(distributed<database>& db, const lw_shared_ptr<keyspace_metadata>& ksm) {
-    return make_directory(db.local()._cfg->data_file_directories() + "/" + ksm->name()).then([ksm, &db] {
+    // FIXME support multiple directories
+    return make_directory(db.local()._cfg->data_file_directories()[0] + "/" + ksm->name()).then([ksm, &db] {
         return db.invoke_on_all([ksm] (database& db) {
             auto cfg = db.make_keyspace_config(*ksm);
             keyspace ks(ksm, cfg);
@@ -961,8 +963,9 @@ future<> database::apply(const frozen_mutation& m) {
 
 keyspace::config
 database::make_keyspace_config(const keyspace_metadata& ksm) const {
+    // FIXME support multiple directories
     keyspace::config cfg;
-    cfg.datadir = sprint("%s/%s", _cfg->data_file_directories(), ksm.name());
+    cfg.datadir = sprint("%s/%s", _cfg->data_file_directories()[0], ksm.name());
     return cfg;
 }
 

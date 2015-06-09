@@ -78,6 +78,7 @@ public:
     future<> read_from_file(file);
 
     typedef std::unordered_map<sstring, sstring> string_map;
+    typedef std::vector<sstring> string_list;
 
     /*
      * This type is not use, and probably never will be.
@@ -146,7 +147,7 @@ public:
     val(commitlog_directory, sstring, "/var/lib/cassandra/commitlog", Used,   \
             "The directory where the commit log is stored. For optimal write performance, it is recommended the commit log be on a separate disk partition (ideally, a separate physical device) from the data file directories."   \
     )                                           \
-    val(data_file_directories, sstring, "/var/lib/cassandra/data", Used,   \
+    val(data_file_directories, string_list, { "/var/lib/cassandra/data" }, Used,   \
             "The directory location where table data (SSTables) is stored"   \
     )                                           \
     val(saved_caches_directory, sstring, "/var/lib/cassandra/saved_caches", Unused, \
