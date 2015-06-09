@@ -268,6 +268,9 @@ public:
     void add_column_family(column_family&&);
     void add_column_family(const utils::UUID&, column_family&&);
 
+    void update_column_family(const sstring& ks_name, const sstring& cf_name);
+    void drop_column_family(const sstring& ks_name, const sstring& cf_name);
+
     /* throws std::out_of_range if missing */
     const utils::UUID& find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range);
     const utils::UUID& find_uuid(const schema_ptr&) const throw (std::out_of_range);

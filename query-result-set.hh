@@ -88,6 +88,9 @@ public:
         }
         return _rows[idx];
     }
+    const std::vector<result_set_row>& rows() const {
+        return _rows;
+    }
     friend inline bool operator==(const result_set& x, const result_set& y);
     friend std::ostream& operator<<(std::ostream& out, const result_set& rs);
 };

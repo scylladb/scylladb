@@ -622,6 +622,14 @@ void database::add_column_family(column_family&& cf) {
     add_column_family(id, std::move(cf));
 }
 
+void database::update_column_family(const sstring& ks_name, const sstring& cf_name) {
+    throw std::runtime_error("not implemented");
+}
+
+void database::drop_column_family(const sstring& ks_name, const sstring& cf_name) {
+    throw std::runtime_error("not implemented");
+}
+
 const utils::UUID& database::find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range) {
     return _ks_cf_to_uuid.at(std::make_pair(ks, cf));
 }
