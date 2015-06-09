@@ -593,6 +593,7 @@ posix_file_impl::discard(uint64_t offset, uint64_t length) {
 
 future<>
 posix_file_impl::allocate(uint64_t position, uint64_t length) {
+#ifdef FALLOC_FL_ZERO_RANGE
     // FALLOC_FL_ZERO_RANGE is fairly new, so don't fail if it's not supported.
     static bool supported = true;
     if (!supported) {
@@ -609,6 +610,9 @@ posix_file_impl::allocate(uint64_t position, uint64_t length) {
         sr.throw_if_error();
         return make_ready_future<>();
     });
+#else
+    return make_ready_future<>();
+#endif
 }
 
 future<>
