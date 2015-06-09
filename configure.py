@@ -45,6 +45,10 @@ def apply_tristate(var, test, note, missing):
             return False
     return False
 
+def pkg_config(option, package):
+    output = subprocess.check_output(['pkg-config', option, package])
+    return output.decode('utf-8').strip()
+
 #
 # dpdk_cflags - fetch the DPDK specific CFLAGS
 #
@@ -543,6 +547,9 @@ if args.dpdk_target:
         libs += '-lintel_dpdk -lrt -lm -ldl'
     else:
         libs += '-Wl,--whole-archive -lrte_pmd_bond -lrte_pmd_vmxnet3_uio -lrte_pmd_virtio_uio -lrte_pmd_i40e -lrte_pmd_ixgbe -lrte_pmd_e1000 -lrte_pmd_ring -Wl,--no-whole-archive -lrte_distributor -lrte_kni -lrte_pipeline -lrte_table -lrte_port -lrte_timer -lrte_hash -lrte_lpm -lrte_power -lrte_acl -lrte_meter -lrte_sched -lrte_kvargs -lrte_mbuf -lrte_ip_frag -lethdev -lrte_eal -lrte_malloc -lrte_mempool -lrte_ring -lrte_cmdline -lrte_cfgfile -lrt -lm -ldl'
+
+args.user_cflags += " " + pkg_config("--cflags", "jsoncpp")
+libs += " " + pkg_config("--libs", "jsoncpp")
 
 warnings = [w
             for w in warnings
