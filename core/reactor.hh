@@ -707,6 +707,7 @@ private:
     seastar::timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link> _lowres_timers;
     seastar::timer_set<timer<lowres_clock>, &timer<lowres_clock>::_link>::timer_list_t _expired_lowres_timers;
     io_context_t _io_context;
+    std::vector<struct ::iocb> _pending_aio;
     semaphore _io_context_available;
     uint64_t _aio_reads = 0;
     uint64_t _aio_writes = 0;
@@ -723,6 +724,7 @@ private:
     circular_buffer<double> _loads;
     double _load = 0;
 private:
+    bool flush_pending_aio();
     void abort_on_error(int ret);
     template <typename T, typename E, typename EnableFunc>
     void complete_timers(T&, E&, EnableFunc&& enable_fn);
