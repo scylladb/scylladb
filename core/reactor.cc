@@ -572,6 +572,26 @@ posix_file_impl::discard(uint64_t offset, uint64_t length) {
 }
 
 future<>
+posix_file_impl::allocate(uint64_t position, uint64_t length) {
+    // FALLOC_FL_ZERO_RANGE is fairly new, so don't fail if it's not supported.
+    static bool supported = true;
+    if (!supported) {
+        return make_ready_future<>();
+    }
+    return engine()._thread_pool.submit<syscall_result<int>>([this, position, length] () mutable {
+        auto ret = ::fallocate(_fd, FALLOC_FL_ZERO_RANGE|FALLOC_FL_KEEP_SIZE, position, length);
+        if (ret == -1 && errno == EOPNOTSUPP) {
+            ret = 0;
+            supported = false; // Racy, but harmless.  At most we issue an extra call or two.
+        }
+        return wrap_syscall<int>(ret);
+    }).then([] (syscall_result<int> sr) {
+        sr.throw_if_error();
+        return make_ready_future<>();
+    });
+}
+
+future<>
 blockdev_file_impl::discard(uint64_t offset, uint64_t length) {
     return engine()._thread_pool.submit<syscall_result<int>>([this, offset, length] () mutable {
         uint64_t range[2] { offset, length };
@@ -580,6 +600,12 @@ blockdev_file_impl::discard(uint64_t offset, uint64_t length) {
         sr.throw_if_error();
         return make_ready_future<>();
     });
+}
+
+future<>
+blockdev_file_impl::allocate(uint64_t position, uint64_t length) {
+    // nothing to do for block device
+    return make_ready_future<>();
 }
 
 future<size_t>

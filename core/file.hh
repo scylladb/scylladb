@@ -62,6 +62,7 @@ public:
     virtual future<struct stat> stat(void) = 0;
     virtual future<> truncate(uint64_t length) = 0;
     virtual future<> discard(uint64_t offset, uint64_t length) = 0;
+    virtual future<> allocate(uint64_t position, uint64_t length) = 0;
     virtual future<size_t> size(void) = 0;
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) = 0;
 
@@ -86,6 +87,7 @@ public:
     future<struct stat> stat(void);
     future<> truncate(uint64_t length);
     future<> discard(uint64_t offset, uint64_t length);
+    virtual future<> allocate(uint64_t position, uint64_t length) override;
     future<size_t> size(void);
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override;
 };
@@ -96,6 +98,7 @@ public:
     future<> truncate(uint64_t length) override;
     future<> discard(uint64_t offset, uint64_t length) override;
     future<size_t> size(void) override;
+    virtual future<> allocate(uint64_t position, uint64_t length) override;
 };
 
 inline
@@ -226,6 +229,22 @@ public:
 
     future<> truncate(uint64_t length) {
         return _file_impl->truncate(length);
+    }
+
+    /// Preallocate disk blocks for a specified byte range.
+    ///
+    /// Requests the file system to allocate disk blocks to
+    /// back the specified range (\c length bytes starting at
+    /// \c position).  The range may be outside the current file
+    /// size; the blocks can then be used when appending to the
+    /// file.
+    ///
+    /// \param position beginning of the range at which to allocate
+    ///                 blocks.
+    /// \parm length length of range to allocate.
+    /// \return future that becomes ready when the operation completes.
+    future<> allocate(uint64_t position, uint64_t length) {
+        return _file_impl->allocate(position, length);
     }
 
     future<> discard(uint64_t offset, uint64_t length) {
