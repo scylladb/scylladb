@@ -415,7 +415,9 @@ column_family::seal_active_memtable(database* db) {
         return;
     }
     add_memtable();
-    assert(_highest_flushed_rp < old->replay_position());
+    assert(_highest_flushed_rp < old->replay_position()
+    || (_highest_flushed_rp == db::replay_position() && old->replay_position() == db::replay_position())
+    );
     _highest_flushed_rp = old->replay_position();
     // FIXME: better way of ensuring we don't attemt to
     //        overwrite an existing table.
