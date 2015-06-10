@@ -116,7 +116,7 @@ public:
             prealloc = _file->allocate(old, _last_preallocation - old);
         }
         return prealloc.then([this, pos, p, buf_size, truncate, buf = std::move(buf)] () mutable {
-            _file->dma_write(pos, p, buf_size).then(
+            return _file->dma_write(pos, p, buf_size).then(
                     [this, buf = std::move(buf), truncate] (size_t size) {
                 if (truncate) {
                     return _file->truncate(_pos);
