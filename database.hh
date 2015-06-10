@@ -58,6 +58,8 @@ class commitlog;
 class config;
 }
 
+class replay_position_reordered_exception : public std::exception {};
+
 class column_family {
 public:
     struct config {
@@ -75,6 +77,7 @@ private:
     lw_shared_ptr<sstable_list> _sstables;
     unsigned _sstable_generation = 1;
     unsigned _mutation_count = 0;
+    db::replay_position _highest_flushed_rp;
 private:
     void add_sstable(sstables::sstable&& sstable);
     void add_memtable();
@@ -111,6 +114,7 @@ private:
     future<bool> for_all_partitions(Func&& func) const;
     future<> probe_file(sstring sstdir, sstring fname);
     void seal_on_overflow(database*);
+    void check_valid_rp(const db::replay_position&) const;
 public:
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
@@ -336,7 +340,16 @@ column_family::seal_on_overflow(database* db) {
 
 inline
 void
+column_family::check_valid_rp(const db::replay_position& rp) const {
+    if (rp < _highest_flushed_rp) {
+        throw replay_position_reordered_exception();
+    }
+}
+
+inline
+void
 column_family::apply(const frozen_mutation& m, const db::replay_position& rp, database* db) {
+    check_valid_rp(rp);
     active_memtable().apply(m, rp);
     seal_on_overflow(db);
 }

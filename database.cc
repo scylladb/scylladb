@@ -415,6 +415,8 @@ column_family::seal_active_memtable(database* db) {
         return;
     }
     add_memtable();
+    assert(_highest_flushed_rp < old->replay_position());
+    _highest_flushed_rp = old->replay_position();
     // FIXME: better way of ensuring we don't attemt to
     //        overwrite an existing table.
     auto gen = _sstable_generation++ * smp::count + engine().cpu_id();
@@ -422,6 +424,7 @@ column_family::seal_active_memtable(database* db) {
             _config.datadir,
             _schema->ks_name(), _schema->cf_name(),
             gen);
+    // FIXME: this does not clear CL. Should it?
     if (!_config.enable_disk_writes) {
         return;
     }
@@ -978,7 +981,17 @@ future<> database::apply(const frozen_mutation& m) {
         bytes_view repr = m.representation();
         auto write_repr = [repr] (data_output& out) { out.write(repr.begin(), repr.end()); };
         return _commitlog->add_mutation(uuid, repr.size(), write_repr).then([&m, this](auto rp) {
-            return this->apply_in_memory(m, rp);
+            try {
+                return this->apply_in_memory(m, rp);
+            } catch (replay_position_reordered_exception&) {
+                // expensive, but we're assuming this is super rare.
+                // if we failed to apply the mutation due to future re-ordering
+                // (which should be the ever only reason for rp mismatch in CF)
+                // let's just try again, add the mutation to the CL once more,
+                // and assume success in inevitable eventually.
+                dblog.warn("replay_position reordering detected");
+                return this->apply(m);
+            }
         });
     }
     return apply_in_memory(m, db::replay_position());
