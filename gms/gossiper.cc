@@ -41,8 +41,13 @@ auto& storage_service_value_factory() {
     return the_value_factory;
 }
 
-gossiper::gossiper()
-    : _scheduled_gossip_task([this] { run(); }) {
+gossiper::gossiper() {
+    // Gossiper's stuff below runs only on CPU0
+    if (engine().cpu_id() != 0) {
+        return;
+    }
+
+    _scheduled_gossip_task.set_callback([this] { run(); });
     // half of QUARATINE_DELAY, to ensure _just_removed_endpoints has enough leeway to prevent re-gossip
     fat_client_timeout = (int64_t) (QUARANTINE_DELAY / 2);
     /* register with the Failure Detector for receiving Failure detector events */
@@ -51,6 +56,10 @@ gossiper::gossiper()
 }
 
 gossiper::~gossiper() {
+    if (engine().cpu_id() != 0) {
+        return;
+    }
+
     get_local_failure_detector().unregister_failure_detection_event_listener(this);
 }
 
@@ -384,7 +393,16 @@ void gossiper::run() {
     // MessagingService.instance().waitUntilListening();
 
     /* Update the local heartbeat counter. */
-    endpoint_state_map[get_broadcast_address()].get_heart_beat_state().update_heart_beat();
+    auto br_addr = get_broadcast_address();
+    heart_beat_state& hbs = endpoint_state_map[br_addr].get_heart_beat_state();
+    hbs.update_heart_beat();
+
+    //
+    // We don't care about heart_beat change on other CPUs - so ingnore this
+    // specific change.
+    //
+    _shadow_endpoint_state_map[br_addr].set_heart_beat_state(hbs);
+
     // if (logger.isTraceEnabled())
     //     logger.trace("My heartbeat is now {}", endpoint_state_map.get(FBUtilities.getBroadcastAddress()).get_heart_beat_state().get_heart_beat_version());
     std::vector<gossip_digest> g_digests;
@@ -420,6 +438,48 @@ void gossiper::run() {
         }
 
         do_status_check();
+    }
+
+    //
+    // Gossiper task runs only on CPU0:
+    //
+    //    - If endpoint_state_map or _live_endpoints have changed - duplicate
+    //      them across all other shards.
+    //    - Reschedule the gossiper only after execution on all nodes is done.
+    //
+    std::chrono::milliseconds period(INTERVAL_IN_MILLIS);
+
+    bool endpoint_map_changed =
+        (_shadow_endpoint_state_map != endpoint_state_map);
+    bool live_endpoint_changed =
+        (_live_endpoints != _shadow_live_endpoints);
+
+    if (endpoint_map_changed || live_endpoint_changed) {
+        if (endpoint_map_changed) {
+            _shadow_endpoint_state_map = endpoint_state_map;
+        }
+
+        if (live_endpoint_changed) {
+            _shadow_live_endpoints = _live_endpoints;
+        }
+
+        _the_gossiper.invoke_on_all(
+                [this, endpoint_map_changed, live_endpoint_changed]
+                (gossiper& local_gossiper) {
+            // Don't copy gossiper(CPU0) maps into themselves!
+            if (engine().cpu_id() != 0) {
+                if (endpoint_map_changed) {
+                    local_gossiper.endpoint_state_map =
+                                                     _shadow_endpoint_state_map;
+                }
+
+                if (live_endpoint_changed) {
+                    local_gossiper._live_endpoints = _shadow_live_endpoints;
+                }
+            }
+        }).then([&] { _scheduled_gossip_task.arm(period); });
+    } else {
+        _scheduled_gossip_task.arm(period);
     }
 }
 
@@ -1072,7 +1132,7 @@ future<> gossiper::start(int generation_nbr, std::map<application_state, version
             logger.trace("gossip started with generation {}", local_state.get_heart_beat_state().get_generation());
 #endif
         std::chrono::milliseconds period(INTERVAL_IN_MILLIS);
-        _scheduled_gossip_task.arm_periodic(period);
+        _scheduled_gossip_task.arm(period);
         return make_ready_future<>();
     });
 }

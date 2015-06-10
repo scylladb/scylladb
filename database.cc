@@ -584,9 +584,15 @@ create_keyspace(distributed<database>& db, const lw_shared_ptr<keyspace_metadata
     return make_directory(db.local()._cfg->data_file_directories()[0] + "/" + ksm->name()).then([ksm, &db] {
         return db.invoke_on_all([ksm] (database& db) {
             auto cfg = db.make_keyspace_config(*ksm);
+
             keyspace ks(ksm, cfg);
-            ks.create_replication_strategy();
-            db.add_keyspace(ksm->name(), std::move(ks));
+            auto fu = ks.create_replication_strategy();
+
+            return fu.then([&db, ks = std::move(ks), ksm] () mutable {
+                db.add_keyspace(ksm->name(), std::move(ks));
+
+                return make_ready_future<>();
+            });
         });
     });
     // FIXME: rollback on error, or keyspace directory remains on disk, poisoning
@@ -692,11 +698,13 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
     }
 }
 
-void
+future<>
 keyspace::create_replication_strategy() {
-    static thread_local locator::token_metadata tm;
-    static locator::simple_snitch snitch;
+    using namespace locator;
+
+    static thread_local token_metadata tm;
     static std::unordered_map<sstring, sstring> options = {{"replication_factor", "3"}};
+
     auto d2t = [](double d) {
         unsigned long l = net::hton(static_cast<unsigned long>(d*(std::numeric_limits<unsigned long>::max())));
         std::array<int8_t, 8> a;
@@ -707,7 +715,16 @@ keyspace::create_replication_strategy() {
     tm.update_normal_token({dht::token::kind::key, {d2t(1.0/4).data(), 8}}, to_sstring("127.0.0.2"));
     tm.update_normal_token({dht::token::kind::key, {d2t(2.0/4).data(), 8}}, to_sstring("127.0.0.3"));
     tm.update_normal_token({dht::token::kind::key, {d2t(3.0/4).data(), 8}}, to_sstring("127.0.0.4"));
-    _replication_strategy = locator::abstract_replication_strategy::create_replication_strategy(_metadata->name(), _metadata->strategy_name(), tm, snitch, options);
+
+    return make_snitch<simple_snitch>().then(
+            [this] (snitch_ptr&& s) {
+        _replication_strategy =
+            abstract_replication_strategy::create_replication_strategy(
+                _metadata->name(), _metadata->strategy_name(),
+                tm, std::move(s), options);
+
+        return make_ready_future<>();
+    });
 }
 
 locator::abstract_replication_strategy&
@@ -750,15 +767,21 @@ schema_ptr database::find_schema(const utils::UUID& uuid) const throw (no_such_c
     return find_column_family(uuid).schema();
 }
 
-keyspace&
-database::find_or_create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
+future<>
+database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     auto i = _keyspaces.find(ksm->name());
     if (i != _keyspaces.end()) {
-        return i->second;
+        return make_ready_future<>();
     }
+
     keyspace ks(ksm, std::move(make_keyspace_config(*ksm)));
-    ks.create_replication_strategy();
-    return _keyspaces.emplace(ksm->name(), std::move(ks)).first->second;
+    auto fu = ks.create_replication_strategy();
+
+    return fu.then([ks = std::move(ks), ksm, this] () mutable {
+        _keyspaces.emplace(ksm->name(), std::move(ks));
+
+        return make_ready_future<>();
+    });
 }
 
 std::set<sstring>
@@ -1018,5 +1041,7 @@ operator<<(std::ostream& os, const atomic_cell& ac) {
 
 future<>
 database::stop() {
-    return make_ready_future<>();
+    return do_for_each(_keyspaces, [this] (auto& val_pair) {
+        return val_pair.second.stop();
+    });
 }

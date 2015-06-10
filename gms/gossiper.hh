@@ -148,6 +148,9 @@ private:
 
     int64_t _last_processed_message_at = now_millis();
 
+    std::unordered_map<inet_address, endpoint_state> _shadow_endpoint_state_map;
+    std::set<inet_address> _shadow_live_endpoints;
+
     void run();
 public:
     gossiper();
@@ -475,7 +478,6 @@ public:
 
 extern distributed<gossiper> _the_gossiper;
 inline gossiper& get_local_gossiper() {
-    assert(engine().cpu_id() == 0);
     return _the_gossiper.local();
 }
 inline distributed<gossiper>& get_gossiper() {

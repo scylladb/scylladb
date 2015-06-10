@@ -23,7 +23,8 @@
 
 #include "core/sstring.hh"
 #include "gms/inet_address.hh"
-#include "locator/abstract_network_topology_snitch.hh"
+#include "snitch_base.hh"
+#include "utils/fb_utilities.hh"
 
 namespace locator {
 
@@ -33,7 +34,19 @@ using inet_address = gms::inet_address;
  * A simple endpoint snitch implementation that assumes datacenter and rack information is encoded
  * in the 2nd and 3rd octets of the ip address, respectively.
  */
-class rack_inferring_snitch : public abstract_network_topology_snitch {
+class rack_inferring_snitch : public snitch_base {
+private:
+    template <typename SnitchClass, typename... A>
+    friend future<snitch_ptr> make_snitch(A&&... a);
+
+    rack_inferring_snitch() {
+        _my_dc = get_datacenter(utils::fb_utilities::get_broadcast_address());
+        _my_rack = get_rack(utils::fb_utilities::get_broadcast_address());
+
+        // This snitch is ready on creation
+        _snitch_is_ready.set_value();
+    }
+
 public:
     virtual sstring get_rack(inet_address endpoint) override {
         return std::to_string((endpoint.raw_addr() >> 8) & 0xFF);
@@ -41,6 +54,12 @@ public:
 
     virtual sstring get_datacenter(inet_address endpoint) override {
         return std::to_string((endpoint.raw_addr() >> 16) & 0xFF);
+    }
+
+    // noop
+    virtual future<> stop() override {
+        _state = snitch_state::stopped;
+        return make_ready_future<>();
     }
 };
 

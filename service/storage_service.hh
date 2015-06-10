@@ -68,6 +68,15 @@ public:
     const locator::token_metadata& get_token_metadata() const {
         return _token_metadata;
     }
+
+    locator::token_metadata& get_token_metadata() {
+        return _token_metadata;
+    }
+
+    void gossip_snitch_info() {
+        // TODO
+    }
+
 private:
     inet_address get_broadcast_address() {
         auto& gossiper = gms::get_local_gossiper();

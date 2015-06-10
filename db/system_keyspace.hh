@@ -23,9 +23,12 @@
 
 #pragma once
 
+#include <unordered_map>
+#include <utility>
 #include "schema.hh"
 #include "legacy_schema_tables.hh"
 #include "utils/UUID.hh"
+#include "gms/inet_address.hh"
 
 namespace db {
 namespace system_keyspace {
@@ -50,6 +53,16 @@ extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 
 std::vector<schema_ptr> all_tables();
 void make(database& db);
+
+// Endpoint Data Center and Rack names
+struct endpoint_dc_rack {
+    sstring dc;
+    sstring rack;
+};
+/**
+ * Return a map of IP addresses containing a map of dc and rack info
+ */
+std::unordered_map<gms::inet_address, endpoint_dc_rack> load_dc_rack_info();
 
 #if 0
 

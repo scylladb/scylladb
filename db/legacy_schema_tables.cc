@@ -580,17 +580,32 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                 created.emplace_back(schema_result::value_type{key, std::move(post)});
             }
         }
+
         return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
-            return proxy.get_db().invoke_on_all([&created, altered = std::move(altered)] (database& db) {
-                for (auto&& kv : created) {
-                    auto ksm = create_keyspace_from_schema_partition(kv);
-                    keyspace k(ksm, db.make_keyspace_config(*ksm));
-                    k.create_replication_strategy();
-                    db.add_keyspace(ksm->name(), std::move(k));
-                }
-                for (auto&& name : altered) {
-                    db.update_keyspace(name);
-                }
+            return proxy.get_db().invoke_on_all([&proxy, &created, altered = std::move(altered)] (database& db) {
+                auto temp_vec_ptr = make_lw_shared<std::vector<std::pair<lw_shared_ptr<keyspace_metadata>, std::unique_ptr<keyspace>>>>();
+                return do_for_each(created,
+                        [&db, temp_vec_ptr] (auto&& val) {
+
+                    auto ksm = create_keyspace_from_schema_partition(val);
+                    std::unique_ptr<keyspace>
+                        k_ptr(new keyspace(ksm, db.make_keyspace_config(*ksm)));
+                    auto fu =  k_ptr->create_replication_strategy();
+                    temp_vec_ptr->emplace_back(ksm, std::move(k_ptr));
+
+                    return fu;
+                }).then([&db, temp_vec_ptr] {
+                    return do_for_each(*temp_vec_ptr, [&db] (auto&& p_val) {
+                        db.add_keyspace(p_val.first->name(), std::move(*p_val.second));
+                        return make_ready_future<>();
+                    });
+                }).then([altered = std::move(altered), &db] () mutable {
+                    for (auto&& name : altered) {
+                        db.update_keyspace(name);
+                    }
+
+                    return make_ready_future<>();
+                });
             });
         }).then([dropped = std::move(dropped)] () {
             return make_ready_future<std::set<sstring>>(dropped);
