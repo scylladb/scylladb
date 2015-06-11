@@ -11,6 +11,7 @@
 #include "core/sstring.hh"
 #include "core/enum.hh"
 #include "core/shared_ptr.hh"
+#include "core/distributed.hh"
 #include <unordered_set>
 #include <unordered_map>
 #include "types.hh"
@@ -25,6 +26,7 @@
 #include "core/stream.hh"
 #include "writer.hh"
 #include "metadata_collector.hh"
+#include "filter.hh"
 
 namespace sstables {
 
@@ -119,6 +121,7 @@ public:
         , _generation(generation)
         , _version(v)
         , _format(f)
+        , _filter_tracker(make_lw_shared<distributed<filter_tracker>>())
     { }
     sstable& operator=(const sstable&) = delete;
     sstable(const sstable&) = delete;
@@ -218,6 +221,8 @@ private:
     unsigned long _generation = 0;
     version_types _version;
     format_types _format;
+
+    lw_shared_ptr<distributed<filter_tracker>> _filter_tracker;
 
     const bool has_component(component_type f);
 

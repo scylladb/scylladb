@@ -34,7 +34,7 @@ class filter_tracker {
     }
 
 public:
-    filter_tracker(lw_shared_ptr<distributed<filter_tracker>> ptr) : _ptr(std::move(ptr)) {}
+    filter_tracker(lw_shared_ptr<distributed<filter_tracker>>&& ptr) : _ptr(std::move(ptr)) {}
 
     void add_false_positive() {
         false_positive++;
