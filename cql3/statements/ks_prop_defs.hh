@@ -70,12 +70,12 @@ public:
         }
     }
 
-    std::unordered_map<sstring, sstring> get_replication_options() const {
+    std::map<sstring, sstring> get_replication_options() const {
         auto replication_options = get_map(KW_REPLICATION);
         if (replication_options) {
             return replication_options.value();
         }
-        return std::unordered_map<sstring, sstring>{};
+        return std::map<sstring, sstring>{};
     }
 
     std::experimental::optional<sstring> get_replication_strategy_class() const {

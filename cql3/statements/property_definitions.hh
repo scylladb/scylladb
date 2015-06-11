@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <cctype>
 #include <string>
+#include <map>
 #include <set>
 
 #include <boost/any.hpp>
@@ -60,7 +61,7 @@ public:
         _properties.emplace(name, value);
     }
 
-    void add_property(const sstring& name, const std::unordered_map<sstring, sstring>& value) {
+    void add_property(const sstring& name, const std::map<sstring, sstring>& value) {
         auto it = _properties.find(name);
         if (it != _properties.end()) {
             throw exceptions::syntax_exception(sprint("Multiple definition for property '%s'", name));
@@ -96,13 +97,13 @@ protected:
         }
     }
 
-    std::experimental::optional<std::unordered_map<sstring, sstring>> get_map(const sstring& name) const {
+    std::experimental::optional<std::map<sstring, sstring>> get_map(const sstring& name) const {
         auto it = _properties.find(name);
         if (it == _properties.end()) {
             return std::experimental::nullopt;
         }
         try {
-            return boost::any_cast<std::unordered_map<sstring, sstring>>(it->second);
+            return boost::any_cast<std::map<sstring, sstring>>(it->second);
         } catch (const boost::bad_any_cast& e) {
             throw exceptions::syntax_exception(sprint("Invalid value for property '%s'. It should be a map.", name));
         }

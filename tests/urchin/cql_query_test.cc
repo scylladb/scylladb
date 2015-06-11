@@ -793,7 +793,7 @@ SEASTAR_TEST_CASE(test_user_type) {
     return do_with_cql_env([make_user_type] (cql_test_env& e) {
         auto ksm = make_lw_shared<keyspace_metadata>("ks",
                 "org.apache.cassandra.locator.SimpleStrategy",
-                std::unordered_map<sstring, sstring>{},
+                std::map<sstring, sstring>{},
                 false
                 );
         // We don't have "CREATE TYPE" yet, so we must insert the type manually
