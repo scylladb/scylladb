@@ -53,6 +53,27 @@
 #include <rte_cycles.h>
 #include <rte_memzone.h>
 
+#if RTE_VERSION <= RTE_VERSION_NUM(2,0,0,16)
+
+static
+inline
+char*
+rte_mbuf_to_baddr(rte_mbuf* mbuf) {
+    return reinterpret_cast<char*>(RTE_MBUF_TO_BADDR(mbuf));
+}
+
+void* as_cookie(struct rte_pktmbuf_pool_private& p) {
+    return reinterpret_cast<void*>(uint64_t(p.mbuf_data_room_size));
+};
+
+#else
+
+void* as_cookie(struct rte_pktmbuf_pool_private& p) {
+    return &p;
+};
+
+#endif
+
 #ifndef MARKER
 typedef void    *MARKER[0];   /**< generic marker for a point in a structure */
 #endif
@@ -829,7 +850,7 @@ class dpdk_qp : public net::qp {
 
             // Restore the rte_mbuf fields we trashed in set_zc_info()
             rte_mbuf_buf_physaddr(&_mbuf) = _buf_physaddr;
-            rte_mbuf_buf_addr(&_mbuf)     = RTE_MBUF_TO_BADDR(&_mbuf);
+            rte_mbuf_buf_addr(&_mbuf)     = rte_mbuf_to_baddr(&_mbuf);
             rte_mbuf_buf_len(&_mbuf)      = _buf_len;
 #ifdef RTE_VERSION_1_7
             _mbuf.pkt.data                = _data;
@@ -1541,13 +1562,14 @@ bool dpdk_qp<HugetlbfsMemBackend>::init_rx_mbuf_pool()
         // Don't pass single-producer/single-consumer flags to mbuf create as it
         // seems faster to use a cache instead.
         //
-        uintptr_t roomsz = mbuf_data_size + RTE_PKTMBUF_HEADROOM;
+        struct rte_pktmbuf_pool_private roomsz = {};
+        roomsz.mbuf_data_room_size = mbuf_data_size + RTE_PKTMBUF_HEADROOM;
         _pktmbuf_pool_rx =
                 rte_mempool_xmem_create(name.c_str(),
                                    mbufs_per_queue_rx, mbuf_overhead,
                                    mbuf_cache_size,
                                    sizeof(struct rte_pktmbuf_pool_private),
-                                   rte_pktmbuf_pool_init, (void*)roomsz,
+                                   rte_pktmbuf_pool_init, as_cookie(roomsz),
                                    rte_pktmbuf_init, nullptr,
                                    rte_socket_id(), 0,
                                    _rx_xmem.get(), mappings.data(),
@@ -1582,13 +1604,14 @@ bool dpdk_qp<HugetlbfsMemBackend>::init_rx_mbuf_pool()
 
         _rx_free_bufs.clear();
     } else {
-        uintptr_t roomsz = inline_mbuf_data_size + RTE_PKTMBUF_HEADROOM;
+        struct rte_pktmbuf_pool_private roomsz = {};
+        roomsz.mbuf_data_room_size = inline_mbuf_data_size + RTE_PKTMBUF_HEADROOM;
         _pktmbuf_pool_rx =
                 rte_mempool_create(name.c_str(),
                                mbufs_per_queue_rx, inline_mbuf_size,
                                mbuf_cache_size,
                                sizeof(struct rte_pktmbuf_pool_private),
-                               rte_pktmbuf_pool_init, (void*)roomsz,
+                               rte_pktmbuf_pool_init, as_cookie(roomsz),
                                rte_pktmbuf_init, nullptr,
                                rte_socket_id(), 0);
     }
