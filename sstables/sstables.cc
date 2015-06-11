@@ -18,6 +18,7 @@
 #include "types.hh"
 #include "sstables.hh"
 #include "compress.hh"
+#include "unimplemented.hh"
 #include <boost/algorithm/string.hpp>
 
 namespace sstables {
@@ -1155,10 +1156,12 @@ static void add_stats_metadata(statistics& s, metadata_collector& collector) {
 }
 
 void sstable::do_write_components(const memtable& mt) {
-    bool checksum_file = true;
-    // FIXME: CRC component must only be present when compression isn't enabled.
+    // CRC component must only be present when compression isn't enabled.
+    bool checksum_file = mt.schema()->get_compressor() == compressor::none;
     if (checksum_file) {
         _components.insert(component_type::CRC);
+    } else {
+        fail(unimplemented::cause::COMPRESSION);
     }
 
     constexpr size_t sstable_buffer_size = 64*1024;
