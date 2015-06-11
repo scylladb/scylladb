@@ -721,7 +721,9 @@ keyspace::create_replication_strategy() {
     tm.update_normal_token({dht::token::kind::key, {d2t(2.0/4).data(), 8}}, to_sstring("127.0.0.3"));
     tm.update_normal_token({dht::token::kind::key, {d2t(3.0/4).data(), 8}}, to_sstring("127.0.0.4"));
 
-    return make_snitch<simple_snitch>().then(
+    // Fixme
+    return i_endpoint_snitch::create_snitch(
+        "org.apache.cassandra.locator.SimpleSnitch").then(
             [this] (snitch_ptr&& s) {
         _replication_strategy =
             abstract_replication_strategy::create_replication_strategy(

@@ -27,14 +27,11 @@
 namespace locator {
 
 /**
- * A simple endpoint snitch implementation that treats Strategy order as proximity,
- * allowing non-read-repaired reads to prefer a single endpoint, which improves
- * cache locality.
+ * A simple endpoint snitch implementation that treats Strategy order as
+ * proximity, allowing non-read-repaired reads to prefer a single endpoint,
+ * which improves cache locality.
  */
-class simple_snitch : public snitch_base {
-    template <typename SnitchClass, typename... A>
-    friend future<snitch_ptr> make_snitch(A&&... a);
-
+struct simple_snitch : public snitch_base {
     simple_snitch() {
         _my_dc = get_datacenter(utils::fb_utilities::get_broadcast_address());
         _my_rack = get_rack(utils::fb_utilities::get_broadcast_address());
@@ -43,7 +40,6 @@ class simple_snitch : public snitch_base {
         _snitch_is_ready.set_value();
     }
 
-public:
     virtual sstring get_rack(inet_address endpoint) override {
         return "rack1";
     }

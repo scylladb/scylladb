@@ -279,4 +279,11 @@ void gossiping_property_file_snitch::reload_gossiper_state()
     #endif
     // else this will eventually rerun at gossiperStarting()
 }
+
+namespace locator {
+using registry = class_registrator<i_endpoint_snitch,
+                                   gossiping_property_file_snitch,
+                                   const sstring&>;
+static registry registrator("org.apache.cassandra.locator.GossipingPropertyFileSnitch");
+}
 } // namespace locator

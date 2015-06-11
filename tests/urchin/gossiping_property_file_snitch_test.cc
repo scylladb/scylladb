@@ -25,7 +25,9 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     path fname(test_files_subdir);
     fname /= path(property_fname);
 
-    return make_snitch<gossiping_property_file_snitch>(sstring(fname.string()))
+    return i_endpoint_snitch::create_snitch<const sstring&>(
+        "org.apache.cassandra.locator.GossipingPropertyFileSnitch",
+        sstring(fname.string()))
         .then([exp_result] (snitch_ptr sptr) {
             BOOST_CHECK(exp_result);
             return sptr->stop();
