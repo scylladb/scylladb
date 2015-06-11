@@ -9,6 +9,8 @@
 #include "core/distributed.hh"
 #include "core/shared_ptr.hh"
 #include "utils/UUID_gen.hh"
+#include "message/messaging_service.hh"
+#include "service/storage_service.hh"
 
 class in_memory_cql_env : public cql_test_env {
 public:
@@ -155,7 +157,7 @@ public:
 
     future<> start() {
         return _core_local.start().then([this] () {
-            auto query = sprint("create keyspace %s with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };", sstring{ks_name});
+            auto query = sprint("create keyspace %s with replication = { 'class' : 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor' : 1 };", sstring{ks_name});
             return execute_cql(query).discard_result().then([] {
                 return make_ready_future<>();
             });
@@ -171,17 +173,31 @@ public:
     }
 };
 
-future<::shared_ptr<cql_test_env>> make_env_for_test() {
-    auto db = ::make_shared<distributed<database>>();
-    return db->start().then([db] {
-        auto proxy = ::make_shared<service::storage_proxy>(std::ref(*db));
-        auto qp = ::make_shared<distributed<cql3::query_processor>>();
-        return qp->start(std::ref(*proxy), std::ref(*db)).then([db, proxy, qp] {
-            auto env = ::make_shared<in_memory_cql_env>(db, qp, proxy);
-            return env->start().then([env] () -> ::shared_ptr<cql_test_env> {
-                return env;
-            });
+future<> init_once() {
+    static bool done = false;
+    if (!done) {
+        done = true;
+        return service::init_storage_service().then([] {
+                return net::init_messaging_service("127.0.0.1", db::config::seed_provider_type()).then([] {
+                });
         });
+    } else {
+        return make_ready_future();
+    }
+}
+future<::shared_ptr<cql_test_env>> make_env_for_test() {
+    return init_once().then([] {
+            auto db = ::make_shared<distributed<database>>();
+            return db->start().then([db] {
+                auto proxy = ::make_shared<service::storage_proxy>(std::ref(*db));
+                auto qp = ::make_shared<distributed<cql3::query_processor>>();
+                return qp->start(std::ref(*proxy), std::ref(*db)).then([db, proxy, qp] {
+                    auto env = ::make_shared<in_memory_cql_env>(db, qp, proxy);
+                    return env->start().then([env] () -> ::shared_ptr<cql_test_env> {
+                        return env;
+                    });
+                });
+            });
     });
 }
 
