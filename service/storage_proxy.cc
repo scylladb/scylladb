@@ -1180,6 +1180,37 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
 #endif
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
+storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl) {
+    query::result_merger merger;
+    std::unordered_map<unsigned, std::vector<query::partition_range>> dst_map;
+
+    std::for_each(partition_ranges.begin(), partition_ranges.end(), [this, &dst_map, &cmd] (auto&& range) {
+        if (!range.is_singular()) {
+            throw std::runtime_error("mixed singular and non singular range are not supported");
+        }
+        auto& key = range.start_value();
+        // TODO: consider storing decorated key in the request
+        auto schema = _db.local().find_schema(cmd->cf_id);
+        auto token = dht::global_partitioner().get_token(*schema, key);
+        unsigned shard = _db.local().shard_of(token);
+        dst_map[shard].emplace_back(std::move(range));
+    });
+
+    merger.reserve(dst_map.size());
+
+    auto f = map_reduce(dst_map.begin(), dst_map.end(), [this, cmd] (auto& dst) mutable {
+        return _db.invoke_on(dst.first, [pr = std::move(dst.second), cmd] (database& db) {
+            return db.query(*cmd, pr).then([](auto&& f) {
+                return make_foreign(std::move(f));
+            });
+        });
+    }, std::move(merger));
+
+    // keep dst_map around till the end, hope move do not invalidates iterators
+    return f.finally([dst_map = std::move(dst_map)] {});
+}
+
+future<foreign_ptr<lw_shared_ptr<query::result>>>
 storage_proxy::query(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl) {
     static auto make_empty = [] {
         return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(make_foreign(make_lw_shared<query::result>()));
@@ -1189,28 +1220,17 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, std::vector<query::
         return make_empty();
     }
 
-    if (partition_ranges.size() != 1) {
-        // FIXME: implement
-        throw std::runtime_error("more than one range not supported yet");
-    }
-
-    auto& range = partition_ranges[0];
-
-    if (range.is_singular()) {
-        auto& key = range.start_value();
-        // TODO: consider storing decorated key in the request
+    if (partition_ranges[0].is_singular()) { // do not support mixed partitions (yet?)
         try {
-            auto schema = _db.local().find_schema(cmd->cf_id);
-            auto token = dht::global_partitioner().get_token(*schema, key);
-            auto shard = _db.local().shard_of(token);
-            return _db.invoke_on(shard, [cmd = std::move(cmd), partition_ranges = std::move(partition_ranges)](database& db) {
-                return db.query(*cmd, partition_ranges).then([](auto&& f) {
-                    return make_foreign(std::move(f));
-                });
-            }).finally([cmd] { });
+            return query_singular(cmd, std::move(partition_ranges), cl);
         } catch (const no_such_column_family&) {
             return make_empty();
         }
+    }
+
+    if (partition_ranges.size() != 1) {
+        // FIXME: implement
+        throw std::runtime_error("more than one non singular range not supported yet");
     }
 
     // FIXME: Respect cmd->row_limit to avoid unnecessary transfer

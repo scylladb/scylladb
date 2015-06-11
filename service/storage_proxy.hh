@@ -36,6 +36,7 @@ namespace service {
 class storage_proxy /*implements StorageProxyMBean*/ {
 private:
     distributed<database>& _db;
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl);
 public:
     storage_proxy(distributed<database>& db) : _db(db) {}
 
