@@ -332,7 +332,7 @@ inline
 void
 column_family::seal_on_overflow(database* db) {
     // FIXME: something better
-    if (++_mutation_count == 10000) {
+    if (++_mutation_count == 100000) {
         _mutation_count = 0;
         seal_active_memtable(db);
     }
