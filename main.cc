@@ -25,12 +25,6 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
     return cfg.read_from_file(opts["options-file"].as<sstring>());
 }
 
-future<> init_storage_service() {
-    return service::get_storage_service().start().then([] {
-        print("Start Storage service ...\n");
-    });
-}
-
 int main(int ac, char** av) {
     app_template app;
     auto opt_add = app.add_options();
@@ -62,7 +56,7 @@ int main(int ac, char** av) {
                 engine().at_exit([&db] { return db.stop(); });
                 return db.invoke_on_all(&database::init_from_data_directory);
             }).then([] {
-                return init_storage_service();
+                return service::init_storage_service();
             }).then([listen_address, seed_provider] {
                 return net::init_messaging_service(listen_address, seed_provider);
             }).then([&db, &proxy, &qp] {

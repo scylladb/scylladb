@@ -3351,4 +3351,10 @@ inline future<std::map<dht::token, gms::inet_address>> get_token_to_endpoint() {
     });
 }
 
+inline future<> init_storage_service() {
+    return service::get_storage_service().start().then([] {
+        print("Start Storage service ...\n");
+    });
+}
+
 }
