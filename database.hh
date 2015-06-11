@@ -102,7 +102,7 @@ public:
     void apply(const mutation& m, const db::replay_position& = db::replay_position(), database* = nullptr);
 
     // Returns at most "cmd.limit" rows
-    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd) const;
+    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges) const;
 
     future<> populate(sstring datadir);
     void seal_active_memtable(database* = nullptr);
@@ -307,7 +307,7 @@ public:
     unsigned shard_of(const dht::token& t);
     unsigned shard_of(const mutation& m);
     unsigned shard_of(const frozen_mutation& m);
-    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd);
+    future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges);
     future<> apply(const frozen_mutation&);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm) const;
     friend std::ostream& operator<<(std::ostream& out, const database& db);

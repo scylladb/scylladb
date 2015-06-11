@@ -865,24 +865,26 @@ compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right) {
 }
 
 struct query_state {
-    explicit query_state(const query::read_command& cmd)
+    explicit query_state(const query::read_command& cmd, const std::vector<query::partition_range>& ranges)
             : cmd(cmd)
             , builder(cmd.slice)
             , limit(cmd.row_limit)
-            , current_partition_range(cmd.partition_ranges.begin()) {
+            , current_partition_range(ranges.begin())
+            , range_end(ranges.end()){
     }
     const query::read_command& cmd;
     query::result::builder builder;
     uint32_t limit;
     std::vector<query::partition_range>::const_iterator current_partition_range;
+    std::vector<query::partition_range>::const_iterator range_end;
     bool done() const {
-        return !limit || current_partition_range == cmd.partition_ranges.end();
+        return !limit || current_partition_range == range_end;
     }
 };
 
 future<lw_shared_ptr<query::result>>
-column_family::query(const query::read_command& cmd) const {
-    return do_with(query_state(cmd), [this] (query_state& qs) {
+column_family::query(const query::read_command& cmd, const std::vector<query::partition_range>& partition_ranges) const {
+    return do_with(query_state(cmd, partition_ranges), [this] (query_state& qs) {
         return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
             auto& cmd = qs.cmd;
             auto& builder = qs.builder;
@@ -925,14 +927,14 @@ column_family::query(const query::read_command& cmd) const {
 }
 
 future<lw_shared_ptr<query::result>>
-database::query(const query::read_command& cmd) {
+database::query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges) {
     static auto make_empty = [] {
         return make_ready_future<lw_shared_ptr<query::result>>(make_lw_shared(query::result()));
     };
 
     try {
         column_family& cf = find_column_family(cmd.cf_id);
-        return cf.query(cmd);
+        return cf.query(cmd, ranges);
     } catch (...) {
         // FIXME: load from sstables
         return make_empty();

@@ -180,9 +180,9 @@ modification_statement::read_required_rows(
     for (auto&& pk : *keys) {
         pr.emplace_back(pk);
     }
-    query::read_command cmd(s->id(), std::move(pr), ps, std::numeric_limits<uint32_t>::max());
+    query::read_command cmd(s->id(), ps, std::numeric_limits<uint32_t>::max());
     // FIXME: ignoring "local"
-    return proxy.query(make_lw_shared(std::move(cmd)), cl).then([this, ps] (auto result) {
+    return proxy.query(make_lw_shared(std::move(cmd)), std::move(pr), cl).then([this, ps] (auto result) {
         // FIXME: copying
         // FIXME: Use scattered_reader to avoid copying
         bytes_ostream buf(result->buf());

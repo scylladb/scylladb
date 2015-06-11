@@ -72,7 +72,7 @@ public:
     */
     future<> mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl);
 
-    future<foreign_ptr<lw_shared_ptr<query::result>>> query(lw_shared_ptr<query::read_command> cmd, db::consistency_level cl);
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl);
 
     future<lw_shared_ptr<query::result_set>> query_local(const sstring& ks_name, const sstring& cf_name, const dht::decorated_key& key);
 };

@@ -20,7 +20,6 @@ std::ostream& operator<<(std::ostream& out, const partition_slice& ps) {
 std::ostream& operator<<(std::ostream& out, const read_command& r) {
     return out << "read_command{"
         << "cf_id=" << r.cf_id
-        << ", pks=[" << join(", ", r.partition_ranges) << "]"
         << ", slice=" << r.slice << ""
         << ", limit=" << r.row_limit << "}";
 }

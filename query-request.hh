@@ -150,14 +150,11 @@ public:
 class read_command {
 public:
     utils::UUID cf_id;
-    std::vector<partition_range> partition_ranges; // ranges must be non-overlapping
     partition_slice slice;
     uint32_t row_limit;
 public:
-    read_command(const utils::UUID& cf_id, std::vector<partition_range> partition_ranges,
-        partition_slice slice, uint32_t row_limit)
+    read_command(const utils::UUID& cf_id, partition_slice slice, uint32_t row_limit)
         : cf_id(cf_id)
-        , partition_ranges(std::move(partition_ranges))
         , slice(std::move(slice))
         , row_limit(row_limit)
     { }

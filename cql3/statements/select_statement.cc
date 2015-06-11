@@ -151,8 +151,7 @@ select_statement::execute(service::storage_proxy& proxy, service::query_state& s
     int32_t limit = get_limit(options);
     auto now = db_clock::now();
 
-    auto command = ::make_lw_shared<query::read_command>(_schema->id(),
-        _restrictions->get_partition_key_ranges(options), make_partition_slice(options), limit);
+    auto command = ::make_lw_shared<query::read_command>(_schema->id(), make_partition_slice(options), limit);
 
     int32_t page_size = options.get_page_size();
 
@@ -164,7 +163,7 @@ select_statement::execute(service::storage_proxy& proxy, service::query_state& s
     }
 
     warn(unimplemented::cause::PAGING);
-    return execute(proxy, command, state, options, now);
+    return execute(proxy, command, _restrictions->get_partition_key_ranges(options), state, options, now);
 
 #if 0
     if (page_size <= 0 || !command || !query_pagers::may_need_paging(command, page_size)) {
@@ -197,9 +196,9 @@ select_statement::execute(service::storage_proxy& proxy, service::query_state& s
 }
 
 future<shared_ptr<transport::messages::result_message>>
-select_statement::execute(service::storage_proxy& proxy, lw_shared_ptr<query::read_command> cmd,
+select_statement::execute(service::storage_proxy& proxy, lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges,
         service::query_state& state, const query_options& options, db_clock::time_point now) {
-    return proxy.query(std::move(cmd), options.get_consistency())
+    return proxy.query(cmd, std::move(partition_ranges), options.get_consistency())
         .then([this, &options, now, cmd] (auto result) {
             return this->process_results(std::move(result), cmd, options, now);
         });

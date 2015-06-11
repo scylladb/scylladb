@@ -29,6 +29,7 @@
 #include "unimplemented.hh"
 #include "frozen_mutation.hh"
 #include "query_result_merger.hh"
+#include "core/do_with.hh"
 
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/transformed.hpp>
@@ -1179,21 +1180,21 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
 #endif
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
-storage_proxy::query(lw_shared_ptr<query::read_command> cmd, db::consistency_level cl) {
+storage_proxy::query(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl) {
     static auto make_empty = [] {
         return make_ready_future<foreign_ptr<lw_shared_ptr<query::result>>>(make_foreign(make_lw_shared<query::result>()));
     };
 
-    if (cmd->partition_ranges.empty()) {
+    if (partition_ranges.empty()) {
         return make_empty();
     }
 
-    if (cmd->partition_ranges.size() != 1) {
+    if (partition_ranges.size() != 1) {
         // FIXME: implement
         throw std::runtime_error("more than one range not supported yet");
     }
 
-    auto& range = cmd->partition_ranges[0];
+    auto& range = partition_ranges[0];
 
     if (range.is_singular()) {
         auto& key = range.start_value();
@@ -1202,8 +1203,8 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, db::consistency_lev
             auto schema = _db.local().find_schema(cmd->cf_id);
             auto token = dht::global_partitioner().get_token(*schema, key);
             auto shard = _db.local().shard_of(token);
-            return _db.invoke_on(shard, [cmd](database& db) {
-                return db.query(*cmd).then([](auto&& f) {
+            return _db.invoke_on(shard, [cmd = std::move(cmd), partition_ranges = std::move(partition_ranges)](database& db) {
+                return db.query(*cmd, partition_ranges).then([](auto&& f) {
                     return make_foreign(std::move(f));
                 });
             }).finally([cmd] { });
@@ -1215,8 +1216,8 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, db::consistency_lev
     // FIXME: Respect cmd->row_limit to avoid unnecessary transfer
     query::result_merger merger;
     merger.reserve(smp::count);
-    return _db.map_reduce(std::move(merger), [cmd] (database& db) {
-        return db.query(*cmd).then([] (auto&& f) {
+    return _db.map_reduce(std::move(merger), [cmd, partition_ranges = std::move(partition_ranges)] (database& db) {
+        return db.query(*cmd, partition_ranges).then([] (auto&& f) {
             return make_foreign(std::move(f));
         });
     }).finally([cmd] {});
@@ -1245,11 +1246,13 @@ storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const
     return _db.invoke_on(shard, [id = schema->id(), key, slice] (database& db) {
         std::vector<query::partition_range> pr;
         pr.emplace_back(query::partition_range::make_singular(key._key));
-        auto cmd = make_lw_shared<query::read_command>(id, pr, slice, std::numeric_limits<uint32_t>::max());
-        return db.query(*cmd).then([] (lw_shared_ptr<query::result>&& result) {
-            return make_foreign(std::move(result));
-        }).finally([cmd] {
-            // keep cmd alive while db.query() executes above
+        auto cmd = make_lw_shared<query::read_command>(id, slice, std::numeric_limits<uint32_t>::max());
+        return do_with(std::move(pr), [&db, cmd] (auto& pr){
+            return db.query(*cmd, pr).then([] (lw_shared_ptr<query::result>&& result) {
+                return make_foreign(std::move(result));
+            }).finally([cmd] {
+                // keep cmd alive while db.query() executes above
+            });
         });
     }).then([this, schema, slice] (auto&& result) {
         query::result_set_builder builder{schema};
