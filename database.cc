@@ -29,6 +29,7 @@
 #include "frozen_mutation.hh"
 #include "mutation_partition_applier.hh"
 #include "core/do_with.hh"
+#include "service/storage_service.hh"
 
 thread_local logging::logger dblog("database");
 
@@ -591,7 +592,7 @@ create_keyspace(distributed<database>& db, const lw_shared_ptr<keyspace_metadata
             auto cfg = db.make_keyspace_config(*ksm);
 
             keyspace ks(ksm, cfg);
-            auto fu = ks.create_replication_strategy(db.get_snitch_name());
+            auto fu = ks.create_replication_strategy(db.get_snitch_name(), ksm->strategy_options());
 
             return fu.then([&db, ks = std::move(ks), ksm] () mutable {
                 db.add_keyspace(ksm->name(), std::move(ks));
@@ -704,30 +705,16 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
 }
 
 future<>
-keyspace::create_replication_strategy(const sstring& snitch_name) {
+keyspace::create_replication_strategy(const sstring& snitch_name, const std::map<sstring, sstring>& options) {
     using namespace locator;
 
-    static thread_local token_metadata tm;
-    static std::unordered_map<sstring, sstring> options = {{"replication_factor", "3"}};
-
-    auto d2t = [](double d) {
-        unsigned long l = net::hton(static_cast<unsigned long>(d*(std::numeric_limits<unsigned long>::max())));
-        std::array<int8_t, 8> a;
-        memcpy(a.data(), &l, 8);
-        return a;
-    };
-    tm.update_normal_token({dht::token::kind::key, {d2t(0).data(), 8}}, to_sstring("127.0.0.1"));
-    tm.update_normal_token({dht::token::kind::key, {d2t(1.0/4).data(), 8}}, to_sstring("127.0.0.2"));
-    tm.update_normal_token({dht::token::kind::key, {d2t(2.0/4).data(), 8}}, to_sstring("127.0.0.3"));
-    tm.update_normal_token({dht::token::kind::key, {d2t(3.0/4).data(), 8}}, to_sstring("127.0.0.4"));
-
-    // Fixme
     return i_endpoint_snitch::create_snitch(snitch_name).then(
-            [this] (snitch_ptr&& s) {
+            [this, &options] (snitch_ptr&& s) {
+        auto& ss = service::get_local_storage_service();
         _replication_strategy =
             abstract_replication_strategy::create_replication_strategy(
                 _metadata->name(), _metadata->strategy_name(),
-                tm, std::move(s), options);
+                ss.get_token_metadata(), std::move(s), options);
 
         return make_ready_future<>();
     });
@@ -781,7 +768,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     }
 
     keyspace ks(ksm, std::move(make_keyspace_config(*ksm)));
-    auto fu = ks.create_replication_strategy(get_snitch_name());
+    auto fu = ks.create_replication_strategy(get_snitch_name(), ksm->strategy_options());
 
     return fu.then([ks = std::move(ks), ksm, this] () mutable {
         _keyspaces.emplace(ksm->name(), std::move(ks));

@@ -218,7 +218,7 @@ public:
     const lw_shared_ptr<keyspace_metadata>& metadata() const {
         return _metadata;
     }
-    future<> create_replication_strategy(const sstring& snitch_name);
+    future<> create_replication_strategy(const sstring& snitch_name, const std::map<sstring, sstring>& options);
     locator::abstract_replication_strategy& get_replication_strategy();
     column_family::config make_column_family_config(const schema& s) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
