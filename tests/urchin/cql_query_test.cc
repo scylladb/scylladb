@@ -841,3 +841,29 @@ SEASTAR_TEST_CASE(test_user_type) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_select_multiple_ranges) {
+    return do_with_cql_env([] (auto&& e) {
+        return e.create_table([](auto ks_name) {
+            // CQL: create table cf (p1 varchar, r1 int, PRIMARY KEY (p1));
+            return schema({}, ks_name, "cf",
+                    {{"p1", utf8_type}}, {}, {{"r1", int32_type}}, {}, utf8_type);
+        }).then([&e] {
+            return e.execute_cql(
+                    "begin unlogged batch \n"
+                    "  insert into cf (p1, r1) values ('key1', 100); \n"
+                    "  insert into cf (p1, r1) values ('key2', 200); \n"
+                    "apply batch;"
+            ).discard_result();
+        }).then([&e] {
+            return e.execute_cql("select r1 from cf where p1 in ('key1', 'key2');");
+        }).then([&e] (shared_ptr<transport::messages::result_message> msg) {
+            assert_that(msg).is_rows().with_size(2).with_row({
+                {int32_type->decompose(100)}
+            }).with_row({
+                {int32_type->decompose(200)}
+            });
+
+        });
+    });
+}
