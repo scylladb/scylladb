@@ -457,7 +457,7 @@ public:
         });
         auto ksm = make_lw_shared<keyspace_metadata>(to_sstring(ks_def.name),
                 to_sstring(ks_def.strategy_class),
-                std::unordered_map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
+                std::map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
                 ks_def.durable_writes,
                 std::vector<schema_ptr>{}); // FIXME
         create_keyspace(_db, ksm).then([this, ks_def, cf_ids] {

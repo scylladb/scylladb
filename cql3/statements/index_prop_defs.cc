@@ -52,7 +52,7 @@ void cql3::statements::index_prop_defs::validate() {
 index_options_map
 cql3::statements::index_prop_defs::get_raw_options() {
     auto options = get_map(KW_OPTIONS);
-    return !options ? std::unordered_map<sstring, sstring>() : *options;
+    return !options ? std::unordered_map<sstring, sstring>() : std::unordered_map<sstring, sstring>(options->begin(), options->end());
 }
 
 index_options_map

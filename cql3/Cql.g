@@ -61,6 +61,7 @@ options {
 #include "CqlLexer.hpp"
 
 #include <unordered_map>
+#include <map>
 }
 
 @parser::traits {
@@ -160,11 +161,11 @@ struct uninitialized {
         listener->syntax_error(*this, msg);
     }
 
-    std::unordered_map<sstring, sstring> convert_property_map(shared_ptr<cql3::maps::literal> map) {
+    std::map<sstring, sstring> convert_property_map(shared_ptr<cql3::maps::literal> map) {
         if (!map || map->entries.empty()) {
-            return std::unordered_map<sstring, sstring>{};
+            return std::map<sstring, sstring>{};
         }
-        std::unordered_map<sstring, sstring> res{map->entries.size()};
+        std::map<sstring, sstring> res;
         for (auto&& entry : map->entries) {
             // Because the parser tries to be smart and recover on error (to
             // allow displaying more than one error I suppose), we have null

@@ -1003,7 +1003,7 @@ std::vector<schema_ptr> all_tables() {
 void make(database& db) {
     auto ksm = make_lw_shared<keyspace_metadata>("system",
             "org.apache.cassandra.locator.SimpleStrategy",
-            std::unordered_map<sstring, sstring>{},
+            std::map<sstring, sstring>{},
             false
             );
     auto kscfg = db.make_keyspace_config(*ksm);
