@@ -12,8 +12,6 @@
 #include "api/api.hh"
 #include "db/config.hh"
 #include "message/messaging_service.hh"
-#include "gms/failure_detector.hh"
-#include "gms/gossiper.hh"
 #include "service/storage_service.hh"
 #include "dns.hh"
 
@@ -30,35 +28,6 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
 future<> init_storage_service() {
     return service::get_storage_service().start().then([] {
         print("Start Storage service ...\n");
-    });
-}
-
-future<> init_messaging_service(auto listen_address, auto seed_provider) {
-    const gms::inet_address listen(listen_address);
-    std::set<gms::inet_address> seeds;
-    if (seed_provider.parameters.count("seeds") > 0) {
-        size_t begin = 0;
-        size_t next = 0;
-        sstring& seeds_str = seed_provider.parameters.find("seeds")->second;
-        while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
-            seeds.emplace(gms::inet_address(seeds_str.substr(begin,next-begin)));
-            begin = next+1;
-        }
-    }
-    if (seeds.empty()) {
-        seeds.emplace(gms::inet_address("127.0.0.1"));
-    }
-    return net::get_messaging_service().start(listen).then([seeds] {
-        auto& ms = net::get_local_messaging_service();
-        print("Messaging server listening on ip %s port %d ...\n", ms.listen_address(), ms.port());
-        return gms::get_failure_detector().start().then([seeds] {
-            return gms::get_gossiper().start().then([seeds] {
-                auto& gossiper = gms::get_local_gossiper();
-                gossiper.set_seeds(seeds);
-                auto& ss = service::get_local_storage_service();
-                return ss.init_server();
-            });
-        });
     });
 }
 
@@ -95,7 +64,7 @@ int main(int ac, char** av) {
             }).then([] {
                 return init_storage_service();
             }).then([listen_address, seed_provider] {
-                return init_messaging_service(listen_address, seed_provider);
+                return net::init_messaging_service(listen_address, seed_provider);
             }).then([&db, &proxy, &qp] {
                 return qp.start(std::ref(proxy), std::ref(db)).then([&qp] {
                     engine().at_exit([&qp] { return qp.stop(); });

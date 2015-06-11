@@ -14,6 +14,7 @@
 #include "gms/inet_address.hh"
 #include "rpc/rpc.hh"
 #include <unordered_map>
+#include "db/config.hh"
 
 namespace net {
 
@@ -289,4 +290,5 @@ inline messaging_service& get_local_messaging_service() {
     return _the_messaging_service.local();
 }
 
+future<> init_messaging_service(sstring listen_address, db::config::seed_provider_type seed_provider);
 } // namespace net
