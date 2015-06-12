@@ -102,7 +102,7 @@ size_t compress_lz4(const char* input, size_t input_len,
     if (ret == 0) {
         throw std::runtime_error("LZ4 compression failure: LZ4_compress() failed");
     }
-    return ret;
+    return ret + 4;
 }
 
 size_t uncompress_deflate(const char* input, size_t input_len,
