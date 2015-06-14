@@ -26,6 +26,7 @@
 
 #include "gms/inet_address.hh"
 #include "core/shared_ptr.hh"
+#include "utils/class_registrator.hh"
 
 namespace locator {
 
@@ -34,11 +35,11 @@ struct i_endpoint_snitch;
 typedef gms::inet_address inet_address;
 typedef std::unique_ptr<i_endpoint_snitch> snitch_ptr;
 
-template <typename SnitchClass, typename... A>
-static future<snitch_ptr> make_snitch(A&&... a);
-
 struct i_endpoint_snitch
 {
+    template <typename... A>
+    static future<snitch_ptr> create_snitch(const sstring& snitch_name, A&&... a);
+
     /**
      * returns a String representing the rack this endpoint belongs to
      */
@@ -90,10 +91,8 @@ struct i_endpoint_snitch
 
     virtual future<> stop() = 0;
 
-    template <typename SnitchClass, typename... A>
-    friend future<snitch_ptr> make_snitch(A&&... a);
-
 protected:
+    static thread_local logging::logger snitch_logger;
     promise<> _snitch_is_ready;
     enum class snitch_state {
         initializing,
@@ -103,27 +102,38 @@ protected:
     } _state = snitch_state::initializing;
 };
 
-template <typename SnitchClass, typename... A>
-static future<snitch_ptr> make_snitch(A&&... a) {
-    snitch_ptr s(new SnitchClass(std::forward<A>(a)...));
 
-    auto fu = s->_snitch_is_ready.get_future();
-    return fu.then_wrapped([s = std::move(s)] (auto&& f) mutable {
-        try {
-            f.get();
+template <typename... A>
+future<snitch_ptr> i_endpoint_snitch::create_snitch(
+    const sstring& snitch_name, A&&... a) {
 
-            return make_ready_future<snitch_ptr>(std::move(s));
-        } catch (...) {
-            auto eptr = std::current_exception();
-            auto fu = s->stop();
+    try {
+        snitch_ptr s(std::move(create_object<i_endpoint_snitch>(
+            snitch_name, std::forward<A>(a)...)));
 
-            return fu.then([eptr, s = std::move(s)] () mutable {
-                std::rethrow_exception(eptr);
-                // just to make a compiler happy
+        auto fu = s->_snitch_is_ready.get_future();
+        return fu.then_wrapped([s = std::move(s)] (auto&& f) mutable {
+            try {
+                f.get();
+
                 return make_ready_future<snitch_ptr>(std::move(s));
-            });
-        }
-    });
+            } catch (...) {
+                auto eptr = std::current_exception();
+                auto fu = s->stop();
+
+                return fu.then([eptr, s = std::move(s)] () mutable {
+                    std::rethrow_exception(eptr);
+                    // just to make a compiler happy
+                    return make_ready_future<snitch_ptr>(std::move(s));
+                });
+            }
+        });
+    } catch (no_such_class& e) {
+        snitch_logger.error("{}", e.what());
+        throw;
+    } catch (...) {
+        throw;
+    }
 }
 
 class snitch_base : public i_endpoint_snitch {

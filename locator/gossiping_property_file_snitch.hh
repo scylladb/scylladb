@@ -54,17 +54,12 @@ public:
     virtual void gossiper_starting() override;
     virtual future<> stop() override;
 
-private:
-    template <typename SnitchClass, typename... A>
-    friend future<snitch_ptr> make_snitch(A&&... a);
-
     gossiping_property_file_snitch(
         const sstring& fname = snitch_properties_filename);
 
+private:
     static logging::logger& logger() {
-        static thread_local logging::logger l("gossiping_property_file_snitch");
-
-        return l;
+        return i_endpoint_snitch::snitch_logger;
     }
 
     template <typename... Args>

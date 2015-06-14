@@ -218,7 +218,7 @@ public:
     const lw_shared_ptr<keyspace_metadata>& metadata() const {
         return _metadata;
     }
-    future<> create_replication_strategy();
+    future<> create_replication_strategy(const sstring& snitch_name);
     locator::abstract_replication_strategy& get_replication_strategy();
     column_family::config make_column_family_config(const schema& s) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
@@ -310,6 +310,8 @@ public:
     future<lw_shared_ptr<query::result>> query(const query::read_command& cmd, const std::vector<query::partition_range>& ranges);
     future<> apply(const frozen_mutation&);
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm) const;
+    const sstring& get_snitch_name() const;
+
     friend std::ostream& operator<<(std::ostream& out, const database& db);
     friend future<> create_keyspace(distributed<database>&, const lw_shared_ptr<keyspace_metadata>&);
 };

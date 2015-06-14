@@ -34,11 +34,7 @@ using inet_address = gms::inet_address;
  * A simple endpoint snitch implementation that assumes datacenter and rack information is encoded
  * in the 2nd and 3rd octets of the ip address, respectively.
  */
-class rack_inferring_snitch : public snitch_base {
-private:
-    template <typename SnitchClass, typename... A>
-    friend future<snitch_ptr> make_snitch(A&&... a);
-
+struct rack_inferring_snitch : public snitch_base {
     rack_inferring_snitch() {
         _my_dc = get_datacenter(utils::fb_utilities::get_broadcast_address());
         _my_rack = get_rack(utils::fb_utilities::get_broadcast_address());
@@ -47,7 +43,6 @@ private:
         _snitch_is_ready.set_value();
     }
 
-public:
     virtual sstring get_rack(inet_address endpoint) override {
         return std::to_string((endpoint.raw_addr() >> 8) & 0xFF);
     }
