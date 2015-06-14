@@ -215,6 +215,7 @@ tests = [
     'tests/fstream_test',
     'tests/distributed_test',
     'tests/rpc',
+    'tests/semaphore_test',
     ]
 
 # urchin
@@ -483,6 +484,7 @@ deps = {
     'tests/timertest': ['tests/timertest.cc'] + core,
     'tests/futures_test': ['tests/futures_test.cc'] + core + boost_test_lib,
     'tests/foreign_ptr_test': ['tests/foreign_ptr_test.cc'] + core + boost_test_lib,
+    'tests/semaphore_test': ['tests/semaphore_test.cc'] + core + boost_test_lib,
     'tests/smp_test': ['tests/smp_test.cc'] + core,
     'tests/thread_test': ['tests/thread_test.cc'] + core + boost_test_lib,
     'tests/thread_context_switch': ['tests/thread_context_switch.cc'] + core,

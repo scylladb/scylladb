@@ -36,6 +36,9 @@
 #include <fcntl.h>
 #include <sys/eventfd.h>
 #include <boost/thread/barrier.hpp>
+#include <boost/algorithm/string/classification.hpp>
+#include <boost/algorithm/string/split.hpp>
+#include <boost/iterator/counting_iterator.hpp>
 #include <atomic>
 #include <dirent.h>
 #ifdef HAVE_DPDK
@@ -45,6 +48,7 @@
 #endif
 #include "prefetch.hh"
 #include <exception>
+#include <regex>
 #ifdef __GNUC__
 #include <iostream>
 #include <system_error>
@@ -1466,14 +1470,59 @@ reactor::get_options_description() {
     return opts;
 }
 
+// We need a wrapper class, because boost::program_options wants validate()
+// (below) to be in the same namespace as the type it is validating.
+struct cpuset_wrapper {
+    resource::cpuset value;
+};
+
+// Overload for boost program options parsing/validation
+void validate(boost::any& v,
+              const std::vector<std::string>& values,
+              cpuset_wrapper* target_type, int) {
+    using namespace boost::program_options;
+    static std::regex r("(\\d+-)?(\\d+)(,(\\d+-)?(\\d+))*");
+    validators::check_first_occurrence(v);
+    // Extract the first string from 'values'. If there is more than
+    // one string, it's an error, and exception will be thrown.
+    auto&& s = validators::get_single_string(values);
+    std::smatch match;
+    if (std::regex_match(s, match, r)) {
+        std::vector<std::string> ranges;
+        boost::split(ranges, s, boost::is_any_of(","));
+        cpuset_wrapper ret;
+        for (auto&& range: ranges) {
+            std::string beg = range;
+            std::string end = range;
+            auto dash = range.find('-');
+            if (dash != range.npos) {
+                beg = range.substr(0, dash);
+                end = range.substr(dash + 1);
+            }
+            auto b = boost::lexical_cast<unsigned>(beg);
+            auto e = boost::lexical_cast<unsigned>(end);
+            if (b > e) {
+                throw validation_error(validation_error::invalid_option_value);
+            }
+            for (auto i = b; i <= e; ++i) {
+                std::cout << "adding " << i << "\n";
+                ret.value.insert(i);
+            }
+        }
+        v = std::move(ret);
+    } else {
+        throw validation_error(validation_error::invalid_option_value);
+    }
+}
+
 boost::program_options::options_description
 smp::get_options_description()
 {
     namespace bpo = boost::program_options;
     bpo::options_description opts("SMP options");
-    auto cpus = resource::nr_processing_units();
     opts.add_options()
-        ("smp,c", bpo::value<unsigned>()->default_value(cpus), "number of threads")
+        ("smp,c", bpo::value<unsigned>(), "number of threads (default: one per CPU)")
+        ("cpuset", bpo::value<cpuset_wrapper>(), "CPUs to use (in cpuset(7) format; default: all))")
         ("memory,m", bpo::value<std::string>(), "memory to use, in bytes (ex: 4G) (default: all)")
         ("reserve-memory", bpo::value<std::string>()->default_value("512M"), "memory reserved to OS")
         ("hugepages", bpo::value<std::string>(), "path to accessible hugetlbfs mount (typically /dev/hugepages/something)")
@@ -1544,7 +1593,19 @@ void smp::configure(boost::program_options::variables_map configuration)
 {
     smp::count = 1;
     smp::_tmain = std::this_thread::get_id();
-    smp::count = configuration["smp"].as<unsigned>();
+    auto nr_cpus = resource::nr_processing_units();
+    resource::cpuset cpu_set;
+    std::copy(boost::counting_iterator<unsigned>(0), boost::counting_iterator<unsigned>(nr_cpus),
+            std::inserter(cpu_set, cpu_set.end()));
+    if (configuration.count("cpuset")) {
+        cpu_set = configuration["cpuset"].as<cpuset_wrapper>().value;
+    }
+    if (configuration.count("smp")) {
+        nr_cpus = configuration["smp"].as<unsigned>();
+    } else {
+        nr_cpus = cpu_set.size();
+    }
+    smp::count = nr_cpus;
     resource::configuration rc;
     if (configuration.count("memory")) {
         rc.total_memory = parse_memory_size(configuration["memory"].as<std::string>());
@@ -1577,6 +1638,7 @@ void smp::configure(boost::program_options::variables_map configuration)
         hugepages_path = configuration["hugepages"].as<std::string>();
     }
     rc.cpus = smp::count;
+    rc.cpu_set = std::move(cpu_set);
     std::vector<resource::cpu> allocations = resource::allocate(rc);
     smp::pin(allocations[0].cpu_id);
     memory::configure(allocations[0].mem, hugepages_path);

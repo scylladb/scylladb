@@ -24,6 +24,7 @@
 #include "core/do_with.hh"
 #include "test-utils.hh"
 #include "core/sstring.hh"
+#include "core/reactor.hh"
 #include "core/semaphore.hh"
 #include "core/do_with.hh"
 #include "core/future-util.hh"

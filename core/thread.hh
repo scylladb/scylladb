@@ -29,10 +29,45 @@
 #include <setjmp.h>
 #include <type_traits>
 
+/// \defgroup thread-module Seastar threads
+///
+/// Seastar threads provide an execution environment where blocking
+/// is tolerated; you can issue I/O, and wait for it in the same function,
+/// rather then establishing a callback to be called with \ref future<>::then().
+///
+/// Seastar threads are not the same as operating system threads:
+///   - seastar threads are cooperative; they are never preempted except
+///     at blocking points (see below)
+///   - seastar threads always run on the same core they were launched on
+///
+/// Like other seastar code, seastar threads may not issue blocking system calls.
+///
+/// A seastar thread blocking point is any function that returns a \ref future<>.
+/// you block by calling \ref future<>::get(); this waits for the future to become
+/// available, and in the meanwhile, other seastar threads and seastar non-threaded
+/// code may execute.
+///
+/// Example:
+/// \code
+///    seastar::thread th([] {
+///       sleep(5s).get();  // blocking point
+///    });
+/// \endcode
+///
+/// An easy way to launch a thread and carry out some computation, and return a
+/// result from this execution is by using the \ref seastar::async() function.
+/// The result is returned as a future, so that non-threaded code can wait for
+/// the thread to terminate and yield a result.
+
 /// Seastar API namespace
 namespace seastar {
 
+/// \addtogroup thread-module
+/// @{
+
 class thread;
+
+/// \cond internal
 class thread_context;
 
 namespace thread_impl {
@@ -68,6 +103,9 @@ public:
     friend void thread_impl::switch_in(thread_context*);
     friend void thread_impl::switch_out(thread_context*);
 };
+
+/// \endcond
+
 
 /// \brief thread - stateful thread of execution
 ///
@@ -125,6 +163,17 @@ thread::join() {
 /// \param func a callable to be executed in a thread
 /// \param args a parameter pack to be forwarded to \c func.
 /// \return whatever \c func returns, as a future.
+///
+/// Example:
+/// \code
+///    future<int> compute_sum(int a, int b) {
+///        return seastar::async([a, b] {
+///            // some blocking code:
+///            sleep(1s).get();
+///            return a + b;
+///        });
+///    }
+/// \endcode
 template <typename Func, typename... Args>
 inline
 futurize_t<std::result_of_t<std::decay_t<Func>(std::decay_t<Args>...)>>
@@ -146,5 +195,7 @@ async(Func&& func, Args&&... args) {
         });
     });
 }
+
+/// @}
 
 }
