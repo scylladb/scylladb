@@ -53,6 +53,11 @@
 ///       sleep(5s).get();  // blocking point
 ///    });
 /// \endcode
+///
+/// An easy way to launch a thread and carry out some computation, and return a
+/// result from this execution is by using the \ref seastar::async() function.
+/// The result is returned as a future, so that non-threaded code can wait for
+/// the thread to terminate and yield a result.
 
 /// Seastar API namespace
 namespace seastar {
@@ -158,6 +163,17 @@ thread::join() {
 /// \param func a callable to be executed in a thread
 /// \param args a parameter pack to be forwarded to \c func.
 /// \return whatever \c func returns, as a future.
+///
+/// Example:
+/// \code
+///    future<int> compute_sum(int a, int b) {
+///        return seastar::async([a, b] {
+///            // some blocking code:
+///            sleep(1s).get();
+///            return a + b;
+///        });
+///    }
+/// \endcode
 template <typename Func, typename... Args>
 inline
 futurize_t<std::result_of_t<std::decay_t<Func>(std::decay_t<Args>...)>>
