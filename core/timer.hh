@@ -47,6 +47,12 @@ private:
     void arm_state(time_point until, std::experimental::optional<duration> period);
 public:
     timer() = default;
+    timer(timer&& t) noexcept : _callback(std::move(t._callback)), _expiry(std::move(t._expiry)), _period(std::move(t._period)),
+            _armed(t._armed), _queued(t._queued), _expired(t._expired) {
+        _link.swap_nodes(t._link);
+        t._queued = false;
+        t._armed = false;
+    }
     explicit timer(callback_t&& callback);
     ~timer();
     future<> expired();
