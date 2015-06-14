@@ -54,7 +54,6 @@
 #include "posix.hh"
 #include "apply.hh"
 #include "sstring.hh"
-#include "timer-set.hh"
 #include "deleter.hh"
 #include "net/api.hh"
 #include "temporary_buffer.hh"
@@ -64,6 +63,7 @@
 #include "core/scattered_message.hh"
 #include "core/enum.hh"
 #include <boost/range/irange.hpp>
+#include "timer.hh"
 
 #ifdef HAVE_OSV
 #include <osv/sched.hh>
@@ -77,7 +77,6 @@ namespace scollectd { class registration; }
 class reactor;
 class pollable_fd;
 class pollable_fd_state;
-class lowres_clock;
 
 struct free_deleter {
     void operator()(void* p) { ::free(p); }
@@ -92,42 +91,6 @@ std::unique_ptr<CharType[], free_deleter> allocate_aligned_buffer(size_t size, s
     assert(r == 0);
     return std::unique_ptr<CharType[], free_deleter>(reinterpret_cast<CharType*>(ret));
 }
-
-using clock_type = std::chrono::high_resolution_clock;
-
-template <typename Clock = std::chrono::high_resolution_clock>
-class timer {
-public:
-    typedef typename Clock::time_point time_point;
-    typedef typename Clock::duration duration;
-    typedef Clock clock;
-private:
-    using callback_t = std::function<void()>;
-    boost::intrusive::list_member_hook<> _link;
-    callback_t _callback;
-    time_point _expiry;
-    std::experimental::optional<duration> _period;
-    bool _armed = false;
-    bool _queued = false;
-    bool _expired = false;
-    void readd_periodic();
-    void arm_state(time_point until, std::experimental::optional<duration> period);
-public:
-    timer() = default;
-    explicit timer(callback_t&& callback);
-    ~timer();
-    future<> expired();
-    void set_callback(callback_t&& callback);
-    void arm(time_point until, std::experimental::optional<duration> period = {});
-    void rearm(time_point until, std::experimental::optional<duration> period = {});
-    void arm(duration delta);
-    void arm_periodic(duration delta);
-    bool armed() const { return _armed; }
-    bool cancel();
-    time_point get_timeout();
-    friend class reactor;
-    friend class seastar::timer_set<timer, &timer::_link>;
-};
 
 class lowres_clock {
 public:
