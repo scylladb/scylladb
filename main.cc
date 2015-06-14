@@ -36,8 +36,14 @@ future<> init_storage_service() {
 future<> init_messaging_service(auto listen_address, auto seed_provider) {
     const gms::inet_address listen(listen_address);
     std::set<gms::inet_address> seeds;
-    for (auto& x : seed_provider.parameters) {
-        seeds.emplace(x.first);
+    if (seed_provider.parameters.count("seeds") > 0) {
+        size_t begin = 0;
+        size_t next = 0;
+        sstring& seeds_str = seed_provider.parameters.find("seeds")->second;
+        while (begin < seeds_str.length() && begin != (next=seeds_str.find(",",begin))) {
+            seeds.emplace(gms::inet_address(seeds_str.substr(begin,next-begin)));
+            begin = next+1;
+        }
     }
     if (seeds.empty()) {
         seeds.emplace(gms::inet_address("127.0.0.1"));
@@ -75,16 +81,15 @@ int main(int ac, char** av) {
 
     return app.run(ac, av, [&] {
         auto&& opts = app.configuration();
-        uint16_t thrift_port = cfg->rpc_port();
-        uint16_t cql_port = cfg->native_transport_port();
-        uint16_t api_port = opts["api-port"].as<uint16_t>();
-        sstring listen_address = cfg->listen_address();
-        sstring rpc_address = cfg->rpc_address();
-        auto seed_provider= cfg->seed_provider();
 
-        return read_config(opts, *cfg).then([cfg, &db]() {
-            return db.start(std::move(*cfg));
-        }).then([&db] {
+        return read_config(opts, *cfg).then([&cfg, &db, &qp, &proxy, &ctx, &server, &opts]() {
+            uint16_t thrift_port = cfg->rpc_port();
+            uint16_t cql_port = cfg->native_transport_port();
+            uint16_t api_port = opts["api-port"].as<uint16_t>();
+            sstring listen_address = cfg->listen_address();
+            sstring rpc_address = cfg->rpc_address();
+            auto seed_provider= cfg->seed_provider();
+            return db.start(std::move(*cfg)).then([&db, &qp, &proxy, &ctx, &server] {
             engine().at_exit([&db] { return db.stop(); });
             return db.invoke_on_all(&database::init_from_data_directory);
         }).then([] {
@@ -120,5 +125,6 @@ int main(int ac, char** av) {
                 std::cout << "Seastar HTTP server listening on port " << api_port << " ...\n";
             });
         }).or_terminate();
+    });
     });
 }
