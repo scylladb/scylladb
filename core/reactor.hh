@@ -49,6 +49,7 @@
 #include <boost/lockfree/spsc_queue.hpp>
 #include <boost/optional.hpp>
 #include <boost/program_options.hpp>
+#include <set>
 #include "util/eclipse.hh"
 #include "future.hh"
 #include "posix.hh"
