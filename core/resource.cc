@@ -42,8 +42,8 @@ size_t div_roundup(size_t num, size_t denom) {
 }
 
 static unsigned find_memory_depth(hwloc_topology_t& topology) {
-    auto obj = hwloc_get_pu_obj_by_os_index(topology, 0);
     auto depth = hwloc_get_type_depth(topology, HWLOC_OBJ_PU);
+    auto obj = hwloc_get_next_obj_by_depth(topology, depth, nullptr);
 
     while (!obj->memory.local_memory && obj) {
         obj = hwloc_get_ancestor_obj_by_depth(topology, --depth, obj);
@@ -68,6 +68,26 @@ std::vector<cpu> allocate(configuration c) {
     hwloc_topology_init(&topology);
     auto free_hwloc = defer([&] { hwloc_topology_destroy(topology); });
     hwloc_topology_load(topology);
+    if (c.cpu_set) {
+        auto bm = hwloc_bitmap_alloc();
+        auto free_bm = defer([&] { hwloc_bitmap_free(bm); });
+        for (auto idx : *c.cpu_set) {
+            hwloc_bitmap_set(bm, idx);
+        }
+        auto r = hwloc_topology_restrict(topology, bm,
+                HWLOC_RESTRICT_FLAG_ADAPT_DISTANCES
+                | HWLOC_RESTRICT_FLAG_ADAPT_MISC
+                | HWLOC_RESTRICT_FLAG_ADAPT_IO);
+        if (r == -1) {
+            if (errno == ENOMEM) {
+                throw std::bad_alloc();
+            }
+            if (errno == EINVAL) {
+                throw std::runtime_error("bad cpuset");
+            }
+            abort();
+        }
+    }
     auto machine_depth = hwloc_get_type_depth(topology, HWLOC_OBJ_MACHINE);
     assert(hwloc_get_nbobjs_by_depth(topology, machine_depth) == 1);
     auto machine = hwloc_get_obj_by_depth(topology, machine_depth, 0);
@@ -152,7 +172,8 @@ std::vector<cpu> allocate(configuration c) {
     if (mem > available_memory) {
         throw std::runtime_error("insufficient physical memory");
     }
-    auto procs = c.cpus.value_or(nr_processing_units());
+    auto cpuset_procs = c.cpu_set ? c.cpu_set->size() : nr_processing_units();
+    auto procs = c.cpus.value_or(cpuset_procs);
     std::vector<cpu> ret;
     ret.reserve(procs);
     for (unsigned i = 0; i < procs; ++i) {

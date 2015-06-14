@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <experimental/optional>
 #include <vector>
+#include <set>
 
 cpu_set_t cpuid_to_cpuset(unsigned cpuid);
 
@@ -32,10 +33,13 @@ namespace resource {
 
 using std::experimental::optional;
 
+using cpuset = std::set<unsigned>;
+
 struct configuration {
     optional<size_t> total_memory;
     optional<size_t> reserve_memory;  // if total_memory not specified
     optional<size_t> cpus;
+    optional<cpuset> cpu_set;
 };
 
 struct memory {
