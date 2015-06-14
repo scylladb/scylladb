@@ -63,7 +63,7 @@ enum class open_flags;
 /// The native stack supports zero-copy on both transmit
 /// and receive, and is implemented using seastar's high
 /// performance, lockless sharded design.  The network stack
-/// can be selected with the \c --network-stack command-line
+/// can be selected with the \c \--network-stack command-line
 /// parameter.
 
 /// \addtogroup networking-module
