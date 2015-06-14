@@ -33,6 +33,7 @@
 ///   - \ref future-util Utililty functions for working with futures
 ///   - \ref memory-module Memory management
 ///   - \ref networking-module TCP/IP networking
+///   - \ref thread-module Support for traditional threaded execution
 
 #include "sstring.hh"
 #include "future.hh"

@@ -24,6 +24,8 @@
 #include "posix.hh"
 #include <ucontext.h>
 
+/// \cond internal
+
 namespace seastar {
 
 thread_local thread_context* g_current_thread;
@@ -118,3 +120,5 @@ void init() {
 
 
 }
+
+/// \endcond
