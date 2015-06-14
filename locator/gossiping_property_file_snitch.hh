@@ -59,9 +59,7 @@ public:
 
 private:
     static logging::logger& logger() {
-        static thread_local logging::logger l("gossiping_property_file_snitch");
-
-        return l;
+        return i_endpoint_snitch::snitch_logger;
     }
 
     template <typename... Args>
