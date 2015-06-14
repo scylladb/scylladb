@@ -591,7 +591,7 @@ create_keyspace(distributed<database>& db, const lw_shared_ptr<keyspace_metadata
             auto cfg = db.make_keyspace_config(*ksm);
 
             keyspace ks(ksm, cfg);
-            auto fu = ks.create_replication_strategy();
+            auto fu = ks.create_replication_strategy(db.get_snitch_name());
 
             return fu.then([&db, ks = std::move(ks), ksm] () mutable {
                 db.add_keyspace(ksm->name(), std::move(ks));
@@ -704,7 +704,7 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
 }
 
 future<>
-keyspace::create_replication_strategy() {
+keyspace::create_replication_strategy(const sstring& snitch_name) {
     using namespace locator;
 
     static thread_local token_metadata tm;
@@ -722,8 +722,7 @@ keyspace::create_replication_strategy() {
     tm.update_normal_token({dht::token::kind::key, {d2t(3.0/4).data(), 8}}, to_sstring("127.0.0.4"));
 
     // Fixme
-    return i_endpoint_snitch::create_snitch(
-        "org.apache.cassandra.locator.SimpleSnitch").then(
+    return i_endpoint_snitch::create_snitch(snitch_name).then(
             [this] (snitch_ptr&& s) {
         _replication_strategy =
             abstract_replication_strategy::create_replication_strategy(
@@ -782,7 +781,7 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     }
 
     keyspace ks(ksm, std::move(make_keyspace_config(*ksm)));
-    auto fu = ks.create_replication_strategy();
+    auto fu = ks.create_replication_strategy(get_snitch_name());
 
     return fu.then([ks = std::move(ks), ksm, this] () mutable {
         _keyspaces.emplace(ksm->name(), std::move(ks));
@@ -1063,4 +1062,8 @@ database::stop() {
     return do_for_each(_keyspaces, [this] (auto& val_pair) {
         return val_pair.second.stop();
     });
+}
+
+const sstring& database::get_snitch_name() const {
+    return _cfg->endpoint_snitch();
 }

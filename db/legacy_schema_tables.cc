@@ -34,6 +34,8 @@
 #include "core/do_with.hh"
 #include "json.hh"
 
+#include "db/config.hh"
+
 #include <boost/range/algorithm/copy.hpp>
 #include <boost/range/adaptor/map.hpp>
 
@@ -591,7 +593,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                     auto ksm = create_keyspace_from_schema_partition(val);
                     std::unique_ptr<keyspace>
                         k_ptr(new keyspace(ksm, db.make_keyspace_config(*ksm)));
-                    auto fu =  k_ptr->create_replication_strategy();
+                    auto fu =  k_ptr->create_replication_strategy(db.get_snitch_name());
                     temp_vec_ptr->emplace_back(ksm, std::move(k_ptr));
 
                     return fu;
