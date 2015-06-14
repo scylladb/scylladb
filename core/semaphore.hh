@@ -25,6 +25,7 @@
 #include "future.hh"
 #include "circular_buffer.hh"
 #include <stdexcept>
+#include "timer.hh"
 
 class broken_semaphore : public std::exception {
 public:
@@ -33,10 +34,23 @@ public:
     }
 };
 
+class semaphore_timed_out : public std::exception {
+public:
+    virtual const char* what() const noexcept {
+        return "Semaphore timedout";
+    }
+};
+
 class semaphore {
 private:
     size_t _count;
-    circular_buffer<std::pair<promise<>, size_t>> _wait_list;
+    struct entry {
+        promise<> pr;
+        size_t nr;
+        timer<> tr;
+        entry(promise<>&& pr_, size_t nr_) : pr(std::move(pr_)), nr(nr_) {}
+    };
+    circular_buffer<entry> _wait_list;
 public:
     semaphore(size_t count = 1) : _count(count) {}
     future<> wait(size_t nr = 1) {
@@ -46,15 +60,31 @@ public:
         }
         promise<> pr;
         auto fut = pr.get_future();
-        _wait_list.push_back({ std::move(pr), nr });
+        _wait_list.push_back(entry(std::move(pr), nr));
         return fut;
+    }
+    future<> wait(typename timer<>::duration timeout, size_t nr = 1) {
+        auto fut = wait(nr);
+        if (!fut.available()) {
+            auto& e = _wait_list.back();
+            e.tr.set_callback([&e, this] {
+                e.pr.set_exception(semaphore_timed_out());
+                e.nr = 0;
+                signal(0);
+            });
+            e.tr.arm(timeout);
+        }
+        return std::move(fut);
     }
     void signal(size_t nr = 1) {
         _count += nr;
-        while (!_wait_list.empty() && _wait_list.front().second <= _count) {
+        while (!_wait_list.empty() && _wait_list.front().nr <= _count) {
             auto& x = _wait_list.front();
-            _count -= x.second;
-            x.first.set_value();
+            if (x.nr) {
+               _count -= x.nr;
+               x.pr.set_value();
+               x.tr.cancel();
+            }
             _wait_list.pop_front();
         }
     }
@@ -89,7 +119,8 @@ void semaphore::broken(const Exception& ex) {
     auto xp = std::make_exception_ptr(ex);
     while (!_wait_list.empty()) {
         auto& x = _wait_list.front();
-        x.first.set_exception(xp);
+        x.pr.set_exception(xp);
+        x.tr.cancel();
         _wait_list.pop_front();
     }
 }
