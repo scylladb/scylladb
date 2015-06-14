@@ -34,6 +34,7 @@ public:
     static std::unique_ptr<abstract_replication_strategy> create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, token_metadata& token_metadata, snitch_ptr&& snitch, const std::map<sstring, sstring>& config_options);
     std::vector<inet_address> get_natural_endpoints(const token& search_token);
     future<> stop() { return _snitch->stop(); }
+    virtual size_t get_replication_factor() const = 0;
 };
 
 }

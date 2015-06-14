@@ -14,7 +14,7 @@ protected:
 public:
     simple_strategy(const sstring& keyspace_name, token_metadata& token_metadata, snitch_ptr&& snitch, const std::map<sstring, sstring>& config_options);
     virtual ~simple_strategy() {};
-    size_t get_replication_factor() const;
+    virtual size_t get_replication_factor() const override;
 };
 
 }
