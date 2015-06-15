@@ -27,29 +27,62 @@
 #include <assert.h>
 #include <type_traits>
 
+/// \addtogroup memory-module
+/// @{
+
+/// Provides a mechanism for managing the lifetime of a buffer.
+///
+/// A \c deleter is an object that is used to inform the consumer
+/// of some buffer (not referenced by the deleter itself) how to
+/// delete the buffer.  This can be by calling an arbitrary function
+/// or destroying an object carried by the deleter.  Examples of
+/// a deleter's encapsulated actions are:
+///
+///  - calling \c std::free(p) on some captured pointer, p
+///  - calling \c delete \c p on some captured pointer, p
+///  - decrementing a reference count somewhere
+///
+/// A deleter performs its action from its destructor.
 class deleter final {
 public:
+    /// \cond internal
     struct impl;
     struct raw_object_tag {};
+    /// \endcond
 private:
     // if bit 0 set, point to object to be freed directly.
     impl* _impl = nullptr;
 public:
+    /// Constructs an empty deleter that does nothing in its destructor.
     deleter() = default;
     deleter(const deleter&) = delete;
+    /// Moves a deleter.
     deleter(deleter&& x) : _impl(x._impl) { x._impl = nullptr; }
+    /// \cond internal
     explicit deleter(impl* i) : _impl(i) {}
     deleter(raw_object_tag tag, void* object)
         : _impl(from_raw_object(object)) {}
+    /// \endcond
+    /// Destroys the deleter and carries out the encapsulated action.
     ~deleter();
     deleter& operator=(deleter&& x);
     deleter& operator=(deleter&) = delete;
+    /// Performs a sharing operation.  The encapsulated action will only
+    /// be carried out after both the original deleter and the returned
+    /// deleter are both destroyed.
+    ///
+    /// \return a deleter with the same encapsulated action as this one.
     deleter share();
+    /// Checks whether the deleter has an associated action.
     explicit operator bool() const { return bool(_impl); }
+    /// \cond internal
     void reset(impl* i) {
         this->~deleter();
         new (this) deleter(i);
     }
+    /// \endcond
+    /// Appends another deleter to this deleter.  When this deleter is
+    /// destroyed, both encapsulated actions will be carried out.
     void append(deleter d);
 private:
     static bool is_raw_object(impl* i) {
@@ -72,12 +105,14 @@ private:
     }
 };
 
+/// \cond internal
 struct deleter::impl {
     unsigned refs = 1;
     deleter next;
     impl(deleter next) : next(std::move(next)) {}
     virtual ~impl() {}
 };
+/// \endcond
 
 inline
 deleter::~deleter() {
@@ -99,6 +134,7 @@ deleter& deleter::operator=(deleter&& x) {
     return *this;
 }
 
+/// \cond internal
 template <typename Deleter>
 struct lambda_deleter_impl final : deleter::impl {
     Deleter del;
@@ -119,24 +155,39 @@ inline
 object_deleter_impl<Object>* make_object_deleter_impl(deleter next, Object obj) {
     return new object_deleter_impl<Object>(std::move(next), std::move(obj));
 }
+/// \endcond
 
-template <typename Deleter>
+/// Makes a \ref deleter that encapsulates the action of
+/// destroying an object, as well as running another deleter.  The input
+/// object is moved to the deleter, and destroyed when the deleter is destroyed.
+///
+/// \param d deleter that will become part of the new deleter's encapsulated action
+/// \param o object whose destructor becomes part of the new deleter's encapsulated action
+/// \related deleter
+template <typename Object>
 deleter
-make_deleter(deleter next, Deleter d) {
-    return deleter(new lambda_deleter_impl<Deleter>(std::move(next), std::move(d)));
+make_deleter(deleter next, Object o) {
+    return deleter(new lambda_deleter_impl<Object>(std::move(next), std::move(o)));
 }
 
-template <typename Deleter>
+/// Makes a \ref deleter that encapsulates the action of destroying an object.  The input
+/// object is moved to the deleter, and destroyed when the deleter is destroyed.
+///
+/// \param o object whose destructor becomes the new deleter's encapsulated action
+/// \related deleter
+template <typename Object>
 deleter
-make_deleter(Deleter d) {
-    return make_deleter(deleter(), std::move(d));
+make_deleter(Object o) {
+    return make_deleter(deleter(), std::move(o));
 }
 
+/// \cond internal
 struct free_deleter_impl final : deleter::impl {
     void* obj;
     free_deleter_impl(void* obj) : impl(deleter()), obj(obj) {}
     virtual ~free_deleter_impl() override { std::free(obj); }
 };
+/// \endcond
 
 inline
 deleter
@@ -176,6 +227,10 @@ void deleter::append(deleter d) {
     d._impl = nullptr;
 }
 
+/// Makes a deleter that calls \c std::free() when it is destroyed.
+///
+/// \param obj object to free.
+/// \related deleter
 inline
 deleter
 make_free_deleter(void* obj) {
@@ -185,12 +240,20 @@ make_free_deleter(void* obj) {
     return deleter(deleter::raw_object_tag(), obj);
 }
 
+/// Makes a deleter that calls \c std::free() when it is destroyed, as well
+/// as invoking the encapsulated action of another deleter.
+///
+/// \param d deleter to invoke.
+/// \param obj object to free.
+/// \related deleter
 inline
 deleter
 make_free_deleter(deleter next, void* obj) {
     return make_deleter(std::move(next), [obj] () mutable { std::free(obj); });
 }
 
+/// \see make_deleter(Object)
+/// \related deleter
 template <typename T>
 inline
 deleter
@@ -198,11 +261,15 @@ make_object_deleter(T&& obj) {
     return deleter{make_object_deleter_impl(deleter(), std::move(obj))};
 }
 
+/// \see make_deleter(deleter, Object)
+/// \related deleter
 template <typename T>
 inline
 deleter
 make_object_deleter(deleter d, T&& obj) {
     return deleter{make_object_deleter_impl(std::move(d), std::move(obj))};
 }
+
+/// @}
 
 #endif /* DELETER_HH_ */
