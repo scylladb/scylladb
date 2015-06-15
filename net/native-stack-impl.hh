@@ -41,7 +41,7 @@ class native_server_socket_impl : public server_socket_impl {
 public:
     native_server_socket_impl(Protocol& proto, uint16_t port, listen_options opt);
     virtual future<connected_socket, socket_address> accept() override;
-    void abort_accept();
+    virtual void abort_accept() override;
 };
 
 template <typename Protocol>

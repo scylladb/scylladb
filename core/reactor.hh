@@ -228,6 +228,7 @@ class server_socket_impl {
 public:
     virtual ~server_socket_impl() {}
     virtual future<connected_socket, socket_address> accept() = 0;
+    virtual void abort_accept() = 0;
 };
 /// \endcond
 
@@ -265,6 +266,14 @@ public:
     /// \see listen(socket_address sa, listen_options opts)
     future<connected_socket, socket_address> accept() {
         return _ssi->accept();
+    }
+
+    /// Stops any \ref accept() in progress.
+    ///
+    /// Current and future \ref accept() calls will terminate immediately
+    /// with an error.
+    void abort_accept() {
+        return _ssi->abort_accept();
     }
 };
 /// @}
