@@ -25,34 +25,66 @@
 #include "reactor.hh"
 #include "future-util.hh"
 
+/// \defgroup smp-module Multicore
+///
+/// \brief Support for exploiting multiple cores on a server.
+///
+/// Seastar supports multicore servers by using \i sharding.  Each logical
+/// core (lcore) runs a separate event loop, with its own memory allocator,
+/// TCP/IP stack, and other services.  Shards communicate by explicit message
+/// passing, rather than using locks and condition variables as with traditional
+/// threaded programming.
+
+/// \addtogroup smp-module
+/// @{
+
+/// Template helper to distribute a service across all logical cores.
+///
+/// The \c distributed template manages a sharded service, by creating
+/// a copy of the service on each shard, providing mechanisms to communicate
+/// with each shard's copy, and a way to stop the service.
+///
+/// \tparam Service a class to be instantiated on each core.  Should expose
+///         a \c stop() method that returns a \c future<>, to be called when
+///         the service is stopped.
 template <typename Service>
 class distributed {
     std::vector<Service*> _instances;
 public:
+    /// Constructs an empty \c distributed object.  No instances of the service are
+    /// created.
     distributed() {}
     distributed(const distributed& other) = delete;
+    /// Moves a \c distributed object.
     distributed(distributed&& other) = default;
     distributed& operator=(const distributed& other) = delete;
+    /// Moves a \c distributed object.
     distributed& operator=(distributed& other) = default;
+    /// Destroyes a \c distributed object.  Must not be in a started state.
     ~distributed();
 
-    // Start @Service by constructing an instance on every engine
-    // with @args passed to the constructor.
-    // The return value becomes ready when all instances have been
-    // constructed.
+    /// Starts \c Service by constructing an instance on every logical core
+    /// with a copy of \c args passed to the constructor.
+    ///
+    /// \param args Arguments to be forwarded to \c Service constructor
+    /// \return a \ref future<> that becomes ready when all instances have been
+    ///         constructed.
     template <typename... Args>
     future<> start(Args&&... args);
 
-    // Start @Service by constructing an instance on a single CPU.
-    // with @args passed to the constructor.
-    // The return value becomes ready when all instances have been
-    // constructed.
+    /// Starts \c Service by constructing an instance on a single logical core
+    /// with a copy of \c args passed to the constructor.
+    ///
+    /// \param args Arguments to be forwarded to \c Service constructor
+    /// \return a \ref future<> that becomes ready when the instance has been
+    ///         constructed.
     template <typename... Args>
     future<> start_single(Args&&... args);
 
-    // Stop @Service by destroying the instances started by start().
-    // The return value becomes ready when all instances have been
-    // destroyed.
+    /// Stops all started instances and destroys them.
+    ///
+    /// For every started instance, its \c stop() method is called, and then
+    /// it is destroyed.
     future<> stop();
 
     // Invoke a method on all instances of @Service.
@@ -61,23 +93,30 @@ public:
     template <typename... Args>
     future<> invoke_on_all(future<> (Service::*func)(Args...), Args... args);
 
-    // Invoke a method on all instances of @Service.
-    // The return value becomes ready when all instances have processed
-    // the message.
+    /// Invoke a method on all \c Service instances in parallel.
+    ///
+    /// \param func member function to be called.  Must return \c void or
+    ///             \c future<>.
+    /// \param args arguments to be passed to \c func.
+    /// \return future that becomes ready when the method has been invoked
+    ///         on all instances.
     template <typename... Args>
     future<> invoke_on_all(void (Service::*func)(Args...), Args... args);
 
-    // Invoke a function on all instances of @Service (the local instance
-    // of the service is passed by reference).
-    // The return value becomes ready when all instances have processed
-    // the message.
-    //
-    // @func a functor returning void or future<>
+    /// Invoke a callable on all instances of  \c Service.
+    ///
+    /// \param func a callable with the signature `void (Service&)`
+    ///             or `future<> (Service&)`, to be called on each core
+    ///             with the local instance as an argument.
+    /// \return a `future<>` that becomes ready when all cores have
+    ///         processed the message.
     template <typename Func>
     future<> invoke_on_all(Func&& func);
 
-    // Invoke a method on all instances of @Service and reduce the results using
-    // @Reducer. See ::map_reduce().
+    /// Invoke a method on all instances of `Service` and reduce the results using
+    /// `Reducer`.
+    ///
+    /// \see map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Reducer&& r)
     template <typename Reducer, typename Ret, typename... FuncArgs, typename... Args>
     inline
     auto
@@ -95,9 +134,10 @@ public:
             }, std::forward<Reducer>(r));
     }
 
-    // Invoke a method on all instances of @Service and reduce the results using
-    // @Reducer. See ::map_reduce().
-    // @Func gets local instance reference as argument.
+    /// Invoke a callable on all instances of `Service` and reduce the results using
+    /// `Reducer`.
+    ///
+    /// \see map_reduce(Iterator begin, Iterator end, Mapper&& mapper, Reducer&& r)
     template <typename Reducer, typename Func>
     inline
     auto map_reduce(Reducer&& r, Func&& func) -> typename reducer_traits<Reducer>::future_type
@@ -113,20 +153,20 @@ public:
 
     /// Applies a map function to all shards, then reduces the output by calling a reducer function.
     ///
-    /// \param mapper map function accepting a \c Service& and returning a value
+    /// \param map callable with the signature `Value (Service&)` or
+    ///               `future<Value> (Service&)` (for some `Value` type).
     ///               used as the second input to \c reduce
-    /// \param initial initial value used as the first input to \c reduce .
+    /// \param initial initial value used as the first input to \c reduce.
     /// \param reduce binary function used to left-fold the return values of \c map
     ///               into \c initial .
     ///
     /// Each \c map invocation runs on the shard associated with the service.
     ///
-    /// Requirements:
-    ///   Mapper: unary function taking \c Service@ and producing some result.
-    ///   Initial: any value type
-    ///   Reduce: a binary function taking two Initial values and returning an Initial
-    /// Returns:
-    ///   future<Initial>
+    /// \tparam  Mapper unary function taking `Service&` and producing some result.
+    /// \tparam  Initial any value type
+    /// \tparam  Reduce a binary function taking two Initial values and returning an Initial
+    /// \return  Result of applying `map` to each instance in parallel, reduced by calling
+    ///          `reduce()` on each adjacent pair of results.
     template <typename Mapper, typename Initial, typename Reduce>
     inline
     future<Initial>
@@ -142,9 +182,12 @@ public:
                             std::move(reduce));
     }
 
-    // Invoke a method on a specific instance of @Service.
-    // The return value (which must be a future) contains the future
-    // returned by @Service.
+    /// Invoke a method on a specific instance of `Service`.
+    ///
+    /// \param id shard id to call
+    /// \param func a method of `Service`
+    /// \param args arguments to be passed to `func`
+    /// \return result of calling `func(args)` on the designated instance
     template <typename Ret, typename... FuncArgs, typename... Args>
     std::enable_if_t<is_future<Ret>::value, Ret>
     invoke_on(unsigned id, Ret (Service::*func)(FuncArgs...), Args&&... args) {
@@ -156,7 +199,12 @@ public:
         });
     }
 
-    // Invoke a method on a specific instance of @Service.
+    /// Invoke a method on a specific instance of `Service`.
+    ///
+    /// \param id shard id to call
+    /// \param func a method of `Service`
+    /// \param args arguments to be passed to `func`
+    /// \return result of calling `func(args)` on the designated instance
     template <typename Ret, typename... FuncArgs, typename... Args>
     std::enable_if_t<!is_future<Ret>::value && !std::is_same<Ret, void>::value, future<Ret>>
     invoke_on(unsigned id, Ret (Service::*func)(FuncArgs...), Args&&... args) {
@@ -176,9 +224,12 @@ public:
         });
     }
 
-    // Invoke a function object on a specific instance of the service.
-    //
-    // @func function object, which may return an future, a value, or void.
+    /// Invoke a callable on a specific instance of `Service`.
+    ///
+    /// \param id shard id to call
+    /// \param func a callable with signature `Value (Service&)` or
+    ///        `future<Value> (Service&)` (for some `Value` type)
+    /// \return result of calling `func(instance)` on the designated instance
     template <typename Func>
     futurize_t<std::result_of_t<Func(Service&)>>
     invoke_on(unsigned id, Func&& func) {
@@ -188,10 +239,10 @@ public:
         });
     }
 
-    // Returns reference to the local instance.
+    /// Gets a reference to the local instance.
     Service& local();
 
-    // Returns TRUE if a local service has been initialized
+    /// Checks whether the local instance has been initialized.
     bool local_is_initialized();
 };
 
@@ -385,5 +436,7 @@ template <typename T>
 foreign_ptr<T> make_foreign(T ptr) {
     return foreign_ptr<T>(std::move(ptr));
 }
+
+/// @}
 
 #endif /* DISTRIBUTED_HH_ */
