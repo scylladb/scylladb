@@ -110,8 +110,27 @@ future<> storage_service::join_token_ring(int delay) {
         logger.info("This node will not auto bootstrap because it is configured to be a seed node.");
 #endif
     if (should_bootstrap()) {
-        _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata);
-        f = bootstrap(_bootstrap_tokens);
+        auto elapsed = make_shared<int>(0);
+        auto stop_cond = [elapsed, delay] {
+            // FIXME
+            // if we see schema, we can proceed to the next check directly
+            // if (!Schema.instance.getVersion().equals(Schema.emptyVersion)) {
+            //    return true;
+            // }
+            if (*elapsed < delay) {
+                return false;
+            }
+            return true;
+        };
+        f = do_until(stop_cond, [elapsed] {
+            auto t = 1000;
+            return sleep(std::chrono::milliseconds(t)).then([elapsed, t] {
+                *elapsed += t;
+            });
+        }).then([this] {
+            _bootstrap_tokens = boot_strapper::get_bootstrap_tokens(_token_metadata);
+            bootstrap(_bootstrap_tokens);
+        });
 #if 0
         if (SystemKeyspace.bootstrapInProgress())
             logger.warn("Detected previous bootstrap failure; retrying");
