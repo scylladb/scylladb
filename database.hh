@@ -261,6 +261,7 @@ class database {
     future<> init_commitlog();
     future<> apply_in_memory(const frozen_mutation&, const db::replay_position&);
     future<> populate(sstring datadir);
+    future<> populate_keyspace(sstring datadir, sstring ks_name);
 public:
     database();
     database(const db::config&);

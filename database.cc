@@ -487,45 +487,53 @@ database::database(const db::config& cfg) : _cfg(std::make_unique<db::config>(cf
 database::~database() {
 }
 
+future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
+    auto ksdir = datadir + "/" + ks_name;
+    auto i = _keyspaces.find(ks_name);
+    if (i == _keyspaces.end()) {
+        dblog.warn("Skipping undefined keyspace: {}", ks_name);
+    } else {
+        dblog.warn("Populating Keyspace {}", ks_name);
+        return lister::scan_dir(ksdir, directory_entry_type::directory, [this, ksdir, ks_name] (directory_entry de) {
+            auto comps = parse_fname(de.name);
+            if (comps.size() != 2) {
+                dblog.error("Keyspace {}: Skipping malformed CF {} ", ksdir, de.name);
+                return make_ready_future<>();
+            }
+            sstring cfname = comps[0];
+
+            auto sstdir = ksdir + "/" + de.name;
+
+            try {
+                auto& cf = find_column_family(ks_name, cfname);
+                dblog.info("Keyspace {}: Reading CF {} ", ksdir, cfname);
+                // FIXME: Increase parallelism.
+                return cf.populate(sstdir);
+            } catch (no_such_column_family&) {
+                dblog.warn("{}, CF {}: schema not loaded!", ksdir, comps[0]);
+                return make_ready_future<>();
+            }
+        });
+    }
+    return make_ready_future<>();
+}
+
 future<> database::populate(sstring datadir) {
     return lister::scan_dir(datadir, directory_entry_type::directory, [this, datadir] (directory_entry de) {
         auto& ks_name = de.name;
-        auto ksdir = datadir + "/" + de.name;
-
-        auto i = _keyspaces.find(ks_name);
-        if (i == _keyspaces.end()) {
-            dblog.warn("Skipping undefined keyspace: {}", ks_name);
-        } else {
-            dblog.warn("Populating Keyspace {}", ks_name);
-            return lister::scan_dir(ksdir, directory_entry_type::directory, [this, ksdir, ks_name] (directory_entry de) {
-                auto comps = parse_fname(de.name);
-                if (comps.size() != 2) {
-                    dblog.error("Keyspace {}: Skipping malformed CF {} ", ksdir, de.name);
-                    return make_ready_future<>();
-                }
-                sstring cfname = comps[0];
-
-                auto sstdir = ksdir + "/" + de.name;
-
-                try {
-                    auto& cf = find_column_family(ks_name, cfname);
-                    dblog.info("Keyspace {}: Reading CF {} ", ksdir, cfname);
-                    // FIXME: Increase parallelism.
-                    return cf.populate(sstdir);
-                } catch (no_such_column_family&) {
-                    dblog.warn("{}, CF {}: schema not loaded!", ksdir, comps[0]);
-                    return make_ready_future<>();
-                }
-            });
+        if (ks_name == "system") {
+            return make_ready_future<>();
         }
-        return make_ready_future<>();
+        return populate_keyspace(datadir, ks_name);
     });
 }
 
 future<>
 database::init_from_data_directory() {
     // FIXME support multiple directories
-    return populate(_cfg->data_file_directories()[0]).then([this]() {
+    return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME).then([this]() {
+        return populate(_cfg->data_file_directories()[0]);
+    }).then([this] {
         return init_commitlog();
     });
 }
