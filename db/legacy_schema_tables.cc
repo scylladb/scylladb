@@ -32,6 +32,7 @@
 #include "map_difference.hh"
 
 #include "core/do_with.hh"
+#include "core/thread.hh"
 #include "json.hh"
 
 #include "db/config.hh"
@@ -478,69 +479,49 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 
     future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush)
     {
-        schema_ptr s = keyspaces();
-        // compare before/after schemas of the affected keyspaces only
-        std::set<sstring> keyspaces;
-        for (auto&& mutation : mutations) {
-            keyspaces.emplace(boost::any_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0))));
-        }
+       return seastar::async([&proxy, mutations = std::move(mutations), do_flush] {
+           schema_ptr s = keyspaces();
+           // compare before/after schemas of the affected keyspaces only
+           std::set<sstring> keyspaces;
+           for (auto&& mutation : mutations) {
+               keyspaces.emplace(boost::any_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0))));
+           }
 
-        // current state of the schema
-        auto old_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
-        auto old_column_families = read_schema_for_keyspaces(proxy, COLUMNFAMILIES, keyspaces);
-        auto old_types = read_schema_for_keyspaces(proxy, USERTYPES, keyspaces);
-        auto old_functions = read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
-        auto old_aggregates = read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
+           // current state of the schema
+           auto&& old_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces).get0();
+           auto&& old_column_families = read_schema_for_keyspaces(proxy, COLUMNFAMILIES, keyspaces).get0();
+           /*auto& old_types = */read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
+           /*auto& old_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
+           /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
 
-        return when_all(std::move(old_keyspaces), std::move(old_column_families), std::move(old_types),
-                        std::move(old_functions), std::move(old_aggregates)).then([&proxy, keyspaces, mutations = std::move(mutations)] (auto&& old_results)  mutable {
-            return proxy.mutate_locally(std::move(mutations)).then([&proxy, keyspaces, old_results = std::move(old_results)] () mutable {
+           proxy.mutate_locally(std::move(mutations)).get0();
 #if 0
-                if (doFlush)
-                    flushSchemaTables();
+           if (doFlush)
+                flushSchemaTables();
 #endif
-                // with new data applied
-                auto new_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
-                auto new_column_families = read_schema_for_keyspaces(proxy, COLUMNFAMILIES, keyspaces);
-                auto new_types = read_schema_for_keyspaces(proxy, USERTYPES, keyspaces);
-                auto new_functions = read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
-                auto new_aggregates = read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
+           // with new data applied
+           auto&& new_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces).get0();
+           auto&& new_column_families = read_schema_for_keyspaces(proxy, COLUMNFAMILIES, keyspaces).get0();
+           /*auto& new_types = */read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
+           /*auto& new_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
+           /*auto& new_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
 
-                // FIXME: Make the update atomic like in Origin.
-                return when_all(std::move(new_keyspaces), std::move(new_column_families), std::move(new_types),
-                        std::move(new_functions), std::move(new_aggregates)).then([&proxy, old_results = std::move(old_results)] (auto&& new_results) mutable {
-                    auto old_keyspaces = std::move(std::get<schema_result>(std::get<0>(old_results).get()));
-                    auto old_column_families = std::move(std::get<schema_result>(std::get<1>(old_results).get()));
-                    auto old_types = std::move(std::get<schema_result>(std::get<2>(old_results).get()));
-                    auto old_functions = std::move(std::get<schema_result>(std::get<3>(old_results).get()));
-                    auto old_aggregates = std::move(std::get<schema_result>(std::get<4>(old_results).get()));
+           // FIXME: Make the update atomic like in Origin.
 
-                    auto new_keyspaces = std::move(std::get<schema_result>(std::get<0>(new_results).get()));
-                    auto new_column_families = std::move(std::get<schema_result>(std::get<1>(new_results).get()));
-                    auto new_types = std::move(std::get<schema_result>(std::get<2>(new_results).get()));
-                    auto new_functions = std::move(std::get<schema_result>(std::get<3>(new_results).get()));
-                    auto new_aggregates = std::move(std::get<schema_result>(std::get<4>(new_results).get()));
-
-                    auto keyspaces_to_drop = merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces));
-                    auto table_merge_done = merge_tables(proxy, std::move(old_column_families), std::move(new_column_families));
+           std::set<sstring> keyspaces_to_drop = merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces)).get0();
+           merge_tables(proxy, std::move(old_column_families), std::move(new_column_families)).get0();
 #if 0
-                    mergeTypes(oldTypes, newTypes);
-                    mergeFunctions(oldFunctions, newFunctions);
-                    mergeAggregates(oldAggregates, newAggregates);
+           mergeTypes(oldTypes, newTypes);
+           mergeFunctions(oldFunctions, newFunctions);
+           mergeAggregates(oldAggregates, newAggregates);
 #endif
-                    return when_all(std::move(keyspaces_to_drop), std::move(table_merge_done)).then([&proxy] (auto&& results) mutable {
-                        auto keyspaces_to_drop = std::move(std::get<std::set<sstring>>(std::get<0>(results).get()));
-
-                        return proxy.get_db().invoke_on_all([keyspaces_to_drop = std::move(keyspaces_to_drop)] (database& db) {
-                            // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
-                            for (auto&& keyspace_to_drop : keyspaces_to_drop) {
-                                db.drop_keyspace(keyspace_to_drop);
-                            }
-                        });
-                    });
-                });
-            });
-        });
+           proxy.get_db().invoke_on_all([keyspaces_to_drop = std::move(keyspaces_to_drop)] (database& db) {
+               // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
+               for (auto&& keyspace_to_drop : keyspaces_to_drop) {
+                   db.drop_keyspace(keyspace_to_drop);
+               }
+           }).get0();
+       });
     }
 
     future<std::set<sstring>> merge_keyspaces(service::storage_proxy& proxy, schema_result&& before, schema_result&& after)
