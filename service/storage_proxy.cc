@@ -1336,11 +1336,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vecto
         if (!range.is_singular()) {
             throw std::runtime_error("mixed singular and non singular range are not supported");
         }
-        auto& key = range.start_value();
-        // TODO: consider storing decorated key in the request
-        auto schema = _db.local().find_schema(cmd->cf_id);
-        auto token = dht::global_partitioner().get_token(*schema, key);
-        unsigned shard = _db.local().shard_of(token);
+        unsigned shard = _db.local().shard_of(range.start_value().token());
         dst_map[shard].emplace_back(std::move(range));
     });
 
@@ -1412,7 +1408,7 @@ storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const
     auto shard = db.shard_of(key._token);
     return _db.invoke_on(shard, [id = schema->id(), key, slice] (database& db) {
         std::vector<query::partition_range> pr;
-        pr.emplace_back(query::partition_range::make_singular(key._key));
+        pr.emplace_back(query::partition_range::make_singular(key));
         auto cmd = make_lw_shared<query::read_command>(id, slice, std::numeric_limits<uint32_t>::max());
         return do_with(std::move(pr), [&db, cmd] (auto& pr){
             return db.query(*cmd, pr).then([] (lw_shared_ptr<query::result>&& result) {

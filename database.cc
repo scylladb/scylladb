@@ -880,15 +880,18 @@ column_family::query(const query::read_command& cmd, const std::vector<query::pa
             auto& limit = qs.limit;
             auto&& range = *qs.current_partition_range++;
             if (range.is_singular()) {
-                auto& key = range.start_value();
-                return find_partition_slow(key).then([this, &qs, &key] (auto partition) {
+                const query::ring_position& pos = range.start_value();
+                if (!pos.key()) {
+                    fail(unimplemented::cause::RANGE_QUERIES);
+                }
+                return find_partition(dht::decorated_key{pos.token(), *pos.key()}).then([this, &qs, &pos] (auto partition) {
                     auto& cmd = qs.cmd;
                     auto& builder = qs.builder;
                     auto& limit = qs.limit;
                     if (!partition) {
                         return;
                     }
-                    auto p_builder = builder.add_partition(key);
+                    auto p_builder = builder.add_partition(*pos.key());
                     partition->query(*_schema, cmd.slice, limit, p_builder);
                     p_builder.finish();
                     limit -= p_builder.row_count();

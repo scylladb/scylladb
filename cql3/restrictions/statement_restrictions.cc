@@ -240,7 +240,19 @@ std::vector<query::partition_range> statement_restrictions::get_partition_key_ra
     if (!_partition_key_restrictions) {
         return {query::partition_range::make_open_ended_both_sides()};
     }
-    return _partition_key_restrictions->bounds(options);
+    std::vector<query::partition_range> ranges;
+    ranges.reserve(_partition_key_restrictions->size());
+    for (query::range<partition_key>& r : _partition_key_restrictions->bounds(options)) {
+        if (!r.is_singular()) {
+            throw exceptions::invalid_request_exception("Range queries on partition key values not supported.");
+        }
+        ranges.emplace_back(std::move(r).transform<query::ring_position>(
+            [this] (partition_key&& k) -> query::ring_position {
+                auto token = dht::global_partitioner().get_token(*_schema, k);
+                return { std::move(token), std::move(k) };
+            }));
+    }
+    return ranges;
 }
 
 std::vector<query::clustering_range> statement_restrictions::get_clustering_bounds(const query_options& options) const {

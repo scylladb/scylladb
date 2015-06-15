@@ -24,4 +24,12 @@ std::ostream& operator<<(std::ostream& out, const read_command& r) {
         << ", limit=" << r.row_limit << "}";
 }
 
+std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
+    out << "{" << pos.token();
+    if (pos.has_key()) {
+        out << ", " << *pos.key();
+    }
+    return out << "}";
+}
+
 }

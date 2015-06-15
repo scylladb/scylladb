@@ -178,7 +178,7 @@ modification_statement::read_required_rows(
     // auto now = db_clock::now();
     std::vector<query::partition_range> pr;
     for (auto&& pk : *keys) {
-        pr.emplace_back(pk);
+        pr.emplace_back(dht::global_partitioner().decorate_key(*s, pk));
     }
     query::read_command cmd(s->id(), ps, std::numeric_limits<uint32_t>::max());
     // FIXME: ignoring "local"
