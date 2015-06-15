@@ -65,6 +65,7 @@ class posix_ap_server_socket_impl : public server_socket_impl {
 public:
     explicit posix_ap_server_socket_impl(socket_address sa) : _sa(sa) {}
     virtual future<connected_socket, socket_address> accept();
+    void abort_accept();
     static void move_connected_socket(socket_address sa, pollable_fd fd, socket_address addr);
 };
 
@@ -74,6 +75,7 @@ class posix_server_socket_impl : public server_socket_impl {
 public:
     explicit posix_server_socket_impl(socket_address sa, pollable_fd lfd) : _sa(sa), _lfd(std::move(lfd)) {}
     virtual future<connected_socket, socket_address> accept();
+    void abort_accept();
 };
 
 class posix_reuseport_server_socket_impl : public server_socket_impl {
@@ -82,6 +84,7 @@ class posix_reuseport_server_socket_impl : public server_socket_impl {
 public:
     explicit posix_reuseport_server_socket_impl(socket_address sa, pollable_fd lfd) : _sa(sa), _lfd(std::move(lfd)) {}
     virtual future<connected_socket, socket_address> accept();
+    void abort_accept();
 };
 
 class posix_network_stack : public network_stack {
