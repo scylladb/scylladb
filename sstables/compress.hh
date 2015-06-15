@@ -59,6 +59,12 @@ compress_func compress_lz4;
 compress_func compress_snappy;
 compress_func compress_deflate;
 
+typedef size_t compress_max_size_func(size_t input_len);
+
+compress_max_size_func compress_max_size_lz4;
+compress_max_size_func compress_max_size_snappy;
+compress_max_size_func compress_max_size_deflate;
+
 inline uint32_t init_checksum_adler32() {
     return adler32(0, Z_NULL, 0);
 }
@@ -95,6 +101,8 @@ private:
     // Variables determined from the above deserialized values, held for convenience:
     uncompress_func *_uncompress = nullptr;
     compress_func *_compress = nullptr;
+    // Return maximum length of data that compressor may output.
+    compress_max_size_func *_compress_max_size = nullptr;
     // Variables *not* found in the "Compression Info" file (added by update()):
     uint64_t _compressed_file_length;
 public:
@@ -140,7 +148,9 @@ public:
         }
         return _compress(input, input_len, output, output_len);
     }
-
+    size_t compress_max_size(size_t input_len) const {
+        return _compress_max_size(input_len);
+    }
     friend class sstable;
 };
 
