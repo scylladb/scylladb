@@ -1394,11 +1394,10 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, std::vector<query::
 // first performing the query on shard CPU and the building the result
 // set on the local CPU.
 future<lw_shared_ptr<query::result_set>>
-storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const dht::decorated_key& key)
+storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const dht::decorated_key& key, const std::vector<query::clustering_range>& row_ranges)
 {
     auto&& db = _db.local();
     auto schema = db.find_schema(ks_name, cf_name);
-    std::vector<query::clustering_range> row_ranges = {query::clustering_range::make_open_ended_both_sides()};
     std::vector<column_id> regular_cols;
     boost::range::push_back(regular_cols, schema->regular_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
     std::vector<column_id> static_cols;
