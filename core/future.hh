@@ -225,6 +225,10 @@ struct future_state {
         }
         return std::move(_u.value);
     }
+    using get0_return_type = std::tuple_element_t<0, std::tuple<T...>>;
+    static get0_return_type get0(std::tuple<T...>&& x) {
+        return std::get<0>(x);
+    }
     void forward_to(promise<T...>& pr) noexcept {
         assert(_state != state::future);
         if (_state == state::exception) {
@@ -307,6 +311,10 @@ struct future_state<> {
             std::rethrow_exception(std::move(_u.ex));
         }
         return {};
+    }
+    using get0_return_type = void;
+    static get0_return_type get0(std::tuple<>&&) {
+        return;
     }
     std::exception_ptr get_exception() noexcept {
         assert(_u.st >= state::exception_min);
@@ -685,8 +693,8 @@ public:
     /// one type parameter.
     ///
     /// Equivalent to: \c std::get<0>(f.get()).
-    T get0() {
-        return std::get<0>(get());
+    typename future_state<T...>::get0_return_type get0() {
+        return future_state<T...>::get0(get());
     }
 
     /// \cond internal
