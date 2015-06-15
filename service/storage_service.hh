@@ -74,9 +74,7 @@ public:
         return _token_metadata;
     }
 
-    void gossip_snitch_info() {
-        // TODO
-    }
+    void gossip_snitch_info();
 
 private:
     inet_address get_broadcast_address() {
@@ -421,16 +419,6 @@ private:
     bool should_bootstrap();
     future<> prepare_to_join();
     future<> join_token_ring(int delay);
-#if 0
-    public void gossipSnitchInfo()
-    {
-        IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
-        String dc = snitch.getDatacenter(FBUtilities.getBroadcastAddress());
-        String rack = snitch.getRack(FBUtilities.getBroadcastAddress());
-        Gossiper.instance.addLocalApplicationState(ApplicationState.DC, StorageService.instance.valueFactory.datacenter(dc));
-        Gossiper.instance.addLocalApplicationState(ApplicationState.RACK, StorageService.instance.valueFactory.rack(rack));
-    }
-#endif
 public:
     void join_ring();
     bool is_joined() {

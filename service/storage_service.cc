@@ -4,6 +4,7 @@
 
 #include "storage_service.hh"
 #include "core/distributed.hh"
+#include "locator/snitch_base.hh"
 
 namespace service {
 
@@ -69,20 +70,21 @@ future<> storage_service::prepare_to_join() {
             gms::get_local_gossiper().debug_show();
             _token_metadata.debug_show();
 #endif
-        });
+        }).then([this] {
+            // gossip snitch infos (local DC and rack)
+            gossip_snitch_info();
 #if 0
-        // gossip snitch infos (local DC and rack)
-        gossipSnitchInfo();
-        // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
-        Schema.instance.updateVersionAndAnnounce(); // Ensure we know our own actual Schema UUID in preparation for updates
+            // gossip Schema.emptyVersion forcing immediate check for schema updates (see MigrationManager#maybeScheduleSchemaPull)
+            Schema.instance.updateVersionAndAnnounce(); // Ensure we know our own actual Schema UUID in preparation for updates
 
-        if (!MessagingService.instance().isListening())
-            MessagingService.instance().listen(FBUtilities.getLocalAddress());
-        LoadBroadcaster.instance.startBroadcasting();
+            if (!MessagingService.instance().isListening())
+                MessagingService.instance().listen(FBUtilities.getLocalAddress());
+            LoadBroadcaster.instance.startBroadcasting();
 
-        HintedHandOffManager.instance.start();
-        BatchlogManager.instance.start();
+            HintedHandOffManager.instance.start();
+            BatchlogManager.instance.start();
 #endif
+        });
     }
     return make_ready_future<>();
 }
@@ -931,6 +933,22 @@ void storage_service::replicate_to_all_cores() {
             print("storage_service: Fail to replicate _token_metadata\n");
         }
     });
+}
+
+void storage_service::gossip_snitch_info() {
+    // FIXME: get a snitch_ptr
+#if 0
+    IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
+    locator::snitch_ptr snitch;
+    auto addr = get_broadcast_address();
+    auto dc = snitch->get_datacenter(addr);
+    auto rack = snitch->get_rack(addr);
+#endif
+    auto dc = "rack1";
+    auto rack = "datacenter1";
+    auto& gossiper = gms::get_local_gossiper();
+    gossiper.add_local_application_state(gms::application_state::DC, value_factory.datacenter(dc));
+    gossiper.add_local_application_state(gms::application_state::RACK, value_factory.rack(rack));
 }
 
 } // namespace service
