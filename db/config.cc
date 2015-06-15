@@ -130,7 +130,7 @@ std::basic_ostream<Args...> & operator<<(std::basic_ostream<Args...> & os, const
     int n = 0;
     for (auto& e : map) {
         if (n > 0) {
-            os << ",";
+            os << ":";
         }
         os << e.first << "=" << e.second;
     }
@@ -142,9 +142,9 @@ std::basic_istream<Args...> & operator>>(std::basic_istream<Args...> & is, db::c
     std::string str;
     is >> str;
 
-    std::regex comma(",");
+    std::regex colon(":");
 
-    std::sregex_token_iterator s(str.begin(), str.end(), comma, -1);
+    std::sregex_token_iterator s(str.begin(), str.end(), colon, -1);
     std::sregex_token_iterator e;
     while (s != e) {
         sstring p = std::string(*s++);
