@@ -677,6 +677,18 @@ public:
         return state()->get();
     }
 
+    /// Gets the value returned by the computation.
+    ///
+    /// Similar to \ref get(), but instead of returning a
+    /// tuple, returns the first value of the tuple.  This is
+    /// useful for the common case of a \c future<T> with exactly
+    /// one type parameter.
+    ///
+    /// Equivalent to: \c std::get<0>(f.get()).
+    T get0() {
+        return std::get<0>(get());
+    }
+
     /// \cond internal
     void wait() {
         auto thread = seastar::thread_impl::get();
