@@ -190,6 +190,8 @@ public:
     virtual ~connected_socket_impl() {}
     virtual input_stream<char> input() = 0;
     virtual output_stream<char> output() = 0;
+    virtual void shutdown_input() = 0;
+    virtual void shutdown_output() = 0;
 };
 
 /// \addtogroup networking-module
@@ -220,6 +222,22 @@ public:
     ///
     /// Gets an object that sends data to the remote endpoint.
     output_stream<char> output();
+    /// Disables output to the socket.
+    ///
+    /// Current or future writes that have not been successfully flushed
+    /// will immediately fail with an error.  This is useful to abort
+    /// operations on a socket that is not making progress due to a
+    /// peer failure.
+    void shutdown_output();
+    /// Disables input from the socket.
+    ///
+    /// Current or future reads will immediately fail with an error.
+    /// This is useful to abort operations on a socket that is not making
+    /// progress due to a peer failure.
+    void shutdown_input();
+    /// Disables socket input and output.
+    ///
+    /// Equivalent to \ref shutdown_input() and \ref shutdown_output().
 };
 /// @}
 
@@ -1336,6 +1354,18 @@ inline
 output_stream<char>
 connected_socket::output() {
     return _csi->output();
+}
+
+inline
+void
+connected_socket::shutdown_input() {
+    return _csi->shutdown_input();
+}
+
+inline
+void
+connected_socket::shutdown_output() {
+    return _csi->shutdown_output();
 }
 
 #endif /* REACTOR_HH_ */

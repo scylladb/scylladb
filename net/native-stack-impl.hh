@@ -76,8 +76,8 @@ public:
         : _conn(std::move(conn)) {}
     virtual input_stream<char> input() override;
     virtual output_stream<char> output() override;
-    void shutdown_input();
-    void shutdown_output();
+    virtual void shutdown_input() override;
+    virtual void shutdown_output() override;
 };
 
 template <typename Protocol>
