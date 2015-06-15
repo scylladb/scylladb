@@ -2,6 +2,7 @@
 
 #include <experimental/optional>
 #include "keys.hh"
+#include "dht/i_partitioner.hh"
 #include "enum_set.hh"
 
 namespace query {
@@ -20,7 +21,8 @@ public:
             : _value(std::move(value))
             , _inclusive(inclusive)
         { }
-        const T& value() const { return _value; }
+        const T& value() const & { return _value; }
+        T&& value() && { return std::move(_value); }
         bool is_inclusive() const { return _inclusive; }
     };
 private:
@@ -28,10 +30,10 @@ private:
     optional<bound> _end;
     bool _singular;
 public:
-    range(optional<bound> start, optional<bound> end)
+    range(optional<bound> start, optional<bound> end, bool singular = false)
         : _start(std::move(start))
         , _end(std::move(end))
-        , _singular(false)
+        , _singular(singular)
     { }
     range(T value)
         : _start(bound(std::move(value), true))
@@ -79,6 +81,21 @@ public:
 
     const optional<bound>& end() const {
         return _end;
+    }
+
+    // Transforms this range into a new range of a different value type
+    // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
+    template<typename U, typename Transformer>
+    range<U> transform(Transformer&& transformer) && {
+        auto t = [&transformer] (std::experimental::optional<bound>&& b)
+            -> std::experimental::optional<typename query::range<U>::bound>
+        {
+            if (!b) {
+                return {};
+            }
+            return { { transformer(std::move(*b).value()), b->is_inclusive() } };
+        };
+        return range<U>(t(std::move(_start)), t(std::move(_end)), _singular);
     }
 
     template<typename U>
