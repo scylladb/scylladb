@@ -167,6 +167,8 @@ public:
     future<> write_all(net::packet& p);
     future<> readable();
     future<> writeable();
+    void abort_reader(std::exception_ptr ex);
+    void abort_writer(std::exception_ptr ex);
     future<pollable_fd, socket_address> accept();
     future<size_t> sendmsg(struct msghdr *msg);
     future<size_t> recvmsg(struct msghdr *msg);
@@ -566,6 +568,8 @@ private:
             promise<> pollable_fd_state::* pr, int event);
     void complete_epoll_event(pollable_fd_state& fd,
             promise<> pollable_fd_state::* pr, int events, int event);
+    void abort_fd(pollable_fd_state& fd, std::exception_ptr ex,
+            promise<> pollable_fd_state::* pr, int event);
 public:
     reactor_backend_epoll();
     virtual ~reactor_backend_epoll() override { }
@@ -575,6 +579,8 @@ public:
     virtual void forget(pollable_fd_state& fd) override;
     virtual future<> notified(reactor_notifier *n) override;
     virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
+    void abort_reader(pollable_fd_state& fd, std::exception_ptr ex);
+    void abort_writer(pollable_fd_state& fd, std::exception_ptr ex);
 };
 
 #ifdef HAVE_OSV
@@ -863,6 +869,12 @@ public:
     future<> notified(reactor_notifier *n) {
         return _backend.notified(n);
     }
+    void abort_reader(pollable_fd_state& fd, std::exception_ptr ex) {
+        return _backend.abort_reader(fd, std::move(ex));
+    }
+    void abort_writer(pollable_fd_state& fd, std::exception_ptr ex) {
+        return _backend.abort_writer(fd, std::move(ex));
+    }
     void enable_timer(clock_type::time_point when);
     std::unique_ptr<reactor_notifier> make_reactor_notifier() {
         return _backend.make_reactor_notifier();
@@ -1149,6 +1161,18 @@ future<> pollable_fd::readable() {
 inline
 future<> pollable_fd::writeable() {
     return engine().writeable(*_s);
+}
+
+inline
+void
+pollable_fd::abort_reader(std::exception_ptr ex) {
+    engine().abort_reader(*_s, std::move(ex));
+}
+
+inline
+void
+pollable_fd::abort_writer(std::exception_ptr ex) {
+    engine().abort_writer(*_s, std::move(ex));
 }
 
 inline
