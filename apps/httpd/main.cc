@@ -45,45 +45,43 @@ void set_routes(routes& r) {
         return "hello";
     });
     function_handler* h2 = new function_handler([](std::unique_ptr<request> req) {
-            return make_ready_future<json::json_return_type>("json-future");
+        return make_ready_future<json::json_return_type>("json-future");
     });
     r.add(operation_type::GET, url("/"), h1);
     r.add(operation_type::GET, url("/jf"), h2);
     r.add(operation_type::GET, url("/file").remainder("path"),
             new directory_handler("/"));
-    demo_json::hello_world.set(r,
-            [](const_req req) {
-                demo_json::my_object obj;
-                obj.var1 = req.param.at("var1");
-                obj.var2 = req.param.at("var2");
-                demo_json::ns_hello_world::query_enum v = demo_json::ns_hello_world::str2query_enum(req.query_parameters.at("query_enum"));
-                // This demonstrate enum conversion
-                obj.enum_var = v;
-                return obj;
-            });
+    demo_json::hello_world.set(r, [] (const_req req) {
+        demo_json::my_object obj;
+        obj.var1 = req.param.at("var1");
+        obj.var2 = req.param.at("var2");
+        demo_json::ns_hello_world::query_enum v = demo_json::ns_hello_world::str2query_enum(req.query_parameters.at("query_enum"));
+        // This demonstrate enum conversion
+        obj.enum_var = v;
+        return obj;
+    });
 }
 
 int main(int ac, char** av) {
     app_template app;
     app.add_options()("port", bpo::value<uint16_t>()->default_value(10000),
             "HTTP Server port");
-    return app.run(ac, av,
-            [&] {
-                auto&& config = app.configuration();
-                uint16_t port = config["port"].as<uint16_t>();
-                auto server = new http_server_control();
-                auto rb= make_shared<api_registry_builder>("apps/httpd/");
-                server->start().then([server] {
-                    return server->set_routes(set_routes);
-                }).then([server, rb]{
-                    return server->set_routes([rb](routes& r){rb->set_api_doc(r);});
-                }).then([server, rb]{
-                    return server->set_routes([rb](routes& r) {rb->register_function(r, "demo", "hello world application");});
-                }).then([server, port] {
-                    return server->listen(port);
-                }).then([port] {
-                    std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
-                });
+    return app.run(ac, av, [&] {
+        auto&& config = app.configuration();
+        uint16_t port = config["port"].as<uint16_t>();
+        auto server = new http_server_control();
+        auto rb = make_shared<api_registry_builder>("apps/httpd/");
+        server->start().then([server] {
+            return server->set_routes(set_routes);
+        }).then([server, rb]{
+            return server->set_routes([rb](routes& r){rb->set_api_doc(r);});
+        }).then([server, rb]{
+            return server->set_routes([rb](routes& r) {rb->register_function(r, "demo", "hello world application");});
+        }).then([server, port] {
+            return server->listen(port);
+        }).then([port] {
+            std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
+        });
 
-            });
+    });
 }
