@@ -117,6 +117,10 @@ public:
         throw_system_error_on(ret == -1);
         return file_desc(ret);
     }
+    void shutdown(int how) {
+        auto ret = ::shutdown(_fd, how);
+        throw_system_error_on(ret == -1);
+    }
     void truncate(size_t size) {
         auto ret = ::ftruncate(_fd, size);
         throw_system_error_on(ret);
