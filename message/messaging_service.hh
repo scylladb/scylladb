@@ -14,12 +14,16 @@
 #include "gms/inet_address.hh"
 #include "rpc/rpc.hh"
 #include <unordered_map>
+#include "db/config.hh"
+#include "frozen_mutation.hh"
+#include "db/serializer.hh"
 
 namespace net {
 
 /* All verb handler identifiers */
 enum class messaging_verb : int32_t {
     MUTATION,
+    MUTATION_DONE,
     BINARY, // Deprecated
     READ_REPAIR,
     READ,
@@ -75,6 +79,8 @@ public:
 
 namespace net {
 
+// NOTE: operator(input_stream<char>&, T&) takes a reference to uninitialized
+//       T object and should use placement new in case T is non POD
 struct serializer {
     // For integer type
     template<typename T>
@@ -89,6 +95,38 @@ struct serializer {
                 throw rpc::closed_error();
             }
             v = net::ntoh(*reinterpret_cast<const net::packed<T>*>(buf.get()));
+        });
+    }
+
+    // For vectors
+    template<typename T>
+    inline auto operator()(output_stream<char>& out, std::vector<T>& v) {
+        return operator()(out, v.size()).then([&out, &v, this] {
+            return do_for_each(v.begin(), v.end(), [&out, this] (T& e) {
+                return operator()(out, e);
+            });
+        });
+    }
+    template<typename T>
+    inline auto operator()(input_stream<char>& in, std::vector<T>& v) {
+        using size_type = typename  std::vector<T>::size_type;
+        return in.read_exactly(sizeof(size_type)).then([&v, &in, this] (temporary_buffer<char> buf) {
+            if (buf.size() != sizeof(size_type)) {
+                throw rpc::closed_error();
+            }
+            size_type c = net::ntoh(*reinterpret_cast<const net::packed<size_type>*>(buf.get()));
+            new (&v) std::vector<T>;
+            v.reserve(c);
+            union U {
+                U(){}
+                ~U(){}
+                T v;
+            };
+            return do_until([c] () mutable {return !c--;}, [&v, &in, u = U(), this] () mutable {
+                return operator()(in, u.v).then([&u, &v] {
+                    v.emplace_back(std::move(u.v));
+                });
+            });
         });
     }
 
@@ -133,6 +171,34 @@ struct serializer {
                 bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), serialize_string_size);
                 new (&v) sstring(read_simple_short_string(bv));
                 return make_ready_future<>();
+            });
+        });
+    }
+
+    // For frozen_mutation
+    inline auto operator()(output_stream<char>& out, const frozen_mutation& v) {
+        db::frozen_mutation_serializer s(v);
+        uint32_t sz = s.size() + data_output::serialized_size(sz);
+        bytes b(bytes::initialized_later(), sz);
+        data_output o(b);
+        o.write<uint32_t>(sz - data_output::serialized_size(sz));
+        db::frozen_mutation_serializer::write(o, v);
+        return out.write(reinterpret_cast<const char*>(b.c_str()), sz);
+    }
+    inline auto operator()(input_stream<char>& in, frozen_mutation& v) {
+        static auto sz = data_output::serialized_size<uint32_t>();
+        return in.read_exactly(sz).then([&v, &in] (temporary_buffer<char> buf) mutable {
+            if (buf.size() != sz) {
+                throw rpc::closed_error();
+            }
+            data_input i(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), sz));
+            size_t msz = i.read<int32_t>();
+            return in.read_exactly(msz).then([&v, msz] (temporary_buffer<char> buf) {
+                if (buf.size() != msz) {
+                    throw rpc::closed_error();
+                }
+                data_input i(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), msz));
+                new (&v) frozen_mutation(db::frozen_mutation_serializer::read(i));
             });
         });
     }
@@ -289,4 +355,5 @@ inline messaging_service& get_local_messaging_service() {
     return _the_messaging_service.local();
 }
 
+future<> init_messaging_service(sstring listen_address, db::config::seed_provider_type seed_provider);
 } // namespace net

@@ -30,11 +30,185 @@
 #include "frozen_mutation.hh"
 #include "query_result_merger.hh"
 #include "core/do_with.hh"
-
+#include "message/messaging_service.hh"
+#include "gms/failure_detector.hh"
+#include "gms/gossiper.hh"
+#include "db/serializer.hh"
+#include "storage_service.hh"
+#include "core/future-util.hh"
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/transformed.hpp>
+#include <boost/iterator/counting_iterator.hpp>
+#include <boost/range/adaptor/filtered.hpp>
+#include <boost/range/algorithm/count_if.hpp>
 
 namespace service {
+
+struct mutation_write_timeout_error : public std::exception {
+    size_t total_block_for;
+    size_t acks;
+    mutation_write_timeout_error(size_t tbf, size_t acks_) : total_block_for(tbf), acks(acks_) {}
+    virtual const char* what() const noexcept {
+        return "Mutation write timeout";
+    }
+};
+
+struct overloaded_exception : public std::exception {
+    size_t hints_in_progress;
+    overloaded_exception(size_t c) : hints_in_progress(c) {}
+    virtual const char* what() const noexcept {
+        return "Too many in flight hints";
+    }
+};
+
+static inline bool is_me(gms::inet_address from) {
+    auto& ms = net::get_local_messaging_service();
+    return from == ms.listen_address(); // FIXME: should be FBUtilities.getBroadcastAddress
+}
+
+class abstract_write_response_handler {
+protected:
+    semaphore _ready; // available when cl is achieved
+    db::consistency_level _cl;
+    keyspace& _ks;
+    frozen_mutation _mutation;
+    std::unordered_set<gms::inet_address> _targets; // who we sent this mutation to
+    size_t _pending_endpoints; // how many endpoints in bootstrap state there is
+    virtual size_t total_block_for() {
+        // original comment from cassandra:
+        // during bootstrap, include pending endpoints in the count
+        // or we may fail the consistency level guarantees (see #833, #8058)
+        return db::block_for(_ks, _cl) + _pending_endpoints;
+    }
+    virtual void signal(gms::inet_address from) {
+        signal();
+    }
+public:
+    abstract_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
+        _ready(0), _cl(cl), _ks(ks), _mutation(std::move(mutation)), _targets(targets), _pending_endpoints(pending_endpoints) {}
+    virtual ~abstract_write_response_handler() {};
+    void signal(size_t nr = 1) {
+        _ready.signal(nr);
+    }
+    // return true on last ack
+    bool response(gms::inet_address from) {
+        signal(from);
+        auto it = _targets.find(from);
+        assert(it != _targets.end());
+        _targets.erase(it);
+        return _targets.size() == 0;
+    }
+    future<> wait() {
+        size_t block_for = total_block_for();
+        //FIXME: timeout is from DatabaseDescriptor.getWriteRpcTimeout()
+        return _ready.wait(std::chrono::milliseconds(100), block_for).then_wrapped([this, block_for] (future<>&& f) {
+            try {
+                f.get();
+                return make_ready_future<>();
+            } catch(semaphore_timed_out& ex) {
+                throw mutation_write_timeout_error(total_block_for(), block_for + _ready.current());
+            } catch(...) {
+                throw;
+            }
+        });
+    }
+    const std::unordered_set<gms::inet_address>& get_targets() {
+        return _targets;
+    }
+    const frozen_mutation& get_mutation() {
+        return _mutation;
+    }
+};
+
+class datacenter_write_response_handler : public abstract_write_response_handler {
+    void signal(gms::inet_address from) override {
+        if (is_me(from) || db::is_local(from)) {
+            abstract_write_response_handler::signal();
+        }
+    }
+public:
+    datacenter_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
+        abstract_write_response_handler(ks, cl, std::move(mutation), targets, pending_endpoints) {}
+};
+
+class write_response_handler : public abstract_write_response_handler {
+public:
+    write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
+        abstract_write_response_handler(ks, cl, std::move(mutation), targets, pending_endpoints) {}
+};
+
+class datacenter_sync_write_response_handler : public abstract_write_response_handler {
+    std::unordered_map<sstring, int> _responses;
+    void signal(gms::inet_address from) override {
+//        sstring data_center = is_local_response(from) ? DatabaseDescriptor.getLocalDataCenter() : snitch.getDatacenter(message.from);
+        sstring data_center = "DCname";
+
+        if (--_responses[data_center] > 0) {
+            abstract_write_response_handler::signal();
+        }
+    }
+public:
+    datacenter_sync_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
+        abstract_write_response_handler(ks, cl, std::move(mutation), targets, pending_endpoints) {
+        warn(unimplemented::cause::CONSISTENCY);
+    }
+};
+
+storage_proxy::storage_proxy::response_id_type storage_proxy::register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h) {
+    auto id = _next_response_id++;
+    auto e = _response_handlers.emplace(id, rh_entry(std::move(h), [this, id] {
+        auto& e = _response_handlers.find(id)->second;
+        // targets left in the handler are not responding. Write a hint.
+        hint_to_dead_endpoints(e.handler->get_mutation(), e.handler->get_targets());
+        remove_response_handler(id);
+    }));
+    assert(e.second);
+    e.first->second.expire_timer.arm(std::chrono::seconds(1)/*getWriteRpcTimeout()*/);
+    return id;
+}
+
+void storage_proxy::remove_response_handler(storage_proxy::storage_proxy::response_id_type id) {
+    _response_handlers.erase(id);
+}
+
+void storage_proxy::got_response(storage_proxy::storage_proxy::response_id_type id, gms::inet_address from) {
+    auto it = _response_handlers.find(id);
+    if (it != _response_handlers.end()) {
+        if (it->second.handler->response(from)) {
+            remove_response_handler(id); // last one, remove entry. Will cancel expiration timer too.
+        }
+    }
+}
+
+future<> storage_proxy::response_wait(storage_proxy::response_id_type id) {
+    return _response_handlers.find(id)->second.handler->wait();
+}
+
+abstract_write_response_handler& storage_proxy::get_write_response_handler(storage_proxy::response_id_type id) {
+        return *_response_handlers.find(id)->second.handler;
+}
+
+storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints)
+{
+    std::unique_ptr<abstract_write_response_handler> h;
+    //auto& rs = ks.get_replication_strategy();
+    size_t pending_count = pending_endpoints.size();
+
+    // for now make is simple
+    if (db::is_datacenter_local(cl)) {
+        pending_count = std::count_if(pending_endpoints.begin(), pending_endpoints.end(), db::is_local);
+        h = std::make_unique<datacenter_write_response_handler>(ks, cl, std::move(mutation), std::move(targets), pending_count);
+    } else if (0 && cl == db::consistency_level::EACH_QUORUM /*&& rs == NetworkTopologyStrategy*/){
+        h = std::make_unique<datacenter_sync_write_response_handler>(ks, cl, std::move(mutation), std::move(targets), pending_count);
+    } else {
+        h = std::make_unique<write_response_handler>(ks, cl, std::move(mutation), std::move(targets), pending_count);
+    }
+    return register_response_handler(std::move(h));
+}
+
+storage_proxy::~storage_proxy() {}
+storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {}
+storage_proxy::rh_entry::rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
 
 #if 0
     public static final String MBEAN_NAME = "org.apache.cassandra.db:type=StorageProxy";
@@ -508,97 +682,93 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations) {
  */
 future<>
 storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl) {
-    auto pmut = make_lw_shared(std::move(mutations));
-    return parallel_for_each(pmut->begin(), pmut->end(), [this, pmut] (const mutation& m) {
+    auto have_cl = make_lw_shared<semaphore>(0);
+
+    for (auto& m : mutations) {
         try {
             keyspace& ks = _db.local().find_keyspace(m.schema()->ks_name());
-            std::vector<gms::inet_address> natural_endpoints =
-                ks.get_replication_strategy().get_natural_endpoints(m.token());
-            // FIXME: send it to replicas instead of applying locally
-            return mutate_locally(m);
-        } catch (no_such_keyspace& ex) {
-            assert(false);
-        }
-    }).finally([pmut]{});
-#if 0
-        Tracing.trace("Determining replicas for mutation");
-        final String localDataCenter = DatabaseDescriptor.getEndpointSnitch().getDatacenter(FBUtilities.getBroadcastAddress());
+            auto& rs = ks.get_replication_strategy();
+            std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(m.token());
+            std::vector<gms::inet_address> pending_endpoints = get_local_storage_service().get_token_metadata().pending_endpoints_for(m.token(), ks);
+            sstring local_dc = "localDC";
 
-        long startTime = System.nanoTime();
-        List<AbstractWriteResponseHandler> responseHandlers = new ArrayList<>(mutations.size());
+            auto all = boost::range::join(natural_endpoints, pending_endpoints);
 
-        try
-        {
-            for (IMutation mutation : mutations)
-            {
-                if (mutation instanceof CounterMutation)
-                {
-                    responseHandlers.add(mutateCounter((CounterMutation)mutation, localDataCenter));
-                }
-                else
-                {
-                    WriteType wt = mutations.size() <= 1 ? WriteType.SIMPLE : WriteType.UNLOGGED_BATCH;
-                    responseHandlers.add(performWrite(mutation, consistency_level, localDataCenter, standardWritePerformer, null, wt));
-                }
+            if (std::find_if(all.begin(), all.end(), std::bind1st(std::mem_fn(&storage_proxy::cannot_hint), this)) != all.end()) {
+                // avoid OOMing due to excess hints.  we need to do this check even for "live" nodes, since we can
+                // still generate hints for those if it's overloaded or simply dead but not yet known-to-be-dead.
+                // The idea is that if we have over maxHintsInProgress hints in flight, this is probably due to
+                // a small number of nodes causing problems, so we should avoid shutting down writes completely to
+                // healthy nodes.  Any node with no hintsInProgress is considered healthy.
+                throw overloaded_exception(_total_hints_in_progress);
             }
 
-            // wait for writes.  throws TimeoutException if necessary
-            for (AbstractWriteResponseHandler responseHandler : responseHandlers)
-            {
-                responseHandler.get();
-            }
-        }
-        catch (WriteTimeoutException ex)
-        {
-            if (consistency_level == ConsistencyLevel.ANY)
-            {
-                // hint all the mutations (except counters, which can't be safely retried).  This means
-                // we'll re-hint any successful ones; doesn't seem worth it to track individual success
-                // just for this unusual case.
-                for (IMutation mutation : mutations)
-                {
-                    if (mutation instanceof CounterMutation)
-                        continue;
+            // filter live endpoints from dead ones
+            std::unordered_set<gms::inet_address> live_endpoints;
+            std::vector<gms::inet_address> dead_endpoints;
+            live_endpoints.reserve(all.size());
+            dead_endpoints.reserve(all.size());
+            std::partition_copy(all.begin(), all.end(), std::inserter(live_endpoints, live_endpoints.begin()), std::back_inserter(dead_endpoints),
+                    std::bind1st(std::mem_fn(&gms::failure_detector::is_alive), &gms::get_local_failure_detector()));
 
-                    Token tk = StorageService.getPartitioner().getToken(mutation.key());
-                    List<InetAddress> naturalEndpoints = StorageService.instance.getNaturalEndpoints(mutation.getKeyspaceName(), tk);
-                    Collection<InetAddress> pendingEndpoints = StorageService.instance.getTokenMetadata().pendingEndpointsFor(tk, mutation.getKeyspaceName());
-                    for (InetAddress target : Iterables.concat(naturalEndpoints, pendingEndpoints))
-                    {
-                        // local writes can timeout, but cannot be dropped (see LocalMutationRunnable and
-                        // CASSANDRA-6510), so there is no need to hint or retry
-                        if (!target.equals(FBUtilities.getBroadcastAddress()) && shouldHint(target))
-                            submitHint((Mutation) mutation, target, null);
+            db::assure_sufficient_live_nodes(cl, ks, live_endpoints);
+
+            storage_proxy::response_id_type response_id = create_write_response_handler(ks, cl, freeze(m), std::move(live_endpoints), pending_endpoints);
+            // it is better to send first and hint afterwards to reduce latency
+            // but request may complete before hint_to_dead_endpoints() is called and
+            // response_id handler will be removed, so we will have to do hint with separate
+            // frozen_mutation copy, or manage handler live time differently.
+            size_t hints = hint_to_dead_endpoints(get_write_response_handler(response_id).get_mutation(), dead_endpoints);
+
+            if (cl == db::consistency_level::ANY) {
+                // for cl==ANY hints are counted towards consistency
+                get_write_response_handler(response_id).signal(hints);
+            }
+
+            // call before send_to_live_endpoints() for the same reason as above
+            auto f = response_wait(response_id);
+            send_to_live_endpoints(response_id, local_dc);
+            f.then_wrapped([this, have_cl, response_id, cl] (future<>&& f) mutable {
+                try {
+                    f.get();
+                    have_cl->signal();
+                    return;
+                } catch(mutation_write_timeout_error& ex) {
+                    // timeout
+                    if (cl == db::consistency_level::ANY) {
+                        warn(unimplemented::cause::HINT);
+                        // for cl==any hint counts towards consistency
+                        have_cl->signal();
+                        auto& h = get_write_response_handler(response_id);
+                        // unlike origin we hint only to those endpoints who did not respond
+                        hint_to_dead_endpoints(h.get_mutation(), h.get_targets());
+//                        Tracing.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
+                    } else {
+//                        writeMetrics.timeouts.mark();
+//                        ClientRequestMetrics.writeTimeouts.inc();
+//                        Tracing.trace("Write timeout; received {} of {} required replies", ex.received, ex.blockFor);
+                        have_cl->broken(ex);
                     }
+                } catch(...) {
+                    have_cl->broken(std::current_exception());
                 }
-                Tracing.trace("Wrote hint to satisfy CL.ANY after no replicas acknowledged the write");
-            }
-            else
-            {
-                writeMetrics.timeouts.mark();
-                ClientRequestMetrics.writeTimeouts.inc();
-                Tracing.trace("Write timeout; received {} of {} required replies", ex.received, ex.blockFor);
-                throw ex;
-            }
+                remove_response_handler(response_id); // cancel expire_timer, so no hint will happen
+            });
+        } catch (no_such_keyspace& ex) {
+            return make_exception_future<>(std::current_exception());
+        } catch(db::unavailable_exception& ex) {
+//            writeMetrics.unavailables.mark();
+//            ClientRequestMetrics.writeUnavailables.inc();
+//            Tracing.trace("Unavailable");
+            return make_exception_future<>(std::current_exception());
+        }  catch(overloaded_exception& ex) {
+//            ClientRequestMetrics.writeUnavailables.inc();
+//            Tracing.trace("Overloaded");
+            return make_exception_future<>(std::current_exception());
         }
-        catch (UnavailableException e)
-        {
-            writeMetrics.unavailables.mark();
-            ClientRequestMetrics.writeUnavailables.inc();
-            Tracing.trace("Unavailable");
-            throw e;
-        }
-        catch (OverloadedException e)
-        {
-            ClientRequestMetrics.writeUnavailables.inc();
-            Tracing.trace("Overloaded");
-            throw e;
-        }
-        finally
-        {
-            writeMetrics.addNano(System.nanoTime() - startTime);
-        }
-#endif
+    }
+
+    return have_cl->wait(mutations.size());
 }
 
 future<>
@@ -840,142 +1010,117 @@ storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistenc
 
         return chosenEndpoints;
     }
+#endif
 
-    /**
-     * Send the mutations to the right targets, write it locally if it corresponds or writes a hint when the node
-     * is not available.
-     *
-     * Note about hints:
-     *
-     * | Hinted Handoff | Consist. Level |
-     * | on             |       >=1      | --> wait for hints. We DO NOT notify the handler with handler.response() for hints;
-     * | on             |       ANY      | --> wait for hints. Responses count towards consistency.
-     * | off            |       >=1      | --> DO NOT fire hints. And DO NOT wait for them to complete.
-     * | off            |       ANY      | --> DO NOT fire hints. And DO NOT wait for them to complete.
-     *
-     * @throws OverloadedException if the hints cannot be written/enqueued
-     */
-    public static void sendToHintedEndpoints(final Mutation mutation,
-                                             Iterable<InetAddress> targets,
-                                             AbstractWriteResponseHandler responseHandler,
-                                             String localDataCenter)
-    throws OverloadedException
+bool storage_proxy::cannot_hint(gms::inet_address target) {
+    return _total_hints_in_progress > _max_hints_in_progress
+            && (get_hints_in_progress_for(target) > 0 && should_hint(target));
+}
+
+/**
+ * Send the mutations to the right targets, write it locally if it corresponds or writes a hint when the node
+ * is not available.
+ *
+ * Note about hints:
+ *
+ * | Hinted Handoff | Consist. Level |
+ * | on             |       >=1      | --> wait for hints. We DO NOT notify the handler with handler.response() for hints;
+ * | on             |       ANY      | --> wait for hints. Responses count towards consistency.
+ * | off            |       >=1      | --> DO NOT fire hints. And DO NOT wait for them to complete.
+ * | off            |       ANY      | --> DO NOT fire hints. And DO NOT wait for them to complete.
+ *
+ * @throws OverloadedException if the hints cannot be written/enqueued
+ */
+ // returned future is ready when sent is complete, not when mutation is executed on all (or any) targets!
+future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type response_id, sstring local_dc)
+{
+    // extra-datacenter replicas, grouped by dc
+    std::unordered_map<sstring, std::vector<gms::inet_address>> dc_groups;
+    std::vector<std::pair<const sstring, std::vector<gms::inet_address>>> local;
+    local.reserve(3);
+
+    for(auto dest: get_write_response_handler(response_id).get_targets()) {
+        sstring dc = "localDC";//getEndpointSnitch().getDatacenter(dest);
+        if (dc == local_dc) {
+            local.emplace_back("", std::vector<gms::inet_address>({dest}));
+        } else {
+            dc_groups[dc].push_back(dest);
+        }
+    }
+
+    auto& m = get_write_response_handler(response_id).get_mutation();
+
+    auto all = boost::range::join(local, dc_groups);
+
+    // OK, now send and/or apply locally
+    return parallel_for_each(all.begin(), all.end(), [response_id, &m, this] (typename decltype(dc_groups)::value_type& dc_targets) mutable {
+        auto& ms = net::get_local_messaging_service();
+        auto my_address = ms.listen_address(); // FIXME: should be FBUtilities.getBroadcastAddress
+        auto& forward = dc_targets.second;
+
+        // last one in forward list is a coordinator
+        auto coordinator = forward.back();
+        forward.pop_back();
+
+        if (coordinator == my_address) {
+            return mutate_locally(m).then([response_id, this, my_address] {
+                got_response(response_id, my_address);
+            });
+        } else {
+            return ms.send_message_oneway(net::messaging_verb::MUTATION, net::messaging_service::shard_id{coordinator, 0}, m, std::move(forward), std::move(my_address),
+                    engine().cpu_id(), std::move(response_id));
+        }
+    });
+}
+
+// returns number of hints stored
+template<typename Range>
+size_t storage_proxy::hint_to_dead_endpoints(const frozen_mutation& m, const Range& targets)
+{
+    return boost::count_if(targets | boost::adaptors::filtered(std::bind1st(std::mem_fn(&storage_proxy::should_hint), this)),
+            std::bind(std::mem_fn(&storage_proxy::submit_hint), this, std::ref(m), std::placeholders::_1));
+}
+
+size_t storage_proxy::get_hints_in_progress_for(gms::inet_address target) {
+    auto it = _hints_in_progress.find(target);
+
+    if (it == _hints_in_progress.end()) {
+        return 0;
+    }
+
+    return it->second;
+}
+
+bool storage_proxy::submit_hint(const frozen_mutation& m, gms::inet_address target)
+{
+    // local write that time out should be handled by LocalMutationRunnable
+    assert(is_me(target));
+    return false;
+#if 0
+    HintRunnable runnable = new HintRunnable(target)
     {
-        // extra-datacenter replicas, grouped by dc
-        Map<String, Collection<InetAddress>> dcGroups = null;
-        // only need to create a Message for non-local writes
-        MessageOut<Mutation> message = null;
-
-        boolean insertLocal = false;
-
-
-        for (InetAddress destination : targets)
+        public void runMayThrow()
         {
-            // avoid OOMing due to excess hints.  we need to do this check even for "live" nodes, since we can
-            // still generate hints for those if it's overloaded or simply dead but not yet known-to-be-dead.
-            // The idea is that if we have over maxHintsInProgress hints in flight, this is probably due to
-            // a small number of nodes causing problems, so we should avoid shutting down writes completely to
-            // healthy nodes.  Any node with no hintsInProgress is considered healthy.
-            if (StorageMetrics.totalHintsInProgress.count() > maxHintsInProgress
-                    && (getHintsInProgressFor(destination).get() > 0 && shouldHint(destination)))
+            int ttl = HintedHandOffManager.calculateHintTTL(mutation);
+            if (ttl > 0)
             {
-                throw new OverloadedException("Too many in flight hints: " + StorageMetrics.totalHintsInProgress.count());
-            }
-
-            if (FailureDetector.instance.isAlive(destination))
-            {
-                if (destination.equals(FBUtilities.getBroadcastAddress()) && OPTIMIZE_LOCAL_REQUESTS)
-                {
-                    insertLocal = true;
-                } else
-                {
-                    // belongs on a different server
-                    if (message == null)
-                        message = mutation.createMessage();
-                    String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(destination);
-                    // direct writes to local DC or old Cassandra versions
-                    // (1.1 knows how to forward old-style String message IDs; updated to int in 2.0)
-                    if (localDataCenter.equals(dc))
-                    {
-                        MessagingService.instance().sendRR(message, destination, responseHandler, true);
-                    } else
-                    {
-                        Collection<InetAddress> messages = (dcGroups != null) ? dcGroups.get(dc) : null;
-                        if (messages == null)
-                        {
-                            messages = new ArrayList<InetAddress>(3); // most DCs will have <= 3 replicas
-                            if (dcGroups == null)
-                                dcGroups = new HashMap<String, Collection<InetAddress>>();
-                            dcGroups.put(dc, messages);
-                        }
-                        messages.add(destination);
-                    }
-                }
+                logger.debug("Adding hint for {}", target);
+                writeHintForMutation(mutation, System.currentTimeMillis(), ttl, target);
+                // Notify the handler only for CL == ANY
+                if (responseHandler != null && responseHandler.consistencyLevel == ConsistencyLevel.ANY)
+                    responseHandler.response(null);
             } else
             {
-                if (!shouldHint(destination))
-                    continue;
-
-                // Schedule a local hint
-                submitHint(mutation, destination, responseHandler);
+                logger.debug("Skipped writing hint for {} (ttl {})", target, ttl);
             }
         }
+    };
 
-        if (insertLocal)
-            insertLocal(mutation, responseHandler);
+    return submitHint(runnable);
+#endif
+}
 
-        if (dcGroups != null)
-        {
-            // for each datacenter, send the message to one node to relay the write to other replicas
-            if (message == null)
-                message = mutation.createMessage();
-
-            for (Collection<InetAddress> dcTargets : dcGroups.values())
-                sendMessagesToNonlocalDC(message, dcTargets, responseHandler);
-        }
-    }
-
-    private static AtomicInteger getHintsInProgressFor(InetAddress destination)
-    {
-        try
-        {
-            return hintsInProgress.load(destination);
-        }
-        catch (Exception e)
-        {
-            throw new AssertionError(e);
-        }
-    }
-
-    public static Future<Void> submitHint(final Mutation mutation,
-                                          final InetAddress target,
-                                          final AbstractWriteResponseHandler responseHandler)
-    {
-        // local write that time out should be handled by LocalMutationRunnable
-        assert !target.equals(FBUtilities.getBroadcastAddress()) : target;
-
-        HintRunnable runnable = new HintRunnable(target)
-        {
-            public void runMayThrow()
-            {
-                int ttl = HintedHandOffManager.calculateHintTTL(mutation);
-                if (ttl > 0)
-                {
-                    logger.debug("Adding hint for {}", target);
-                    writeHintForMutation(mutation, System.currentTimeMillis(), ttl, target);
-                    // Notify the handler only for CL == ANY
-                    if (responseHandler != null && responseHandler.consistencyLevel == ConsistencyLevel.ANY)
-                        responseHandler.response(null);
-                } else
-                {
-                    logger.debug("Skipped writing hint for {} (ttl {})", target, ttl);
-                }
-            }
-        };
-
-        return submitHint(runnable);
-    }
-
+#if 0
     private static Future<Void> submitHint(HintRunnable runnable)
     {
         StorageMetrics.totalHintsInProgress.inc();
@@ -2173,34 +2318,42 @@ storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const
     {
         DatabaseDescriptor.setMaxHintWindow(ms);
     }
+#endif
 
-    public static boolean shouldHint(InetAddress ep)
+bool storage_proxy::should_hint(gms::inet_address ep) {
+    if (is_me(ep)) { // do not hint to local address
+        return false;
+    }
+
+    return false;
+#if 0
+    if (DatabaseDescriptor.shouldHintByDC())
     {
-        if (DatabaseDescriptor.shouldHintByDC())
-        {
-            final String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(ep);
-            //Disable DC specific hints
-            if(!DatabaseDescriptor.hintedHandoffEnabled(dc))
-            {
-                HintedHandOffManager.instance.metrics.incrPastWindow(ep);
-                return false;
-            }
-        }
-        else if (!DatabaseDescriptor.hintedHandoffEnabled())
+        final String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(ep);
+        //Disable DC specific hints
+        if(!DatabaseDescriptor.hintedHandoffEnabled(dc))
         {
             HintedHandOffManager.instance.metrics.incrPastWindow(ep);
             return false;
         }
-
-        boolean hintWindowExpired = Gossiper.instance.getEndpointDowntime(ep) > DatabaseDescriptor.getMaxHintWindow();
-        if (hintWindowExpired)
-        {
-            HintedHandOffManager.instance.metrics.incrPastWindow(ep);
-            Tracing.trace("Not hinting {} which has been down {}ms", ep, Gossiper.instance.getEndpointDowntime(ep));
-        }
-        return !hintWindowExpired;
+    }
+    else if (!DatabaseDescriptor.hintedHandoffEnabled())
+    {
+        HintedHandOffManager.instance.metrics.incrPastWindow(ep);
+        return false;
     }
 
+    boolean hintWindowExpired = Gossiper.instance.getEndpointDowntime(ep) > DatabaseDescriptor.getMaxHintWindow();
+    if (hintWindowExpired)
+    {
+        HintedHandOffManager.instance.metrics.incrPastWindow(ep);
+        Tracing.trace("Not hinting {} which has been down {}ms", ep, Gossiper.instance.getEndpointDowntime(ep));
+    }
+    return !hintWindowExpired;
+#endif
+}
+
+#if 0
     /**
      * Performs the truncate operatoin, which effectively deletes all data from
      * the column family cfname
@@ -2429,5 +2582,36 @@ storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const
         return ReadRepairMetrics.repairedBackground.count();
     }
 #endif
+
+future<> storage_proxy::init_messaging_service() {
+    return parallel_for_each(boost::counting_iterator<unsigned>(0), boost::counting_iterator<unsigned>(smp::count), [this] (unsigned cpu) {
+        return smp::submit_to(cpu, [this] {
+            auto& ms = net::get_local_messaging_service();
+            ms.register_handler(net::messaging_verb::MUTATION, [this] (frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
+                do_with(std::move(in), [this, forward = std::move(forward), reply_to, shard, response_id] (const frozen_mutation& m) mutable {
+                    return when_all(
+                            mutate_locally(m).then([reply_to, shard, response_id] () mutable {
+                                auto& ms = net::get_local_messaging_service();
+                                ms.send_message_oneway(net::messaging_verb::MUTATION_DONE, net::messaging_service::shard_id{reply_to, shard}, std::move(shard), std::move(response_id));
+                                // return void, no need to wait for send to complete
+                            }),
+                            parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) mutable {
+                                auto& ms = net::get_local_messaging_service();
+                                return ms.send_message_oneway(net::messaging_verb::MUTATION, net::messaging_service::shard_id{forward, 0}, m, std::vector<gms::inet_address>(), reply_to, std::move(shard), std::move(response_id));
+                            })
+                    );
+                }).discard_result();
+                return net::messaging_service::no_wait();
+            });
+            ms.register_handler(net::messaging_verb::MUTATION_DONE, [this] (rpc::client_info cinfo, unsigned shard, storage_proxy::response_id_type response_id) {
+                gms::inet_address from(net::ntoh(cinfo.addr.as_posix_sockaddr_in().sin_addr.s_addr));
+                smp::submit_to(shard, [this, from, response_id] {
+                    got_response(response_id, from);
+                });
+                return net::messaging_service::no_wait();
+            });
+        });
+    });
+}
 
 }

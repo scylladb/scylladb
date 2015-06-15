@@ -41,11 +41,6 @@ frozen_mutation::frozen_mutation(bytes&& b)
     : _bytes(std::move(b))
 { }
 
-frozen_mutation
-frozen_mutation::from_bytes(bytes b) {
-    return { std::move(b) };
-}
-
 frozen_mutation::frozen_mutation(const mutation& m)
     : _bytes(bytes::initialized_later(), serialized_size(m))
 {

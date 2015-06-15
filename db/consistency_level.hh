@@ -27,6 +27,8 @@
 #include "exceptions/exceptions.hh"
 #include "core/sstring.hh"
 #include "schema.hh"
+#include "database.hh"
+#include "unimplemented.hh"
 
 namespace db {
 
@@ -69,6 +71,17 @@ enum class consistency_level {
 
 std::ostream& operator<<(std::ostream& os, consistency_level cl);
 
+struct unavailable_exception : std::exception {
+    consistency_level cl;
+    size_t required;
+    size_t alive;
+
+    unavailable_exception(consistency_level cl_, size_t required_, size_t alive_) : cl(cl_), required(required_), alive(alive_) {}
+    virtual const char* what() const noexcept {
+        return "Cannot achieve consistency level";
+    }
+};
+
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(ConsistencyLevel.class);
 
@@ -108,57 +121,65 @@ std::ostream& operator<<(std::ostream& os, consistency_level cl);
         return codeIdx[code];
     }
 
-    private int quorumFor(Keyspace keyspace)
-    {
-        return (keyspace.getReplicationStrategy().getReplicationFactor() / 2) + 1;
-    }
-
-    private int localQuorumFor(Keyspace keyspace, String dc)
-    {
-        return (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
-             ? (((NetworkTopologyStrategy) keyspace.getReplicationStrategy()).getReplicationFactor(dc) / 2) + 1
-             : quorumFor(keyspace);
-    }
-
-    public int blockFor(Keyspace keyspace)
-    {
-        switch (this)
-        {
-            case ONE:
-            case LOCAL_ONE:
-                return 1;
-            case ANY:
-                return 1;
-            case TWO:
-                return 2;
-            case THREE:
-                return 3;
-            case QUORUM:
-            case SERIAL:
-                return quorumFor(keyspace);
-            case ALL:
-                return keyspace.getReplicationStrategy().getReplicationFactor();
-            case LOCAL_QUORUM:
-            case LOCAL_SERIAL:
-                return localQuorumFor(keyspace, DatabaseDescriptor.getLocalDataCenter());
-            case EACH_QUORUM:
-                if (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
-                {
-                    NetworkTopologyStrategy strategy = (NetworkTopologyStrategy) keyspace.getReplicationStrategy();
-                    int n = 0;
-                    for (String dc : strategy.getDatacenters())
-                        n += localQuorumFor(keyspace, dc);
-                    return n;
-                }
-                else
-                {
-                    return quorumFor(keyspace);
-                }
-            default:
-                throw new UnsupportedOperationException("Invalid consistency level: " + toString());
-        }
-    }
 #endif
+inline size_t quorum_for(keyspace& ks)
+{
+    return (ks.get_replication_strategy().get_replication_factor() / 2) + 1;
+}
+
+inline size_t local_quorum_for(keyspace& ks, const sstring& dc)
+{
+    fail(unimplemented::cause::CONSISTENCY);
+    return 0;
+#if 0
+    return (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
+            ? (((NetworkTopologyStrategy) keyspace.getReplicationStrategy()).getReplicationFactor(dc) / 2) + 1
+                    : quorum_for(ks);
+#endif
+}
+
+inline size_t block_for(keyspace& ks, consistency_level cl)
+{
+    switch (cl)
+    {
+    case consistency_level::ONE:
+    case consistency_level::LOCAL_ONE:
+        return 1;
+    case consistency_level::ANY:
+        return 1;
+    case consistency_level::TWO:
+        return 2;
+    case consistency_level::THREE:
+        return 3;
+    case consistency_level::QUORUM:
+    case consistency_level::SERIAL:
+        return quorum_for(ks);
+    case consistency_level::ALL:
+        return ks.get_replication_strategy().get_replication_factor();
+    case consistency_level::LOCAL_QUORUM:
+    case consistency_level::LOCAL_SERIAL:
+        return local_quorum_for(ks, "localDC"/*DatabaseDescriptor.getLocalDataCenter()*/);
+    case consistency_level::EACH_QUORUM:
+        assert(false);
+        return 0;
+#if 0
+        if (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
+        {
+            NetworkTopologyStrategy strategy = (NetworkTopologyStrategy) keyspace.getReplicationStrategy();
+            int n = 0;
+            for (String dc : strategy.getDatacenters())
+                n += localQuorumFor(keyspace, dc);
+            return n;
+        }
+        else
+        {
+            return quorum_for(ks);
+        }
+#endif
+    default:
+        abort();
+    }
+}
 
 static inline
 bool is_datacenter_local(consistency_level l)
@@ -166,21 +187,21 @@ bool is_datacenter_local(consistency_level l)
     return l == consistency_level::LOCAL_ONE || l == consistency_level::LOCAL_QUORUM;
 }
 
-#if 0
-    public boolean isLocal(InetAddress endpoint)
-    {
-        return DatabaseDescriptor.getLocalDataCenter().equals(DatabaseDescriptor.getEndpointSnitch().getDatacenter(endpoint));
-    }
+inline
+bool is_local(gms::inet_address endpoint)
+{
+    return true;
+ //       return DatabaseDescriptor.getLocalDataCenter().equals(DatabaseDescriptor.getEndpointSnitch().getDatacenter(endpoint));
+}
 
-    public int countLocalEndpoints(Iterable<InetAddress> liveEndpoints)
-    {
-        int count = 0;
-        for (InetAddress endpoint : liveEndpoints)
-            if (isLocal(endpoint))
-                count++;
-        return count;
-    }
+template<typename Range>
+inline
+size_t count_local_endpoints(Range& live_endpoints)
+{
+    return std::count_if(live_endpoints.begin(), live_endpoints.end(), is_local);
+}
 
+ #if 0
     private Map<String, Integer> countPerDCEndpoints(Keyspace keyspace, Iterable<InetAddress> liveEndpoints)
     {
         NetworkTopologyStrategy strategy = (NetworkTopologyStrategy) keyspace.getReplicationStrategy();
@@ -265,61 +286,69 @@ bool is_datacenter_local(consistency_level l)
                 return Iterables.size(liveEndpoints) >= blockFor(keyspace);
         }
     }
-
-    public void assureSufficientLiveNodes(Keyspace keyspace, Iterable<InetAddress> liveEndpoints) throws UnavailableException
-    {
-        int blockFor = blockFor(keyspace);
-        switch (this)
-        {
-            case ANY:
-                // local hint is acceptable, and local node is always live
-                break;
-            case LOCAL_ONE:
-                if (countLocalEndpoints(liveEndpoints) == 0)
-                    throw new UnavailableException(this, 1, 0);
-                break;
-            case LOCAL_QUORUM:
-                int localLive = countLocalEndpoints(liveEndpoints);
-                if (localLive < blockFor)
-                {
-                    if (logger.isDebugEnabled())
-                    {
-                        StringBuilder builder = new StringBuilder("Local replicas [");
-                        for (InetAddress endpoint : liveEndpoints)
-                        {
-                            if (isLocal(endpoint))
-                                builder.append(endpoint).append(",");
-                        }
-                        builder.append("] are insufficient to satisfy LOCAL_QUORUM requirement of ").append(blockFor).append(" live nodes in '").append(DatabaseDescriptor.getLocalDataCenter()).append("'");
-                        logger.debug(builder.toString());
-                    }
-                    throw new UnavailableException(this, blockFor, localLive);
-                }
-                break;
-            case EACH_QUORUM:
-                if (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
-                {
-                    for (Map.Entry<String, Integer> entry : countPerDCEndpoints(keyspace, liveEndpoints).entrySet())
-                    {
-                        int dcBlockFor = localQuorumFor(keyspace, entry.getKey());
-                        int dcLive = entry.getValue();
-                        if (dcLive < dcBlockFor)
-                            throw new UnavailableException(this, dcBlockFor, dcLive);
-                    }
-                    break;
-                }
-                // Fallthough on purpose for SimpleStrategy
-            default:
-                int live = Iterables.size(liveEndpoints);
-                if (live < blockFor)
-                {
-                    logger.debug("Live nodes {} do not satisfy ConsistencyLevel ({} required)", Iterables.toString(liveEndpoints), blockFor);
-                    throw new UnavailableException(this, blockFor, live);
-                }
-                break;
-        }
-    }
 #endif
+
+template<typename Range>
+static inline
+void assure_sufficient_live_nodes(consistency_level cl, keyspace& ks, Range& live_endpoints)
+{
+    size_t need = block_for(ks, cl);
+
+    switch (cl)
+    {
+    case consistency_level::ANY:
+        // local hint is acceptable, and local node is always live
+        break;
+    case consistency_level::LOCAL_ONE:
+        if (count_local_endpoints(live_endpoints) == 0) {
+            throw unavailable_exception(cl, 1, 0);
+        }
+        break;
+    case consistency_level::LOCAL_QUORUM: {
+        size_t local_live = count_local_endpoints(live_endpoints);
+        if (local_live < need) {
+#if 0
+            if (logger.isDebugEnabled())
+            {
+                StringBuilder builder = new StringBuilder("Local replicas [");
+                for (InetAddress endpoint : liveEndpoints)
+                {
+                    if (isLocal(endpoint))
+                        builder.append(endpoint).append(",");
+                }
+                builder.append("] are insufficient to satisfy LOCAL_QUORUM requirement of ").append(blockFor).append(" live nodes in '").append(DatabaseDescriptor.getLocalDataCenter()).append("'");
+                logger.debug(builder.toString());
+            }
+#endif
+            throw unavailable_exception(cl, need, local_live);
+        }
+        break;
+    }
+    case consistency_level::EACH_QUORUM:
+        warn(unimplemented::cause::CONSISTENCY);
+#if 0
+        if (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
+        {
+            for (Map.Entry<String, Integer> entry : countPerDCEndpoints(keyspace, liveEndpoints).entrySet())
+            {
+                int dcBlockFor = localQuorumFor(keyspace, entry.getKey());
+                int dcLive = entry.getValue();
+                if (dcLive < dcBlockFor)
+                    throw new UnavailableException(this, dcBlockFor, dcLive);
+            }
+            break;
+        }
+#endif
+// Fallthough on purpose for SimpleStrategy
+    default:
+        size_t live = live_endpoints.size();
+        if (live < need) {
+            //                    logger.debug("Live nodes {} do not satisfy ConsistencyLevel ({} required)", Iterables.toString(liveEndpoints), blockFor);
+            throw unavailable_exception(cl, need, live);
+        }
+        break;
+    }
+}
 
 static inline
 void validate_for_read(const sstring& keyspace_name, consistency_level cl) {

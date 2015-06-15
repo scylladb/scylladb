@@ -43,6 +43,10 @@ public:
     static inline std::enable_if_t<std::is_fundamental<T>::value, size_t> serialized_size(const T&) {
         return sizeof(T);
     }
+    template<typename T>
+    static inline std::enable_if_t<std::is_fundamental<T>::value, size_t> serialized_size() {
+        return sizeof(T);
+    }
     static inline size_t serialized_size(const sstring& s) {
         if (s.size() > std::numeric_limits<uint16_t>::max()) {
             throw std::out_of_range("String too large");

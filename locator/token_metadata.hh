@@ -28,6 +28,9 @@
 #include "utils/UUID.hh"
 #include <experimental/optional>
 
+// forward declaration since database.hh includes this file
+class keyspace;
+
 namespace locator {
 
 using inet_address = gms::inet_address;
@@ -893,9 +896,12 @@ public:
 
         return sb.toString();
     }
-
-    public Collection<InetAddress> pendingEndpointsFor(Token token, String keyspaceName)
+#endif
+    std::vector<gms::inet_address> pending_endpoints_for(const token& token, const keyspace& ks)
     {
+        // FIXME: implement it
+        return std::vector<gms::inet_address>();
+#if 0
         Map<Range<Token>, Collection<InetAddress>> ranges = getPendingRanges(keyspaceName);
         if (ranges.isEmpty())
             return Collections.emptyList();
@@ -908,8 +914,9 @@ public:
         }
 
         return endpoints;
+#endif
     }
-
+#if 0
     /**
      * @deprecated retained for benefit of old tests
      */
