@@ -41,6 +41,7 @@ class native_server_socket_impl : public server_socket_impl {
 public:
     native_server_socket_impl(Protocol& proto, uint16_t port, listen_options opt);
     virtual future<connected_socket, socket_address> accept() override;
+    void abort_accept();
 };
 
 template <typename Protocol>
@@ -56,6 +57,12 @@ native_server_socket_impl<Protocol>::accept() {
                 connected_socket(std::make_unique<native_connected_socket_impl<Protocol>>(std::move(conn))),
                 socket_address()); // FIXME: don't fake it
     });
+}
+
+template <typename Protocol>
+void
+native_server_socket_impl<Protocol>::abort_accept() {
+    _listener.abort_accept();
 }
 
 // native_connected_socket_impl

@@ -583,6 +583,9 @@ public:
                 return make_ready_future<connection>(_q.pop());
             });
         }
+        void abort_accept() {
+            _q.abort(std::make_exception_ptr(std::system_error(ECONNABORTED, std::system_category())));
+        }
         friend class tcp;
     };
 public:
