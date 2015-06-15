@@ -33,6 +33,7 @@
 #include "gms/application_state.hh"
 #include "db/system_keyspace.hh"
 #include "core/semaphore.hh"
+#include "utils/fb_utilities.hh"
 
 namespace service {
 
@@ -79,8 +80,7 @@ public:
 
 private:
     inet_address get_broadcast_address() {
-        auto& gossiper = gms::get_local_gossiper();
-        return gossiper.get_broadcast_address();
+        return utils::fb_utilities::get_broadcast_address();
     }
     static int get_ring_delay() {
 #if 0
