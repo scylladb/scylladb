@@ -33,6 +33,12 @@ private:
 public:
     virtual input_stream<char> input() override { return input_stream<char>(posix_data_source(_fd)); }
     virtual output_stream<char> output() override { return output_stream<char>(posix_data_sink(_fd), 8192); }
+    void shutdown_input() {
+        _fd.shutdown(SHUT_RD);
+    }
+    void shutdown_output() {
+        _fd.shutdown(SHUT_WR);
+    }
     friend class posix_server_socket_impl;
     friend class posix_ap_server_socket_impl;
     friend class posix_reuseport_server_socket_impl;
