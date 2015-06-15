@@ -477,7 +477,7 @@ void gossiper::run() {
                     local_gossiper._live_endpoints = _shadow_live_endpoints;
                 }
             }
-        }).then([&] { _scheduled_gossip_task.arm(period); });
+        }).then([this, period] { _scheduled_gossip_task.arm(period); });
     } else {
         _scheduled_gossip_task.arm(period);
     }
