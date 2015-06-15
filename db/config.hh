@@ -179,7 +179,7 @@ public:
             "Related information: Handling Disk Failures In Cassandra 1.2 blog and Recovering from a single disk failure using JBOD.\n"    \
             , "die", "stop_paranoid", "stop", "best_effort", "ignore"   \
     )   \
-    val(endpoint_snitch, sstring, "org.apache.cassandra.locator.SimpleSnitch", Unused,  \
+    val(endpoint_snitch, sstring, "org.apache.cassandra.locator.SimpleSnitch", Used,  \
             "Set to a class that implements the IEndpointSnitch. Cassandra uses snitches for locating nodes and routing requests.\n"    \
             "\tSimpleSnitch                 Use for single-data center deployments or single-zone in public clouds. Does not recognize data center or rack information. It treats strategy order as proximity, which can improve cache locality when disabling read repair.\n"    \
             "\tGossipingPropertyFileSnitch  Recommended for production. The rack and data center for the local node are defined in the cassandra-rackdc.properties file and propagated to other nodes via gossip. To allow migration from the PropertyFileSnitch, it uses the cassandra-topology.properties file if it is present.\n"    \
