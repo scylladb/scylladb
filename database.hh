@@ -314,6 +314,16 @@ public:
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
     friend future<> create_keyspace(distributed<database>&, const lw_shared_ptr<keyspace_metadata>&);
+    const std::unordered_map<sstring, keyspace>& get_keyspaces() const {
+        return _keyspaces;
+    }
+    const std::unordered_map<utils::UUID, column_family>& get_column_families() const {
+        return _column_families;
+    }
+    const std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash>&
+    get_column_families_mapping() const {
+        return _ks_cf_to_uuid;
+    }
 };
 
 // Creates a keyspace.  Keyspaces have a non-sharded
