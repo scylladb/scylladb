@@ -105,6 +105,7 @@ private:
     compress_max_size_func *_compress_max_size = nullptr;
     // Variables *not* found in the "Compression Info" file (added by update()):
     uint64_t _compressed_file_length;
+    uint32_t _full_checksum;
 public:
     // Set the compressor algorithm, please check the definition of enum compressor.
     void set_compressor(compressor c);
@@ -132,6 +133,16 @@ public:
     unsigned uncompressed_chunk_length() const noexcept {
         return chunk_len;
     }
+    uint32_t full_checksum() const {
+        return _full_checksum;
+    }
+    void init_full_checksum() {
+        _full_checksum = init_checksum_adler32();
+    }
+    void update_full_checksum(uint32_t checksum, size_t size) {
+        _full_checksum = checksum_adler32_combine(_full_checksum, checksum, size);
+    }
+
     size_t uncompress(
             const char* input, size_t input_len,
             char* output, size_t output_len) const {

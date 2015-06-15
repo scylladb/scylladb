@@ -1125,6 +1125,17 @@ static void prepare_statistics(statistics& s) {
     s.offset += (METADATA_TYPE_COUNT * (sizeof(metadata_type) + sizeof(uint32_t)));
 }
 
+static void prepare_compression(compression& c, const schema& schema) {
+    c.set_compressor(schema.get_compressor());
+    // FIXME: chunk length can be configured by the user.
+    c.chunk_len = DEFAULT_CHUNK_SIZE;
+    c.data_len = 0;
+    // probability to verify the checksum of a compressed chunk we read.
+    // defaults to 1.0.
+    c.options.elements.push_back({"crc_check_chance", "1.0"});
+    c.init_full_checksum();
+}
+
 static void maybe_add_summary_entry(summary& s, bytes_view key, uint64_t offset) {
     if ((s.keys_written % s.header.min_index_interval) == 0) {
         s.positions.push_back(s.header.memory_size);
@@ -1155,19 +1166,12 @@ static void add_stats_metadata(statistics& s, metadata_collector& collector) {
     // compaction_metadata to get supported, then increment s.offset using it.
 }
 
-void sstable::do_write_components(const memtable& mt) {
-    // CRC component must only be present when compression isn't enabled.
-    bool checksum_file = mt.schema()->get_compressor() == compressor::none;
-    if (checksum_file) {
-        _components.insert(component_type::CRC);
-    } else {
-        fail(unimplemented::cause::COMPRESSION);
-    }
+static constexpr size_t sstable_buffer_size = 64*1024;
 
-    constexpr size_t sstable_buffer_size = 64*1024;
-
-    // TODO: Add compression support by having a specialized output stream.
-    auto w = make_shared<checksummed_file_writer>(_data_file, sstable_buffer_size, checksum_file);
+///
+///  @param out holds an output stream to data file.
+///
+void sstable::do_write_components(const memtable& mt, file_writer& out) {
     auto index = make_shared<file_writer>(_index_file, sstable_buffer_size);
 
     prepare_summary(_summary, mt);
@@ -1189,7 +1193,7 @@ void sstable::do_write_components(const memtable& mt) {
     for (auto& partition_entry: mt.all_partitions()) {
         // FIXME: it's likely that we need to set both sstable_level and repaired_at at this point.
         // Set current index of data to later compute row size.
-        _c_stats.start_offset = w->offset();
+        _c_stats.start_offset = out.offset();
         auto partition_key = key::from_partition_key(*mt.schema(), partition_entry.first._key);
         // Maybe add summary entry into in-memory representation of summary file.
         maybe_add_summary_entry(_summary, bytes_view(partition_key), index->offset());
@@ -1199,10 +1203,10 @@ void sstable::do_write_components(const memtable& mt) {
         p_key.value = bytes_view(partition_key);
         // Write index file entry from partition key into index file.
 
-        write_index_entry(*index, p_key, w->offset());
+        write_index_entry(*index, p_key, out.offset());
 
         // Write partition key into data file.
-        write(*w, p_key);
+        write(out, p_key);
 
         auto tombstone = partition_entry.second.partition_tombstone();
         deletion_time d;
@@ -1220,32 +1224,31 @@ void sstable::do_write_components(const memtable& mt) {
             d.local_deletion_time = std::numeric_limits<int32_t>::max();
             d.marked_for_delete_at = std::numeric_limits<int64_t>::min();
         }
-        write(*w, d);
+        write(out, d);
 
         auto& partition = partition_entry.second;
         auto& static_row = partition.static_row();
 
-        write_static_row(*w, *mt.schema(), static_row);
+        write_static_row(out, *mt.schema(), static_row);
         for (const auto& rt: partition.row_tombstones()) {
             auto prefix = composite::from_clustering_element(*mt.schema(), rt.prefix());
-            write_range_tombstone(*w, prefix, {}, rt.t());
+            write_range_tombstone(out, prefix, {}, rt.t());
         }
 
         // Write all CQL rows from a given mutation partition.
         for (auto& clustered_row: partition.clustered_rows()) {
-            write_clustered_row(*w, *mt.schema(), clustered_row);
+            write_clustered_row(out, *mt.schema(), clustered_row);
         }
         int16_t end_of_row = 0;
-        write(*w, end_of_row);
+        write(out, end_of_row);
 
         // compute size of the current row.
-        _c_stats.row_size = w->offset() - _c_stats.start_offset;
+        _c_stats.row_size = out.offset() - _c_stats.start_offset;
         // update is about merging column_stats with the data being stored by collector.
         collector->update(_c_stats);
         _c_stats.reset();
     }
 
-    w->close().get();
     index->close().get();
 
     _components.insert(component_type::TOC);
@@ -1256,16 +1259,35 @@ void sstable::do_write_components(const memtable& mt) {
     _components.insert(component_type::Data);
 
     add_stats_metadata(_statistics, *collector);
-    write_digest(filename(sstable::component_type::Digest), w->full_checksum()).get();
+}
+
+void sstable::prepare_write_components(const memtable& mt) {
+    // CRC component must only be present when compression isn't enabled.
+    bool checksum_file = mt.schema()->get_compressor() == compressor::none;
+
     if (checksum_file) {
+        auto w = make_shared<checksummed_file_writer>(_data_file, sstable_buffer_size, checksum_file);
+        _components.insert(component_type::CRC);
+        this->do_write_components(mt, *w);
+        w->close().get();
+
+        write_digest(filename(sstable::component_type::Digest), w->full_checksum()).get();
         write_crc(filename(sstable::component_type::CRC), w->finalize_checksum()).get();
+    } else {
+        prepare_compression(_compression, *mt.schema());
+        auto w = make_shared<file_writer>(make_compressed_file_output_stream(_data_file, &_compression));
+        _components.insert(component_type::CompressionInfo);
+        this->do_write_components(mt, *w);
+        w->close().get();
+
+        write_digest(filename(sstable::component_type::Digest), _compression.full_checksum()).get();
     }
 }
 
 future<> sstable::write_components(const memtable& mt) {
     return create_data().then([this, &mt] {
         auto w = [this] (const memtable& mt) {
-            this->do_write_components(mt);
+            this->prepare_write_components(mt);
         };
         return seastar::async(w, mt).then([this] {
             return write_summary();
@@ -1273,6 +1295,9 @@ future<> sstable::write_components(const memtable& mt) {
             return write_filter();
         }).then([this] {
             return write_statistics();
+        }).then([this] {
+            // NOTE: write_compression means maybe_write_compression.
+            return write_compression();
         }).then([this] {
             return write_toc();
         });
