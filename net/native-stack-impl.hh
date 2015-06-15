@@ -76,6 +76,8 @@ public:
         : _conn(std::move(conn)) {}
     virtual input_stream<char> input() override;
     virtual output_stream<char> output() override;
+    void shutdown_input();
+    void shutdown_output();
 };
 
 template <typename Protocol>
@@ -136,6 +138,19 @@ native_connected_socket_impl<Protocol>::output() {
     data_sink ds(std::make_unique<native_data_sink_impl>(_conn));
     return output_stream<char>(std::move(ds), 8192);
 }
+
+template <typename Protocol>
+void
+native_connected_socket_impl<Protocol>::shutdown_input() {
+    _conn.close_read();
+}
+
+template <typename Protocol>
+void
+native_connected_socket_impl<Protocol>::shutdown_output() {
+    _conn.close_write();
+}
+
 
 }
 
