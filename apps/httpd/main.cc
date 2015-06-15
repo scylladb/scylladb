@@ -79,8 +79,11 @@ int main(int ac, char** av) {
             return server->set_routes([rb](routes& r) {rb->register_function(r, "demo", "hello world application");});
         }).then([server, port] {
             return server->listen(port);
-        }).then([port] {
+        }).then([server, port] {
             std::cout << "Seastar HTTP server listening on port " << port << " ...\n";
+            engine().at_exit([server] {
+                return server->stop();
+            });
         });
 
     });

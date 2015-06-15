@@ -65,6 +65,7 @@ class http_server {
     uint64_t _requests_served = 0;
     sstring _date = http_date();
     timer<> _date_format_timer { [this] {_date = http_date();} };
+    future<> _stopped = make_ready_future();
 public:
     routes _routes;
 
@@ -75,11 +76,17 @@ public:
         listen_options lo;
         lo.reuse_address = true;
         _listeners.push_back(engine().listen(make_ipv4_address(addr), lo));
-        do_accepts(_listeners.size() - 1);
+        _stopped = when_all(std::move(_stopped), do_accepts(_listeners.size() - 1)).discard_result();
         return make_ready_future<>();
     }
-    void do_accepts(int which) {
-        _listeners[which].accept().then(
+    future<> stop() {
+        for (auto&& l : _listeners) {
+            l.abort_accept();
+        }
+        return std::move(_stopped);
+    }
+    future<> do_accepts(int which) {
+        return _listeners[which].accept().then(
                 [this, which] (connected_socket fd, socket_address addr) mutable {
                     auto conn = new connection(*this, std::move(fd), addr);
                     conn->process().then_wrapped([this, conn] (auto&& f) {
@@ -368,6 +375,10 @@ public:
 
     future<> start() {
         return _server_dist->start();
+    }
+
+    future<> stop() {
+        return _server_dist->stop();
     }
 
     future<> set_routes(std::function<void(routes& r)> fun) {
