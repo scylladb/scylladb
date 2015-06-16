@@ -338,6 +338,7 @@ api = ['api/api.cc',
        'api/cache_service.cc',
        'api/api-doc/collectd.json',
        'api/collectd.cc',
+       'api/api-doc/endpoint_snitch_info.json',
        ]
 
 boost_test_lib = [
