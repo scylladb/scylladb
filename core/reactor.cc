@@ -281,12 +281,38 @@ future<> reactor_backend_epoll::get_epoll_future(pollable_fd_state& pfd,
     return (pfd.*pr).get_future();
 }
 
+void reactor_backend_epoll::abort_fd(pollable_fd_state& pfd, std::exception_ptr ex,
+                                     promise<> pollable_fd_state::* pr, int event) {
+    if (pfd.events_epoll & event) {
+        pfd.events_epoll &= ~event;
+        auto ctl = pfd.events_epoll ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+        ::epoll_event eevt;
+        eevt.events = pfd.events_epoll;
+        eevt.data.ptr = &pfd;
+        int r = ::epoll_ctl(_epollfd.get(), ctl, pfd.fd.get(), &eevt);
+        assert(r == 0);
+    }
+    if (pfd.events_requested & event) {
+        pfd.events_requested &= ~event;
+        (pfd.*pr).set_exception(std::move(ex));
+    }
+    pfd.events_known &= ~event;
+}
+
 future<> reactor_backend_epoll::readable(pollable_fd_state& fd) {
     return get_epoll_future(fd, &pollable_fd_state::pollin, EPOLLIN);
 }
 
 future<> reactor_backend_epoll::writeable(pollable_fd_state& fd) {
     return get_epoll_future(fd, &pollable_fd_state::pollout, EPOLLOUT);
+}
+
+void reactor_backend_epoll::abort_reader(pollable_fd_state& fd, std::exception_ptr ex) {
+    abort_fd(fd, std::move(ex), &pollable_fd_state::pollin, EPOLLIN);
+}
+
+void reactor_backend_epoll::abort_writer(pollable_fd_state& fd, std::exception_ptr ex) {
+    abort_fd(fd, std::move(ex), &pollable_fd_state::pollout, EPOLLOUT);
 }
 
 void reactor_backend_epoll::forget(pollable_fd_state& fd) {

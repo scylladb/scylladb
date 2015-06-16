@@ -323,6 +323,7 @@ private:
         void input_handle_other_state(tcp_hdr* th, packet p);
         void output_one(bool data_retransmit = false);
         future<> wait_for_data();
+        void abort_reader();
         future<> wait_for_all_data_acked();
         future<> send(packet p);
         void connect();
@@ -582,6 +583,9 @@ public:
             return _q.not_empty().then([this] {
                 return make_ready_future<connection>(_q.pop());
             });
+        }
+        void abort_accept() {
+            _q.abort(std::make_exception_ptr(std::system_error(ECONNABORTED, std::system_category())));
         }
         friend class tcp;
     };
@@ -1527,6 +1531,16 @@ future<> tcp<InetTraits>::tcb::wait_for_data() {
 }
 
 template <typename InetTraits>
+void
+tcp<InetTraits>::tcb::abort_reader() {
+    if (_rcv._data_received_promise) {
+        _rcv._data_received_promise->set_exception(
+                std::make_exception_ptr(std::system_error(ECONNABORTED, std::system_category())));
+        _rcv._data_received_promise = std::experimental::nullopt;
+    }
+}
+
+template <typename InetTraits>
 future<> tcp<InetTraits>::tcb::wait_for_all_data_acked() {
     if (_snd.data.empty() && _snd.unsent_len == 0 && _snd.queued_len == 0) {
         return make_ready_future<>();
@@ -1875,6 +1889,7 @@ std::experimental::optional<typename InetTraits::l4packet> tcp<InetTraits>::tcb:
 
 template <typename InetTraits>
 void tcp<InetTraits>::connection::close_read() {
+    _tcb->abort_reader();
 }
 
 template <typename InetTraits>

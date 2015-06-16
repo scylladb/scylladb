@@ -167,11 +167,14 @@ public:
     future<> write_all(net::packet& p);
     future<> readable();
     future<> writeable();
+    void abort_reader(std::exception_ptr ex);
+    void abort_writer(std::exception_ptr ex);
     future<pollable_fd, socket_address> accept();
     future<size_t> sendmsg(struct msghdr *msg);
     future<size_t> recvmsg(struct msghdr *msg);
     future<size_t> sendto(socket_address addr, const void* buf, size_t len);
     file_desc& get_file_desc() const { return _s->fd; }
+    void shutdown(int how) { _s->fd.shutdown(how); }
     void close() { _s.reset(); }
 protected:
     int get_fd() const { return _s->fd.get(); }
@@ -187,6 +190,8 @@ public:
     virtual ~connected_socket_impl() {}
     virtual input_stream<char> input() = 0;
     virtual output_stream<char> output() = 0;
+    virtual void shutdown_input() = 0;
+    virtual void shutdown_output() = 0;
 };
 
 /// \addtogroup networking-module
@@ -217,6 +222,22 @@ public:
     ///
     /// Gets an object that sends data to the remote endpoint.
     output_stream<char> output();
+    /// Disables output to the socket.
+    ///
+    /// Current or future writes that have not been successfully flushed
+    /// will immediately fail with an error.  This is useful to abort
+    /// operations on a socket that is not making progress due to a
+    /// peer failure.
+    void shutdown_output();
+    /// Disables input from the socket.
+    ///
+    /// Current or future reads will immediately fail with an error.
+    /// This is useful to abort operations on a socket that is not making
+    /// progress due to a peer failure.
+    void shutdown_input();
+    /// Disables socket input and output.
+    ///
+    /// Equivalent to \ref shutdown_input() and \ref shutdown_output().
 };
 /// @}
 
@@ -225,6 +246,7 @@ class server_socket_impl {
 public:
     virtual ~server_socket_impl() {}
     virtual future<connected_socket, socket_address> accept() = 0;
+    virtual void abort_accept() = 0;
 };
 /// \endcond
 
@@ -262,6 +284,14 @@ public:
     /// \see listen(socket_address sa, listen_options opts)
     future<connected_socket, socket_address> accept() {
         return _ssi->accept();
+    }
+
+    /// Stops any \ref accept() in progress.
+    ///
+    /// Current and future \ref accept() calls will terminate immediately
+    /// with an error.
+    void abort_accept() {
+        return _ssi->abort_accept();
     }
 };
 /// @}
@@ -566,6 +596,8 @@ private:
             promise<> pollable_fd_state::* pr, int event);
     void complete_epoll_event(pollable_fd_state& fd,
             promise<> pollable_fd_state::* pr, int events, int event);
+    void abort_fd(pollable_fd_state& fd, std::exception_ptr ex,
+            promise<> pollable_fd_state::* pr, int event);
 public:
     reactor_backend_epoll();
     virtual ~reactor_backend_epoll() override { }
@@ -575,6 +607,8 @@ public:
     virtual void forget(pollable_fd_state& fd) override;
     virtual future<> notified(reactor_notifier *n) override;
     virtual std::unique_ptr<reactor_notifier> make_reactor_notifier() override;
+    void abort_reader(pollable_fd_state& fd, std::exception_ptr ex);
+    void abort_writer(pollable_fd_state& fd, std::exception_ptr ex);
 };
 
 #ifdef HAVE_OSV
@@ -862,6 +896,12 @@ public:
     }
     future<> notified(reactor_notifier *n) {
         return _backend.notified(n);
+    }
+    void abort_reader(pollable_fd_state& fd, std::exception_ptr ex) {
+        return _backend.abort_reader(fd, std::move(ex));
+    }
+    void abort_writer(pollable_fd_state& fd, std::exception_ptr ex) {
+        return _backend.abort_writer(fd, std::move(ex));
     }
     void enable_timer(clock_type::time_point when);
     std::unique_ptr<reactor_notifier> make_reactor_notifier() {
@@ -1152,6 +1192,18 @@ future<> pollable_fd::writeable() {
 }
 
 inline
+void
+pollable_fd::abort_reader(std::exception_ptr ex) {
+    engine().abort_reader(*_s, std::move(ex));
+}
+
+inline
+void
+pollable_fd::abort_writer(std::exception_ptr ex) {
+    engine().abort_writer(*_s, std::move(ex));
+}
+
+inline
 future<pollable_fd, socket_address> pollable_fd::accept() {
     return engine().accept(*_s);
 }
@@ -1302,6 +1354,18 @@ inline
 output_stream<char>
 connected_socket::output() {
     return _csi->output();
+}
+
+inline
+void
+connected_socket::shutdown_input() {
+    return _csi->shutdown_input();
+}
+
+inline
+void
+connected_socket::shutdown_output() {
+    return _csi->shutdown_output();
 }
 
 #endif /* REACTOR_HH_ */
