@@ -87,3 +87,14 @@ SEASTAR_TEST_CASE(test_thread_async_immed) {
         BOOST_REQUIRE_EQUAL(three, 3);
     });
 }
+
+SEASTAR_TEST_CASE(test_thread_async_nested) {
+    return async([] {
+        return async([] {
+            return 3;
+        }).get0();
+    }).then([] (int three) {
+        BOOST_REQUIRE_EQUAL(three, 3);
+    });
+}
+
