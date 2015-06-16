@@ -135,8 +135,26 @@ size_t uncompress_deflate(const char* input, size_t input_len,
 
 size_t compress_deflate(const char* input, size_t input_len,
         char* output, size_t output_len) {
-    // FIXME: implement.
-    fail(unimplemented::cause::COMPRESSION);
+    z_stream zs;
+    zs.zalloc = Z_NULL;
+    zs.zfree = Z_NULL;
+    zs.opaque = Z_NULL;
+    zs.avail_in = 0;
+    zs.next_in = Z_NULL;
+    if (deflateInit(&zs, Z_DEFAULT_COMPRESSION) != Z_OK) {
+        throw std::runtime_error("deflate compression init failure");
+    }
+    zs.next_in = reinterpret_cast<unsigned char*>(const_cast<char*>(input));
+    zs.avail_in = input_len;
+    zs.next_out = reinterpret_cast<unsigned char*>(output);
+    zs.avail_out = output_len;
+    auto res = deflate(&zs, Z_FINISH);
+    deflateEnd(&zs);
+    if (res == Z_STREAM_END) {
+        return output_len - zs.avail_out;
+    } else {
+        throw std::runtime_error("deflate compression failure");
+    }
 }
 
 size_t uncompress_snappy(const char* input, size_t input_len,
@@ -163,8 +181,18 @@ size_t compress_max_size_lz4(size_t input_len) {
 }
 
 size_t compress_max_size_deflate(size_t input_len) {
-    // FIXME: implement.
-    fail(unimplemented::cause::COMPRESSION);
+    z_stream zs;
+    zs.zalloc = Z_NULL;
+    zs.zfree = Z_NULL;
+    zs.opaque = Z_NULL;
+    zs.avail_in = 0;
+    zs.next_in = Z_NULL;
+    if (deflateInit(&zs, Z_DEFAULT_COMPRESSION) != Z_OK) {
+        throw std::runtime_error("deflate compression init failure");
+    }
+    auto res = deflateBound(&zs, input_len);
+    deflateEnd(&zs);
+    return res;
 }
 
 size_t compress_max_size_snappy(size_t input_len) {
