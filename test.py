@@ -115,8 +115,9 @@ if __name__ == "__main__":
         proc = subprocess.Popen(path.split(' '), stdout=outf, stderr=subprocess.PIPE, env=env,preexec_fn=os.setsid)
         signal.alarm(args.timeout)
         err = None
+        out = None
         try:
-            err = proc.communicate()
+            out,err = proc.communicate()
             signal.alarm(0)
         except:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
