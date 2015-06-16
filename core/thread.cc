@@ -61,7 +61,6 @@ thread_context::setup() {
 
 void
 thread_context::switch_in() {
-    // FIXME: use setjmp/longjmp after initial_switch_in, much faster
     auto prev = g_current_context;
     g_current_context = &_context;
     _context.link = prev;
