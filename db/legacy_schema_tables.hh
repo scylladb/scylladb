@@ -79,5 +79,9 @@ void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestam
 
 schema_ptr create_table_from_table_row(const query::result_set_row& row);
 
+void add_column_to_schema_mutation(schema_ptr table, const column_definition& column, api::timestamp_type timestamp, const partition_key& pkey, std::vector<mutation>& mutations);
+
+sstring serialize_kind(column_kind kind);
+
 } // namespace legacy_schema_tables
 } // namespace db

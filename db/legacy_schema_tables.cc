@@ -1045,16 +1045,18 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
             adder.addMapEntry("dropped_columns", entry.getKey().toString(), entry.getValue());
 
         adder.add("is_dense", table.getIsDense());
+#endif
 
-        if (withColumnsAndTriggers)
-        {
-            for (ColumnDefinition column : table.allColumns())
-                addColumnToSchemaMutation(table, column, timestamp, mutation);
+        if (with_columns_and_triggers) {
+            for (auto&& column : table->all_columns_in_select_order()) {
+                add_column_to_schema_mutation(table, column, timestamp, pkey, mutations);
+            }
 
+#if 0
             for (TriggerDefinition trigger : table.getTriggers().values())
                 addTriggerToSchemaMutation(table, trigger, timestamp, mutation);
-        }
 #endif
+        }
         mutations.emplace_back(std::move(m));
     }
 
@@ -1292,31 +1294,44 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
             converted.put(new ColumnIdentifier(entry.getKey(), true), entry.getValue());
         return converted;
     }
+#endif
 
     /*
      * Column metadata serialization/deserialization.
      */
 
-    private static void addColumnToSchemaMutation(CFMetaData table, ColumnDefinition column, long timestamp, Mutation mutation)
+    void add_column_to_schema_mutation(schema_ptr table,
+                                       const column_definition& column,
+                                       api::timestamp_type timestamp,
+                                       const partition_key& pkey,
+                                       std::vector<mutation>& mutations)
     {
-        ColumnFamily cells = mutation.addOrGet(Columns);
-        Composite prefix = Columns.comparator.make(table.cfName, column.name.toString());
-        CFRowAdder adder = new CFRowAdder(cells, prefix, timestamp);
-
-        adder.add("validator", column.type.toString());
-        adder.add("type", serializeKind(column.kind));
+        schema_ptr s = columns();
+        mutation m{pkey, s};
+        auto ckey = clustering_key::from_exploded(*s, {to_bytes(table->cf_name()), column.name()});
+        m.set_clustered_cell(ckey, "validator", column.type->name(), timestamp);
+        m.set_clustered_cell(ckey, "type", serialize_kind(column.kind), timestamp);
+#if 0
         adder.add("component_index", column.isOnAllComponents() ? null : column.position());
         adder.add("index_name", column.getIndexName());
         adder.add("index_type", column.getIndexType() == null ? null : column.getIndexType().toString());
         adder.add("index_options", json(column.getIndexOptions()));
+#endif
+        mutations.emplace_back(std::move(m));
     }
 
-    private static String serializeKind(ColumnDefinition.Kind kind)
+    sstring serialize_kind(column_kind kind)
     {
-        // For backward compatibility we need to special case CLUSTERING_COLUMN
-        return kind == ColumnDefinition.Kind.CLUSTERING_COLUMN ? "clustering_key" : kind.toString().toLowerCase();
+        switch (kind) {
+        case column_kind::partition_key:  return "partition_key";
+        case column_kind::clustering_key: return "clustering_key";
+        case column_kind::static_column:  return "static";
+        case column_kind::regular_column: return "regular";
+        default:                          throw std::invalid_argument("unknown column kind");
+        }
     }
 
+#if 0
     private static ColumnDefinition.Kind deserializeKind(String kind)
     {
         if (kind.equalsIgnoreCase("clustering_key"))
