@@ -79,7 +79,13 @@ void init();
 
 }
 
-extern thread_local jmp_buf g_unthreaded_context;
+struct jmp_buf_link {
+    jmp_buf jmpbuf;
+    jmp_buf_link* link;
+    thread_context* thread;
+};
+
+extern thread_local jmp_buf_link g_unthreaded_context;
 
 // Internal class holding thread state.  We can't hold this in
 // \c thread itself because \c thread is movable, and we want pointers
@@ -88,7 +94,7 @@ class thread_context {
     static constexpr size_t _stack_size = 128*1024;
     std::unique_ptr<char[]> _stack{new char[_stack_size]};
     std::function<void ()> _func;
-    jmp_buf _context;
+    jmp_buf_link _context;
     promise<> _done;
     bool _joined = false;
 private:

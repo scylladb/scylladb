@@ -28,9 +28,8 @@
 
 namespace seastar {
 
-thread_local thread_context* g_current_thread;
-thread_local jmp_buf g_unthreaded_context;
-thread_local jmp_buf* g_current_context;
+thread_local jmp_buf_link g_unthreaded_context;
+thread_local jmp_buf_link* g_current_context;
 
 thread_context::thread_context(std::function<void ()> func)
         : _func(std::move(func)) {
@@ -52,9 +51,10 @@ thread_context::setup() {
     initial_context.uc_link = nullptr;
     makecontext(&initial_context, main, 2, int(q), int(q >> 32));
     auto prev = g_current_context;
+    _context.link = prev;
+    _context.thread = this;
     g_current_context = &_context;
-    g_current_thread = this;
-    if (setjmp(*prev) == 0) {
+    if (setjmp(prev->jmpbuf) == 0) {
         setcontext(&initial_context);
     }
 }
@@ -64,18 +64,17 @@ thread_context::switch_in() {
     // FIXME: use setjmp/longjmp after initial_switch_in, much faster
     auto prev = g_current_context;
     g_current_context = &_context;
-    g_current_thread = this;
-    if (setjmp(*prev) == 0) {
-        longjmp(_context, 1);
+    _context.link = prev;
+    if (setjmp(prev->jmpbuf) == 0) {
+        longjmp(_context.jmpbuf, 1);
     }
 }
 
 void
 thread_context::switch_out() {
-    g_current_context = &g_unthreaded_context;
-    g_current_thread = nullptr;
-    if (setjmp(_context) == 0) {
-        longjmp(g_unthreaded_context, 1);
+    g_current_context = _context.link;
+    if (setjmp(_context.jmpbuf) == 0) {
+        longjmp(g_current_context->jmpbuf, 1);
     }
 }
 
@@ -93,15 +92,14 @@ thread_context::main() {
     } catch (...) {
         _done.set_exception(std::current_exception());
     }
-    g_current_context = &g_unthreaded_context;
-    g_current_thread = nullptr;
-    longjmp(g_unthreaded_context, 1);
+    g_current_context = _context.link;
+    longjmp(g_current_context->jmpbuf, 1);
 }
 
 namespace thread_impl {
 
 thread_context* get() {
-    return g_current_thread;
+    return g_current_context->thread;
 }
 
 void switch_in(thread_context* to) {
@@ -113,6 +111,8 @@ void switch_out(thread_context* from) {
 }
 
 void init() {
+    g_unthreaded_context.link = nullptr;
+    g_unthreaded_context.thread = nullptr;
     g_current_context = &g_unthreaded_context;
 }
 
