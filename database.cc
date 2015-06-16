@@ -158,16 +158,13 @@ struct column_family::merge_comparator {
     }
 };
 
-
-using mutation_reader = std::function<future<mutation_opt> ()>;
-
 // Convert a memtable to a subscription<mutation>, which is what's expected by
 // mutation_cursor (and provided by sstables).
 mutation_reader
-make_memtable_reader(const memtable& mt) {
-    auto begin = mt.all_partitions().begin();
-    auto end = mt.all_partitions().end();
-    return [begin, end, s = mt.schema()] () mutable {
+memtable::make_reader() const {
+    auto begin = all_partitions().begin();
+    auto end = all_partitions().end();
+    return [begin, end, s = schema()] () mutable {
         if (begin != end) {
             auto m = mutation(s, begin->first, begin->second);
             ++begin;
@@ -224,7 +221,7 @@ column_family::for_all_partitions(Func&& func) const {
     return do_with(std::move(is), [this] (iteration_state& is) {
         for (auto mtp : *is.memtables) {
             if (!mtp->empty()) {
-                is.tables.emplace_back(make_memtable_reader(*mtp));
+                is.tables.emplace_back(mtp->make_reader());
             }
         }
         for (auto sstp : *is.sstables | boost::adaptors::map_values) {
