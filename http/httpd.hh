@@ -127,7 +127,6 @@ public:
             }
         });
     }
-private:
     class connection : public boost::intrusive::list_base_hook<> {
         http_server& _server;
         connected_socket _fd;
@@ -364,7 +363,6 @@ private:
                     _resp->_content.size());
         }
     };
-public:
     uint64_t total_connections() const {
         return _total_connections;
     }
