@@ -15,84 +15,46 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db.marshal;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
 
-import org.apache.cassandra.exceptions.*;
-import org.apache.cassandra.utils.ByteBufferUtil;
-import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.Pair;
+#pragma once
+
+#include "types.hh"
+
+#include "core/sstring.hh"
+
+namespace db {
+
+namespace marshal {
 
 /**
  * Parse a string containing an Type definition.
  */
-public class TypeParser
-{
-    private final String str;
-    private int idx;
+class type_parser {
+    sstring _str;
+    size_t _idx;
 
+#if 0
     // A cache of parsed string, specially useful for DynamicCompositeType
     private static final Map<String, AbstractType<?>> cache = new HashMap<String, AbstractType<?>>();
 
     public static final TypeParser EMPTY_PARSER = new TypeParser("", 0);
-
-    private TypeParser(String str, int idx)
-    {
-        this.str = str;
-        this.idx = idx;
-    }
-
-    public TypeParser(String str)
-    {
-        this(str, 0);
-    }
+#endif
+    type_parser(const sstring& str, size_t idx);
+public:
+    explicit type_parser(const sstring& str);
 
     /**
      * Parse a string containing an type definition.
      */
-    public static AbstractType<?> parse(String str) throws SyntaxException, ConfigurationException
-    {
-        if (str == null)
-            return BytesType.instance;
+    static data_type parse(const sstring& str);
 
-        AbstractType<?> type = cache.get(str);
-
-        if (type != null)
-            return type;
-
-        // This could be simplier (i.e. new TypeParser(str).parse()) but we avoid creating a TypeParser object if not really necessary.
-        int i = 0;
-        i = skipBlank(str, i);
-        int j = i;
-        while (!isEOS(str, i) && isIdentifierChar(str.charAt(i)))
-            ++i;
-
-        if (i == j)
-            return BytesType.instance;
-
-        String name = str.substring(j, i);
-        i = skipBlank(str, i);
-
-        if (!isEOS(str, i) && str.charAt(i) == '(')
-            type = getAbstractType(name, new TypeParser(str, i));
-        else
-            type = getAbstractType(name);
-
-        // We don't really care about concurrency here. Worst case scenario, we do some parsing unnecessarily
-        cache.put(str, type);
-        return type;
-    }
-
+#if 0
     public static AbstractType<?> parse(CharSequence compareWith) throws SyntaxException, ConfigurationException
     {
         return parse(compareWith == null ? null : compareWith.toString());
@@ -102,22 +64,14 @@ public class TypeParser
     {
         return type.getClass().getSimpleName();
     }
+#endif
 
     /**
      * Parse an AbstractType from current position of this parser.
      */
-    public AbstractType<?> parse() throws SyntaxException, ConfigurationException
-    {
-        skipBlank();
-        String name = readNextIdentifier();
+    data_type parse();
 
-        skipBlank();
-        if (!isEOS() && str.charAt(idx) == '(')
-            return getAbstractType(name, this);
-        else
-            return getAbstractType(name);
-    }
-
+#if 0
     public Map<String, String> getKeyValueParameters() throws SyntaxException
     {
         if (isEOS())
@@ -154,41 +108,11 @@ public class TypeParser
         }
         throw new SyntaxException(String.format("Syntax error parsing '%s' at char %d: unexpected end of string", str, idx));
     }
+#endif
 
-    public List<AbstractType<?>> getTypeParameters() throws SyntaxException, ConfigurationException
-    {
-        List<AbstractType<?>> list = new ArrayList<AbstractType<?>>();
+    std::vector<data_type> get_type_parameters();
 
-        if (isEOS())
-            return list;
-
-        if (str.charAt(idx) != '(')
-            throw new IllegalStateException();
-
-        ++idx; // skipping '('
-
-        while (skipBlankAndComma())
-        {
-            if (str.charAt(idx) == ')')
-            {
-                ++idx;
-                return list;
-            }
-
-            try
-            {
-                list.add(parse());
-            }
-            catch (SyntaxException e)
-            {
-                SyntaxException ex = new SyntaxException(String.format("Exception while parsing '%s' around char %d", str, idx));
-                ex.initCause(e);
-                throw ex;
-            }
-        }
-        throw new SyntaxException(String.format("Syntax error parsing '%s' at char %d: unexpected end of string", str, idx));
-    }
-
+#if 0
     public Map<Byte, AbstractType<?>> getAliasParameters() throws SyntaxException, ConfigurationException
     {
         Map<Byte, AbstractType<?>> map = new HashMap<Byte, AbstractType<?>>();
@@ -337,57 +261,13 @@ public class TypeParser
         }
         throw new SyntaxException(String.format("Syntax error parsing '%s' at char %d: unexpected end of string", str, idx));
     }
+#endif
 
-    private static AbstractType<?> getAbstractType(String compareWith) throws ConfigurationException
-    {
-        String className = compareWith.contains(".") ? compareWith : "org.apache.cassandra.db.marshal." + compareWith;
-        Class<? extends AbstractType<?>> typeClass = FBUtilities.<AbstractType<?>>classForName(className, "abstract-type");
-        try
-        {
-            Field field = typeClass.getDeclaredField("instance");
-            return (AbstractType<?>) field.get(null);
-        }
-        catch (NoSuchFieldException e)
-        {
-            // Trying with empty parser
-            return getRawAbstractType(typeClass, EMPTY_PARSER);
-        }
-        catch (IllegalAccessException e)
-        {
-            // Trying with empty parser
-            return getRawAbstractType(typeClass, EMPTY_PARSER);
-        }
-    }
+    static data_type get_abstract_type(const sstring& compare_with);
 
-    private static AbstractType<?> getAbstractType(String compareWith, TypeParser parser) throws SyntaxException, ConfigurationException
-    {
-        String className = compareWith.contains(".") ? compareWith : "org.apache.cassandra.db.marshal." + compareWith;
-        Class<? extends AbstractType<?>> typeClass = FBUtilities.<AbstractType<?>>classForName(className, "abstract-type");
-        try
-        {
-            Method method = typeClass.getDeclaredMethod("getInstance", TypeParser.class);
-            return (AbstractType<?>) method.invoke(null, parser);
-        }
-        catch (NoSuchMethodException e)
-        {
-            // Trying to see if we have an instance field and apply the default parameter to it
-            AbstractType<?> type = getRawAbstractType(typeClass);
-            return AbstractType.parseDefaultParameters(type, parser);
-        }
-        catch (IllegalAccessException e)
-        {
-            // Trying to see if we have an instance field and apply the default parameter to it
-            AbstractType<?> type = getRawAbstractType(typeClass);
-            return AbstractType.parseDefaultParameters(type, parser);
-        }
-        catch (InvocationTargetException e)
-        {
-            ConfigurationException ex = new ConfigurationException("Invalid definition for comparator " + typeClass.getName() + ".");
-            ex.initCause(e.getTargetException());
-            throw ex;
-        }
-    }
+    static data_type get_abstract_type(const sstring& compare_with, type_parser parser);
 
+#if 0
     private static AbstractType<?> getRawAbstractType(Class<? extends AbstractType<?>> typeClass) throws ConfigurationException
     {
         try
@@ -432,78 +312,30 @@ public class TypeParser
     {
         throw new SyntaxException(String.format("Syntax error parsing '%s' at char %d: %s", str, idx, msg));
     }
+#endif
 
-    private boolean isEOS()
-    {
-        return isEOS(str, idx);
-    }
+    bool is_eos() const;
 
-    private static boolean isEOS(String str, int i)
-    {
-        return i >= str.length();
-    }
+    static bool is_eos(const sstring& str, size_t i);
 
-    private static boolean isBlank(int c)
-    {
-        return c == ' ' || c == '\t' || c == '\n';
-    }
+    static bool is_blank(char c);
 
-    private void skipBlank()
-    {
-        idx = skipBlank(str, idx);
-    }
+    void skip_blank();
 
-    private static int skipBlank(String str, int i)
-    {
-        while (!isEOS(str, i) && isBlank(str.charAt(i)))
-            ++i;
-
-        return i;
-    }
+    static size_t skip_blank(const sstring& str, size_t i);
 
     // skip all blank and at best one comma, return true if there not EOS
-    private boolean skipBlankAndComma()
-    {
-        boolean commaFound = false;
-        while (!isEOS())
-        {
-            int c = str.charAt(idx);
-            if (c == ',')
-            {
-                if (commaFound)
-                    return true;
-                else
-                    commaFound = true;
-            }
-            else if (!isBlank(c))
-            {
-                return true;
-            }
-            ++idx;
-        }
-        return false;
-    }
+    bool skip_blank_and_comma();
 
     /*
      * [0..9a..bA..B-+._&]
      */
-    private static boolean isIdentifierChar(int c)
-    {
-        return (c >= '0' && c <= '9')
-            || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-            || c == '-' || c == '+' || c == '.' || c == '_' || c == '&';
-    }
+    static bool is_identifier_char(char c);
 
     // left idx positioned on the character stopping the read
-    public String readNextIdentifier()
-    {
-        int i = idx;
-        while (!isEOS() && isIdentifierChar(str.charAt(idx)))
-            ++idx;
+    sstring read_next_identifier();
 
-        return str.substring(i, idx);
-    }
-
+#if 0
     public char readNextChar()
     {
         skipBlank();
@@ -588,4 +420,9 @@ public class TypeParser
         sb.append(')');
         return sb.toString();
     }
+#endif
+};
+
+}
+
 }
