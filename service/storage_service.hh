@@ -33,6 +33,7 @@
 #include "gms/application_state.hh"
 #include "db/system_keyspace.hh"
 #include "core/semaphore.hh"
+#include "utils/fb_utilities.hh"
 
 namespace service {
 
@@ -65,6 +66,9 @@ class storage_service : public gms::i_endpoint_state_change_subscriber
 public:
     static int RING_DELAY; // delay after which we assume ring has stablized
 
+    // Needed by distributed<>
+    future<> stop();
+
     const locator::token_metadata& get_token_metadata() const {
         return _token_metadata;
     }
@@ -73,14 +77,11 @@ public:
         return _token_metadata;
     }
 
-    void gossip_snitch_info() {
-        // TODO
-    }
+    void gossip_snitch_info();
 
 private:
     inet_address get_broadcast_address() {
-        auto& gossiper = gms::get_local_gossiper();
-        return gossiper.get_broadcast_address();
+        return utils::fb_utilities::get_broadcast_address();
     }
     static int get_ring_delay() {
 #if 0
@@ -421,16 +422,6 @@ private:
     bool should_bootstrap();
     future<> prepare_to_join();
     future<> join_token_ring(int delay);
-#if 0
-    public void gossipSnitchInfo()
-    {
-        IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
-        String dc = snitch.getDatacenter(FBUtilities.getBroadcastAddress());
-        String rack = snitch.getRack(FBUtilities.getBroadcastAddress());
-        Gossiper.instance.addLocalApplicationState(ApplicationState.DC, StorageService.instance.valueFactory.datacenter(dc));
-        Gossiper.instance.addLocalApplicationState(ApplicationState.RACK, StorageService.instance.valueFactory.rack(rack));
-    }
-#endif
 public:
     void join_ring();
     bool is_joined() {

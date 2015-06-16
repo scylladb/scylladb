@@ -26,6 +26,7 @@
 #include "core/shared_ptr.hh"
 #include "core/print.hh"
 #include "utils/UUID.hh"
+#include "utils/fb_utilities.hh"
 #include "gms/i_failure_detection_event_listener.hh"
 #include "gms/versioned_value.hh"
 #include "gms/application_state.hh"
@@ -91,8 +92,7 @@ private:
     std::set<inet_address> _seeds_from_config;
 public:
     inet_address get_broadcast_address() {
-        // FIXME: Helper for FBUtilities.getBroadcastAddress
-        return ms().listen_address();
+        return utils::fb_utilities::get_broadcast_address();
     }
     std::set<inet_address> get_seeds() {
         // FIXME: DatabaseDescriptor.getSeeds()
