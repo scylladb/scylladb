@@ -33,11 +33,12 @@ void set_storage_service(http_context& ctx, routes& r) {
 
     httpd::storage_service_json::get_token_endpoint.set(r, [](std::unique_ptr<request> req) {
         return service::get_token_to_endpoint().then([] (const std::map<dht::token, gms::inet_address>& tokens){
-            std::vector<storage_service_json::mapper> res(tokens.size());
+            std::vector<storage_service_json::mapper> res;
             for (auto i : tokens) {
-                res.push_back(storage_service_json::mapper());
-                res.back().key = boost::lexical_cast<sstring>(i.first);
-                res.back().value = boost::lexical_cast<sstring>(i.second);
+                ss::mapper val;
+                val.key = boost::lexical_cast<std::string>(i.first);
+                val.value = boost::lexical_cast<std::string>(i.second);
+                res.push_back(val);
             }
             return make_ready_future<json::json_return_type>(res);
         });
