@@ -291,7 +291,7 @@ template <typename T>
 inline
 lw_shared_ptr<const T>
 enable_lw_shared_from_this<T>::shared_from_this() const {
-    return lw_shared_ptr<const T>(this);
+    return lw_shared_ptr<const T>(const_cast<enable_lw_shared_from_this*>(this));
 }
 
 template <typename T>
