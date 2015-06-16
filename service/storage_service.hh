@@ -66,6 +66,9 @@ class storage_service : public gms::i_endpoint_state_change_subscriber
 public:
     static int RING_DELAY; // delay after which we assume ring has stablized
 
+    // Needed by distributed<>
+    future<> stop();
+
     const locator::token_metadata& get_token_metadata() const {
         return _token_metadata;
     }

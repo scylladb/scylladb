@@ -951,4 +951,8 @@ void storage_service::gossip_snitch_info() {
     gossiper.add_local_application_state(gms::application_state::RACK, value_factory.rack(rack));
 }
 
+future<> storage_service::stop() {
+    return make_ready_future<>();
+}
+
 } // namespace service
