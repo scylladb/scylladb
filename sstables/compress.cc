@@ -151,8 +151,11 @@ size_t uncompress_snappy(const char* input, size_t input_len,
 
 size_t compress_snappy(const char* input, size_t input_len,
         char* output, size_t output_len) {
-    // FIXME: implement.
-    fail(unimplemented::cause::COMPRESSION);
+    auto ret = snappy_compress(input, input_len, output, &output_len);
+    if (ret != SNAPPY_OK) {
+        throw std::runtime_error("snappy compression failure: snappy_compress() failed");
+    }
+    return output_len;
 }
 
 size_t compress_max_size_lz4(size_t input_len) {
@@ -165,8 +168,7 @@ size_t compress_max_size_deflate(size_t input_len) {
 }
 
 size_t compress_max_size_snappy(size_t input_len) {
-    // FIXME: implement.
-    fail(unimplemented::cause::COMPRESSION);
+    return snappy_max_compressed_length(input_len);
 }
 
 class compressed_file_data_source_impl : public data_source_impl {
