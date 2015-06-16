@@ -38,4 +38,5 @@ public:
     const db::replay_position& replay_position() const {
         return _replay_position;
     }
+    mutation_reader make_reader() const;
 };
