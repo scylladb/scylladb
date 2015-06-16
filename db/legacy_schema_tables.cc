@@ -1011,12 +1011,14 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         }
         else
         {
-            adder.add("comparator", table.comparator.toString());
+#endif
+            m.set_clustered_cell(ckey, "comparator", table->regular_column_name_type()->name(), timestamp);
+#if 0
         }
 #endif
 
+        m.set_clustered_cell(ckey, "bloom_filter_fp_chance", table->bloom_filter_fp_chance(), timestamp);
 #if 0
-        adder.add("bloom_filter_fp_chance", table.getBloomFilterFpChance());
         adder.add("caching", table.getCaching().toString());
 #endif
         m.set_clustered_cell(ckey, "comment", table->comment(), timestamp);
@@ -1024,7 +1026,9 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         adder.add("compaction_strategy_class", table.compactionStrategyClass.getName());
         adder.add("compaction_strategy_options", json(table.compactionStrategyOptions));
         adder.add("compression_parameters", json(table.compressionParameters.asThriftOptions()));
-        adder.add("default_time_to_live", table.getDefaultTimeToLive());
+#endif
+        m.set_clustered_cell(ckey, "default_time_to_live", table->default_time_to_live().count(), timestamp);
+#if 0
         adder.add("default_validator", table.getDefaultValidator().toString());
         adder.add("gc_grace_seconds", table.getGcGraceSeconds());
         adder.add("key_validator", table.getKeyValidator().toString());
