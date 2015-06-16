@@ -41,6 +41,7 @@ class native_server_socket_impl : public server_socket_impl {
 public:
     native_server_socket_impl(Protocol& proto, uint16_t port, listen_options opt);
     virtual future<connected_socket, socket_address> accept() override;
+    virtual void abort_accept() override;
 };
 
 template <typename Protocol>
@@ -58,6 +59,12 @@ native_server_socket_impl<Protocol>::accept() {
     });
 }
 
+template <typename Protocol>
+void
+native_server_socket_impl<Protocol>::abort_accept() {
+    _listener.abort_accept();
+}
+
 // native_connected_socket_impl
 template <typename Protocol>
 class native_connected_socket_impl : public connected_socket_impl {
@@ -69,6 +76,8 @@ public:
         : _conn(std::move(conn)) {}
     virtual input_stream<char> input() override;
     virtual output_stream<char> output() override;
+    virtual void shutdown_input() override;
+    virtual void shutdown_output() override;
 };
 
 template <typename Protocol>
@@ -129,6 +138,19 @@ native_connected_socket_impl<Protocol>::output() {
     data_sink ds(std::make_unique<native_data_sink_impl>(_conn));
     return output_stream<char>(std::move(ds), 8192);
 }
+
+template <typename Protocol>
+void
+native_connected_socket_impl<Protocol>::shutdown_input() {
+    _conn.close_read();
+}
+
+template <typename Protocol>
+void
+native_connected_socket_impl<Protocol>::shutdown_output() {
+    _conn.close_write();
+}
+
 
 }
 

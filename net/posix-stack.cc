@@ -33,6 +33,12 @@ private:
 public:
     virtual input_stream<char> input() override { return input_stream<char>(posix_data_source(_fd)); }
     virtual output_stream<char> output() override { return output_stream<char>(posix_data_sink(_fd), 8192); }
+    virtual void shutdown_input() override {
+        _fd.shutdown(SHUT_RD);
+    }
+    virtual void shutdown_output() override {
+        _fd.shutdown(SHUT_WR);
+    }
     friend class posix_server_socket_impl;
     friend class posix_ap_server_socket_impl;
     friend class posix_reuseport_server_socket_impl;
@@ -59,6 +65,11 @@ posix_server_socket_impl::accept() {
     });
 }
 
+void
+posix_server_socket_impl::abort_accept() {
+    _lfd.abort_reader(std::make_exception_ptr(std::system_error(ECONNABORTED, std::system_category())));
+}
+
 future<connected_socket, socket_address> posix_ap_server_socket_impl::accept() {
     auto conni = conn_q.find(_sa.as_posix_sockaddr_in());
     if (conni != conn_q.end()) {
@@ -73,6 +84,16 @@ future<connected_socket, socket_address> posix_ap_server_socket_impl::accept() {
     }
 }
 
+void
+posix_ap_server_socket_impl::abort_accept() {
+    conn_q.erase(_sa.as_posix_sockaddr_in());
+    auto i = sockets.find(_sa.as_posix_sockaddr_in());
+    if (i != sockets.end()) {
+        i->second.set_exception(std::system_error(ECONNABORTED, std::system_category()));
+        sockets.erase(i);
+    }
+}
+
 future<connected_socket, socket_address>
 posix_reuseport_server_socket_impl::accept() {
     return _lfd.accept().then([this] (pollable_fd fd, socket_address sa) {
@@ -80,6 +101,11 @@ posix_reuseport_server_socket_impl::accept() {
         return make_ready_future<connected_socket, socket_address>(
             connected_socket(std::move(csi)), sa);
     });
+}
+
+void
+posix_reuseport_server_socket_impl::abort_accept() {
+    _lfd.abort_reader(std::make_exception_ptr(std::system_error(ECONNABORTED, std::system_category())));
 }
 
 void  posix_ap_server_socket_impl::move_connected_socket(socket_address sa, pollable_fd fd, socket_address addr) {
