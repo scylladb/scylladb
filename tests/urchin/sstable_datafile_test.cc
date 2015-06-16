@@ -888,3 +888,38 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
         }).then([sst, mtp] {});
     });
 }
+
+SEASTAR_TEST_CASE(datafile_generation_13) {
+    return test_setup::do_with_test_directory([] {
+        auto& cs = *complex_schema();
+        auto s = make_lw_shared(schema(cs));
+        // NOTE: set lz4 as compressor algorithm to schema.
+        s->set_compressor(compressor::lz4);
+
+        auto mtp = make_shared<memtable>(s);
+
+        auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+        auto cp = exploded_clustering_prefix({to_bytes("c1") });
+
+        mutation m(key, s);
+
+        tombstone tomb(db_clock::now_in_usecs(), gc_clock::now());
+        m.partition().apply_delete(*s, cp, tomb);
+        mtp->apply(std::move(m));
+
+        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 13, la, big);
+        return sst->write_components(*mtp).then([s, tomb] {
+            return reusable_sst("tests/urchin/sstables/tests-temporary", 13).then([s, tomb] (auto sstp) mutable {
+                return do_with(sstables::key("key1"), [sstp, s, tomb] (auto& key) {
+                    return sstp->read_row(s, key).then([sstp, s, tomb] (auto mutation) {
+                        auto& mp = mutation->partition();
+                        BOOST_REQUIRE(mp.row_tombstones().size() == 1);
+                        for (auto& rt: mp.row_tombstones()) {
+                            BOOST_REQUIRE(rt.t() == tomb);
+                        }
+                    });
+                });
+            });
+        }).then([sst, mtp] {});
+    });
+}

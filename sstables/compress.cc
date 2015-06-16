@@ -36,12 +36,15 @@ void compression::update(uint64_t compressed_file_length) {
 void compression::set_compressor(compressor c) {
      if (c == compressor::lz4) {
          _compress = compress_lz4;
+         _compress_max_size = compress_max_size_lz4;
          name.value = "LZ4Compressor";
      } else if (c == compressor::snappy) {
          _compress = compress_snappy;
+         _compress_max_size = compress_max_size_snappy;
          name.value = "SnappyCompressor";
      } else if (c == compressor::deflate) {
          _compress = compress_deflate;
+         _compress_max_size = compress_max_size_deflate;
          name.value = "DeflateCompressor";
      } else {
          throw std::runtime_error("unsupported compressor type");
@@ -102,7 +105,7 @@ size_t compress_lz4(const char* input, size_t input_len,
     if (ret == 0) {
         throw std::runtime_error("LZ4 compression failure: LZ4_compress() failed");
     }
-    return ret;
+    return ret + 4;
 }
 
 size_t uncompress_deflate(const char* input, size_t input_len,
@@ -148,6 +151,20 @@ size_t uncompress_snappy(const char* input, size_t input_len,
 
 size_t compress_snappy(const char* input, size_t input_len,
         char* output, size_t output_len) {
+    // FIXME: implement.
+    fail(unimplemented::cause::COMPRESSION);
+}
+
+size_t compress_max_size_lz4(size_t input_len) {
+    return LZ4_COMPRESSBOUND(input_len) + 4;
+}
+
+size_t compress_max_size_deflate(size_t input_len) {
+    // FIXME: implement.
+    fail(unimplemented::cause::COMPRESSION);
+}
+
+size_t compress_max_size_snappy(size_t input_len) {
     // FIXME: implement.
     fail(unimplemented::cause::COMPRESSION);
 }

@@ -18,6 +18,9 @@ public:
     file_writer(lw_shared_ptr<file> f, size_t buffer_size = 8192)
         : _out(make_file_output_stream(std::move(f), buffer_size)) {}
 
+    file_writer(output_stream<char>&& out)
+        : _out(std::move(out)) {}
+
     virtual future<> write(const char* buf, size_t n) {
         _offset += n;
         return _out.write(buf, n);
@@ -111,5 +114,67 @@ public:
         return checksum_adler32_combine(_full_checksum, _per_chunk_checksum, _offset % _c.chunk_size);
     }
 };
+
+// compressed_file_data_sink_impl works as a filter for a file output stream,
+// where the buffer flushed will be compressed and its checksum computed, then
+// the result passed to a regular output stream.
+class compressed_file_data_sink_impl : public data_sink_impl {
+    output_stream<char> _out;
+    sstables::compression* _compression_metadata;
+    size_t _pos = 0;
+public:
+    compressed_file_data_sink_impl(lw_shared_ptr<file> f, sstables::compression* cm, file_output_stream_options options)
+            : _out(make_file_output_stream(std::move(f), options))
+            , _compression_metadata(cm) {}
+
+    future<> put(net::packet data) { abort(); }
+    virtual future<> put(temporary_buffer<char> buf) override {
+        auto output_len = _compression_metadata->compress_max_size(buf.size());
+        // account space for checksum that goes after compressed data.
+        temporary_buffer<char> compressed(output_len + 4);
+
+        // compress flushed data.
+        auto len = _compression_metadata->compress(buf.get(), buf.size(), compressed.get_write(), output_len);
+        if (len > output_len) {
+            throw std::runtime_error("possible overflow during compression");
+        }
+
+        _compression_metadata->offsets.elements.push_back(_pos);
+        // account compressed data + 32-bit checksum.
+        _pos += len + 4;
+        // total length of the uncompressed data.
+        _compression_metadata->data_len += buf.size();
+
+        // compute 32-bit checksum for compressed data.
+        uint32_t per_chunk_checksum = checksum_adler32(compressed.get(), len);
+        _compression_metadata->update_full_checksum(per_chunk_checksum, len);
+
+        // write checksum into buffer after compressed data.
+        *unaligned_cast<uint32_t*>(compressed.get_write() + len) = htonl(per_chunk_checksum);
+
+        compressed.trim(len + 4);
+
+        auto f = _out.write(compressed.get(), compressed.size());
+        return f.then([compressed = std::move(compressed)] {});
+    }
+    virtual future<> close() {
+        return _out.close();
+    }
+};
+
+class compressed_file_data_sink : public data_sink {
+public:
+    compressed_file_data_sink(lw_shared_ptr<file> f, sstables::compression* cm, file_output_stream_options options)
+        : data_sink(std::make_unique<compressed_file_data_sink_impl>(
+                std::move(f), cm, options)) {}
+};
+
+static inline output_stream<char> make_compressed_file_output_stream(lw_shared_ptr<file> f, sstables::compression* cm) {
+    file_output_stream_options options;
+    // buffer of output stream is set to chunk length, because flush must
+    // happen every time a chunk was filled up.
+    options.buffer_size = cm->uncompressed_chunk_length();
+    return output_stream<char>(compressed_file_data_sink(std::move(f), cm, options), options.buffer_size);
+}
 
 }
