@@ -319,6 +319,8 @@ api = ['api/api.cc',
        'api/failure_detector.cc',
        'api/api-doc/column_family.json',
        'api/column_family.cc',
+       'api/messaging_service.cc',
+       'api/api-doc/messaging_service.json',
        ]
 
 boost_test_lib = [
@@ -465,7 +467,7 @@ urchin_core = (['database.cc',
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
                 + core + libnet)
 
-urchin_tests_dependencies = urchin_core + [
+urchin_tests_dependencies = urchin_core + http + api + [
     'tests/urchin/cql_test_env.cc',
     'tests/urchin/cql_assertions.cc',
 ]

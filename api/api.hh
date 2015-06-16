@@ -37,6 +37,16 @@ std::vector<T> map_to_key_value(const std::map<sstring, sstring>& map) {
     }
     return res;
 }
+
+template <typename T, typename S = T>
+T map_sum(T&& dest, const S& src) {
+    for (auto i : src) {
+        dest[i.first] += i.second;
+    }
+    return dest;
+}
+
+
 }
 
 #endif /* API_API_HH_ */
