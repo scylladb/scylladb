@@ -1007,8 +1007,9 @@ void make(database& db) {
             false
             );
     auto kscfg = db.make_keyspace_config(*ksm);
-    keyspace ks{ksm, std::move(kscfg)};
-    db.add_keyspace("system", std::move(ks));
+    keyspace _ks{ksm, std::move(kscfg)};
+    db.add_keyspace("system", std::move(_ks));
+    auto& ks = db.find_keyspace("system");
     for (auto&& table : all_tables()) {
         db.add_column_family(column_family(table, ks.make_column_family_config(*table)));
     }
