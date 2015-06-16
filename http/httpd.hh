@@ -41,6 +41,7 @@
 #include <limits>
 #include <cctype>
 #include <vector>
+#include <boost/intrusive/list.hpp>
 #include "reply.hh"
 #include "http/routes.hh"
 
@@ -63,9 +64,18 @@ class http_server {
     uint64_t _total_connections = 0;
     uint64_t _current_connections = 0;
     uint64_t _requests_served = 0;
+    uint64_t _connections_being_accepted = 0;
     sstring _date = http_date();
     timer<> _date_format_timer { [this] {_date = http_date();} };
-    future<> _stopped = make_ready_future();
+    bool _stopping = false;
+    promise<> _all_connections_stopped;
+    future<> _stopped = _all_connections_stopped.get_future();
+private:
+    void maybe_idle() {
+        if (_stopping && !_connections_being_accepted && !_current_connections) {
+            _all_connections_stopped.set_value();
+        }
+    }
 public:
     routes _routes;
 
@@ -80,15 +90,26 @@ public:
         return make_ready_future<>();
     }
     future<> stop() {
+        _stopping = true;
         for (auto&& l : _listeners) {
             l.abort_accept();
+        }
+        for (auto&& c : _connections) {
+            c.shutdown();
         }
         return std::move(_stopped);
     }
     future<> do_accepts(int which) {
-        return _listeners[which].accept().then(
-                [this, which] (connected_socket fd, socket_address addr) mutable {
-                    auto conn = new connection(*this, std::move(fd), addr);
+        ++_connections_being_accepted;
+        return _listeners[which].accept().then_wrapped(
+                [this, which] (future<connected_socket, socket_address> f_cs_sa) mutable {
+                    --_connections_being_accepted;
+                    if (_stopping) {
+                        maybe_idle();
+                        return;
+                    }
+                    auto cs_sa = f_cs_sa.get();
+                    auto conn = new connection(*this, std::get<0>(std::move(cs_sa)), std::get<1>(std::move(cs_sa)));
                     conn->process().then_wrapped([this, conn] (auto&& f) {
                                 delete conn;
                                 try {
@@ -106,7 +127,8 @@ public:
             }
         });
     }
-    class connection {
+private:
+    class connection : public boost::intrusive::list_base_hook<> {
         http_server& _server;
         connected_socket _fd;
         input_stream<char> _read_buf;
@@ -125,9 +147,12 @@ public:
                         _fd.output()) {
             ++_server._total_connections;
             ++_server._current_connections;
+            _server._connections.push_back(*this);
         }
         ~connection() {
             --_server._current_connections;
+            _server._connections.erase(_server._connections.iterator_to(*this));
+            _server.maybe_idle();
         }
         future<> process() {
             // Launch read and write "threads" simultaneously:
@@ -136,6 +161,10 @@ public:
                         // FIXME: notify any exceptions in joined?
                         return make_ready_future<>();
                     });
+        }
+        void shutdown() {
+            _fd.shutdown_input();
+            _fd.shutdown_output();
         }
         future<> read() {
             return do_until([this] {return _done;}, [this] {
@@ -335,6 +364,7 @@ public:
                     _resp->_content.size());
         }
     };
+public:
     uint64_t total_connections() const {
         return _total_connections;
     }
@@ -352,6 +382,8 @@ public:
         strftime(tmp, sizeof(tmp), "%d %b %Y %H:%M:%S GMT", &tm);
         return tmp;
     }
+private:
+    boost::intrusive::list<connection> _connections;
 };
 
 /*
