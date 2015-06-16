@@ -203,6 +203,7 @@ public:
     virtual bool less(bytes_view v1, bytes_view v2) const = 0;
     // returns a callable that can be called with two byte_views, and calls this->less() on them.
     serialized_compare as_less_comparator() const ;
+    static data_type parse_type(const sstring& name);
     virtual size_t hash(bytes_view v) const = 0;
     virtual bool equal(bytes_view v1, bytes_view v2) const {
         if (is_byte_order_equal()) {

@@ -1653,3 +1653,27 @@ thread_local const shared_ptr<const abstract_type> inet_addr_type(make_shared<in
 thread_local const shared_ptr<const abstract_type> float_type(make_shared<float_type_impl>());
 thread_local const shared_ptr<const abstract_type> double_type(make_shared<double_type_impl>());
 thread_local const data_type empty_type(make_shared<empty_type_impl>());
+
+data_type abstract_type::parse_type(const sstring& name)
+{
+    static thread_local const std::unordered_map<sstring, data_type> types = {
+        { "org.apache.cassandra.db.marshal.Int32Type",       int32_type     },
+        { "org.apache.cassandra.db.marshal.LongType",        long_type      },
+        { "org.apache.cassandra.db.marshal.AsciiType",       ascii_type     },
+        { "org.apache.cassandra.db.marshal.BytesType",       bytes_type     },
+        { "org.apache.cassandra.db.marshal.UTF8Type",        utf8_type      },
+        { "org.apache.cassandra.db.marshal.BooleanType",     boolean_type   },
+        { "org.apache.cassandra.db.marshal.TimeUUIDType",    timeuuid_type  },
+        { "org.apache.cassandra.db.marshal.TimestampType",   timestamp_type },
+        { "org.apache.cassandra.db.marshal.UUIDType",        uuid_type      },
+        { "org.apache.cassandra.db.marshal.InetAddressType", inet_addr_type },
+        { "org.apache.cassandra.db.marshal.FloatType",       float_type     },
+        { "org.apache.cassandra.db.marshal.DoubleType",      double_type    },
+        { "org.apache.cassandra.db.marshal.EmptyType",       empty_type     },
+    };
+    auto it = types.find(name);
+    if (it == types.end()) {
+        throw std::invalid_argument(sprint("unknown type: %s\n", name));
+    }
+    return it->second;
+}
