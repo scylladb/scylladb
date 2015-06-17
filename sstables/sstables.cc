@@ -1079,25 +1079,35 @@ static void write_index_entry(file_writer& out, disk_string_view<uint16_t>& key,
 static constexpr int BASE_SAMPLING_LEVEL = 128;
 
 static void prepare_summary(summary& s, const memtable& mt) {
-    auto&& all_partitions = mt.all_partitions();
+    auto& all_partitions = mt.all_partitions();
     assert(all_partitions.size() >= 1);
 
     s.header.min_index_interval = BASE_SAMPLING_LEVEL;
     s.header.sampling_level = BASE_SAMPLING_LEVEL;
 
-    uint64_t max_expected_entries = all_partitions.size() / BASE_SAMPLING_LEVEL + 1;
+    uint64_t max_expected_entries = (all_partitions.size() / BASE_SAMPLING_LEVEL) + !!(all_partitions.size() % BASE_SAMPLING_LEVEL);
     // FIXME: handle case where max_expected_entries is greater than max value stored by uint32_t.
-    assert(max_expected_entries <= std::numeric_limits<uint32_t>::max());
-    s.header.size = max_expected_entries;
-    assert(s.header.size >= 1);
+    if (max_expected_entries > std::numeric_limits<uint32_t>::max()) {
+        throw malformed_sstable_exception("Current sampling level (" + to_sstring(BASE_SAMPLING_LEVEL) + ") not enough to generate summary.");
+    }
 
-    // memory_size only accounts size of vector positions at this point.
-    s.header.memory_size = s.header.size * sizeof(uint32_t);
+    s.positions.reserve(max_expected_entries);
+    s.entries.reserve(max_expected_entries);
+    s.keys_written = 0;
+    s.header.memory_size = 0;
+}
+
+static void seal_summary(summary& s, const memtable& mt) {
+    auto& all_partitions = mt.all_partitions();
+
+    s.header.size = s.entries.size();
     s.header.size_at_full_sampling = s.header.size;
 
-    s.positions.reserve(s.header.size);
-    s.entries.reserve(s.header.size);
-    s.keys_written = 0;
+    s.header.memory_size = s.header.size * sizeof(uint32_t);
+    for (auto& e: s.entries) {
+        s.positions.push_back(s.header.memory_size);
+        s.header.memory_size += e.key.size() + sizeof(e.position);
+    }
 
     auto begin = all_partitions.begin();
     auto last = --all_partitions.end();
@@ -1137,12 +1147,9 @@ static void prepare_compression(compression& c, const schema& schema) {
 }
 
 static void maybe_add_summary_entry(summary& s, bytes_view key, uint64_t offset) {
-    if ((s.keys_written % s.header.min_index_interval) == 0) {
-        s.positions.push_back(s.header.memory_size);
+    if ((s.keys_written++ % s.header.min_index_interval) == 0) {
         s.entries.push_back({ bytes(key.data(), key.size()), offset });
-        s.header.memory_size += key.size() + sizeof(uint64_t);
     }
-    s.keys_written++;
 }
 
 static void add_validation_metadata(statistics& s, const bytes partitioner, double bloom_filter_fp_chance)
@@ -1248,6 +1255,7 @@ void sstable::do_write_components(const memtable& mt, file_writer& out) {
         collector->update(_c_stats);
         _c_stats.reset();
     }
+    seal_summary(_summary, mt);
 
     index->close().get();
 
