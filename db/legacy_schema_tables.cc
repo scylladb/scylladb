@@ -483,8 +483,10 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
            schema_ptr s = keyspaces();
            // compare before/after schemas of the affected keyspaces only
            std::set<sstring> keyspaces;
+           std::set<utils::UUID> column_families;
            for (auto&& mutation : mutations) {
                keyspaces.emplace(boost::any_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0))));
+               column_families.emplace(mutation.column_family_id());
            }
 
            // current state of the schema
@@ -495,11 +497,19 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
            /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
 
            proxy.local().mutate_locally(std::move(mutations)).get0();
-#if 0
-           if (doFlush)
-                flushSchemaTables();
-#endif
-           // with new data applied
+
+           if (do_flush) {
+               proxy.local().get_db().invoke_on_all([s, cfs = std::move(column_families)] (database& db) {
+                   return parallel_for_each(cfs.begin(), cfs.end(), [&db] (auto& id) {
+                       auto& cf = db.find_column_family(id);
+                       // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
+                       // anything about previous writes.
+                       return cf.seal_active_memtable(&db);
+                   });
+               }).get();
+           }
+
+          // with new data applied
            auto&& new_keyspaces = read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces).get0();
            auto&& new_column_families = read_schema_for_keyspaces(proxy, COLUMNFAMILIES, keyspaces).get0();
            /*auto& new_types = */read_schema_for_keyspaces(proxy, USERTYPES, keyspaces).get0();
