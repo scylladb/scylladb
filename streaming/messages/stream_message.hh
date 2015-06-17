@@ -14,23 +14,23 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming.messages;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.channels.ReadableByteChannel;
+#pragma once
 
-import org.apache.cassandra.io.util.DataOutputStreamAndChannel;
-import org.apache.cassandra.streaming.StreamSession;
+namespace streaming {
+namespace messages {
 
 /**
  * StreamMessage is an abstract base class that every messages in streaming protocol inherit.
  *
  * Every message carries message type({@link Type}) and streaming protocol version byte.
  */
-public abstract class StreamMessage
-{
+class stream_message {
+#if 0
     /** Streaming protocol version */
     public static final int VERSION_20 = 2;
     public static final int VERSION_30 = 3;
@@ -125,4 +125,8 @@ public abstract class StreamMessage
     {
         return type.priority;
     }
-}
+#endif
+};
+
+} // namespace messages
+} // namespace streaming

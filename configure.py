@@ -462,6 +462,7 @@ urchin_core = (['database.cc',
                  'locator/gossiping_property_file_snitch.cc',
                  'message/messaging_service.cc',
                  'service/storage_service.cc',
+                 'streaming/streaming.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
