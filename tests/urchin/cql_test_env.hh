@@ -36,6 +36,8 @@ public:
 
     virtual future<> require_keyspace_exists(const sstring& ks_name) = 0;
 
+    virtual future<> require_table_exists(const sstring& ks_name, const sstring& cf_name) = 0;
+
     virtual future<> require_column_has_value(
         const sstring& table_name,
         std::vector<boost::any> pk,
