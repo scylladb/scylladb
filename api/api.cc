@@ -10,6 +10,7 @@
 #include "failure_detector.hh"
 #include "column_family.hh"
 #include "messaging_service.hh"
+#include "storage_proxy.hh"
 
 namespace api {
 
@@ -37,6 +38,9 @@ future<> set_server(http_context& ctx) {
         rb->register_function(r, "messaging_service",
                 "The messaging service API");
         set_messaging_service(ctx, r);
+        rb->register_function(r, "storage_proxy",
+                                        "The storage proxy API");
+        set_storage_proxy(ctx,r);
 
     });
 }
