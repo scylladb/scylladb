@@ -105,7 +105,7 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
         auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}, {"r2", int32_type}}, {}, utf8_type));
 
-        memtable mt(s);
+        auto mt = make_lw_shared<memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -114,13 +114,12 @@ SEASTAR_TEST_CASE(datafile_generation_01) {
 
         mutation m(key, s);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
-        mt.apply(std::move(m));
+        mt->apply(std::move(m));
 
-        auto mtp = make_shared<memtable>(std::move(mt));
         auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 1, la, big);
 
         auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 1, big, sstable::component_type::Data);
-        return sst->write_components(*mtp).then([mtp, sst, s, fname] {
+        return sst->write_components(*mt).then([mt, sst, s, fname] {
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -172,7 +171,7 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
         auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}, {"p2", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-        memtable mt(s);
+        auto mt = make_lw_shared<memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -181,13 +180,12 @@ SEASTAR_TEST_CASE(datafile_generation_02) {
 
         mutation m(key, s);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
-        mt.apply(std::move(m));
+        mt->apply(std::move(m));
 
-        auto mtp = make_shared<memtable>(std::move(mt));
         auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 2, la, big);
 
         auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 2, big, sstable::component_type::Data);
-        return sst->write_components(*mtp).then([mtp, sst, s, fname] {
+        return sst->write_components(*mt).then([mt, sst, s, fname] {
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -240,7 +238,7 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
         auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}, {"c2", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-        memtable mt(s);
+        auto mt = make_lw_shared<memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -249,13 +247,12 @@ SEASTAR_TEST_CASE(datafile_generation_03) {
 
         mutation m(key, s);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
-        mt.apply(std::move(m));
+        mt->apply(std::move(m));
 
-        auto mtp = make_shared<memtable>(std::move(mt));
         auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 3, la, big);
 
         auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 3, big, sstable::component_type::Data);
-        return sst->write_components(*mtp).then([mtp, sst, s, fname] {
+        return sst->write_components(*mt).then([mt, sst, s, fname] {
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -309,7 +306,7 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
         auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {{"s1", int32_type}}, utf8_type));
 
-        memtable mt(s);
+        auto mt = make_lw_shared<memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
         const column_definition& s1_col = *s->get_column_definition("s1");
@@ -320,13 +317,12 @@ SEASTAR_TEST_CASE(datafile_generation_04) {
         mutation m(key, s);
         m.set_static_cell(s1_col, make_atomic_cell(int32_type->decompose(10)));
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
-        mt.apply(std::move(m));
+        mt->apply(std::move(m));
 
-        auto mtp = make_shared<memtable>(std::move(mt));
         auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 4, la, big);
 
         auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 4, big, sstable::component_type::Data);
-        return sst->write_components(*mtp).then([mtp, sst, s, fname] {
+        return sst->write_components(*mt).then([mt, sst, s, fname] {
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
 
@@ -381,7 +377,7 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
         auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-        memtable mt(s);
+        auto mt = make_lw_shared<memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -390,12 +386,11 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
 
         mutation m(key, s);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1), 3600, 3600));
-        mt.apply(std::move(m));
+        mt->apply(std::move(m));
 
-        auto mtp = make_shared<memtable>(std::move(mt));
         auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 5, la, big);
 
-        return sst->write_components(*mtp).then([mtp, sst, s] {
+        return sst->write_components(*mt).then([mt, sst, s] {
             auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 5, big, sstable::component_type::Data);
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
@@ -453,7 +448,7 @@ SEASTAR_TEST_CASE(datafile_generation_06) {
         auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-        memtable mt(s);
+        auto mt = make_lw_shared<memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -462,12 +457,11 @@ SEASTAR_TEST_CASE(datafile_generation_06) {
 
         mutation m(key, s);
         m.set_clustered_cell(c_key, r1_col, make_dead_atomic_cell(3600));
-        mt.apply(std::move(m));
+        mt->apply(std::move(m));
 
-        auto mtp = make_shared<memtable>(std::move(mt));
         auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 6, la, big);
 
-        return sst->write_components(*mtp).then([mtp, sst, s] {
+        return sst->write_components(*mt).then([mt, sst, s] {
             auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 6, big, sstable::component_type::Data);
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
@@ -522,7 +516,7 @@ SEASTAR_TEST_CASE(datafile_generation_07) {
         auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-        memtable mt(s);
+        auto mt = make_lw_shared<memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -531,19 +525,18 @@ SEASTAR_TEST_CASE(datafile_generation_07) {
 
         mutation m(key, s);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
-        mt.apply(std::move(m));
+        mt->apply(std::move(m));
 
         auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
         auto c_key2 = clustering_key::from_exploded(*s, {to_bytes("cde")});
 
         mutation m2(key2, s);
         m2.set_clustered_cell(c_key2, r1_col, make_atomic_cell(int32_type->decompose(1)));
-        mt.apply(std::move(m2));
+        mt->apply(std::move(m2));
 
-        auto mtp = make_shared<memtable>(std::move(mt));
         auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 7, la, big);
 
-        return sst->write_components(*mtp).then([mtp, sst, s] {
+        return sst->write_components(*mt).then([mt, sst, s] {
             auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 7, big, sstable::component_type::Index);
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
@@ -582,7 +575,7 @@ SEASTAR_TEST_CASE(datafile_generation_08) {
         auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", int32_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-        memtable mt(s);
+        auto mt = make_lw_shared<memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -594,13 +587,12 @@ SEASTAR_TEST_CASE(datafile_generation_08) {
 
             mutation m(key, s);
             m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
-            mt.apply(std::move(m));
+            mt->apply(std::move(m));
         }
 
-        auto mtp = make_shared<memtable>(std::move(mt));
         auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 8, la, big);
 
-        return sst->write_components(*mtp).then([mtp, sst, s] {
+        return sst->write_components(*mt).then([mt, sst, s] {
             auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 8, big, sstable::component_type::Summary);
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
@@ -649,7 +641,7 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
         auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-        memtable mt(s);
+        auto mt = make_lw_shared<memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -658,12 +650,11 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
 
         mutation m(key, s);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
-        mt.apply(std::move(m));
+        mt->apply(std::move(m));
 
-        auto mtp = make_shared<memtable>(std::move(mt));
         auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 9, la, big);
 
-        return sst->write_components(*mtp).then([mtp, sst, s] {
+        return sst->write_components(*mt).then([mt, sst, s] {
             auto sst2 = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 9, la, big);
 
             return sstables::test(sst2).read_summary().then([sst, sst2] {
@@ -696,7 +687,7 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
         auto s = make_lw_shared(schema({}, some_keyspace, some_column_family,
             {{"p1", utf8_type}}, {{"c1", utf8_type}}, {{"r1", int32_type}}, {}, utf8_type));
 
-        memtable mt(s);
+        auto mt = make_lw_shared<memtable>(s);
 
         const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -705,12 +696,11 @@ SEASTAR_TEST_CASE(datafile_generation_10) {
 
         mutation m(key, s);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1)));
-        mt.apply(std::move(m));
+        mt->apply(std::move(m));
 
-        auto mtp = make_shared<memtable>(std::move(mt));
         auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 10, la, big);
 
-        return sst->write_components(*mtp).then([mtp, sst, s] {
+        return sst->write_components(*mt).then([mt, sst, s] {
             auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 10, big, sstable::component_type::Data);
             return engine().open_file_dma(fname, open_flags::ro).then([] (file f) {
                 auto bufptr = allocate_aligned_buffer<char>(4096, 4096);
@@ -768,7 +758,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
     return test_setup::do_with_test_directory([] {
         auto s = complex_schema();
 
-        auto mtp = make_shared<memtable>(s);
+        auto mt = make_lw_shared<memtable>(s);
 
         const column_definition& set_col = *s->get_column_definition("reg_set");
         const column_definition& static_set_col = *s->get_column_definition("static_collection");
@@ -797,8 +787,8 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
 
         m2.set_clustered_cell(c_key, set_col, set_type->serialize_mutation_form(set_mut_single));
 
-        mtp->apply(std::move(m));
-        mtp->apply(std::move(m2));
+        mt->apply(std::move(m));
+        mt->apply(std::move(m2));
 
         auto verifier = [s, set_col, c_key] (auto& mutation) {
 
@@ -814,7 +804,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
         };
 
         auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 11, la, big);
-        return sst->write_components(*mtp).then([s, sst, mtp, verifier, tomb, &static_set_col] {
+        return sst->write_components(*mt).then([s, sst, mt, verifier, tomb, &static_set_col] {
             return reusable_sst("tests/urchin/sstables/tests-temporary", 11).then([s, verifier, tomb, &static_set_col] (auto sstp) mutable {
                 return do_with(sstables::key("key1"), [sstp, s, verifier, tomb, &static_set_col] (auto& key) {
                     return sstp->read_row(s, key).then([sstp, s, verifier, tomb, &static_set_col] (auto mutation) {
@@ -853,7 +843,7 @@ SEASTAR_TEST_CASE(datafile_generation_11) {
                     });
                 });
             });
-        }).then([sst, mtp] {});
+        }).then([sst, mt] {});
     });
 }
 
@@ -861,7 +851,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
     return test_setup::do_with_test_directory([] {
         auto s = complex_schema();
 
-        auto mtp = make_shared<memtable>(s);
+        auto mt = make_lw_shared<memtable>(s);
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto cp = exploded_clustering_prefix({to_bytes("c1") });
@@ -870,10 +860,10 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
 
         tombstone tomb(db_clock::now_in_usecs(), gc_clock::now());
         m.partition().apply_delete(*s, cp, tomb);
-        mtp->apply(std::move(m));
+        mt->apply(std::move(m));
 
         auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 12, la, big);
-        return sst->write_components(*mtp).then([s, tomb] {
+        return sst->write_components(*mt).then([s, tomb] {
             return reusable_sst("tests/urchin/sstables/tests-temporary", 12).then([s, tomb] (auto sstp) mutable {
                 return do_with(sstables::key("key1"), [sstp, s, tomb] (auto& key) {
                     return sstp->read_row(s, key).then([sstp, s, tomb] (auto mutation) {
@@ -885,7 +875,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
                     });
                 });
             });
-        }).then([sst, mtp] {});
+        }).then([sst, mt] {});
     });
 }
 

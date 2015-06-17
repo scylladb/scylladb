@@ -14,7 +14,8 @@
 
 class frozen_mutation;
 
-class memtable {
+// Managed by lw_shared_ptr<>.
+class memtable final : public enable_lw_shared_from_this<memtable> {
 public:
     using partitions_type = std::map<dht::decorated_key, mutation_partition, dht::decorated_key::less_comparator>;
 private:
