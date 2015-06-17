@@ -302,6 +302,7 @@ public:
     const column_family& find_column_family(const schema_ptr&) const throw (no_such_column_family);
     schema_ptr find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family);
     schema_ptr find_schema(const utils::UUID&) const throw (no_such_column_family);
+    bool has_schema(const sstring& ks_name, const sstring& cf_name) const;
     std::set<sstring> existing_index_names(const sstring& cf_to_exclude = sstring()) const;
     future<> stop();
     unsigned shard_of(const dht::token& t);
