@@ -1085,7 +1085,7 @@ static void prepare_summary(summary& s, const memtable& mt) {
     s.header.min_index_interval = BASE_SAMPLING_LEVEL;
     s.header.sampling_level = BASE_SAMPLING_LEVEL;
 
-    uint64_t max_expected_entries = all_partitions.size() / BASE_SAMPLING_LEVEL + 1;
+    uint64_t max_expected_entries = (all_partitions.size() / BASE_SAMPLING_LEVEL) + !!(all_partitions.size() % BASE_SAMPLING_LEVEL);
     // FIXME: handle case where max_expected_entries is greater than max value stored by uint32_t.
     assert(max_expected_entries <= std::numeric_limits<uint32_t>::max());
 
