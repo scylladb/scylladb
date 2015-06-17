@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include "bytes.hh"
+
 namespace streaming {
 namespace messages {
 
@@ -126,6 +128,15 @@ class stream_init_message {
         }
     }
 #endif
+public:
+    void serialize(bytes::iterator& out) const {
+    }
+    static stream_init_message deserialize(bytes_view& v) {
+        return stream_init_message();
+    }
+    size_t serialized_size() const {
+        return 0;
+    }
 };
 
 } // namespace messages

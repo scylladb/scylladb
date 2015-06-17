@@ -86,6 +86,15 @@ class prepare_message : public stream_message {
         return sb.toString();
     }
 #endif
+public:
+    void serialize(bytes::iterator& out) const {
+    }
+    static prepare_message deserialize(bytes_view& v) {
+        return prepare_message();
+    }
+    size_t serialized_size() const {
+        return 0;
+    }
 };
 
 } // namespace messages

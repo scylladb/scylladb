@@ -63,6 +63,15 @@ enum class messaging_verb : int32_t {
     UNUSED_1,
     UNUSED_2,
     UNUSED_3,
+    // Used by streaming
+    STREAM_INIT_MESSAGE,
+    PREPARE_MESSAGE,
+    INCOMING_FILE_MESSAGE,
+    OUTGOING_FILE_MESSAGE,
+    RECEIVED_MESSAGE,
+    RETRY_MESSAGE,
+    COMPLETE_MESSAGE,
+    SESSION_FAILED_MESSAGE,
     LAST,
 };
 

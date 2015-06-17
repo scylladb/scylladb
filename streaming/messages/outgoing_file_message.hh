@@ -84,6 +84,15 @@ class outgoing_file_message : public stream_message {
         return "File (" + header + ", file: " + sstable.getFilename() + ")";
     }
 #endif
+public:
+    void serialize(bytes::iterator& out) const {
+    }
+    static outgoing_file_message deserialize(bytes_view& v) {
+        return outgoing_file_message();
+    }
+    size_t serialized_size() const {
+        return 0;
+    }
 };
 
 } // namespace messages
