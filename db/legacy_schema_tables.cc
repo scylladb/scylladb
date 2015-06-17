@@ -1311,8 +1311,10 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         auto ckey = clustering_key::from_exploded(*s, {to_bytes(table->cf_name()), column.name()});
         m.set_clustered_cell(ckey, "validator", column.type->name(), timestamp);
         m.set_clustered_cell(ckey, "type", serialize_kind(column.kind), timestamp);
+        if (!column.is_on_all_components()) {
+            m.set_clustered_cell(ckey, "component_index", int32_t(column.position()), timestamp);
+        }
 #if 0
-        adder.add("component_index", column.isOnAllComponents() ? null : column.position());
         adder.add("index_name", column.getIndexName());
         adder.add("index_type", column.getIndexType() == null ? null : column.getIndexType().toString());
         adder.add("index_options", json(column.getIndexOptions()));
