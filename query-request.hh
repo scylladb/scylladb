@@ -185,6 +185,8 @@ public:
 using partition_range = range<ring_position>;
 using clustering_range = range<clustering_key_prefix>;
 
+extern const partition_range full_partition_range;
+
 // Specifies subset of rows, columns and cell attributes to be returned in a query.
 // Can be accessed across cores.
 class partition_slice {
