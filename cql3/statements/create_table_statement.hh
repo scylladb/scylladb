@@ -62,15 +62,19 @@ class create_table_statement : public schema_altering_statement {
                            data_type,
                            shared_ptr_value_hash<column_identifier>,
                            shared_ptr_equal_by_value<column_identifier>>;
+    using column_set_type =
+        std::unordered_set<::shared_ptr<column_identifier>,
+                           shared_ptr_value_hash<column_identifier>,
+                           shared_ptr_equal_by_value<column_identifier>>;
     column_map_type _columns;
-    const std::set<::shared_ptr<column_identifier>> _static_columns;
+    column_set_type _static_columns;
     const ::shared_ptr<cf_prop_defs> _properties;
     const bool _if_not_exists;
 public:
     create_table_statement(::shared_ptr<cf_name> name,
                            ::shared_ptr<cf_prop_defs> properties,
                            bool if_not_exists,
-                           std::set<::shared_ptr<column_identifier>> static_columns);
+                           column_set_type static_columns);
 
     virtual void check_access(const service::client_state& state) override;
 
@@ -102,7 +106,7 @@ private:
     std::vector<std::vector<::shared_ptr<column_identifier>>> _key_aliases;
     std::vector<::shared_ptr<column_identifier>> _column_aliases;
     std::vector<std::pair<::shared_ptr<column_identifier>, bool>> defined_ordering; // Insertion ordering is important
-    std::set<::shared_ptr<column_identifier>> _static_columns;
+    create_table_statement::column_set_type _static_columns;
 
     bool _use_compact_storage = false;
     std::multiset<::shared_ptr<column_identifier>> _defined_names;

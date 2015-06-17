@@ -33,7 +33,7 @@ namespace statements {
 create_table_statement::create_table_statement(::shared_ptr<cf_name> name,
                                                ::shared_ptr<cf_prop_defs> properties,
                                                bool if_not_exists,
-                                               std::set<::shared_ptr<column_identifier>> static_columns)
+                                               column_set_type static_columns)
     : schema_altering_statement{name}
     , _static_columns{static_columns}
     , _properties{properties}
