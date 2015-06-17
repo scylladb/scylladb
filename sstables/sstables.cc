@@ -1266,6 +1266,10 @@ void sstable::do_write_components(const memtable& mt, file_writer& out) {
     _components.insert(component_type::Summary);
     _components.insert(component_type::Data);
 
+    if (has_component(sstable::component_type::CompressionInfo)) {
+        collector->add_compression_ratio(_compression.compressed_file_length(), _compression.uncompressed_file_length());
+    }
+
     add_stats_metadata(_statistics, *collector);
 }
 

@@ -142,6 +142,7 @@ public:
         _compression_metadata->offsets.elements.push_back(_pos);
         // account compressed data + 32-bit checksum.
         _pos += len + 4;
+        _compression_metadata->set_compressed_file_length(_pos);
         // total length of the uncompressed data.
         _compression_metadata->data_len += buf.size();
 

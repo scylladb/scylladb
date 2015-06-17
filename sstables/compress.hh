@@ -133,6 +133,17 @@ public:
     unsigned uncompressed_chunk_length() const noexcept {
         return chunk_len;
     }
+    uint64_t uncompressed_file_length() const {
+        return data_len;
+    }
+
+    uint64_t compressed_file_length() const {
+        return _compressed_file_length;
+    }
+    void set_compressed_file_length(uint64_t compressed_file_length) {
+        _compressed_file_length = compressed_file_length;
+    }
+
     uint32_t full_checksum() const {
         return _full_checksum;
     }
