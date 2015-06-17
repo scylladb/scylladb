@@ -331,10 +331,19 @@ void gossiping_property_file_snitch::reload_gossiper_state()
 }
 
 namespace locator {
-using registry = class_registrator<i_endpoint_snitch,
+using registry_2_params = class_registrator<i_endpoint_snitch,
+                                   gossiping_property_file_snitch,
+                                   const sstring&, unsigned>;
+static registry_2_params registrator2("org.apache.cassandra.locator.GossipingPropertyFileSnitch");
+
+using registry_1_param = class_registrator<i_endpoint_snitch,
                                    gossiping_property_file_snitch,
                                    const sstring&>;
-static registry registrator1("org.apache.cassandra.locator.GossipingPropertyFileSnitch");
-static registry registrator2("GossipingPropertyFileSnitch");
+static registry_1_param registrator1("org.apache.cassandra.locator.GossipingPropertyFileSnitch");
+
+using registry_default = class_registrator<i_endpoint_snitch,
+                                           gossiping_property_file_snitch>;
+static registry_default registrator_default("org.apache.cassandra.locator.GossipingPropertyFileSnitch");
+static registry_default registrator_default_short_name("GossipingPropertyFileSnitch");
 }
 } // namespace locator
