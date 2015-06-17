@@ -28,14 +28,42 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     return i_endpoint_snitch::create_snitch<const sstring&>(
         "org.apache.cassandra.locator.GossipingPropertyFileSnitch",
         sstring(fname.string()))
-        .then([exp_result] () {
-            BOOST_CHECK(exp_result);
-            return i_endpoint_snitch::stop_snitch();
-        }).then_wrapped([exp_result] (auto&& f) {
+        .then_wrapped([exp_result] (auto&& f) {
             try {
                 f.get();
-                BOOST_CHECK(exp_result);
-                return make_ready_future<>();
+                if (!exp_result) {
+                    BOOST_ERROR("Failed to catch an error in a malformed "
+                                "configuration file");
+                    return make_ready_future<>();
+                }
+                auto cpu0_dc = make_lw_shared<sstring>();
+                auto cpu0_rack = make_lw_shared<sstring>();
+                auto res = make_lw_shared<bool>(true);
+                auto my_address = utils::fb_utilities::get_broadcast_address();
+
+                return i_endpoint_snitch::snitch_instance().invoke_on(0,
+                        [cpu0_dc, cpu0_rack,
+                         res, my_address] (snitch_ptr& inst) {
+                    *cpu0_dc =inst->get_datacenter(my_address);
+                    *cpu0_rack = inst->get_rack(my_address);
+                }).then([cpu0_dc, cpu0_rack, res, my_address] {
+                    return i_endpoint_snitch::snitch_instance().invoke_on_all(
+                            [cpu0_dc, cpu0_rack,
+                             res, my_address] (snitch_ptr& inst) {
+                        if (*cpu0_dc != inst->get_datacenter(my_address) ||
+                            *cpu0_rack != inst->get_rack(my_address)) {
+                            *res = false;
+                        }
+                    }).then([res] {
+                        if (!*res) {
+                            BOOST_ERROR("Data center or Rack do not match on "
+                                        "different shards");
+                        } else {
+                            BOOST_CHECK(true);
+                        }
+                        return i_endpoint_snitch::stop_snitch();
+                    });
+                });
             } catch (std::exception& e) {
                 BOOST_CHECK(!exp_result);
                 return make_ready_future<>();
