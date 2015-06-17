@@ -14,37 +14,16 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.io.IOException;
-import java.net.InetAddress;
-import java.net.Socket;
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+#pragma once
 
-import com.google.common.collect.*;
-import org.apache.cassandra.io.sstable.format.SSTableReader;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+#include "gms/i_endpoint_state_change_subscriber.hh"
 
-import org.apache.cassandra.config.DatabaseDescriptor;
-import org.apache.cassandra.db.ColumnFamilyStore;
-import org.apache.cassandra.db.Keyspace;
-import org.apache.cassandra.db.RowPosition;
-import org.apache.cassandra.dht.AbstractBounds;
-import org.apache.cassandra.dht.Range;
-import org.apache.cassandra.dht.Token;
-import org.apache.cassandra.gms.*;
-import org.apache.cassandra.io.sstable.Component;
-import org.apache.cassandra.io.sstable.Descriptor;
-import org.apache.cassandra.metrics.StreamingMetrics;
-import org.apache.cassandra.service.ActiveRepairService;
-import org.apache.cassandra.streaming.messages.*;
-import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.JVMStabilityInspector;
-import org.apache.cassandra.utils.Pair;
+namespace streaming {
 
 /**
  * Handles the streaming a one or more section of one of more sstables to and from a specific
@@ -110,8 +89,8 @@ import org.apache.cassandra.utils.Pair;
  *       session is done is is closed (closeSession()). Otherwise, the node switch to the WAIT_COMPLETE state and
  *       send a CompleteMessage to the other side.
  */
-public class StreamSession implements IEndpointStateChangeSubscriber
-{
+class stream_session : public gms::i_endpoint_state_change_subscriber {
+#if 0
     private static final Logger logger = LoggerFactory.getLogger(StreamSession.class);
 
     /**
@@ -704,4 +683,7 @@ public class StreamSession implements IEndpointStateChangeSubscriber
                 taskCompleted(task); // there is no file to send
         }
     }
-}
+#endif
+};
+
+} // namespace streaming
