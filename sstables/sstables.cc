@@ -1293,21 +1293,23 @@ void sstable::prepare_write_components(const memtable& mt) {
 }
 
 future<> sstable::write_components(const memtable& mt) {
-    return create_data().then([this, &mt] {
-        auto w = [this] (const memtable& mt) {
-            this->prepare_write_components(mt);
-        };
-        return seastar::async(w, mt).then([this] {
-            return write_summary();
-        }).then([this] {
-            return write_filter();
-        }).then([this] {
-            return write_statistics();
-        }).then([this] {
-            // NOTE: write_compression means maybe_write_compression.
-            return write_compression();
-        }).then([this] {
-            return write_toc();
+    return touch_directory(_dir).then([this, &mt] {
+        return create_data().then([this, &mt] {
+            auto w = [this] (const memtable& mt) {
+                this->prepare_write_components(mt);
+            };
+            return seastar::async(w, mt).then([this] {
+                return write_summary();
+            }).then([this] {
+                return write_filter();
+            }).then([this] {
+                return write_statistics();
+            }).then([this] {
+                // NOTE: write_compression means maybe_write_compression.
+                return write_compression();
+            }).then([this] {
+                return write_toc();
+            });
         });
     });
 }
