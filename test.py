@@ -111,8 +111,8 @@ if __name__ == "__main__":
 
 
     if args.jenkins:
-       jenkins_boost_log = open(args.jenkins+".boost.xml",'wb')
-       jenkins_boost_log.write(b'<TestLog><TestSuite name="all">')
+       jenkins_boost_log = open(args.jenkins+".boost.xml",'w')
+       jenkins_boost_log.write('<TestLog><TestSuite name="all">')
 
     all_ok = True
 
@@ -127,26 +127,31 @@ if __name__ == "__main__":
         signal.signal(signal.SIGALRM, alarm_handler)
         if args.jenkins and test[1] == 'boost':
            path = path + " --output_format=XML --log_level=all --report_level=no"
-        proc = subprocess.Popen(path.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,preexec_fn=os.setsid)
+        if os.path.isfile('tmp.out'):
+           os.remove('tmp.out')
+        outf=open('tmp.out','w')
+        proc = subprocess.Popen(path.split(' '), stdout=outf, stderr=subprocess.PIPE, env=env,preexec_fn=os.setsid)
         signal.alarm(args.timeout)
-        out = None
         err = None
+        out = None
         try:
-            out, err = proc.communicate()
+            out,err = proc.communicate()
             signal.alarm(0)
         except:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             proc.kill()
             proc.returncode = -1
         finally:
+            outf.close();
             if proc.returncode:
                 print_status('FAILED: %s\n' % (path))
                 if proc.returncode == -1:
                     print_status('TIMED OUT\n')
-                if out:
-                    print('=== stdout START ===')
-                    print(out.decode())
-                    print('=== stdout END ===')
+                print('=== stdout START ===')
+                with open('tmp.out') as outf:
+                   for line in outf:
+                       print(line)
+                print('=== stdout END ===')
                 if err:
                     print('=== stderr START ===')
                     print(err.decode())
@@ -155,11 +160,13 @@ if __name__ == "__main__":
             else:
                 print_status('%s PASSED %s' % (prefix, path))
         if args.jenkins and test[1] == 'boost':
-           # remove the <TestLog> and </TestLog>
-           jenkins_boost_log.write(out[9:-10])
+           with open('tmp.out') as outf:
+              for line in outf:
+                 jenkins_boost_log.write(line.replace('<TestLog>','').replace('</TestLog>',''))
+                 jenkins_boost_log.write('\n');
 
     if args.jenkins:
-        jenkins_boost_log.write(b'</TestSuite></TestLog>')
+        jenkins_boost_log.write('</TestSuite></TestLog>')
 
     if all_ok:
         print('\nOK.')

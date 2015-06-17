@@ -115,8 +115,11 @@ class enable_lw_shared_from_this {
     T* to_value() { return static_cast<T*>(this); }
     T* to_internal_object() { return static_cast<T*>(this); }
 protected:
-    enable_lw_shared_from_this& operator=(const enable_lw_shared_from_this&) { return *this; }
-    enable_lw_shared_from_this& operator=(enable_lw_shared_from_this&&) { return *this; }
+    enable_lw_shared_from_this() noexcept {}
+    enable_lw_shared_from_this(enable_lw_shared_from_this&&) noexcept {}
+    enable_lw_shared_from_this(const enable_lw_shared_from_this&) noexcept {}
+    enable_lw_shared_from_this& operator=(const enable_lw_shared_from_this&) noexcept { return *this; }
+    enable_lw_shared_from_this& operator=(enable_lw_shared_from_this&&) noexcept { return *this; }
 public:
     lw_shared_ptr<T> shared_from_this();
     lw_shared_ptr<const T> shared_from_this() const;
@@ -288,7 +291,7 @@ template <typename T>
 inline
 lw_shared_ptr<const T>
 enable_lw_shared_from_this<T>::shared_from_this() const {
-    return lw_shared_ptr<const T>(this);
+    return lw_shared_ptr<const T>(const_cast<enable_lw_shared_from_this*>(this));
 }
 
 template <typename T>

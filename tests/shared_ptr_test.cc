@@ -82,3 +82,14 @@ BOOST_AUTO_TEST_CASE(test_lw_const_ptr_2) {
     lw_shared_ptr<const E> pe3 = pe2;
     BOOST_REQUIRE(pe2 == pe3);
 }
+
+struct F : enable_lw_shared_from_this<F> {
+    auto const_method() const {
+        return shared_from_this();
+    }
+};
+
+BOOST_AUTO_TEST_CASE(test_shared_from_this_called_on_const_object) {
+    auto ptr = make_lw_shared<F>();
+    ptr->const_method();
+}
