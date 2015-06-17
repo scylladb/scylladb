@@ -1000,11 +1000,11 @@ std::vector<schema_ptr> all_tables() {
     return r;
 }
 
-void make(database& db) {
+void make(database& db, bool durable) {
     auto ksm = make_lw_shared<keyspace_metadata>(NAME,
             "org.apache.cassandra.locator.SimpleStrategy",
             std::map<sstring, sstring>{},
-            false
+            durable
             );
     auto kscfg = db.make_keyspace_config(*ksm);
     keyspace _ks{ksm, std::move(kscfg)};

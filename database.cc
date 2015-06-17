@@ -480,7 +480,8 @@ database::database() : database(db::config())
 
 database::database(const db::config& cfg) : _cfg(std::make_unique<db::config>(cfg))
 {
-    db::system_keyspace::make(*this);
+    bool durable = cfg.data_file_directories().size() > 0;
+    db::system_keyspace::make(*this, durable);
 }
 
 database::~database() {
@@ -994,7 +995,13 @@ keyspace::config
 database::make_keyspace_config(const keyspace_metadata& ksm) const {
     // FIXME support multiple directories
     keyspace::config cfg;
-    cfg.datadir = sprint("%s/%s", _cfg->data_file_directories()[0], ksm.name());
+    if (_cfg->data_file_directories().size() > 0) {
+        cfg.datadir = sprint("%s/%s", _cfg->data_file_directories()[0], ksm.name());
+        cfg.enable_disk_writes = ksm.durable_writes();
+    } else {
+        cfg.datadir = "";
+        cfg.enable_disk_writes = false;
+    }
     return cfg;
 }
 

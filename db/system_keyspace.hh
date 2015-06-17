@@ -52,7 +52,7 @@ extern schema_ptr batchlog();
 extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 
 std::vector<schema_ptr> all_tables();
-void make(database& db);
+void make(database& db, bool durable);
 
 // Endpoint Data Center and Rack names
 struct endpoint_dc_rack {
