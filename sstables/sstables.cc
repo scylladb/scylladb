@@ -1087,7 +1087,9 @@ static void prepare_summary(summary& s, const memtable& mt) {
 
     uint64_t max_expected_entries = (all_partitions.size() / BASE_SAMPLING_LEVEL) + !!(all_partitions.size() % BASE_SAMPLING_LEVEL);
     // FIXME: handle case where max_expected_entries is greater than max value stored by uint32_t.
-    assert(max_expected_entries <= std::numeric_limits<uint32_t>::max());
+    if (max_expected_entries > std::numeric_limits<uint32_t>::max()) {
+        throw malformed_sstable_exception("Current sampling level (" + to_sstring(BASE_SAMPLING_LEVEL) + ") not enough to generate summary.");
+    }
 
     s.positions.reserve(max_expected_entries);
     s.entries.reserve(max_expected_entries);
