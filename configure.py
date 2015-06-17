@@ -168,6 +168,7 @@ urchin_tests = [
     'tests/perf/perf_cql_parser',
     'tests/perf/perf_simple_query',
     'tests/urchin/cql_query_test',
+    'tests/urchin/mutation_reader_test',
     'tests/test-serialization',
     'tests/urchin/sstable_test',
     'tests/urchin/sstable_mutation_test',
@@ -526,6 +527,7 @@ for t in urchin_tests:
 
 deps['tests/urchin/mutation_test'] += boost_test_lib
 deps['tests/urchin/cql_query_test'] += boost_test_lib
+deps['tests/urchin/mutation_reader_test'] += boost_test_lib
 deps['tests/urchin/commitlog_test'] += boost_test_lib
 deps['tests/urchin/config_test'] += boost_test_lib
 deps['tests/urchin/sstable_test'] += boost_test_lib + ['tests/urchin/sstable_datafile_test.cc']
