@@ -21,3 +21,5 @@
 // single one as it is normally the same for all of them. So "mutation" might
 // not be the optimal object to use here.
 using mutation_reader = std::function<future<mutation_opt>()>;
+
+mutation_reader make_combined_reader(std::vector<mutation_reader>);
