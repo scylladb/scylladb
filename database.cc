@@ -927,7 +927,7 @@ database::query(const query::read_command& cmd, const std::vector<query::partiti
     try {
         column_family& cf = find_column_family(cmd.cf_id);
         return cf.query(cmd, ranges);
-    } catch (...) {
+    } catch (const no_such_column_family&) {
         // FIXME: load from sstables
         return make_empty();
     }
