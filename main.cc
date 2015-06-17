@@ -36,7 +36,6 @@ int main(int ac, char** av) {
         ("options-file", bpo::value<sstring>(), "cassandra.yaml file to read options from")
         ;
 
-    auto server = std::make_unique<distributed<thrift_server>>();
     distributed<database> db;
     distributed<cql3::query_processor> qp;
     service::storage_proxy proxy{db};
@@ -45,14 +44,14 @@ int main(int ac, char** av) {
     return app.run(ac, av, [&] {
         auto&& opts = app.configuration();
 
-        return read_config(opts, *cfg).then([&cfg, &db, &qp, &proxy, &ctx, &server, &opts]() {
+        return read_config(opts, *cfg).then([&cfg, &db, &qp, &proxy, &ctx, &opts]() {
             uint16_t thrift_port = cfg->rpc_port();
             uint16_t cql_port = cfg->native_transport_port();
             uint16_t api_port = opts["api-port"].as<uint16_t>();
             sstring listen_address = cfg->listen_address();
             sstring rpc_address = cfg->rpc_address();
             auto seed_provider= cfg->seed_provider();
-            return db.start(std::move(*cfg)).then([&db, &qp, &proxy, &ctx, &server] {
+            return db.start(std::move(*cfg)).then([&db] {
                 engine().at_exit([&db] { return db.stop(); });
                 return db.invoke_on_all(&database::init_from_data_directory);
             }).then([] {
