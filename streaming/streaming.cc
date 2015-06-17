@@ -7,3 +7,4 @@
 
 #include "streaming/messages/stream_message.hh"
 #include "streaming/messages/stream_init_message.hh"
+#include "streaming/messages/complete_message.hh"

@@ -14,17 +14,20 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming.messages;
 
-import java.io.IOException;
-import java.nio.channels.ReadableByteChannel;
+#pragma once
 
-import org.apache.cassandra.io.util.DataOutputStreamAndChannel;
-import org.apache.cassandra.streaming.StreamSession;
+#include "streaming/messages/stream_message.hh"
 
-public class CompleteMessage extends StreamMessage
-{
+namespace streaming {
+namespace messages {
+
+class complete_message : public stream_message {
+#if 0
     public static Serializer<CompleteMessage> serializer = new Serializer<CompleteMessage>()
     {
         public CompleteMessage deserialize(ReadableByteChannel in, int version, StreamSession session) throws IOException
@@ -45,4 +48,8 @@ public class CompleteMessage extends StreamMessage
     {
         return "Complete";
     }
-}
+#endif
+};
+
+} // namespace messages
+} // namespace streaming
