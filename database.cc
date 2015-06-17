@@ -496,7 +496,7 @@ future<> database::populate_keyspace(sstring datadir, sstring ks_name) {
         dblog.warn("Populating Keyspace {}", ks_name);
         return lister::scan_dir(ksdir, directory_entry_type::directory, [this, ksdir, ks_name] (directory_entry de) {
             auto comps = parse_fname(de.name);
-            if (comps.size() != 2) {
+            if (comps.size() < 2) {
                 dblog.error("Keyspace {}: Skipping malformed CF {} ", ksdir, de.name);
                 return make_ready_future<>();
             }
