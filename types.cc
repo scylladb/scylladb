@@ -108,7 +108,7 @@ struct integer_type_impl : simple_type_impl<T> {
 };
 
 struct int32_type_impl : integer_type_impl<int32_t> {
-    int32_type_impl() : integer_type_impl{"int32"}
+    int32_type_impl() : integer_type_impl{"org.apache.cassandra.db.marshal.Int32Type"}
     { }
 
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
@@ -117,7 +117,7 @@ struct int32_type_impl : integer_type_impl<int32_t> {
 };
 
 struct long_type_impl : integer_type_impl<int64_t> {
-    long_type_impl() : integer_type_impl{"long"}
+    long_type_impl() : integer_type_impl{"org.apache.cassandra.db.marshal.LongType"}
     { }
 
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
@@ -168,7 +168,7 @@ struct string_type_impl : public abstract_type {
 };
 
 struct bytes_type_impl final : public abstract_type {
-    bytes_type_impl() : abstract_type("bytes") {}
+    bytes_type_impl() : abstract_type("org.apache.cassandra.db.marshal.BytesType") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         auto& v = boost::any_cast<const bytes&>(value);
         out = std::copy(v.begin(), v.end(), out);
@@ -207,7 +207,7 @@ struct bytes_type_impl final : public abstract_type {
 };
 
 struct boolean_type_impl : public simple_type_impl<bool> {
-    boolean_type_impl() : simple_type_impl<bool>("boolean") {}
+    boolean_type_impl() : simple_type_impl<bool>("org.apache.cassandra.db.marshal.BooleanType") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         auto v = boost::any_cast<bool>(value);
         *out++ = char(v);
@@ -277,7 +277,7 @@ struct date_type_impl : public abstract_type {
 };
 
 struct timeuuid_type_impl : public abstract_type {
-    timeuuid_type_impl() : abstract_type("timeuuid") {}
+    timeuuid_type_impl() : abstract_type("org.apache.cassandra.db.marshal.TimeUUIDType") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         auto& uuid = boost::any_cast<const utils::UUID&>(value);
         out = std::copy_n(uuid.to_bytes().begin(), sizeof(uuid), out);
@@ -345,7 +345,7 @@ private:
 };
 
 struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
-    timestamp_type_impl() : simple_type_impl("timestamp") {}
+    timestamp_type_impl() : simple_type_impl("org.apache.cassandra.db.marshal.TimestampType") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         uint64_t v = boost::any_cast<db_clock::time_point>(value).time_since_epoch().count();
         v = net::hton(v);
@@ -377,7 +377,7 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
 };
 
 struct uuid_type_impl : abstract_type {
-    uuid_type_impl() : abstract_type("uuid") {}
+    uuid_type_impl() : abstract_type("org.apache.cassandra.db.marshal.UUIDType") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         auto& uuid = boost::any_cast<const utils::UUID&>(value);
         out = std::copy_n(uuid.to_bytes().begin(), sizeof(uuid), out);
@@ -442,7 +442,7 @@ struct uuid_type_impl : abstract_type {
 };
 
 struct inet_addr_type_impl : abstract_type {
-    inet_addr_type_impl() : abstract_type("inet_addr") {}
+    inet_addr_type_impl() : abstract_type("org.apache.cassandra.db.marshal.InetAddressType") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
         // FIXME: support ipv6
         auto& ipv4 = boost::any_cast<const net::ipv4_address&>(value);
@@ -562,21 +562,21 @@ struct floating_type_impl : public simple_type_impl<T> {
 };
 
 struct double_type_impl : floating_type_impl<double> {
-    double_type_impl() : floating_type_impl{"double"} { }
+    double_type_impl() : floating_type_impl{"org.apache.cassandra.db.marshal.DoubleType"} { }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::double_;
     }
 };
 
 struct float_type_impl : floating_type_impl<float> {
-    float_type_impl() : floating_type_impl{"float"} { }
+    float_type_impl() : floating_type_impl{"org.apache.cassandra.db.marshal.FloatType"} { }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::float_;
     }
 };
 
 struct empty_type_impl : abstract_type {
-    empty_type_impl() : abstract_type("void") {}
+    empty_type_impl() : abstract_type("org.apache.cassandra.db.marshal.EmptyType") {}
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
     }
     virtual size_t serialized_size(const boost::any& value) const override {
@@ -759,7 +759,7 @@ map_type_impl::get_instance(data_type keys, data_type values, bool is_multi_cell
 }
 
 map_type_impl::map_type_impl(data_type keys, data_type values, bool is_multi_cell)
-        : collection_type_impl("map<" + keys->name() + ", " + values->name() + ">", kind::map)
+        : collection_type_impl("org.apache.cassandra.db.marshal.MapType(" + keys->name() + "," + values->name() + ")", kind::map)
         , _keys(std::move(keys))
         , _values(std::move(values))
         , _is_multi_cell(is_multi_cell) {
@@ -1153,7 +1153,7 @@ set_type_impl::get_instance(data_type elements, bool is_multi_cell) {
 }
 
 set_type_impl::set_type_impl(data_type elements, bool is_multi_cell)
-        : collection_type_impl("set<" + elements->name() + ">", kind::set)
+        : collection_type_impl("org.apache.cassandra.db.marshal.SetType(" + elements->name() + ")", kind::set)
         , _elements(std::move(elements))
         , _is_multi_cell(is_multi_cell) {
 }
@@ -1313,7 +1313,7 @@ list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
 }
 
 list_type_impl::list_type_impl(data_type elements, bool is_multi_cell)
-        : collection_type_impl("list<" + elements->name() + ">", kind::list)
+        : collection_type_impl("org.apache.cassandra.db.marshal.ListType(" + elements->name() + ")", kind::list)
         , _elements(std::move(elements))
         , _is_multi_cell(is_multi_cell) {
 }
@@ -1641,9 +1641,9 @@ user_type_impl::make_name(sstring keyspace, bytes name, std::vector<bytes> field
 
 thread_local const shared_ptr<const abstract_type> int32_type(make_shared<int32_type_impl>());
 thread_local const shared_ptr<const abstract_type> long_type(make_shared<long_type_impl>());
-thread_local const shared_ptr<const abstract_type> ascii_type(make_shared<string_type_impl>("ascii", [] { return cql3::cql3_type::ascii; }));
+thread_local const shared_ptr<const abstract_type> ascii_type(make_shared<string_type_impl>("org.apache.cassandra.db.marshal.AsciiType", [] { return cql3::cql3_type::ascii; }));
 thread_local const shared_ptr<const abstract_type> bytes_type(make_shared<bytes_type_impl>());
-thread_local const shared_ptr<const abstract_type> utf8_type(make_shared<string_type_impl>("utf8", [] { return cql3::cql3_type::text; }));
+thread_local const shared_ptr<const abstract_type> utf8_type(make_shared<string_type_impl>("org.apache.cassandra.db.marshal.UTF8Type", [] { return cql3::cql3_type::text; }));
 thread_local const shared_ptr<const abstract_type> boolean_type(make_shared<boolean_type_impl>());
 thread_local const shared_ptr<const abstract_type> date_type(make_shared<date_type_impl>());
 thread_local const shared_ptr<const abstract_type> timeuuid_type(make_shared<timeuuid_type_impl>());
@@ -1653,3 +1653,27 @@ thread_local const shared_ptr<const abstract_type> inet_addr_type(make_shared<in
 thread_local const shared_ptr<const abstract_type> float_type(make_shared<float_type_impl>());
 thread_local const shared_ptr<const abstract_type> double_type(make_shared<double_type_impl>());
 thread_local const data_type empty_type(make_shared<empty_type_impl>());
+
+data_type abstract_type::parse_type(const sstring& name)
+{
+    static thread_local const std::unordered_map<sstring, data_type> types = {
+        { "org.apache.cassandra.db.marshal.Int32Type",       int32_type     },
+        { "org.apache.cassandra.db.marshal.LongType",        long_type      },
+        { "org.apache.cassandra.db.marshal.AsciiType",       ascii_type     },
+        { "org.apache.cassandra.db.marshal.BytesType",       bytes_type     },
+        { "org.apache.cassandra.db.marshal.UTF8Type",        utf8_type      },
+        { "org.apache.cassandra.db.marshal.BooleanType",     boolean_type   },
+        { "org.apache.cassandra.db.marshal.TimeUUIDType",    timeuuid_type  },
+        { "org.apache.cassandra.db.marshal.TimestampType",   timestamp_type },
+        { "org.apache.cassandra.db.marshal.UUIDType",        uuid_type      },
+        { "org.apache.cassandra.db.marshal.InetAddressType", inet_addr_type },
+        { "org.apache.cassandra.db.marshal.FloatType",       float_type     },
+        { "org.apache.cassandra.db.marshal.DoubleType",      double_type    },
+        { "org.apache.cassandra.db.marshal.EmptyType",       empty_type     },
+    };
+    auto it = types.find(name);
+    if (it == types.end()) {
+        throw std::invalid_argument(sprint("unknown type: %s\n", name));
+    }
+    return it->second;
+}

@@ -73,15 +73,32 @@ mutation make_create_keyspace_mutation(lw_shared_ptr<keyspace_metadata> keyspace
 
 std::vector<mutation> make_create_table_mutations(lw_shared_ptr<keyspace_metadata> keyspace, schema_ptr table, api::timestamp_type timestamp);
 
-std::map<sstring, schema_ptr> create_tables_from_tables_partition(const schema_result::mapped_type& result);
+std::map<sstring, schema_ptr> create_tables_from_tables_partition(service::storage_proxy& proxy, const schema_result::mapped_type& result);
 
 void add_table_to_schema_mutation(schema_ptr table, api::timestamp_type timestamp, bool with_columns_and_triggers, const partition_key& pkey, std::vector<mutation>& mutations);
 
-schema_ptr create_table_from_table_row(const query::result_set_row& row);
+schema_ptr create_table_from_table_row(service::storage_proxy& proxy, const query::result_set_row& row);
+
+void create_table_from_table_row_and_column_rows(schema_builder& builder, const query::result_set_row& table_row, const schema_result::mapped_type& serialized_columns);
+
+std::vector<column_definition> create_columns_from_column_rows(const schema_result::mapped_type& rows,
+                                                               const sstring& keyspace,
+                                                               const sstring& table/*,
+                                                               AbstractType<?> rawComparator,
+                                                               boolean isSuper*/);
+
+column_definition create_column_from_column_row(const query::result_set_row& row,
+                                                sstring keyspace,
+                                                sstring table/*,
+                                                AbstractType<?> rawComparator,
+                                                boolean isSuper*/);
+
 
 void add_column_to_schema_mutation(schema_ptr table, const column_definition& column, api::timestamp_type timestamp, const partition_key& pkey, std::vector<mutation>& mutations);
 
 sstring serialize_kind(column_kind kind);
+column_kind deserialize_kind(sstring kind);
+data_type parse_type(sstring str);
 
 } // namespace legacy_schema_tables
 } // namespace db
