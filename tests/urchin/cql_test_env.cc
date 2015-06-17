@@ -196,7 +196,9 @@ future<> init_once() {
 future<::shared_ptr<cql_test_env>> make_env_for_test() {
     return init_once().then([] {
             auto db = ::make_shared<distributed<database>>();
-            return db->start().then([db] {
+            auto cfg = make_lw_shared<db::config>();
+            cfg->data_file_directories() = {};
+            return db->start(std::move(*cfg)).then([db] {
                 auto proxy = ::make_shared<distributed<service::storage_proxy>>();
                 auto qp = ::make_shared<distributed<cql3::query_processor>>();
                 return proxy->start(std::ref(*db)).then([qp, db, proxy] {
