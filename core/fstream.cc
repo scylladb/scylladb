@@ -87,7 +87,7 @@ class file_data_sink_impl : public data_sink_impl {
 public:
     file_data_sink_impl(lw_shared_ptr<file> f, file_output_stream_options options)
             : _file(std::move(f)), _options(options) {}
-    future<> put(net::packet data) { return make_ready_future<>(); }
+    future<> put(net::packet data) { abort(); }
     virtual temporary_buffer<char> allocate_buffer(size_t size) override {
         // buffers to dma_write must be aligned to 512 bytes.
         return temporary_buffer<char>::aligned(512, size);
