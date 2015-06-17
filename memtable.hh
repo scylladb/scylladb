@@ -9,6 +9,7 @@
 #include "database_fwd.hh"
 #include "dht/i_partitioner.hh"
 #include "schema.hh"
+#include "mutation_reader.hh"
 #include "db/commitlog/replay_position.hh"
 
 class frozen_mutation;

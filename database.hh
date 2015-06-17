@@ -41,6 +41,7 @@
 #include "mutation.hh"
 #include "memtable.hh"
 #include <list>
+#include "mutation_reader.hh"
 
 class frozen_mutation;
 
