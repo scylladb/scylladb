@@ -14,26 +14,23 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming.messages;
 
-import java.io.DataInputStream;
-import java.io.IOException;
-import java.nio.channels.Channels;
-import java.nio.channels.ReadableByteChannel;
+#pragma once
 
-import org.apache.cassandra.io.sstable.format.SSTableWriter;
-import org.apache.cassandra.io.util.DataOutputStreamAndChannel;
-import org.apache.cassandra.streaming.StreamReader;
-import org.apache.cassandra.streaming.StreamSession;
-import org.apache.cassandra.streaming.compress.CompressedStreamReader;
-import org.apache.cassandra.utils.JVMStabilityInspector;
+#include "streaming/messages/stream_message.hh"
+
+namespace streaming {
+namespace messages {
 
 /**
  * IncomingFileMessage is used to receive the part(or whole) of a SSTable data file.
  */
-public class IncomingFileMessage extends StreamMessage
-{
+class incoming_file_message : public stream_message {
+#if 0
     public static Serializer<IncomingFileMessage> serializer = new Serializer<IncomingFileMessage>()
     {
         public IncomingFileMessage deserialize(ReadableByteChannel in, int version, StreamSession session) throws IOException
@@ -76,5 +73,8 @@ public class IncomingFileMessage extends StreamMessage
     {
         return "File (" + header + ", file: " + sstable.getFilename() + ")";
     }
-}
+#endif
+};
 
+} // namespace messages
+} // namespace streaming
