@@ -93,9 +93,18 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const column_definition& cd) {
         return os << cd.name_as_text();
     }
+    bool has_component_index() const {
+        return is_primary_key();
+    }
     uint32_t component_index() const {
-        assert(is_primary_key());
+        assert(has_component_index());
         return id;
+    }
+    uint32_t position() const {
+        if (has_component_index()) {
+            return component_index();
+        }
+        return 0;
     }
     bool is_on_all_components() const;
     friend bool operator==(const column_definition&, const column_definition&);
