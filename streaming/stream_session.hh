@@ -22,6 +22,8 @@
 #pragma once
 
 #include "gms/i_endpoint_state_change_subscriber.hh"
+#include "core/distributed.hh"
+#include "message/messaging_service.hh"
 
 namespace streaming {
 
@@ -90,6 +92,22 @@ namespace streaming {
  *       send a CompleteMessage to the other side.
  */
 class stream_session : public gms::i_endpoint_state_change_subscriber {
+private:
+    using messaging_verb = net::messaging_verb;
+    using messaging_service = net::messaging_service;
+    using shard_id = net::messaging_service::shard_id;
+    net::messaging_service& ms() {
+        return net::get_local_messaging_service();
+    }
+    class handler {
+    public:
+        future<> stop() {
+            return make_ready_future<>();
+        }
+    };
+    distributed<handler> _handlers;
+    void init_messaging_service_handler();
+    future<> start();
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(StreamSession.class);
 

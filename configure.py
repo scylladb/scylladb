@@ -463,6 +463,7 @@ urchin_core = (['database.cc',
                  'message/messaging_service.cc',
                  'service/storage_service.cc',
                  'streaming/streaming.cc',
+                 'streaming/stream_session.cc',
                  ]
                 + [Antlr3Grammar('cql3/Cql.g')]
                 + [Thrift('interface/cassandra.thrift', 'Cassandra')]
