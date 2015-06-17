@@ -14,30 +14,19 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming.messages;
 
-import java.io.DataInput;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+#pragma once
 
-import org.apache.cassandra.db.TypeSizes;
-import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.compress.CompressionMetadata;
-import org.apache.cassandra.io.sstable.format.SSTableFormat;
-import org.apache.cassandra.io.util.DataOutputPlus;
-import org.apache.cassandra.net.MessagingService;
-import org.apache.cassandra.streaming.compress.CompressionInfo;
-import org.apache.cassandra.utils.Pair;
-import org.apache.cassandra.utils.UUIDSerializer;
-
+namespace streaming {
+namespace messages {
 /**
  * StreamingFileHeader is appended before sending actual data to describe what it's sending.
  */
-public class FileMessageHeader
-{
+class file_message_header {
+#if 0
     public static IVersionedSerializer<FileMessageHeader> serializer = new FileMessageHeaderSerializer();
 
     public final UUID cfId;
@@ -198,4 +187,8 @@ public class FileMessageHeader
             return size;
         }
     }
-}
+#endif
+};
+
+} // namespace messages
+} // namespace streaming
