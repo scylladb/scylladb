@@ -54,7 +54,7 @@ public:
 #endif
     }
 
-    virtual void validate(service::storage_proxy&, const service::client_state& state) override {
+    virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override {
         throw std::runtime_error("not implemented");
 #if 0
         ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
@@ -62,7 +62,7 @@ public:
     }
 
     virtual future<::shared_ptr<transport::messages::result_message>>
-    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override {
+    execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override {
         throw std::runtime_error("not implemented");
 #if 0
         try

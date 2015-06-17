@@ -207,7 +207,10 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
 }
 
 storage_proxy::~storage_proxy() {}
-storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {}
+storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
+    init_messaging_service();
+}
+
 storage_proxy::rh_entry::rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
 
 #if 0
@@ -2582,34 +2585,30 @@ bool storage_proxy::should_hint(gms::inet_address ep) {
     }
 #endif
 
-future<> storage_proxy::init_messaging_service() {
-    return parallel_for_each(boost::counting_iterator<unsigned>(0), boost::counting_iterator<unsigned>(smp::count), [this] (unsigned cpu) {
-        return smp::submit_to(cpu, [this] {
-            auto& ms = net::get_local_messaging_service();
-            ms.register_handler(net::messaging_verb::MUTATION, [this] (frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
-                do_with(std::move(in), [this, forward = std::move(forward), reply_to, shard, response_id] (const frozen_mutation& m) mutable {
-                    return when_all(
-                            mutate_locally(m).then([reply_to, shard, response_id] () mutable {
-                                auto& ms = net::get_local_messaging_service();
-                                ms.send_message_oneway(net::messaging_verb::MUTATION_DONE, net::messaging_service::shard_id{reply_to, shard}, std::move(shard), std::move(response_id));
-                                // return void, no need to wait for send to complete
-                            }),
-                            parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) mutable {
-                                auto& ms = net::get_local_messaging_service();
-                                return ms.send_message_oneway(net::messaging_verb::MUTATION, net::messaging_service::shard_id{forward, 0}, m, std::vector<gms::inet_address>(), reply_to, std::move(shard), std::move(response_id));
-                            })
-                    );
-                }).discard_result();
-                return net::messaging_service::no_wait();
-            });
-            ms.register_handler(net::messaging_verb::MUTATION_DONE, [this] (rpc::client_info cinfo, unsigned shard, storage_proxy::response_id_type response_id) {
-                gms::inet_address from(net::ntoh(cinfo.addr.as_posix_sockaddr_in().sin_addr.s_addr));
-                smp::submit_to(shard, [this, from, response_id] {
-                    got_response(response_id, from);
-                });
-                return net::messaging_service::no_wait();
-            });
+void storage_proxy::init_messaging_service() {
+    auto& ms = net::get_local_messaging_service();
+    ms.register_handler(net::messaging_verb::MUTATION, [this] (frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
+        do_with(std::move(in), [this, forward = std::move(forward), reply_to, shard, response_id] (const frozen_mutation& m) mutable {
+            return when_all(
+                    mutate_locally(m).then([reply_to, shard, response_id] () mutable {
+                auto& ms = net::get_local_messaging_service();
+                ms.send_message_oneway(net::messaging_verb::MUTATION_DONE, net::messaging_service::shard_id{reply_to, shard}, std::move(shard), std::move(response_id));
+                // return void, no need to wait for send to complete
+            }),
+            parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) mutable {
+                auto& ms = net::get_local_messaging_service();
+                return ms.send_message_oneway(net::messaging_verb::MUTATION, net::messaging_service::shard_id{forward, 0}, m, std::vector<gms::inet_address>(), reply_to, std::move(shard), std::move(response_id));
+            })
+            );
+        }).discard_result();
+        return net::messaging_service::no_wait();
+    });
+    ms.register_handler(net::messaging_verb::MUTATION_DONE, [this] (rpc::client_info cinfo, unsigned shard, storage_proxy::response_id_type response_id) {
+        gms::inet_address from(net::ntoh(cinfo.addr.as_posix_sockaddr_in().sin_addr.s_addr));
+        smp::submit_to(shard, [this, from, response_id] {
+            got_response(response_id, from);
         });
+        return net::messaging_service::no_wait();
     });
 }
 

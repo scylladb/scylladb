@@ -63,7 +63,7 @@ void create_table_statement::check_access(const service::client_state& state) {
 #endif
 }
 
-void create_table_statement::validate(service::storage_proxy&, const service::client_state& state) {
+void create_table_statement::validate(distributed<service::storage_proxy>&, const service::client_state& state) {
     // validated in announceMigration()
 }
 
@@ -81,7 +81,7 @@ std::vector<column_definition> create_table_statement::get_columns()
     return column_defs;
 }
 
-future<bool> create_table_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) {
+future<bool> create_table_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
     return service::migration_manager::announce_new_column_family(proxy, get_cf_meta_data(), is_local_only).then_wrapped([this] (auto&& f) {
         try {
             f.get();

@@ -224,7 +224,7 @@ private:
     sstring make_frame(uint8_t version, size_t length);
 };
 
-cql_server::cql_server(service::storage_proxy& proxy, distributed<cql3::query_processor>& qp)
+cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp)
     : _proxy(proxy)
     , _query_processor(qp)
 {

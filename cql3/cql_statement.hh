@@ -61,7 +61,7 @@ public:
      *
      * @param state the current client state
      */
-    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) = 0;
+    virtual void validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) = 0;
 
     /**
      * Execute the statement and return the resulting result or null if there is no result.
@@ -70,7 +70,7 @@ public:
      * @param options options for this query (consistency, variables, pageSize, ...)
      */
     virtual future<::shared_ptr<transport::messages::result_message>>
-        execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) = 0;
+        execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) = 0;
 
     /**
      * Variant of execute used for internal query against the system tables, and thus only query the local node = 0.

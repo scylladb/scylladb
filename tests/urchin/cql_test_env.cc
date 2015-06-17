@@ -18,7 +18,7 @@ public:
 private:
     ::shared_ptr<distributed<database>> _db;
     ::shared_ptr<distributed<cql3::query_processor>> _qp;
-    ::shared_ptr<service::storage_proxy> _proxy;
+    ::shared_ptr<distributed<service::storage_proxy>> _proxy;
 private:
     struct core_local_state {
         service::client_state client_state;
@@ -41,7 +41,7 @@ public:
     in_memory_cql_env(
         ::shared_ptr<distributed<database>> db,
         ::shared_ptr<distributed<cql3::query_processor>> qp,
-        ::shared_ptr<service::storage_proxy> proxy)
+        ::shared_ptr<distributed<service::storage_proxy>> proxy)
             : _db(db)
             , _qp(qp)
             , _proxy(proxy)
@@ -167,7 +167,9 @@ public:
     virtual future<> stop() override {
         return _core_local.stop().then([this] {
             return _qp->stop().then([this] {
-                return _db->stop();
+                return _proxy->stop().then([this] {
+                    return _db->stop();
+                });
             });
         });
     }
@@ -189,12 +191,14 @@ future<::shared_ptr<cql_test_env>> make_env_for_test() {
     return init_once().then([] {
             auto db = ::make_shared<distributed<database>>();
             return db->start().then([db] {
-                auto proxy = ::make_shared<service::storage_proxy>(std::ref(*db));
+                auto proxy = ::make_shared<distributed<service::storage_proxy>>();
                 auto qp = ::make_shared<distributed<cql3::query_processor>>();
-                return qp->start(std::ref(*proxy), std::ref(*db)).then([db, proxy, qp] {
-                    auto env = ::make_shared<in_memory_cql_env>(db, qp, proxy);
-                    return env->start().then([env] () -> ::shared_ptr<cql_test_env> {
-                        return env;
+                return proxy->start(std::ref(*db)).then([qp, db, proxy] {
+                    return qp->start(std::ref(*proxy), std::ref(*db)).then([db, proxy, qp] {
+                        auto env = ::make_shared<in_memory_cql_env>(db, qp, proxy);
+                        return env->start().then([env] () -> ::shared_ptr<cql_test_env> {
+                            return env;
+                        });
                     });
                 });
             });

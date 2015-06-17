@@ -40,10 +40,10 @@ namespace cql3 {
 
 class query_processor {
 private:
-    service::storage_proxy& _proxy;
+    distributed<service::storage_proxy>& _proxy;
     distributed<database>& _db;
 public:
-    query_processor(service::storage_proxy& proxy, distributed<database>& db) : _proxy(proxy), _db(db) {}
+    query_processor(distributed<service::storage_proxy>& proxy, distributed<database>& db) : _proxy(proxy), _db(db) {}
 
     static const sstring CQL_VERSION;
 

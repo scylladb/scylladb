@@ -38,7 +38,7 @@ int main(int ac, char** av) {
 
     distributed<database> db;
     distributed<cql3::query_processor> qp;
-    service::storage_proxy proxy{db};
+    distributed<service::storage_proxy> proxy;
     api::http_context ctx(db);
 
     return app.run(ac, av, [&] {
@@ -58,8 +58,10 @@ int main(int ac, char** av) {
                 return service::init_storage_service();
             }).then([listen_address, seed_provider] {
                 return net::init_messaging_service(listen_address, seed_provider);
-            }).then([&proxy] {
-                proxy.init_messaging_service();
+            }).then([&proxy, &db] {
+                return proxy.start(std::ref(db)).then([&proxy] {
+                    engine().at_exit([&proxy] { return proxy.stop(); });
+                });
             }).then([&db, &proxy, &qp] {
                 return qp.start(std::ref(proxy), std::ref(db)).then([&qp] {
                     engine().at_exit([&qp] { return qp.stop(); });

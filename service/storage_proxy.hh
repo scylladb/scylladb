@@ -51,6 +51,7 @@ private:
     size_t _total_hints_in_progress = 0;
     std::unordered_map<gms::inet_address, size_t> _hints_in_progress;
 private:
+    void init_messaging_service();
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl);
     response_id_type register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
@@ -107,7 +108,7 @@ public:
     query_local(const sstring& ks_name, const sstring& cf_name, const dht::decorated_key& key,
                 const std::vector<query::clustering_range>& row_ranges = {query::clustering_range::make_open_ended_both_sides()});
 
-    future<> init_messaging_service();
+    future<> stop() { return make_ready_future<>(); }
 };
 
 }

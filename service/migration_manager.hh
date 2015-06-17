@@ -43,24 +43,24 @@ class migration_manager {
     private MigrationManager() {}
 #endif
 public:
-    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally = false);
+    static future<> announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally = false);
 
-    static future<> announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally);
+    static future<> announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally);
 
-    static future<> announce_column_family_update(service::storage_proxy& proxy, schema_ptr cfm, bool from_thrift, bool announce_locally = false);
+    static future<> announce_column_family_update(distributed<service::storage_proxy>& proxy, schema_ptr cfm, bool from_thrift, bool announce_locally = false);
 
-    static future<> announce_new_column_family(service::storage_proxy& proxy, schema_ptr cfm, bool announce_locally = false);
+    static future<> announce_new_column_family(distributed<service::storage_proxy>& proxy, schema_ptr cfm, bool announce_locally = false);
 
     /**
      * actively announce a new version to active hosts via rpc
      * @param schema The schema mutation to be applied
      */
-    static future<> announce(service::storage_proxy& proxy, mutation schema, bool announce_locally);
+    static future<> announce(distributed<service::storage_proxy>& proxy, mutation schema, bool announce_locally);
 
-    static future<> announce(service::storage_proxy& proxy, std::vector<mutation> mutations, bool announce_locally);
+    static future<> announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool announce_locally);
 
     // Returns a future on the local application of the schema
-    static future<> announce(service::storage_proxy& proxy, std::vector<mutation> schema);
+    static future<> announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> schema);
 };
 
 }

@@ -407,9 +407,9 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 #endif
 
     future<schema_result>
-    read_schema_for_keyspaces(service::storage_proxy& proxy, const sstring& schema_table_name, const std::set<sstring>& keyspace_names)
+    read_schema_for_keyspaces(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const std::set<sstring>& keyspace_names)
     {
-        auto schema = proxy.get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
+        auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
         auto map = [&proxy, schema_table_name] (sstring keyspace_name) { return read_schema_partition_for_keyspace(proxy, schema_table_name, keyspace_name); };
         auto insert = [] (schema_result&& result, auto&& schema_entity) {
             if (!schema_entity.second->empty()) {
@@ -428,24 +428,24 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 #endif
 
     future<schema_result::value_type>
-    read_schema_partition_for_keyspace(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
+    read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name)
     {
-        auto schema = proxy.get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
+        auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
         auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
             partition_key::from_single_value(*schema, to_bytes(keyspace_name)));
-        return proxy.query_local(system_keyspace::NAME, schema_table_name, keyspace_key).then([keyspace_name] (auto&& rs) {
+        return proxy.local().query_local(system_keyspace::NAME, schema_table_name, keyspace_key).then([keyspace_name] (auto&& rs) {
             return schema_result::value_type{keyspace_name, std::move(rs)};
         });
     }
 
     future<schema_result::value_type>
-    read_schema_partition_for_table(service::storage_proxy& proxy, const sstring& schema_table_name, const sstring& keyspace_name, const sstring& table_name)
+    read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const sstring& keyspace_name, const sstring& table_name)
     {
-        auto schema = proxy.get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
+        auto schema = proxy.local().get_db().local().find_schema(system_keyspace::NAME, schema_table_name);
         auto keyspace_key = dht::global_partitioner().decorate_key(*schema,
             partition_key::from_single_value(*schema, to_bytes(keyspace_name)));
         auto clustering_range = {query::clustering_range(clustering_key_prefix::from_clustering_prefix(*schema, exploded_clustering_prefix({to_bytes(table_name)})))};
-        return proxy.query_local(system_keyspace::NAME, schema_table_name, keyspace_key, clustering_range).then([keyspace_name] (auto&& rs) {
+        return proxy.local().query_local(system_keyspace::NAME, schema_table_name, keyspace_key, clustering_range).then([keyspace_name] (auto&& rs) {
             return schema_result::value_type{keyspace_name, std::move(rs)};
         });
     }
@@ -471,7 +471,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      * @throws ConfigurationException If one of metadata attributes has invalid value
      * @throws IOException If data was corrupted during transportation or failed to apply fs operations
      */
-    future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations)
+    future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations)
     {
         return merge_schema(proxy, std::move(mutations), true).then([] {
 #if 0
@@ -481,7 +481,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         });
     }
 
-    future<> merge_schema(service::storage_proxy& proxy, std::vector<mutation> mutations, bool do_flush)
+    future<> merge_schema(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool do_flush)
     {
        return seastar::async([&proxy, mutations = std::move(mutations), do_flush] {
            schema_ptr s = keyspaces();
@@ -498,7 +498,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
            /*auto& old_functions = */read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces).get0();
            /*auto& old_aggregates = */read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces).get0();
 
-           proxy.mutate_locally(std::move(mutations)).get0();
+           proxy.local().mutate_locally(std::move(mutations)).get0();
 #if 0
            if (doFlush)
                 flushSchemaTables();
@@ -519,7 +519,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
            mergeFunctions(oldFunctions, newFunctions);
            mergeAggregates(oldAggregates, newAggregates);
 #endif
-           proxy.get_db().invoke_on_all([keyspaces_to_drop = std::move(keyspaces_to_drop)] (database& db) {
+           proxy.local().get_db().invoke_on_all([keyspaces_to_drop = std::move(keyspaces_to_drop)] (database& db) {
                // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
                for (auto&& keyspace_to_drop : keyspaces_to_drop) {
                    db.drop_keyspace(keyspace_to_drop);
@@ -528,7 +528,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
        });
     }
 
-    future<std::set<sstring>> merge_keyspaces(service::storage_proxy& proxy, schema_result&& before, schema_result&& after)
+    future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
     {
         std::vector<schema_result::value_type> created;
         std::vector<sstring> altered;
@@ -570,7 +570,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         }
 
         return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
-            return proxy.get_db().invoke_on_all([&proxy, &created, altered = std::move(altered)] (database& db) {
+            return proxy.local().get_db().invoke_on_all([&proxy, &created, altered = std::move(altered)] (database& db) {
                 auto temp_vec_ptr = make_lw_shared<std::vector<std::pair<lw_shared_ptr<keyspace_metadata>, std::unique_ptr<keyspace>>>>();
                 return do_for_each(created,
                         [&db, temp_vec_ptr] (auto&& val) {
@@ -601,12 +601,12 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
     }
 
     // see the comments for merge_keyspaces()
-    future<> merge_tables(service::storage_proxy& proxy, schema_result&& before, schema_result&& after)
+    future<> merge_tables(distributed<service::storage_proxy>& proxy, schema_result&& before, schema_result&& after)
     {
         return do_with(std::make_pair(std::move(after), std::move(before)), [&proxy] (auto& pair) {
             auto& after = pair.first;
             auto& before = pair.second;
-            return proxy.get_db().invoke_on_all([&proxy, &before, &after] (database& db) {
+            return proxy.local().get_db().invoke_on_all([&proxy, &before, &after] (database& db) {
                 return seastar::async([&proxy, &db, &before, &after] {
                     std::vector<schema_ptr> created;
                     std::vector<schema_ptr> altered;
@@ -1152,7 +1152,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      *
      * @return map containing name of the table and its metadata for faster lookup
      */
-    std::map<sstring, schema_ptr> create_tables_from_tables_partition(service::storage_proxy& proxy, const schema_result::mapped_type& result)
+    std::map<sstring, schema_ptr> create_tables_from_tables_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
     {
         std::map<sstring, schema_ptr> tables{};
         for (auto&& row : result->rows()) {
@@ -1188,7 +1188,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      *
      * @return Metadata deserialized from schema
      */
-    schema_ptr create_table_from_table_row(service::storage_proxy& proxy, const query::result_set_row& row)
+    schema_ptr create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row)
     {
         auto ks_name = row.get_nonnull<sstring>("keyspace_name");
         auto cf_name = row.get_nonnull<sstring>("columnfamily_name");

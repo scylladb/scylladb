@@ -46,10 +46,10 @@ cql3::statements::create_index_statement::check_access(const service::client_sta
 }
 
 void
-cql3::statements::create_index_statement::validate(service::storage_proxy& proxy
+cql3::statements::create_index_statement::validate(distributed<service::storage_proxy>& proxy
         , const service::client_state& state)
 {
-    auto schema = validation::validate_column_family(proxy.get_db().local(), keyspace(), column_family());
+    auto schema = validation::validate_column_family(proxy.local().get_db().local(), keyspace(), column_family());
 
     if (schema->is_counter()) {
         throw exceptions::invalid_request_exception("Secondary indexes are not supported on counter tables");
@@ -152,8 +152,8 @@ cql3::statements::create_index_statement::validate(service::storage_proxy& proxy
 }
 
 future<bool>
-cql3::statements::create_index_statement::announce_migration(service::storage_proxy& proxy, bool is_local_only) {
-    auto schema = proxy.get_db().local().find_schema(keyspace(), column_family());
+cql3::statements::create_index_statement::announce_migration(distributed<service::storage_proxy>& proxy, bool is_local_only) {
+    auto schema = proxy.local().get_db().local().find_schema(keyspace(), column_family());
     auto target = _raw_target->prepare(schema);
 
     schema_builder cfm(schema);
@@ -181,7 +181,7 @@ cql3::statements::create_index_statement::announce_migration(service::storage_pr
     }
 
     idx.index_name = _index_name;
-    cfm.add_default_index_names(proxy.get_db().local());
+    cfm.add_default_index_names(proxy.local().get_db().local());
 
     return service::migration_manager::announce_column_family_update(proxy,
             cfm.build(), false, is_local_only).then([]() {

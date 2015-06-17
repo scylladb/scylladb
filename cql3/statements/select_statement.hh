@@ -115,9 +115,9 @@ public:
 
     virtual uint32_t get_bound_terms() override;
     virtual void check_access(const service::client_state& state) override;
-    virtual void validate(service::storage_proxy&, const service::client_state& state) override;
+    virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
 
-    virtual future<::shared_ptr<transport::messages::result_message>> execute(service::storage_proxy& proxy,
+    virtual future<::shared_ptr<transport::messages::result_message>> execute(distributed<service::storage_proxy>& proxy,
         service::query_state& state, const query_options& options) override;
 
     virtual future<::shared_ptr<transport::messages::result_message>> execute_internal(database& db,
@@ -125,7 +125,7 @@ public:
         throw std::runtime_error("not implemented");
     }
 
-    future<::shared_ptr<transport::messages::result_message>> execute(service::storage_proxy& proxy,
+    future<::shared_ptr<transport::messages::result_message>> execute(distributed<service::storage_proxy>& proxy,
         lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, service::query_state& state,
          const query_options& options, db_clock::time_point now);
 

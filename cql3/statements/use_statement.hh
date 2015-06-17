@@ -65,18 +65,18 @@ public:
         state.validate_login();
     }
 
-    virtual void validate(service::storage_proxy&, const service::client_state& state) override {
+    virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override {
     }
 
     virtual future<::shared_ptr<transport::messages::result_message>>
-    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override;
+    execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
 
     virtual future<::shared_ptr<transport::messages::result_message>>
     execute_internal(database& db, service::query_state& state, const query_options& options) override;
 
 #if 0
     virtual future<::shared_ptr<transport::messages::result_message>>
-    execute(service::storage_proxy& proxy, service::query_state& state, const query_options& options) override {
+    execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override {
         state.get_client_state().set_keyspace(_keyspace);
         auto result =::make_shared<transport::messages::result_message::set_keyspace>(_keyspace);
         return make_ready_future<::shared_ptr<transport::messages::result_message>>(result);

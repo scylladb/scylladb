@@ -137,7 +137,7 @@ public:
 
     // The batch itself will be validated in either Parsed#prepare() - for regular CQL3 batches,
     //   or in QueryProcessor.processBatch() - for native protocol batches.
-    virtual void validate(service::storage_proxy& proxy, const service::client_state& state) override {
+    virtual void validate(distributed<service::storage_proxy>& proxy, const service::client_state& state) override {
         for (auto&& s : _statements) {
             s->validate(proxy, state);
         }
@@ -147,7 +147,7 @@ public:
         return _statements;
     }
 private:
-    future<std::vector<mutation>> get_mutations(service::storage_proxy& storage, const query_options& options, bool local, api::timestamp_type now) {
+    future<std::vector<mutation>> get_mutations(distributed<service::storage_proxy>& storage, const query_options& options, bool local, api::timestamp_type now) {
         struct collector {
             std::vector<mutation> _result;
             std::vector<mutation> get() && { return std::move(_result); }
@@ -197,12 +197,12 @@ public:
         }
     }
     virtual future<shared_ptr<transport::messages::result_message>> execute(
-            service::storage_proxy& storage, service::query_state& state, const query_options& options) override {
+            distributed<service::storage_proxy>& storage, service::query_state& state, const query_options& options) override {
         return execute(storage, state, options, false, options.get_timestamp(state));
     }
 private:
     future<shared_ptr<transport::messages::result_message>> execute(
-            service::storage_proxy& storage,
+            distributed<service::storage_proxy>& storage,
             service::query_state& query_state, const query_options& options,
             bool local, api::timestamp_type now) {
         // FIXME: we don't support nulls here
@@ -225,7 +225,7 @@ private:
     }
 
     future<> execute_without_conditions(
-            service::storage_proxy& storage,
+            distributed<service::storage_proxy>& storage,
             std::vector<mutation> mutations,
             db::consistency_level cl) {
         // FIXME: do we need to do this?
@@ -242,11 +242,11 @@ private:
         verify_batch_size(mutations);
 
         bool mutate_atomic = _type == type::LOGGED && mutations.size() > 1;
-        return storage.mutate_with_triggers(std::move(mutations), cl, mutate_atomic);
+        return storage.local().mutate_with_triggers(std::move(mutations), cl, mutate_atomic);
     }
 
     future<shared_ptr<transport::messages::result_message>> execute_with_conditions(
-            service::storage_proxy& storage,
+            distributed<service::storage_proxy>& storage,
             const query_options& options,
             service::query_state& state) {
         fail(unimplemented::cause::LWT);

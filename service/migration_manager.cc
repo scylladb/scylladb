@@ -209,17 +209,17 @@ public void notifyDropAggregate(UDAggregate udf)
 }
 #endif
 
-future<>migration_manager::announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally)
+future<>migration_manager::announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, bool announce_locally)
 {
     return announce_new_keyspace(proxy, ksm, db_clock::now_in_usecs(), announce_locally);
 }
 
-future<> migration_manager::announce_new_keyspace(service::storage_proxy& proxy, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally)
+future<> migration_manager::announce_new_keyspace(distributed<service::storage_proxy>& proxy, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type timestamp, bool announce_locally)
 {
 #if 0
     ksm.validate();
 #endif
-    if (proxy.get_db().local().has_keyspace(ksm->name())) {
+    if (proxy.local().get_db().local().has_keyspace(ksm->name())) {
         throw exceptions::already_exists_exception{ksm->name()};
     }
 #if 0
@@ -229,12 +229,12 @@ future<> migration_manager::announce_new_keyspace(service::storage_proxy& proxy,
     return announce(proxy, std::move(mutations), announce_locally);
 }
 
-future<> migration_manager::announce_new_column_family(service::storage_proxy& proxy, schema_ptr cfm, bool announce_locally) {
+future<> migration_manager::announce_new_column_family(distributed<service::storage_proxy>& proxy, schema_ptr cfm, bool announce_locally) {
 #if 0
     cfm.validate();
 #endif
     try {
-        auto&& keyspace = proxy.get_db().local().find_keyspace(cfm->ks_name());
+        auto&& keyspace = proxy.local().get_db().local().find_keyspace(cfm->ks_name());
 #if 0
         else if (ksm.cfMetaData().containsKey(cfm.cfName))
             throw new AlreadyExistsException(cfm.ksName, cfm.cfName);
@@ -247,7 +247,7 @@ future<> migration_manager::announce_new_column_family(service::storage_proxy& p
     }
 }
 
-future<> migration_manager::announce_column_family_update(service::storage_proxy& proxy, schema_ptr cfm, bool from_thrift, bool announce_locally) {
+future<> migration_manager::announce_column_family_update(distributed<service::storage_proxy>& proxy, schema_ptr cfm, bool from_thrift, bool announce_locally) {
     warn(unimplemented::cause::MIGRATIONS);
     return make_ready_future<>();
 #if 0
@@ -389,14 +389,14 @@ public static void announceAggregateDrop(UDAggregate udf, boolean announceLocall
  * actively announce a new version to active hosts via rpc
  * @param schema The schema mutation to be applied
  */
-future<> migration_manager::announce(service::storage_proxy& proxy, mutation schema, bool announce_locally)
+future<> migration_manager::announce(distributed<service::storage_proxy>& proxy, mutation schema, bool announce_locally)
 {
     std::vector<mutation> mutations;
     mutations.emplace_back(std::move(schema));
     return announce(proxy, std::move(mutations), announce_locally);
 }
 
-future<> migration_manager::announce(service::storage_proxy& proxy, std::vector<mutation> mutations, bool announce_locally)
+future<> migration_manager::announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool announce_locally)
 {
     if (announce_locally) {
         return db::legacy_schema_tables::merge_schema(proxy, std::move(mutations), false);
@@ -416,7 +416,7 @@ private static void pushSchemaMutation(InetAddress endpoint, Collection<Mutation
 #endif
 
     // Returns a future on the local application of the schema
-future<> migration_manager::announce(service::storage_proxy& proxy, std::vector<mutation> schema)
+future<> migration_manager::announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> schema)
 {
     auto f = db::legacy_schema_tables::merge_schema(proxy, std::move(schema));
 #if 0

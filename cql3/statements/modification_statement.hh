@@ -169,7 +169,7 @@ public:
 #endif
     }
 
-    void validate(service::storage_proxy&, const service::client_state& state) override;
+    void validate(distributed<service::storage_proxy>&, const service::client_state& state) override;
 
     void add_operation(::shared_ptr<operation> op) {
         if (op->column.is_static()) {
@@ -241,7 +241,7 @@ public:
 
 protected:
     future<update_parameters::prefetched_rows_type> read_required_rows(
-                service::storage_proxy& proxy,
+                distributed<service::storage_proxy>& proxy,
                 lw_shared_ptr<std::vector<partition_key>> keys,
                 lw_shared_ptr<exploded_clustering_prefix> prefix,
                 bool local,
@@ -253,7 +253,7 @@ public:
     }
 
     virtual future<::shared_ptr<transport::messages::result_message>>
-    execute(service::storage_proxy& proxy, service::query_state& qs, const query_options& options) override;
+    execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) override;
 
     virtual future<::shared_ptr<transport::messages::result_message>>
     execute_internal(database& db, service::query_state& qs, const query_options& options) override {
@@ -262,10 +262,10 @@ public:
 
 private:
     future<>
-    execute_without_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
+    execute_without_condition(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options);
 
     future<::shared_ptr<transport::messages::result_message>>
-    execute_with_condition(service::storage_proxy& proxy, service::query_state& qs, const query_options& options);
+    execute_with_condition(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options);
 
 #if 0
     public void addConditions(Composite clusteringPrefix, CQL3CasRequest request, QueryOptions options) throws InvalidRequestException
@@ -392,11 +392,11 @@ public:
      * @return vector of the mutations
      * @throws invalid_request_exception on invalid requests
      */
-    future<std::vector<mutation>> get_mutations(service::storage_proxy& proxy, const query_options& options, bool local, int64_t now);
+    future<std::vector<mutation>> get_mutations(distributed<service::storage_proxy>& proxy, const query_options& options, bool local, int64_t now);
 
 public:
     future<std::unique_ptr<update_parameters>> make_update_parameters(
-                service::storage_proxy& proxy,
+                distributed<service::storage_proxy>& proxy,
                 lw_shared_ptr<std::vector<partition_key>> keys,
                 lw_shared_ptr<exploded_clustering_prefix> prefix,
                 const query_options& options,
