@@ -27,18 +27,18 @@ SEASTAR_TEST_CASE(test_create_keyspace_statement) {
 SEASTAR_TEST_CASE(test_create_table_statement) {
     return do_with_cql_env([] (auto& e) {
         return e.execute_cql("create table users (user_name varchar PRIMARY KEY, birth_year bigint);").discard_result().then([&e] {
+            return e.require_table_exists("ks", "users");
+        }).then([&e] {
             return e.execute_cql("create table cf (id int primary key, m map<int, int>, s set<text>, l list<uuid>);").discard_result();
+        }).then([&e] {
+            return e.require_table_exists("ks", "cf");
         });
     });
 }
 
 SEASTAR_TEST_CASE(test_insert_statement) {
     return do_with_cql_env([] (auto& e) {
-        return e.create_table([](auto ks_name) {
-            // CQL: create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));
-            return schema({}, ks_name, "cf",
-                          {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
-        }).then([&e] {
+        return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
             return e.execute_cql("insert into cf (p1, c1, r1) values ('key1', 1, 100);").discard_result();
         }).then([&e] {
             return e.require_column_has_value("cf", {sstring("key1")}, {1}, "r1", 100);
@@ -588,12 +588,7 @@ SEASTAR_TEST_CASE(test_set_insert_update) {
 
 SEASTAR_TEST_CASE(test_list_insert_update) {
     return do_with_cql_env([] (auto& e) {
-        return e.create_table([](auto ks_name) {
-            // CQL: create table cf (p1 varchar primary key, list1 list<int>);
-            auto my_list_type = list_type_impl::get_instance(int32_type, true);
-            return schema({}, ks_name, "cf",
-                {{"p1", utf8_type}}, {}, {{"list1", my_list_type}}, {}, utf8_type);
-        }).then([&e] {
+        return e.execute_cql("create table cf (p1 varchar primary key, list1 list<int>);").discard_result().then([&e] {
             return e.execute_cql("insert into cf (p1, list1) values ('key1', [ 1001 ]);").discard_result();
         }).then([&e] {
             return e.require_column_has_value("cf", {sstring("key1")}, {},
@@ -722,11 +717,7 @@ SEASTAR_TEST_CASE(test_functions) {
 static const api::timestamp_type the_timestamp = 123456789;
 SEASTAR_TEST_CASE(test_writetime_and_ttl) {
     return do_with_cql_env([] (auto&& e) {
-        return e.create_table([](auto ks_name) {
-            // CQL: create table cf (p1 varchar primary key, i int);
-            return schema({}, ks_name, "cf",
-                {{"p1", utf8_type}}, {}, {{"i", int32_type}}, {}, utf8_type);
-        }).then([&e] {
+        return e.execute_cql("create table cf (p1 varchar primary key, i int);").discard_result().then([&e] {
             auto q = sprint("insert into cf (p1, i) values ('key1', 1) using timestamp %d;", the_timestamp);
             return e.execute_cql(q).discard_result();
         }).then([&e] {
@@ -742,11 +733,7 @@ SEASTAR_TEST_CASE(test_writetime_and_ttl) {
 
 SEASTAR_TEST_CASE(test_batch) {
     return do_with_cql_env([] (auto&& e) {
-        return e.create_table([](auto ks_name) {
-            // CQL: create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));
-            return schema({}, ks_name, "cf",
-                          {{"p1", utf8_type}}, {{"c1", int32_type}}, {{"r1", int32_type}}, {}, utf8_type);
-        }).then([&e] {
+        return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
             return e.execute_cql(
                     "begin unlogged batch \n"
                     "  insert into cf (p1, c1, r1) values ('key1', 1, 100); \n"
@@ -844,11 +831,7 @@ SEASTAR_TEST_CASE(test_user_type) {
 
 SEASTAR_TEST_CASE(test_select_multiple_ranges) {
     return do_with_cql_env([] (auto&& e) {
-        return e.create_table([](auto ks_name) {
-            // CQL: create table cf (p1 varchar, r1 int, PRIMARY KEY (p1));
-            return schema({}, ks_name, "cf",
-                    {{"p1", utf8_type}}, {}, {{"r1", int32_type}}, {}, utf8_type);
-        }).then([&e] {
+        return e.execute_cql("create table cf (p1 varchar, r1 int, PRIMARY KEY (p1));").discard_result().then([&e] {
             return e.execute_cql(
                     "begin unlogged batch \n"
                     "  insert into cf (p1, r1) values ('key1', 100); \n"

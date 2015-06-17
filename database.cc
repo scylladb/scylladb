@@ -757,6 +757,10 @@ schema_ptr database::find_schema(const utils::UUID& uuid) const throw (no_such_c
     return find_column_family(uuid).schema();
 }
 
+bool database::has_schema(const sstring& ks_name, const sstring& cf_name) const {
+    return _ks_cf_to_uuid.count(std::make_pair(ks_name, cf_name)) > 0;
+}
+
 future<>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     auto i = _keyspaces.find(ksm->name());

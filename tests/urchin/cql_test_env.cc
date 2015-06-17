@@ -106,6 +106,12 @@ public:
         return make_ready_future<>();
     }
 
+    virtual future<> require_table_exists(const sstring& ks_name, const sstring& table_name) override {
+        auto& db = _db->local();
+        assert(db.has_schema(ks_name, table_name));
+        return make_ready_future<>();
+    }
+
     virtual future<> require_column_has_value(const sstring& table_name,
                                       std::vector<boost::any> pk,
                                       std::vector<boost::any> ck,
