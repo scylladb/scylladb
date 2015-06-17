@@ -116,7 +116,7 @@ private:
     uint64_t _repaired_at = 0;
     int _max_local_deletion_time = std::numeric_limits<int>::min();
     double _compression_ratio = NO_COMPRESSION_RATIO;
-    // FIXME: add C++ version of protected Set<Integer> ancestors = new HashSet<>();
+    std::set<int> _ancestors;
     streaming_histogram _estimated_tombstone_drop_time = default_tombstone_drop_time_histogram();
     int _sstable_level = 0;
     std::vector<bytes> _min_column_names;
@@ -171,6 +171,10 @@ public:
 
     void set_repaired_at(uint64_t repaired_at) {
         _repaired_at = repaired_at;
+    }
+
+    void add_ancestor(int generation) {
+        _ancestors.insert(generation);
     }
 
     void sstable_level(int sstable_level) {
