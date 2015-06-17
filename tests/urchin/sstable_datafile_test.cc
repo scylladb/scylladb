@@ -923,3 +923,29 @@ SEASTAR_TEST_CASE(datafile_generation_13) {
         }).then([sst, mtp] {});
     });
 }
+
+SEASTAR_TEST_CASE(datafile_generation_14) {
+    return test_setup::do_with_test_directory([] {
+        auto s = uncompressed_schema();
+
+        auto mtp = make_shared<memtable>(s);
+        // Create a number of keys that is a multiple of the sampling level
+        for (int i = 0; i < 0x80; ++i) {
+            sstring k = "key" + to_sstring(i);
+            auto key = partition_key::from_exploded(*s, {to_bytes(k)});
+            mutation m(key, s);
+
+            auto c_key = clustering_key::make_empty(*s);
+            m.set_clustered_cell(c_key, to_bytes("col2"), boost::any(i), api::max_timestamp);
+            mtp->apply(std::move(m));
+        }
+
+        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 14, la, big);
+        return sst->write_components(*mtp).then([s] {
+            return reusable_sst("tests/urchin/sstables/tests-temporary", 14).then([] (auto s) {
+                // Not crashing is enough
+                return make_ready_future<>();
+            });
+        }).then([sst, mtp] {});
+    });
+}
