@@ -23,3 +23,6 @@
 using mutation_reader = std::function<future<mutation_opt>()>;
 
 mutation_reader make_combined_reader(std::vector<mutation_reader>);
+mutation_reader make_reader_returning(mutation);
+mutation_reader make_reader_returning_many(std::initializer_list<mutation>);
+mutation_reader make_empty_reader();
