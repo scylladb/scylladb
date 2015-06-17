@@ -26,6 +26,7 @@
 #include "streaming/messages/outgoing_file_message.hh"
 #include "streaming/messages/received_message.hh"
 #include "streaming/messages/retry_message.hh"
+#include "streaming/messages/complete_message.hh"
 
 namespace streaming {
 
@@ -59,6 +60,14 @@ void stream_session::init_messaging_service_handler() {
             // TODO
             messages::outgoing_file_message msg_ret;
             return make_ready_future<messages::outgoing_file_message>(std::move(msg_ret));
+        });
+    });
+    ms().register_handler(messaging_verb::COMPLETE_MESSAGE, [] (messages::complete_message msg) {
+        auto cpu_id = 0;
+        return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
+            // TODO
+            messages::complete_message msg_ret;
+            return make_ready_future<messages::complete_message>(std::move(msg_ret));
         });
     });
 }

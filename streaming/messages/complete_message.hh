@@ -49,6 +49,15 @@ class complete_message : public stream_message {
         return "Complete";
     }
 #endif
+public:
+    void serialize(bytes::iterator& out) const {
+    }
+    static complete_message deserialize(bytes_view& v) {
+        return complete_message();
+    }
+    size_t serialized_size() const {
+        return 0;
+    }
 };
 
 } // namespace messages
