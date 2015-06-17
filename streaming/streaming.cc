@@ -11,3 +11,4 @@
 #include "streaming/messages/incoming_file_message.hh"
 #include "streaming/messages/outgoing_file_message.hh"
 #include "streaming/messages/file_message_header.hh"
+#include "streaming/messages/prepare_message.hh"
