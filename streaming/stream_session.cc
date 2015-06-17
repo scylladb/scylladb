@@ -21,10 +21,18 @@
 
 #include "message/messaging_service.hh"
 #include "streaming/stream_session.hh"
+#include "streaming/messages/stream_init_message.hh"
 
 namespace streaming {
 
 void stream_session::init_messaging_service_handler() {
+    ms().register_handler(messaging_verb::STREAM_INIT_MESSAGE, [] (messages::stream_init_message msg) {
+        auto cpu_id = 0;
+        return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
+            // TODO
+            return make_ready_future<>();
+        });
+    });
 }
 
 future<> stream_session::start() {
