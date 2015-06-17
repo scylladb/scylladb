@@ -14,27 +14,23 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming.messages;
 
-import java.io.IOException;
-import java.nio.channels.ReadableByteChannel;
-import java.util.List;
+#pragma once
 
-import org.apache.cassandra.io.compress.CompressionMetadata;
-import org.apache.cassandra.io.sstable.format.SSTableReader;
-import org.apache.cassandra.io.util.DataOutputStreamAndChannel;
-import org.apache.cassandra.streaming.StreamSession;
-import org.apache.cassandra.streaming.StreamWriter;
-import org.apache.cassandra.streaming.compress.CompressedStreamWriter;
-import org.apache.cassandra.streaming.compress.CompressionInfo;
-import org.apache.cassandra.utils.Pair;
+#include "streaming/messages/stream_message.hh"
+
+namespace streaming {
+namespace messages {
 
 /**
  * OutgoingFileMessage is used to transfer the part(or whole) of a SSTable data file.
  */
-public class OutgoingFileMessage extends StreamMessage
-{
+class outgoing_file_message : public stream_message {
+#if 0
     public static Serializer<OutgoingFileMessage> serializer = new Serializer<OutgoingFileMessage>()
     {
         public OutgoingFileMessage deserialize(ReadableByteChannel in, int version, StreamSession session) throws IOException
@@ -87,5 +83,9 @@ public class OutgoingFileMessage extends StreamMessage
     {
         return "File (" + header + ", file: " + sstable.getFilename() + ")";
     }
-}
+#endif
+};
+
+} // namespace messages
+} // namespace streaming
 
