@@ -13,3 +13,4 @@
 #include "streaming/messages/file_message_header.hh"
 #include "streaming/messages/prepare_message.hh"
 #include "streaming/messages/received_message.hh"
+#include "streaming/messages/retry_message.hh"

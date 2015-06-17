@@ -14,21 +14,20 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming.messages;
 
-import java.io.*;
-import java.nio.channels.Channels;
-import java.nio.channels.ReadableByteChannel;
-import java.util.UUID;
+#pragma once
 
-import org.apache.cassandra.io.util.DataOutputStreamAndChannel;
-import org.apache.cassandra.net.MessagingService;
-import org.apache.cassandra.streaming.StreamSession;
-import org.apache.cassandra.utils.UUIDSerializer;
+#include "streaming/messages/stream_message.hh"
 
-public class RetryMessage extends StreamMessage
-{
+namespace streaming {
+namespace messages {
+
+class retry_message : public stream_message {
+#if 0
     public static Serializer<RetryMessage> serializer = new Serializer<RetryMessage>()
     {
         public RetryMessage deserialize(ReadableByteChannel in, int version, StreamSession session) throws IOException
@@ -61,4 +60,8 @@ public class RetryMessage extends StreamMessage
         sb.append(cfId).append(", #").append(sequenceNumber).append(')');
         return sb.toString();
     }
-}
+#endif
+};
+
+} // namespace messages
+} // namespace streaming
