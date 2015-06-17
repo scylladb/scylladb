@@ -124,9 +124,9 @@ void create_table_statement::apply_properties_to(schema_builder& builder) {
         .isDense(isDense);
 #endif
 
-    add_column_metadata_from_aliases(builder, _key_aliases, _key_validator, column_kind::partition_key);
+    add_column_metadata_from_aliases(builder, _key_aliases, _partition_key_types, column_kind::partition_key);
+    add_column_metadata_from_aliases(builder, _column_aliases, _clustering_key_types, column_kind::clustering_key);
 #if 0
-    addColumnMetadataFromAliases(cfmd, columnAliases, comparator.asAbstractType(), ColumnDefinition.Kind.CLUSTERING_COLUMN);
     if (valueAlias != null)
         addColumnMetadataFromAliases(cfmd, Collections.singletonList(valueAlias), defaultValidator, ColumnDefinition.Kind.COMPACT_VALUE);
 #endif
@@ -134,25 +134,14 @@ void create_table_statement::apply_properties_to(schema_builder& builder) {
     _properties->apply_to_builder(builder);
 }
 
-void create_table_statement::add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, data_type comparator, column_kind kind)
+void create_table_statement::add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind)
 {
-#if 0
-    if (comparator instanceof CompositeType)
-    {
-        CompositeType ct = (CompositeType)comparator;
-        for (int i = 0; i < aliases.size(); ++i)
-            if (aliases.get(i) != null)
-                cfm.addOrReplaceColumnDefinition(new ColumnDefinition(cfm, aliases.get(i), ct.types.get(i), i, kind));
+    assert(aliases.size() == types.size());
+    for (size_t i = 0; i < aliases.size(); i++) {
+        if (!aliases[i].empty()) {
+            builder.with_column(aliases[i], types[i], kind);
+        }
     }
-    else
-    {
-#endif
-        assert(aliases.size() <= 1);
-        if (!aliases.empty())
-            builder.with_column(aliases[0], comparator, kind);
-#if 0
-    }
-#endif
 }
 
 create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name, bool if_not_exists)
@@ -177,12 +166,15 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
 
     auto stmt = ::make_shared<create_table_statement>(_cf_name, properties, _if_not_exists, _static_columns);
 
-    std::map<bytes, data_type> defined_multi_cell_collections;
+    std::experimental::optional<std::map<bytes, data_type>> defined_multi_cell_collections;
     for (auto&& entry : _definitions) {
         ::shared_ptr<column_identifier> id = entry.first;
         ::shared_ptr<cql3_type> pt = entry.second->prepare(db, keyspace());
         if (pt->is_collection() && pt->get_type()->is_multi_cell()) {
-            defined_multi_cell_collections.emplace(id->name(), pt->get_type());
+            if (!defined_multi_cell_collections) {
+                defined_multi_cell_collections = std::map<bytes, data_type>{};
+            }
+            defined_multi_cell_collections->emplace(id->name(), pt->get_type());
         }
         stmt->_columns.emplace(id, pt->get_type()); // we'll remove what is not a column below
     }
@@ -205,88 +197,71 @@ create_table_statement::raw_statement::raw_statement(::shared_ptr<cf_name> name,
         }
         key_types.emplace_back(t);
     }
-    if (key_types.size() > 1) {
-        throw std::runtime_error("compound key types are not supported");
-    }
-    stmt->_key_validator = key_types[0];
-#if 0
-    stmt.keyValidator = keyTypes.size() == 1 ? keyTypes.get(0) : CompositeType.getInstance(keyTypes);
+    stmt->_partition_key_types = key_types;
 
+#if 0
     // Dense means that no part of the comparator stores a CQL column name. This means
     // COMPACT STORAGE with at least one columnAliases (otherwise it's a thrift "static" CF).
     stmt.isDense = useCompactStorage && !columnAliases.isEmpty();
+#endif
 
     // Handle column aliases
-    if (columnAliases.isEmpty())
-    {
-        if (useCompactStorage)
-        {
+    if (_column_aliases.empty()) {
+        if (_use_compact_storage) {
             // There should remain some column definition since it is a non-composite "static" CF
-            if (stmt.columns.isEmpty())
-                throw new InvalidRequestException("No definition found that is not part of the PRIMARY KEY");
-
-            if (definedMultiCellCollections != null)
-                throw new InvalidRequestException("Non-frozen collection types are not supported with COMPACT STORAGE");
-
-            stmt.comparator = new SimpleSparseCellNameType(UTF8Type.instance);
+            if (stmt->_columns.empty()) {
+                throw exceptions::invalid_request_exception("No definition found that is not part of the PRIMARY KEY");
+            }
+            if (defined_multi_cell_collections) {
+                throw exceptions::invalid_request_exception("Non-frozen collection types are not supported with COMPACT STORAGE");
+            }
+            stmt->_clustering_key_types.emplace_back(utf8_type);
+        } else {
+            stmt->_clustering_key_types = std::vector<data_type>{};
         }
-        else
-        {
-            stmt.comparator = definedMultiCellCollections == null
-                            ? new CompoundSparseCellNameType(Collections.<AbstractType<?>>emptyList())
-                            : new CompoundSparseCellNameType.WithCollection(Collections.<AbstractType<?>>emptyList(), ColumnToCollectionType.getInstance(definedMultiCellCollections));
-        }
-    }
-    else
-    {
+    } else {
         // If we use compact storage and have only one alias, it is a
         // standard "dynamic" CF, otherwise it's a composite
-        if (useCompactStorage && columnAliases.size() == 1)
-        {
-            if (definedMultiCellCollections != null)
-                throw new InvalidRequestException("Collection types are not supported with COMPACT STORAGE");
-
-            ColumnIdentifier alias = columnAliases.get(0);
-            if (staticColumns.contains(alias))
-                throw new InvalidRequestException(String.format("Static column %s cannot be part of the PRIMARY KEY", alias));
-
-            stmt.columnAliases.add(alias.bytes);
-            AbstractType<?> at = getTypeAndRemove(stmt.columns, alias);
-            if (at instanceof CounterColumnType)
-                throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", stmt.columnAliases.get(0)));
-            stmt.comparator = new SimpleDenseCellNameType(at);
-        }
-        else
-        {
-            List<AbstractType<?>> types = new ArrayList<AbstractType<?>>(columnAliases.size() + 1);
-            for (ColumnIdentifier t : columnAliases)
-            {
-                stmt.columnAliases.add(t.bytes);
-
-                AbstractType<?> type = getTypeAndRemove(stmt.columns, t);
-                if (type instanceof CounterColumnType)
-                    throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", t));
-                if (staticColumns.contains(t))
-                    throw new InvalidRequestException(String.format("Static column %s cannot be part of the PRIMARY KEY", t));
-                types.add(type);
+        if (_use_compact_storage && _column_aliases.size() == 1) {
+            if (defined_multi_cell_collections) {
+                throw exceptions::invalid_request_exception("Collection types are not supported with COMPACT STORAGE");
+            }
+            auto alias = _column_aliases[0];
+            if (_static_columns.count(alias) > 0) {
+                throw exceptions::invalid_request_exception(sprint("Static column %s cannot be part of the PRIMARY KEY", alias->text()));
+            }
+            stmt->_column_aliases.emplace_back(alias->name());
+            auto at = get_type_and_remove(stmt->_columns, alias);
+            if (at->is_counter()) {
+                throw exceptions::invalid_request_exception(sprint("counter type is not supported for PRIMARY KEY part %s", stmt->_column_aliases[0]));
+            }
+            stmt->_clustering_key_types.emplace_back(at);
+        } else {
+            std::vector<data_type> types;
+            for (auto&& t : _column_aliases) {
+                stmt->_column_aliases.emplace_back(t->name());
+                auto type = get_type_and_remove(stmt->_columns, t);
+                if (type->is_counter()) {
+                    throw exceptions::invalid_request_exception(sprint("counter type is not supported for PRIMARY KEY part %s", t->text()));
+                }
+                if (_static_columns.count(t) > 0) {
+                    throw exceptions::invalid_request_exception(sprint("Static column %s cannot be part of the PRIMARY KEY", t->text()));
+                }
+                types.emplace_back(type);
             }
 
-            if (useCompactStorage)
-            {
-                if (definedMultiCellCollections != null)
-                    throw new InvalidRequestException("Collection types are not supported with COMPACT STORAGE");
-
-                stmt.comparator = new CompoundDenseCellNameType(types);
-            }
-            else
-            {
-                stmt.comparator = definedMultiCellCollections == null
-                                ? new CompoundSparseCellNameType(types)
-                                : new CompoundSparseCellNameType.WithCollection(types, ColumnToCollectionType.getInstance(definedMultiCellCollections));
+            if (_use_compact_storage) {
+                if (defined_multi_cell_collections) {
+                    throw exceptions::invalid_request_exception("Collection types are not supported with COMPACT STORAGE");
+                }
+                stmt->_clustering_key_types = types;
+            } else {
+                stmt->_clustering_key_types = types;
             }
         }
     }
 
+#if 0
     if (!staticColumns.isEmpty())
     {
         // Only CQL3 tables can have static columns

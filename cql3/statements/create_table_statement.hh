@@ -46,16 +46,13 @@ namespace statements {
 /** A <code>CREATE TABLE</code> parsed from a CQL query statement. */
 class create_table_statement : public schema_altering_statement {
 #if 0
-    public CellNameType comparator;
-#endif
-private:
-#if 0
     private AbstractType<?> defaultValidator;
 #endif
-    data_type _key_validator;
+    std::vector<data_type> _partition_key_types;
+    std::vector<data_type> _clustering_key_types;
     std::vector<bytes> _key_aliases;
+    std::vector<bytes> _column_aliases;
 #if 0
-    private final List<ByteBuffer> columnAliases = new ArrayList<ByteBuffer>();
     private ByteBuffer valueAlias;
 
     private boolean isDense;
@@ -93,7 +90,7 @@ private:
 
     void apply_properties_to(schema_builder& builder);
 
-    void add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, data_type comparator, column_kind kind);
+    void add_column_metadata_from_aliases(schema_builder& builder, std::vector<bytes> aliases, const std::vector<data_type>& types, column_kind kind);
 };
 
 class create_table_statement::raw_statement : public cf_statement {
