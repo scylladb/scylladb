@@ -14,3 +14,4 @@
 #include "streaming/messages/prepare_message.hh"
 #include "streaming/messages/received_message.hh"
 #include "streaming/messages/retry_message.hh"
+#include "streaming/messages/session_failed_message.hh"
