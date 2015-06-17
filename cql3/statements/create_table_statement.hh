@@ -99,7 +99,11 @@ private:
 
 class create_table_statement::raw_statement : public cf_statement {
 private:
-    std::unordered_map<::shared_ptr<column_identifier>, ::shared_ptr<cql3_type::raw>> _definitions;
+    using defs_type = std::unordered_map<::shared_ptr<column_identifier>,
+                                         ::shared_ptr<cql3_type::raw>,
+                                         shared_ptr_value_hash<column_identifier>,
+                                         shared_ptr_equal_by_value<column_identifier>>;
+    defs_type _definitions;
 public:
     const ::shared_ptr<cf_prop_defs> properties = ::make_shared<cf_prop_defs>();
 private:
