@@ -1137,12 +1137,11 @@ static void prepare_compression(compression& c, const schema& schema) {
 }
 
 static void maybe_add_summary_entry(summary& s, bytes_view key, uint64_t offset) {
-    if ((s.keys_written % s.header.min_index_interval) == 0) {
+    if ((s.keys_written++ % s.header.min_index_interval) == 0) {
         s.positions.push_back(s.header.memory_size);
         s.entries.push_back({ bytes(key.data(), key.size()), offset });
         s.header.memory_size += key.size() + sizeof(uint64_t);
     }
-    s.keys_written++;
 }
 
 static void add_validation_metadata(statistics& s, const bytes partitioner, double bloom_filter_fp_chance)
