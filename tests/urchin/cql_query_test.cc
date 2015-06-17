@@ -27,7 +27,11 @@ SEASTAR_TEST_CASE(test_create_keyspace_statement) {
 SEASTAR_TEST_CASE(test_create_table_statement) {
     return do_with_cql_env([] (auto& e) {
         return e.execute_cql("create table users (user_name varchar PRIMARY KEY, birth_year bigint);").discard_result().then([&e] {
+            return e.require_table_exists("ks", "users");
+        }).then([&e] {
             return e.execute_cql("create table cf (id int primary key, m map<int, int>, s set<text>, l list<uuid>);").discard_result();
+        }).then([&e] {
+            return e.require_table_exists("ks", "cf");
         });
     });
 }
