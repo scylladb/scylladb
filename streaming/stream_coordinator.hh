@@ -14,17 +14,19 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.net.InetAddress;
-import java.util.*;
+#pragma once
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+#include "gms/inet_address.hh"
+#include "streaming/stream_session.hh"
+#include "streaming/session_info.hh"
+#include <map>
 
-import org.apache.cassandra.concurrent.DebuggableThreadPoolExecutor;
-import org.apache.cassandra.utils.FBUtilities;
+namespace streaming {
 
 /**
  * {@link StreamCoordinator} is a helper class that abstracts away maintaining multiple
@@ -33,27 +35,20 @@ import org.apache.cassandra.utils.FBUtilities;
  * This class coordinates multiple SessionStreams per peer in both the outgoing StreamPlan context and on the
  * inbound StreamResultFuture context.
  */
-public class StreamCoordinator
-{
-    private static final Logger logger = LoggerFactory.getLogger(StreamCoordinator.class);
+class stream_coordinator {
+    class host_streaming_data;
+private:
+    using inet_address = gms::inet_address;
+    std::map<inet_address, host_streaming_data> _peer_sessions;
+    int _connections_per_host;
+    bool _keep_ss_table_level;
 
-    // Executor strictly for establishing the initial connections. Once we're connected to the other end the rest of the
-    // streaming is handled directly by the ConnectionHandler's incoming and outgoing threads.
-    private static final DebuggableThreadPoolExecutor streamExecutor = DebuggableThreadPoolExecutor.createWithFixedPoolSize("StreamConnectionEstablisher",
-                                                                                                                            FBUtilities.getAvailableProcessors());
-
-    private Map<InetAddress, HostStreamingData> peerSessions = new HashMap<>();
-    private final int connectionsPerHost;
-    private StreamConnectionFactory factory;
-    private final boolean keepSSTableLevel;
-
-    public StreamCoordinator(int connectionsPerHost, boolean keepSSTableLevel, StreamConnectionFactory factory)
-    {
-        this.connectionsPerHost = connectionsPerHost;
-        this.factory = factory;
-        this.keepSSTableLevel = keepSSTableLevel;
+public:
+    stream_coordinator(int connections_per_host, bool keep_ss_table_level)
+        : _connections_per_host(connections_per_host)
+        , _keep_ss_table_level(keep_ss_table_level) {
     }
-
+#if 0
     public void setConnectionFactory(StreamConnectionFactory factory)
     {
         this.factory = factory;
@@ -211,14 +206,15 @@ public class StreamCoordinator
             logger.info("[Stream #{}, ID#{}] Beginning stream session with {}", session.planId(), session.sessionIndex(), session.peer);
         }
     }
+#endif
 
-    private class HostStreamingData
-    {
-        private Map<Integer, StreamSession> streamSessions = new HashMap<>();
-        private Map<Integer, SessionInfo> sessionInfos = new HashMap<>();
-
-        private int lastReturned = -1;
-
+private:
+    class host_streaming_data {
+    private:
+        std::map<int, stream_session> _stream_sessions;
+        std::map<int, session_info> _session_infos;
+        int last_returned = -1;
+#if 0
         public boolean hasActiveSessions()
         {
             for (StreamSession session : streamSessions.values())
@@ -287,5 +283,8 @@ public class StreamCoordinator
         {
             return sessionInfos.values();
         }
-    }
-}
+#endif
+    };
+};
+
+} // namespace streaming
