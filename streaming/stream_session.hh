@@ -140,17 +140,17 @@ private:
 
     private AtomicBoolean isAborted = new AtomicBoolean(false);
     private final boolean keepSSTableLevel;
-
-    public static enum State
-    {
+#endif
+public:
+    enum class state {
         INITIALIZED,
         PREPARING,
         STREAMING,
         WAIT_COMPLETE,
         COMPLETE,
         FAILED,
-    }
-
+    };
+#if 0
     private volatile State state = State.INITIALIZED;
     private volatile boolean completeSent = false;
 
