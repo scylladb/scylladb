@@ -292,6 +292,7 @@ distributed<Service>::stop() {
         });
     }).then([this] {
         _instances.clear();
+        _instances = std::vector<Service*>();
     });
 }
 
