@@ -284,6 +284,7 @@ namespace locator {
 using registry = class_registrator<i_endpoint_snitch,
                                    gossiping_property_file_snitch,
                                    const sstring&>;
-static registry registrator("org.apache.cassandra.locator.GossipingPropertyFileSnitch");
+static registry registrator1("org.apache.cassandra.locator.GossipingPropertyFileSnitch");
+static registry registrator2("GossipingPropertyFileSnitch");
 }
 } // namespace locator
