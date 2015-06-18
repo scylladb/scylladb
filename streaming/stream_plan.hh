@@ -14,52 +14,63 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.net.InetAddress;
-import java.util.*;
+#pragma once
 
-import org.apache.cassandra.dht.Range;
-import org.apache.cassandra.dht.Token;
-import org.apache.cassandra.service.ActiveRepairService;
-import org.apache.cassandra.utils.UUIDGen;
+#include "utils/UUID.hh"
+#include "utils/UUID_gen.hh"
+#include "core/sstring.hh"
+#include "gms/inet_address.hh"
+#include "query-request.hh"
+#include "dht/i_partitioner.hh"
+#include <vector>
+#include <initializer_list>
+
+namespace streaming {
 
 /**
  * {@link StreamPlan} is a helper class that builds StreamOperation of given configuration.
  *
  * This is the class you want to use for building streaming plan and starting streaming.
  */
-public class StreamPlan
-{
-    private final UUID planId = UUIDGen.getTimeUUID();
-    private final String description;
-    private final List<StreamEventHandler> handlers = new ArrayList<>();
-    private final long repairedAt;
-    private final StreamCoordinator coordinator;
+class stream_plan {
+private:
+    using inet_address = gms::inet_address;
+    using UUID = utils::UUID;
+    using token = dht::token;
+    UUID _plan_id;
+    sstring _description;
+    //List<StreamEventHandler> handlers = new ArrayList<>();
+    long _repaired_at;
+    //StreamCoordinator coordinator;
 
-    private boolean flushBeforeTransfer = true;
+    bool _flush_before_transfer = true;
+    // FIXME: ActiveRepairService.UNREPAIRED_SSTABLE
+    long UNREPAIRED_SSTABLE = 0;
+public:
 
     /**
      * Start building stream plan.
      *
      * @param description Stream type that describes this StreamPlan
      */
-    public StreamPlan(String description)
-    {
-        this(description, ActiveRepairService.UNREPAIRED_SSTABLE, 1, false);
+    stream_plan(sstring description) {
+        stream_plan(description, UNREPAIRED_SSTABLE, 1, false);
     }
 
-    public StreamPlan(String description, boolean keepSSTableLevels)
-    {
-        this(description, ActiveRepairService.UNREPAIRED_SSTABLE, 1, keepSSTableLevels);
+    stream_plan(sstring description, bool keep_ss_table_levels) {
+        stream_plan(description, UNREPAIRED_SSTABLE, 1, keep_ss_table_levels);
     }
 
-    public StreamPlan(String description, long repairedAt, int connectionsPerHost, boolean keepSSTableLevels)
-    {
-        this.description = description;
-        this.repairedAt = repairedAt;
-        this.coordinator = new StreamCoordinator(connectionsPerHost, keepSSTableLevels, new DefaultConnectionFactory());
+    stream_plan(sstring description, long repaired_at, int connections_per_host, bool keep_ss_table_levels)
+        : _plan_id(utils::UUID_gen::get_time_UUID())
+        , _description(description)
+        , _repaired_at(repaired_at) {
+        // this.coordinator = new StreamCoordinator(connectionsPerHost, keepSSTableLevels, new DefaultConnectionFactory());
     }
 
     /**
@@ -71,10 +82,7 @@ public class StreamPlan
      * @param ranges ranges to fetch
      * @return this object for chaining
      */
-    public StreamPlan requestRanges(InetAddress from, InetAddress connecting, String keyspace, Collection<Range<Token>> ranges)
-    {
-        return requestRanges(from, connecting, keyspace, ranges, new String[0]);
-    }
+    stream_plan& request_ranges(inet_address from, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges);
 
     /**
      * Request data in {@code columnFamilies} under {@code keyspace} and {@code ranges} from specific node.
@@ -86,22 +94,14 @@ public class StreamPlan
      * @param columnFamilies specific column families
      * @return this object for chaining
      */
-    public StreamPlan requestRanges(InetAddress from, InetAddress connecting, String keyspace, Collection<Range<Token>> ranges, String... columnFamilies)
-    {
-        StreamSession session = coordinator.getOrCreateNextSession(from, connecting);
-        session.addStreamRequest(keyspace, ranges, Arrays.asList(columnFamilies), repairedAt);
-        return this;
-    }
+    stream_plan& request_ranges(inet_address from, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::initializer_list<sstring> column_families);
 
     /**
      * Add transfer task to send data of specific {@code columnFamilies} under {@code keyspace} and {@code ranges}.
      *
      * @see #transferRanges(java.net.InetAddress, java.net.InetAddress, String, java.util.Collection, String...)
      */
-    public StreamPlan transferRanges(InetAddress to, String keyspace, Collection<Range<Token>> ranges, String... columnFamilies)
-    {
-        return transferRanges(to, to, keyspace, ranges, columnFamilies);
-    }
+    stream_plan& transfer_ranges(inet_address to, sstring keyspace, std::vector<query::range<token>> ranges, std::initializer_list<sstring> column_families);
 
     /**
      * Add transfer task to send data of specific keyspace and ranges.
@@ -112,10 +112,7 @@ public class StreamPlan
      * @param ranges ranges to send
      * @return this object for chaining
      */
-    public StreamPlan transferRanges(InetAddress to, InetAddress connecting, String keyspace, Collection<Range<Token>> ranges)
-    {
-        return transferRanges(to, connecting, keyspace, ranges, new String[0]);
-    }
+    stream_plan& transfer_ranges(inet_address to, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges);
 
     /**
      * Add transfer task to send data of specific {@code columnFamilies} under {@code keyspace} and {@code ranges}.
@@ -127,13 +124,9 @@ public class StreamPlan
      * @param columnFamilies specific column families
      * @return this object for chaining
      */
-    public StreamPlan transferRanges(InetAddress to, InetAddress connecting, String keyspace, Collection<Range<Token>> ranges, String... columnFamilies)
-    {
-        StreamSession session = coordinator.getOrCreateNextSession(to, connecting);
-        session.addTransferRanges(keyspace, ranges, Arrays.asList(columnFamilies), flushBeforeTransfer, repairedAt);
-        return this;
-    }
+    stream_plan& transfer_ranges(inet_address to, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::initializer_list<sstring> column_families);
 
+#if 0
     /**
      * Add transfer task to send given SSTable files.
      *
@@ -199,4 +192,7 @@ public class StreamPlan
         this.flushBeforeTransfer = flushBeforeTransfer;
         return this;
     }
-}
+#endif
+};
+
+} // namespace streaming
