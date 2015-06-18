@@ -3348,4 +3348,8 @@ inline future<> init_storage_service() {
     });
 }
 
+inline future<> deinit_storage_service() {
+    return service::get_storage_service().stop();
+}
+
 }

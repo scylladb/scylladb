@@ -55,14 +55,6 @@ gossiper::gossiper() {
     // Register this instance with JMX
 }
 
-gossiper::~gossiper() {
-    if (engine().cpu_id() != 0) {
-        return;
-    }
-
-    get_local_failure_detector().unregister_failure_detection_event_listener(this);
-}
-
 /*
  * First construct a map whose key is the endpoint in the GossipDigest and the value is the
  * GossipDigest itself. Then build a list of version differences i.e difference between the
@@ -1250,7 +1242,10 @@ void gossiper::shutdown() {
 
 future<> gossiper::stop() {
     _scheduled_gossip_task.cancel();
-    return _handlers.stop().then( [] () {
+    return _handlers.stop().then( [this] () {
+        if (engine().cpu_id() == 0) {
+            get_local_failure_detector().unregister_failure_detection_event_listener(this);
+        }
         return make_ready_future<>();
     });
 }

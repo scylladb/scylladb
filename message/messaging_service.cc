@@ -9,7 +9,17 @@
 #include "service/storage_service.hh"
 
 namespace net {
-    distributed<messaging_service> _the_messaging_service;
+distributed<messaging_service> _the_messaging_service;
+
+future<> deinit_messaging_service() {
+    return gms::get_gossiper().stop().then([] {
+            return gms::get_failure_detector().stop();
+    }).then([] {
+            return net::get_messaging_service().stop();
+    }).then([]{
+            return service::deinit_storage_service();
+    });
+}
 
 future<> init_messaging_service(sstring listen_address, db::config::seed_provider_type seed_provider) {
     const gms::inet_address listen(listen_address);
@@ -26,6 +36,11 @@ future<> init_messaging_service(sstring listen_address, db::config::seed_provide
     if (seeds.empty()) {
         seeds.emplace(gms::inet_address("127.0.0.1"));
     }
+
+    engine().at_exit([]{
+            return deinit_messaging_service();
+    });
+
     return net::get_messaging_service().start(listen).then([seeds] {
         auto& ms = net::get_local_messaging_service();
         print("Messaging server listening on ip %s port %d ...\n", ms.listen_address(), ms.port());
