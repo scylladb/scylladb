@@ -384,7 +384,8 @@ with open(buildfile, 'w') as f:
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
-        cxxflags = -std=gnu++1y {dbgflag} {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. {user_cflags} {warnings} {defines}
+        # we disable _FORTIFY_SOURCE because it generates false positives with longjmp() (core/thread.cc)
+        cxxflags = -std=gnu++1y {dbgflag} {fpie} -Wall -Werror -fvisibility=hidden -pthread -I. -U_UNFORTIFY_SOURCE {user_cflags} {warnings} {defines}
         ldflags = {dbgflag} -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags}
         libs = {libs}
         pool link_pool
