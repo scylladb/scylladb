@@ -49,6 +49,15 @@ class session_failed_message : public stream_message {
         return "Session Failed";
     }
 #endif
+public:
+    void serialize(bytes::iterator& out) const {
+    }
+    static session_failed_message deserialize(bytes_view& v) {
+        return session_failed_message();
+    }
+    size_t serialized_size() const {
+        return 0;
+    }
 };
 
 } // namespace messages
