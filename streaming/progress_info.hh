@@ -14,67 +14,54 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.io.Serializable;
-import java.net.InetAddress;
+#pragma once
 
-import com.google.common.base.Objects;
+#include "gms/inet_address.hh"
+#include "core/sstring.hh"
+
+namespace streaming {
 
 /**
  * ProgressInfo contains file transfer progress.
  */
-public class ProgressInfo implements Serializable
-{
+class progress_info {
+public:
+    using inet_address = gms::inet_address;
     /**
      * Direction of the stream.
      */
-    public static enum Direction
-    {
-        OUT(0),
-        IN(1);
+    enum class direction { OUT, IN };
 
-        public final byte code;
+    inet_address peer;
+    int session_index;
+    sstring file_name;
+    direction dir;
+    long current_bytes;
+    long total_bytes;
 
-        private Direction(int code)
-        {
-            this.code = (byte) code;
-        }
-
-        public static Direction fromByte(byte direction)
-        {
-            return direction == 0 ? OUT : IN;
-        }
-    }
-
-    public final InetAddress peer;
-    public final int sessionIndex;
-    public final String fileName;
-    public final Direction direction;
-    public final long currentBytes;
-    public final long totalBytes;
-
-    public ProgressInfo(InetAddress peer, int sessionIndex, String fileName, Direction direction, long currentBytes, long totalBytes)
-    {
-        assert totalBytes > 0;
-
-        this.peer = peer;
-        this.sessionIndex = sessionIndex;
-        this.fileName = fileName;
-        this.direction = direction;
-        this.currentBytes = currentBytes;
-        this.totalBytes = totalBytes;
+    progress_info(inet_address _peer, int _session_index, sstring _file_name, direction _dir, long _current_bytes, long _total_bytes)
+        : peer(_peer)
+        , session_index(_session_index)
+        , file_name(_file_name)
+        , dir(_dir)
+        , current_bytes(_current_bytes)
+        , total_bytes(_total_bytes) {
+        assert(_total_bytes > 0);
     }
 
     /**
      * @return true if file transfer is completed
      */
-    public boolean isCompleted()
-    {
-        return currentBytes >= totalBytes;
+    bool is_completed() {
+        return current_bytes >= total_bytes;
     }
 
+#if 0
     /**
      * ProgressInfo is considered to be equal only when all attributes except currentBytes are equal.
      */
@@ -99,16 +86,8 @@ public class ProgressInfo implements Serializable
         return Objects.hashCode(peer, sessionIndex, fileName, direction, totalBytes);
     }
 
-    @Override
-    public String toString()
-    {
-        StringBuilder sb = new StringBuilder(fileName);
-        sb.append(" ").append(currentBytes);
-        sb.append("/").append(totalBytes).append(" bytes");
-        sb.append("(").append(currentBytes*100/totalBytes).append("%) ");
-        sb.append(direction == Direction.OUT ? "sent to " : "received from ");
-        sb.append("idx:").append(sessionIndex);
-        sb.append(peer);
-        return sb.toString();
-    }
-}
+#endif
+    friend std::ostream& operator<<(std::ostream& os, const progress_info& x);
+};
+
+} // namespace streaming
