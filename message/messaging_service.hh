@@ -320,7 +320,11 @@ public:
         return _listen_address;
     }
     future<> stop() {
-        return make_ready_future<>();
+        return when_all(_server.stop(),
+            parallel_for_each(_clients, [](std::pair<const shard_id, shard_info>& c) {
+                return c.second.rpc_client->stop();
+            })
+        ).discard_result();
     }
 
     static auto no_wait() {
