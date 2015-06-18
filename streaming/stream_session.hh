@@ -96,6 +96,10 @@ private:
     using messaging_verb = net::messaging_verb;
     using messaging_service = net::messaging_service;
     using shard_id = net::messaging_service::shard_id;
+    using inet_address = gms::inet_address;
+    using endpoint_state = gms::endpoint_state;
+    using application_state = gms::application_state;
+    using versioned_value = gms::versioned_value;
     net::messaging_service& ms() {
         return net::get_local_messaging_service();
     }
@@ -627,23 +631,22 @@ public:
         transfers.remove(completedTask.cfId);
         maybeCompleted();
     }
+#endif
 
-    public void onJoin(InetAddress endpoint, EndpointState epState) {}
-    public void beforeChange(InetAddress endpoint, EndpointState currentState, ApplicationState newStateKey, VersionedValue newValue) {}
-    public void onChange(InetAddress endpoint, ApplicationState state, VersionedValue value) {}
-    public void onAlive(InetAddress endpoint, EndpointState state) {}
-    public void onDead(InetAddress endpoint, EndpointState state) {}
-
-    public void onRemove(InetAddress endpoint)
-    {
-        closeSession(State.FAILED);
+public:
+    virtual void on_join(inet_address endpoint, endpoint_state ep_state) override {}
+    virtual void before_change(inet_address endpoint, endpoint_state current_state, application_state new_state_key, versioned_value new_value) override {}
+    virtual void on_change(inet_address endpoint, application_state state, versioned_value value) override {}
+    virtual void on_alive(inet_address endpoint, endpoint_state state) override {}
+    virtual void on_dead(inet_address endpoint, endpoint_state state) override {}
+    virtual void on_remove(inet_address endpoint) override {
+        //closeSession(State.FAILED);
+    }
+    virtual void on_restart(inet_address endpoint, endpoint_state ep_state) override {
+        //closeSession(State.FAILED);
     }
 
-    public void onRestart(InetAddress endpoint, EndpointState epState)
-    {
-        closeSession(State.FAILED);
-    }
-
+#if 0
     private boolean maybeCompleted()
     {
         boolean completed = receivers.isEmpty() && transfers.isEmpty();
