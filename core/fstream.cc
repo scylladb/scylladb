@@ -87,10 +87,9 @@ class file_data_sink_impl : public data_sink_impl {
 public:
     file_data_sink_impl(lw_shared_ptr<file> f, file_output_stream_options options)
             : _file(std::move(f)), _options(options) {}
-    future<> put(net::packet data) { return make_ready_future<>(); }
+    future<> put(net::packet data) { abort(); }
     virtual temporary_buffer<char> allocate_buffer(size_t size) override {
-        // buffers to dma_write must be aligned to 512 bytes.
-        return temporary_buffer<char>::aligned(512, size);
+        return temporary_buffer<char>::aligned(file::dma_alignment, size);
     }
     virtual future<> put(temporary_buffer<char> buf) override {
         bool truncate = false;
@@ -99,10 +98,10 @@ public:
         auto p = static_cast<const char*>(buf.get());
         size_t buf_size = buf.size();
 
-        if ((buf.size() & 511) != 0) {
+        if ((buf.size() & (file::dma_alignment - 1)) != 0) {
             // If buf size isn't aligned, copy its content into a new aligned buf.
             // This should only happen when the user calls output_stream::flush().
-            auto tmp = allocate_buffer(align_up(buf.size(), 512UL));
+            auto tmp = allocate_buffer(align_up(buf.size(), file::dma_alignment));
             ::memcpy(tmp.get_write(), buf.get(), buf.size());
             buf = std::move(tmp);
             p = buf.get();

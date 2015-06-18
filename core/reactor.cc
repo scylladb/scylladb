@@ -1917,6 +1917,18 @@ future<> make_directory(sstring name) {
     return engine().make_directory(std::move(name));
 }
 
+future<> touch_directory(sstring name) {
+    return make_directory(name).then_wrapped([] (future<> f) {
+        try {
+            f.get();
+        } catch (std::system_error& e) {
+            if (e.code() != std::error_code(EEXIST, std::system_category())) {
+                throw;
+            }
+        }
+    });
+}
+
 future<> remove_file(sstring pathname) {
     return engine().remove_file(std::move(pathname));
 }

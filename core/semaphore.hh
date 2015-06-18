@@ -23,7 +23,7 @@
 #define CORE_SEMAPHORE_HH_
 
 #include "future.hh"
-#include "circular_buffer.hh"
+#include <list>
 #include <stdexcept>
 #include "timer.hh"
 
@@ -50,7 +50,7 @@ private:
         timer<> tr;
         entry(promise<>&& pr_, size_t nr_) : pr(std::move(pr_)), nr(nr_) {}
     };
-    circular_buffer<entry> _wait_list;
+    std::list<entry> _wait_list;
 public:
     semaphore(size_t count = 1) : _count(count) {}
     future<> wait(size_t nr = 1) {
