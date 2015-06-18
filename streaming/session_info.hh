@@ -14,58 +14,55 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.io.Serializable;
-import java.net.InetAddress;
-import java.util.Collection;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+#pragma once
 
-import com.google.common.base.Predicate;
-import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
+#include "gms/inet_address.hh"
+#include "streaming/stream_summary.hh"
+#include "streaming/stream_session.hh"
+#include "streaming/progress_info.hh"
+#include <vector>
+
+namespace streaming {
 
 /**
  * Stream session info.
  */
-public final class SessionInfo implements Serializable
-{
-    public final InetAddress peer;
-    public final int sessionIndex;
-    public final InetAddress connecting;
+class session_info {
+public:
+    using inet_address = gms::inet_address;
+    inet_address peer;
+    int session_index;
+    inet_address connecting;
     /** Immutable collection of receiving summaries */
-    public final Collection<StreamSummary> receivingSummaries;
+    std::vector<stream_summary> receiving_summaries;
     /** Immutable collection of sending summaries*/
-    public final Collection<StreamSummary> sendingSummaries;
+    std::vector<stream_summary> sending_summaries;
     /** Current session state */
-    public final StreamSession.State state;
+    stream_session::state state;
 
-    private final Map<String, ProgressInfo> receivingFiles;
-    private final Map<String, ProgressInfo> sendingFiles;
+    std::map<sstring, progress_info> receiving_files;
+    std::map<sstring, progress_info> sending_files;
 
-    public SessionInfo(InetAddress peer,
-                       int sessionIndex,
-                       InetAddress connecting,
-                       Collection<StreamSummary> receivingSummaries,
-                       Collection<StreamSummary> sendingSummaries,
-                       StreamSession.State state)
-    {
-        this.peer = peer;
-        this.sessionIndex = sessionIndex;
-        this.connecting = connecting;
-        this.receivingSummaries = ImmutableSet.copyOf(receivingSummaries);
-        this.sendingSummaries = ImmutableSet.copyOf(sendingSummaries);
-        this.receivingFiles = new ConcurrentHashMap<>();
-        this.sendingFiles = new ConcurrentHashMap<>();
-        this.state = state;
+    session_info(inet_address peer_, int session_index_, inet_address connecting_,
+                 std::vector<stream_summary> receiving_summaries_,
+                 std::vector<stream_summary> sending_summaries_,
+                 stream_session::state state_)
+        : peer(peer_)
+        , connecting(connecting_)
+        , receiving_summaries(std::move(receiving_summaries_))
+        , sending_summaries(std::move(sending_summaries_))
+        , state(state_) {
     }
 
-    public boolean isFailed()
-    {
-        return state == StreamSession.State.FAILED;
+    bool is_failed() {
+        return state == stream_session::state::FAILED;
     }
+#if 0
 
     /**
      * Update progress of receiving/sending file.
@@ -190,4 +187,7 @@ public final class SessionInfo implements Serializable
         });
         return Iterables.size(completed);
     }
-}
+#endif
+};
+
+} // namespace streaming
