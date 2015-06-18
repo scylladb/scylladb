@@ -889,12 +889,12 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
     });
 }
 
-SEASTAR_TEST_CASE(datafile_generation_13) {
-    return test_setup::do_with_test_directory([] {
+static future<> sstable_compression_test(compressor c, unsigned generation) {
+    return test_setup::do_with_test_directory([c, generation] {
         auto& cs = *complex_schema();
         auto s = make_lw_shared(schema(cs));
-        // NOTE: set lz4 as compressor algorithm to schema.
-        s->set_compressor(compressor::lz4);
+        // NOTE: set a given compressor algorithm to schema.
+        s->set_compressor(c);
 
         auto mtp = make_shared<memtable>(s);
 
@@ -907,9 +907,9 @@ SEASTAR_TEST_CASE(datafile_generation_13) {
         m.partition().apply_delete(*s, cp, tomb);
         mtp->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 13, la, big);
-        return sst->write_components(*mtp).then([s, tomb] {
-            return reusable_sst("tests/urchin/sstables/tests-temporary", 13).then([s, tomb] (auto sstp) mutable {
+        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", generation, la, big);
+        return sst->write_components(*mtp).then([s, tomb, generation] {
+            return reusable_sst("tests/urchin/sstables/tests-temporary", generation).then([s, tomb] (auto sstp) mutable {
                 return do_with(sstables::key("key1"), [sstp, s, tomb] (auto& key) {
                     return sstp->read_row(s, key).then([sstp, s, tomb] (auto mutation) {
                         auto& mp = mutation->partition();
@@ -924,7 +924,19 @@ SEASTAR_TEST_CASE(datafile_generation_13) {
     });
 }
 
+SEASTAR_TEST_CASE(datafile_generation_13) {
+    return sstable_compression_test(compressor::lz4, 13);
+}
+
 SEASTAR_TEST_CASE(datafile_generation_14) {
+    return sstable_compression_test(compressor::snappy, 14);
+}
+
+SEASTAR_TEST_CASE(datafile_generation_15) {
+    return sstable_compression_test(compressor::deflate, 15);
+}
+
+SEASTAR_TEST_CASE(datafile_generation_16) {
     return test_setup::do_with_test_directory([] {
         auto s = uncompressed_schema();
 
@@ -940,12 +952,13 @@ SEASTAR_TEST_CASE(datafile_generation_14) {
             mtp->apply(std::move(m));
         }
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 14, la, big);
+        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 16, la, big);
         return sst->write_components(*mtp).then([s] {
-            return reusable_sst("tests/urchin/sstables/tests-temporary", 14).then([] (auto s) {
+            return reusable_sst("tests/urchin/sstables/tests-temporary", 16).then([] (auto s) {
                 // Not crashing is enough
                 return make_ready_future<>();
             });
         }).then([sst, mtp] {});
     });
 }
+
