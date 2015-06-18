@@ -2,6 +2,7 @@
 
 #include <experimental/optional>
 #include "keys.hh"
+#include "dht/i_partitioner.hh"
 #include "enum_set.hh"
 
 namespace query {
@@ -20,7 +21,8 @@ public:
             : _value(std::move(value))
             , _inclusive(inclusive)
         { }
-        const T& value() const { return _value; }
+        const T& value() const & { return _value; }
+        T&& value() && { return std::move(_value); }
         bool is_inclusive() const { return _inclusive; }
     };
 private:
@@ -28,10 +30,10 @@ private:
     optional<bound> _end;
     bool _singular;
 public:
-    range(optional<bound> start, optional<bound> end)
+    range(optional<bound> start, optional<bound> end, bool singular = false)
         : _start(std::move(start))
         , _end(std::move(end))
-        , _singular(false)
+        , _singular(singular)
     { }
     range(T value)
         : _start(bound(std::move(value), true))
@@ -81,6 +83,21 @@ public:
         return _end;
     }
 
+    // Transforms this range into a new range of a different value type
+    // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
+    template<typename U, typename Transformer>
+    range<U> transform(Transformer&& transformer) && {
+        auto t = [&transformer] (std::experimental::optional<bound>&& b)
+            -> std::experimental::optional<typename query::range<U>::bound>
+        {
+            if (!b) {
+                return {};
+            }
+            return { { transformer(std::move(*b).value()), b->is_inclusive() } };
+        };
+        return range<U>(t(std::move(_start)), t(std::move(_end)), _singular);
+    }
+
     template<typename U>
     friend std::ostream& operator<<(std::ostream& out, const range<U>& r);
 };
@@ -116,8 +133,59 @@ std::ostream& operator<<(std::ostream& out, const range<U>& r) {
     return out;
 }
 
-using partition_range = range<partition_key>;
+//
+// Represents position in the ring of partitons, where partitions are ordered
+// according to decorated_key ordering (first by token, then by key value).
+//
+// The 'key' part is optional. When it's absent, this object selects all
+// partitions which share given token. When 'key' is present, position is
+// further narrowed down to a partition with given key value among all
+// partitions which share given token.
+//
+// Maps to org.apache.cassandra.db.RowPosition and its derivatives in Origin.
+// Range bound intricacies are handled separately, by wrapping range<>. This
+// allows us to devirtualize this.
+//
+class ring_position {
+    dht::token _token;
+    std::experimental::optional<partition_key> _key;
+public:
+    ring_position(dht::token token) : _token(std::move(token)) {}
+
+    ring_position(dht::token token, partition_key key)
+        : _token(std::move(token))
+        , _key(std::experimental::make_optional(std::move(key)))
+    { }
+
+    ring_position(const dht::decorated_key& dk)
+        : _token(dk._token)
+        , _key(std::experimental::make_optional(dk._key))
+    { }
+
+    const dht::token& token() const {
+        return _token;
+    }
+
+    const std::experimental::optional<partition_key>& key() const {
+        return _key;
+    }
+
+    bool has_key() const {
+        return bool(_key);
+    }
+
+    // Call only when has_key()
+    dht::decorated_key as_decorated_key() const {
+        return { _token, *_key };
+    }
+
+    friend std::ostream& operator<<(std::ostream&, const ring_position&);
+};
+
+using partition_range = range<ring_position>;
 using clustering_range = range<clustering_key_prefix>;
+
+extern const partition_range full_partition_range;
 
 // Specifies subset of rows, columns and cell attributes to be returned in a query.
 // Can be accessed across cores.

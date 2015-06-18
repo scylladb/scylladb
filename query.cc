@@ -8,6 +8,8 @@
 
 namespace query {
 
+const partition_range full_partition_range = partition_range::make_open_ended_both_sides();
+
 std::ostream& operator<<(std::ostream& out, const partition_slice& ps) {
     return out << "{"
         << "regular_cols=[" << join(", ", ps.regular_columns) << "]"
@@ -22,6 +24,14 @@ std::ostream& operator<<(std::ostream& out, const read_command& r) {
         << "cf_id=" << r.cf_id
         << ", slice=" << r.slice << ""
         << ", limit=" << r.row_limit << "}";
+}
+
+std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
+    out << "{" << pos.token();
+    if (pos.has_key()) {
+        out << ", " << *pos.key();
+    }
+    return out << "}";
 }
 
 }

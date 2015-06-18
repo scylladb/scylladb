@@ -41,6 +41,7 @@
 #include "mutation.hh"
 #include "memtable.hh"
 #include <list>
+#include "mutation_reader.hh"
 
 class frozen_mutation;
 
@@ -60,6 +61,9 @@ class config;
 
 class replay_position_reordered_exception : public std::exception {};
 
+using memtable_list = std::vector<lw_shared_ptr<memtable>>;
+using sstable_list = std::map<unsigned long, lw_shared_ptr<sstables::sstable>>;
+
 class column_family {
 public:
     struct config {
@@ -70,10 +74,8 @@ public:
 private:
     schema_ptr _schema;
     config _config;
-    using memtable_list = std::vector<lw_shared_ptr<memtable>>;
     lw_shared_ptr<memtable_list> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
-    using sstable_list = std::map<unsigned long, lw_shared_ptr<sstables::sstable>>;
     lw_shared_ptr<sstable_list> _sstables;
     unsigned _sstable_generation = 1;
     unsigned _mutation_count = 0;
@@ -83,7 +85,18 @@ private:
     void add_memtable();
     memtable& active_memtable() { return *_memtables->back(); }
     struct merge_comparator;
+private:
+    // Creates a mutation reader which covers sstables.
+    // Caller needs to ensure that column_family remains live (FIXME: relax this).
+    // The 'range' parameter must be live as long as the reader is used.
+    mutation_reader make_sstable_reader(const query::partition_range& range) const;
 public:
+    // Creates a mutation reader which covers all data sources for this column family.
+    // Caller needs to ensure that column_family remains live (FIXME: relax this).
+    // Note: for data queries use query() instead.
+    // The 'range' parameter must be live as long as the reader is used.
+    mutation_reader make_reader(const query::partition_range& range = query::full_partition_range) const;
+
     // Queries can be satisfied from multiple data sources, so they are returned
     // as temporaries.
     //

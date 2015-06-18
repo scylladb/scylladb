@@ -61,44 +61,94 @@ memtable::find_partition(const dht::decorated_key& key) const {
     return i == partitions.end() ? const_mutation_partition_ptr() : std::make_unique<const mutation_partition>(i->second);
 }
 
-future<column_family::const_mutation_partition_ptr>
-column_family::find_partition(const dht::decorated_key& key) const {
-    // FIXME: optimize for 0 or 1 entries found case
-    struct find_state {
-        sstables::key key;
-        mutation_partition ret;
-        bool any = false;
-        lw_shared_ptr<sstable_list> sstables; // protect from concurrent sstable removal
-        find_state(const column_family& cf, const dht::decorated_key& key)
-                : key(sstables::key::from_partition_key(*cf._schema, key._key))
-                , ret(cf._schema)
-                , sstables(cf._sstables) {
+class range_sstable_reader {
+    dht::token _min_token;
+    dht::token _max_token;
+    lw_shared_ptr<sstable_list> _sstables;
+    mutation_reader _reader;
+public:
+    range_sstable_reader(schema_ptr s, lw_shared_ptr<sstable_list> sstables, const query::partition_range& pr)
+        : _min_token(dht::minimum_token())
+        , _max_token(dht::maximum_token())
+        , _sstables(std::move(sstables))
+    {
+        if (!pr.is_full()) {
+            // FIXME: make sstable::read_range_rows() accept query::partition_range
+            fail(unimplemented::cause::RANGE_QUERIES);
         }
-    };
-    find_state fs(*this, key);
-    auto& ret = fs.ret;
-    bool& any = fs.any;
-    for (auto&& mtp : *_memtables) {
-        auto mp = mtp->find_partition(key);
-        if (mp) {
-            ret.apply(*_schema, *mp);
-            any = true;
+
+        std::vector<mutation_reader> readers;
+        for (const lw_shared_ptr<sstables::sstable>& sst : *_sstables | boost::adaptors::map_values) {
+            // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
+            readers.emplace_back([r = make_lw_shared(sst->read_range_rows(s, _min_token, _max_token))] () mutable { return r->read(); });
         }
+        _reader = make_combined_reader(std::move(readers));
     }
-    return do_with(std::move(fs), [this] (find_state& fs) {
-        return parallel_for_each(*fs.sstables | boost::adaptors::map_values, [this, &fs] (lw_shared_ptr<sstables::sstable> sstable) {
-            return sstable->read_row(_schema, fs.key).then([&fs] (mutation_opt mo) {
+
+    range_sstable_reader(range_sstable_reader&&) = delete; // reader takes reference to member fields
+
+    future<mutation_opt> operator()() {
+        return _reader();
+    }
+};
+
+class single_key_sstable_reader {
+    schema_ptr _schema;
+    sstables::key _key;
+    mutation_opt _m;
+    bool _done = false;
+    lw_shared_ptr<sstable_list> _sstables;
+public:
+    single_key_sstable_reader(schema_ptr schema, lw_shared_ptr<sstable_list> sstables, const partition_key& key)
+        : _schema(std::move(schema))
+        , _key(sstables::key::from_partition_key(*_schema, key))
+        , _sstables(std::move(sstables))
+    { }
+
+    future<mutation_opt> operator()() {
+        if (_done) {
+            return make_ready_future<mutation_opt>();
+        }
+        return parallel_for_each(*_sstables | boost::adaptors::map_values, [this](const lw_shared_ptr<sstables::sstable>& sstable) {
+            return sstable->read_row(_schema, _key).then([this](mutation_opt mo) {
                 if (mo) {
-                    fs.ret.apply(*mo->schema(), mo->partition());
-                    fs.any = true;
+                    if (!_m) {
+                        _m = std::move(mo);
+                    } else {
+                        _m->partition().apply(*mo->schema(), mo->partition());
+                    }
                 }
             });
-        }).then([&fs] {
-            if (fs.any) {
-                return make_ready_future<const_mutation_partition_ptr>(std::make_unique<mutation_partition>(std::move(fs.ret)));
-            } else {
-                return make_ready_future<const_mutation_partition_ptr>();
-            }
+        }).then([this] {
+            _done = true;
+            return std::move(_m);
+        });
+    }
+};
+
+mutation_reader
+column_family::make_sstable_reader(const query::partition_range& pr) const {
+    if (pr.is_singular() && pr.start_value().has_key()) {
+        return single_key_sstable_reader(_schema, _sstables, *pr.start_value().key());
+    } else {
+        // range_sstable_reader is not movable so we need to wrap it
+        return [r = make_lw_shared<range_sstable_reader>(_schema, _sstables, pr)] () mutable {
+            return (*r)();
+        };
+    }
+}
+
+// Exposed for testing, not performance critical.
+future<column_family::const_mutation_partition_ptr>
+column_family::find_partition(const dht::decorated_key& key) const {
+    return do_with(query::partition_range::make_singular(key), [this] (auto& range) {
+        return do_with(this->make_reader(range), [] (mutation_reader& reader) {
+            return reader().then([] (mutation_opt&& mo) -> std::unique_ptr<const mutation_partition> {
+                if (!mo) {
+                    return {};
+                }
+                return std::make_unique<const mutation_partition>(std::move(mo->partition()));
+            });
         });
     });
 }
@@ -158,15 +208,36 @@ struct column_family::merge_comparator {
     }
 };
 
-// Convert a memtable to a subscription<mutation>, which is what's expected by
-// mutation_cursor (and provided by sstables).
+boost::iterator_range<memtable::partitions_type::const_iterator>
+memtable::slice(const query::partition_range& range) const {
+    if (range.is_singular()) {
+        const query::ring_position& pos = range.start_value();
+
+        if (!pos.has_key()) {
+            fail(unimplemented::cause::RANGE_QUERIES);
+        }
+
+        auto i = partitions.find(pos.as_decorated_key());
+        if (i != partitions.end()) {
+            return boost::make_iterator_range(i, std::next(i));
+        } else {
+            return boost::make_iterator_range(i, i);
+        }
+    } else {
+        if (!range.is_full()) {
+            fail(unimplemented::cause::RANGE_QUERIES);
+        }
+
+        return boost::make_iterator_range(partitions.begin(), partitions.end());
+    }
+}
+
 mutation_reader
-memtable::make_reader() const {
-    auto begin = all_partitions().begin();
-    auto end = all_partitions().end();
-    return [begin, end, s = schema()] () mutable {
+memtable::make_reader(const query::partition_range& range) const {
+    auto r = slice(range);
+    return [begin = r.begin(), end = r.end(), self = shared_from_this()] () mutable {
         if (begin != end) {
-            auto m = mutation(s, begin->first, begin->second);
+            auto m = mutation(self->_schema, begin->first, begin->second);
             ++begin;
             return make_ready_future<mutation_opt>(std::experimental::make_optional(std::move(m)));
         } else {
@@ -175,12 +246,17 @@ memtable::make_reader() const {
     };
 }
 
-// Convert an sstable to a mutation_reader
 mutation_reader
-make_sstable_reader(sstables::sstable& sst, schema_ptr schema) {
-    return [reader = make_lw_shared(sst.read_range_rows(std::move(schema), dht::minimum_token(), dht::maximum_token()))] () mutable {
-        return reader->read();
-    };
+column_family::make_reader(const query::partition_range& range) const {
+    std::vector<mutation_reader> readers;
+    readers.reserve(_memtables->size() + _sstables->size());
+
+    for (auto&& mt : *_memtables) {
+        readers.emplace_back(mt->make_reader(range));
+    }
+
+    readers.emplace_back(make_sstable_reader(range));
+    return make_combined_reader(std::move(readers));
 }
 
 template <typename Func>
@@ -188,94 +264,31 @@ future<bool>
 column_family::for_all_partitions(Func&& func) const {
     static_assert(std::is_same<bool, std::result_of_t<Func(const dht::decorated_key&, const mutation_partition&)>>::value,
                   "bad Func signature");
-    // The plan here is to use a heap structure to sort incoming
-    // mutations from many mutation_queues, grab them in turn, and
-    // either merge them (if the keys are the same), or pass them
-    // to func (if not).
+
     struct iteration_state {
-        std::vector<mutation_reader> tables;
-        struct mutation_and_reader {
-            mutation m;
-            mutation_reader* read;
-        };
-        std::vector<mutation_and_reader> ptables;
-        // comparison function for std::make_heap()/std::push_heap()
-        static bool heap_compare(const mutation_and_reader& a, const mutation_and_reader& b) {
-            auto&& s = a.m.schema();
-            // order of comparison is inverted, because heaps produce greatest value first
-            return b.m.decorated_key().less_compare(*s, a.m.decorated_key());
-        }
-        // mutation being merged from ptables
-        std::experimental::optional<mutation> current;
-        lw_shared_ptr<memtable_list> memtables;
-        lw_shared_ptr<sstable_list> sstables;
+        mutation_reader reader;
         Func func;
         bool ok = true;
-        bool done() const { return !ok || ptables.empty(); }
+        bool empty = false;
+    public:
+        bool done() const { return !ok || empty; }
         iteration_state(const column_family& cf, Func&& func)
-                : memtables(cf._memtables), sstables(cf._sstables), func(std::move(func)) {
-        }
+            : reader(cf.make_reader())
+            , func(std::move(func))
+        { }
     };
-    iteration_state is(*this, std::move(func));
-    // Can't use memtable::partitions_type::value_type due do constness
-    return do_with(std::move(is), [this] (iteration_state& is) {
-        for (auto mtp : *is.memtables) {
-            if (!mtp->empty()) {
-                is.tables.emplace_back(mtp->make_reader());
-            }
-        }
-        for (auto sstp : *is.sstables | boost::adaptors::map_values) {
-            is.tables.emplace_back(make_sstable_reader(*sstp, _schema));
-        }
-        // Get first element from mutation_cursor, if any, and set up ptables
-        return parallel_for_each(is.tables, [this, &is] (mutation_reader& mr) {
-            return mr().then([this, &is, &mr] (mutation_opt&& m) {
-                if (m) {
-                    is.ptables.push_back({std::move(*m), &mr});
-                }
-            });
-        }).then([&is, this] {
-            boost::range::make_heap(is.ptables, &iteration_state::heap_compare);
-            return do_until(std::bind(&iteration_state::done, &is), [&is, this] {
-                if (!is.ptables.empty()) {
-                    boost::range::pop_heap(is.ptables, &iteration_state::heap_compare);
-                    auto& candidate_queue = is.ptables.back();
-                    // Note: heap is now in invalid state, waiting for pop_back or push_heap,
-                    //       see below.
-                    mutation& m = candidate_queue.m;
-                    // FIXME: handle different schemas
-                    if (is.current && !is.current->decorated_key().equal(*m.schema(), m.decorated_key())) {
-                        // key has changed, so emit accumukated mutation
-                        is.ok = is.func(is.current->decorated_key(), is.current->partition());
-                        is.current = std::experimental::nullopt;
-                    }
-                    if (!is.current) {
-                        is.current = std::move(m);
-                    } else {
-                        is.current->partition().apply(*m.schema(), m.partition());
-                    }
-                    return (*candidate_queue.read)().then([&is] (mutation_opt&& more) {
-                        // Restore heap to valid state
-                        if (!more) {
-                            is.ptables.pop_back();
-                        } else {
-                            is.ptables.back().m = std::move(*more);
-                            boost::range::push_heap(is.ptables, &iteration_state::heap_compare);
-                        }
-                    });
+
+    return do_with(iteration_state(*this, std::move(func)), [] (iteration_state& is) {
+        return do_until([&is] { return is.done(); }, [&is] {
+            return is.reader().then([&is](mutation_opt&& mo) {
+                if (!mo) {
+                    is.empty = true;
                 } else {
-                    return make_ready_future<>();
+                    is.ok = is.func(mo->decorated_key(), mo->partition());
                 }
             });
-        }).then([this, &is] {
-            auto& ok = is.ok;
-            auto& current = is.current;
-            auto& func = is.func;
-            if (ok && current) {
-                ok = func(std::move(current->decorated_key()), std::move(current->partition()));
-                current = std::experimental::nullopt;
-            }
-            return make_ready_future<bool>(ok);
+        }).then([&is] {
+            return is.ok;
         });
     });
 }
@@ -864,8 +877,10 @@ struct query_state {
     const query::read_command& cmd;
     query::result::builder builder;
     uint32_t limit;
+    bool range_empty;
     std::vector<query::partition_range>::const_iterator current_partition_range;
     std::vector<query::partition_range>::const_iterator range_end;
+    mutation_reader reader;
     bool done() const {
         return !limit || current_partition_range == range_end;
     }
@@ -875,39 +890,21 @@ future<lw_shared_ptr<query::result>>
 column_family::query(const query::read_command& cmd, const std::vector<query::partition_range>& partition_ranges) const {
     return do_with(query_state(cmd, partition_ranges), [this] (query_state& qs) {
         return do_until(std::bind(&query_state::done, &qs), [this, &qs] {
-            auto& cmd = qs.cmd;
-            auto& builder = qs.builder;
-            auto& limit = qs.limit;
             auto&& range = *qs.current_partition_range++;
-            if (range.is_singular()) {
-                auto& key = range.start_value();
-                return find_partition_slow(key).then([this, &qs, &key] (auto partition) {
-                    auto& cmd = qs.cmd;
-                    auto& builder = qs.builder;
-                    auto& limit = qs.limit;
-                    if (!partition) {
-                        return;
+            qs.reader = make_reader(range);
+            qs.range_empty = false;
+            return do_until([&qs] { return !qs.limit || qs.range_empty; }, [this, &qs] {
+                return qs.reader().then([this, &qs](mutation_opt mo) {
+                    if (mo) {
+                        auto p_builder = qs.builder.add_partition(mo->key());
+                        mo->partition().query(*_schema, qs.cmd.slice, qs.limit, p_builder);
+                        p_builder.finish();
+                        qs.limit -= p_builder.row_count();
+                    } else {
+                        qs.range_empty = true;
                     }
-                    auto p_builder = builder.add_partition(key);
-                    partition->query(*_schema, cmd.slice, limit, p_builder);
-                    p_builder.finish();
-                    limit -= p_builder.row_count();
                 });
-            } else if (range.is_full()) {
-                return for_all_partitions([&] (const dht::decorated_key& dk, const mutation_partition& partition) {
-                    auto p_builder = builder.add_partition(dk._key);
-                    partition.query(*_schema, cmd.slice, limit, p_builder);
-                    p_builder.finish();
-                    limit -= p_builder.row_count();
-                    if (limit == 0) {
-                        return false;
-                    }
-                    return true;
-                }).discard_result();
-            } else {
-                fail(unimplemented::cause::RANGE_QUERIES);
-            }
-            return make_ready_future<>();
+            });
         }).then([&qs] {
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));
@@ -924,7 +921,7 @@ database::query(const query::read_command& cmd, const std::vector<query::partiti
     try {
         column_family& cf = find_column_family(cmd.cf_id);
         return cf.query(cmd, ranges);
-    } catch (...) {
+    } catch (const no_such_column_family&) {
         // FIXME: load from sstables
         return make_empty();
     }
