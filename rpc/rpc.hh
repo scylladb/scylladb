@@ -22,6 +22,7 @@
 #pragma once
 
 #include <unordered_map>
+#include <unordered_set>
 #include "core/future.hh"
 #include "net/api.hh"
 #include "core/reactor.hh"
@@ -61,6 +62,7 @@ class protocol {
         future<> _output_ready = make_ready_future<>();
         bool _error = false;
         protocol& _proto;
+        promise<> _stopped;
     public:
         connection(connected_socket&& fd, protocol& proto) : _fd(std::move(fd)), _read_buf(_fd.input()), _write_buf(_fd.output()), _proto(proto) {}
         connection(protocol& proto) : _proto(proto) {}
@@ -72,13 +74,16 @@ class protocol {
         bool error() { return _error; }
         auto& serializer() { return _proto._serializer; }
         auto& get_protocol() { return _proto; }
+        future<> stop() {
+            _fd.shutdown_input();
+            _fd.shutdown_output();
+            return _stopped.get_future();
+        }
     };
     friend connection;
 
 public:
     class server {
-    private:
-        protocol& _proto;
     public:
         class connection : public protocol::connection, public enable_lw_shared_from_this<connection> {
             server& _server;
@@ -89,8 +94,24 @@ public:
             future<> process();
             auto& info() { return _info; }
         };
+    private:
+        protocol& _proto;
+        server_socket _ss;
+        std::unordered_set<connection*> _conns;
+        bool _stopping = false;
+        promise<> _ss_stopped;
+    public:
         server(protocol& proto, ipv4_addr addr);
-        void accept(server_socket&& ss);
+        void accept();
+        future<> stop() {
+            _stopping = true; // prevents closed connections to be deleted from _conns
+            _ss.abort_accept();
+            return when_all(_ss_stopped.get_future(),
+                parallel_for_each(_conns, [] (connection* conn) {
+                    return conn->stop();
+                })
+            ).discard_result();
+    }
         friend connection;
     };
 

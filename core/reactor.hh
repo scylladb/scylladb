@@ -270,10 +270,16 @@ bool operator==(const ::sockaddr_in a, const ::sockaddr_in b);
 class server_socket {
     std::unique_ptr<server_socket_impl> _ssi;
 public:
+    /// Constructs a \c server_socket not corresponding to a connection
+    server_socket() {}
     /// \cond internal
     explicit server_socket(std::unique_ptr<server_socket_impl> ssi)
         : _ssi(std::move(ssi)) {}
     /// \endcond
+    /// Moves a \c server_socket object.
+    server_socket(server_socket&& ss) = default;
+    /// Move-assigns a \c server_socket object.
+    server_socket& operator=(server_socket&& cs) = default;
 
     /// Accepts the next connection to successfully connect to this socket.
     ///

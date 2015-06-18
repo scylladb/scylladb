@@ -532,16 +532,25 @@ template<typename Serializer, typename MsgType>
 protocol<Serializer, MsgType>::server::server(protocol<Serializer, MsgType>& proto, ipv4_addr addr) : _proto(proto) {
     listen_options lo;
     lo.reuse_address = true;
-    accept(engine().listen(make_ipv4_address(addr), lo));
+    _ss = engine().listen(make_ipv4_address(addr), lo);
+    accept();
 }
 
 template<typename Serializer, typename MsgType>
-void protocol<Serializer, MsgType>::server::accept(server_socket&& ss) {
-    keep_doing([this, ss = std::move(ss)] () mutable {
-        return ss.accept().then([this] (connected_socket fd, socket_address addr) mutable {
+void protocol<Serializer, MsgType>::server::accept() {
+    keep_doing([this] () mutable {
+        return _ss.accept().then([this] (connected_socket fd, socket_address addr) mutable {
             auto conn = make_lw_shared<connection>(*this, std::move(fd), std::move(addr), _proto);
+            _conns.insert(conn.get());
             conn->process();
         });
+    }).then_wrapped([this] (future<>&& f){
+        try {
+            f.get();
+            assert(false);
+        } catch (...) {
+            _ss_stopped.set_value();
+        }
     });
 }
 
@@ -563,8 +572,14 @@ future<> protocol<Serializer, MsgType>::server::connection::process() {
                 return make_ready_future<>();
             }
         });
-    }).finally([conn_ptr = this->shared_from_this()] () {
+    }).finally([this, conn_ptr = this->shared_from_this()] () {
         // hold onto connection pointer until do_until() exists
+        if (!this->_server._stopping) {
+            // if server us stopping to not remove connection
+            // since it may invalidate _conns iterators
+            this->_server._conns.erase(this);
+        }
+        this->_stopped.set_value();
     });
 }
 
@@ -594,6 +609,7 @@ protocol<Serializer, MsgType>::client::client(protocol<Serializer, MsgType>& pro
             this->_error = true;
             this->_write_buf.close();
             _outstanding.clear();
+            this->_stopped.set_value();
         });
     });
 }
