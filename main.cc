@@ -14,6 +14,7 @@
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
 #include "dns.hh"
+#include <cstdio>
 
 namespace bpo = boost::program_options;
 
@@ -26,6 +27,7 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
 }
 
 int main(int ac, char** av) {
+    std::setvbuf(stdout, nullptr, _IOLBF, 1000);
     app_template app;
     auto opt_add = app.add_options();
 
