@@ -14,39 +14,40 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.atomic.AtomicInteger;
+#pragma once
 
-import org.apache.cassandra.concurrent.NamedThreadFactory;
-import org.apache.cassandra.io.sstable.format.SSTableReader;
-import org.apache.cassandra.streaming.messages.OutgoingFileMessage;
-import org.apache.cassandra.utils.Pair;
+#include "utils/UUID.hh"
+#include "streaming/stream_session.hh"
+#include "streaming/stream_task.hh"
+#include "streaming/messages/outgoing_file_message.hh"
+#include <map>
+
+namespace streaming {
 
 /**
  * StreamTransferTask sends sections of SSTable files in certain ColumnFamily.
  */
-public class StreamTransferTask extends StreamTask
-{
-    private static final ScheduledExecutorService timeoutExecutor = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory("StreamingTransferTaskTimeouts"));
+class stream_transfer_task : public stream_task {
+private:
+    //final AtomicInteger sequenceNumber = new AtomicInteger(0);
+    bool aborted = false;
 
-    private final AtomicInteger sequenceNumber = new AtomicInteger(0);
-    private boolean aborted = false;
+    std::map<int, messages::outgoing_file_message> files;
+    //final Map<Integer, ScheduledFuture> timeoutTasks = new HashMap<>();
 
-    private final Map<Integer, OutgoingFileMessage> files = new HashMap<>();
-    private final Map<Integer, ScheduledFuture> timeoutTasks = new HashMap<>();
-
-    private long totalSize;
-
-    public StreamTransferTask(StreamSession session, UUID cfId)
-    {
-        super(session, cfId);
+    long total_size;
+public:
+    using UUID = utils::UUID;
+    stream_transfer_task(stream_session& session, UUID cf_id)
+        : stream_task(session, cf_id) {
     }
 
+#if 0
     public synchronized void addTransferFile(SSTableReader sstable, long estimatedKeys, List<Pair<Long, Long>> sections, long repairedAt)
     {
         assert sstable != null && cfId.equals(sstable.metadata.cfId);
@@ -153,4 +154,7 @@ public class StreamTransferTask extends StreamTask
         assert prev == null;
         return future;
     }
-}
+#endif
+};
+
+} // namespace streaming
