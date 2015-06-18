@@ -22,6 +22,8 @@
 #pragma once
 
 #include "streaming/messages/stream_message.hh"
+#include "streaming/stream_request.hh"
+#include "streaming/stream_summary.hh"
 
 namespace streaming {
 namespace messages {
@@ -57,17 +59,19 @@ class prepare_message : public stream_message {
                 StreamSummary.serializer.serialize(summary, out, version);
         }
     };
-
+#endif
+public:
     /**
      * Streaming requests
      */
-    public final Collection<StreamRequest> requests = new ArrayList<>();
+    std::vector<stream_request> requests;
 
     /**
      * Summaries of streaming out
      */
-    public final Collection<StreamSummary> summaries = new ArrayList<>();
+    std::vector<stream_summary> summaries;
 
+#if 0
     public PrepareMessage()
     {
         super(Type.PREPARE);
