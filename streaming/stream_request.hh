@@ -14,38 +14,35 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.io.DataInput;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
+#pragma once
 
-import org.apache.cassandra.db.TypeSizes;
-import org.apache.cassandra.dht.Range;
-import org.apache.cassandra.dht.Token;
-import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.util.DataOutputPlus;
+#include "core/sstring.hh"
+#include "query-request.hh"
+#include "dht/i_partitioner.hh"
+#include <vector>
 
-public class StreamRequest
-{
-    public static final IVersionedSerializer<StreamRequest> serializer = new StreamRequestSerializer();
+namespace streaming {
 
-    public final String keyspace;
-    public final Collection<Range<Token>> ranges;
-    public final Collection<String> columnFamilies = new HashSet<>();
-    public final long repairedAt;
-    public StreamRequest(String keyspace, Collection<Range<Token>> ranges, Collection<String> columnFamilies, long repairedAt)
-    {
-        this.keyspace = keyspace;
-        this.ranges = ranges;
-        this.columnFamilies.addAll(columnFamilies);
-        this.repairedAt = repairedAt;
+class stream_request {
+public:
+    using token = dht::token;
+    sstring keyspace;
+    std::vector<query::range<token>> ranges;
+    std::vector<sstring> column_families;
+    long repaired_at;
+    stream_request(sstring _keyspace, std::vector<query::range<token>> _ranges, std::vector<sstring> _column_families, long _repaired_at)
+        : keyspace(std::move(_keyspace))
+        , ranges(std::move(_ranges))
+        , column_families(std::move(_column_families))
+        , repaired_at(_repaired_at) {
     }
 
+#if 0
     public static class StreamRequestSerializer implements IVersionedSerializer<StreamRequest>
     {
         public void serialize(StreamRequest request, DataOutputPlus out, int version) throws IOException
@@ -59,13 +56,13 @@ public class StreamRequest
                 Token.serializer.serialize(range.right, out);
             }
             out.writeInt(request.columnFamilies.size());
-            for (String cf : request.columnFamilies)
+            for (sstring cf : request.columnFamilies)
                 out.writeUTF(cf);
         }
 
         public StreamRequest deserialize(DataInput in, int version) throws IOException
         {
-            String keyspace = in.readUTF();
+            sstring keyspace = in.readUTF();
             long repairedAt = in.readLong();
             int rangeCount = in.readInt();
             List<Range<Token>> ranges = new ArrayList<>(rangeCount);
@@ -76,7 +73,7 @@ public class StreamRequest
                 ranges.add(new Range<>(left, right));
             }
             int cfCount = in.readInt();
-            List<String> columnFamilies = new ArrayList<>(cfCount);
+            List<sstring> columnFamilies = new ArrayList<>(cfCount);
             for (int i = 0; i < cfCount; i++)
                 columnFamilies.add(in.readUTF());
             return new StreamRequest(keyspace, ranges, columnFamilies, repairedAt);
@@ -93,9 +90,12 @@ public class StreamRequest
                 size += Token.serializer.serializedSize(range.right, TypeSizes.NATIVE);
             }
             size += TypeSizes.NATIVE.sizeof(request.columnFamilies.size());
-            for (String cf : request.columnFamilies)
+            for (sstring cf : request.columnFamilies)
                 size += TypeSizes.NATIVE.sizeof(cf);
             return size;
         }
     }
-}
+#endif
+};
+
+} // namespace streaming
