@@ -14,48 +14,57 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.util.UUID;
+#pragma once
 
+#include "utils/UUID.hh"
+#include "streaming/stream_session.hh"
+#include "streaming/stream_summary.hh"
+
+namespace streaming {
 /**
  * StreamTask is an abstraction of the streaming task performed over specific ColumnFamily.
  */
-public abstract class StreamTask
-{
+class stream_task {
+protected:
+    using UUID = utils::UUID;
     /** StreamSession that this task belongs */
-    protected final StreamSession session;
+    stream_session& session;
 
-    protected final UUID cfId;
+    UUID cf_id;
 
-    protected StreamTask(StreamSession session, UUID cfId)
-    {
-        this.session = session;
-        this.cfId = cfId;
+    stream_task(stream_session& _session, UUID _cf_id)
+        : session(_session)
+        , cf_id(std::move(_cf_id)) {
     }
 
+public:
     /**
      * @return total number of files this task receives/streams.
      */
-    public abstract int getTotalNumberOfFiles();
+    virtual int get_total_number_of_files() = 0;
 
     /**
      * @return total bytes expected to receive
      */
-    public abstract long getTotalSize();
+    virtual long get_total_size() = 0;
 
     /**
      * Abort the task.
      * Subclass should implement cleaning up resources.
      */
-    public abstract void abort();
+    virtual void abort() = 0;
 
     /**
      * @return StreamSummary that describes this task
      */
-    public StreamSummary getSummary()
-    {
-        return new StreamSummary(cfId, getTotalNumberOfFiles(), getTotalSize());
+    virtual stream_summary get_summary() {
+        return stream_summary(this->cf_id, this->get_total_number_of_files(), this->get_total_size());
     }
-}
+};
+
+} // namespace streaming
