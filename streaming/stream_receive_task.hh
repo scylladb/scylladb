@@ -14,55 +14,43 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.io.File;
-import java.io.IOError;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+#pragma once
 
-import org.apache.cassandra.concurrent.NamedThreadFactory;
-import org.apache.cassandra.config.Schema;
-import org.apache.cassandra.db.ColumnFamilyStore;
-import org.apache.cassandra.db.Keyspace;
-import org.apache.cassandra.io.sstable.format.SSTableReader;
-import org.apache.cassandra.io.sstable.format.SSTableWriter;
-import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.Pair;
+#include "utils/UUID.hh"
+#include "streaming/stream_session.hh"
+#include "streaming/stream_task.hh"
+#include "streaming/messages/outgoing_file_message.hh"
+
+namespace streaming {
 
 /**
  * Task that manages receiving files for the session for certain ColumnFamily.
  */
-public class StreamReceiveTask extends StreamTask
-{
-    private static final ExecutorService executor = Executors.newCachedThreadPool(new NamedThreadFactory("StreamReceiveTask"));
-
+class stream_receive_task : public stream_task {
+private:
     // number of files to receive
-    private final int totalFiles;
+    int total_files;
     // total size of files to receive
-    private final long totalSize;
+    long total_size;
 
     // true if task is done (either completed or aborted)
-    private boolean done = false;
+    bool done = false;
 
-    //  holds references to SSTables received
-    protected Collection<SSTableWriter> sstables;
-
-    public StreamReceiveTask(StreamSession session, UUID cfId, int totalFiles, long totalSize)
-    {
-        super(session, cfId);
-        this.totalFiles = totalFiles;
-        this.totalSize = totalSize;
-        this.sstables = new ArrayList<>(totalFiles);
+    // holds references to SSTables received
+    // protected Collection<SSTableWriter> sstables;
+public:
+    stream_receive_task(stream_session& _session, UUID _cf_id, int _total_files, long _total_size)
+        : stream_task(_session, _cf_id)
+        , total_files(_total_files)
+        , total_size(_total_size) {
     }
 
+#if 0
     /**
      * Process received file.
      *
@@ -159,4 +147,7 @@ public class StreamReceiveTask extends StreamTask
             writer.abort();
         sstables.clear();
     }
-}
+#endif
+};
+
+} // namespace streaming
