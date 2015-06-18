@@ -21,38 +21,44 @@
 
 #pragma once
 
+#include "core/sstring.hh"
 #include "bytes.hh"
+#include "gms/inet_address.hh"
+#include "utils/UUID.hh"
 
 namespace streaming {
 namespace messages {
+
 
 /**
  * StreamInitMessage is first sent from the node where {@link org.apache.cassandra.streaming.StreamSession} is started,
  * to initiate corresponding {@link org.apache.cassandra.streaming.StreamSession} on the other side.
  */
 class stream_init_message {
-#if 0
-    public static IVersionedSerializer<StreamInitMessage> serializer = new StreamInitMessageSerializer();
-
-    public final InetAddress from;
-    public final int sessionIndex;
-    public final UUID planId;
-    public final String description;
+public:
+    using inet_address = gms::inet_address;
+    using UUID = utils::UUID;
+    inet_address from;
+    int session_index;
+    UUID plan_id;
+    sstring description;
 
     // true if this init message is to connect for outgoing message on receiving side
-    public final boolean isForOutgoing;
-    public final boolean keepSSTableLevel;
+    bool is_for_outgoing;
+    bool keep_ss_table_level;
 
-    public StreamInitMessage(InetAddress from, int sessionIndex, UUID planId, String description, boolean isForOutgoing, boolean keepSSTableLevel)
-    {
-        this.from = from;
-        this.sessionIndex = sessionIndex;
-        this.planId = planId;
-        this.description = description;
-        this.isForOutgoing = isForOutgoing;
-        this.keepSSTableLevel = keepSSTableLevel;
+    stream_init_message() = default;
+
+    stream_init_message(inet_address _from, int _session_index, UUID _plan_id, sstring _description, bool _is_for_outgoing, bool _keep_ss_table_level)
+        : from(_from)
+        , session_index(_session_index)
+        , plan_id(_plan_id)
+        , description(_description)
+        , is_for_outgoing(_is_for_outgoing)
+        , keep_ss_table_level(-keep_ss_table_level) {
     }
 
+#if 0
     /**
      * Create serialized message.
      *
