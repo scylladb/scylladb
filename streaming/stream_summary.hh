@@ -14,44 +14,38 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.io.DataInput;
-import java.io.IOException;
-import java.io.Serializable;
-import java.util.UUID;
+#pragma once
 
-import com.google.common.base.Objects;
+#include "utils/UUID.hh"
 
-import org.apache.cassandra.db.TypeSizes;
-import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.util.DataOutputPlus;
-import org.apache.cassandra.net.MessagingService;
-import org.apache.cassandra.utils.UUIDSerializer;
+namespace streaming {
 
 /**
  * Summary of streaming.
  */
-public class StreamSummary implements Serializable
-{
-    public static final IVersionedSerializer<StreamSummary> serializer = new StreamSummarySerializer();
-
-    public final UUID cfId;
+class stream_summary {
+public:
+    using UUID = utils::UUID;
+    UUID cf_id;
 
     /**
      * Number of files to transfer. Can be 0 if nothing to transfer for some streaming request.
      */
-    public final int files;
-    public final long totalSize;
+    int files;
+    long total_size;
 
-    public StreamSummary(UUID cfId, int files, long totalSize)
-    {
-        this.cfId = cfId;
-        this.files = files;
-        this.totalSize = totalSize;
+    stream_summary(UUID _cf_id, int _files, long _total_size)
+        : cf_id (_cf_id)
+        , files(_files)
+        , total_size(_total_size) {
     }
 
+#if 0
     @Override
     public boolean equals(Object o)
     {
@@ -104,4 +98,7 @@ public class StreamSummary implements Serializable
             return size;
         }
     }
-}
+#endif
+};
+
+} // namespace streaming
