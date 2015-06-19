@@ -127,7 +127,7 @@ public:
         if (_bufp->readable()) {
             return _bufp->read();
         } else {
-            return {};
+            return make_ready_future<std::experimental::optional<T>>();
         }
     }
     ~pipe_reader() {
@@ -194,8 +194,8 @@ public:
 /// A pipe<T> resembles a Unix pipe, in that it has a read side, a write side,
 /// and a fixed-sized buffer between them, and supports either end to be closed
 /// independently (and EOF or broken pipe when using the other side).
-/// The pipe() function returns the reader and write sides of the pipe as two
-/// separate objects. These objects can be moved into the two fibers.
+/// A pipe<T> object holds the reader and write sides of the pipe as two
+/// separate objects. These objects can be moved into two different fibers.
 /// Importantly, if one of the pipe ends is destroyed (i.e., the continuations
 /// capturing it end), the other end of the pipe will stop blocking, so the
 /// other fiber will not hang.
