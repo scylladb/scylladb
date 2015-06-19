@@ -14,18 +14,25 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import com.google.common.util.concurrent.FutureCallback;
+#pragma once
 
-public interface StreamEventHandler extends FutureCallback<StreamState>
-{
+#include "streaming/stream_event.hh"
+
+namespace streaming {
+
+class stream_event_handler /* extends FutureCallback<StreamState> */ {
     /**
      * Callback for various streaming events.
      *
      * @see StreamEvent.Type
      * @param event Stream event.
      */
-    void handleStreamEvent(StreamEvent event);
-}
+    virtual void handle_stream_event(stream_event event) = 0;
+};
+
+} // namespace streaming
