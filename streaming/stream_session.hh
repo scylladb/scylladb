@@ -24,6 +24,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "core/distributed.hh"
 #include "message/messaging_service.hh"
+#include "utils/UUID.hh"
 
 namespace streaming {
 
@@ -100,6 +101,7 @@ private:
     using endpoint_state = gms::endpoint_state;
     using application_state = gms::application_state;
     using versioned_value = gms::versioned_value;
+    using UUID = utils::UUID;
     net::messaging_service& ms() {
         return net::get_local_messaging_service();
     }
@@ -112,19 +114,19 @@ private:
     distributed<handler> _handlers;
     void init_messaging_service_handler();
     future<> start();
-#if 0
-    private static final Logger logger = LoggerFactory.getLogger(StreamSession.class);
-
+public:
     /**
      * Streaming endpoint.
      *
      * Each {@code StreamSession} is identified by this InetAddress which is broadcast address of the node streaming.
      */
-    public final InetAddress peer;
-    private final int index;
+    inet_address peer;
     /** Actual connecting address. Can be the same as {@linkplain #peer}. */
-    public final InetAddress connecting;
+    inet_address connecting;
+private:
+    int _index;
 
+#if 0
     // should not be null when session is started
     private StreamResultFuture streamResult;
 
@@ -154,10 +156,10 @@ public:
         COMPLETE,
         FAILED,
     };
+private:
+    state _state = state::INITIALIZED;
+    bool complete_sent = false;
 #if 0
-    private volatile State state = State.INITIALIZED;
-    private volatile boolean completeSent = false;
-
     /**
      * Create new streaming session with the peer.
      *
@@ -175,16 +177,21 @@ public:
         this.metrics = StreamingMetrics.get(connecting);
         this.keepSSTableLevel = keepSSTableLevel;
     }
+#endif
 
-    public UUID planId()
-    {
-        return streamResult == null ? null : streamResult.planId;
+public:
+
+    UUID plan_id() {
+        // return streamResult == null ? null : streamResult.planId;
+        // FIXME:
+        return UUID();
     }
 
-    public int sessionIndex()
-    {
-        return index;
+    int session_index() {
+        return _index;
     }
+
+#if 0
 
     public String description()
     {
@@ -408,17 +415,19 @@ public:
     {
         return state;
     }
+#endif
 
+public:
     /**
      * Return if this session completed successfully.
      *
      * @return true if session completed successfully.
      */
-    public boolean isSuccess()
-    {
-        return state == State.COMPLETE;
+    bool is_success() {
+        return _state == state::COMPLETE;
     }
 
+#if 0
     public void messageReceived(StreamMessage message)
     {
         switch (message.type)
