@@ -446,6 +446,7 @@ column_family::seal_active_memtable(database* db) {
         sstables::sstable::version_types::la,
         sstables::sstable::format_types::big);
 
+    _in_flight_seals.enter();
     do_with(std::move(newtab), [old, name, this, db] (sstables::sstable& newtab) {
         // FIXME: write all components
         return newtab.write_components(*old).then([name, this, &newtab, old] {
@@ -474,6 +475,8 @@ column_family::seal_active_memtable(database* db) {
             } catch (...) {
                 dblog.error("failed to write sstable: unknown error");
             }
+
+            _in_flight_seals.leave();
         });
     });
     // FIXME: release commit log

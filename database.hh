@@ -27,6 +27,7 @@
 #include "types.hh"
 #include "compound.hh"
 #include "core/future.hh"
+#include "core/gate.hh"
 #include "cql3/column_specification.hh"
 #include "db/commitlog/replay_position.hh"
 #include <limits>
@@ -120,6 +121,8 @@ public:
     future<> populate(sstring datadir);
     void seal_active_memtable(database* = nullptr);
 private:
+    seastar::gate _in_flight_seals;
+
     // Iterate over all partitions.  Protocol is the same as std::all_of(),
     // so that iteration can be stopped by returning false.
     // Func signature: bool (const decorated_key& dk, const mutation_partition& mp)
