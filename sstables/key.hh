@@ -44,6 +44,14 @@ inline void check_marker(bytes_view component, composite_marker expected) {
     }
 }
 
+inline void check_marker(bytes_view component, composite_marker expected, composite_marker alternative) {
+    auto found = composite_marker(component.back());
+    if ((found == expected) || (found == alternative)) {
+        return;
+    }
+    throw runtime_exception(sprint("Unexpected marker. Found %d, expected %d or %d\n", uint8_t(found), uint8_t(expected)));
+}
+
 // Our internal representation differs slightly (in the way it serializes) from Origin.
 // In order to be able to achieve read and write compatibility for sstables - so they can
 // be imported and exported - we need to always convert a key to this representation.
