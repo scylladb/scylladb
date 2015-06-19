@@ -120,6 +120,11 @@ public:
 
     future<> populate(sstring datadir);
     void seal_active_memtable(database* = nullptr);
+
+    future<> stop(database* db = nullptr) {
+        seal_active_memtable(db);
+        return _in_flight_seals.close();
+    }
 private:
     seastar::gate _in_flight_seals;
 

@@ -1066,6 +1066,10 @@ future<>
 database::stop() {
     return do_for_each(_keyspaces, [this] (auto& val_pair) {
         return val_pair.second.stop();
+    }).then([this] {
+        return parallel_for_each(_column_families, [this] (auto& val_pair) {
+            return val_pair.second.stop(this);
+        });
     });
 }
 
