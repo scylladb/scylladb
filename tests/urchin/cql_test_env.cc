@@ -195,6 +195,7 @@ future<> init_once() {
         return make_ready_future();
     }
 }
+
 future<::shared_ptr<cql_test_env>> make_env_for_test() {
     return init_once().then([] {
         using namespace locator;
