@@ -14,33 +14,20 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.io.IOException;
-import java.net.Socket;
-import java.net.SocketException;
-import java.nio.ByteBuffer;
-import java.nio.channels.Channels;
-import java.nio.channels.ReadableByteChannel;
-import java.nio.channels.WritableByteChannel;
-import java.util.Collection;
-import java.util.Comparator;
-import java.util.concurrent.PriorityBlockingQueue;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
+#pragma once
 
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.SettableFuture;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+#include "utils/UUID.hh"
+#include "gms/inet_address.hh"
+#include "streaming/stream_session.hh"
+#include "streaming/session_info.hh"
+#include "streaming/progress_info.hh"
 
-import org.apache.cassandra.io.util.DataOutputStreamAndChannel;
-import org.apache.cassandra.streaming.messages.StreamInitMessage;
-import org.apache.cassandra.streaming.messages.StreamMessage;
-import org.apache.cassandra.utils.FBUtilities;
-import org.apache.cassandra.utils.JVMStabilityInspector;
+namespace streaming {
 
 /**
  * ConnectionHandler manages incoming/outgoing message exchange for the {@link StreamSession}.
@@ -50,22 +37,15 @@ import org.apache.cassandra.utils.JVMStabilityInspector;
  * send outgoing message. Messages are encoded/decoded on those thread and handed to
  * {@link StreamSession#messageReceived(org.apache.cassandra.streaming.messages.StreamMessage)}.
  */
-public class ConnectionHandler
-{
-    private static final Logger logger = LoggerFactory.getLogger(ConnectionHandler.class);
-
-    private final StreamSession session;
-
-    private IncomingMessageHandler incoming;
-    private OutgoingMessageHandler outgoing;
-
-    ConnectionHandler(StreamSession session)
-    {
-        this.session = session;
-        this.incoming = new IncomingMessageHandler(session);
-        this.outgoing = new OutgoingMessageHandler(session);
+class connection_handler {
+public:
+    connection_handler(stream_session session)
+        : _session(std::move(session))
+        , _incoming(_session)
+        , _outgoing(_session) {
     }
 
+#if 0
     /**
      * Set up incoming message handler and initiate streaming.
      *
@@ -137,20 +117,20 @@ public class ConnectionHandler
     {
         return outgoing != null && !outgoing.isClosed();
     }
+#endif
 
-    abstract static class MessageHandler implements Runnable
-    {
-        protected final StreamSession session;
-
-        protected int protocolVersion;
+public:
+    class message_handler {
+    protected:
+        stream_session& session;
+        int protocol_version;
+        message_handler(stream_session& session_) : session(session_) {
+        }
+#if 0
         protected Socket socket;
 
         private final AtomicReference<SettableFuture<?>> closeFuture = new AtomicReference<>();
 
-        protected MessageHandler(StreamSession session)
-        {
-            this.session = session;
-        }
 
         protected abstract String name();
 
@@ -218,23 +198,20 @@ public class ConnectionHandler
             }
             catch (IOException ignore) {}
         }
-    }
+#endif
+    };
 
     /**
      * Incoming streaming message handler
      */
-    static class IncomingMessageHandler extends MessageHandler
-    {
-        IncomingMessageHandler(StreamSession session)
-        {
-            super(session);
+    class incoming_message_handler : public message_handler {
+    public:
+        incoming_message_handler(stream_session& session) : message_handler(session) {
         }
-
-        protected String name()
-        {
+        sstring name() {
             return "STREAM-IN";
         }
-
+#if 0
         public void run()
         {
             try
@@ -268,13 +245,22 @@ public class ConnectionHandler
                 signalCloseDone();
             }
         }
-    }
+#endif
+    };
 
     /**
      * Outgoing file transfer thread
      */
-    static class OutgoingMessageHandler extends MessageHandler
-    {
+    class outgoing_message_handler : public message_handler {
+    public:
+        outgoing_message_handler(stream_session& session) : message_handler(session) {
+        }
+
+        sstring name() {
+            return "STREAM-OUT";
+        }
+#if 0
+
         /*
          * All out going messages are queued up into messageQueue.
          * The size will grow when received streaming request.
@@ -288,16 +274,6 @@ public class ConnectionHandler
                 return o2.getPriority() - o1.getPriority();
             }
         });
-
-        OutgoingMessageHandler(StreamSession session)
-        {
-            super(session);
-        }
-
-        protected String name()
-        {
-            return "STREAM-OUT";
-        }
 
         public void enqueue(StreamMessage message)
         {
@@ -356,5 +332,13 @@ public class ConnectionHandler
                 session.onError(e);
             }
         }
-    }
-}
+#endif
+    };
+
+private:
+    stream_session _session;
+    incoming_message_handler _incoming;
+    outgoing_message_handler _outgoing;
+};
+
+} // namespace streaming

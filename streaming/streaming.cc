@@ -19,3 +19,4 @@
 #include "streaming/stream_task.hh"
 #include "streaming/stream_event.hh"
 #include "streaming/stream_event_handler.hh"
+#include "streaming/connection_handler.hh"
