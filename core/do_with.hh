@@ -21,8 +21,10 @@
 
 #pragma once
 
+#include "apply.hh"
 #include <utility>
 #include <memory>
+#include <tuple>
 
 /// \addtogroup future-util
 /// @{
@@ -51,6 +53,37 @@ inline
 auto do_with(T&& rvalue, F&& f) {
     auto obj = std::make_unique<T>(std::forward<T>(rvalue));
     auto fut = f(*obj);
+    return fut.finally([obj = std::move(obj)] () {});
+}
+
+template <typename Tuple, size_t... Idx>
+inline
+auto
+cherry_pick_tuple(std::index_sequence<Idx...>, Tuple&& tuple) {
+    return std::make_tuple(std::get<Idx>(std::forward<Tuple>(tuple))...);
+}
+
+/// Multiple argument variant of \ref do_with(T&& rvalue, F&& f).
+///
+/// This is the same as \ref do_with(T&& tvalue, F&& f), but accepts
+/// two or more rvalue parameters, which are held in memory while
+/// \c f executes.  \c f will be called with all arguments as
+/// reference parameters.
+template <typename T1, typename T2, typename T3_or_F, typename... More>
+inline
+auto
+do_with(T1&& rv1, T2&& rv2, T3_or_F&& rv3, More&&... more) {
+    auto all = std::forward_as_tuple(
+            std::forward<T1>(rv1),
+            std::forward<T2>(rv2),
+            std::forward<T3_or_F>(rv3),
+            std::forward<More>(more)...);
+    constexpr size_t nr = std::tuple_size<decltype(all)>::value - 1;
+    using idx = std::make_index_sequence<nr>;
+    auto&& just_values = cherry_pick_tuple(idx(), std::move(all));
+    auto&& just_func = std::move(std::get<nr>(std::move(all)));
+    auto obj = std::make_unique<std::remove_reference_t<decltype(just_values)>>(std::move(just_values));
+    auto fut = apply(just_func, *obj);
     return fut.finally([obj = std::move(obj)] () {});
 }
 
