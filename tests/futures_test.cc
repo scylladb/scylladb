@@ -25,6 +25,7 @@
 #include "core/semaphore.hh"
 #include "core/future-util.hh"
 #include "core/sleep.hh"
+#include "core/do_with.hh"
 #include <boost/iterator/counting_iterator.hpp>
 
 class expected_exception : std::runtime_error {
@@ -295,4 +296,38 @@ SEASTAR_TEST_CASE(test_map_reduce) {
 // regression test.
 SEASTAR_TEST_CASE(test_sleep) {
     return sleep(std::chrono::milliseconds(100));
+}
+
+SEASTAR_TEST_CASE(test_do_with_1) {
+    return do_with(1, [] (int& one) {
+       BOOST_REQUIRE_EQUAL(one, 1);
+       return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(test_do_with_2) {
+    return do_with(1, 2L, [] (int& one, long two) {
+        BOOST_REQUIRE_EQUAL(one, 1);
+        BOOST_REQUIRE_EQUAL(two, 2);
+        return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(test_do_with_3) {
+    return do_with(1, 2L, 3, [] (int& one, long two, int three) {
+        BOOST_REQUIRE_EQUAL(one, 1);
+        BOOST_REQUIRE_EQUAL(two, 2);
+        BOOST_REQUIRE_EQUAL(three, 3);
+        return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(test_do_with_4) {
+    return do_with(1, 2L, 3, 4, [] (int& one, long two, int three, int four) {
+        BOOST_REQUIRE_EQUAL(one, 1);
+        BOOST_REQUIRE_EQUAL(two, 2);
+        BOOST_REQUIRE_EQUAL(three, 3);
+        BOOST_REQUIRE_EQUAL(four, 4);
+        return make_ready_future<>();
+    });
 }
