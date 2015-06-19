@@ -111,13 +111,7 @@ public:
         }
         return parallel_for_each(*_sstables | boost::adaptors::map_values, [this](const lw_shared_ptr<sstables::sstable>& sstable) {
             return sstable->read_row(_schema, _key).then([this](mutation_opt mo) {
-                if (mo) {
-                    if (!_m) {
-                        _m = std::move(mo);
-                    } else {
-                        _m->partition().apply(*mo->schema(), mo->partition());
-                    }
-                }
+                apply(_m, std::move(mo));
             });
         }).then([this] {
             _done = true;

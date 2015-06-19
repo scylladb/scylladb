@@ -33,14 +33,6 @@ class combined_reader {
     mutation_opt _current;
     bool _inited = false;
 private:
-    void apply(mutation_opt& mo, mutation&& m) {
-        if (!mo) {
-            mo = std::move(m);
-        } else {
-            mo->partition().apply(*m.schema(), m.partition());
-        }
-    }
-
     // Produces next mutation or disengaged optional if there are no more.
     //
     // Entry conditions:
@@ -59,7 +51,6 @@ private:
             // key has changed, so emit accumulated mutation
             return make_ready_future<mutation_opt>(move_and_disengage(_current));
         }
-
 
         apply(_current, std::move(m));
 
