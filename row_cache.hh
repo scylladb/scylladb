@@ -83,8 +83,6 @@ public:
 // Returns a reference to shard-wide cache_tracker.
 cache_tracker& global_cache_tracker();
 
-using mutation_source = std::function<mutation_reader(const query::partition_range& range)>;
-
 //
 // A data source which wraps another data source such that data obtained from the underlying data source
 // is cached in-memory in order to serve queries faster.

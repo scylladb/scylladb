@@ -212,7 +212,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
     column_family::config cfg;
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
-    column_family cf(s, cfg);
+    auto cf = make_lw_shared<column_family>(s, cfg);
 
     const column_definition& r1_col = *s->get_column_definition("r1");
     auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -221,8 +221,8 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
         auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
         mutation m(key, s);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(r1)));
-        cf.apply(std::move(m));
-        cf.seal_active_memtable();
+        cf->apply(std::move(m));
+        cf->seal_active_memtable();
     };
     insert_row(1001, 2001);
     insert_row(1002, 2002);
@@ -230,7 +230,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
 
     auto verify_row = [&] (int32_t c1, int32_t r1) {
       auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(c1)});
-      return cf.find_row(dht::global_partitioner().decorate_key(*s, key), std::move(c_key)).then([r1, r1_col] (auto r) {
+      return cf->find_row(dht::global_partitioner().decorate_key(*s, key), std::move(c_key)).then([r1, r1_col] (auto r) {
         BOOST_REQUIRE(r);
         auto i = r->find_cell(r1_col.id);
         BOOST_REQUIRE(i);
@@ -252,7 +252,8 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     column_family::config cfg;
     cfg.enable_disk_reads = false;
     cfg.enable_disk_writes = false;
-    return do_with(column_family(s, cfg), [s] (column_family& cf) {
+    return do_with(make_lw_shared<column_family>(s, cfg), [s] (auto& cf_ptr) mutable {
+        column_family& cf = *cf_ptr;
         std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
 
         const column_definition& r1_col = *s->get_column_definition("r1");

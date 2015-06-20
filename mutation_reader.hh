@@ -49,3 +49,8 @@ future<> consume(mutation_reader& reader, Consumer consumer) {
         });
     });
 }
+
+// mutation_source represents source of data in mutation form. The data source
+// can be queried multiple times and in parallel. For each query it returns
+// independent mutation_reader.
+using mutation_source = std::function<mutation_reader(const query::partition_range& range)>;

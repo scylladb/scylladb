@@ -43,12 +43,17 @@ column_family::column_family(schema_ptr schema, config config)
     , _config(std::move(config))
     , _memtables(make_lw_shared(memtable_list{}))
     , _sstables(make_lw_shared<sstable_list>())
+    , _cache(_schema, sstables_as_mutation_source(), global_cache_tracker())
 {
     add_memtable();
 }
 
-// define in .cc, since sstable is forward-declared in .hh
-column_family::column_family(column_family&& x) = default;
+mutation_source
+column_family::sstables_as_mutation_source() {
+    return [this] (const query::partition_range& r) {
+        return make_sstable_reader(r);
+    };
+}
 
 // define in .cc, since sstable is forward-declared in .hh
 column_family::~column_family() {
@@ -249,7 +254,12 @@ column_family::make_reader(const query::partition_range& range) const {
         readers.emplace_back(mt->make_reader(range));
     }
 
-    readers.emplace_back(make_sstable_reader(range));
+    if (_config.enable_cache) {
+        readers.emplace_back(_cache.make_reader(range));
+    } else {
+        readers.emplace_back(make_sstable_reader(range));
+    }
+
     return make_combined_reader(std::move(readers));
 }
 
@@ -413,6 +423,13 @@ void column_family::add_memtable() {
     _memtables->emplace_back(make_lw_shared<memtable>(_schema));
 }
 
+future<>
+column_family::update_cache(memtable& m) {
+    // TODO: add option to disable populating of the cache.
+    // TODO: move data into cache instead of copying
+    return _cache.update(m.make_reader());
+}
+
 void
 column_family::seal_active_memtable(database* db) {
     auto old = _memtables->back();
@@ -445,6 +462,8 @@ column_family::seal_active_memtable(database* db) {
         // FIXME: write all components
         return newtab.write_components(*old).then([name, this, &newtab, old] {
             return newtab.load();
+        }).then([this, old] {
+            return update_cache(*old);
         }).then_wrapped([name, this, &newtab, old, db] (future<> ret) {
             try {
                 ret.get();

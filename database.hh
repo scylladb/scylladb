@@ -43,6 +43,7 @@
 #include "memtable.hh"
 #include <list>
 #include "mutation_reader.hh"
+#include "row_cache.hh"
 
 class frozen_mutation;
 
@@ -71,6 +72,7 @@ public:
         sstring datadir;
         bool enable_disk_writes = true;
         bool enable_disk_reads = true;
+        bool enable_cache = true;
     };
 private:
     schema_ptr _schema;
@@ -78,6 +80,7 @@ private:
     lw_shared_ptr<memtable_list> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     lw_shared_ptr<sstable_list> _sstables;
+    mutable row_cache _cache; // Cache covers only sstables.
     unsigned _sstable_generation = 1;
     unsigned _mutation_count = 0;
     db::replay_position _highest_flushed_rp;
@@ -85,12 +88,15 @@ private:
     void add_sstable(sstables::sstable&& sstable);
     void add_memtable();
     memtable& active_memtable() { return *_memtables->back(); }
+    future<> update_cache(memtable&);
     struct merge_comparator;
 private:
     // Creates a mutation reader which covers sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
     mutation_reader make_sstable_reader(const query::partition_range& range) const;
+
+    mutation_source sstables_as_mutation_source();
 public:
     // Creates a mutation reader which covers all data sources for this column family.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
@@ -106,7 +112,7 @@ public:
     using const_row_ptr = std::unique_ptr<const row>;
 public:
     column_family(schema_ptr schema, config cfg);
-    column_family(column_family&&);
+    column_family(column_family&&) = delete; // 'this' is being captured during construction
     ~column_family();
     schema_ptr schema() const { return _schema; }
     future<const_mutation_partition_ptr> find_partition(const dht::decorated_key& key) const;
