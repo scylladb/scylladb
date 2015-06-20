@@ -30,10 +30,19 @@ boost_tests = [
     'sstring_test',
     'output_stream_test',
     'httpd',
+    'fstream_test',
+    'foreign_ptr_test',
+    'semaphore_test',
+    'shared_ptr_test',
 ]
 
 other_tests = [
     'smp_test',
+    'timertest',
+    'distributed_test',
+    'allocator_test',
+    'directory_test',
+    'thread_context_switch',
 ]
 
 last_len = 0
