@@ -270,7 +270,7 @@ public:
 
 class database {
     std::unordered_map<sstring, keyspace> _keyspaces;
-    std::unordered_map<utils::UUID, column_family> _column_families;
+    std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
     std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::config> _cfg;
@@ -293,9 +293,7 @@ public:
 
     // but see: create_keyspace(distributed<database>&, sstring)
     void add_keyspace(sstring name, keyspace k);
-    /** Adds cf with auto-generated UUID. */
-    void add_column_family(column_family&&);
-    void add_column_family(const utils::UUID&, column_family&&);
+    void add_column_family(schema_ptr schema, column_family::config cfg);
 
     void update_column_family(const sstring& ks_name, const sstring& cf_name);
     void drop_column_family(const sstring& ks_name, const sstring& cf_name);
@@ -348,7 +346,7 @@ public:
     const std::unordered_map<sstring, keyspace>& get_keyspaces() const {
         return _keyspaces;
     }
-    const std::unordered_map<utils::UUID, column_family>& get_column_families() const {
+    const std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& get_column_families() const {
         return _column_families;
     }
     const std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash>&

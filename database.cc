@@ -626,26 +626,23 @@ void database::drop_keyspace(const sstring& name) {
     throw std::runtime_error("not implemented");
 }
 
-void database::add_column_family(const utils::UUID& uuid, column_family&& cf) {
-    auto ks = _keyspaces.find(cf.schema()->ks_name());
+void database::add_column_family(schema_ptr schema, column_family::config cfg) {
+    auto uuid = schema->id();
+    auto cf = make_lw_shared<column_family>(schema, std::move(cfg));
+    auto ks = _keyspaces.find(schema->ks_name());
     if (ks == _keyspaces.end()) {
-        throw std::invalid_argument("Keyspace " + cf.schema()->ks_name() + " not defined");
+        throw std::invalid_argument("Keyspace " + schema->ks_name() + " not defined");
     }
     if (_column_families.count(uuid) != 0) {
         throw std::invalid_argument("UUID " + uuid.to_sstring() + " already mapped");
     }
-    auto kscf = std::make_pair(cf.schema()->ks_name(), cf.schema()->cf_name());
+    auto kscf = std::make_pair(schema->ks_name(), schema->cf_name());
     if (_ks_cf_to_uuid.count(kscf) != 0) {
-        throw std::invalid_argument("Column family " + cf.schema()->cf_name() + " exists");
+        throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
     }
-    ks->second.add_column_family(cf.schema());
+    ks->second.add_column_family(schema);
     _column_families.emplace(uuid, std::move(cf));
     _ks_cf_to_uuid.emplace(std::move(kscf), uuid);
-}
-
-void database::add_column_family(column_family&& cf) {
-    auto id = cf.schema()->id();
-    add_column_family(id, std::move(cf));
 }
 
 void database::update_column_family(const sstring& ks_name, const sstring& cf_name) {
@@ -702,7 +699,7 @@ const column_family& database::find_column_family(const sstring& ks_name, const 
 
 column_family& database::find_column_family(const utils::UUID& uuid) throw (no_such_column_family) {
     try {
-        return _column_families.at(uuid);
+        return *_column_families.at(uuid);
     } catch (...) {
         std::throw_with_nested(no_such_column_family(uuid.to_sstring()));
     }
@@ -710,7 +707,7 @@ column_family& database::find_column_family(const utils::UUID& uuid) throw (no_s
 
 const column_family& database::find_column_family(const utils::UUID& uuid) const throw (no_such_column_family) {
     try {
-        return _column_families.at(uuid);
+        return *_column_families.at(uuid);
     } catch (...) {
         std::throw_with_nested(no_such_column_family(uuid.to_sstring()));
     }
@@ -793,7 +790,7 @@ std::set<sstring>
 database::existing_index_names(const sstring& cf_to_exclude) const {
     std::set<sstring> names;
     for (auto& p : _column_families) {
-        auto& cf = p.second;
+        auto& cf = *p.second;
         if (!cf_to_exclude.empty() && cf.schema()->cf_name() == cf_to_exclude) {
             continue;
         }
@@ -942,7 +939,7 @@ std::ostream& operator<<(std::ostream& out, const column_family& cf) {
 std::ostream& operator<<(std::ostream& out, const database& db) {
     out << "{\n";
     for (auto&& e : db._column_families) {
-        auto&& cf = e.second;
+        auto&& cf = *e.second;
         out << "(" << e.first.to_sstring() << ", " << cf.schema()->cf_name() << ", " << cf.schema()->ks_name() << "): " << cf << "\n";
     }
     out << "}";
@@ -1049,7 +1046,7 @@ operator<<(std::ostream& os, const atomic_cell& ac) {
 future<>
 database::stop() {
     return parallel_for_each(_column_families, [this] (auto& val_pair) {
-        return val_pair.second.stop(this);
+        return val_pair.second->stop(this);
     });
 }
 

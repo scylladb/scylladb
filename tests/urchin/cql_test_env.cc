@@ -96,7 +96,7 @@ public:
             cf_schema->set_id(id);
             auto& ks = db.find_keyspace(ks_name);
             auto cfg = ks.make_column_family_config(*cf_schema);
-            db.add_column_family(column_family(std::move(cf_schema), std::move(cfg)));
+            db.add_column_family(std::move(cf_schema), std::move(cfg));
         });
     }
 
