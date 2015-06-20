@@ -25,6 +25,7 @@
 #include "core/fstream.hh"
 #include "core/shared_ptr.hh"
 #include "core/app-template.hh"
+#include "core/do_with.hh"
 #include "test-utils.hh"
 
 struct writer {
@@ -109,10 +110,12 @@ SEASTAR_TEST_CASE(test_fstream_unaligned) {
         }).then([] {
             return engine().open_file_dma("testfile.tmp", open_flags::ro);
         }).then([] (file f) {
-            return f.size().then([] (size_t size) {
-                // assert that file was indeed truncated to the amount of bytes written.
-                BOOST_REQUIRE(size == 40);
-                return make_ready_future<>();
+            return do_with(std::move(f), [] (file& f) {
+                return f.size().then([] (size_t size) {
+                    // assert that file was indeed truncated to the amount of bytes written.
+                    BOOST_REQUIRE(size == 40);
+                    return make_ready_future<>();
+                });
             });
         }).then([] {
             return engine().open_file_dma("testfile.tmp", open_flags::ro);
