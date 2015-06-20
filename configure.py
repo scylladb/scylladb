@@ -117,7 +117,6 @@ modes = {
 }
 
 tests = [
-    'tests/test-reactor',
     'tests/fileiotest',
     'tests/directory_test',
     'tests/linecount',
@@ -274,7 +273,6 @@ deps = {
     'libseastar.a' : core + libnet,
     'seastar.pc': [],
     'apps/seastar/seastar': ['apps/seastar/main.cc'] + core,
-    'tests/test-reactor': ['tests/test-reactor.cc'] + core,
     'apps/httpd/httpd': ['apps/httpd/demo.json', 'apps/httpd/main.cc'] + http + libnet + core,
     'apps/memcached/memcached': ['apps/memcached/memcache.cc'] + memcache_base,
     'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base + boost_test_lib,
