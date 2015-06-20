@@ -33,6 +33,17 @@ public:
     expected_exception() : runtime_error("expected") {}
 };
 
+// Returns a future which is not ready but is scheduled to resolve soon.
+static
+future<> later() {
+    promise<> p;
+    auto f = p.get_future();
+    schedule(make_task([p = std::move(p)] () mutable {
+        p.set_value();
+    }));
+    return f;
+}
+
 SEASTAR_TEST_CASE(test_finally_is_called_on_success_and_failure) {
     auto finally1 = make_shared<bool>();
     auto finally2 = make_shared<bool>();
@@ -329,5 +340,60 @@ SEASTAR_TEST_CASE(test_do_with_4) {
         BOOST_REQUIRE_EQUAL(three, 3);
         BOOST_REQUIRE_EQUAL(four, 4);
         return make_ready_future<>();
+    });
+}
+
+SEASTAR_TEST_CASE(test_do_while_stopping_immediately) {
+    return do_with(int(0), [] (int& count) {
+        return repeat([&count] {
+            ++count;
+            return stop_iteration::yes;
+        }).then([&count] {
+            BOOST_REQUIRE(count == 1);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_do_while_stopping_after_two_iterations) {
+    return do_with(int(0), [] (int& count) {
+        return repeat([&count] {
+            ++count;
+            return count == 2 ? stop_iteration::yes : stop_iteration::no;
+        }).then([&count] {
+            BOOST_REQUIRE(count == 2);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_do_while_failing_in_the_first_step) {
+    return repeat([] {
+        throw expected_exception();
+        return stop_iteration::no;
+    }).then_wrapped([](auto&& f) {
+        try {
+            f.get();
+            BOOST_FAIL("should not happen");
+        } catch (const expected_exception&) {
+            // expected
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_do_while_failing_in_the_second_step) {
+    return do_with(int(0), [] (int& count) {
+        return repeat([&count] {
+            ++count;
+            if (count > 1) {
+                throw expected_exception();
+            }
+            return later().then([] { return stop_iteration::no; });
+        }).then_wrapped([&count](auto&& f) {
+            try {
+                f.get();
+                BOOST_FAIL("should not happen");
+            } catch (const expected_exception&) {
+                BOOST_REQUIRE(count == 2);
+            }
+        });
     });
 }
