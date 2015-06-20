@@ -24,12 +24,14 @@
 #include "core/distributed.hh"
 #include "core/shared_ptr.hh"
 
-BOOST_AUTO_TEST_CASE(make_foreign_ptr_from_lw_shared_ptr) {
+SEASTAR_TEST_CASE(make_foreign_ptr_from_lw_shared_ptr) {
     auto p = make_foreign(make_lw_shared<sstring>("foo"));
     BOOST_REQUIRE(p->size() == 3);
+    return make_ready_future<>();
 }
 
-BOOST_AUTO_TEST_CASE(make_foreign_ptr_from_shared_ptr) {
+SEASTAR_TEST_CASE(make_foreign_ptr_from_shared_ptr) {
     auto p = make_foreign(make_shared<sstring>("foo"));
     BOOST_REQUIRE(p->size() == 3);
+    return make_ready_future<>();
 }
