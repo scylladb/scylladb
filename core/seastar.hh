@@ -34,6 +34,8 @@
 ///   - \ref memory-module Memory management
 ///   - \ref networking-module TCP/IP networking
 ///   - \ref smp-module Multicore support
+///   - \ref fiber-module Utilities for managing loosely coupled chains of
+///          continuations, also known as fibers
 ///   - \ref thread-module Support for traditional threaded execution
 
 #include "sstring.hh"

@@ -27,6 +27,9 @@
 
 namespace seastar {
 
+/// \addtogroup fiber-module
+/// @{
+
 namespace stdx = std::experimental;
 
 /// Exception thrown when a \ref gate object has been closed
@@ -48,7 +51,7 @@ class gate {
 public:
     /// Registers an in-progress request.
     ///
-    /// If the gate is not closed, the request is registered.  Othewise,
+    /// If the gate is not closed, the request is registered.  Otherwise,
     /// a \ref gate_closed_exception is thrown.
     void enter() {
         if (_stopped) {
@@ -79,5 +82,7 @@ public:
         return _stopped->get_future();
     }
 };
+
+/// @}
 
 }

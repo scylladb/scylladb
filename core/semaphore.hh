@@ -25,6 +25,7 @@
 #include "future.hh"
 #include <list>
 #include <stdexcept>
+#include <exception>
 #include "timer.hh"
 
 class broken_semaphore : public std::exception {
@@ -103,7 +104,7 @@ public:
     //
     // This may only be used once per semaphore; after using it the
     // semaphore is in an indeterminite state and should not be waited on.
-    void broken() { broken(broken_semaphore()); }
+    void broken() { broken(std::make_exception_ptr(broken_semaphore())); }
 
     // Signal to waiters that an error occured.  wait() will see
     // an exceptional future<> containing the provided exception parameter.
@@ -111,12 +112,21 @@ public:
     // This may only be used once per semaphore; after using it the
     // semaphore is in an indeterminite state and should not be waited on.
     template <typename Exception>
-    void broken(const Exception& ex);
+    void broken(const Exception& ex) {
+        broken(std::make_exception_ptr(ex));
+    }
+
+    // Signal to waiters that an error occured.  wait() will see
+    // an exceptional future<> containing the provided exception parameter.
+    //
+    // This may only be used once per semaphore; after using it the
+    // semaphore is in an indeterminite state and should not be waited on.
+    void broken(std::exception_ptr ex);
 };
 
-template <typename Exception>
-void semaphore::broken(const Exception& ex) {
-    auto xp = std::make_exception_ptr(ex);
+inline
+void
+semaphore::broken(std::exception_ptr xp) {
     while (!_wait_list.empty()) {
         auto& x = _wait_list.front();
         x.pr.set_exception(xp);
