@@ -27,6 +27,9 @@
 
 namespace seastar {
 
+/// \addtogroup fiber-module
+/// @{
+
 namespace stdx = std::experimental;
 
 /// Exception thrown when a \ref gate object has been closed
@@ -79,5 +82,7 @@ public:
         return _stopped->get_future();
     }
 };
+
+/// @}
 
 }
