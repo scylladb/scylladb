@@ -200,12 +200,12 @@ public:
     // Write sstable components from a memtable.
     future<> write_components(const memtable& mt);
     future<> write_components(::mutation_reader mr,
-            size_t estimated_partitions, schema_ptr schema);
+            uint64_t estimated_partitions, schema_ptr schema);
 private:
     void do_write_components(::mutation_reader mr,
-            size_t estimated_partitions, schema_ptr schema, file_writer& out);
+            uint64_t estimated_partitions, schema_ptr schema, file_writer& out);
     void prepare_write_components(::mutation_reader mr,
-            size_t estimated_partitions, schema_ptr schema);
+            uint64_t estimated_partitions, schema_ptr schema);
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
     static std::unordered_map<component_type, sstring, enum_hash<component_type>> _component_map;
@@ -219,7 +219,7 @@ private:
     column_stats _c_stats;
     lw_shared_ptr<file> _index_file;
     lw_shared_ptr<file> _data_file;
-    size_t _data_file_size;
+    uint64_t _data_file_size;
 
     sstring _dir;
     unsigned long _generation = 0;
@@ -238,7 +238,7 @@ private:
     template <sstable::component_type Type, typename T>
     future<> write_simple(T& comp);
 
-    size_t data_size();
+    uint64_t data_size();
 
     future<> read_toc();
     future<> write_toc();
@@ -279,7 +279,7 @@ private:
     // for iteration through all the rows.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len);
 
-    future<size_t> data_end_position(int summary_idx, int index_idx, const index_list& il);
+    future<uint64_t> data_end_position(int summary_idx, int index_idx, const index_list& il);
 
     template <typename T>
     int binary_search(const T& entries, const key& sk, const dht::token& token);

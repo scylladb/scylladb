@@ -367,18 +367,18 @@ static int adjust_binary_search_index(int idx) {
     return idx;
 }
 
-future<size_t> sstables::sstable::data_end_position(int summary_idx, int index_idx, const index_list& il) {
-    if (size_t(index_idx + 1) < il.size()) {
-        return make_ready_future<size_t>(il[index_idx + 1].position);
+future<uint64_t> sstables::sstable::data_end_position(int summary_idx, int index_idx, const index_list& il) {
+    if (uint64_t(index_idx + 1) < il.size()) {
+        return make_ready_future<uint64_t>(il[index_idx + 1].position);
     } else if (size_t(summary_idx + 1) >= _summary.entries.size()) {
-        return make_ready_future<size_t>(data_size());
+        return make_ready_future<uint64_t>(data_size());
     }
 
     // We should only go to the end of the file if we are in the last summary group.
     // Otherwise, we will determine the end position of the current data read by looking
     // at the first index in the next summary group.
     return read_indexes(_summary.entries[summary_idx + 1].position, 128).then([] (auto next_il) {
-        return make_ready_future<size_t>(next_il.front().position);
+        return make_ready_future<uint64_t>(next_il.front().position);
     });
 }
 
@@ -411,7 +411,7 @@ sstables::sstable::read_row(schema_ptr schema, const sstables::key& key) {
         _filter_tracker->local().add_true_positive();
 
         auto position = index_list[index_idx].position;
-        return this->data_end_position(summary_idx, index_idx, index_list).then([&key, schema, this, position] (size_t end) {
+        return this->data_end_position(summary_idx, index_idx, index_list).then([&key, schema, this, position] (uint64_t end) {
             return do_with(mp_row_consumer(key, schema), [this, position, end] (auto& c) {
                 return this->data_consume_rows_at_once(c, position, end).then([&c] {
                     return make_ready_future<mutation_opt>(std::move(c.mut));
@@ -522,7 +522,7 @@ mutation_reader sstable::read_range_rows(schema_ptr schema,
         if (tcandidate < min_token) {
             min_index_idx++;
         }
-        return make_ready_future<size_t>(index_list[min_index_idx].position);
+        return make_ready_future<uint64_t>(index_list[min_index_idx].position);
     });
 
     auto epos_fut = read_indexes(position).then([this, max_idx, max_token] (auto index_list) {

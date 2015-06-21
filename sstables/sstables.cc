@@ -1078,7 +1078,7 @@ static void write_index_entry(file_writer& out, disk_string_view<uint16_t>& key,
 
 static constexpr int BASE_SAMPLING_LEVEL = 128;
 
-static void prepare_summary(summary& s, size_t expected_partition_count) {
+static void prepare_summary(summary& s, uint64_t expected_partition_count) {
     assert(expected_partition_count >= 1);
 
     s.header.min_index_interval = BASE_SAMPLING_LEVEL;
@@ -1180,7 +1180,7 @@ static constexpr size_t sstable_buffer_size = 64*1024;
 ///  @param out holds an output stream to data file.
 ///
 void sstable::do_write_components(::mutation_reader mr,
-        size_t estimated_partitions, schema_ptr schema, file_writer& out) {
+        uint64_t estimated_partitions, schema_ptr schema, file_writer& out) {
     auto index = make_shared<file_writer>(_index_file, sstable_buffer_size);
 
     prepare_summary(_summary, estimated_partitions);
@@ -1284,7 +1284,7 @@ void sstable::do_write_components(::mutation_reader mr,
     add_stats_metadata(_statistics, *collector);
 }
 
-void sstable::prepare_write_components(::mutation_reader mr, size_t estimated_partitions, schema_ptr schema) {
+void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema) {
     // CRC component must only be present when compression isn't enabled.
     bool checksum_file = schema->get_compressor() == compressor::none;
 
@@ -1313,10 +1313,10 @@ future<> sstable::write_components(const memtable& mt) {
 }
 
 future<> sstable::write_components(::mutation_reader mr,
-        size_t estimated_partitions, schema_ptr schema) {
+        uint64_t estimated_partitions, schema_ptr schema) {
     return touch_directory(_dir).then([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema)] {
         return create_data().then([this, mr = std::move(mr), estimated_partitions, schema = std::move(schema)] {
-            auto w = [this] (::mutation_reader mr, size_t estimated_partitions, schema_ptr schema) {
+            auto w = [this] (::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema) {
                 this->prepare_write_components(std::move(mr), estimated_partitions, std::move(schema));
             };
             return seastar::async(std::move(w), std::move(mr), estimated_partitions, std::move(schema)).then([this] {
@@ -1335,7 +1335,7 @@ future<> sstable::write_components(::mutation_reader mr,
     });
 }
 
-size_t sstable::data_size() {
+uint64_t sstable::data_size() {
     if (has_component(sstable::component_type::CompressionInfo)) {
         return _compression.data_len;
     }
