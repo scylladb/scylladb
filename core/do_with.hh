@@ -56,12 +56,14 @@ auto do_with(T&& rvalue, F&& f) {
     return fut.finally([obj = std::move(obj)] () {});
 }
 
+/// \cond internal
 template <typename Tuple, size_t... Idx>
 inline
 auto
 cherry_pick_tuple(std::index_sequence<Idx...>, Tuple&& tuple) {
     return std::make_tuple(std::get<Idx>(std::forward<Tuple>(tuple))...);
 }
+/// \endcond
 
 /// Multiple argument variant of \ref do_with(T&& rvalue, F&& f).
 ///
