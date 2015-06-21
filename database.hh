@@ -253,6 +253,9 @@ public:
 
         return make_ready_future<>();
     }
+
+    // FIXME to allow simple registration at boostrap
+    void set_replication_strategy(std::unique_ptr<locator::abstract_replication_strategy> replication_strategy);
 private:
     sstring column_family_directory(const sstring& name, utils::UUID uuid) const;
 };

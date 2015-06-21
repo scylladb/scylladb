@@ -749,6 +749,11 @@ keyspace::get_replication_strategy() {
     return *_replication_strategy;
 }
 
+void
+keyspace::set_replication_strategy(std::unique_ptr<locator::abstract_replication_strategy> replication_strategy) {
+    _replication_strategy = std::move(replication_strategy);
+}
+
 column_family::config
 keyspace::make_column_family_config(const schema& s) const {
     column_family::config cfg;
