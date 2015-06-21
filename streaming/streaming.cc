@@ -17,3 +17,6 @@
 #include "streaming/messages/session_failed_message.hh"
 #include "streaming/stream_session.hh"
 #include "streaming/stream_task.hh"
+#include "streaming/stream_event.hh"
+#include "streaming/stream_event_handler.hh"
+#include "streaming/connection_handler.hh"

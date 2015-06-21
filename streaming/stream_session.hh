@@ -24,6 +24,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "core/distributed.hh"
 #include "message/messaging_service.hh"
+#include "utils/UUID.hh"
 
 namespace streaming {
 
@@ -96,6 +97,11 @@ private:
     using messaging_verb = net::messaging_verb;
     using messaging_service = net::messaging_service;
     using shard_id = net::messaging_service::shard_id;
+    using inet_address = gms::inet_address;
+    using endpoint_state = gms::endpoint_state;
+    using application_state = gms::application_state;
+    using versioned_value = gms::versioned_value;
+    using UUID = utils::UUID;
     net::messaging_service& ms() {
         return net::get_local_messaging_service();
     }
@@ -108,19 +114,19 @@ private:
     distributed<handler> _handlers;
     void init_messaging_service_handler();
     future<> start();
-#if 0
-    private static final Logger logger = LoggerFactory.getLogger(StreamSession.class);
-
+public:
     /**
      * Streaming endpoint.
      *
      * Each {@code StreamSession} is identified by this InetAddress which is broadcast address of the node streaming.
      */
-    public final InetAddress peer;
-    private final int index;
+    inet_address peer;
     /** Actual connecting address. Can be the same as {@linkplain #peer}. */
-    public final InetAddress connecting;
+    inet_address connecting;
+private:
+    int _index;
 
+#if 0
     // should not be null when session is started
     private StreamResultFuture streamResult;
 
@@ -140,20 +146,20 @@ private:
 
     private AtomicBoolean isAborted = new AtomicBoolean(false);
     private final boolean keepSSTableLevel;
-
-    public static enum State
-    {
+#endif
+public:
+    enum class state {
         INITIALIZED,
         PREPARING,
         STREAMING,
         WAIT_COMPLETE,
         COMPLETE,
         FAILED,
-    }
-
-    private volatile State state = State.INITIALIZED;
-    private volatile boolean completeSent = false;
-
+    };
+private:
+    state _state = state::INITIALIZED;
+    bool complete_sent = false;
+#if 0
     /**
      * Create new streaming session with the peer.
      *
@@ -171,16 +177,21 @@ private:
         this.metrics = StreamingMetrics.get(connecting);
         this.keepSSTableLevel = keepSSTableLevel;
     }
+#endif
 
-    public UUID planId()
-    {
-        return streamResult == null ? null : streamResult.planId;
+public:
+
+    UUID plan_id() {
+        // return streamResult == null ? null : streamResult.planId;
+        // FIXME:
+        return UUID();
     }
 
-    public int sessionIndex()
-    {
-        return index;
+    int session_index() {
+        return _index;
     }
+
+#if 0
 
     public String description()
     {
@@ -404,17 +415,19 @@ private:
     {
         return state;
     }
+#endif
 
+public:
     /**
      * Return if this session completed successfully.
      *
      * @return true if session completed successfully.
      */
-    public boolean isSuccess()
-    {
-        return state == State.COMPLETE;
+    bool is_success() {
+        return _state == state::COMPLETE;
     }
 
+#if 0
     public void messageReceived(StreamMessage message)
     {
         switch (message.type)
@@ -627,23 +640,22 @@ private:
         transfers.remove(completedTask.cfId);
         maybeCompleted();
     }
+#endif
 
-    public void onJoin(InetAddress endpoint, EndpointState epState) {}
-    public void beforeChange(InetAddress endpoint, EndpointState currentState, ApplicationState newStateKey, VersionedValue newValue) {}
-    public void onChange(InetAddress endpoint, ApplicationState state, VersionedValue value) {}
-    public void onAlive(InetAddress endpoint, EndpointState state) {}
-    public void onDead(InetAddress endpoint, EndpointState state) {}
-
-    public void onRemove(InetAddress endpoint)
-    {
-        closeSession(State.FAILED);
+public:
+    virtual void on_join(inet_address endpoint, endpoint_state ep_state) override {}
+    virtual void before_change(inet_address endpoint, endpoint_state current_state, application_state new_state_key, versioned_value new_value) override {}
+    virtual void on_change(inet_address endpoint, application_state state, versioned_value value) override {}
+    virtual void on_alive(inet_address endpoint, endpoint_state state) override {}
+    virtual void on_dead(inet_address endpoint, endpoint_state state) override {}
+    virtual void on_remove(inet_address endpoint) override {
+        //closeSession(State.FAILED);
+    }
+    virtual void on_restart(inet_address endpoint, endpoint_state ep_state) override {
+        //closeSession(State.FAILED);
     }
 
-    public void onRestart(InetAddress endpoint, EndpointState epState)
-    {
-        closeSession(State.FAILED);
-    }
-
+#if 0
     private boolean maybeCompleted()
     {
         boolean completed = receivers.isEmpty() && transfers.isEmpty();
