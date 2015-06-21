@@ -30,6 +30,7 @@
 #include "query-result-set.hh"
 #include "core/distributed.hh"
 #include "db/consistency_level.hh"
+#include "core/shared_ptr.hh"
 
 namespace service {
 
@@ -37,9 +38,9 @@ class abstract_write_response_handler;
 
 class storage_proxy /*implements StorageProxyMBean*/ {
     struct rh_entry {
-        std::unique_ptr<abstract_write_response_handler> handler;
+        ::shared_ptr<abstract_write_response_handler> handler;
         timer<> expire_timer;
-        rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb);
+        rh_entry(::shared_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb);
     };
 public:
     using response_id_type = uint64_t;
@@ -53,7 +54,7 @@ private:
 private:
     void init_messaging_service();
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl);
-    response_id_type register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h);
+    response_id_type register_response_handler(::shared_ptr<abstract_write_response_handler>&& h);
     void remove_response_handler(response_id_type id);
     void got_response(response_id_type id, gms::inet_address from);
     future<> response_wait(response_id_type id);
