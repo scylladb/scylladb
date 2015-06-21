@@ -14,16 +14,19 @@
 namespace sstables {
 
 future<> sstable::read_filter() {
-    if (!has_component(sstable::component_type::Filter)) {
-        _filter = std::make_unique<utils::filter::always_present_filter>();
-        return make_ready_future<>();
-    }
+    auto ft = _filter_tracker;
+    return _filter_tracker->start(std::move(ft)).then([this] {
+        if (!has_component(sstable::component_type::Filter)) {
+            _filter = std::make_unique<utils::filter::always_present_filter>();
+            return make_ready_future<>();
+        }
 
-    return do_with(sstables::filter(), [this] (auto& filter) {
-        return this->read_simple<sstable::component_type::Filter>(filter).then([this, &filter] {
-            utils::filter::bloom_filter::bitmap bs;
-            bs.append(filter.buckets.elements.begin(), filter.buckets.elements.end());
-            _filter = utils::filter::create_filter(filter.hashes, std::move(bs));
+        return do_with(sstables::filter(), [this] (auto& filter) {
+            return this->read_simple<sstable::component_type::Filter>(filter).then([this, &filter] {
+                utils::filter::bloom_filter::bitmap bs;
+                bs.append(filter.buckets.elements.begin(), filter.buckets.elements.end());
+                _filter = utils::filter::create_filter(filter.hashes, std::move(bs));
+            });
         });
     });
 }
