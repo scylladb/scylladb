@@ -213,6 +213,18 @@ reactor::reactor()
     });
 }
 
+reactor::~reactor() {
+    timer_delete(_timer);
+    auto eraser = [](auto& list) {
+        while (!list.empty()) {
+            auto& timer = *list.begin();
+            timer.cancel();
+        }
+    };
+    eraser(_expired_timers);
+    eraser(_expired_lowres_timers);
+}
+
 #ifdef HAVE_OSV
 void reactor::timer_thread_func() {
     sched::timer tmr(*sched::thread::current());

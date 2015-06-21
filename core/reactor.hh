@@ -772,17 +772,7 @@ public:
     static boost::program_options::options_description get_options_description();
     reactor();
     reactor(const reactor&) = delete;
-    ~reactor() {
-        timer_delete(_timer);
-        auto eraser = [](auto& list) {
-            while (!list.empty()) {
-                auto& timer = *list.begin();
-                timer.cancel();
-            }
-        };
-        eraser(_expired_timers);
-        eraser(_expired_lowres_timers);
-    }
+    ~reactor();
     void operator=(const reactor&) = delete;
 
     void configure(boost::program_options::variables_map config);
