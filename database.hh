@@ -239,19 +239,12 @@ public:
     const lw_shared_ptr<keyspace_metadata>& metadata() const {
         return _metadata;
     }
-    future<> create_replication_strategy(const sstring& snitch_name, const std::map<sstring, sstring>& options);
+    void create_replication_strategy(const std::map<sstring, sstring>& options);
     locator::abstract_replication_strategy& get_replication_strategy();
     column_family::config make_column_family_config(const schema& s) const;
     future<> make_directory_for_column_family(const sstring& name, utils::UUID uuid);
     void add_column_family(const schema_ptr& s) {
         _metadata->add_column_family(s);
-    }
-    future<> stop() {
-        if (_replication_strategy) {
-            return _replication_strategy->stop();
-        }
-
-        return make_ready_future<>();
     }
 
     // FIXME to allow simple registration at boostrap
@@ -311,8 +304,20 @@ public:
     const utils::UUID& find_uuid(const sstring& ks, const sstring& cf) const throw (std::out_of_range);
     const utils::UUID& find_uuid(const schema_ptr&) const throw (std::out_of_range);
 
-    /* below, find* throws no_such_<type> on fail */
+    /**
+     * Creates a keyspace for a given metadata if it still doesn't exist.
+     *
+     * Fixme: this interface is left to return a future by a Glauber's request
+     * since it's upcoming patch is going to need this. Currently there is no
+     * reason for it to return a future. Therefore there should be a proper
+     * comment here describing the reason why this function returns a future
+     * since running a "git blame" on this function's header would give a
+     * confusing result about the reason it became futurized.
+     *
+     * @return ready future when the operation is complete
+     */
     future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&);
+    /* below, find_keyspace throws no_such_<type> on fail */
     keyspace& find_keyspace(const sstring& name) throw (no_such_keyspace);
     const keyspace& find_keyspace(const sstring& name) const throw (no_such_keyspace);
     bool has_keyspace(const sstring& name) const;

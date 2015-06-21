@@ -40,7 +40,7 @@ struct rack_inferring_snitch : public snitch_base {
         _my_rack = get_rack(utils::fb_utilities::get_broadcast_address());
 
         // This snitch is ready on creation
-        _snitch_is_ready.set_value();
+        set_snitch_ready();
     }
 
     virtual sstring get_rack(inet_address endpoint) override {

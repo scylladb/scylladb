@@ -1009,7 +1009,7 @@ void make(database& db, bool durable) {
             );
     auto kscfg = db.make_keyspace_config(*ksm);
     keyspace _ks{ksm, std::move(kscfg)};
-    auto rs(locator::abstract_replication_strategy::create_replication_strategy(NAME, "LocalStrategy", service::get_local_storage_service().get_token_metadata(), nullptr, ksm->strategy_options()));
+    auto rs(locator::abstract_replication_strategy::create_replication_strategy(NAME, "LocalStrategy", service::get_local_storage_service().get_token_metadata(), ksm->strategy_options()));
     _ks.set_replication_strategy(std::move(rs));
     db.add_keyspace(NAME, std::move(_ks));
     auto& ks = db.find_keyspace(NAME);

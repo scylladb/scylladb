@@ -28,9 +28,9 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     return i_endpoint_snitch::create_snitch<const sstring&>(
         "org.apache.cassandra.locator.GossipingPropertyFileSnitch",
         sstring(fname.string()))
-        .then([exp_result] (snitch_ptr sptr) {
+        .then([exp_result] () {
             BOOST_CHECK(exp_result);
-            return sptr->stop();
+            return i_endpoint_snitch::stop_snitch();
         }).then_wrapped([exp_result] (auto&& f) {
             try {
                 f.get();
