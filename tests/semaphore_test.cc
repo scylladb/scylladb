@@ -29,6 +29,8 @@
 #include "core/do_with.hh"
 #include "core/future-util.hh"
 #include "core/sleep.hh"
+#include "core/shared_mutex.hh"
+#include <boost/range/irange.hpp>
 
 using namespace seastar;
 using namespace std::chrono_literals;
@@ -100,3 +102,75 @@ SEASTAR_TEST_CASE(test_semaphore_mix_1) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_shared_mutex_exclusive) {
+    return do_with(shared_mutex(), unsigned(0), [] (shared_mutex& sm, unsigned& counter) {
+        return parallel_for_each(boost::irange(0, 10), [&sm, &counter] (int idx) {
+            return with_lock(sm, [&counter] {
+                BOOST_REQUIRE_EQUAL(counter, 0);
+                ++counter;
+                return sleep(10ms).then([&counter] {
+                    --counter;
+                    BOOST_REQUIRE_EQUAL(counter, 0);
+                });
+            });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_shared_mutex_shared) {
+    return do_with(shared_mutex(), unsigned(0), [] (shared_mutex& sm, unsigned& counter) {
+        auto running_in_parallel = [&sm, &counter] (int instance) {
+            return with_shared(sm, [&counter] {
+                ++counter;
+                return sleep(10ms).then([&counter] {
+                    bool was_parallel = counter != 0;
+                    --counter;
+                    return was_parallel;
+                });
+            });
+        };
+        return map_reduce(boost::irange(0, 100), running_in_parallel, false, std::bit_or<bool>()).then([&counter] (bool result) {
+            BOOST_REQUIRE_EQUAL(result, true);
+            BOOST_REQUIRE_EQUAL(counter, 0);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_shared_mutex_mixed) {
+    return do_with(shared_mutex(), unsigned(0), [] (shared_mutex& sm, unsigned& counter) {
+        auto running_in_parallel = [&sm, &counter] (int instance) {
+            return with_shared(sm, [&counter] {
+                ++counter;
+                return sleep(10ms).then([&counter] {
+                    bool was_parallel = counter != 0;
+                    --counter;
+                    return was_parallel;
+                });
+            });
+        };
+        auto running_alone = [&sm, &counter] (int instance) {
+            return with_lock(sm, [&counter] {
+                BOOST_REQUIRE_EQUAL(counter, 0);
+                ++counter;
+                return sleep(10ms).then([&counter] {
+                    --counter;
+                    BOOST_REQUIRE_EQUAL(counter, 0);
+                    return true;
+                });
+            });
+        };
+        auto run = [running_in_parallel, running_alone] (int instance) {
+            if (instance % 9 == 0) {
+                return running_alone(instance);
+            } else {
+                return running_in_parallel(instance);
+            }
+        };
+        return map_reduce(boost::irange(0, 100), run, false, std::bit_or<bool>()).then([&counter] (bool result) {
+            BOOST_REQUIRE_EQUAL(result, true);
+            BOOST_REQUIRE_EQUAL(counter, 0);
+        });
+    });
+}
+
