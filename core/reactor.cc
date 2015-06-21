@@ -1434,16 +1434,6 @@ void schedule(std::unique_ptr<task> t) {
     engine().add_task(std::move(t));
 }
 
-void report_failed_future(std::exception_ptr exp) {
-    try {
-        std::rethrow_exception(std::move(exp));
-    } catch (std::exception& ex) {
-        std::cerr << "WARNING: exceptional future ignored: " << ex.what() << "\n";
-    } catch (...) {
-        std::cerr << "WARNING: exceptional future ignored\n";
-    }
-}
-
 bool operator==(const ::sockaddr_in a, const ::sockaddr_in b) {
     return (a.sin_addr.s_addr == b.sin_addr.s_addr) && (a.sin_port == b.sin_port);
 }
@@ -1860,6 +1850,43 @@ reactor_backend_osv::enable_timer(clock_type::time_point when) {
 
 #endif
 
+void report_exception(sstring message, std::exception_ptr eptr) {
+#ifndef __GNUC__
+    std::cerr << message << ".\n";
+#else
+    try {
+        std::rethrow_exception(eptr);
+    } catch(...) {
+        auto tp = abi::__cxa_current_exception_type();
+        std::cerr << message;
+        if (tp) {
+            int status;
+            char *demangled = abi::__cxa_demangle(tp->name(), 0, 0, &status);
+            std::cerr << " of type '";
+            if (status == 0) {
+                std::cerr << demangled;
+                free(demangled);
+            } else {
+                std::cerr << tp->name();
+            }
+            std::cerr << "'";
+        } else {
+            std::cerr << " of unknown type";
+        }
+        // Print more information on some known exception types
+        try {
+            throw;
+        } catch(const std::system_error &e) {
+            std::cerr << ": Error " << e.code() << " (" << e.code().message() << ")\n";
+        } catch(const std::exception& e) {
+            std::cerr << ": " << e.what() << "\n";
+        } catch(...) {
+            std::cerr << ".\n";
+        }
+    }
+#endif
+}
+
 /**
  * engine_exit() exits the reactor. It should be given a pointer to the
  * exception which prompted this exit - or a null pointer if the exit
@@ -1870,40 +1897,14 @@ void engine_exit(std::exception_ptr eptr) {
         engine().exit(0);
         return;
     }
-#ifndef __GNUC__
-    std::cerr << "Exiting on unhandled exception.\n";
-#else
-    try {
-        std::rethrow_exception(eptr);
-    } catch(...) {
-        auto tp = abi::__cxa_current_exception_type();
-        std::cerr << "Exiting on unhandled exception ";
-        if (tp) {
-            int status;
-            char *demangled = abi::__cxa_demangle(tp->name(), 0, 0, &status);
-            std::cerr << "of type '";
-            if (status == 0) {
-                std::cerr << demangled;
-                free(demangled);
-            } else {
-                std::cerr << tp->name();
-            }
-            std::cerr << "'.\n";
-        } else {
-            std::cerr << "of unknown type.\n";
-        }
-        // Print more information on some known exception types
-        try {
-            throw;
-        } catch(const std::system_error &e) {
-            std::cerr << "Error " << e.code() << " (" << e.code().message() << ")\n";
-        } catch(const std::exception& e) {
-            std::cerr << e.what() << "\n";
-        }
-    }
-#endif
+    report_exception("Exiting on unhandled exception", eptr);
     engine().exit(1);
 }
+
+void report_failed_future(std::exception_ptr eptr) {
+    report_exception("WARNING: exceptional future ignored", eptr);
+}
+
 
 future<file> open_file_dma(sstring name, open_flags flags) {
     return engine().open_file_dma(std::move(name), flags);
