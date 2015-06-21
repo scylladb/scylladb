@@ -198,10 +198,14 @@ public:
     mutation_reader read_rows(schema_ptr schema);
 
     // Write sstable components from a memtable.
-    void do_write_components(const memtable& mt, file_writer& out);
-    void prepare_write_components(const memtable& mt);
     future<> write_components(const memtable& mt);
+    future<> write_components(::mutation_reader mr,
+            size_t estimated_partitions, schema_ptr schema);
 private:
+    void do_write_components(::mutation_reader mr,
+            size_t estimated_partitions, schema_ptr schema, file_writer& out);
+    void prepare_write_components(::mutation_reader mr,
+            size_t estimated_partitions, schema_ptr schema);
     static std::unordered_map<version_types, sstring, enum_hash<version_types>> _version_string;
     static std::unordered_map<format_types, sstring, enum_hash<format_types>> _format_string;
     static std::unordered_map<component_type, sstring, enum_hash<component_type>> _component_map;
