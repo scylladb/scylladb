@@ -66,7 +66,7 @@ public:
     /// \return a future that becomes ready when no exclusive access
     ///         is granted to anyone.
     future<> lock_shared() {
-        if (!_writer) {
+        if (!_writer && _waiters.empty()) {
             ++_readers;
             return make_ready_future<>();
         }
