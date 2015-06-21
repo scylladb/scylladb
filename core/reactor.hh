@@ -702,7 +702,7 @@ private:
     bool _handle_sigint = true;
     promise<std::unique_ptr<network_stack>> _network_stack_ready_promise;
     int _return = 0;
-    timer_t _timer;
+    timer_t _timer = {};
     promise<> _start_promise;
     semaphore _cpu_started;
     uint64_t _tasks_processed = 0;
@@ -773,6 +773,7 @@ public:
     reactor();
     reactor(const reactor&) = delete;
     ~reactor() {
+        timer_delete(_timer);
         auto eraser = [](auto& list) {
             while (!list.empty()) {
                 auto& timer = *list.begin();
