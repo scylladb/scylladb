@@ -15,6 +15,12 @@ class result_digest {
 public:
     result_digest(bytes&& digest) : _digest(std::move(digest)) {}
     const bytes& get() { return _digest; }
+    bool operator==(const result_digest& rh) {
+        return _digest == rh._digest;
+    }
+    bool operator!=(const result_digest& rh) {
+        return _digest != rh._digest;
+    }
     size_t serialized_size() const { return _digest.size(); }
     void serialize(bytes::iterator& out) const {
         out = std::copy(_digest.begin(), _digest.end(), out);

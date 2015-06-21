@@ -27,6 +27,8 @@ enum class messaging_verb : int32_t {
     BINARY, // Deprecated
     READ_REPAIR,
     READ,
+    READ_DATA,
+    READ_DIGEST,
     REQUEST_RESPONSE, // client-initiated reads and writes
     STREAM_INITIATE, // Deprecated
     STREAM_INITIATE_DONE, // Deprecated

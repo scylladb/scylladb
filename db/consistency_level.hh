@@ -24,11 +24,13 @@
 
 #pragma once
 
+#include <boost/range/algorithm/sort.hpp>
 #include "exceptions/exceptions.hh"
 #include "core/sstring.hh"
 #include "schema.hh"
 #include "database.hh"
 #include "unimplemented.hh"
+#include "db/read_repair_decision.hh"
 
 namespace db {
 
@@ -217,49 +219,57 @@ size_t count_local_endpoints(Range& live_endpoints)
         }
         return dcEndpoints;
     }
+#endif
 
-    public List<InetAddress> filterForQuery(Keyspace keyspace, List<InetAddress> liveEndpoints)
-    {
-        return filterForQuery(keyspace, liveEndpoints, ReadRepairDecision.NONE);
+inline
+std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address> live_endpoints, read_repair_decision read_repair) {
+    /*
+     * Endpoints are expected to be restricted to live replicas, sorted by snitch preference.
+     * For LOCAL_QUORUM, move local-DC replicas in front first as we need them there whether
+     * we do read repair (since the first replica gets the data read) or not (since we'll take
+     * the blockFor first ones).
+     */
+    if (is_datacenter_local(cl)) {
+        boost::range::sort(live_endpoints, [] (gms::inet_address&, gms::inet_address&) { return 0; }/*, DatabaseDescriptor.getLocalComparator()*/);
     }
 
-    public List<InetAddress> filterForQuery(Keyspace keyspace, List<InetAddress> liveEndpoints, ReadRepairDecision readRepair)
+    switch (read_repair)
     {
-        /*
-         * Endpoints are expected to be restricted to live replicas, sorted by snitch preference.
-         * For LOCAL_QUORUM, move local-DC replicas in front first as we need them there whether
-         * we do read repair (since the first replica gets the data read) or not (since we'll take
-         * the blockFor first ones).
-         */
-        if (isDCLocal)
-            Collections.sort(liveEndpoints, DatabaseDescriptor.getLocalComparator());
-
-        switch (readRepair)
+    case read_repair_decision::NONE:
+        live_endpoints.erase(live_endpoints.begin() + std::min(live_endpoints.size(), block_for(ks, cl)), live_endpoints.end());
+        // fall through
+    case read_repair_decision::GLOBAL:
+        return std::move(live_endpoints);
+    case read_repair_decision::DC_LOCAL:
+        throw std::runtime_error("DC local read repair is not implemented yet");
+#if 0
+        List<InetAddress> local = new ArrayList<InetAddress>();
+        List<InetAddress> other = new ArrayList<InetAddress>();
+        for (InetAddress add : liveEndpoints)
         {
-            case NONE:
-                return liveEndpoints.subList(0, Math.min(liveEndpoints.size(), blockFor(keyspace)));
-            case GLOBAL:
-                return liveEndpoints;
-            case DC_LOCAL:
-                List<InetAddress> local = new ArrayList<InetAddress>();
-                List<InetAddress> other = new ArrayList<InetAddress>();
-                for (InetAddress add : liveEndpoints)
-                {
-                    if (isLocal(add))
-                        local.add(add);
-                    else
-                        other.add(add);
-                }
-                // check if blockfor more than we have localep's
-                int blockFor = blockFor(keyspace);
-                if (local.size() < blockFor)
-                    local.addAll(other.subList(0, Math.min(blockFor - local.size(), other.size())));
-                return local;
-            default:
-                throw new AssertionError();
+            if (isLocal(add))
+                local.add(add);
+            else
+                other.add(add);
         }
+        // check if blockfor more than we have localep's
+        int blockFor = blockFor(keyspace);
+        if (local.size() < blockFor)
+            local.addAll(other.subList(0, Math.min(blockFor - local.size(), other.size())));
+        return local;
+#endif
+    default:
+        throw std::runtime_error("Unknown read repair type");
     }
+}
 
+inline
+std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address>& live_endpoints) {
+    return filter_for_query(cl, ks, live_endpoints, read_repair_decision::NONE);
+}
+
+
+#if 0
     public boolean isSufficientLiveNodes(Keyspace keyspace, Iterable<InetAddress> liveEndpoints)
     {
         switch (this)
