@@ -886,7 +886,7 @@ static future<> sstable_compression_test(compressor c, unsigned generation) {
         // NOTE: set a given compressor algorithm to schema.
         s->set_compressor(c);
 
-        auto mtp = make_shared<memtable>(s);
+        auto mtp = make_lw_shared<memtable>(s);
 
         auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
         auto cp = exploded_clustering_prefix({to_bytes("c1") });
@@ -930,7 +930,7 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
     return test_setup::do_with_test_directory([] {
         auto s = uncompressed_schema();
 
-        auto mtp = make_shared<memtable>(s);
+        auto mtp = make_lw_shared<memtable>(s);
         // Create a number of keys that is a multiple of the sampling level
         for (int i = 0; i < 0x80; ++i) {
             sstring k = "key" + to_sstring(i);
