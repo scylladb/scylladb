@@ -98,7 +98,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
             {"compression_parameters", utf8_type},
             {"default_time_to_live", int32_type},
             {"default_validator", utf8_type},
-            //    + "dropped_columns map<text, bigint>," // FIXME: add this type
+            {"dropped_columns",  map_type_impl::get_instance(utf8_type, long_type, true)},
             {"gc_grace_seconds", int32_type},
             {"is_dense", boolean_type},
             {"key_validator", utf8_type},
@@ -162,8 +162,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         {{"columnfamily_name", utf8_type}, {"trigger_name", utf8_type}},
         // regular columns
         {
-            // FIXME: Cassandra had this:
-            // "trigger_options map<text, text>,"
+            {"trigger_options",  map_type_impl::get_instance(utf8_type, utf8_type, true)},
         },
         // static columns
         {},
@@ -186,9 +185,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         {{"type_name", utf8_type}},
         // regular columns
         {
-            // FIXME: Cassandra had this:
-            // "field_names list<text>,"
-            // "field_types list<text>,"
+            {"field_names", list_type_impl::get_instance(utf8_type, true)},
+            {"field_types", list_type_impl::get_instance(utf8_type, true)},
         },
         // static columns
         {},
@@ -211,9 +209,8 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         {{"function_name", utf8_type}, {"signature", bytes_type}},
         // regular columns
         {
-            // FIXME: Cassandra had this:
-            // "argument_names list<text>,"
-            // "argument_types list<text>,"
+            {"argument_names", list_type_impl::get_instance(utf8_type, true)},
+            {"argument_types", list_type_impl::get_instance(utf8_type, true)},
             {"body", utf8_type},
             {"is_deterministic", boolean_type},
             {"language", utf8_type},
@@ -240,8 +237,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         {{"aggregate_name", utf8_type}, {"signature", bytes_type}},
         // regular columns
         {
-            // FIXME: Cassandra had this:
-            // "argument_types list<text>,"
+            {"argument_types", list_type_impl::get_instance(utf8_type, true)},
             {"final_func", utf8_type},
             {"intercond", bytes_type},
             {"return_type", utf8_type},
