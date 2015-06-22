@@ -201,6 +201,11 @@ public:
     future<> write_components(const memtable& mt);
     future<> write_components(::mutation_reader mr,
             uint64_t estimated_partitions, schema_ptr schema);
+
+    uint64_t get_estimated_key_count() const {
+        return ((uint64_t)_summary.header.size_at_full_sampling + 1) *
+                _summary.header.min_index_interval;
+    }
 private:
     void do_write_components(::mutation_reader mr,
             uint64_t estimated_partitions, schema_ptr schema, file_writer& out);
