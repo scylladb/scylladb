@@ -128,6 +128,55 @@ void do_until_continued(StopCondition&& stop_cond, AsyncAction&& action, promise
 }
 /// \endcond
 
+enum class stop_iteration { no, yes };
+
+/// Invokes given action until it fails or the function requests iteration to stop by returning
+/// \c stop_iteration::yes.
+///
+/// \param action a callable taking no arguments, returning a future<stop_iteration>.  Will
+///               be called again as soon as the future resolves, unless the
+///               future fails, action throws, or it resolves with \c stop_iteration::yes.
+///               If \c action is an r-value it can be moved in the middle of iteration.
+/// \return a ready future if we stopped successfully, or a failed future if
+///         a call to to \c action failed.
+template<typename AsyncAction>
+static inline
+future<> repeat(AsyncAction&& action) {
+    using futurator = futurize<std::result_of_t<AsyncAction()>>;
+    static_assert(std::is_same<future<stop_iteration>, typename futurator::type>::value, "bad AsyncAction signature");
+
+    while (task_quota) {
+        try {
+            auto f = futurator::apply(action);
+
+            if (!f.available()) {
+                return f.then([action = std::forward<AsyncAction>(action)] (stop_iteration stop) mutable {
+                    if (stop == stop_iteration::yes) {
+                        return make_ready_future<>();
+                    } else {
+                        return repeat(std::forward<AsyncAction>(action));
+                    }
+                });
+            }
+
+            if (f.get0() == stop_iteration::yes) {
+                return make_ready_future<>();
+            }
+        } catch (...) {
+            return make_exception_future<>(std::current_exception());
+        }
+
+        --task_quota;
+    }
+
+    promise<> p;
+    auto f = p.get_future();
+    schedule(make_task([action = std::forward<AsyncAction>(action), p = std::move(p)] () mutable {
+        repeat(std::forward<AsyncAction>(action)).forward_to(std::move(p));
+    }));
+    return f;
+}
+
 /// Invokes given action until it fails or given condition evaluates to true.
 ///
 /// \param stop_cond a callable taking no arguments, returning a boolean that
@@ -158,28 +207,11 @@ future<> do_until(StopCondition&& stop_cond, AsyncAction&& action) {
 template<typename AsyncAction>
 static inline
 future<> keep_doing(AsyncAction&& action) {
-    while (task_quota) {
-        auto f = action();
-
-        if (!f.available()) {
-            return f.then([action = std::forward<AsyncAction>(action)] () mutable {
-                return keep_doing(std::forward<AsyncAction>(action));
-            });
-        }
-
-        if (f.failed()) {
-            return std::move(f);
-        }
-
-        --task_quota;
-    }
-
-    promise<> p;
-    auto f = p.get_future();
-    schedule(make_task([action = std::forward<AsyncAction>(action), p = std::move(p)] () mutable {
-        keep_doing(std::forward<AsyncAction>(action)).forward_to(std::move(p));
-    }));
-    return f;
+    return repeat([action = std::forward<AsyncAction>(action)] () mutable {
+        return action().then([] {
+            return stop_iteration::no;
+        });
+    });
 }
 
 /// Call a function for each item in a range, sequentially (iterator version).
