@@ -381,7 +381,8 @@ public:
     get_column_families_mapping() const {
         return _ks_cf_to_uuid;
     }
-    const db::config& get_config() {
+
+    const db::config& get_config() const {
         return *_cfg;
     }
 };
