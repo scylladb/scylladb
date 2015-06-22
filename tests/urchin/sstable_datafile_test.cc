@@ -8,6 +8,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/key.hh"
 #include "sstables/compress.hh"
+#include "sstables/compaction.hh"
 #include "tests/test-utils.hh"
 #include "schema.hh"
 #include "database.hh"
@@ -952,3 +953,153 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
     });
 }
 
+////////////////////////////////  Test basic compaction support
+
+// open_sstable() opens the requested sstable for reading only (sstables are
+// immutable, so an existing sstable cannot be opened for writing).
+// It returns a future because opening requires reading from disk, and
+// therefore may block. The future value is a shared sstable - a reference-
+// counting pointer to an sstable - allowing for the returned handle to
+// be passed around until no longer needed.
+static future<sstables::shared_sstable> open_sstable(sstring dir, unsigned long generation) {
+    auto sst = make_lw_shared<sstables::sstable>(dir, generation,
+            sstables::sstable::version_types::la,
+            sstables::sstable::format_types::big);
+    auto fut = sst->load();
+    return fut.then([sst = std::move(sst)] { return std::move(sst); });
+}
+
+// open_sstables() opens several generations of the same sstable, returning,
+// after all the tables have been open, their vector.
+static future<std::vector<sstables::shared_sstable>> open_sstables(sstring dir, std::vector<unsigned long> generations) {
+    return do_with(std::vector<sstables::shared_sstable>(),
+            [dir = std::move(dir), generations = std::move(generations)] (auto& ret) mutable {
+        return parallel_for_each(generations, [&ret, &dir] (unsigned long generation) {
+            return open_sstable(dir, generation).then([&ret] (sstables::shared_sstable sst) {
+                ret.push_back(std::move(sst));
+            });
+        }).then([&ret] {
+            return std::move(ret);
+        });
+    });
+}
+
+// mutation_reader for sstable keeping all the required objects alive.
+static ::mutation_reader sstable_reader(shared_sstable sst, schema_ptr s) {
+    // TODO: s is probably not necessary, as the read_rows() object keeps a copy of it.
+    return [sst, s, r = make_lw_shared(sst->read_rows(s))] () mutable { return r->read(); };
+
+}
+
+
+SEASTAR_TEST_CASE(compact) {
+    constexpr int generation = 17;
+    // The "compaction" sstable was created with the following schema:
+    // CREATE TABLE compaction (
+    //        name text,
+    //        age int,
+    //        height int,
+    //        PRIMARY KEY (name)
+    //);
+    schema_ptr s = make_lw_shared(schema({}, "tests", "compaction",
+            // partition key
+            {{"name", utf8_type}},
+            // clustering key
+            {},
+            // regular columns
+            {
+                {"age", int32_type},
+                {"height", int32_type},
+            },
+            // static columns
+            {},
+            // regular column name type
+            utf8_type,
+            // comment
+            "Example table for compaction"
+           ));
+
+    class creator : public sstables::sstable_creator {
+    private:
+        std::vector<shared_sstable> _tables;
+    public:
+        virtual shared_sstable new_tmp() override {
+            auto sst = make_lw_shared<sstables::sstable>("tests/urchin/sstables/tests-temporary",
+                    generation, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
+            _tables.push_back(sst);
+            return sst;
+        }
+        virtual void commit() override {
+        }
+        virtual ~creator() {
+        }
+    };
+
+    return open_sstables("tests/urchin/sstables/compaction", {1,2,3}).then([s = std::move(s), generation] (auto sstables) {
+        return test_setup::do_with_test_directory([sstables, s, generation] {
+            return do_with(creator(), [sstables, s, generation] (auto& c) {
+                return sstables::compact_sstables(std::move(sstables), std::move(s), c).then([s, generation] {
+                    // Verify that the compacted sstable has the right content. We expect to see:
+                    //  name  | age | height
+                    // -------+-----+--------
+                    //  jerry |  40 |    170
+                    //    tom |  20 |    180
+                    //   john |  20 |   deleted
+                    //   nadav - deleted partition
+                    return open_sstable("tests/urchin/sstables/tests-temporary", generation).then([s] (shared_sstable sst) {
+                        auto reader = sstable_reader(sst, s); // reader holds sst and s alive.
+                        return reader().then([reader, s] (mutation_opt m) {
+                            BOOST_REQUIRE(m);
+                            BOOST_REQUIRE(m->key().representation() == bytes("jerry"));
+                            BOOST_REQUIRE(!m->partition().partition_tombstone());
+                            auto &rows = m->partition().clustered_rows();
+                            BOOST_REQUIRE(rows.size() == 1);
+                            auto &row = rows.begin()->row();
+                            BOOST_REQUIRE(!row.deleted_at());
+                            auto &cells = row.cells();
+                            BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,40}));
+                            BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(char)170}));
+                            return reader();
+                        }).then([reader, s] (mutation_opt m) {
+                            BOOST_REQUIRE(m);
+                            BOOST_REQUIRE(m->key().representation() == bytes("tom"));
+                            BOOST_REQUIRE(!m->partition().partition_tombstone());
+                            auto &rows = m->partition().clustered_rows();
+                            BOOST_REQUIRE(rows.size() == 1);
+                            auto &row = rows.begin()->row();
+                            BOOST_REQUIRE(!row.deleted_at());
+                            auto &cells = row.cells();
+                            BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,20}));
+                            BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(char)180}));
+                            return reader();
+                        }).then([reader, s] (mutation_opt m) {
+                            BOOST_REQUIRE(m);
+                            BOOST_REQUIRE(m->key().representation() == bytes("john"));
+                            BOOST_REQUIRE(!m->partition().partition_tombstone());
+                            auto &rows = m->partition().clustered_rows();
+                            BOOST_REQUIRE(rows.size() == 1);
+                            auto &row = rows.begin()->row();
+                            BOOST_REQUIRE(!row.deleted_at());
+                            auto &cells = row.cells();
+                            BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,20}));
+                            BOOST_REQUIRE(cells.find_cell(s->get_column_definition("height")->id) == nullptr);
+                            return reader();
+                        }).then([reader, s] (mutation_opt m) {
+                            BOOST_REQUIRE(m);
+                            BOOST_REQUIRE(m->key().representation() == bytes("nadav"));
+                            BOOST_REQUIRE(m->partition().partition_tombstone());
+                            // FIXME: enable the following test.
+                            //auto &rows = m->partition().clustered_rows();
+                            //BOOST_REQUIRE(rows.size() == 0);
+                            return reader();
+                        }).then([reader] (mutation_opt m) {
+                            BOOST_REQUIRE(!m);
+                        });
+                    });
+                });
+            });
+        });
+    });
+
+    // verify that the compacted sstable look like
+}
