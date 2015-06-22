@@ -101,7 +101,7 @@ public:
     future<> wait() {
         size_t block_for = total_block_for();
         //FIXME: timeout is from DatabaseDescriptor.getWriteRpcTimeout()
-        return _ready.wait(std::chrono::milliseconds(100), block_for).then_wrapped([h = shared_from_this(), block_for] (future<>&& f) {
+        return _ready.wait(std::chrono::seconds(2), block_for).then_wrapped([h = shared_from_this(), block_for] (future<>&& f) {
             // hold reference for a handler in h. If timeout happens simultaneously with arrival of
             // a last response the handler can be deleted before this continuation has a chance to run
             try {
