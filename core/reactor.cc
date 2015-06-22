@@ -204,6 +204,11 @@ reactor::reactor()
     sev.sigev_signo = SIGALRM;
     r = timer_create(CLOCK_REALTIME, &sev, &_timer);
     assert(r >= 0);
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGALRM);
+    r = ::sigprocmask(SIG_BLOCK, &mask, NULL);
+    assert(r == 0);
 #endif
     memory::set_reclaim_hook([this] (std::function<void ()> reclaim_fn) {
         // push it in the front of the queue so we reclaim memory quickly
