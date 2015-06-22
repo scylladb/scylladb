@@ -8,6 +8,8 @@
 #include "schema_builder.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
 
+constexpr int32_t schema::NAME_LENGTH;
+
 template<typename Sequence>
 std::vector<data_type>
 get_column_types(const Sequence& column_definitions) {
