@@ -53,11 +53,12 @@ int main(int ac, char** av) {
             sstring listen_address = cfg->listen_address();
             sstring rpc_address = cfg->rpc_address();
             auto seed_provider= cfg->seed_provider();
-            return db.start(std::move(*cfg)).then([&db] {
-                engine().at_exit([&db] { return db.stop(); });
-                return db.invoke_on_all(&database::init_from_data_directory);
-            }).then([] {
-                return service::init_storage_service();
+
+            return service::init_storage_service().then([&db,&cfg] {
+                return db.start(std::move(*cfg)).then([&db] {
+                    engine().at_exit([&db] { return db.stop(); });
+                    return db.invoke_on_all(&database::init_from_data_directory);
+                });
             }).then([listen_address, seed_provider] {
                 return net::init_messaging_service(listen_address, seed_provider);
             }).then([&proxy, &db] {

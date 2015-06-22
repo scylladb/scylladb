@@ -23,6 +23,7 @@
 
 #include "system_keyspace.hh"
 #include "types.hh"
+#include "service/storage_service.hh"
 
 namespace db {
 namespace system_keyspace {
@@ -1002,12 +1003,14 @@ std::vector<schema_ptr> all_tables() {
 
 void make(database& db, bool durable) {
     auto ksm = make_lw_shared<keyspace_metadata>(NAME,
-            "org.apache.cassandra.locator.SimpleStrategy",
+            "org.apache.cassandra.locator.LocalStrategy",
             std::map<sstring, sstring>{},
             durable
             );
     auto kscfg = db.make_keyspace_config(*ksm);
     keyspace _ks{ksm, std::move(kscfg)};
+    auto rs(locator::abstract_replication_strategy::create_replication_strategy(NAME, "LocalStrategy", service::get_local_storage_service().get_token_metadata(), nullptr, ksm->strategy_options()));
+    _ks.set_replication_strategy(std::move(rs));
     db.add_keyspace(NAME, std::move(_ks));
     auto& ks = db.find_keyspace(NAME);
     for (auto&& table : all_tables()) {
