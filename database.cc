@@ -608,12 +608,59 @@ future<> database::populate(sstring datadir) {
     });
 }
 
+template <typename Func>
+static future<>
+do_parse_system_tables(distributed<service::storage_proxy>& proxy, const sstring& _cf_name, Func&& func) {
+    using namespace db::legacy_schema_tables;
+    static_assert(std::is_same<future<>, std::result_of_t<Func(schema_result::value_type&)>>::value,
+                  "bad Func signature");
+
+
+    auto cf_name = make_lw_shared<sstring>(_cf_name);
+    return db::system_keyspace::query(proxy.local(), *cf_name).then([&proxy] (auto rs) {
+        auto names = std::set<sstring>();
+        for (auto& r : rs->rows()) {
+            auto keyspace_name = r.template get_nonnull<sstring>("keyspace_name");
+            names.emplace(keyspace_name);
+        }
+        return std::move(names);
+    }).then([&proxy, cf_name, func = std::forward<Func>(func)] (std::set<sstring>&& names) mutable {
+        return parallel_for_each(names.begin(), names.end(), [&proxy, cf_name, func = std::forward<Func>(func)] (sstring name) mutable {
+            if (name == "system") {
+                return make_ready_future<>();
+            }
+
+            return read_schema_partition_for_keyspace(proxy, *cf_name, name).then([func, cf_name] (auto&& v) mutable {
+                return do_with(std::move(v), [func = std::forward<Func>(func), cf_name] (auto& v) {
+                    return func(v).then_wrapped([cf_name, &v] (future<> f) {
+                        try {
+                            f.get();
+                        } catch (std::exception& e) {
+                            dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, *cf_name, e.what());
+                        }
+                    });
+                });
+            });
+        });
+    });
+}
+
+future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy) {
+    using namespace db::legacy_schema_tables;
+    return do_parse_system_tables(proxy, db::legacy_schema_tables::KEYSPACES, [this] (schema_result::value_type &v) {
+        auto ksm = create_keyspace_from_schema_partition(v);
+        return create_keyspace(ksm);
+    });
+}
+
 future<>
 database::init_from_data_directory(distributed<service::storage_proxy>& proxy) {
     // FIXME support multiple directories
-    return touch_directory(_cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this] {
-        return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME).then([this]() {
-            return populate(_cfg->data_file_directories()[0]);
+    return touch_directory(_cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this, &proxy] {
+        return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME).then([this, &proxy]() {
+            return parse_system_tables(proxy).then([this] {
+                return populate(_cfg->data_file_directories()[0]);
+            });
         }).then([this] {
             return init_commitlog();
         });

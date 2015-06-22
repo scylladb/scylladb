@@ -322,6 +322,7 @@ private:
     friend void db::system_keyspace::make(database& db, bool durable);
 
 public:
+    future<> parse_system_tables(distributed<service::storage_proxy>&);
     database();
     database(const db::config&);
     database(database&&) = default;
