@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include <regex>
+
 #include "cql3/statements/schema_altering_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "service/migration_manager.hh"
@@ -75,15 +77,20 @@ public:
      * @throws InvalidRequestException if arguments are missing or unacceptable
      */
     virtual void validate(distributed<service::storage_proxy>&, const service::client_state& state) override {
-#if 0
-        ThriftValidation.validateKeyspaceNotSystem(name);
-
+        std::string name;
+        name.resize(_name.length());
+        std::transform(_name.begin(), _name.end(), name.begin(), ::tolower);
+        if (name == db::system_keyspace::NAME) {
+            throw exceptions::invalid_request_exception("system keyspace is not user-modifiable");
+        }
         // keyspace name
-        if (!name.matches("\\w+"))
-            throw new InvalidRequestException(String.format("\"%s\" is not a valid keyspace name", name));
-        if (name.length() > Schema.NAME_LENGTH)
-            throw new InvalidRequestException(String.format("Keyspace names shouldn't be more than %s characters long (got \"%s\")", Schema.NAME_LENGTH, name));
-#endif
+        std::regex name_regex("\\w+");
+        if (!std::regex_match(name, name_regex)) {
+            throw exceptions::invalid_request_exception(sprint("\"%s\" is not a valid keyspace name", _name.c_str()));
+        }
+        if (name.length() > schema::NAME_LENGTH) {
+            throw exceptions::invalid_request_exception(sprint("Keyspace names shouldn't be more than %" PRId32 " characters long (got \"%s\")", schema::NAME_LENGTH, _name.c_str()));
+        }
 
         _attrs->validate();
 
