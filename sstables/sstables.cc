@@ -1183,7 +1183,6 @@ void sstable::do_write_components(::mutation_reader mr,
         uint64_t estimated_partitions, schema_ptr schema, file_writer& out) {
     auto index = make_shared<file_writer>(_index_file, sstable_buffer_size);
 
-    prepare_summary(_summary, estimated_partitions);
     auto filter_fp_chance = schema->bloom_filter_fp_chance();
     if (filter_fp_chance != 1.0) {
         _components.insert(component_type::Filter);
@@ -1191,11 +1190,10 @@ void sstable::do_write_components(::mutation_reader mr,
     _filter = utils::i_filter::get_filter(estimated_partitions, filter_fp_chance);
 
     prepare_statistics(_statistics);
+    prepare_summary(_summary, estimated_partitions);
 
-    // NOTE: Cassandra gets partition name by calling getClass().getCanonicalName() on
-    // partition class.
-    add_validation_metadata(_statistics, dht::global_partitioner().name(), filter_fp_chance);
     auto collector = make_lw_shared<metadata_collector>();
+    // FIXME: it's likely that we need to set both sstable_level and repaired_at stats at this point.
 
     // Remember first and last keys, which we need for the summary file.
     std::experimental::optional<key> first_key, last_key;
@@ -1203,18 +1201,19 @@ void sstable::do_write_components(::mutation_reader mr,
     // Iterate through CQL partitions, then CQL rows, then CQL columns.
     // Each mt.all_partitions() entry is a set of clustered rows sharing the same partition key.
     while (mutation_opt mut = mr().get0()) {
-        // FIXME: it's likely that we need to set both sstable_level and repaired_at at this point.
         // Set current index of data to later compute row size.
         _c_stats.start_offset = out.offset();
+
         auto partition_key = key::from_partition_key(*schema, mut->key());
+
         // Maybe add summary entry into in-memory representation of summary file.
         maybe_add_summary_entry(_summary, bytes_view(partition_key), index->offset());
         _filter->add(bytes_view(partition_key));
 
         auto p_key = disk_string_view<uint16_t>();
         p_key.value = bytes_view(partition_key);
-        // Write index file entry from partition key into index file.
 
+        // Write index file entry from partition key into index file.
         write_index_entry(*index, p_key, out.offset());
 
         // Write partition key into data file.
@@ -1259,6 +1258,7 @@ void sstable::do_write_components(::mutation_reader mr,
         // update is about merging column_stats with the data being stored by collector.
         collector->update(_c_stats);
         _c_stats.reset();
+
         if (!first_key) {
             first_key = std::move(partition_key);
         } else {
@@ -1281,6 +1281,9 @@ void sstable::do_write_components(::mutation_reader mr,
         collector->add_compression_ratio(_compression.compressed_file_length(), _compression.uncompressed_file_length());
     }
 
+    // NOTE: Cassandra gets partition name by calling getClass().getCanonicalName() on
+    // partition class.
+    add_validation_metadata(_statistics, dht::global_partitioner().name(), filter_fp_chance);
     add_stats_metadata(_statistics, *collector);
 }
 
