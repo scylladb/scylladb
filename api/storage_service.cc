@@ -6,6 +6,7 @@
 #include "api/api-doc/storage_service.json.hh"
 #include <service/storage_service.hh>
 #include <db/commitlog/commitlog.hh>
+#include <gms/gossiper.hh>
 
 namespace api {
 
@@ -36,32 +37,30 @@ void set_storage_service(http_context& ctx, routes& r) {
     ss::get_token_endpoint.set(r, [](std::unique_ptr<request> req) {
         return service::get_token_to_endpoint().then([] (const std::map<dht::token, gms::inet_address>& tokens){
             std::vector<storage_service_json::mapper> res;
-            for (auto i : tokens) {
-                ss::mapper val;
-                val.key = boost::lexical_cast<std::string>(i.first);
-                val.value = boost::lexical_cast<std::string>(i.second);
-                res.push_back(val);
-            }
-            return make_ready_future<json::json_return_type>(res);
+            return make_ready_future<json::json_return_type>(map_to_key_value(tokens, res));
         });
     });
 
-    ss::get_leaving_nodes.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        std::vector<sstring> res;
-        return make_ready_future<json::json_return_type>(res);
+    ss::get_leaving_nodes.set(r, [](const_req req) {
+        return container_to_vec(service::get_local_storage_service().get_token_metadata().get_leaving_endpoints());
     });
 
-    ss::get_moving_nodes.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        std::vector<sstring> res;
-        return make_ready_future<json::json_return_type>(res);
+    ss::get_moving_nodes.set(r, [](const_req req) {
+        auto points = service::get_local_storage_service().get_token_metadata().get_moving_endpoints();
+        std::unordered_set<sstring> addr;
+        for (auto i: points) {
+            addr.insert(boost::lexical_cast<std::string>(i.second));
+        }
+        return container_to_vec(addr);
     });
 
-    ss::get_joining_nodes.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        std::vector<sstring> res;
-        return make_ready_future<json::json_return_type>(res);
+    ss::get_joining_nodes.set(r, [](const_req req) {
+        auto points = service::get_local_storage_service().get_token_metadata().get_bootstrap_tokens();
+        std::unordered_set<sstring> addr;
+        for (auto i: points) {
+            addr.insert(boost::lexical_cast<std::string>(i.second));
+        }
+        return container_to_vec(addr);
     });
 
     ss::get_release_version.set(r, [](const_req req) {
@@ -74,16 +73,12 @@ void set_storage_service(http_context& ctx, routes& r) {
         return "";
     });
 
-    ss::get_all_data_file_locations.set(r, [](const_req req) {
-        //TBD
-        std::vector<sstring> res;
-        return res;
+    ss::get_all_data_file_locations.set(r, [&ctx](const_req req) {
+        return container_to_vec(ctx.db.local().get_config().data_file_directories());
     });
 
-    ss::get_saved_caches_location.set(r, [](const_req req) {
-        //TBD
-        std::vector<sstring> res;
-        return res;
+    ss::get_saved_caches_location.set(r, [&ctx](const_req req) {
+        return ctx.db.local().get_config().saved_caches_directory();
     });
 
     ss::get_range_to_endpoint_map.set(r, [](std::unique_ptr<request> req) {
@@ -107,10 +102,10 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(res);
     });
 
-    ss::get_host_id_map.set(r, [](std::unique_ptr<request> req) {
-        //TBD
+    ss::get_host_id_map.set(r, [](const_req req) {
         std::vector<ss::mapper> res;
-        return make_ready_future<json::json_return_type>(res);
+        return map_to_key_value(service::get_local_storage_service().
+                get_token_metadata().get_endpoint_to_host_id_map_for_reading(), res);
     });
 
     ss::get_load.set(r, [](std::unique_ptr<request> req) {
@@ -125,8 +120,10 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::get_current_generation_number.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        return make_ready_future<json::json_return_type>(0);
+        gms::inet_address ep(utils::fb_utilities::get_broadcast_address());
+        return gms::get_current_generation_number(ep).then([](int res) {
+            return make_ready_future<json::json_return_type>(res);
+        });
     });
 
     ss::get_natural_endpoints.set(r, [](std::unique_ptr<request> req) {
@@ -165,11 +162,23 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>(0);
     });
 
-    ss::force_keyspace_compaction.set(r, [](std::unique_ptr<request> req) {
-        //TBD
+    ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<request> req) {
         auto keyspace = req->param["keyspace"];
-        auto column_family = req->get_query_param("cf");
-        return make_ready_future<json::json_return_type>("");
+        auto column_families = split_cf(req->get_query_param("cf"));
+        if (column_families.empty()) {
+            column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
+        }
+        return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
+            std::vector<column_family*> column_families_vec;
+            for (auto cf : column_families) {
+                column_families_vec.push_back(&db.find_column_family(keyspace, cf));
+            }
+            return parallel_for_each(column_families_vec, [] (column_family* cf) {
+                    return cf->compact_all_sstables();
+            });
+        }).then([]{
+                return make_ready_future<json::json_return_type>("");
+        });
     });
 
     ss::force_keyspace_cleanup.set(r, [](std::unique_ptr<request> req) {
@@ -196,11 +205,19 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>("");
     });
 
-    ss::force_keyspace_flush.set(r, [](std::unique_ptr<request> req) {
-        //TBD
+    ss::force_keyspace_flush.set(r, [&ctx](std::unique_ptr<request> req) {
         auto keyspace = req->param["keyspace"];
-        auto column_family = req->get_query_param("cf");
-        return make_ready_future<json::json_return_type>("");
+        auto column_families = split_cf(req->get_query_param("cf"));
+        if (column_families.empty()) {
+            column_families = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
+        }
+        return ctx.db.invoke_on_all([keyspace, column_families] (database& db) {
+            for (auto cf : column_families) {
+                db.find_column_family(keyspace, cf).seal_active_memtable(&db);
+            }
+        }).then([]{
+                return make_ready_future<json::json_return_type>("");
+        });
     });
 
     ss::repair_async.set(r, [](std::unique_ptr<request> req) {
@@ -282,11 +299,9 @@ void set_storage_service(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>("");
     });
 
-    ss::get_keyspaces.set(r, [](std::unique_ptr<request> req) {
-        //TBD
-        auto non_system = req->get_query_param("non_system");
-        std::vector<ss::maplist_mapper> res;
-        return make_ready_future<json::json_return_type>(res);
+    ss::get_keyspaces.set(r, [&ctx](const_req req) {
+        auto non_system = req.get_query_param("non_system");
+        return map_keys(ctx.db.local().keyspaces());
     });
 
     ss::update_snitch.set(r, [](std::unique_ptr<request> req) {
