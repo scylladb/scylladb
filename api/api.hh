@@ -8,6 +8,9 @@
 #include "http/httpd.hh"
 #include "database.hh"
 #include <boost/lexical_cast.hpp>
+#include <boost/algorithm/string/split.hpp>
+#include <boost/algorithm/string/classification.hpp>
+
 namespace api {
 
 struct http_context {
@@ -38,6 +41,16 @@ std::vector<T> map_to_key_value(const std::map<sstring, sstring>& map) {
     return res;
 }
 
+template<class T, class MAP>
+std::vector<T>& map_to_key_value(const MAP& map, std::vector<T>& res) {
+    for (auto i : map) {
+        T val;
+        val.key = boost::lexical_cast<std::string>(i.first);
+        val.value = boost::lexical_cast<std::string>(i.second);
+        res.push_back(val);
+    }
+    return res;
+}
 template <typename T, typename S = T>
 T map_sum(T&& dest, const S& src) {
     for (auto i : src) {
@@ -46,7 +59,32 @@ T map_sum(T&& dest, const S& src) {
     return dest;
 }
 
-
+template <typename MAP>
+std::vector<sstring> map_keys(const MAP& map) {
+    std::vector<sstring> res;
+    for (const auto& i : map) {
+        res.push_back(boost::lexical_cast<std::string>(i.first));
+    }
+    return res;
 }
 
+/**
+ * General sstring splitting function
+ */
+inline std::vector<sstring> split(const sstring& text, const char* separator) {
+    if (text == "") {
+        return std::vector<sstring>();
+    }
+    std::vector<sstring> tokens;
+    return boost::split(tokens, text, boost::is_any_of(separator));
+}
+
+/**
+ * Split a column family parameter
+ */
+inline std::vector<sstring> split_cf(const sstring& cf) {
+    return split(cf, ",");
+}
+
+}
 #endif /* API_API_HH_ */
