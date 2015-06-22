@@ -39,17 +39,6 @@ public:
     static constexpr auto KW_REPLICATION = "replication";
 
     static constexpr auto REPLICATION_STRATEGY_CLASS_KEY = "class";
-
-#if 0
-    public static final Set<String> keywords = new HashSet<>();
-    public static final Set<String> obsoleteKeywords = new HashSet<>();
-
-    static
-    {
-        keywords.add(KW_DURABLE_WRITES);
-        keywords.add(KW_REPLICATION);
-    }
-#endif
 private:
     std::experimental::optional<sstring> _strategy_class;
 public:
@@ -59,11 +48,12 @@ public:
         if (_strategy_class) {
             return;
         }
-#if 0
-        validate(keywords, obsoleteKeywords);
-#endif
+
+        static std::set<sstring> keywords({ sstring(KW_DURABLE_WRITES), sstring(KW_REPLICATION) });
+        property_definitions::validate(keywords, std::set<sstring>());
+
         auto replication_options = get_replication_options();
-        if (!replication_options.empty()) {
+        if (replication_options.count(REPLICATION_STRATEGY_CLASS_KEY)) {
             _strategy_class = replication_options[REPLICATION_STRATEGY_CLASS_KEY];
             // FIXME
             //replication_options.remove(REPLICATION_STRATEGY_CLASS_KEY);
