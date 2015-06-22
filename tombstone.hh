@@ -73,7 +73,11 @@ struct tombstone final {
     }
 
     friend std::ostream& operator<<(std::ostream& out, const tombstone& t) {
-        return out << "{timestamp=" << t.timestamp << ", deletion_time=" << t.deletion_time.time_since_epoch().count() << "}";
+        if (t) {
+            return out << "{tombstone: timestamp=" << t.timestamp << ", deletion_time=" << t.deletion_time.time_since_epoch().count() << "}";
+        } else {
+            return out << "{tombstone: none}";
+        }
     }
 };
 
