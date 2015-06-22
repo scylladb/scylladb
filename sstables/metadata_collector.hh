@@ -33,6 +33,93 @@ namespace sstables {
 
 static constexpr int TOMBSTONE_HISTOGRAM_BIN_SIZE = 100;
 
+class min_long_tracker {
+    uint64_t _default_value;
+    bool _is_set = false;
+    uint64_t _value;
+public:
+    min_long_tracker() {}
+    min_long_tracker(uint64_t default_value) {
+        _default_value = default_value;
+    }
+
+    void update(uint64_t value) {
+        if (!_is_set) {
+            _value = value;
+            _is_set = true;
+        } else {
+            if (value < _value) {
+                _value = value;
+            }
+        }
+    }
+
+    uint64_t get() {
+        if (_is_set) {
+            return _value;
+        }
+        return _default_value;
+    }
+};
+
+class max_long_tracker {
+    uint64_t _default_value;
+    bool _is_set = false;
+    uint64_t _value;
+public:
+    max_long_tracker() {}
+    max_long_tracker(uint64_t default_value) {
+        _default_value = default_value;
+    }
+
+    void update(uint64_t value) {
+        if (!_is_set) {
+            _value = value;
+            _is_set = true;
+        } else {
+            if (value > _value) {
+                _value = value;
+            }
+        }
+    }
+
+    uint64_t get() {
+        if (_is_set) {
+            return _value;
+        }
+        return _default_value;
+    }
+};
+
+class max_int_tracker {
+    int _default_value;
+    bool _is_set = false;
+    int _value;
+public:
+    max_int_tracker() {}
+    max_int_tracker(int default_value) {
+        _default_value = default_value;
+    }
+
+    void update(int value) {
+        if (!_is_set) {
+            _value = value;
+            _is_set = true;
+        } else {
+            if (value > _value) {
+                _value = value;
+            }
+        }
+    }
+
+    int get() {
+        if (_is_set) {
+            return _value;
+        }
+        return _default_value;
+    }
+};
+
 /**
  * ColumnStats holds information about the columns for one row inside sstable
  */
@@ -44,9 +131,9 @@ struct column_stats {
     uint64_t row_size;
 
     /** the largest (client-supplied) timestamp in the row */
-    uint64_t min_timestamp;
-    uint64_t max_timestamp;
-    int max_local_deletion_time;
+    min_long_tracker min_timestamp;
+    max_long_tracker max_timestamp;
+    max_int_tracker max_local_deletion_time;
     /** histogram of tombstone drop time */
     streaming_histogram tombstone_histogram;
 
@@ -60,9 +147,9 @@ struct column_stats {
         column_count = 0;
         start_offset = 0;
         row_size = 0;
-        min_timestamp = std::numeric_limits<uint64_t>::max();
-        max_timestamp = std::numeric_limits<uint64_t>::min();
-        max_local_deletion_time = std::numeric_limits<int>::min();
+        min_timestamp = min_long_tracker(std::numeric_limits<uint64_t>::min());
+        max_timestamp = max_long_tracker(std::numeric_limits<uint64_t>::max());
+        max_local_deletion_time = max_int_tracker(std::numeric_limits<int>::max());
         tombstone_histogram = streaming_histogram(TOMBSTONE_HISTOGRAM_BIN_SIZE);
         has_legacy_counter_shards = false;
     }
@@ -72,13 +159,13 @@ struct column_stats {
     }
 
     void update_min_timestamp(uint64_t potential_min) {
-        min_timestamp = std::min(min_timestamp, potential_min);
+        min_timestamp.update(potential_min);
     }
     void update_max_timestamp(uint64_t potential_max) {
-        max_timestamp = std::max(max_timestamp, potential_max);
+        max_timestamp.update(potential_max);
     }
     void update_max_local_deletion_time(int potential_value) {
-        max_local_deletion_time = std::max(max_local_deletion_time, potential_value);
+        max_local_deletion_time.update(potential_value);
     }
 
 };
@@ -218,9 +305,9 @@ public:
     }
 
     void update(column_stats& stats) {
-        update_min_timestamp(stats.min_timestamp);
-        update_max_timestamp(stats.max_timestamp);
-        update_max_local_deletion_time(stats.max_local_deletion_time);
+        update_min_timestamp(stats.min_timestamp.get());
+        update_max_timestamp(stats.max_timestamp.get());
+        update_max_local_deletion_time(stats.max_local_deletion_time.get());
         add_row_size(stats.row_size);
         add_column_count(stats.column_count);
         merge_tombstone_histogram(stats.tombstone_histogram);
