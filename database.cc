@@ -609,7 +609,7 @@ future<> database::populate(sstring datadir) {
 }
 
 future<>
-database::init_from_data_directory() {
+database::init_from_data_directory(distributed<service::storage_proxy>& proxy) {
     // FIXME support multiple directories
     return touch_directory(_cfg->data_file_directories()[0] + "/" + db::system_keyspace::NAME).then([this] {
         return populate_keyspace(_cfg->data_file_directories()[0], db::system_keyspace::NAME).then([this]() {

@@ -78,9 +78,9 @@ int main(int ac, char** av) {
                 return qp.start(std::ref(proxy), std::ref(db)).then([&qp] {
                     engine().at_exit([&qp] { return qp.stop(); });
                 });
-            }).then([&db] {
+            }).then([&db, &proxy] {
                 return db.invoke_on_all([&proxy] (database& db) {
-                    return db.init_from_data_directory();
+                    return db.init_from_data_directory(proxy);
                 });
             }).then([rpc_address] {
                 return dns::gethostbyname(rpc_address);
