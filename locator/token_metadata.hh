@@ -80,6 +80,17 @@ public:
     const std::map<token, inet_address>& get_token_to_endpoint() const {
         return _token_to_endpoint_map;
     }
+
+    const std::unordered_set<inet_address>& get_leaving_endpoints() const {
+        return _leaving_endpoints;
+    }
+
+    const std::unordered_map<token, inet_address>& get_moving_endpoints() const {
+            return _moving_endpoints;
+    }
+    const std::unordered_map<token, inet_address>& get_bootstrap_tokens() const {
+        return _bootstrap_tokens;
+    }
     void debug_show();
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(TokenMetadata.class);
@@ -267,7 +278,7 @@ public:
     inet_address get_endpoint_for_host_id(UUID host_id);
 
     /** @return a copy of the endpoint-to-id map for read-only operations */
-    const auto& get_endpoint_to_host_id_map_for_reading();
+    const std::unordered_map<inet_address, utils::UUID>& get_endpoint_to_host_id_map_for_reading() const;
 
     void add_bootstrap_token(token t, inet_address endpoint);
 
