@@ -25,6 +25,8 @@
 #pragma once
 
 #include "types.hh"
+#include "utils/murmur_hash.hh"
+#include "hyperloglog.hh"
 #include <algorithm>
 
 namespace sstables {
@@ -107,6 +109,11 @@ public:
         //  - it will sort before any real replayposition, so it will be effectively ignored by getReplayPosition
         return replay_position(-1UL, 0U);
     }
+
+    static hll::HyperLogLog hyperloglog(int p, int sp) {
+        // FIXME: hll::HyperLogLog doesn't support sparse format, so ignoring parameters by the time being.
+        return hll::HyperLogLog();
+    }
 private:
     estimated_histogram _estimated_row_size = default_row_size_histogram();
     estimated_histogram _estimated_column_count = default_column_count_histogram();
@@ -122,6 +129,14 @@ private:
     std::vector<bytes> _min_column_names;
     std::vector<bytes> _max_column_names;
     bool _has_legacy_counter_shards = false;
+
+    /**
+     * Default cardinality estimation method is to use HyperLogLog++.
+     * Parameter here(p=13, sp=25) should give reasonable estimation
+     * while lowering bytes required to hold information.
+     * See CASSANDRA-5906 for detail.
+     */
+    hll::HyperLogLog _cardinality = hyperloglog(13, 25);
 private:
     /*
      * Convert a vector of bytes into a disk array of disk_string<uint16_t>.
@@ -133,6 +148,11 @@ private:
         }
     }
 public:
+    void add_key(bytes_view key) {
+        long hashed = utils::murmur_hash::hash2_64(key, 0);
+        _cardinality.offer_hashed(hashed);
+    }
+
     void add_row_size(uint64_t row_size) {
         _estimated_row_size.add(row_size);
     }
@@ -207,6 +227,14 @@ public:
         update_min_column_names(stats.min_column_names);
         update_max_column_names(stats.max_column_names);
         update_has_legacy_counter_shards(stats.has_legacy_counter_shards);
+    }
+
+    void construct_compaction(compaction_metadata& m) {
+        if (!_ancestors.empty()) {
+            m.ancestors.elements = std::vector<uint32_t>(_ancestors.begin(), _ancestors.end());
+        }
+        auto cardinality = _cardinality.get_bytes();
+        m.cardinality.elements = std::vector<uint8_t>(cardinality.get(), cardinality.get() + cardinality.size());
     }
 
     void construct_stats(stats_metadata& m) {

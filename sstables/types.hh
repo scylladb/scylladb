@@ -141,6 +141,11 @@ struct compaction_metadata : public metadata {
     disk_array<uint32_t, uint32_t> ancestors;
     disk_array<uint32_t, uint8_t> cardinality;
 
+    size_t serialized_size() {
+        return sizeof(uint32_t) + (ancestors.elements.size() * sizeof(uint32_t)) +
+            sizeof(uint32_t) + (cardinality.elements.size() * sizeof(uint8_t));
+    }
+
     template <typename Describer>
     auto describe_type(Describer f) { return f(ancestors, cardinality); }
 };
