@@ -26,9 +26,15 @@
 #include "core/shared_ptr.hh"
 #include "types.hh"
 #include "keys.hh"
-#include "sstables/key.hh"
 #include <memory>
 #include <random>
+
+
+namespace sstables {
+
+class key_view;
+
+}
 
 namespace dht {
 

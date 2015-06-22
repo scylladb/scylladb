@@ -4,6 +4,7 @@
 
 #include "murmur3_partitioner.hh"
 #include "utils/murmur_hash.hh"
+#include "sstables/key.hh"
 
 namespace dht {
 

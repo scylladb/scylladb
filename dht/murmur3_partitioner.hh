@@ -6,7 +6,6 @@
 
 #include "i_partitioner.hh"
 #include "bytes.hh"
-#include "sstables/key.hh"
 
 namespace dht {
 
