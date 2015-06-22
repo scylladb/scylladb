@@ -103,6 +103,26 @@ SEASTAR_TEST_CASE(test_semaphore_mix_1) {
     });
 }
 
+SEASTAR_TEST_CASE(test_broken_semaphore) {
+    auto sem = make_lw_shared<semaphore>(0);
+    struct oops {};
+    auto ret = sem->wait().then_wrapped([sem] (future<> f) {
+        try {
+            f.get();
+            BOOST_FAIL("expecting exception");
+        } catch (oops& x) {
+            // ok
+            return make_ready_future<>();
+        } catch (...) {
+            BOOST_FAIL("wrong exception seen");
+        }
+        BOOST_FAIL("unreachable");
+        return make_ready_future<>();
+    });
+    sem->broken(oops());
+    return ret;
+}
+
 SEASTAR_TEST_CASE(test_shared_mutex_exclusive) {
     return do_with(shared_mutex(), unsigned(0), [] (shared_mutex& sm, unsigned& counter) {
         return parallel_for_each(boost::irange(0, 10), [&sm, &counter] (int idx) {

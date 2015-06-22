@@ -22,7 +22,6 @@
 #include "tests/test-utils.hh"
 
 #include "core/shared_ptr.hh"
-#include "core/semaphore.hh"
 #include "core/future-util.hh"
 #include "core/sleep.hh"
 #include "core/do_with.hh"
@@ -243,26 +242,6 @@ SEASTAR_TEST_CASE(test_exception_can_be_thrown_from_do_until_body) {
            // expected
        }
     });
-}
-
-SEASTAR_TEST_CASE(test_broken_semaphore) {
-    auto sem = make_lw_shared<semaphore>(0);
-    struct oops {};
-    auto ret = sem->wait().then_wrapped([sem] (future<> f) {
-        try {
-            f.get();
-            BOOST_FAIL("expecting exception");
-        } catch (oops& x) {
-            // ok
-            return make_ready_future<>();
-        } catch (...) {
-            BOOST_FAIL("wrong exception seen");
-        }
-        BOOST_FAIL("unreachable");
-        return make_ready_future<>();
-    });
-    sem->broken(oops());
-    return ret;
 }
 
 SEASTAR_TEST_CASE(test_bare_value_can_be_returned_from_callback) {
