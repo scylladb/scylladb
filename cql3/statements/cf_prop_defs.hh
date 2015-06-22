@@ -55,64 +55,59 @@ public:
 
     static const sstring COMPACTION_STRATEGY_CLASS_KEY;
 
-#if 0
-    public static final Set<String> keywords = new HashSet<>();
-    public static final Set<String> obsoleteKeywords = new HashSet<>();
+    // FIXME: In origin the following consts are in CFMetaData.
+    static constexpr int32_t DEFAULT_DEFAULT_TIME_TO_LIVE = 0;
+    static constexpr int32_t DEFAULT_MIN_INDEX_INTERVAL = 128;
+    static constexpr int32_t DEFAULT_MAX_INDEX_INTERVAL = 2048;
 
-    static
-    {
-        keywords.add(KW_COMMENT);
-        keywords.add(KW_READREPAIRCHANCE);
-        keywords.add(KW_DCLOCALREADREPAIRCHANCE);
-        keywords.add(KW_GCGRACESECONDS);
-        keywords.add(KW_CACHING);
-        keywords.add(KW_DEFAULT_TIME_TO_LIVE);
-        keywords.add(KW_MIN_INDEX_INTERVAL);
-        keywords.add(KW_MAX_INDEX_INTERVAL);
-        keywords.add(KW_SPECULATIVE_RETRY);
-        keywords.add(KW_BF_FP_CHANCE);
-        keywords.add(KW_COMPACTION);
-        keywords.add(KW_COMPRESSION);
-        keywords.add(KW_MEMTABLE_FLUSH_PERIOD);
-
-        obsoleteKeywords.add("index_interval");
-        obsoleteKeywords.add("replicate_on_write");
-        obsoleteKeywords.add("populate_io_cache_on_flush");
-    }
-
-    private Class<? extends AbstractCompactionStrategy> compactionStrategyClass = null;
-#endif
+    // FIXME: In origin the following consts are in CompressionParameters.
+    static constexpr auto SSTABLE_COMPRESSION = "sstable_compression";
+private:
+    std::experimental::optional<sstring> _compaction_strategy_class;
 public:
-    void validate() const {
-        // FIXME
-#if 0
+    void validate() {
         // Skip validation if the comapction strategy class is already set as it means we've alreayd
         // prepared (and redoing it would set strategyClass back to null, which we don't want)
-        if (compactionStrategyClass != null)
+        if (_compaction_strategy_class) {
             return;
+        }
 
-        validate(keywords, obsoleteKeywords);
+        static std::set<sstring> keywords({
+            KW_COMMENT, KW_READREPAIRCHANCE, KW_DCLOCALREADREPAIRCHANCE,
+            KW_GCGRACESECONDS, KW_MINCOMPACTIONTHRESHOLD,
+            KW_MAXCOMPACTIONTHRESHOLD, KW_CACHING, KW_DEFAULT_TIME_TO_LIVE,
+            KW_MIN_INDEX_INTERVAL, KW_MAX_INDEX_INTERVAL, KW_SPECULATIVE_RETRY,
+            KW_BF_FP_CHANCE, KW_MEMTABLE_FLUSH_PERIOD,
+        });
+        static std::set<sstring> obsolete_keywords({
+            sstring("index_interval"),
+            sstring("replicate_on_write"),
+            sstring("populate_io_cache_on_flush"),
+        });
+        property_definitions::validate(keywords, obsolete_keywords);
 
-        Map<String, String> compactionOptions = getCompactionOptions();
-        if (!compactionOptions.isEmpty())
-        {
-            String strategy = compactionOptions.get(COMPACTION_STRATEGY_CLASS_KEY);
-            if (strategy == null)
-                throw new ConfigurationException("Missing sub-option '" + COMPACTION_STRATEGY_CLASS_KEY + "' for the '" + KW_COMPACTION + "' option.");
-
+        auto compaction_options = get_compaction_options();
+        if (!compaction_options.empty()) {
+            auto strategy = compaction_options.find(COMPACTION_STRATEGY_CLASS_KEY);
+            if (strategy == compaction_options.end()) {
+                throw exceptions::configuration_exception(sstring("Missing sub-option '") + COMPACTION_STRATEGY_CLASS_KEY + "' for the '" + KW_COMPACTION + "' option.");
+            }
+            _compaction_strategy_class = strategy->second;
+#if 0
             compactionStrategyClass = CFMetaData.createCompactionStrategy(strategy);
             compactionOptions.remove(COMPACTION_STRATEGY_CLASS_KEY);
 
             CFMetaData.validateCompactionOptions(compactionStrategyClass, compactionOptions);
+#endif
         }
 
-        Map<String, String> compressionOptions = getCompressionOptions();
-        if (!compressionOptions.isEmpty())
-        {
-            String sstableCompressionClass = compressionOptions.get(CompressionParameters.SSTABLE_COMPRESSION);
-            if (sstableCompressionClass == null)
-                throw new ConfigurationException("Missing sub-option '" + CompressionParameters.SSTABLE_COMPRESSION + "' for the '" + KW_COMPRESSION + "' option.");
-
+        auto compression_options = get_compression_options();
+        if (!compression_options.empty()) {
+            auto sstable_compression_class = compression_options.find(sstring(SSTABLE_COMPRESSION));
+            if (sstable_compression_class == compression_options.end()) {
+                throw exceptions::configuration_exception(sstring("Missing sub-option '") + SSTABLE_COMPRESSION + "' for the '" + KW_COMPRESSION + "' option.");
+            }
+            #if 0
             Integer chunkLength = CompressionParameters.DEFAULT_CHUNK_LENGTH;
             if (compressionOptions.containsKey(CompressionParameters.CHUNK_LENGTH_KB))
                 chunkLength = CompressionParameters.parseChunkLength(compressionOptions.get(CompressionParameters.CHUNK_LENGTH_KB));
@@ -122,17 +117,21 @@ public:
             remainingOptions.remove(CompressionParameters.CHUNK_LENGTH_KB);
             CompressionParameters cp = new CompressionParameters(sstableCompressionClass, chunkLength, remainingOptions);
             cp.validate();
+            #endif
+
         }
 
-        validateMinimumInt(KW_DEFAULT_TIME_TO_LIVE, 0, CFMetaData.DEFAULT_DEFAULT_TIME_TO_LIVE);
+        validate_minimum_int(KW_DEFAULT_TIME_TO_LIVE, 0, DEFAULT_DEFAULT_TIME_TO_LIVE);
 
-        Integer minIndexInterval = getInt(KW_MIN_INDEX_INTERVAL, null);
-        Integer maxIndexInterval = getInt(KW_MAX_INDEX_INTERVAL, null);
-        if (minIndexInterval != null && minIndexInterval < 1)
-            throw new ConfigurationException(KW_MIN_INDEX_INTERVAL + " must be greater than 0");
-        if (maxIndexInterval != null && minIndexInterval != null && maxIndexInterval < minIndexInterval)
-            throw new ConfigurationException(KW_MAX_INDEX_INTERVAL + " must be greater than " + KW_MIN_INDEX_INTERVAL);
-
+        auto min_index_interval = get_int(KW_MIN_INDEX_INTERVAL, DEFAULT_MIN_INDEX_INTERVAL);
+        auto max_index_interval = get_int(KW_MAX_INDEX_INTERVAL, DEFAULT_MAX_INDEX_INTERVAL);
+        if (min_index_interval < 1) {
+            throw exceptions::configuration_exception(KW_MIN_INDEX_INTERVAL + " must be greater than 0");
+        }
+        if (max_index_interval < min_index_interval) {
+            throw exceptions::configuration_exception(KW_MAX_INDEX_INTERVAL + " must be greater than " + KW_MIN_INDEX_INTERVAL);
+        }
+#if 0
         SpeculativeRetry.fromString(getString(KW_SPECULATIVE_RETRY, SpeculativeRetry.RetryType.NONE.name()));
 #endif
     }
@@ -142,22 +141,22 @@ public:
     {
         return compactionStrategyClass;
     }
-
-    public Map<String, String> getCompactionOptions() throws SyntaxException
-    {
-        Map<String, String> compactionOptions = getMap(KW_COMPACTION);
-        if (compactionOptions == null)
-            return Collections.emptyMap();
-        return compactionOptions;
+#endif
+    std::map<sstring, sstring> get_compaction_options() const {
+        auto compaction_options = get_map(KW_COMPACTION);
+        if (compaction_options ) {
+            return compaction_options.value();
+        }
+        return std::map<sstring, sstring>{};
     }
-
-    public Map<String, String> getCompressionOptions() throws SyntaxException
-    {
-        Map<String, String> compressionOptions = getMap(KW_COMPRESSION);
-        if (compressionOptions == null)
-            return Collections.emptyMap();
-        return compressionOptions;
+    std::map<sstring, sstring> get_compression_options() const {
+        auto compression_options = get_map(KW_COMPRESSION);
+        if (compression_options) {
+            return compression_options.value();
+        }
+        return std::map<sstring, sstring>{};
     }
+#if 0
     public CachingOptions getCachingOptions() throws SyntaxException, ConfigurationException
     {
         CachingOptions options = null;
@@ -226,16 +225,15 @@ public:
     {
         return String.format("CFPropDefs(%s)", properties.toString());
     }
-
-    private void validateMinimumInt(String field, int minimumValue, int defaultValue) throws SyntaxException, ConfigurationException
-    {
-        Integer val = getInt(field, null);
-        if (val != null && val < minimumValue)
-            throw new ConfigurationException(String.format("%s cannot be smaller than %s, (default %s)",
-                                                            field, minimumValue, defaultValue));
-
-    }
 #endif
+    void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const
+    {
+        auto val = get_int(field, default_value);
+        if (val < minimum_value) {
+            throw exceptions::configuration_exception(sprint("%s cannot be smaller than %s, (default %s)",
+                                                             field, minimum_value, default_value));
+        }
+    }
 };
 
 }
