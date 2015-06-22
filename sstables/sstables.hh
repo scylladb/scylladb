@@ -315,4 +315,6 @@ public:
     friend class test;
 };
 
+using shared_sstable = lw_shared_ptr<sstable>;
+
 }
