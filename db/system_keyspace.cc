@@ -1014,7 +1014,7 @@ void make(database& db, bool durable) {
     db.add_keyspace(NAME, std::move(_ks));
     auto& ks = db.find_keyspace(NAME);
     for (auto&& table : all_tables()) {
-        db.add_column_family(column_family(table, ks.make_column_family_config(*table)));
+        db.add_column_family(table, ks.make_column_family_config(*table));
     }
 }
 

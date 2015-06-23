@@ -634,7 +634,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                     for (auto&& cfm : created) {
                         auto& ks = db.find_keyspace(cfm->ks_name());
                         auto cfg = ks.make_column_family_config(*cfm);
-                        db.add_column_family(std::move(column_family{cfm, cfg}));
+                        db.add_column_family(cfm, cfg);
                     }
                     for (auto&& cfm : altered) {
                         db.update_column_family(cfm->ks_name(), cfm->cf_name());

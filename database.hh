@@ -43,6 +43,7 @@
 #include "memtable.hh"
 #include <list>
 #include "mutation_reader.hh"
+#include "row_cache.hh"
 
 class frozen_mutation;
 
@@ -71,6 +72,7 @@ public:
         sstring datadir;
         bool enable_disk_writes = true;
         bool enable_disk_reads = true;
+        bool enable_cache = true;
     };
 private:
     schema_ptr _schema;
@@ -78,6 +80,7 @@ private:
     lw_shared_ptr<memtable_list> _memtables;
     // generation -> sstable. Ordered by key so we can easily get the most recent.
     lw_shared_ptr<sstable_list> _sstables;
+    mutable row_cache _cache; // Cache covers only sstables.
     unsigned _sstable_generation = 1;
     unsigned _mutation_count = 0;
     db::replay_position _highest_flushed_rp;
@@ -85,12 +88,15 @@ private:
     void add_sstable(sstables::sstable&& sstable);
     void add_memtable();
     memtable& active_memtable() { return *_memtables->back(); }
+    future<> update_cache(memtable&);
     struct merge_comparator;
 private:
     // Creates a mutation reader which covers sstables.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
     // The 'range' parameter must be live as long as the reader is used.
     mutation_reader make_sstable_reader(const query::partition_range& range) const;
+
+    mutation_source sstables_as_mutation_source();
 public:
     // Creates a mutation reader which covers all data sources for this column family.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
@@ -106,7 +112,7 @@ public:
     using const_row_ptr = std::unique_ptr<const row>;
 public:
     column_family(schema_ptr schema, config cfg);
-    column_family(column_family&&);
+    column_family(column_family&&) = delete; // 'this' is being captured during construction
     ~column_family();
     schema_ptr schema() const { return _schema; }
     future<const_mutation_partition_ptr> find_partition(const dht::decorated_key& key) const;
@@ -270,7 +276,7 @@ public:
 
 class database {
     std::unordered_map<sstring, keyspace> _keyspaces;
-    std::unordered_map<utils::UUID, column_family> _column_families;
+    std::unordered_map<utils::UUID, lw_shared_ptr<column_family>> _column_families;
     std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash> _ks_cf_to_uuid;
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::config> _cfg;
@@ -293,9 +299,7 @@ public:
 
     // but see: create_keyspace(distributed<database>&, sstring)
     void add_keyspace(sstring name, keyspace k);
-    /** Adds cf with auto-generated UUID. */
-    void add_column_family(column_family&&);
-    void add_column_family(const utils::UUID&, column_family&&);
+    void add_column_family(schema_ptr schema, column_family::config cfg);
 
     void update_column_family(const sstring& ks_name, const sstring& cf_name);
     void drop_column_family(const sstring& ks_name, const sstring& cf_name);
@@ -348,7 +352,7 @@ public:
     const std::unordered_map<sstring, keyspace>& get_keyspaces() const {
         return _keyspaces;
     }
-    const std::unordered_map<utils::UUID, column_family>& get_column_families() const {
+    const std::unordered_map<utils::UUID, lw_shared_ptr<column_family>>& get_column_families() const {
         return _column_families;
     }
     const std::unordered_map<std::pair<sstring, sstring>, utils::UUID, utils::tuple_hash>&

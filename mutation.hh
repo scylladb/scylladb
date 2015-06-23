@@ -46,3 +46,19 @@ private:
 };
 
 using mutation_opt = std::experimental::optional<mutation>;
+
+inline
+void apply(mutation_opt& dst, mutation&& src) {
+    if (!dst) {
+        dst = std::move(src);
+    } else {
+        dst->partition().apply(*src.schema(), src.partition());
+    }
+}
+
+inline
+void apply(mutation_opt& dst, mutation_opt&& src) {
+    if (src) {
+        apply(dst, std::move(*src));
+    }
+}

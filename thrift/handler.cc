@@ -491,8 +491,7 @@ public:
                             std::move(partition_key), std::move(clustering_key), std::move(regular_columns),
                             std::vector<schema::column>(), column_name_type));
                     auto& ks = db.find_keyspace(ks_def.name);
-                    column_family cf(s, ks.make_column_family_config(*s));
-                    db.add_column_family(std::move(cf));
+                    db.add_column_family(s, ks.make_column_family_config(*s));
                     cf_defs.push_back(s);
                 }
             });
