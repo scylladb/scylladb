@@ -1019,82 +1019,68 @@ SEASTAR_TEST_CASE(compact) {
             "Example table for compaction"
            ));
 
-    class creator : public sstables::sstable_creator {
-    private:
-        std::vector<shared_sstable> _tables;
-    public:
-        virtual shared_sstable new_tmp() override {
-            auto sst = make_lw_shared<sstables::sstable>("tests/urchin/sstables/tests-temporary",
-                    generation, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
-            _tables.push_back(sst);
-            return sst;
-        }
-        virtual void commit() override {
-        }
-        virtual ~creator() {
-        }
-    };
-
     return open_sstables("tests/urchin/sstables/compaction", {1,2,3}).then([s = std::move(s), generation] (auto sstables) {
         return test_setup::do_with_test_directory([sstables, s, generation] {
-            return do_with(creator(), [sstables, s, generation] (auto& c) {
-                return sstables::compact_sstables(std::move(sstables), std::move(s), c).then([s, generation] {
-                    // Verify that the compacted sstable has the right content. We expect to see:
-                    //  name  | age | height
-                    // -------+-----+--------
-                    //  jerry |  40 |    170
-                    //    tom |  20 |    180
-                    //   john |  20 |   deleted
-                    //   nadav - deleted partition
-                    return open_sstable("tests/urchin/sstables/tests-temporary", generation).then([s] (shared_sstable sst) {
-                        auto reader = sstable_reader(sst, s); // reader holds sst and s alive.
-                        return reader().then([reader, s] (mutation_opt m) {
-                            BOOST_REQUIRE(m);
-                            BOOST_REQUIRE(m->key().representation() == bytes("jerry"));
-                            BOOST_REQUIRE(!m->partition().partition_tombstone());
-                            auto &rows = m->partition().clustered_rows();
-                            BOOST_REQUIRE(rows.size() == 1);
-                            auto &row = rows.begin()->row();
-                            BOOST_REQUIRE(!row.deleted_at());
-                            auto &cells = row.cells();
-                            BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,40}));
-                            BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(char)170}));
-                            return reader();
-                        }).then([reader, s] (mutation_opt m) {
-                            BOOST_REQUIRE(m);
-                            BOOST_REQUIRE(m->key().representation() == bytes("tom"));
-                            BOOST_REQUIRE(!m->partition().partition_tombstone());
-                            auto &rows = m->partition().clustered_rows();
-                            BOOST_REQUIRE(rows.size() == 1);
-                            auto &row = rows.begin()->row();
-                            BOOST_REQUIRE(!row.deleted_at());
-                            auto &cells = row.cells();
-                            BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,20}));
-                            BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(char)180}));
-                            return reader();
-                        }).then([reader, s] (mutation_opt m) {
-                            BOOST_REQUIRE(m);
-                            BOOST_REQUIRE(m->key().representation() == bytes("john"));
-                            BOOST_REQUIRE(!m->partition().partition_tombstone());
-                            auto &rows = m->partition().clustered_rows();
-                            BOOST_REQUIRE(rows.size() == 1);
-                            auto &row = rows.begin()->row();
-                            BOOST_REQUIRE(!row.deleted_at());
-                            auto &cells = row.cells();
-                            BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,20}));
-                            BOOST_REQUIRE(cells.find_cell(s->get_column_definition("height")->id) == nullptr);
-                            return reader();
-                        }).then([reader, s] (mutation_opt m) {
-                            BOOST_REQUIRE(m);
-                            BOOST_REQUIRE(m->key().representation() == bytes("nadav"));
-                            BOOST_REQUIRE(m->partition().partition_tombstone());
-                            // FIXME: enable the following test.
-                            //auto &rows = m->partition().clustered_rows();
-                            //BOOST_REQUIRE(rows.size() == 0);
-                            return reader();
-                        }).then([reader] (mutation_opt m) {
-                            BOOST_REQUIRE(!m);
-                        });
+            auto new_sstable = [generation] {
+                return make_lw_shared<sstables::sstable>("tests/urchin/sstables/tests-temporary",
+                        generation, sstables::sstable::version_types::la, sstables::sstable::format_types::big);
+            };
+            return sstables::compact_sstables(std::move(sstables), std::move(s), new_sstable).then([s, generation] {
+                // Verify that the compacted sstable has the right content. We expect to see:
+                //  name  | age | height
+                // -------+-----+--------
+                //  jerry |  40 |    170
+                //    tom |  20 |    180
+                //   john |  20 |   deleted
+                //   nadav - deleted partition
+                return open_sstable("tests/urchin/sstables/tests-temporary", generation).then([s] (shared_sstable sst) {
+                    auto reader = sstable_reader(sst, s); // reader holds sst and s alive.
+                    return reader().then([reader, s] (mutation_opt m) {
+                        BOOST_REQUIRE(m);
+                        BOOST_REQUIRE(m->key().representation() == bytes("jerry"));
+                        BOOST_REQUIRE(!m->partition().partition_tombstone());
+                        auto &rows = m->partition().clustered_rows();
+                        BOOST_REQUIRE(rows.size() == 1);
+                        auto &row = rows.begin()->row();
+                        BOOST_REQUIRE(!row.deleted_at());
+                        auto &cells = row.cells();
+                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,40}));
+                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(char)170}));
+                        return reader();
+                    }).then([reader, s] (mutation_opt m) {
+                        BOOST_REQUIRE(m);
+                        BOOST_REQUIRE(m->key().representation() == bytes("tom"));
+                        BOOST_REQUIRE(!m->partition().partition_tombstone());
+                        auto &rows = m->partition().clustered_rows();
+                        BOOST_REQUIRE(rows.size() == 1);
+                        auto &row = rows.begin()->row();
+                        BOOST_REQUIRE(!row.deleted_at());
+                        auto &cells = row.cells();
+                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,20}));
+                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("height")->id).as_atomic_cell().value() == bytes({0,0,0,(char)180}));
+                        return reader();
+                    }).then([reader, s] (mutation_opt m) {
+                        BOOST_REQUIRE(m);
+                        BOOST_REQUIRE(m->key().representation() == bytes("john"));
+                        BOOST_REQUIRE(!m->partition().partition_tombstone());
+                        auto &rows = m->partition().clustered_rows();
+                        BOOST_REQUIRE(rows.size() == 1);
+                        auto &row = rows.begin()->row();
+                        BOOST_REQUIRE(!row.deleted_at());
+                        auto &cells = row.cells();
+                        BOOST_REQUIRE(cells.cell_at(s->get_column_definition("age")->id).as_atomic_cell().value() == bytes({0,0,0,20}));
+                        BOOST_REQUIRE(cells.find_cell(s->get_column_definition("height")->id) == nullptr);
+                        return reader();
+                    }).then([reader, s] (mutation_opt m) {
+                        BOOST_REQUIRE(m);
+                        BOOST_REQUIRE(m->key().representation() == bytes("nadav"));
+                        BOOST_REQUIRE(m->partition().partition_tombstone());
+                        // FIXME: enable the following test.
+                        //auto &rows = m->partition().clustered_rows();
+                        //BOOST_REQUIRE(rows.size() == 0);
+                        return reader();
+                    }).then([reader] (mutation_opt m) {
+                        BOOST_REQUIRE(!m);
                     });
                 });
             });

@@ -3,6 +3,7 @@
  */
 
 #include <vector>
+#include <functional>
 
 #include "core/future-util.hh"
 #include "core/pipe.hh"
@@ -17,7 +18,7 @@ namespace sstables {
 // (currently) or more (in the future) new sstables. The new sstables
 // are created using the "sstable_creator" object passed by the caller.
 future<> compact_sstables(std::vector<shared_sstable> sstables,
-        schema_ptr schema, sstable_creator& creator) {
+        schema_ptr schema, std::function<shared_sstable()> creator) {
     std::vector<::mutation_reader> readers;
     uint64_t estimated_parititions = 0;
 
@@ -59,9 +60,9 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     ::mutation_reader mutation_queue_reader = [output_reader] () {
         return output_reader->read();
     };
-    auto newtab = creator.new_tmp();
+    auto newtab = creator();
     future<> write_done = newtab->write_components(
-            std::move(mutation_queue_reader), estimated_parititions, schema);
+            std::move(mutation_queue_reader), estimated_parititions, schema).finally([newtab] {});
 
     // Wait for both read_done and write_done fibers to finish.
     // FIXME: if write_done throws an exception, we get a broken pipe
