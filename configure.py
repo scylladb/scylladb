@@ -58,6 +58,11 @@ def dpdk_cflags (dpdk_target):
         dpdk_sdk_path = os.path.dirname(dpdk_target)
         dpdk_target_name = os.path.basename(dpdk_target)
         dpdk_arch = dpdk_target_name.split('-')[0]
+        if args.dpdk:
+            dpdk_sdk_path = 'dpdk'
+            dpdk_target = 'build/dpdk'
+            dpdk_target_name = 'x86_64-native-linuxapp-gcc'
+            dpdk_arch = 'x86_64'
 
         sfile.file.write(bytes('include ' + dpdk_sdk_path + '/mk/rte.vars.mk' + "\n", 'utf-8'))
         sfile.file.write(bytes('all:' + "\n\t", 'utf-8'))
@@ -67,7 +72,9 @@ def dpdk_cflags (dpdk_target):
         dpdk_cflags = subprocess.check_output(['make', '--no-print-directory',
                                              '-f', sfile.name,
                                              'RTE_SDK=' + dpdk_sdk_path,
+                                             'RTE_OUTPUT=' + dpdk_target,
                                              'RTE_TARGET=' + dpdk_target_name,
+                                             'RTE_SDK_BIN=' + dpdk_target,
                                              'RTE_ARCH=' + dpdk_arch])
         dpdk_cflags_str = dpdk_cflags.decode('utf-8')
         dpdk_cflags_str = re.sub(r'\n+$', '', dpdk_cflags_str)
@@ -176,6 +183,8 @@ arg_parser.add_argument('--compiler', action = 'store', dest = 'cxx', default = 
                         help = 'C++ compiler path')
 arg_parser.add_argument('--with-osv', action = 'store', dest = 'with_osv', default = '',
                         help = 'Shortcut for compile for OSv')
+arg_parser.add_argument('--enable-dpdk', action = 'store_true', dest = 'dpdk', default = False,
+                        help = 'Enable dpdk (from included dpdk sources)')
 arg_parser.add_argument('--dpdk-target', action = 'store', dest = 'dpdk_target', default = '',
                         help = 'Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
 arg_parser.add_argument('--debuginfo', action = 'store', dest = 'debuginfo', type = int, default = 1,
@@ -322,6 +331,27 @@ if args.with_osv:
         args.with_osv + ' -I' + args.with_osv + '/include -I' +
         args.with_osv + '/arch/x64')
 
+if args.dpdk:
+    subprocess.check_call('make -C dpdk RTE_OUTPUT=$PWD/build/dpdk/ config T=x86_64-native-linuxapp-gcc',
+                          shell = True)
+    # adjust configutation to taste
+    dotconfig = 'build/dpdk/.config'
+    lines = open(dotconfig).readlines()
+    def disable(lines, vars):
+        vars_enabled = [var + '=y\n' for var in vars]
+        return [line.replace('=y', '=n') if line in vars_enabled else line
+                for line in lines
+                ]
+    lines = disable(lines, ['CONFIG_RTE_LIBRTE_PMD_BOND',
+                            'CONFIG_RTE_MBUF_SCATTER_GATHER',
+                            'CONFIG_RTE_LIBRTE_IP_FRAG',
+                            'CONFIG_RTE_APP_TEST',
+                            'CONFIG_RTE_TEST_PMD',
+                            'CONFIG_RTE_MBUF_REFCNT_ATOMIC',
+                            ])
+    open(dotconfig, 'w').writelines(lines)
+    args.dpdk_target = 'build/dpdk'
+    
 if args.dpdk_target:
     args.user_cflags = (args.user_cflags +
         ' -DHAVE_DPDK -I' + args.dpdk_target + '/include ' +
@@ -331,7 +361,7 @@ if args.dpdk_target:
     if args.with_osv:
         libs += '-lintel_dpdk -lrt -lm -ldl'
     else:
-        libs += '-Wl,--whole-archive -lrte_pmd_bond -lrte_pmd_vmxnet3_uio -lrte_pmd_virtio_uio -lrte_pmd_i40e -lrte_pmd_ixgbe -lrte_pmd_e1000 -lrte_pmd_ring -Wl,--no-whole-archive -lrte_distributor -lrte_pipeline -lrte_table -lrte_port -lrte_timer -lrte_hash -lrte_lpm -lrte_power -lrte_acl -lrte_meter -lrte_sched -lrte_kvargs -lrte_mbuf -lrte_ip_frag -lethdev -lrte_eal -lrte_malloc -lrte_mempool -lrte_ring -lrte_cmdline -lrte_cfgfile -lrt -lm -ldl'
+        libs += '-Wl,--whole-archive -lrte_pmd_vmxnet3_uio -lrte_pmd_i40e -lrte_pmd_ixgbe -lrte_pmd_e1000 -lrte_pmd_ring -Wl,--no-whole-archive -lrte_distributor -lrte_pipeline -lrte_table -lrte_port -lrte_timer -lrte_hash -lrte_lpm -lrte_power -lrte_acl -lrte_meter -lrte_sched -lrte_kvargs -lrte_mbuf -lethdev -lrte_eal -lrte_malloc -lrte_mempool -lrte_ring -lrte_cmdline -lrte_cfgfile -lrt -lm -ldl'
 
 warnings = [w
             for w in warnings
@@ -371,6 +401,14 @@ link_pool_depth = max(int(total_memory / 7e9), 1)
 build_modes = modes if args.mode == 'all' else [args.mode]
 build_artifacts = all_artifacts if not args.artifacts else args.artifacts
 
+dpdk_sources = []
+if args.dpdk:
+    for root, dirs, files in os.walk('dpdk'):
+        dpdk_sources += [os.path.join(root, file)
+                         for file in files
+                         if file.endswith('.h') or file.endswith('.c')]
+dpdk_sources = ' '.join(dpdk_sources)
+
 outdir = 'build'
 buildfile = 'build.ninja'
 os.makedirs(outdir, exist_ok = True)
@@ -378,6 +416,10 @@ do_sanitize = True
 if args.static:
     do_sanitize = False
 with open(buildfile, 'w') as f:
+    dpdk_deps = ''
+    if args.dpdk:
+        # fake dependencies on dpdk, so that it is built before anything else
+        dpdk_deps = ' build/dpdk/include/rte_eal.h build/dpdk/lib/librte_eal.a'
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
@@ -398,6 +440,12 @@ with open(buildfile, 'w') as f:
             command = json/json2code.py -f $in -o $out
             description = SWAGGER $out
         ''').format(**globals()))
+    if args.dpdk:
+        f.write(textwrap.dedent('''\
+            rule dpdkmake
+                command = make -C build/dpdk
+            build {dpdk_deps} : dpdkmake {dpdk_sources}
+            ''').format(**globals()))
     for mode in build_modes:
         modeval = modes[mode]
         if modeval['sanitize'] and not do_sanitize:
@@ -444,7 +492,7 @@ with open(buildfile, 'w') as f:
             elif binary.endswith('.a'):
                 f.write('build $builddir/{}/{}: ar.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
             else:
-                f.write('build $builddir/{}/{}: link.{} {}\n'.format(mode, binary, mode, str.join(' ', objs)))
+                f.write('build $builddir/{}/{}: link.{} {} | {}\n'.format(mode, binary, mode, str.join(' ', objs), dpdk_deps))
             for src in srcs:
                 if src.endswith('.cc'):
                     obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
@@ -460,7 +508,7 @@ with open(buildfile, 'w') as f:
         for obj in compiles:
             src = compiles[obj]
             gen_headers = list(ragels.keys()) + list(swaggers.keys())
-            f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers)))
+            f.write('build {}: cxx.{} {} || {} \n'.format(obj, mode, src, ' '.join(gen_headers) + dpdk_deps))
         for hh in ragels:
             src = ragels[hh]
             f.write('build {}: ragel {}\n'.format(hh, src))
