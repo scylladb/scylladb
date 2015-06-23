@@ -614,15 +614,9 @@ create_keyspace(distributed<database>& db, const lw_shared_ptr<keyspace_metadata
     return make_directory(db.local()._cfg->data_file_directories()[0] + "/" + ksm->name()).then([ksm, &db] {
         return db.invoke_on_all([ksm] (database& db) {
             auto cfg = db.make_keyspace_config(*ksm);
-
             keyspace ks(ksm, cfg);
-            auto fu = ks.create_replication_strategy(db.get_snitch_name(), ksm->strategy_options());
-
-            return fu.then([&db, ks = std::move(ks), ksm] () mutable {
-                db.add_keyspace(ksm->name(), std::move(ks));
-
-                return make_ready_future<>();
-            });
+            ks.create_replication_strategy(ksm->strategy_options());
+            db.add_keyspace(ksm->name(), std::move(ks));
         });
     });
     // FIXME: rollback on error, or keyspace directory remains on disk, poisoning
@@ -728,20 +722,15 @@ const column_family& database::find_column_family(const utils::UUID& uuid) const
     }
 }
 
-future<>
-keyspace::create_replication_strategy(const sstring& snitch_name, const std::map<sstring, sstring>& options) {
+void
+keyspace::create_replication_strategy(const std::map<sstring, sstring>& options) {
     using namespace locator;
 
-    return i_endpoint_snitch::create_snitch(snitch_name).then(
-            [this, &options] (snitch_ptr&& s) {
-        auto& ss = service::get_local_storage_service();
-        _replication_strategy =
+    auto& ss = service::get_local_storage_service();
+    _replication_strategy =
             abstract_replication_strategy::create_replication_strategy(
                 _metadata->name(), _metadata->strategy_name(),
-                ss.get_token_metadata(), std::move(s), options);
-
-        return make_ready_future<>();
-    });
+                ss.get_token_metadata(), options);
 }
 
 locator::abstract_replication_strategy&
@@ -799,15 +788,11 @@ database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     if (i != _keyspaces.end()) {
         return make_ready_future<>();
     }
-
     keyspace ks(ksm, std::move(make_keyspace_config(*ksm)));
-    auto fu = ks.create_replication_strategy(get_snitch_name(), ksm->strategy_options());
+    ks.create_replication_strategy(ksm->strategy_options());
+    _keyspaces.emplace(ksm->name(), std::move(ks));
 
-    return fu.then([ks = std::move(ks), ksm, this] () mutable {
-        _keyspaces.emplace(ksm->name(), std::move(ks));
-
-        return make_ready_future<>();
-    });
+    return make_ready_future<>();
 }
 
 std::set<sstring>
@@ -1069,12 +1054,8 @@ operator<<(std::ostream& os, const atomic_cell& ac) {
 
 future<>
 database::stop() {
-    return do_for_each(_keyspaces, [this] (auto& val_pair) {
-        return val_pair.second.stop();
-    }).then([this] {
-        return parallel_for_each(_column_families, [this] (auto& val_pair) {
-            return val_pair.second.stop(this);
-        });
+    return parallel_for_each(_column_families, [this] (auto& val_pair) {
+        return val_pair.second.stop(this);
     });
 }
 

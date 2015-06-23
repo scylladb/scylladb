@@ -26,19 +26,20 @@
 
 #include "gms/inet_address.hh"
 #include "core/shared_ptr.hh"
+#include "core/distributed.hh"
 #include "utils/class_registrator.hh"
 
 namespace locator {
 
-struct i_endpoint_snitch;
+struct snitch_ptr;
 
 typedef gms::inet_address inet_address;
-typedef std::unique_ptr<i_endpoint_snitch> snitch_ptr;
 
-struct i_endpoint_snitch
-{
+struct i_endpoint_snitch {
     template <typename... A>
-    static future<snitch_ptr> create_snitch(const sstring& snitch_name, A&&... a);
+    static future<> create_snitch(const sstring& snitch_name, A... a);
+
+    static future<> stop_snitch();
 
     /**
      * returns a String representing the rack this endpoint belongs to
@@ -91,8 +92,37 @@ struct i_endpoint_snitch
 
     virtual future<> stop() = 0;
 
+    // noop by default
+    virtual future<> start() { return make_ready_future<>(); }
+
+    // noop by default
+    virtual void set_my_dc(const sstring& new_dc) {};
+    virtual void set_my_rack(const sstring& new_rack) {};
+
+    static distributed<snitch_ptr>& snitch_instance() {
+        static distributed<snitch_ptr> snitch_inst;
+
+        return snitch_inst;
+    }
+
+    static snitch_ptr& get_local_snitch_ptr() {
+        return snitch_instance().local();
+    }
+
+    void set_snitch_ready() {
+        _state = snitch_state::running;
+        _snitch_is_ready.set_value();
+    }
+
+protected:
+    static unsigned& io_cpu_id() {
+        static unsigned id = 0;
+        return id;
+    }
+
 protected:
     static thread_local logging::logger snitch_logger;
+
     promise<> _snitch_is_ready;
     enum class snitch_state {
         initializing,
@@ -102,38 +132,92 @@ protected:
     } _state = snitch_state::initializing;
 };
 
-
-template <typename... A>
-future<snitch_ptr> i_endpoint_snitch::create_snitch(
-    const sstring& snitch_name, A&&... a) {
-
-    try {
-        snitch_ptr s(std::move(create_object<i_endpoint_snitch>(
-            snitch_name, std::forward<A>(a)...)));
-
-        auto fu = s->_snitch_is_ready.get_future();
-        return fu.then_wrapped([s = std::move(s)] (auto&& f) mutable {
-            try {
-                f.get();
-
-                return make_ready_future<snitch_ptr>(std::move(s));
-            } catch (...) {
-                auto eptr = std::current_exception();
-                auto fu = s->stop();
-
-                return fu.then([eptr, s = std::move(s)] () mutable {
-                    std::rethrow_exception(eptr);
-                    // just to make a compiler happy
-                    return make_ready_future<snitch_ptr>(std::move(s));
-                });
-            }
-        });
-    } catch (no_such_class& e) {
-        snitch_logger.error("{}", e.what());
-        throw;
-    } catch (...) {
-        throw;
+struct snitch_ptr {
+    typedef std::unique_ptr<i_endpoint_snitch> ptr_type;
+        ;
+    future<> stop() {
+        if (_ptr) {
+            return _ptr->stop();
+        } else {
+            return make_ready_future<>();
+        }
     }
+
+    future<> start() {
+        if (_ptr) {
+            return _ptr->start();
+        } else {
+            return make_ready_future<>();
+        }
+    }
+
+    i_endpoint_snitch* operator->() {
+        return _ptr.get();
+    }
+
+    ptr_type& operator=(ptr_type&& new_val) {
+        _ptr = std::move(new_val);
+
+        return _ptr;
+    }
+
+    operator bool() const {
+        return _ptr ? true : false;
+    }
+
+private:
+    ptr_type _ptr;
+};
+
+/**
+ * Creates the distributed i_endpoint_snitch::snitch_instane object
+ *
+ * @param snitch_name name of the snitch class (comes from the cassandra.yaml)
+ *
+ * @return ready future when the distributed object is ready.
+ */
+template <typename... A>
+future<> i_endpoint_snitch::create_snitch(
+    const sstring& snitch_name, A... a) {
+
+    // First, create the snitch_ptr objects...
+    return snitch_instance().start().then(
+        [snitch_name = std::move(snitch_name), a = std::make_tuple(std::forward<A>(a)...)] () {
+        // ...then, create the snitches...
+        return snitch_instance().invoke_on_all(
+            [snitch_name, a] (snitch_ptr& local_inst) {
+            try {
+                auto s(std::move(apply([snitch_name] (A... a) {
+                    return create_object<i_endpoint_snitch>(snitch_name, std::forward<A>(a)...);
+                }, std::move(a))));
+
+                local_inst = std::move(s);
+            } catch (no_such_class& e) {
+                snitch_logger.error("{}", e.what());
+                throw;
+            } catch (...) {
+                throw;
+            }
+            
+            return make_ready_future<>();
+        }).then([] {
+            // ...and finally - start them.
+            return snitch_instance().invoke_on_all([] (snitch_ptr& local_inst) {
+                return local_inst.start();
+            }).then_wrapped([] (auto&& f) {
+                try {
+                    f.get();
+                    return make_ready_future<>();
+                } catch (...) {
+                    auto eptr = std::current_exception();
+
+                    return stop_snitch().then([eptr] () {
+                        std::rethrow_exception(eptr);
+                    });
+                }
+            });
+        });
+    });
 }
 
 class snitch_base : public i_endpoint_snitch {

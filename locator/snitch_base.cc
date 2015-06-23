@@ -122,4 +122,12 @@ bool snitch_base::has_remote_node(std::vector<inet_address>& l) {
 
     return false;
 }
+
+future<> i_endpoint_snitch::stop_snitch() {
+    // First stop the instance on a CPU where I/O is running
+    return snitch_instance().invoke_on(io_cpu_id(), [] (snitch_ptr& s) {
+        return s->stop();
+    }).then([] { return snitch_instance().stop(); });
+}
+
 } // namespace locator

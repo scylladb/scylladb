@@ -95,6 +95,14 @@ private:
         return default_val;
     }
 
+    virtual void set_my_dc(const sstring& new_dc) override {
+        _my_dc = new_dc;
+    }
+
+    virtual void set_my_rack(const sstring& new_rack) override {
+        _my_rack = new_rack;
+    }
+
 protected:
     promise<> _snitch_is_stopped;
     std::experimental::optional<addr2dc_rack_map> _saved_endpoints;

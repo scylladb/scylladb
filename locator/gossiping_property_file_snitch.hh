@@ -53,9 +53,11 @@ public:
 
     virtual void gossiper_starting() override;
     virtual future<> stop() override;
+    virtual future<> start() override;
 
     gossiping_property_file_snitch(
-        const sstring& fname = snitch_properties_filename);
+        const sstring& fname = snitch_properties_filename,
+        unsigned io_cpu_id = 0);
 
 private:
     static logging::logger& logger() {
@@ -87,6 +89,8 @@ private:
             "labels have to be defined.", _fname);
         throw bad_property_file_error();
     }
+
+    void periodic_reader_callback();
 
     /**
      * Parse the property file and indicate the StorageService and a Gossiper if
@@ -134,5 +138,6 @@ private:
     bool _gossip_started = false;
     bool _prefer_local = false;
     bool _file_reader_runs = false;
+    unsigned _file_reader_cpu_id;
 };
 } // namespace locator
