@@ -169,6 +169,7 @@ urchin_tests = [
     'tests/perf/perf_simple_query',
     'tests/urchin/cql_query_test',
     'tests/urchin/mutation_reader_test',
+    'tests/urchin/row_cache_test',
     'tests/test-serialization',
     'tests/urchin/sstable_test',
     'tests/urchin/sstable_mutation_test',
@@ -545,6 +546,7 @@ deps['tests/urchin/hash_test'] += boost_test_lib
 deps['tests/urchin/serializer_test'] += boost_test_lib
 deps['tests/urchin/gossip_test'] += boost_test_lib
 deps['tests/urchin/gossiping_property_file_snitch_test'] += boost_test_lib
+deps['tests/urchin/row_cache_test'] += boost_test_lib
 
 deps['tests/urchin/bytes_ostream_test'] = ['tests/urchin/bytes_ostream_test.cc']
 deps['tests/urchin/UUID_test'] = ['utils/UUID_gen.cc', 'tests/urchin/UUID_test.cc']
