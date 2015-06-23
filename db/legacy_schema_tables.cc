@@ -598,7 +598,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                     for (auto&& key : diff.entries_only_on_right) {
                         auto&& value = after[key];
                         if (!value->empty()) {
-                            auto&& tables = create_tables_from_tables_partition(proxy, value);
+                            auto&& tables = create_tables_from_tables_partition(proxy, value).get0();
                             boost::copy(tables | boost::adaptors::map_values, std::back_inserter(created));
                         }
                     }
@@ -610,7 +610,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 
                         if (!pre->empty() && !post->empty()) {
                             auto before = db.find_keyspace(keyspace_name).metadata()->cf_meta_data();
-                            auto after = create_tables_from_tables_partition(proxy, post);
+                            auto after = create_tables_from_tables_partition(proxy, post).get0();
                             auto delta = difference(std::map<sstring, schema_ptr>{before.begin(), before.end()}, after, [](const schema_ptr& x, const schema_ptr& y) -> bool {
                                 return *x == *y;
                             });
@@ -627,7 +627,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                             auto before = db.find_keyspace(keyspace_name).metadata()->cf_meta_data();
                             boost::copy(before | boost::adaptors::map_values, std::back_inserter(dropped));
                         } else if (!post->empty()) {
-                            auto tables = create_tables_from_tables_partition(proxy, post);
+                            auto tables = create_tables_from_tables_partition(proxy, post).get0();
                             boost::copy(tables | boost::adaptors::map_values, std::back_inserter(created));
                         }
                     }
@@ -1134,14 +1134,16 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      *
      * @return map containing name of the table and its metadata for faster lookup
      */
-    std::map<sstring, schema_ptr> create_tables_from_tables_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
+    future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
     {
-        std::map<sstring, schema_ptr> tables{};
-        for (auto&& row : result->rows()) {
-            auto&& cfm = create_table_from_table_row(proxy, row);
-            tables.emplace(cfm->cf_name(), std::move(cfm));
-        }
-        return tables;
+        auto tables = make_lw_shared<std::map<sstring, schema_ptr>>();
+        return parallel_for_each(result->rows().begin(), result->rows().end(), [&proxy, tables] (auto&& row) {
+            return create_table_from_table_row(proxy, row).then([tables] (schema_ptr&& cfm) {
+                tables->emplace(cfm->cf_name(), std::move(cfm));
+            });
+        }).then([tables] {
+            return std::move(*tables);
+        });
     }
 
 #if 0
@@ -1170,14 +1172,16 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
      *
      * @return Metadata deserialized from schema
      */
-    schema_ptr create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row)
+    future<schema_ptr> create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row)
     {
         auto ks_name = row.get_nonnull<sstring>("keyspace_name");
         auto cf_name = row.get_nonnull<sstring>("columnfamily_name");
         auto id = row.get_nonnull<utils::UUID>("cf_id");
-        schema_builder builder{ks_name, cf_name, id};
-        auto serialized_columns = read_schema_partition_for_table(proxy, COLUMNS, ks_name, cf_name).get0();
-        create_table_from_table_row_and_columns_partition(builder, row, serialized_columns);
+        return read_schema_partition_for_table(proxy, COLUMNS, ks_name, cf_name).then([&proxy, &row, ks_name, cf_name, id] (auto serialized_columns) {
+            schema_builder builder{ks_name, cf_name, id};
+            create_table_from_table_row_and_columns_partition(builder, row, serialized_columns);
+            return builder.build();
+        });
 #if 0
         // FIXME:
         Row serializedTriggers = readSchemaPartitionForTable(TRIGGERS, ksName, cfName);
@@ -1191,7 +1195,6 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
             throw new RuntimeException(e);
         }
 #endif
-        return builder.build();
     }
 
     void create_table_from_table_row_and_column_rows(schema_builder& builder, const query::result_set_row& table_row, const schema_result::mapped_type& serialized_column_definitions)
