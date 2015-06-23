@@ -21,7 +21,11 @@
 
 #pragma once
 
+#include "utils/UUID.hh"
 #include "streaming/messages/stream_message.hh"
+#include "streaming/messages/file_message_header.hh"
+#include "streaming/compress/compression_info.hh"
+#include "sstables/sstables.hh"
 
 namespace streaming {
 namespace messages {
@@ -30,6 +34,9 @@ namespace messages {
  * OutgoingFileMessage is used to transfer the part(or whole) of a SSTable data file.
  */
 class outgoing_file_message : public stream_message {
+    using UUID = utils::UUID;
+    using compression_info = compress::compression_info;
+    using format_types = sstables::sstable::format_types;
 #if 0
     public static Serializer<OutgoingFileMessage> serializer = new Serializer<OutgoingFileMessage>()
     {
@@ -52,32 +59,36 @@ class outgoing_file_message : public stream_message {
             session.fileSent(message.header);
         }
     };
+#endif
+public:
 
-    public FileMessageHeader header;
-    public SSTableReader sstable;
+    file_message_header header;
+    sstables::sstable* sstable;
 
-    public OutgoingFileMessage(SSTableReader sstable, int sequenceNumber, long estimatedKeys, List<Pair<Long, Long>> sections, long repairedAt, boolean keepSSTableLevel)
-    {
+    outgoing_file_message() = default;
+    outgoing_file_message(sstables::sstable& sstable_, int32_t sequence_number, int64_t estimated_keys,
+                          std::map<int64_t, int64_t> sections, int64_t repaired_at, bool keep_ss_table_level)
+        : sstable(&sstable_) {
+#if 0
         super(Type.FILE);
-        this.sstable = sstable;
-
         CompressionInfo compressionInfo = null;
         if (sstable.compression)
         {
             CompressionMetadata meta = sstable.getCompressionMetadata();
             compressionInfo = new CompressionInfo(meta.getChunksForSections(sections), meta.parameters);
         }
-        this.header = new FileMessageHeader(sstable.metadata.cfId,
-                                            sequenceNumber,
-                                            sstable.descriptor.version.toString(),
-                                            sstable.descriptor.formatType,
-                                            estimatedKeys,
-                                            sections,
-                                            compressionInfo,
-                                            repairedAt,
-                                            keepSSTableLevel ? sstable.getSSTableLevel() : 0);
+#endif
+        // FIXME:
+        UUID cf_id; // sstable.metadata.cfId
+        sstring version; // sstable.descriptor.version.toString()
+        format_types format; // sstable.descriptor.formatType
+        int32_t level = 0; // keepSSTableLevel ? sstable.getSSTableLevel() : 0
+        compression_info comp_info;
+        header = file_message_header(cf_id, sequence_number, version, format, estimated_keys,
+                                     std::move(sections), comp_info, repaired_at, level);
     }
 
+#if 0
     @Override
     public String toString()
     {
