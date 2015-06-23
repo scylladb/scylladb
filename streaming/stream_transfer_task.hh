@@ -25,6 +25,7 @@
 #include "streaming/stream_session.hh"
 #include "streaming/stream_task.hh"
 #include "streaming/messages/outgoing_file_message.hh"
+#include "sstables/sstables.hh"
 #include <map>
 
 namespace streaming {
@@ -34,10 +35,10 @@ namespace streaming {
  */
 class stream_transfer_task : public stream_task {
 private:
-    //final AtomicInteger sequenceNumber = new AtomicInteger(0);
+    int32_t sequence_number = 0;
     bool aborted = false;
 
-    std::map<int, messages::outgoing_file_message> files;
+    std::map<int32_t, messages::outgoing_file_message> files;
     //final Map<Integer, ScheduledFuture> timeoutTasks = new HashMap<>();
 
     long total_size;
@@ -47,14 +48,16 @@ public:
         : stream_task(session, cf_id) {
     }
 
-#if 0
-    public synchronized void addTransferFile(SSTableReader sstable, long estimatedKeys, List<Pair<Long, Long>> sections, long repairedAt)
-    {
-        assert sstable != null && cfId.equals(sstable.metadata.cfId);
-        OutgoingFileMessage message = new OutgoingFileMessage(sstable, sequenceNumber.getAndIncrement(), estimatedKeys, sections, repairedAt, session.keepSSTableLevel());
-        files.put(message.header.sequenceNumber, message);
-        totalSize += message.header.size();
+    void add_transfer_file(sstables::sstable& sstable, int64_t estimated_keys, std::map<int64_t, int64_t> sections, int64_t repaired_at) {
+        //assert sstable != null && cfId.equals(sstable.metadata.cfId);
+        auto message = messages::outgoing_file_message(sstable, sequence_number++, estimated_keys, std::move(sections), repaired_at, session.keep_ss_table_level());
+        auto size = message.header.size();
+        auto seq = message.header.sequence_number;
+        files.emplace(seq, std::move(message));
+        total_size += size;
     }
+
+#if 0
 
     /**
      * Received ACK for file at {@code sequenceNumber}.
