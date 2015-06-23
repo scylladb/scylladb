@@ -430,11 +430,11 @@ column_family::update_cache(memtable& m) {
     return _cache.update(m.make_reader());
 }
 
-void
+future<>
 column_family::seal_active_memtable(database* db) {
     auto old = _memtables->back();
     if (old->empty()) {
-        return;
+        return make_ready_future<>();
     }
     add_memtable();
     assert(_highest_flushed_rp < old->replay_position()
@@ -450,7 +450,7 @@ column_family::seal_active_memtable(database* db) {
             gen);
     // FIXME: this does not clear CL. Should it?
     if (!_config.enable_disk_writes) {
-        return;
+        return make_ready_future<>();
     }
 
     sstables::sstable newtab = sstables::sstable(_config.datadir, gen,
@@ -458,7 +458,7 @@ column_family::seal_active_memtable(database* db) {
         sstables::sstable::format_types::big);
 
     _in_flight_seals.enter();
-    do_with(std::move(newtab), [old, name, this, db] (sstables::sstable& newtab) {
+    return do_with(std::move(newtab), [old, name, this, db] (sstables::sstable& newtab) {
         // FIXME: write all components
         return newtab.write_components(*old).then([name, this, &newtab, old] {
             return newtab.load();
