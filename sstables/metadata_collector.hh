@@ -25,11 +25,100 @@
 #pragma once
 
 #include "types.hh"
+#include "utils/murmur_hash.hh"
+#include "hyperloglog.hh"
 #include <algorithm>
 
 namespace sstables {
 
 static constexpr int TOMBSTONE_HISTOGRAM_BIN_SIZE = 100;
+
+class min_long_tracker {
+    uint64_t _default_value;
+    bool _is_set = false;
+    uint64_t _value;
+public:
+    min_long_tracker() {}
+    min_long_tracker(uint64_t default_value) {
+        _default_value = default_value;
+    }
+
+    void update(uint64_t value) {
+        if (!_is_set) {
+            _value = value;
+            _is_set = true;
+        } else {
+            if (value < _value) {
+                _value = value;
+            }
+        }
+    }
+
+    uint64_t get() {
+        if (_is_set) {
+            return _value;
+        }
+        return _default_value;
+    }
+};
+
+class max_long_tracker {
+    uint64_t _default_value;
+    bool _is_set = false;
+    uint64_t _value;
+public:
+    max_long_tracker() {}
+    max_long_tracker(uint64_t default_value) {
+        _default_value = default_value;
+    }
+
+    void update(uint64_t value) {
+        if (!_is_set) {
+            _value = value;
+            _is_set = true;
+        } else {
+            if (value > _value) {
+                _value = value;
+            }
+        }
+    }
+
+    uint64_t get() {
+        if (_is_set) {
+            return _value;
+        }
+        return _default_value;
+    }
+};
+
+class max_int_tracker {
+    int _default_value;
+    bool _is_set = false;
+    int _value;
+public:
+    max_int_tracker() {}
+    max_int_tracker(int default_value) {
+        _default_value = default_value;
+    }
+
+    void update(int value) {
+        if (!_is_set) {
+            _value = value;
+            _is_set = true;
+        } else {
+            if (value > _value) {
+                _value = value;
+            }
+        }
+    }
+
+    int get() {
+        if (_is_set) {
+            return _value;
+        }
+        return _default_value;
+    }
+};
 
 /**
  * ColumnStats holds information about the columns for one row inside sstable
@@ -42,9 +131,9 @@ struct column_stats {
     uint64_t row_size;
 
     /** the largest (client-supplied) timestamp in the row */
-    uint64_t min_timestamp;
-    uint64_t max_timestamp;
-    int max_local_deletion_time;
+    min_long_tracker min_timestamp;
+    max_long_tracker max_timestamp;
+    max_int_tracker max_local_deletion_time;
     /** histogram of tombstone drop time */
     streaming_histogram tombstone_histogram;
 
@@ -58,9 +147,9 @@ struct column_stats {
         column_count = 0;
         start_offset = 0;
         row_size = 0;
-        min_timestamp = std::numeric_limits<uint64_t>::max();
-        max_timestamp = std::numeric_limits<uint64_t>::min();
-        max_local_deletion_time = std::numeric_limits<int>::min();
+        min_timestamp = min_long_tracker(std::numeric_limits<uint64_t>::min());
+        max_timestamp = max_long_tracker(std::numeric_limits<uint64_t>::max());
+        max_local_deletion_time = max_int_tracker(std::numeric_limits<int>::max());
         tombstone_histogram = streaming_histogram(TOMBSTONE_HISTOGRAM_BIN_SIZE);
         has_legacy_counter_shards = false;
     }
@@ -70,13 +159,13 @@ struct column_stats {
     }
 
     void update_min_timestamp(uint64_t potential_min) {
-        min_timestamp = std::min(min_timestamp, potential_min);
+        min_timestamp.update(potential_min);
     }
     void update_max_timestamp(uint64_t potential_max) {
-        max_timestamp = std::max(max_timestamp, potential_max);
+        max_timestamp.update(potential_max);
     }
     void update_max_local_deletion_time(int potential_value) {
-        max_local_deletion_time = std::max(max_local_deletion_time, potential_value);
+        max_local_deletion_time.update(potential_value);
     }
 
 };
@@ -107,6 +196,11 @@ public:
         //  - it will sort before any real replayposition, so it will be effectively ignored by getReplayPosition
         return replay_position(-1UL, 0U);
     }
+
+    static hll::HyperLogLog hyperloglog(int p, int sp) {
+        // FIXME: hll::HyperLogLog doesn't support sparse format, so ignoring parameters by the time being.
+        return hll::HyperLogLog();
+    }
 private:
     estimated_histogram _estimated_row_size = default_row_size_histogram();
     estimated_histogram _estimated_column_count = default_column_count_histogram();
@@ -116,12 +210,20 @@ private:
     uint64_t _repaired_at = 0;
     int _max_local_deletion_time = std::numeric_limits<int>::min();
     double _compression_ratio = NO_COMPRESSION_RATIO;
-    // FIXME: add C++ version of protected Set<Integer> ancestors = new HashSet<>();
+    std::set<int> _ancestors;
     streaming_histogram _estimated_tombstone_drop_time = default_tombstone_drop_time_histogram();
     int _sstable_level = 0;
     std::vector<bytes> _min_column_names;
     std::vector<bytes> _max_column_names;
     bool _has_legacy_counter_shards = false;
+
+    /**
+     * Default cardinality estimation method is to use HyperLogLog++.
+     * Parameter here(p=13, sp=25) should give reasonable estimation
+     * while lowering bytes required to hold information.
+     * See CASSANDRA-5906 for detail.
+     */
+    hll::HyperLogLog _cardinality = hyperloglog(13, 25);
 private:
     /*
      * Convert a vector of bytes into a disk array of disk_string<uint16_t>.
@@ -133,6 +235,11 @@ private:
         }
     }
 public:
+    void add_key(bytes_view key) {
+        long hashed = utils::murmur_hash::hash2_64(key, 0);
+        _cardinality.offer_hashed(hashed);
+    }
+
     void add_row_size(uint64_t row_size) {
         _estimated_row_size.add(row_size);
     }
@@ -173,6 +280,10 @@ public:
         _repaired_at = repaired_at;
     }
 
+    void add_ancestor(int generation) {
+        _ancestors.insert(generation);
+    }
+
     void sstable_level(int sstable_level) {
         _sstable_level = sstable_level;
     }
@@ -194,15 +305,23 @@ public:
     }
 
     void update(column_stats& stats) {
-        update_min_timestamp(stats.min_timestamp);
-        update_max_timestamp(stats.max_timestamp);
-        update_max_local_deletion_time(stats.max_local_deletion_time);
+        update_min_timestamp(stats.min_timestamp.get());
+        update_max_timestamp(stats.max_timestamp.get());
+        update_max_local_deletion_time(stats.max_local_deletion_time.get());
         add_row_size(stats.row_size);
         add_column_count(stats.column_count);
         merge_tombstone_histogram(stats.tombstone_histogram);
         update_min_column_names(stats.min_column_names);
         update_max_column_names(stats.max_column_names);
         update_has_legacy_counter_shards(stats.has_legacy_counter_shards);
+    }
+
+    void construct_compaction(compaction_metadata& m) {
+        if (!_ancestors.empty()) {
+            m.ancestors.elements = std::vector<uint32_t>(_ancestors.begin(), _ancestors.end());
+        }
+        auto cardinality = _cardinality.get_bytes();
+        m.cardinality.elements = std::vector<uint8_t>(cardinality.get(), cardinality.get() + cardinality.size());
     }
 
     void construct_stats(stats_metadata& m) {

@@ -3,3 +3,6 @@ Copyright 2015 Cloudius Systems
 
 This works contains software from the OSv project (http://osv.io), licensed
 under the BSD license.
+
+This works contains software from https://github.com/hideo55/cpp-HyperLogLog, licensed
+under the MIT license.
