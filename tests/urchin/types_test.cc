@@ -52,6 +52,17 @@ BOOST_AUTO_TEST_CASE(test_int32_type_string_conversions) {
     BOOST_REQUIRE_EQUAL(int32_type->to_string(bytes()), "");
 }
 
+BOOST_AUTO_TEST_CASE(test_boolean_type_string_conversions) {
+    BOOST_REQUIRE(boolean_type->equal(boolean_type->from_string(""), boolean_type->decompose(false)));
+    BOOST_REQUIRE(boolean_type->equal(boolean_type->from_string("false"), boolean_type->decompose(false)));
+    BOOST_REQUIRE(boolean_type->equal(boolean_type->from_string("fAlSe"), boolean_type->decompose(false)));
+    BOOST_REQUIRE(boolean_type->equal(boolean_type->from_string("true"), boolean_type->decompose(true)));
+    BOOST_REQUIRE(boolean_type->equal(boolean_type->from_string("tRue"), boolean_type->decompose(true)));
+
+    BOOST_REQUIRE_EQUAL(boolean_type->to_string(boolean_type->decompose(false)), "false");
+    BOOST_REQUIRE_EQUAL(boolean_type->to_string(boolean_type->decompose(true)), "true");
+}
+
 BOOST_AUTO_TEST_CASE(test_compound_type_compare) {
     compound_type<> type({utf8_type, utf8_type, utf8_type});
 

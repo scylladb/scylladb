@@ -208,12 +208,20 @@ struct bytes_type_impl final : public abstract_type {
 
 struct boolean_type_impl : public simple_type_impl<bool> {
     boolean_type_impl() : simple_type_impl<bool>("org.apache.cassandra.db.marshal.BooleanType") {}
+    void serialize_value(bool value, bytes::iterator& out) const {
+        *out++ = char(value);
+    }
     virtual void serialize(const boost::any& value, bytes::iterator& out) const override {
-        auto v = boost::any_cast<bool>(value);
-        *out++ = char(v);
+        serialize_value(boost::any_cast<bool>(value), out);
+    }
+    virtual size_t serialized_size() const {
+        return 1;
     }
     virtual size_t serialized_size(const boost::any& value) const override {
-        return 1;
+        return serialized_size();
+    }
+    size_t serialized_size(bool value) const {
+        return serialized_size();
     }
     virtual boost::any deserialize(bytes_view v) const override {
         if (v.empty()) {
@@ -225,10 +233,21 @@ struct boolean_type_impl : public simple_type_impl<bool> {
         return boost::any(*v.begin() != 0);
     }
     virtual bytes from_string(sstring_view s) const override {
-        throw std::runtime_error("not implemented");
+        sstring s_lower(s.begin(), s.end());
+        std::transform(s_lower.begin(), s_lower.end(), s_lower.begin(), ::tolower);
+        if (s.empty() || s_lower == "false") {
+            return ::serialize_value(*this, false);
+        } else if (s_lower == "true") {
+            return ::serialize_value(*this, true);
+        } else {
+            throw marshal_exception(sprint("unable to make boolean from '%s'", s));
+        }
     }
     virtual sstring to_string(const bytes& b) const override {
-        throw std::runtime_error("not implemented");
+        if (b.size() != 1) {
+            throw marshal_exception();
+        }
+        return *b.begin() ? "true" : "false";
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::boolean;
