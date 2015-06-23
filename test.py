@@ -120,10 +120,6 @@ if __name__ == "__main__":
         test_to_run = [t for t in test_to_run if args.name in t[0]]
 
 
-    if args.jenkins:
-       jenkins_boost_log = open(args.jenkins+".boost.xml",'w')
-       jenkins_boost_log.write('<TestLog><TestSuite name="all">')
-
     all_ok = True
 
     n_total = len(test_to_run)
@@ -170,13 +166,10 @@ if __name__ == "__main__":
             else:
                 print_status('%s PASSED %s' % (prefix, path))
         if args.jenkins and test[1] == 'boost':
-           with open('tmp.out') as outf:
-              for line in outf:
-                 jenkins_boost_log.write(line.replace('<TestLog>','').replace('</TestLog>',''))
-                 jenkins_boost_log.write('\n');
-
-    if args.jenkins:
-        jenkins_boost_log.write('</TestSuite></TestLog>')
+           mode = 'release'
+           if test[0].startswith(os.path.join('build','debug')):
+              mode = 'debug'
+           os.rename('tmp.out',args.jenkins+"."+mode+"."+os.path.basename(test[0])+".boost.xml")
 
     if all_ok:
         print('\nOK.')
