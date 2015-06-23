@@ -227,7 +227,7 @@ struct future_state {
     }
     using get0_return_type = std::tuple_element_t<0, std::tuple<T...>>;
     static get0_return_type get0(std::tuple<T...>&& x) {
-        return std::get<0>(x);
+        return std::get<0>(std::move(x));
     }
     void forward_to(promise<T...>& pr) noexcept {
         assert(_state != state::future);
