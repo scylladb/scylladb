@@ -100,16 +100,7 @@ public:
         return _targets.size() == 0;
     }
     future<> wait() {
-        size_t block_for = total_block_for();
-        //FIXME: timeout is from DatabaseDescriptor.getWriteRpcTimeout()
-        return _ready.wait(block_for).then_wrapped([block_for] (future<>&& f) {
-            try {
-                f.get();
-                return make_ready_future<>();
-            } catch(...) {
-                throw;
-            }
-        });
+        return _ready.wait(total_block_for());
     }
     const std::unordered_set<gms::inet_address>& get_targets() {
         return _targets;
