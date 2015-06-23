@@ -9,8 +9,29 @@
  * furnished to do so.
  */
 
-#if !defined(HYPERLOGLOG_HPP)
-#define HYPERLOGLOG_HPP
+/*
+ * Copyright (C) 2011 Clearspring Technologies, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*
+ * Copyright 2015 Cloudius Systems
+ *
+ * Modified by Cloudius Systems
+ */
+
+#pragma once
 
 /**
  * @file hyperloglog.hpp
@@ -24,7 +45,9 @@
 #include <sstream>
 #include <stdexcept>
 #include <algorithm>
+#if 0
 #include "murmur3.h"
+#endif
 
 #define HLL_HASH_SEED 313
 
@@ -32,6 +55,30 @@ namespace hll {
 
 static const double pow_2_32 = 4294967296.0; ///< 2^32
 static const double neg_pow_2_32 = -4294967296.0; ///< -(2^32)
+
+
+static inline size_t size_unsigned_var_int(unsigned int value) {
+    size_t size = 0;
+    while ((value & 0xFFFFFF80) != 0L) {
+        size++;
+        value >>= 7;
+    }
+    size++;
+    return size;
+}
+
+static inline size_t write_unsigned_var_int(unsigned int value, uint8_t* to) {
+    size_t size = 0;
+    while ((value & 0xFFFFFF80) != 0L) {
+        *to = (value & 0x7F) | 0x80;
+        value >>= 7;
+        to++;
+        size++;
+    }
+    *to = value & 0x7F;
+    size++;
+    return size;
+}
 
 /** @class HyperLogLog
  *  @brief Implement of 'HyperLogLog' estimate cardinality algorithm
@@ -72,12 +119,20 @@ public:
         alphaMM_ = alpha * m_ * m_;
     }
 
+    static HyperLogLog from_bytes(temporary_buffer<uint8_t> bytes) {
+        // FIXME: implement class that creates a HyperLogLog from an array of bytes.
+        // This will useful if we need to work with the cardinality data from the
+        // compaction metadata.
+        abort();
+    }
+
     /**
      * Adds element to the estimator
      *
      * @param[in] str string to add
      * @param[in] len length of string
      */
+#if 0
     void add(const char* str, uint32_t len) {
         uint32_t hash;
         MurmurHash3_x86_32(str, len, HLL_HASH_SEED, (void*) &hash);
@@ -86,6 +141,57 @@ public:
         if (rank > M_[index]) {
             M_[index] = rank;
         }
+    }
+#endif
+    void offer_hashed(uint64_t hash) {
+        uint32_t index = hash >> (64 - b_);
+        uint8_t rank = rho((hash << b_), 64 - b_);
+
+        if (rank > M_[index]) {
+            M_[index] = rank;
+        }
+    }
+
+    /*
+     * Calculate the size of buffer returned by get_bytes().
+     */
+    size_t get_bytes_size() {
+        size_t size = 0;
+        size += sizeof(int); // version
+        size += size_unsigned_var_int(b_); // p; register width = b_.
+        size += size_unsigned_var_int(0); // sp; // sparse set = 0.
+        size += size_unsigned_var_int(0); // type;
+        size += size_unsigned_var_int(M_.size()); // register size;
+        size += M_.size();
+        return size;
+    }
+
+    temporary_buffer<uint8_t> get_bytes() {
+        // FIXME: add support to SPARSE format.
+        static constexpr int VERSION = 2;
+
+        size_t s = get_bytes_size();
+        temporary_buffer<uint8_t> bytes(s);
+        size_t offset = 0;
+        // write version
+        *unaligned_cast<int*>(bytes.get_write() + offset) = htonl(-VERSION);
+        offset += sizeof(int);
+
+        // write register width
+        offset += write_unsigned_var_int(b_, bytes.get_write() + offset);
+        // NOTE: write precision value for sparse set (not supported).
+        offset += write_unsigned_var_int(0, bytes.get_write() + offset);
+        // write type (NORMAL always!)
+        offset += write_unsigned_var_int(0, bytes.get_write() + offset);
+        // write register size
+        offset += write_unsigned_var_int(M_.size(), bytes.get_write() + offset);
+        // write register
+        memcpy(bytes.get_write() + offset, M_.data(), M_.size());
+        offset += M_.size();
+
+        bytes.trim(offset);
+        assert(s == offset);
+        return bytes;
     }
 
     /**
@@ -216,5 +322,3 @@ private:
 };
 
 } // namespace hll
-
-#endif // !defined(HYPERLOGLOG_HPP)
