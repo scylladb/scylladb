@@ -6,6 +6,7 @@
 #include "simple_strategy.hh"
 #include "utils/class_registrator.hh"
 #include <boost/algorithm/string.hpp>
+#include "utils/sequenced_set.hh"
 
 namespace locator {
 
@@ -24,31 +25,24 @@ simple_strategy::simple_strategy(const sstring& keyspace_name, token_metadata& t
 }
 
 std::vector<inet_address> simple_strategy::calculate_natural_endpoints(const token& t) {
-    size_t replicas = get_replication_factor();
     const std::vector<token>& tokens = _token_metadata.sorted_tokens();
-    std::vector<inet_address> endpoints;
-    endpoints.reserve(replicas);
 
     if (tokens.empty()) {
-        return endpoints;
+        return std::vector<inet_address>();
     }
 
-    auto it = tokens.begin() + _token_metadata.first_token_index(t);
-    auto c = tokens.size();
+    size_t replicas = get_replication_factor();
+    utils::sequenced_set<inet_address> endpoints;
+    endpoints.reserve(replicas);
 
-    while (endpoints.size() < replicas && c) {
-        auto ep = _token_metadata.get_endpoint(*(it++));
+    for (auto& token : _token_metadata.ring_range(t)) {
+        auto ep = _token_metadata.get_endpoint(token);
         assert(ep);
-        if (std::find(endpoints.begin(), endpoints.end(), *ep) == endpoints.end()) {
-            endpoints.push_back(*ep);
-        }
-        c--;
-        // wrap around
-        if (it == tokens.end()) {
-            it = tokens.begin();
-        }
+
+        endpoints.push_back(*ep);
     }
-    return endpoints;
+
+    return std::move(endpoints.get_vector());
 }
 
 size_t simple_strategy::get_replication_factor() const {
