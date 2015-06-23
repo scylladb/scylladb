@@ -650,6 +650,17 @@ future<> database::parse_system_tables(distributed<service::storage_proxy>& prox
     return do_parse_system_tables(proxy, db::legacy_schema_tables::KEYSPACES, [this] (schema_result::value_type &v) {
         auto ksm = create_keyspace_from_schema_partition(v);
         return create_keyspace(ksm);
+    }).then([&proxy, this] {
+        return do_parse_system_tables(proxy, db::legacy_schema_tables::COLUMNFAMILIES, [this, &proxy] (schema_result::value_type &v) {
+            return create_tables_from_tables_partition(proxy, v.second).then([this] (std::map<sstring, schema_ptr> tables) {
+                for (auto& t: tables) {
+                    auto s = t.second;
+                    auto& ks = this->find_keyspace(s->ks_name());
+                    auto cfg = ks.make_column_family_config(*s);
+                    this->add_column_family(std::move(s), std::move(cfg));
+                }
+            });
+        });
     });
 }
 
