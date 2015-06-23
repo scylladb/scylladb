@@ -14,52 +14,42 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.nio.channels.Channels;
-import java.nio.channels.WritableByteChannel;
-import java.util.Collection;
+#pragma once
 
-import com.ning.compress.lzf.LZFOutputStream;
+#include "streaming/stream_session.hh"
+#include "sstables/sstables.hh"
+#include <map>
 
-import org.apache.cassandra.io.sstable.Component;
-import org.apache.cassandra.io.sstable.format.SSTableReader;
-import org.apache.cassandra.io.util.DataIntegrityMetadata;
-import org.apache.cassandra.io.util.DataIntegrityMetadata.ChecksumValidator;
-import org.apache.cassandra.io.util.FileUtils;
-import org.apache.cassandra.io.util.RandomAccessReader;
-import org.apache.cassandra.streaming.StreamManager.StreamRateLimiter;
-import org.apache.cassandra.utils.Pair;
-
+namespace streaming {
 /**
  * StreamWriter writes given section of the SSTable to given channel.
  */
-public class StreamWriter
-{
-    private static final int DEFAULT_CHUNK_SIZE = 64 * 1024;
-
-    protected final SSTableReader sstable;
-    protected final Collection<Pair<Long, Long>> sections;
-    protected final StreamRateLimiter limiter;
-    protected final StreamSession session;
-
+class stream_writer {
+    static constexpr int DEFAULT_CHUNK_SIZE = 64 * 1024;
+protected:
+    sstables::sstable& sstable;
+    std::map<int64_t, int64_t> sections;
+    //StreamRateLimiter limiter;
+    stream_session& session;
+#if 0
     private OutputStream compressedOutput;
-
     // allocate buffer to use for transfers only once
     private byte[] transferBuffer;
+#endif
 
-    public StreamWriter(SSTableReader sstable, Collection<Pair<Long, Long>> sections, StreamSession session)
-    {
-        this.session = session;
-        this.sstable = sstable;
-        this.sections = sections;
-        this.limiter =  StreamManager.getRateLimiter(session.peer);
+public:
+    stream_writer(sstables::sstable& sstable_, std::map<int64_t, int64_t> sections_, stream_session& session_)
+        : sstable(sstable_)
+        , sections(std::move(sections_))
+        , session(session_) {
+        //this.limiter =  StreamManager.getRateLimiter(session.peer);
     }
-
+#if 0
     /**
      * Stream file of specified sections to given channel.
      *
@@ -117,15 +107,12 @@ public class StreamWriter
             FileUtils.closeQuietly(validator);
         }
     }
+#endif
 
-    protected long totalSize()
-    {
-        long size = 0;
-        for (Pair<Long, Long> section : sections)
-            size += section.right - section.left;
-        return size;
-    }
+protected:
+    int64_t total_size();
 
+#if 0
     /**
      * Sequentially read bytes from the file and write them to the output stream
      *
@@ -153,4 +140,7 @@ public class StreamWriter
 
         return toTransfer;
     }
-}
+#endif
+};
+
+} // namespace streaming
