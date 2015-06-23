@@ -222,10 +222,6 @@ namespace sstables {
 struct statistics {
     disk_hash<uint32_t, metadata_type, uint32_t> hash;
     std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
-
-    // NOTE: offset isn't part of on-disk format. Instead, it's used to help
-    // generation of statistics file by keeping track of its offset.
-    size_t offset;
 };
 
 struct deletion_time {

@@ -1120,21 +1120,6 @@ static void seal_summary(summary& s,
     }
 }
 
-// In the beginning of the statistics file, there is a disk_hash used to
-// describe where each type of metadata lies. Key is the metadata_type, and
-// Value the offset.
-// The purpose of this function is to initialize the field offset, used to
-// help the computation of the offset value for each metadata type.
-static void prepare_statistics(statistics& s) {
-    static constexpr int METADATA_TYPE_COUNT = 3;
-
-    s.offset = 0;
-    // account disk_hash size.
-    s.offset += sizeof(uint32_t);
-    // account disk_hash members.
-    s.offset += (METADATA_TYPE_COUNT * (sizeof(metadata_type) + sizeof(uint32_t)));
-}
-
 static void prepare_compression(compression& c, const schema& schema) {
     c.set_compressor(schema.get_compressor());
     // FIXME: chunk length can be configured by the user.
@@ -1153,31 +1138,40 @@ static void maybe_add_summary_entry(summary& s, bytes_view key, uint64_t offset)
     }
 }
 
-static void add_statistics_metadata(statistics& s, metadata_collector& collector,
+// In the beginning of the statistics file, there is a disk_hash used to
+// map each metadata type to its correspondent position in the file.
+static void seal_statistics(statistics& s, metadata_collector& collector,
         const bytes partitioner, double bloom_filter_fp_chance) {
-    size_t old_offset;
+    static constexpr int METADATA_TYPE_COUNT = 3;
+
+    size_t old_offset, offset = 0;
+    // account disk_hash size.
+    offset += sizeof(uint32_t);
+    // account disk_hash members.
+    offset += (METADATA_TYPE_COUNT * (sizeof(metadata_type) + sizeof(uint32_t)));
+
     validation_metadata validation;
     compaction_metadata compaction;
     stats_metadata stats;
 
-    old_offset = s.offset;
+    old_offset = offset;
     validation.partitioner.value = partitioner;
     validation.filter_chance = bloom_filter_fp_chance;
-    s.offset += validation.serialized_size();
+    offset += validation.serialized_size();
     s.contents[metadata_type::Validation] = std::make_unique<validation_metadata>(std::move(validation));
     s.hash.map[metadata_type::Validation] = old_offset;
 
-    old_offset = s.offset;
+    old_offset = offset;
     collector.construct_compaction(compaction);
-    s.offset += compaction.serialized_size();
+    offset += compaction.serialized_size();
     s.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>(std::move(compaction));
     s.hash.map[metadata_type::Compaction] = old_offset;
 
     collector.construct_stats(stats);
-    // FIXME: method serialized_size of stats_metadata must be implemented for
+    // NOTE: method serialized_size of stats_metadata must be implemented for
     // a new type of compaction to get supported.
     s.contents[metadata_type::Stats] = std::make_unique<stats_metadata>(std::move(stats));
-    s.hash.map[metadata_type::Stats] = s.offset;
+    s.hash.map[metadata_type::Stats] = offset;
 }
 
 static constexpr size_t sstable_buffer_size = 64*1024;
@@ -1195,7 +1189,6 @@ void sstable::do_write_components(::mutation_reader mr,
     }
     _filter = utils::i_filter::get_filter(estimated_partitions, filter_fp_chance);
 
-    prepare_statistics(_statistics);
     prepare_summary(_summary, estimated_partitions);
 
     auto collector = make_lw_shared<metadata_collector>();
@@ -1289,7 +1282,7 @@ void sstable::do_write_components(::mutation_reader mr,
 
     // NOTE: Cassandra gets partition name by calling getClass().getCanonicalName() on
     // partition class.
-    add_statistics_metadata(_statistics, *collector, dht::global_partitioner().name(), filter_fp_chance);
+    seal_statistics(_statistics, *collector, dht::global_partitioner().name(), filter_fp_chance);
 }
 
 void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema) {
