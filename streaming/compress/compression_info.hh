@@ -14,23 +14,23 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming.compress;
 
-import java.io.DataInput;
-import java.io.IOException;
+#pragma once
 
-import org.apache.cassandra.db.TypeSizes;
-import org.apache.cassandra.io.IVersionedSerializer;
-import org.apache.cassandra.io.compress.CompressionMetadata;
-import org.apache.cassandra.io.compress.CompressionParameters;
-import org.apache.cassandra.io.util.DataOutputPlus;
+#include "bytes.hh"
+
+namespace streaming {
+namespace compress {
 
 /**
  * Container that carries compression parameters and chunks to decompress data from stream.
  */
-public class CompressionInfo
-{
+class compression_info {
+#if 0
     public static final IVersionedSerializer<CompressionInfo> serializer = new CompressionInfoSerializer();
 
     public final CompressionMetadata.Chunk[] chunks;
@@ -92,4 +92,17 @@ public class CompressionInfo
             return size;
         }
     }
-}
+#endif
+public:
+    void serialize(bytes::iterator& out) const {
+    }
+    static compression_info deserialize(bytes_view& v) {
+        return compression_info();
+    }
+    size_t serialized_size() const {
+        return 0;
+    }
+};
+
+} // namespace compress
+} // namespace streaming
