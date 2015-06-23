@@ -145,8 +145,9 @@ private:
     private int retries;
 
     private AtomicBoolean isAborted = new AtomicBoolean(false);
-    private final boolean keepSSTableLevel;
 #endif
+private:
+    bool _keep_ss_table_level;
 public:
     enum class state {
         INITIALIZED,
@@ -197,12 +198,12 @@ public:
     {
         return streamResult == null ? null : streamResult.description;
     }
-
-    public boolean keepSSTableLevel()
-    {
-        return keepSSTableLevel;
+#endif
+public:
+    bool keep_ss_table_level() {
+        return _keep_ss_table_level;
     }
-
+#if 0
     /**
      * Bind this session to report to specific {@link StreamResultFuture} and
      * perform pre-streaming initialization.
