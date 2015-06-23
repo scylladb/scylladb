@@ -62,8 +62,7 @@ struct overloaded_exception : public std::exception {
 };
 
 static inline bool is_me(gms::inet_address from) {
-    auto& ms = net::get_local_messaging_service();
-    return from == ms.listen_address(); // FIXME: should be FBUtilities.getBroadcastAddress
+    return from == utils::fb_utilities::get_broadcast_address();
 }
 
 class abstract_write_response_handler {
@@ -1067,8 +1066,7 @@ future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type r
 
     // OK, now send and/or apply locally
     return parallel_for_each(all.begin(), all.end(), [response_id, &m, this] (typename decltype(dc_groups)::value_type& dc_targets) mutable {
-        auto& ms = net::get_local_messaging_service();
-        auto my_address = ms.listen_address(); // FIXME: should be FBUtilities.getBroadcastAddress
+        auto my_address = utils::fb_utilities::get_broadcast_address();
         auto& forward = dc_targets.second;
 
         // last one in forward list is a coordinator
@@ -1080,6 +1078,7 @@ future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type r
                 got_response(response_id, my_address);
             });
         } else {
+            auto& ms = net::get_local_messaging_service();
             return ms.send_message_oneway(net::messaging_verb::MUTATION, net::messaging_service::shard_id{coordinator, 0}, m, std::move(forward), std::move(my_address),
                     engine().cpu_id(), std::move(response_id));
         }
