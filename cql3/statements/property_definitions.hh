@@ -69,7 +69,7 @@ public:
         _properties.emplace(name, value);
     }
 
-    void validate(std::set<sstring> keywords, std::set<sstring> obsolete) {
+    void validate(const std::set<sstring>& keywords, const std::set<sstring>& obsolete) {
         for (auto&& kv : _properties) {
             auto&& name = kv.first;
             if (keywords.count(name)) {

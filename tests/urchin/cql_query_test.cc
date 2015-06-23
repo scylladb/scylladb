@@ -842,3 +842,56 @@ SEASTAR_TEST_CASE(test_select_multiple_ranges) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_validate_keyspace) {
+    return do_with_cql_env([] (cql_test_env& e) {
+        return make_ready_future<>().then([&e] {
+            return e.execute_cql("create keyspace kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkssssssssssssssssssssssssssssssssssssssssssssss with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create keyspace ks3-1 with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create keyspace ks3 with replication = { 'replication_factor' : 1 };");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create keyspace ks3 with rreplication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create keyspace SyStEm with replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_validate_table) {
+    return do_with_cql_env([] (cql_test_env& e) {
+        return make_ready_future<>().then([&e] {
+            return e.execute_cql("create table ttttttttttttttttttttttttttttttttttttttttbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb (foo text PRIMARY KEY, bar text);");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create table tb (foo text PRIMARY KEY, foo text);");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create table tb-1 (foo text PRIMARY KEY, bar text);");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create table tb (foo text, bar text);");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create table tb (foo text PRIMARY KEY, bar text PRIMARY KEY);");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create table tb (foo text PRIMARY KEY, bar text) with commment = 'aaaa';");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create table tb (foo text PRIMARY KEY, bar text) with min_index_interval = -1;");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create table tb (foo text PRIMARY KEY, bar text) with min_index_interval = 1024 and max_index_interval = 128;");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+        });
+    });
+}

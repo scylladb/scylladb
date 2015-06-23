@@ -169,6 +169,8 @@ public:
     typedef boost::iterator_range<iterator> iterator_range_type;
     typedef boost::iterator_range<const_iterator> const_iterator_range_type;
 
+    static constexpr int32_t NAME_LENGTH = 48;
+
     struct column {
         bytes name;
         data_type type;
