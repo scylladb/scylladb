@@ -25,5 +25,6 @@ size_t local_strategy::get_replication_factor() const {
 
 using registry = class_registrator<abstract_replication_strategy, local_strategy, const sstring&, token_metadata&, snitch_ptr&, const std::map<sstring, sstring>&>;
 static registry registrator("org.apache.cassandra.locator.LocalStrategy");
+static registry registrator_short_name("LocalStrategy");
 
 }
