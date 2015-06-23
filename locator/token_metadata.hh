@@ -36,6 +36,12 @@ namespace locator {
 using inet_address = gms::inet_address;
 using token = dht::token;
 
+// Endpoint Data Center and Rack names
+struct endpoint_dc_rack {
+    sstring dc;
+    sstring rack;
+};
+
 class topology {
 
 };

@@ -1043,10 +1043,10 @@ utils::UUID set_local_host_id(const utils::UUID& host_id) {
     // executeInternal(String.format(req, LOCAL, LOCAL), hostId);
     return host_id;
 }
-std::unordered_map<gms::inet_address, endpoint_dc_rack>
+std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
 load_dc_rack_info()
 {
-    std::unordered_map<gms::inet_address, endpoint_dc_rack> result;
+    std::unordered_map<gms::inet_address, locator::endpoint_dc_rack> result;
 #if 0 //TODO
     for (UntypedResultSet.Row row : executeInternal("SELECT peer, data_center, rack from system." + PEERS))
     {
