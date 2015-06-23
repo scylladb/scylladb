@@ -936,16 +936,10 @@ void storage_service::replicate_to_all_cores() {
 }
 
 void storage_service::gossip_snitch_info() {
-    // FIXME: get a snitch_ptr
-#if 0
-    IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
-    locator::snitch_ptr snitch;
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
     auto addr = get_broadcast_address();
     auto dc = snitch->get_datacenter(addr);
     auto rack = snitch->get_rack(addr);
-#endif
-    auto dc = "rack1";
-    auto rack = "datacenter1";
     auto& gossiper = gms::get_local_gossiper();
     gossiper.add_local_application_state(gms::application_state::DC, value_factory.datacenter(dc));
     gossiper.add_local_application_state(gms::application_state::RACK, value_factory.rack(rack));
