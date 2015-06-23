@@ -149,13 +149,12 @@ struct uninitialized {
         this->listener = &listener;
     }
 
-#if 0
-    public void displayRecognitionError(String[] tokenNames, RecognitionException e)
+    void displayRecognitionError(ANTLR_UINT8** token_names, ExceptionBaseType* ex)
     {
-        for (int i = 0, m = listeners.size(); i < m; i++)
-            listeners.get(i).syntaxError(this, tokenNames, e);
+        std::stringstream msg;
+        ex->displayRecognitionError(token_names, msg);
+        listener->syntax_error(*this, msg.str());
     }
-#endif
 
     void add_recognition_error(const sstring& msg) {
         listener->syntax_error(*this, msg);
@@ -232,13 +231,12 @@ struct uninitialized {
         this->listener = &listener;
     }
 
-#if 0
-    public void displayRecognitionError(String[] tokenNames, RecognitionException e)
+    void displayRecognitionError(ANTLR_UINT8** token_names, ExceptionBaseType* ex)
     {
-        for (int i = 0, m = listeners.size(); i < m; i++)
-            listeners.get(i).syntaxError(this, tokenNames, e);
+        std::stringstream msg;
+        ex->displayRecognitionError(token_names, msg);
+        listener->syntax_error(*this, msg.str());
     }
-#endif
 }
 
 /** STATEMENTS **/

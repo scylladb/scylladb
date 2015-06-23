@@ -208,7 +208,6 @@ query_processor::parse_statement(const sstring_view& query)
         parser_error_collector.throw_first_syntax_error();
 
         if (!statement) {
-            // TODO: We should plug into get_rec()->displayRecognitionError and call error_collector from there
             throw exceptions::syntax_exception("Parsing failed");
         };
         return std::move(statement);
