@@ -66,7 +66,7 @@ static inline bool is_me(gms::inet_address from) {
     return from == ms.listen_address(); // FIXME: should be FBUtilities.getBroadcastAddress
 }
 
-class abstract_write_response_handler : public enable_shared_from_this<abstract_write_response_handler> {
+class abstract_write_response_handler {
 protected:
     semaphore _ready; // available when cl is achieved
     db::consistency_level _cl;
@@ -103,9 +103,7 @@ public:
     future<> wait() {
         size_t block_for = total_block_for();
         //FIXME: timeout is from DatabaseDescriptor.getWriteRpcTimeout()
-        return _ready.wait(block_for).then_wrapped([h = shared_from_this(), block_for] (future<>&& f) {
-            // hold reference for a handler in h. If timeout happens simultaneously with arrival of
-            // a last response the handler can be deleted before this continuation has a chance to run
+        return _ready.wait(block_for).then_wrapped([block_for] (future<>&& f) {
             try {
                 f.get();
                 return make_ready_future<>();
@@ -157,7 +155,7 @@ public:
     }
 };
 
-storage_proxy::storage_proxy::response_id_type storage_proxy::register_response_handler(::shared_ptr<abstract_write_response_handler>&& h) {
+storage_proxy::storage_proxy::response_id_type storage_proxy::register_response_handler(std::unique_ptr<abstract_write_response_handler>&& h) {
     auto id = _next_response_id++;
     auto e = _response_handlers.emplace(id, rh_entry(std::move(h), [this, id] {
         auto& e = _response_handlers.find(id)->second;
@@ -212,18 +210,18 @@ abstract_write_response_handler& storage_proxy::get_write_response_handler(stora
 
 storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints)
 {
-    ::shared_ptr<abstract_write_response_handler> h;
+    std::unique_ptr<abstract_write_response_handler> h;
     //auto& rs = ks.get_replication_strategy();
     size_t pending_count = pending_endpoints.size();
 
     // for now make is simple
     if (db::is_datacenter_local(cl)) {
         pending_count = std::count_if(pending_endpoints.begin(), pending_endpoints.end(), db::is_local);
-        h = ::make_shared<datacenter_write_response_handler>(ks, cl, std::move(mutation), std::move(targets), pending_count);
+        h = std::make_unique<datacenter_write_response_handler>(ks, cl, std::move(mutation), std::move(targets), pending_count);
     } else if (0 && cl == db::consistency_level::EACH_QUORUM /*&& rs == NetworkTopologyStrategy*/){
-        h = ::make_shared<datacenter_sync_write_response_handler>(ks, cl, std::move(mutation), std::move(targets), pending_count);
+        h = std::make_unique<datacenter_sync_write_response_handler>(ks, cl, std::move(mutation), std::move(targets), pending_count);
     } else {
-        h = ::make_shared<write_response_handler>(ks, cl, std::move(mutation), std::move(targets), pending_count);
+        h = std::make_unique<write_response_handler>(ks, cl, std::move(mutation), std::move(targets), pending_count);
     }
     return register_response_handler(std::move(h));
 }
@@ -233,7 +231,7 @@ storage_proxy::storage_proxy(distributed<database>& db) : _db(db) {
     init_messaging_service();
 }
 
-storage_proxy::rh_entry::rh_entry(::shared_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
+storage_proxy::rh_entry::rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb) : handler(std::move(h)), expire_timer(std::move(cb)) {}
 
 #if 0
     public static final String MBEAN_NAME = "org.apache.cassandra.db:type=StorageProxy";
