@@ -197,9 +197,8 @@ future<> init_once() {
 }
 
 future<::shared_ptr<cql_test_env>> make_env_for_test() {
-    return init_once().then([] {
-        using namespace locator;
-        return i_endpoint_snitch::create_snitch("org.apache.cassandra.locator.SimpleSnitch").then([] {
+    return locator::i_endpoint_snitch::create_snitch("SimpleSnitch").then([] {
+        return init_once().then([] {
             auto db = ::make_shared<distributed<database>>();
             auto cfg = make_lw_shared<db::config>();
             cfg->data_file_directories() = {};
