@@ -190,7 +190,9 @@ public:
         offset += M_.size();
 
         bytes.trim(offset);
-        assert(s == offset);
+        if (s != offset) {
+            throw std::runtime_error("possible overflow while generating cardinality metadata");
+        }
         return bytes;
     }
 
