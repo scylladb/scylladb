@@ -23,6 +23,7 @@
 
 #include <map>
 #include <unordered_set>
+#include <unordered_map>
 #include "gms/inet_address.hh"
 #include "dht/i_partitioner.hh"
 #include "utils/UUID.hh"
@@ -43,7 +44,49 @@ struct endpoint_dc_rack {
 };
 
 class topology {
+public:
+    topology() {}
+    topology(const topology& other);
 
+    void clear();
+
+    /**
+     * Stores current DC/rack assignment for ep
+     */
+    void add_endpoint(const inet_address& ep);
+
+    /**
+     * Removes current DC/rack assignment for ep
+     */
+    void remove_endpoint(inet_address ep);
+
+    std::unordered_map<sstring,
+                       std::unordered_set<inet_address>>&
+    get_datacenter_endpoints() {
+        return _dc_endpoints;
+    }
+
+    std::unordered_map<sstring,
+                       std::unordered_map<sstring,
+                                          std::unordered_set<inet_address>>>&
+    get_datacenter_racks() {
+        return _dc_racks;
+    }
+
+private:
+    /** multi-map: DC -> endpoints in that DC */
+    std::unordered_map<sstring,
+                       std::unordered_set<inet_address>>
+        _dc_endpoints;
+
+    /** map: DC -> (multi-map: rack -> endpoints in that rack) */
+    std::unordered_map<sstring,
+                       std::unordered_map<sstring,
+                                          std::unordered_set<inet_address>>>
+        _dc_racks;
+
+    /** reverse-lookup map: endpoint -> current known dc/rack assignment */
+    std::unordered_map<inet_address, endpoint_dc_rack> _current_locations;
 };
 
 class token_metadata final {
