@@ -77,9 +77,10 @@ public:
         if (signalComplete)
             session.taskCompleted(this);
     }
-
-    public synchronized void abort()
-    {
+#endif
+public:
+    virtual void abort() override {
+#if 0
         if (aborted)
             return;
         aborted = true;
@@ -90,18 +91,18 @@ public:
 
         for (OutgoingFileMessage file : files.values())
             file.sstable.releaseReference();
+#endif
     }
 
-    public synchronized int getTotalNumberOfFiles()
-    {
+    virtual int get_total_number_of_files() override {
         return files.size();
     }
 
-    public long getTotalSize()
-    {
-        return totalSize;
+    virtual long get_total_size() override {
+        return total_size;
     }
 
+#if 0
     public synchronized Collection<OutgoingFileMessage> getFileMessages()
     {
         // We may race between queuing all those messages and the completion of the completion of
