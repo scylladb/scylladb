@@ -31,6 +31,8 @@
 #include "gms/inet_address.hh"
 #include "query-result-set.hh"
 #include "locator/token_metadata.hh"
+#include "db_clock.hh"
+#include "db/commitlog/replay_position.hh"
 
 namespace service {
 
@@ -39,7 +41,7 @@ class storage_proxy;
 }
 
 namespace cql3 {
-class query_processor;
+    class query_processor;
 }
 
 namespace db {
@@ -210,88 +212,13 @@ load_dc_rack_info();
         UntypedResultSet queryResultSet = executeInternal(String.format("SELECT * from system.%s", COMPACTION_HISTORY));
         return CompactionHistoryTabularData.from(queryResultSet);
     }
+#endif
+    future<> save_truncation_record(cql3::query_processor&, const column_family&, db_clock::time_point truncated_at, const db::replay_position&);
+    future<> remove_truncation_record(cql3::query_processor&, utils::UUID);
+    future<db::replay_position> get_truncated_position(cql3::query_processor&, utils::UUID);
+    future<db_clock::time_point> get_truncated_at(cql3::query_processor&, utils::UUID);
 
-    public static synchronized void saveTruncationRecord(ColumnFamilyStore cfs, long truncatedAt, ReplayPosition position)
-    {
-        String req = "UPDATE system.%s SET truncated_at = truncated_at + ? WHERE key = '%s'";
-        executeInternal(String.format(req, LOCAL, LOCAL), truncationAsMapEntry(cfs, truncatedAt, position));
-        truncationRecords = null;
-        forceBlockingFlush(LOCAL);
-    }
-
-    /**
-     * This method is used to remove information about truncation time for specified column family
-     */
-    public static synchronized void removeTruncationRecord(UUID cfId)
-    {
-        String req = "DELETE truncated_at[?] from system.%s WHERE key = '%s'";
-        executeInternal(String.format(req, LOCAL, LOCAL), cfId);
-        truncationRecords = null;
-        forceBlockingFlush(LOCAL);
-    }
-
-    private static Map<UUID, ByteBuffer> truncationAsMapEntry(ColumnFamilyStore cfs, long truncatedAt, ReplayPosition position)
-    {
-        DataOutputBuffer out = new DataOutputBuffer();
-        try
-        {
-            ReplayPosition.serializer.serialize(position, out);
-            out.writeLong(truncatedAt);
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);
-        }
-        return Collections.singletonMap(cfs.metadata.cfId, ByteBuffer.wrap(out.getData(), 0, out.getLength()));
-    }
-
-    public static ReplayPosition getTruncatedPosition(UUID cfId)
-    {
-        Pair<ReplayPosition, Long> record = getTruncationRecord(cfId);
-        return record == null ? null : record.left;
-    }
-
-    public static long getTruncatedAt(UUID cfId)
-    {
-        Pair<ReplayPosition, Long> record = getTruncationRecord(cfId);
-        return record == null ? Long.MIN_VALUE : record.right;
-    }
-
-    private static synchronized Pair<ReplayPosition, Long> getTruncationRecord(UUID cfId)
-    {
-        if (truncationRecords == null)
-            truncationRecords = readTruncationRecords();
-        return truncationRecords.get(cfId);
-    }
-
-    private static Map<UUID, Pair<ReplayPosition, Long>> readTruncationRecords()
-    {
-        UntypedResultSet rows = executeInternal(String.format("SELECT truncated_at FROM system.%s WHERE key = '%s'", LOCAL, LOCAL));
-
-        Map<UUID, Pair<ReplayPosition, Long>> records = new HashMap<>();
-
-        if (!rows.isEmpty() && rows.one().has("truncated_at"))
-        {
-            Map<UUID, ByteBuffer> map = rows.one().getMap("truncated_at", UUIDType.instance, BytesType.instance);
-            for (Map.Entry<UUID, ByteBuffer> entry : map.entrySet())
-                records.put(entry.getKey(), truncationRecordFromBlob(entry.getValue()));
-        }
-
-        return records;
-    }
-
-    private static Pair<ReplayPosition, Long> truncationRecordFromBlob(ByteBuffer bytes)
-    {
-        try
-        {
-            DataInputStream in = new DataInputStream(ByteBufferUtil.inputStream(bytes));
-            return Pair.create(ReplayPosition.serializer.deserialize(in), in.available() > 0 ? in.readLong() : Long.MIN_VALUE);
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);
-        }
-    }
+#if 0
 
     /**
      * Record tokens being used by another node
@@ -390,13 +317,11 @@ load_dc_rack_info();
         updateTokens(tokens);
         return tokens;
     }
+#endif
 
-    public static void forceBlockingFlush(String cfname)
-    {
-        if (!Boolean.getBoolean("cassandra.unsafesystem"))
-            FBUtilities.waitOnFuture(Keyspace.open(NAME).getColumnFamilyStore(cfname).forceFlush());
-    }
+    future<> force_blocking_flush(distributed<database>&, sstring cf_name);
 
+#if o
     /**
      * Return a map of stored tokens to IP addresses
      *

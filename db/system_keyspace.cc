@@ -37,6 +37,8 @@
 #include "version.hh"
 #include "thrift/server.hh"
 #include "exceptions/exceptions.hh"
+#include "cql3/query_processor.hh"
+#include "db/serializer.hh"
 
 namespace db {
 namespace system_keyspace {
@@ -501,89 +503,76 @@ future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp
         UntypedResultSet queryResultSet = executeInternal(String.format("SELECT * from system.%s", COMPACTION_HISTORY));
         return CompactionHistoryTabularData.from(queryResultSet);
     }
+#endif
 
-    public static synchronized void saveTruncationRecord(ColumnFamilyStore cfs, long truncatedAt, ReplayPosition position)
-    {
-        String req = "UPDATE system.%s SET truncated_at = truncated_at + ? WHERE key = '%s'";
-        executeInternal(String.format(req, LOCAL, LOCAL), truncationAsMapEntry(cfs, truncatedAt, position));
-        truncationRecords = null;
-        forceBlockingFlush(LOCAL);
+
+typedef std::pair<db::replay_position, db_clock::time_point> truncation_entry;
+typedef std::unordered_map<utils::UUID, truncation_entry> truncation_map;
+static thread_local std::experimental::optional<truncation_map> truncation_records;
+
+future<> save_truncation_record(cql3::query_processor& qp, const column_family& cf, db_clock::time_point truncated_at, const db::replay_position& rp) {
+    db::serializer<replay_position> rps(rp);
+    bytes buf(bytes::initialized_later(), sizeof(db_clock::rep) + rps.size());
+    data_output out(buf);
+    rps(out);
+    out.write<db_clock::rep>(truncated_at.time_since_epoch().count());
+
+    map_type_impl::native_type tmp;
+    tmp.emplace_back(boost::any{ cf.schema()->id() }, boost::any{ buf });
+
+    sstring req = sprint("UPDATE system.%s SET truncated_at = truncated_at + ? WHERE key = '%s'", LOCAL, LOCAL);
+    return qp.execute_internal(req, {tmp}).then([&qp](auto rs) {
+        truncation_records = {};
+        return force_blocking_flush(qp.db(), LOCAL);
+    });
+}
+
+/**
+ * This method is used to remove information about truncation time for specified column family
+ */
+future<> remove_truncation_record(cql3::query_processor& qp, utils::UUID id) {
+    sstring req = sprint("DELETE truncated_at[?] from system.%s WHERE key = '%s'", LOCAL, LOCAL);
+    return qp.execute_internal(req, {id}).then([&qp](auto rs) {
+        truncation_records = {};
+        return force_blocking_flush(qp.db(), LOCAL);
+    });
+}
+
+static future<truncation_entry> get_truncation_record(cql3::query_processor& qp, utils::UUID cf_id) {
+    if (!truncation_records) {
+        sstring req = sprint("SELECT truncated_at FROM system.%s WHERE key = '%s'", LOCAL, LOCAL);
+        return qp.execute_internal(req).then([&qp, cf_id](::shared_ptr<cql3::untyped_result_set> rs) {
+            truncation_map tmp;
+            if (!rs->empty() && rs->one().has("truncated_set")) {
+                auto map = rs->one().get_map<utils::UUID, bytes>("truncated_at");
+                for (auto& p : map) {
+                    truncation_entry e;
+                    data_input in(p.second);
+                    e.first = db::serializer<replay_position>::read(in);
+                    e.second = db_clock::time_point(db_clock::duration(in.read<db_clock::rep>()));
+                    tmp[p.first] = e;
+                }
+            }
+            truncation_records = std::move(tmp);
+            return get_truncation_record(qp, cf_id);
+        });
     }
+    return make_ready_future<truncation_entry>((*truncation_records)[cf_id]);
+}
 
-    /**
-     * This method is used to remove information about truncation time for specified column family
-     */
-    public static synchronized void removeTruncationRecord(UUID cfId)
-    {
-        String req = "DELETE truncated_at[?] from system.%s WHERE key = '%s'";
-        executeInternal(String.format(req, LOCAL, LOCAL), cfId);
-        truncationRecords = null;
-        forceBlockingFlush(LOCAL);
-    }
+future<db::replay_position> get_truncated_position(cql3::query_processor& qp, utils::UUID cf_id) {
+    return get_truncation_record(qp, cf_id).then([](truncation_entry e) {
+        return make_ready_future<db::replay_position>(e.first);
+    });
+}
 
-    private static Map<UUID, ByteBuffer> truncationAsMapEntry(ColumnFamilyStore cfs, long truncatedAt, ReplayPosition position)
-    {
-        DataOutputBuffer out = new DataOutputBuffer();
-        try
-        {
-            ReplayPosition.serializer.serialize(position, out);
-            out.writeLong(truncatedAt);
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);
-        }
-        return Collections.singletonMap(cfs.metadata.cfId, ByteBuffer.wrap(out.getData(), 0, out.getLength()));
-    }
+future<db_clock::time_point> get_truncated_at(cql3::query_processor& qp, utils::UUID cf_id) {
+    return get_truncation_record(qp, cf_id).then([](truncation_entry e) {
+        return make_ready_future<db_clock::time_point>(e.second);
+    });
+}
 
-    public static ReplayPosition getTruncatedPosition(UUID cfId)
-    {
-        Pair<ReplayPosition, Long> record = getTruncationRecord(cfId);
-        return record == null ? null : record.left;
-    }
-
-    public static long getTruncatedAt(UUID cfId)
-    {
-        Pair<ReplayPosition, Long> record = getTruncationRecord(cfId);
-        return record == null ? Long.MIN_VALUE : record.right;
-    }
-
-    private static synchronized Pair<ReplayPosition, Long> getTruncationRecord(UUID cfId)
-    {
-        if (truncationRecords == null)
-            truncationRecords = readTruncationRecords();
-        return truncationRecords.get(cfId);
-    }
-
-    private static Map<UUID, Pair<ReplayPosition, Long>> readTruncationRecords()
-    {
-        UntypedResultSet rows = executeInternal(String.format("SELECT truncated_at FROM system.%s WHERE key = '%s'", LOCAL, LOCAL));
-
-        Map<UUID, Pair<ReplayPosition, Long>> records = new HashMap<>();
-
-        if (!rows.isEmpty() && rows.one().has("truncated_at"))
-        {
-            Map<UUID, ByteBuffer> map = rows.one().getMap("truncated_at", UUIDType.instance, BytesType.instance);
-            for (Map.Entry<UUID, ByteBuffer> entry : map.entrySet())
-                records.put(entry.getKey(), truncationRecordFromBlob(entry.getValue()));
-        }
-
-        return records;
-    }
-
-    private static Pair<ReplayPosition, Long> truncationRecordFromBlob(ByteBuffer bytes)
-    {
-        try
-        {
-            DataInputStream in = new DataInputStream(ByteBufferUtil.inputStream(bytes));
-            return Pair.create(ReplayPosition.serializer.deserialize(in), in.available() > 0 ? in.readLong() : Long.MIN_VALUE);
-        }
-        catch (IOException e)
-        {
-            throw new RuntimeException(e);
-        }
-    }
-
+#if 0
     /**
      * Record tokens being used by another node
      */
@@ -694,8 +683,19 @@ future<> force_blocking_flush(sstring cfname) {
     return cf.flush(&qctx->db());
 }
 
+future<> force_blocking_flush(distributed<database>& db, sstring cf_name) {
 #if 0
+    if (!Boolean.getBoolean("cassandra.unsafesystem"))
+#endif
+    {
+        return db.invoke_on_all([cf_name](database& db) {
+            auto& cf = db.find_column_family(NAME, cf_name);
+            return cf.seal_active_memtable(&db);
+        });
+    }
+}
 
+#if 0
     /**
      * Return a map of stored tokens to IP addresses
      *
