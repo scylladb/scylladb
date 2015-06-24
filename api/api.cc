@@ -11,6 +11,7 @@
 #include "column_family.hh"
 #include "messaging_service.hh"
 #include "storage_proxy.hh"
+#include "cache_service.hh"
 
 namespace api {
 
@@ -40,7 +41,9 @@ future<> set_server(http_context& ctx) {
         set_messaging_service(ctx, r);
         rb->register_function(r, "storage_proxy",
                                         "The storage proxy API");
-        set_storage_proxy(ctx,r);
+        rb->register_function(r, "cache_service",
+                                                "The cache service API");
+        set_cache_service(ctx,r);
 
     });
 }
