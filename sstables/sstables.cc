@@ -1009,6 +1009,9 @@ void sstable::write_range_tombstone(file_writer& out, const composite& clusterin
     uint64_t timestamp = t.timestamp;
     uint32_t deletion_time = t.deletion_time.time_since_epoch().count();
 
+    update_cell_stats(_c_stats, timestamp);
+    _c_stats.tombstone_histogram.update(deletion_time);
+
     write(out, deletion_time, timestamp);
 }
 
