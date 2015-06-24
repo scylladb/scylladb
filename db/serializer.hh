@@ -13,6 +13,7 @@
 #include "keys.hh"
 #include "database_fwd.hh"
 #include "frozen_mutation.hh"
+#include "db/commitlog/replay_position.hh"
 
 namespace db {
 /**
@@ -116,6 +117,10 @@ template<> void serializer<clustering_key_prefix_view>::write(output&, const clu
 template<> void serializer<clustering_key_prefix_view>::read(clustering_key_prefix_view&, input&);
 template<> clustering_key_prefix_view serializer<clustering_key_prefix_view>::read(input&);
 
+template<> serializer<db::replay_position>::serializer(const db::replay_position&);
+template<> void serializer<db::replay_position>::write(output&, const db::replay_position&);
+template<> void serializer<db::replay_position>::read(db::replay_position&, input&);
+
 template<typename T>
 T serializer<T>::read(input& in) {
     type t;
@@ -131,6 +136,7 @@ extern template class serializer<utils::UUID>;
 extern template class serializer<partition_key_view>;
 extern template class serializer<clustering_key_view>;
 extern template class serializer<clustering_key_prefix_view>;
+extern template class serializer<db::replay_position>;
 
 typedef serializer<tombstone> tombstone_serializer;
 typedef serializer<bytes> bytes_serializer; // Compatible with bytes_view_serializer
@@ -143,6 +149,7 @@ typedef serializer<partition_key_view> partition_key_view_serializer;
 typedef serializer<clustering_key_view> clustering_key_view_serializer;
 typedef serializer<clustering_key_prefix_view> clustering_key_prefix_view_serializer;
 typedef serializer<frozen_mutation> frozen_mutation_serializer;
+typedef serializer<db::replay_position> replay_position_serializer;
 
 }
 

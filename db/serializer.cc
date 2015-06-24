@@ -234,6 +234,23 @@ frozen_mutation db::serializer<frozen_mutation>::read(input& in) {
     return frozen_mutation(bytes_serializer::read(in));
 }
 
+template<>
+db::serializer<db::replay_position>::serializer(const db::replay_position& rp)
+        : _item(rp), _size(sizeof(uint64_t) * 2) {
+}
+
+template<>
+void db::serializer<db::replay_position>::write(output& out, const db::replay_position& rp) {
+    out.write<uint64_t>(rp.id);
+    out.write<uint64_t>(rp.pos);
+}
+
+template<>
+void db::serializer<db::replay_position>::read(db::replay_position& rp, input& in) {
+    rp.id = in.read<uint64_t>();
+    rp.pos = in.read<uint64_t>();
+}
+
 template class db::serializer<tombstone> ;
 template class db::serializer<bytes> ;
 template class db::serializer<bytes_view> ;
@@ -245,3 +262,4 @@ template class db::serializer<partition_key_view> ;
 template class db::serializer<clustering_key_view> ;
 template class db::serializer<clustering_key_prefix_view> ;
 template class db::serializer<frozen_mutation> ;
+template class db::serializer<db::replay_position> ;
