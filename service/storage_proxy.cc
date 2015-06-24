@@ -188,8 +188,7 @@ void storage_proxy::got_response(storage_proxy::storage_proxy::response_id_type 
 future<> storage_proxy::response_wait(storage_proxy::response_id_type id) {
     auto& e = _response_handlers.find(id)->second;
 
-    //FIXME: timeout is from DatabaseDescriptor.getWriteRpcTimeout()
-    e.expire_timer.arm(std::chrono::seconds(2));
+    e.expire_timer.arm(std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms()));
 
     return e.handler->wait();
 }

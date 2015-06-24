@@ -359,6 +359,9 @@ public:
     get_column_families_mapping() const {
         return _ks_cf_to_uuid;
     }
+    const db::config& get_config() {
+        return *_cfg;
+    }
 };
 
 // Creates a keyspace.  Keyspaces have a non-sharded

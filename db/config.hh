@@ -453,7 +453,7 @@ public:
     val(truncate_request_timeout_in_ms, uint32_t, 10000, Unused,     \
             "The time that the coordinator waits for truncates (remove all data from a table) to complete. The long default value allows for a snapshot to be taken before removing the data. If auto_snapshot is disabled (not recommended), you can reduce this time."  \
     )   \
-    val(write_request_timeout_in_ms, uint32_t, 10000, Unused,     \
+    val(write_request_timeout_in_ms, uint32_t, 2000, Used,     \
             "The time in milliseconds that the coordinator waits for write operations to complete.\n"  \
             "Related information: About hinted handoff writes"  \
     )   \
