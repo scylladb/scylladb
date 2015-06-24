@@ -113,7 +113,12 @@ if __name__ == "__main__":
         print_status('%s RUNNING %s' % (prefix, path))
         signal.signal(signal.SIGALRM, alarm_handler)
         if args.jenkins and test[1] == 'boost':
-           path = path + " --output_format=XML --log_level=all --report_level=no"
+           mode = 'release'
+           if test[0].startswith(os.path.join('build','debug')):
+              mode = 'debug'
+           xmlout = args.jenkins+"."+mode+"."+os.path.basename(test[0])+".boost.xml"
+           path = path + " --output_format=XML --log_level=all --report_level=no --log_sink=" + xmlout
+           print(path)
         if os.path.isfile('tmp.out'):
            os.remove('tmp.out')
         outf=open('tmp.out','w')
@@ -146,11 +151,6 @@ if __name__ == "__main__":
                 all_ok = False
             else:
                 print_status('%s PASSED %s' % (prefix, path))
-        if args.jenkins and test[1] == 'boost':
-           mode = 'release'
-           if test[0].startswith(os.path.join('build','debug')):
-              mode = 'debug'
-           os.rename('tmp.out',args.jenkins+"."+mode+"."+os.path.basename(test[0])+".boost.xml")
 
     if all_ok:
         print('\nOK.')
