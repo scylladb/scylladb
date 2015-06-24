@@ -59,7 +59,7 @@ public:
         , state(state_) {
     }
 
-    bool is_failed() {
+    bool is_failed() const {
         return state == stream_session::state::FAILED;
     }
 #if 0

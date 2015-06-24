@@ -14,40 +14,43 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.io.Serializable;
-import java.util.Set;
-import java.util.UUID;
+#pragma once
 
-import com.google.common.base.Predicate;
-import com.google.common.collect.Iterables;
+#include "utils/UUID.hh"
+#include "streaming/session_info.hh"
+#include <set>
+
+namespace streaming {
 
 /**
  * Current snapshot of streaming progress.
  */
-public class StreamState implements Serializable
-{
-    public final UUID planId;
-    public final String description;
-    public final Set<SessionInfo> sessions;
+class stream_state {
+public:
+    using UUID = utils::UUID;
+    UUID plan_id;
+    sstring description;
+    std::set<session_info> sessions;
 
-    public StreamState(UUID planId, String description, Set<SessionInfo> sessions)
-    {
-        this.planId = planId;
-        this.description = description;
-        this.sessions = sessions;
+    stream_state(UUID plan_id_, sstring description_, std::set<session_info> sessions_)
+        : plan_id(std::move(plan_id_))
+        , description(std::move(description_))
+        , sessions(std::move(sessions_)) {
     }
 
-    public boolean hasFailedSession()
-    {
-        return Iterables.any(sessions, new Predicate<SessionInfo>()
-        {
-            public boolean apply(SessionInfo session)
-            {
-                return session.isFailed();
+    bool has_failed_session() {
+        for (auto& x : sessions) {
+            if (x.is_failed()) {
+                return true;
             }
-        });
+        }
+        return false;
     }
-}
+};
+
+} // namespace streaming
