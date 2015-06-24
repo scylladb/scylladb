@@ -22,6 +22,15 @@ public:
     virtual void visit(const result_message::rows&) = 0;
 };
 
+class result_message::visitor_base : public visitor {
+public:
+    void visit(const result_message::void_message&) override {};
+    void visit(const result_message::set_keyspace&) override {};
+    void visit(const result_message::prepared&) override {};
+    void visit(const result_message::schema_change&) override {};
+    void visit(const result_message::rows&) override {};
+};
+
 class result_message::void_message : public result_message {
 public:
     virtual void accept(result_message::visitor& v) override {

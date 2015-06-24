@@ -6,6 +6,7 @@ namespace messages {
 class result_message {
 public:
     class visitor;
+    class visitor_base;
 
     virtual ~result_message() {}
 
