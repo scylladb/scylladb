@@ -621,19 +621,6 @@ void database::add_keyspace(sstring name, keyspace k) {
     _keyspaces.emplace(std::move(name), std::move(k));
 }
 
-// FIXME: This function is wrong. ksm must be per core, and it currently isn't. It was wrong
-// before, it is wrong now. It will go away soon
-future<>
-create_keyspace(distributed<database>& db, const lw_shared_ptr<keyspace_metadata>& ksm) {
-    // FIXME support multiple directories
-    return db.invoke_on_all([ksm] (database& db) {
-        return db.create_keyspace(ksm);
-    });
-    // FIXME: rollback on error, or keyspace directory remains on disk, poisoning
-    // everything.
-    // FIXME: sync parent directory?
-}
-
 void database::update_keyspace(const sstring& name) {
     throw std::runtime_error("not implemented");
 }

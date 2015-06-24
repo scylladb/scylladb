@@ -366,7 +366,6 @@ public:
     const sstring& get_snitch_name() const;
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
-    friend future<> create_keyspace(distributed<database>&, const lw_shared_ptr<keyspace_metadata>&);
     const std::unordered_map<sstring, keyspace>& get_keyspaces() const {
         return _keyspaces;
     }
@@ -381,10 +380,6 @@ public:
         return *_cfg;
     }
 };
-
-// Creates a keyspace.  Keyspaces have a non-sharded
-// component (the directory), so a global function is needed.
-future<> create_keyspace(distributed<database>& db, const lw_shared_ptr<keyspace_metadata>&);
 
 // FIXME: stub
 class secondary_index_manager {};
