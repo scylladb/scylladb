@@ -351,6 +351,7 @@ if args.dpdk:
                            'CONFIG_RTE_APP_TEST': 'n',
                            'CONFIG_RTE_TEST_PMD': 'n',
                            'CONFIG_RTE_MBUF_REFCNT_ATOMIC': 'n',
+                           'CONFIG_RTE_MAX_MEMSEG': '8192',
                            })
     open(dotconfig, 'w').writelines(lines)
     args.dpdk_target = 'build/dpdk'
