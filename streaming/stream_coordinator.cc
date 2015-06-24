@@ -20,3 +20,26 @@
  */
 
 #include "streaming/stream_coordinator.hh"
+
+namespace streaming {
+
+bool stream_coordinator::has_active_sessions() {
+    for (auto& x : _peer_sessions) {
+        if (x.second.has_active_sessions()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool stream_coordinator::host_streaming_data::has_active_sessions() {
+    for (auto& x : _stream_sessions) {
+        auto state = x.second.get_state();
+        if (state != stream_session::state::COMPLETE && state != stream_session::state::FAILED) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace streaming

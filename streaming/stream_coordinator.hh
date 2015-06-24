@@ -58,15 +58,7 @@ public:
     /**
      * @return true if any stream session is active
      */
-    bool has_active_sessions() {
-        for (auto& x : _peer_sessions) {
-            if (x.second.has_active_sessions()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
+    bool has_active_sessions();
 #if 0
     public synchronized Collection<StreamSession> getAllStreamSessions()
     {
@@ -216,16 +208,7 @@ private:
         std::map<int, session_info> _session_infos;
         int last_returned = -1;
     public:
-        bool has_active_sessions() {
-            for (auto& x : _stream_sessions) {
-                auto state = x.second.get_state();
-                if (state != stream_session::state::COMPLETE && state != stream_session::state::FAILED) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
+        bool has_active_sessions();
 #if 0
         public StreamSession getOrCreateNextSession(InetAddress peer, InetAddress connecting)
         {
