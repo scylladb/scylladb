@@ -1,3 +1,6 @@
 [submodule "dpdk"]
 	path = dpdk
 	url = ../dpdk
+[submodule "swagger-ui"]
+	path = swagger-ui
+	url = ../urchin-swagger-ui
