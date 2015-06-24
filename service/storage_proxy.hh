@@ -58,14 +58,14 @@ private:
     void got_response(response_id_type id, gms::inet_address from);
     future<> response_wait(response_id_type id);
     abstract_write_response_handler& get_write_response_handler(storage_proxy::response_id_type id);
-    response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints);
+    response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints);
     future<> send_to_live_endpoints(response_id_type response_id,  sstring local_data_center);
     template<typename Range>
-    size_t hint_to_dead_endpoints(const frozen_mutation& m, const Range& targets);
+    size_t hint_to_dead_endpoints(lw_shared_ptr<const frozen_mutation> m, const Range& targets);
     bool cannot_hint(gms::inet_address target);
     size_t get_hints_in_progress_for(gms::inet_address target);
     bool should_hint(gms::inet_address ep);
-    bool submit_hint(const frozen_mutation& m, gms::inet_address target);
+    bool submit_hint(lw_shared_ptr<const frozen_mutation> m, gms::inet_address target);
 public:
     storage_proxy(distributed<database>& db);
     ~storage_proxy();

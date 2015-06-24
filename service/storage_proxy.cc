@@ -70,7 +70,7 @@ protected:
     semaphore _ready; // available when cl is achieved
     db::consistency_level _cl;
     keyspace& _ks;
-    frozen_mutation _mutation;
+    lw_shared_ptr<const frozen_mutation> _mutation;
     std::unordered_set<gms::inet_address> _targets; // who we sent this mutation to
     size_t _pending_endpoints; // how many endpoints in bootstrap state there is
     size_t _cl_acks = 0;
@@ -84,7 +84,7 @@ protected:
         signal();
     }
 public:
-    abstract_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
+    abstract_write_response_handler(keyspace& ks, db::consistency_level cl, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
         _ready(0), _cl(cl), _ks(ks), _mutation(std::move(mutation)), _targets(targets), _pending_endpoints(pending_endpoints) {}
     virtual ~abstract_write_response_handler() {};
     void signal(size_t nr = 1) {
@@ -105,7 +105,7 @@ public:
     const std::unordered_set<gms::inet_address>& get_targets() {
         return _targets;
     }
-    const frozen_mutation& get_mutation() {
+    lw_shared_ptr<const frozen_mutation> get_mutation() {
         return _mutation;
     }
     friend storage_proxy;
@@ -118,13 +118,13 @@ class datacenter_write_response_handler : public abstract_write_response_handler
         }
     }
 public:
-    datacenter_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
+    datacenter_write_response_handler(keyspace& ks, db::consistency_level cl, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
         abstract_write_response_handler(ks, cl, std::move(mutation), targets, pending_endpoints) {}
 };
 
 class write_response_handler : public abstract_write_response_handler {
 public:
-    write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
+    write_response_handler(keyspace& ks, db::consistency_level cl, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
         abstract_write_response_handler(ks, cl, std::move(mutation), targets, pending_endpoints) {}
 };
 
@@ -139,7 +139,7 @@ class datacenter_sync_write_response_handler : public abstract_write_response_ha
         }
     }
 public:
-    datacenter_sync_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
+    datacenter_sync_write_response_handler(keyspace& ks, db::consistency_level cl, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
         abstract_write_response_handler(ks, cl, std::move(mutation), targets, pending_endpoints) {
         warn(unimplemented::cause::CONSISTENCY);
     }
@@ -197,20 +197,22 @@ abstract_write_response_handler& storage_proxy::get_write_response_handler(stora
         return *_response_handlers.find(id)->second.handler;
 }
 
-storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints)
+storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints)
 {
     std::unique_ptr<abstract_write_response_handler> h;
     //auto& rs = ks.get_replication_strategy();
     size_t pending_count = pending_endpoints.size();
 
+    auto m = make_lw_shared<const frozen_mutation>(std::move(mutation));
+
     // for now make is simple
     if (db::is_datacenter_local(cl)) {
         pending_count = std::count_if(pending_endpoints.begin(), pending_endpoints.end(), db::is_local);
-        h = std::make_unique<datacenter_write_response_handler>(ks, cl, std::move(mutation), std::move(targets), pending_count);
+        h = std::make_unique<datacenter_write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count);
     } else if (0 && cl == db::consistency_level::EACH_QUORUM /*&& rs == NetworkTopologyStrategy*/){
-        h = std::make_unique<datacenter_sync_write_response_handler>(ks, cl, std::move(mutation), std::move(targets), pending_count);
+        h = std::make_unique<datacenter_sync_write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count);
     } else {
-        h = std::make_unique<write_response_handler>(ks, cl, std::move(mutation), std::move(targets), pending_count);
+        h = std::make_unique<write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count);
     }
     return register_response_handler(std::move(h));
 }
@@ -1050,8 +1052,8 @@ future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type r
         }
     }
 
-    auto& m = get_write_response_handler(response_id).get_mutation();
-
+    auto mptr = get_write_response_handler(response_id).get_mutation();
+    auto& m = *mptr;
     auto all = boost::range::join(local, dc_groups);
 
     // OK, now send and/or apply locally
@@ -1072,15 +1074,18 @@ future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type r
             return ms.send_message_oneway(net::messaging_verb::MUTATION, net::messaging_service::shard_id{coordinator, 0}, m, std::move(forward), std::move(my_address),
                     engine().cpu_id(), std::move(response_id));
         }
+    }).finally([mptr] {
+        // make mutation alive until it is sent or processed locally, otherwise it
+        // may disappear if write timeouts before this future is ready
     });
 }
 
 // returns number of hints stored
 template<typename Range>
-size_t storage_proxy::hint_to_dead_endpoints(const frozen_mutation& m, const Range& targets)
+size_t storage_proxy::hint_to_dead_endpoints(lw_shared_ptr<const frozen_mutation> m, const Range& targets)
 {
     return boost::count_if(targets | boost::adaptors::filtered(std::bind1st(std::mem_fn(&storage_proxy::should_hint), this)),
-            std::bind(std::mem_fn(&storage_proxy::submit_hint), this, std::ref(m), std::placeholders::_1));
+            std::bind(std::mem_fn(&storage_proxy::submit_hint), this, m, std::placeholders::_1));
 }
 
 size_t storage_proxy::get_hints_in_progress_for(gms::inet_address target) {
@@ -1093,7 +1098,7 @@ size_t storage_proxy::get_hints_in_progress_for(gms::inet_address target) {
     return it->second;
 }
 
-bool storage_proxy::submit_hint(const frozen_mutation& m, gms::inet_address target)
+bool storage_proxy::submit_hint(lw_shared_ptr<const frozen_mutation> m, gms::inet_address target)
 {
     warn(unimplemented::cause::HINT);
     // local write that time out should be handled by LocalMutationRunnable
