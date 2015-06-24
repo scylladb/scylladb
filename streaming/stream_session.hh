@@ -398,27 +398,24 @@ public:
             streamResult.handleSessionComplete(this);
         }
     }
-
+#endif
+public:
     /**
      * Set current state to {@code newState}.
      *
      * @param newState new state to set
      */
-    public void state(State newState)
-    {
-        state = newState;
+    void set_state(stream_session::state new_state) {
+        _state = new_state;
     }
 
     /**
      * @return current state
      */
-    public State state()
-    {
-        return state;
+    stream_session::state get_state() {
+        return _state;
     }
-#endif
 
-public:
     /**
      * Return if this session completed successfully.
      *
