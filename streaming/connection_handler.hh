@@ -23,11 +23,12 @@
 
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
-#include "streaming/stream_session.hh"
 #include "streaming/session_info.hh"
 #include "streaming/progress_info.hh"
 
 namespace streaming {
+
+class stream_session;
 
 /**
  * ConnectionHandler manages incoming/outgoing message exchange for the {@link StreamSession}.
@@ -39,10 +40,10 @@ namespace streaming {
  */
 class connection_handler {
 public:
-    connection_handler(stream_session session)
-        : _session(std::move(session))
-        , _incoming(_session)
-        , _outgoing(_session) {
+    connection_handler(stream_session& session)
+        : _session(session)
+        , _incoming(session)
+        , _outgoing(session) {
     }
 
 #if 0
@@ -336,7 +337,7 @@ public:
     };
 
 private:
-    stream_session _session;
+    stream_session& _session;
     incoming_message_handler _incoming;
     outgoing_message_handler _outgoing;
 };
