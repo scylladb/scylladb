@@ -162,14 +162,15 @@ public:
         this.coordinator.setConnectionFactory(factory);
         return this;
     }
-
+#endif
+public:
     /**
      * @return true if this plan has no plan to execute
      */
-    public boolean isEmpty()
-    {
-        return !coordinator.hasActiveSessions();
+    bool is_empty() {
+        return !_coordinator.has_active_sessions();
     }
+#if 0
 
     /**
      * Execute this {@link StreamPlan} asynchronously.
