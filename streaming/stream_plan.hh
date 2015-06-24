@@ -27,6 +27,7 @@
 #include "gms/inet_address.hh"
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"
+#include "streaming/stream_coordinator.hh"
 #include <vector>
 #include <initializer_list>
 
@@ -46,7 +47,7 @@ private:
     sstring _description;
     //List<StreamEventHandler> handlers = new ArrayList<>();
     long _repaired_at;
-    //StreamCoordinator coordinator;
+    stream_coordinator _coordinator;
 
     bool _flush_before_transfer = true;
     // FIXME: ActiveRepairService.UNREPAIRED_SSTABLE
@@ -58,19 +59,19 @@ public:
      *
      * @param description Stream type that describes this StreamPlan
      */
-    stream_plan(sstring description) {
-        stream_plan(description, UNREPAIRED_SSTABLE, 1, false);
+    stream_plan(sstring description)
+        : stream_plan(description, UNREPAIRED_SSTABLE, 1, false) {
     }
 
-    stream_plan(sstring description, bool keep_ss_table_levels) {
-        stream_plan(description, UNREPAIRED_SSTABLE, 1, keep_ss_table_levels);
+    stream_plan(sstring description, bool keep_ss_table_levels)
+        : stream_plan(description, UNREPAIRED_SSTABLE, 1, keep_ss_table_levels) {
     }
 
     stream_plan(sstring description, long repaired_at, int connections_per_host, bool keep_ss_table_levels)
         : _plan_id(utils::UUID_gen::get_time_UUID())
         , _description(description)
-        , _repaired_at(repaired_at) {
-        // this.coordinator = new StreamCoordinator(connectionsPerHost, keepSSTableLevels, new DefaultConnectionFactory());
+        , _repaired_at(repaired_at)
+        , _coordinator(connections_per_host, keep_ss_table_levels) {
     }
 
     /**
