@@ -22,10 +22,12 @@
 #pragma once
 
 #include "utils/UUID.hh"
-#include "streaming/stream_session.hh"
 #include "streaming/stream_summary.hh"
 
 namespace streaming {
+
+class stream_session;
+
 /**
  * StreamTask is an abstraction of the streaming task performed over specific ColumnFamily.
  */
