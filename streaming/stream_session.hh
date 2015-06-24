@@ -30,6 +30,7 @@
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_receive_task.hh"
 #include "streaming/stream_request.hh"
+#include "sstables/sstables.hh"
 #include <map>
 #include <set>
 
@@ -349,23 +350,24 @@ public:
             iter.remove();
         }
     }
+#endif
 
-    public static class SSTableStreamingSections
-    {
-        public final SSTableReader sstable;
-        public final List<Pair<Long, Long>> sections;
-        public final long estimatedKeys;
-        public final long repairedAt;
-
-        public SSTableStreamingSections(SSTableReader sstable, List<Pair<Long, Long>> sections, long estimatedKeys, long repairedAt)
-        {
-            this.sstable = sstable;
-            this.sections = sections;
-            this.estimatedKeys = estimatedKeys;
-            this.repairedAt = repairedAt;
+public:
+    struct ss_table_streaming_sections {
+        sstables::sstable& sstable;
+        std::map<int64_t, int64_t> sections;
+        int64_t estimated_keys;
+        int64_t repaired_at;
+        ss_table_streaming_sections(sstables::sstable& sstable_, std::map<int64_t, int64_t> sections_,
+                                    long estimated_keys_, long repaired_at_)
+            : sstable(sstable_)
+            , sections(std::move(sections_))
+            , estimated_keys(estimated_keys_)
+            , repaired_at(repaired_at_) {
         }
-    }
+    };
 
+#if 0
     private synchronized void closeSession(State finalState)
     {
         if (isAborted.compareAndSet(false, true))
