@@ -53,20 +53,21 @@ public:
     {
         this.factory = factory;
     }
-
+#endif
+public:
     /**
      * @return true if any stream session is active
      */
-    public synchronized boolean hasActiveSessions()
-    {
-        for (HostStreamingData data : peerSessions.values())
-        {
-            if (data.hasActiveSessions())
+    bool has_active_sessions() {
+        for (auto& x : _peer_sessions) {
+            if (x.second.has_active_sessions()) {
                 return true;
+            }
         }
         return false;
     }
 
+#if 0
     public synchronized Collection<StreamSession> getAllStreamSessions()
     {
         Collection<StreamSession> results = new ArrayList<>();
@@ -214,18 +215,18 @@ private:
         std::map<int, stream_session> _stream_sessions;
         std::map<int, session_info> _session_infos;
         int last_returned = -1;
-#if 0
-        public boolean hasActiveSessions()
-        {
-            for (StreamSession session : streamSessions.values())
-            {
-                StreamSession.State state = session.state();
-                if (state != StreamSession.State.COMPLETE && state != StreamSession.State.FAILED)
+    public:
+        bool has_active_sessions() {
+            for (auto& x : _stream_sessions) {
+                auto state = x.second.get_state();
+                if (state != stream_session::state::COMPLETE && state != stream_session::state::FAILED) {
                     return true;
+                }
             }
             return false;
         }
 
+#if 0
         public StreamSession getOrCreateNextSession(InetAddress peer, InetAddress connecting)
         {
             // create
