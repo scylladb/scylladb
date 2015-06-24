@@ -288,13 +288,13 @@ public:
         _sstable_level = sstable_level;
     }
 
-    void update_min_column_names(std::vector<bytes>& min_column_names) {
+    void update_min_column_names(std::vector<bytes>&& min_column_names) {
         if (min_column_names.size() > 0) {
             column_name_helper::merge_min_components(_min_column_names, std::move(min_column_names));
         }
     }
 
-    void update_max_column_names(std::vector<bytes>& max_column_names) {
+    void update_max_column_names(std::vector<bytes>&& max_column_names) {
         if (max_column_names.size() > 0) {
             column_name_helper::merge_max_components(_max_column_names, std::move(max_column_names));
         }
@@ -304,15 +304,15 @@ public:
         _has_legacy_counter_shards = _has_legacy_counter_shards || has_legacy_counter_shards;
     }
 
-    void update(column_stats& stats) {
+    void update(column_stats&& stats) {
         update_min_timestamp(stats.min_timestamp.get());
         update_max_timestamp(stats.max_timestamp.get());
         update_max_local_deletion_time(stats.max_local_deletion_time.get());
         add_row_size(stats.row_size);
         add_column_count(stats.column_count);
         merge_tombstone_histogram(stats.tombstone_histogram);
-        update_min_column_names(stats.min_column_names);
-        update_max_column_names(stats.max_column_names);
+        update_min_column_names(std::move(stats.min_column_names));
+        update_max_column_names(std::move(stats.max_column_names));
         update_has_legacy_counter_shards(stats.has_legacy_counter_shards);
     }
 

@@ -1259,7 +1259,7 @@ void sstable::do_write_components(::mutation_reader mr,
         // compute size of the current row.
         _c_stats.row_size = out.offset() - _c_stats.start_offset;
         // update is about merging column_stats with the data being stored by collector.
-        collector->update(_c_stats);
+        collector->update(std::move(_c_stats));
         _c_stats.reset();
 
         if (!first_key) {
