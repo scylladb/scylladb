@@ -103,13 +103,17 @@ public:
         schema_ptr s;
         less_comparator(schema_ptr s);
         bool operator()(const decorated_key& k1, const decorated_key& k2) const;
+        bool operator()(const decorated_key& k1, const ring_position& k2) const;
+        bool operator()(const ring_position& k1, const decorated_key& k2) const;
     };
 
     bool equal(const schema& s, const decorated_key& other) const;
 
     bool less_compare(const schema& s, const decorated_key& other) const;
+    bool less_compare(const schema& s, const ring_position& other) const;
 
     int tri_compare(const schema& s, const decorated_key& other) const;
+    int tri_compare(const schema& s, const ring_position& other) const;
 };
 
 class i_partitioner {

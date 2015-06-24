@@ -182,6 +182,22 @@ decorated_key::tri_compare(const schema& s, const decorated_key& other) const {
     }
 }
 
+int
+decorated_key::tri_compare(const schema& s, const ring_position& other) const {
+    if (_token != other.token()) {
+        return _token < other.token() ? -1 : 1;
+    }
+    if (other.has_key()) {
+        return _key.legacy_tri_compare(s, *other.key());
+    }
+    return 0;
+}
+
+bool
+decorated_key::less_compare(const schema& s, const ring_position& other) const {
+    return tri_compare(s, other) < 0;
+}
+
 bool
 decorated_key::less_compare(const schema& s, const decorated_key& other) const {
     return tri_compare(s, other) < 0;
@@ -194,6 +210,16 @@ decorated_key::less_comparator::less_comparator(schema_ptr s)
 bool
 decorated_key::less_comparator::operator()(const decorated_key& lhs, const decorated_key& rhs) const {
     return lhs.less_compare(*s, rhs);
+}
+
+bool
+decorated_key::less_comparator::operator()(const ring_position& lhs, const decorated_key& rhs) const {
+    return rhs.tri_compare(*s, lhs) > 0;
+}
+
+bool
+decorated_key::less_comparator::operator()(const decorated_key& lhs, const ring_position& rhs) const {
+    return lhs.tri_compare(*s, rhs) < 0;
 }
 
 std::ostream& operator<<(std::ostream& out, const ring_position& pos) {
