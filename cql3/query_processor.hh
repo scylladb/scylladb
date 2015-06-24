@@ -35,6 +35,7 @@
 #include "log.hh"
 #include "core/distributed.hh"
 #include "transport/messages/result_message.hh"
+#include "untyped_result_set.hh"
 
 namespace cql3 {
 
@@ -42,11 +43,22 @@ class query_processor {
 private:
     distributed<service::storage_proxy>& _proxy;
     distributed<database>& _db;
+
+    class internal_state;
+    std::unique_ptr<internal_state> _internal_state;
+
 public:
-    query_processor(distributed<service::storage_proxy>& proxy, distributed<database>& db) : _proxy(proxy), _db(db) {}
+    query_processor(distributed<service::storage_proxy>& proxy, distributed<database>& db);
+    ~query_processor();
 
     static const sstring CQL_VERSION;
 
+    distributed<database>& db() {
+        return _db;
+    }
+    distributed<service::storage_proxy>& proxy() {
+        return _proxy;
+    }
 #if 0
     public static final QueryProcessor instance = new QueryProcessor();
 #endif
@@ -76,6 +88,7 @@ private:
 #endif
 
     std::unordered_map<bytes, ::shared_ptr<statements::parsed_statement::prepared>> _prepared_statements;
+    std::unordered_map<sstring, ::shared_ptr<statements::parsed_statement::prepared>> _internal_statements;
 #if 0
     private static final ConcurrentLinkedHashMap<Integer, ParsedStatement.Prepared> thriftPreparedStatements;
 
@@ -282,28 +295,17 @@ public:
         internalStatements.putIfAbsent(query, prepared);
         return prepared;
     }
+#endif
+private:
+    ::shared_ptr<statements::parsed_statement::prepared> prepare_internal(const std::experimental::string_view& query);
+    query_options make_internal_options(::shared_ptr<statements::parsed_statement::prepared>, const std::initializer_list<boost::any>&);
 
-    public static UntypedResultSet executeInternal(String query, Object... values)
-    {
-        try
-        {
-            ParsedStatement.Prepared prepared = prepareInternal(query);
-            ResultMessage result = prepared.statement.executeInternal(internalQueryState(), makeInternalOptions(prepared, values));
-            if (result instanceof ResultMessage.Rows)
-                return UntypedResultSet.create(((ResultMessage.Rows)result).result);
-            else
-                return null;
-        }
-        catch (RequestExecutionException e)
-        {
-            throw new RuntimeException(e);
-        }
-        catch (RequestValidationException e)
-        {
-            throw new RuntimeException("Error validating " + query, e);
-        }
-    }
+public:
+    future<::shared_ptr<untyped_result_set>> execute_internal(
+            const std::experimental::string_view& query_string,
+            const std::initializer_list<boost::any>& = { });
 
+#if 0
     public static UntypedResultSet executeInternalWithPaging(String query, int pageSize, Object... values)
     {
         try

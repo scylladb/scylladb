@@ -40,6 +40,35 @@ thread_local logging::logger log("query_processor");
 
 const sstring query_processor::CQL_VERSION = "3.2.0";
 
+class query_processor::internal_state {
+    service::client_state _cs;
+    service::query_state _qs;
+public:
+    internal_state()
+            : _cs(service::client_state::internal_tag()), _qs(_cs) {
+    }
+    operator service::query_state&() {
+        return _qs;
+    }
+    operator const service::query_state&() const {
+        return _qs;
+    }
+    operator service::client_state&() {
+        return _cs;
+    }
+    operator const service::client_state&() const {
+        return _cs;
+    }
+};
+
+query_processor::query_processor(distributed<service::storage_proxy>& proxy,
+        distributed<database>& db)
+        : _proxy(proxy), _db(db), _internal_state(new internal_state()) {
+}
+
+query_processor::~query_processor()
+{}
+
 future<::shared_ptr<result_message>>
 query_processor::process(const sstring_view& query_string, service::query_state& query_state, query_options& options)
 {
@@ -217,6 +246,50 @@ query_processor::parse_statement(const sstring_view& query)
         log.error("The statement: {} could not be parsed: {}", query, e.what());
         throw exceptions::syntax_exception(sprint("Failed parsing statement: [%s] reason: %s", query, e.what()));
     }
+}
+
+query_options query_processor::make_internal_options(
+        ::shared_ptr<statements::parsed_statement::prepared> p,
+        const std::initializer_list<boost::any>& values) {
+    if (p->bound_names.size() != values.size()) {
+        throw std::invalid_argument(sprint("Invalid number of values. Expecting %d but got %d", p->bound_names.size(), values.size()));
+    }
+    auto ni = p->bound_names.begin();
+    std::vector<bytes_opt> bound_values;
+    for (auto& v : values) {
+        auto& n = *ni++;
+        if (v.type() == typeid(bytes)) {
+            bound_values.push_back({boost::any_cast<bytes>(v)});
+        } else if (v.empty()) {
+            bound_values.push_back({});
+        } else {
+            bound_values.push_back({n->type->decompose(v)});
+        }
+    }
+    return query_options(bound_values);
+}
+
+::shared_ptr<statements::parsed_statement::prepared> query_processor::prepare_internal(
+        const std::experimental::string_view& query_string) {
+
+    auto& p = _internal_statements[sstring(query_string.begin(), query_string.end())];
+    if (p == nullptr) {
+        auto np = parse_statement(query_string)->prepare(_db.local());
+        np->statement->validate(_proxy, *_internal_state);
+        p = std::move(np); // inserts it into map
+    }
+    return p;
+}
+
+future<::shared_ptr<untyped_result_set>> query_processor::execute_internal(
+        const std::experimental::string_view& query_string,
+        const std::initializer_list<boost::any>& values) {
+    auto p = prepare_internal(query_string);
+    auto opts = make_internal_options(p, values);
+    return p->statement->execute_internal(_proxy, *_internal_state, opts).then(
+            [](::shared_ptr<transport::messages::result_message> msg) {
+                return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
+            });
 }
 
 }
