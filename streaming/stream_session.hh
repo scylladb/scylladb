@@ -26,6 +26,12 @@
 #include "message/messaging_service.hh"
 #include "utils/UUID.hh"
 #include "streaming/stream_session_state.hh"
+#include "streaming/connection_handler.hh"
+#include "streaming/stream_transfer_task.hh"
+#include "streaming/stream_receive_task.hh"
+#include "streaming/stream_request.hh"
+#include <map>
+#include <set>
 
 namespace streaming {
 
@@ -124,35 +130,29 @@ public:
     inet_address peer;
     /** Actual connecting address. Can be the same as {@linkplain #peer}. */
     inet_address connecting;
+    connection_handler conn_handler;
 private:
     int _index;
-
-#if 0
     // should not be null when session is started
-    private StreamResultFuture streamResult;
+    //private StreamResultFuture streamResult;
 
     // stream requests to send to the peer
-    private final Set<StreamRequest> requests = Sets.newConcurrentHashSet();
+    std::set<stream_request> _requests;
     // streaming tasks are created and managed per ColumnFamily ID
-    private final Map<UUID, StreamTransferTask> transfers = new ConcurrentHashMap<>();
+    std::map<UUID, stream_transfer_task> _transfers;
     // data receivers, filled after receiving prepare message
-    private final Map<UUID, StreamReceiveTask> receivers = new ConcurrentHashMap<>();
-    private final StreamingMetrics metrics;
+    std::map<UUID, stream_receive_task> _receivers;
+    //private final StreamingMetrics metrics;
     /* can be null when session is created in remote */
-    private final StreamConnectionFactory factory;
+    //private final StreamConnectionFactory factory;
 
-    public final ConnectionHandler handler;
-
-    private int retries;
-
-    private AtomicBoolean isAborted = new AtomicBoolean(false);
-#endif
-private:
+    int _retries;
+    bool _is_aborted =  false;
     bool _keep_ss_table_level;
-private:
+
     stream_session_state _state = stream_session_state::INITIALIZED;
-    bool complete_sent = false;
-#if 0
+    bool _complete_sent = false;
+public:
     /**
      * Create new streaming session with the peer.
      *
@@ -160,19 +160,14 @@ private:
      * @param connecting Actual connecting address
      * @param factory is used for establishing connection
      */
-    public StreamSession(InetAddress peer, InetAddress connecting, StreamConnectionFactory factory, int index, boolean keepSSTableLevel)
-    {
-        this.peer = peer;
-        this.connecting = connecting;
-        this.index = index;
-        this.factory = factory;
-        this.handler = new ConnectionHandler(this);
-        this.metrics = StreamingMetrics.get(connecting);
-        this.keepSSTableLevel = keepSSTableLevel;
+    stream_session(inet_address peer_, inet_address connecting_, int index_, bool keep_ss_table_level_)
+        : peer(peer_)
+        , connecting(connecting_)
+        , conn_handler(*this)
+        , _index(index_)
+        , _keep_ss_table_level(keep_ss_table_level_) {
+        //this.metrics = StreamingMetrics.get(connecting);
     }
-#endif
-
-public:
 
     UUID plan_id() {
         // return streamResult == null ? null : streamResult.planId;
