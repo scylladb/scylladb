@@ -835,6 +835,20 @@ public:
         }
     }
 
+#endif
+    size_t number_of_endpoints() const {
+        return _endpoint_to_host_id_map.size();
+    }
+	
+    std::vector<inet_address> get_all_endpoints() const {
+        std::vector<inet_address> tmp;
+        std::transform(_endpoint_to_host_id_map.begin(), _endpoint_to_host_id_map.end(), std::back_inserter(tmp), [](const auto& p) {
+           return p.first;
+        });
+        return tmp;
+    }
+
+#if 0
     public Set<InetAddress> getAllEndpoints()
     {
         lock.readLock().lock();
