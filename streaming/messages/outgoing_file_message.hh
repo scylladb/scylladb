@@ -81,7 +81,7 @@ public:
         // FIXME:
         UUID cf_id; // sstable.metadata.cfId
         sstring version; // sstable.descriptor.version.toString()
-        format_types format; // sstable.descriptor.formatType
+        format_types format = format_types::big; // sstable.descriptor.formatType
         int32_t level = 0; // keepSSTableLevel ? sstable.getSSTableLevel() : 0
         compression_info comp_info;
         header = file_message_header(cf_id, sequence_number, version, format, estimated_keys,
