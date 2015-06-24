@@ -29,6 +29,13 @@
 #include "legacy_schema_tables.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
+#include "query-result-set.hh"
+
+namespace service {
+
+class storage_proxy;
+
+}
 
 namespace db {
 namespace system_keyspace {
@@ -53,6 +60,11 @@ extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
 
 std::vector<schema_ptr> all_tables();
 void make(database& db, bool durable);
+
+// Returns all data from given system table.
+// Intended to be used by code which is not performance critical.
+future<lw_shared_ptr<query::result_set>> query(service::storage_proxy& proxy, const sstring& cf_name);
+
 
 // Endpoint Data Center and Rack names
 struct endpoint_dc_rack {
