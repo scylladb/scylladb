@@ -337,18 +337,21 @@ if args.dpdk:
     # adjust configutation to taste
     dotconfig = 'build/dpdk/.config'
     lines = open(dotconfig).readlines()
-    def disable(lines, vars):
-        vars_enabled = [var + '=y\n' for var in vars]
-        return [line.replace('=y', '=n') if line in vars_enabled else line
-                for line in lines
-                ]
-    lines = disable(lines, ['CONFIG_RTE_LIBRTE_PMD_BOND',
-                            'CONFIG_RTE_MBUF_SCATTER_GATHER',
-                            'CONFIG_RTE_LIBRTE_IP_FRAG',
-                            'CONFIG_RTE_APP_TEST',
-                            'CONFIG_RTE_TEST_PMD',
-                            'CONFIG_RTE_MBUF_REFCNT_ATOMIC',
-                            ])
+    def update(lines, vars):
+        ret = []
+        for line in lines:
+            for var, val in vars.items():
+                if line.startswith(var + '='):
+                    line = var + '=' + val + '\n'
+            ret.append(line)
+        return ret
+    lines = update(lines, {'CONFIG_RTE_LIBRTE_PMD_BOND': 'n',
+                           'CONFIG_RTE_MBUF_SCATTER_GATHER': 'n',
+                           'CONFIG_RTE_LIBRTE_IP_FRAG': 'n',
+                           'CONFIG_RTE_APP_TEST': 'n',
+                           'CONFIG_RTE_TEST_PMD': 'n',
+                           'CONFIG_RTE_MBUF_REFCNT_ATOMIC': 'n',
+                           })
     open(dotconfig, 'w').writelines(lines)
     args.dpdk_target = 'build/dpdk'
     
