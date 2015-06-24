@@ -74,10 +74,10 @@ public:
 
         static std::set<sstring> keywords({
             KW_COMMENT, KW_READREPAIRCHANCE, KW_DCLOCALREADREPAIRCHANCE,
-            KW_GCGRACESECONDS, KW_MINCOMPACTIONTHRESHOLD,
-            KW_MAXCOMPACTIONTHRESHOLD, KW_CACHING, KW_DEFAULT_TIME_TO_LIVE,
+            KW_GCGRACESECONDS, KW_CACHING, KW_DEFAULT_TIME_TO_LIVE,
             KW_MIN_INDEX_INTERVAL, KW_MAX_INDEX_INTERVAL, KW_SPECULATIVE_RETRY,
-            KW_BF_FP_CHANCE, KW_MEMTABLE_FLUSH_PERIOD,
+            KW_BF_FP_CHANCE, KW_MEMTABLE_FLUSH_PERIOD, KW_COMPACTION,
+            KW_COMPRESSION,
         });
         static std::set<sstring> obsolete_keywords({
             sstring("index_interval"),
