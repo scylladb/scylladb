@@ -71,17 +71,17 @@ public:
             executor.submit(new OnCompletionRunnable(this));
         }
     }
-
-    public int getTotalNumberOfFiles()
-    {
-        return totalFiles;
+#endif
+public:
+    virtual int get_total_number_of_files() override {
+        return total_files;
     }
 
-    public long getTotalSize()
-    {
-        return totalSize;
+    virtual long get_total_size() override {
+        return total_size;
     }
 
+#if 0
     private static class OnCompletionRunnable implements Runnable
     {
         private final StreamReceiveTask task;
@@ -131,6 +131,7 @@ public:
             task.session.taskCompleted(task);
         }
     }
+#endif
 
     /**
      * Abort this task.
@@ -138,8 +139,8 @@ public:
      * {@link org.apache.cassandra.streaming.StreamReceiveTask.OnCompletionRunnable} task is submitted,
      * then task cannot be aborted.
      */
-    public synchronized void abort()
-    {
+    virtual void abort() override {
+#if 0
         if (done)
             return;
 
@@ -147,8 +148,8 @@ public:
         for (SSTableWriter writer : sstables)
             writer.abort();
         sstables.clear();
-    }
 #endif
+    }
 };
 
 } // namespace streaming
