@@ -621,22 +621,6 @@ void database::add_keyspace(sstring name, keyspace k) {
     _keyspaces.emplace(std::move(name), std::move(k));
 }
 
-future<>
-create_keyspace(distributed<database>& db, const lw_shared_ptr<keyspace_metadata>& ksm) {
-    // FIXME support multiple directories
-    return make_directory(db.local()._cfg->data_file_directories()[0] + "/" + ksm->name()).then([ksm, &db] {
-        return db.invoke_on_all([ksm] (database& db) {
-            auto cfg = db.make_keyspace_config(*ksm);
-            keyspace ks(ksm, cfg);
-            ks.create_replication_strategy(ksm->strategy_options());
-            db.add_keyspace(ksm->name(), std::move(ks));
-        });
-    });
-    // FIXME: rollback on error, or keyspace directory remains on disk, poisoning
-    // everything.
-    // FIXME: sync parent directory?
-}
-
 void database::update_keyspace(const sstring& name) {
     throw std::runtime_error("not implemented");
 }
@@ -792,17 +776,27 @@ bool database::has_schema(const sstring& ks_name, const sstring& cf_name) const 
     return _ks_cf_to_uuid.count(std::make_pair(ks_name, cf_name)) > 0;
 }
 
+
+void database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
+    keyspace ks(ksm, std::move(make_keyspace_config(*ksm)));
+    ks.create_replication_strategy(ksm->strategy_options());
+    _keyspaces.emplace(ksm->name(), std::move(ks));
+}
+
 future<>
 database::create_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm) {
     auto i = _keyspaces.find(ksm->name());
     if (i != _keyspaces.end()) {
         return make_ready_future<>();
     }
-    keyspace ks(ksm, std::move(make_keyspace_config(*ksm)));
-    ks.create_replication_strategy(ksm->strategy_options());
-    _keyspaces.emplace(ksm->name(), std::move(ks));
 
-    return make_ready_future<>();
+    create_in_memory_keyspace(ksm);
+    auto& datadir = _keyspaces.at(ksm->name()).datadir();
+    if (datadir != "") {
+        return touch_directory(datadir);
+    } else {
+        return make_ready_future<>();
+    }
 }
 
 std::set<sstring>

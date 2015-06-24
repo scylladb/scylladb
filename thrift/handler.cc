@@ -455,18 +455,22 @@ public:
         boost::for_each(ks_def.cf_defs, [&cf_ids] (auto&&) {
             cf_ids.push_back(utils::UUID_gen::get_time_UUID());
         });
-        auto ksm = make_lw_shared<keyspace_metadata>(to_sstring(ks_def.name),
-                to_sstring(ks_def.strategy_class),
-                std::map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
-                ks_def.durable_writes,
-                std::vector<schema_ptr>{}); // FIXME
-        create_keyspace(_db, ksm).then([this, ks_def, cf_ids] {
-            return parallel_for_each(boost::combine(ks_def.cf_defs, cf_ids), [this, ks_def, cf_ids] (auto&& cf_def_and_id) {
-                // We create the directory on the local shard, since the same directory is
-                // used for all shards.
-                auto&& name = boost::get<0>(cf_def_and_id).name;
-                auto&& uuid = boost::get<1>(cf_def_and_id);
-                return _db.local().find_keyspace(ks_def.name).make_directory_for_column_family(name, uuid);
+
+        _db.invoke_on_all([this, ks_def, cf_ids] (database& db) {
+            auto ksm = make_lw_shared<keyspace_metadata>(to_sstring(ks_def.name),
+                    to_sstring(ks_def.strategy_class),
+                    std::map<sstring, sstring>{ks_def.strategy_options.begin(), ks_def.strategy_options.end()},
+                    ks_def.durable_writes,
+                    std::vector<schema_ptr>{}); // FIXME
+
+            return db.create_keyspace(ksm).then([this, ks_def, cf_ids] {
+                return parallel_for_each(boost::combine(ks_def.cf_defs, cf_ids), [this, ks_def, cf_ids] (auto&& cf_def_and_id) {
+                    // We create the directory on the local shard, since the same directory is
+                    // used for all shards.
+                    auto&& name = boost::get<0>(cf_def_and_id).name;
+                    auto&& uuid = boost::get<1>(cf_def_and_id);
+                    return _db.local().find_keyspace(ks_def.name).make_directory_for_column_family(name, uuid);
+                });
             });
         }).then([this, ks_def, cf_ids] {
             return _db.invoke_on_all([this, ks_def = std::move(ks_def), cf_ids = std::move(cf_ids)] (database& db) {

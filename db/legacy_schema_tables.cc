@@ -576,15 +576,16 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         }
         return do_with(std::move(created), [&proxy, altered = std::move(altered)] (auto& created) {
             return proxy.local().get_db().invoke_on_all([&proxy, &created, altered = std::move(altered)] (database& db) {
-                for (auto&& kv : created) {
-                    auto ksm = create_keyspace_from_schema_partition(kv);
-                    keyspace k(ksm, db.make_keyspace_config(*ksm));
-                    k.create_replication_strategy(ksm->strategy_options());
-                    db.add_keyspace(ksm->name(), std::move(k));
-                }
-                for (auto&& name : altered) {
-                    db.update_keyspace(name);
-                }
+                return do_for_each(created, [&db] (auto&& val) {
+                    auto ksm = create_keyspace_from_schema_partition(val);
+                    return db.create_keyspace(std::move(ksm));
+                }).then([altered = std::move(altered), &db] () mutable {
+                    for (auto&& name : altered) {
+                        db.update_keyspace(name);
+                    }
+
+                    return make_ready_future<>();
+                });
             });
         }).then([dropped = std::move(dropped)] () {
             return make_ready_future<std::set<sstring>>(dropped);

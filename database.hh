@@ -59,6 +59,10 @@ class serializer;
 
 class commitlog;
 class config;
+
+namespace system_keyspace {
+void make(database& db, bool durable);
+}
 }
 
 class replay_position_reordered_exception : public std::exception {};
@@ -266,6 +270,10 @@ public:
 
     // FIXME to allow simple registration at boostrap
     void set_replication_strategy(std::unique_ptr<locator::abstract_replication_strategy> replication_strategy);
+
+    const sstring& datadir() const {
+        return _config.datadir;
+    }
 private:
     sstring column_family_directory(const sstring& name, utils::UUID uuid) const;
 };
@@ -296,6 +304,14 @@ class database {
     future<> apply_in_memory(const frozen_mutation&, const db::replay_position&);
     future<> populate(sstring datadir);
     future<> populate_keyspace(sstring datadir, sstring ks_name);
+
+private:
+    // Unless you are an earlier boostraper or the database itself, you should
+    // not be using this directly.  Go for the public create_keyspace instead.
+    void add_keyspace(sstring name, keyspace k);
+    void create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm);
+    friend void db::system_keyspace::make(database& db, bool durable);
+
 public:
     database();
     database(const db::config&);
@@ -308,8 +324,6 @@ public:
 
     future<> init_from_data_directory();
 
-    // but see: create_keyspace(distributed<database>&, sstring)
-    void add_keyspace(sstring name, keyspace k);
     void add_column_family(schema_ptr schema, column_family::config cfg);
 
     void update_column_family(const sstring& ks_name, const sstring& cf_name);
@@ -321,13 +335,6 @@ public:
 
     /**
      * Creates a keyspace for a given metadata if it still doesn't exist.
-     *
-     * Fixme: this interface is left to return a future by a Glauber's request
-     * since it's upcoming patch is going to need this. Currently there is no
-     * reason for it to return a future. Therefore there should be a proper
-     * comment here describing the reason why this function returns a future
-     * since running a "git blame" on this function's header would give a
-     * confusing result about the reason it became futurized.
      *
      * @return ready future when the operation is complete
      */
@@ -359,7 +366,6 @@ public:
     const sstring& get_snitch_name() const;
 
     friend std::ostream& operator<<(std::ostream& out, const database& db);
-    friend future<> create_keyspace(distributed<database>&, const lw_shared_ptr<keyspace_metadata>&);
     const std::unordered_map<sstring, keyspace>& get_keyspaces() const {
         return _keyspaces;
     }
@@ -374,10 +380,6 @@ public:
         return *_cfg;
     }
 };
-
-// Creates a keyspace.  Keyspaces have a non-sharded
-// component (the directory), so a global function is needed.
-future<> create_keyspace(distributed<database>& db, const lw_shared_ptr<keyspace_metadata>&);
 
 // FIXME: stub
 class secondary_index_manager {};
