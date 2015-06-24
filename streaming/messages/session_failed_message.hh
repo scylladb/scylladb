@@ -37,12 +37,11 @@ class session_failed_message : public stream_message {
 
         public void serialize(SessionFailedMessage message, DataOutputStreamAndChannel out, int version, StreamSession session) throws IOException {}
     };
+#endif
 
-    public SessionFailedMessage()
-    {
-        super(Type.SESSION_FAILED);
-    }
+    session_failed_message() : stream_message(stream_message::Type::SESSION_FAILED) { }
 
+#if 0
     @Override
     public String toString()
     {
