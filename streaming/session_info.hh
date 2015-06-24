@@ -26,6 +26,7 @@
 #include "streaming/stream_session_state.hh"
 #include "streaming/progress_info.hh"
 #include <vector>
+#include <map>
 
 namespace streaming {
 
@@ -62,132 +63,82 @@ public:
     bool is_failed() const {
         return state == stream_session_state::FAILED;
     }
-#if 0
 
     /**
      * Update progress of receiving/sending file.
      *
      * @param newProgress new progress info
      */
-    public void updateProgress(ProgressInfo newProgress)
-    {
-        assert peer.equals(newProgress.peer);
+    void update_progress(progress_info new_progress);
 
-        Map<String, ProgressInfo> currentFiles = newProgress.direction == ProgressInfo.Direction.IN
-                                                    ? receivingFiles : sendingFiles;
-        currentFiles.put(newProgress.fileName, newProgress);
-    }
+    std::vector<progress_info> get_receiving_files();
 
-    public Collection<ProgressInfo> getReceivingFiles()
-    {
-        return receivingFiles.values();
-    }
-
-    public Collection<ProgressInfo> getSendingFiles()
-    {
-        return sendingFiles.values();
-    }
+    std::vector<progress_info> get_sending_files();
 
     /**
      * @return total number of files already received.
      */
-    public long getTotalFilesReceived()
-    {
-        return getTotalFilesCompleted(receivingFiles.values());
+    long get_total_files_received() {
+        return get_total_files_completed(get_receiving_files());
     }
 
     /**
      * @return total number of files already sent.
      */
-    public long getTotalFilesSent()
-    {
-        return getTotalFilesCompleted(sendingFiles.values());
+    long get_total_files_sent() {
+        return get_total_files_completed(get_sending_files());
     }
 
     /**
      * @return total size(in bytes) already received.
      */
-    public long getTotalSizeReceived()
-    {
-        return getTotalSizeInProgress(receivingFiles.values());
+    long get_total_size_received() {
+        return get_total_size_in_progress(get_receiving_files());
     }
 
     /**
      * @return total size(in bytes) already sent.
      */
-    public long getTotalSizeSent()
-    {
-        return getTotalSizeInProgress(sendingFiles.values());
+    long get_total_size_sent() {
+        return get_total_size_in_progress(get_sending_files());
     }
 
     /**
      * @return total number of files to receive in the session
      */
-    public long getTotalFilesToReceive()
-    {
-        return getTotalFiles(receivingSummaries);
+    long get_total_files_to_receive() {
+        return get_total_files(receiving_summaries);
     }
 
     /**
      * @return total number of files to send in the session
      */
-    public long getTotalFilesToSend()
-    {
-        return getTotalFiles(sendingSummaries);
+    long getTotalFilesToSend() {
+        return get_total_files(sending_summaries);
     }
 
     /**
      * @return total size(in bytes) to receive in the session
      */
-    public long getTotalSizeToReceive()
-    {
-        return getTotalSizes(receivingSummaries);
+    long get_total_size_to_receive() {
+        return get_total_sizes(receiving_summaries);
     }
 
     /**
      * @return total size(in bytes) to send in the session
      */
-    public long getTotalSizeToSend()
-    {
-        return getTotalSizes(sendingSummaries);
+    long get_total_size_to_send() {
+        return get_total_sizes(sending_summaries);
     }
 
-    private long getTotalSizeInProgress(Collection<ProgressInfo> files)
-    {
-        long total = 0;
-        for (ProgressInfo file : files)
-            total += file.currentBytes;
-        return total;
-    }
+private:
+    long get_total_size_in_progress(std::vector<progress_info> files);
 
-    private long getTotalFiles(Collection<StreamSummary> summaries)
-    {
-        long total = 0;
-        for (StreamSummary summary : summaries)
-            total += summary.files;
-        return total;
-    }
+    long get_total_files(std::vector<stream_summary>& summaries);
 
-    private long getTotalSizes(Collection<StreamSummary> summaries)
-    {
-        long total = 0;
-        for (StreamSummary summary : summaries)
-            total += summary.totalSize;
-        return total;
-    }
+    long get_total_sizes(std::vector<stream_summary>& summaries);
 
-    private long getTotalFilesCompleted(Collection<ProgressInfo> files)
-    {
-        Iterable<ProgressInfo> completed = Iterables.filter(files, new Predicate<ProgressInfo>()
-        {
-            public boolean apply(ProgressInfo input)
-            {
-                return input.isCompleted();
-            }
-        });
-        return Iterables.size(completed);
-    }
-#endif
+    long get_total_files_completed(std::vector<progress_info> files);
 };
 
 } // namespace streaming
