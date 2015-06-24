@@ -120,28 +120,15 @@ $ seabuild ninja-build
 
 ### Building with a DPDK network backend
 
-1. Setup host to compile DPDK:
-   - Ubuntu 
-```
-sudo apt-get install -y build-essential linux-image-extra-`uname -r` 
-```
-2. Prepare a DPDK SDK:
-  - Download the latest DPDK release: `wget http://dpdk.org/browse/dpdk/snapshot/dpdk-1.8.0.tar.gz`
-  - Untar it.
-  - Edit config/common_linuxapp: set CONFIG_RTE_MBUF_REFCNT and CONFIG_RTE_LIBRTE_KNI to 'n'.
-  - For DPDK 1.7.x: edit config/common_linuxapp: 
-    - Set CONFIG_RTE_LIBRTE_PMD_BOND  to 'n'.
-    - Set CONFIG_RTE_MBUF_SCATTER_GATHER to 'n'.
-    - Set CONFIG_RTE_LIBRTE_IP_FRAG to 'n'.
-  - Start the tools/setup.sh script as root.
-  - Compile a linuxapp target (option 9).
-  - Install IGB_UIO module (option 11).
-  - Bind some physical port to IGB_UIO (option 17).
-  - Configure hugepage mappings (option 14/15).
-3. Run a configure.py: `./configure.py --dpdk-target <Path to untared dpdk-1.8.0 above>/x86_64-native-linuxapp-gcc --compiler=g++-4.9`.
-4. Run `ninja-build`.
+ 1. Setup host to compile DPDK:
+    - Ubuntu 
+         `sudo apt-get install -y build-essential linux-image-extra-$(uname -r$)` 
+ 2. Run a configure.py: `./configure.py --enable-dpdk`.
+ 3. Run `ninja-build`.
 
 To run with the DPDK backend for a native stack give the seastar application `--dpdk-pmd 1` parameter.
+
+You can also configure DPDK as an [external package](README-DPDK.md).
 
 Futures and promises
 --------------------
