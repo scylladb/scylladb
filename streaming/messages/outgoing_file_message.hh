@@ -68,9 +68,9 @@ public:
     outgoing_file_message() = default;
     outgoing_file_message(sstables::sstable& sstable_, int32_t sequence_number, int64_t estimated_keys,
                           std::map<int64_t, int64_t> sections, int64_t repaired_at, bool keep_ss_table_level)
-        : sstable(&sstable_) {
+        : stream_message(stream_message::Type::FILE)
+        , sstable(&sstable_) {
 #if 0
-        super(Type.FILE);
         CompressionInfo compressionInfo = null;
         if (sstable.compression)
         {
