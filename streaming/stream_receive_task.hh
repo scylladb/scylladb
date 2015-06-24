@@ -22,11 +22,12 @@
 #pragma once
 
 #include "utils/UUID.hh"
-#include "streaming/stream_session.hh"
 #include "streaming/stream_task.hh"
 #include "streaming/messages/outgoing_file_message.hh"
 
 namespace streaming {
+
+class stream_session;
 
 /**
  * Task that manages receiving files for the session for certain ColumnFamily.
