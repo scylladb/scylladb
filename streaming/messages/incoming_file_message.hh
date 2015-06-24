@@ -66,9 +66,9 @@ public:
 
     incoming_file_message() = default;
     incoming_file_message(sstables::sstable& sstable_, file_message_header header_)
-        : header(std::move(header_))
+        : stream_message(stream_message::Type::FILE)
+        , header(std::move(header_))
         , sstable(&sstable_) {
-        //super(Type.FILE);
     }
 
 #if 0
