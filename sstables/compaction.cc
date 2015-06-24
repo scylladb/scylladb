@@ -63,7 +63,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     auto newtab = creator();
     future<> write_done = newtab->write_components(
             std::move(mutation_queue_reader), estimated_parititions, schema).then([newtab] {
-        return newtab->load();
+        return newtab->load().then([newtab] {});
     });
 
     // Wait for both read_done and write_done fibers to finish.
