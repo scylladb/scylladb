@@ -23,7 +23,7 @@
 
 #include "gms/inet_address.hh"
 #include "streaming/stream_summary.hh"
-#include "streaming/stream_session.hh"
+#include "streaming/stream_session_state.hh"
 #include "streaming/progress_info.hh"
 #include <vector>
 
@@ -43,7 +43,7 @@ public:
     /** Immutable collection of sending summaries*/
     std::vector<stream_summary> sending_summaries;
     /** Current session state */
-    stream_session::state state;
+    stream_session_state state;
 
     std::map<sstring, progress_info> receiving_files;
     std::map<sstring, progress_info> sending_files;
@@ -51,7 +51,7 @@ public:
     session_info(inet_address peer_, int session_index_, inet_address connecting_,
                  std::vector<stream_summary> receiving_summaries_,
                  std::vector<stream_summary> sending_summaries_,
-                 stream_session::state state_)
+                 stream_session_state state_)
         : peer(peer_)
         , connecting(connecting_)
         , receiving_summaries(std::move(receiving_summaries_))
@@ -60,7 +60,7 @@ public:
     }
 
     bool is_failed() const {
-        return state == stream_session::state::FAILED;
+        return state == stream_session_state::FAILED;
     }
 #if 0
 

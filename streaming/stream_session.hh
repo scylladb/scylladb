@@ -25,6 +25,7 @@
 #include "core/distributed.hh"
 #include "message/messaging_service.hh"
 #include "utils/UUID.hh"
+#include "streaming/stream_session_state.hh"
 
 namespace streaming {
 
@@ -148,17 +149,8 @@ private:
 #endif
 private:
     bool _keep_ss_table_level;
-public:
-    enum class state {
-        INITIALIZED,
-        PREPARING,
-        STREAMING,
-        WAIT_COMPLETE,
-        COMPLETE,
-        FAILED,
-    };
 private:
-    state _state = state::INITIALIZED;
+    stream_session_state _state = stream_session_state::INITIALIZED;
     bool complete_sent = false;
 #if 0
     /**
@@ -405,14 +397,14 @@ public:
      *
      * @param newState new state to set
      */
-    void set_state(stream_session::state new_state) {
+    void set_state(stream_session_state new_state) {
         _state = new_state;
     }
 
     /**
      * @return current state
      */
-    stream_session::state get_state() {
+    stream_session_state get_state() {
         return _state;
     }
 
@@ -422,7 +414,7 @@ public:
      * @return true if session completed successfully.
      */
     bool is_success() {
-        return _state == state::COMPLETE;
+        return _state == stream_session_state::COMPLETE;
     }
 
 #if 0

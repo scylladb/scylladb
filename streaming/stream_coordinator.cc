@@ -19,6 +19,7 @@
  * Copyright 2015 Cloudius Systems.
  */
 
+#include "streaming/stream_session_state.hh"
 #include "streaming/stream_coordinator.hh"
 
 namespace streaming {
@@ -35,7 +36,7 @@ bool stream_coordinator::has_active_sessions() {
 bool stream_coordinator::host_streaming_data::has_active_sessions() {
     for (auto& x : _stream_sessions) {
         auto state = x.second.get_state();
-        if (state != stream_session::state::COMPLETE && state != stream_session::state::FAILED) {
+        if (state != stream_session_state::COMPLETE && state != stream_session_state::FAILED) {
             return true;
         }
     }
