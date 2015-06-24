@@ -20,3 +20,16 @@
  */
 
 #include "streaming/stream_transfer_task.hh"
+#include "streaming/stream_session.hh"
+
+namespace streaming {
+void stream_transfer_task::add_transfer_file(sstables::sstable& sstable, int64_t estimated_keys, std::map<int64_t, int64_t> sections, int64_t repaired_at) {
+    //assert sstable != null && cfId.equals(sstable.metadata.cfId);
+    auto message = messages::outgoing_file_message(sstable, sequence_number++, estimated_keys, std::move(sections), repaired_at, session.keep_ss_table_level());
+    auto size = message.header.size();
+    auto seq = message.header.sequence_number;
+    files.emplace(seq, std::move(message));
+    total_size += size;
+}
+
+} // namespace streaming

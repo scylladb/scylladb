@@ -22,13 +22,14 @@
 #pragma once
 
 #include "utils/UUID.hh"
-#include "streaming/stream_session.hh"
 #include "streaming/stream_task.hh"
 #include "streaming/messages/outgoing_file_message.hh"
 #include "sstables/sstables.hh"
 #include <map>
 
 namespace streaming {
+
+class stream_session;
 
 /**
  * StreamTransferTask sends sections of SSTable files in certain ColumnFamily.
@@ -48,15 +49,7 @@ public:
         : stream_task(session, cf_id) {
     }
 
-    void add_transfer_file(sstables::sstable& sstable, int64_t estimated_keys, std::map<int64_t, int64_t> sections, int64_t repaired_at) {
-        //assert sstable != null && cfId.equals(sstable.metadata.cfId);
-        auto message = messages::outgoing_file_message(sstable, sequence_number++, estimated_keys, std::move(sections), repaired_at, session.keep_ss_table_level());
-        auto size = message.header.size();
-        auto seq = message.header.sequence_number;
-        files.emplace(seq, std::move(message));
-        total_size += size;
-    }
-
+    void add_transfer_file(sstables::sstable& sstable, int64_t estimated_keys, std::map<int64_t, int64_t> sections, int64_t repaired_at);
 #if 0
 
     /**
