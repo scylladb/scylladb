@@ -30,102 +30,44 @@ namespace messages {
  * Every message carries message type({@link Type}) and streaming protocol version byte.
  */
 class stream_message {
-#if 0
-    /** Streaming protocol version */
-    public static final int VERSION_20 = 2;
-    public static final int VERSION_30 = 3;
-    public static final int CURRENT_VERSION = VERSION_30;
+public:
+    enum class Type {
+        PREPARE,
+        FILE,
+        RECEIVED,
+        RETRY,
+        COMPLETE,
+        SESSION_FAILED,
+    };
 
-    public static void serialize(StreamMessage message, DataOutputStreamAndChannel out, int version, StreamSession session) throws IOException
-    {
-        ByteBuffer buff = ByteBuffer.allocate(1);
-        // message type
-        buff.put(message.type.type);
-        buff.flip();
-        out.write(buff);
-        message.type.outSerializer.serialize(message, out, version, session);
-    }
+    Type type;
+    int priority;
 
-    public static StreamMessage deserialize(ReadableByteChannel in, int version, StreamSession session) throws IOException
-    {
-        ByteBuffer buff = ByteBuffer.allocate(1);
-        if (in.read(buff) > 0)
-        {
-            buff.flip();
-            Type type = Type.get(buff.get());
-            return type.inSerializer.deserialize(in, version, session);
+    stream_message() = default;
+
+    stream_message(Type type_)
+        : type(type_) {
+        if (type == Type::PREPARE) {
+            priority = 5;
+        } else if (type == Type::FILE) {
+            priority = 0;
+        } else if (type == Type::RECEIVED) {
+            priority = 4;
+        } else if (type == Type::RETRY) {
+            priority = 4;
+        } else if (type == Type::COMPLETE) {
+            priority = 1;
+        } else if (type == Type::SESSION_FAILED) {
+            priority = 5;
         }
-        else
-        {
-            // when socket gets closed, there is a chance that buff is empty
-            // in that case, just return null
-            return null;
-        }
-    }
-
-    /** StreamMessage serializer */
-    public static interface Serializer<V extends StreamMessage>
-    {
-        V deserialize(ReadableByteChannel in, int version, StreamSession session) throws IOException;
-        void serialize(V message, DataOutputStreamAndChannel out, int version, StreamSession session) throws IOException;
-    }
-
-    /** StreamMessage types */
-    public static enum Type
-    {
-        PREPARE(1, 5, PrepareMessage.serializer),
-        FILE(2, 0, IncomingFileMessage.serializer, OutgoingFileMessage.serializer),
-        RECEIVED(3, 4, ReceivedMessage.serializer),
-        RETRY(4, 4, RetryMessage.serializer),
-        COMPLETE(5, 1, CompleteMessage.serializer),
-        SESSION_FAILED(6, 5, SessionFailedMessage.serializer);
-
-        public static Type get(byte type)
-        {
-            for (Type t : Type.values())
-            {
-                if (t.type == type)
-                    return t;
-            }
-            throw new IllegalArgumentException("Unknown type " + type);
-        }
-
-        private final byte type;
-        public final int priority;
-        public final Serializer<StreamMessage> inSerializer;
-        public final Serializer<StreamMessage> outSerializer;
-
-        @SuppressWarnings("unchecked")
-        private Type(int type, int priority, Serializer serializer)
-        {
-            this(type, priority, serializer, serializer);
-        }
-
-        @SuppressWarnings("unchecked")
-        private Type(int type, int priority, Serializer inSerializer, Serializer outSerializer)
-        {
-            this.type = (byte) type;
-            this.priority = priority;
-            this.inSerializer = inSerializer;
-            this.outSerializer = outSerializer;
-        }
-    }
-
-    public final Type type;
-
-    protected StreamMessage(Type type)
-    {
-        this.type = type;
     }
 
     /**
      * @return priority of this message. higher value, higher priority.
      */
-    public int getPriority()
-    {
-        return type.priority;
+    int get_priority() {
+        return priority;
     }
-#endif
 };
 
 } // namespace messages
