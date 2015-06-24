@@ -395,19 +395,19 @@ future<> column_family::probe_file(sstring sstdir, sstring fname) {
 
     assert(_sstables->count(generation) == 0);
 
-    try {
-        auto sst = std::make_unique<sstables::sstable>(sstdir, generation, version, format);
-        auto fut = sst->load();
-        return std::move(fut).then([this, generation, sst = std::move(sst)] () mutable {
-            add_sstable(std::move(*sst));
-            return make_ready_future<>();
-        });
-    } catch (malformed_sstable_exception& e) {
-        dblog.error("Skipping malformed sstable: {}", e.what());
+    auto sst = std::make_unique<sstables::sstable>(sstdir, generation, version, format);
+    auto fut = sst->load();
+    return std::move(fut).then([this, generation, sst = std::move(sst)] () mutable {
+        add_sstable(std::move(*sst));
         return make_ready_future<>();
-    }
-
-    return make_ready_future<>();
+    }).then_wrapped([fname] (future<> f) {
+        try {
+            f.get();
+        } catch (malformed_sstable_exception& e) {
+            dblog.error("Skipping malformed sstable {}: {}", fname, e.what());
+        }
+        return make_ready_future<>();
+    });
 }
 
 void column_family::add_sstable(sstables::sstable&& sstable) {
