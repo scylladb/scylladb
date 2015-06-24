@@ -27,6 +27,7 @@ namespace streaming {
 namespace messages {
 
 class complete_message : public stream_message {
+public:
 #if 0
     public static Serializer<CompleteMessage> serializer = new Serializer<CompleteMessage>()
     {
@@ -37,18 +38,14 @@ class complete_message : public stream_message {
 
         public void serialize(CompleteMessage message, DataOutputStreamAndChannel out, int version, StreamSession session) throws IOException {}
     };
-
-    public CompleteMessage()
-    {
-        super(Type.COMPLETE);
-    }
-
-    @Override
-    public String toString()
-    {
-        return "Complete";
-    }
 #endif
+
+    complete_message() : stream_message(stream_message::Type::COMPLETE) { }
+
+    friend inline std::ostream& operator<<(std::ostream& os, const complete_message& x) {
+        return os << "Complete";
+    }
+
 public:
     void serialize(bytes::iterator& out) const {
     }

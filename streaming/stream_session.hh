@@ -25,6 +25,14 @@
 #include "core/distributed.hh"
 #include "message/messaging_service.hh"
 #include "utils/UUID.hh"
+#include "streaming/stream_session_state.hh"
+#include "streaming/connection_handler.hh"
+#include "streaming/stream_transfer_task.hh"
+#include "streaming/stream_receive_task.hh"
+#include "streaming/stream_request.hh"
+#include "sstables/sstables.hh"
+#include <map>
+#include <set>
 
 namespace streaming {
 
@@ -123,43 +131,29 @@ public:
     inet_address peer;
     /** Actual connecting address. Can be the same as {@linkplain #peer}. */
     inet_address connecting;
+    connection_handler conn_handler;
 private:
     int _index;
-
-#if 0
     // should not be null when session is started
-    private StreamResultFuture streamResult;
+    //private StreamResultFuture streamResult;
 
     // stream requests to send to the peer
-    private final Set<StreamRequest> requests = Sets.newConcurrentHashSet();
+    std::set<stream_request> _requests;
     // streaming tasks are created and managed per ColumnFamily ID
-    private final Map<UUID, StreamTransferTask> transfers = new ConcurrentHashMap<>();
+    std::map<UUID, stream_transfer_task> _transfers;
     // data receivers, filled after receiving prepare message
-    private final Map<UUID, StreamReceiveTask> receivers = new ConcurrentHashMap<>();
-    private final StreamingMetrics metrics;
+    std::map<UUID, stream_receive_task> _receivers;
+    //private final StreamingMetrics metrics;
     /* can be null when session is created in remote */
-    private final StreamConnectionFactory factory;
+    //private final StreamConnectionFactory factory;
 
-    public final ConnectionHandler handler;
+    int _retries;
+    bool _is_aborted =  false;
+    bool _keep_ss_table_level;
 
-    private int retries;
-
-    private AtomicBoolean isAborted = new AtomicBoolean(false);
-    private final boolean keepSSTableLevel;
-#endif
+    stream_session_state _state = stream_session_state::INITIALIZED;
+    bool _complete_sent = false;
 public:
-    enum class state {
-        INITIALIZED,
-        PREPARING,
-        STREAMING,
-        WAIT_COMPLETE,
-        COMPLETE,
-        FAILED,
-    };
-private:
-    state _state = state::INITIALIZED;
-    bool complete_sent = false;
-#if 0
     /**
      * Create new streaming session with the peer.
      *
@@ -167,19 +161,14 @@ private:
      * @param connecting Actual connecting address
      * @param factory is used for establishing connection
      */
-    public StreamSession(InetAddress peer, InetAddress connecting, StreamConnectionFactory factory, int index, boolean keepSSTableLevel)
-    {
-        this.peer = peer;
-        this.connecting = connecting;
-        this.index = index;
-        this.factory = factory;
-        this.handler = new ConnectionHandler(this);
-        this.metrics = StreamingMetrics.get(connecting);
-        this.keepSSTableLevel = keepSSTableLevel;
+    stream_session(inet_address peer_, inet_address connecting_, int index_, bool keep_ss_table_level_)
+        : peer(peer_)
+        , connecting(connecting_)
+        , conn_handler(*this)
+        , _index(index_)
+        , _keep_ss_table_level(keep_ss_table_level_) {
+        //this.metrics = StreamingMetrics.get(connecting);
     }
-#endif
-
-public:
 
     UUID plan_id() {
         // return streamResult == null ? null : streamResult.planId;
@@ -197,12 +186,12 @@ public:
     {
         return streamResult == null ? null : streamResult.description;
     }
-
-    public boolean keepSSTableLevel()
-    {
-        return keepSSTableLevel;
+#endif
+public:
+    bool keep_ss_table_level() {
+        return _keep_ss_table_level;
     }
-
+#if 0
     /**
      * Bind this session to report to specific {@link StreamResultFuture} and
      * perform pre-streaming initialization.
@@ -361,23 +350,24 @@ public:
             iter.remove();
         }
     }
+#endif
 
-    public static class SSTableStreamingSections
-    {
-        public final SSTableReader sstable;
-        public final List<Pair<Long, Long>> sections;
-        public final long estimatedKeys;
-        public final long repairedAt;
-
-        public SSTableStreamingSections(SSTableReader sstable, List<Pair<Long, Long>> sections, long estimatedKeys, long repairedAt)
-        {
-            this.sstable = sstable;
-            this.sections = sections;
-            this.estimatedKeys = estimatedKeys;
-            this.repairedAt = repairedAt;
+public:
+    struct ss_table_streaming_sections {
+        sstables::sstable& sstable;
+        std::map<int64_t, int64_t> sections;
+        int64_t estimated_keys;
+        int64_t repaired_at;
+        ss_table_streaming_sections(sstables::sstable& sstable_, std::map<int64_t, int64_t> sections_,
+                                    long estimated_keys_, long repaired_at_)
+            : sstable(sstable_)
+            , sections(std::move(sections_))
+            , estimated_keys(estimated_keys_)
+            , repaired_at(repaired_at_) {
         }
-    }
+    };
 
+#if 0
     private synchronized void closeSession(State finalState)
     {
         if (isAborted.compareAndSet(false, true))
@@ -397,34 +387,31 @@ public:
             streamResult.handleSessionComplete(this);
         }
     }
-
+#endif
+public:
     /**
      * Set current state to {@code newState}.
      *
      * @param newState new state to set
      */
-    public void state(State newState)
-    {
-        state = newState;
+    void set_state(stream_session_state new_state) {
+        _state = new_state;
     }
 
     /**
      * @return current state
      */
-    public State state()
-    {
-        return state;
+    stream_session_state get_state() {
+        return _state;
     }
-#endif
 
-public:
     /**
      * Return if this session completed successfully.
      *
      * @return true if session completed successfully.
      */
     bool is_success() {
-        return _state == state::COMPLETE;
+        return _state == stream_session_state::COMPLETE;
     }
 
 #if 0

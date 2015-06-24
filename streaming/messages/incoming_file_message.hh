@@ -22,6 +22,8 @@
 #pragma once
 
 #include "streaming/messages/stream_message.hh"
+#include "streaming/messages/file_message_header.hh"
+#include "sstables/sstables.hh"
 
 namespace streaming {
 namespace messages {
@@ -57,17 +59,19 @@ class incoming_file_message : public stream_message {
             throw new UnsupportedOperationException("Not allowed to call serialize on an incoming file");
         }
     };
+#endif
+public:
+    file_message_header header;
+    sstables::sstable* sstable;
 
-    public FileMessageHeader header;
-    public SSTableWriter sstable;
-
-    public IncomingFileMessage(SSTableWriter sstable, FileMessageHeader header)
-    {
-        super(Type.FILE);
-        this.header = header;
-        this.sstable = sstable;
+    incoming_file_message() = default;
+    incoming_file_message(sstables::sstable& sstable_, file_message_header header_)
+        : stream_message(stream_message::Type::FILE)
+        , header(std::move(header_))
+        , sstable(&sstable_) {
     }
 
+#if 0
     @Override
     public String toString()
     {

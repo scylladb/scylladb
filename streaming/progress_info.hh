@@ -44,6 +44,7 @@ public:
     long current_bytes;
     long total_bytes;
 
+    progress_info() = default;
     progress_info(inet_address _peer, int _session_index, sstring _file_name, direction _dir, long _current_bytes, long _total_bytes)
         : peer(_peer)
         , session_index(_session_index)

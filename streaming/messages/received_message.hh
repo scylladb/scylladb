@@ -21,12 +21,15 @@
 
 #pragma once
 
+#include "utils/UUID.hh"
 #include "streaming/messages/stream_message.hh"
 
 namespace streaming {
 namespace messages {
 
 class received_message : public stream_message {
+public:
+    using UUID = utils::UUID;
 #if 0
     public static Serializer<ReceivedMessage> serializer = new Serializer<ReceivedMessage>()
     {
@@ -42,17 +45,17 @@ class received_message : public stream_message {
             out.writeInt(message.sequenceNumber);
         }
     };
+#endif
+    UUID cf_id;
+    int sequence_number;
 
-    public final UUID cfId;
-    public final int sequenceNumber;
-
-    public ReceivedMessage(UUID cfId, int sequenceNumber)
-    {
-        super(Type.RECEIVED);
-        this.cfId = cfId;
-        this.sequenceNumber = sequenceNumber;
+    received_message() = default;
+    received_message(UUID cf_id_, int sequence_number_)
+        : stream_message(stream_message::Type::RECEIVED)
+        , cf_id (cf_id_)
+        , sequence_number(sequence_number_) {
     }
-
+#if 0
     @Override
     public String toString()
     {

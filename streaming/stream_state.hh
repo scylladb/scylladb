@@ -22,50 +22,34 @@
 #pragma once
 
 #include "utils/UUID.hh"
-#include "streaming/stream_summary.hh"
+#include "streaming/session_info.hh"
+#include <set>
 
 namespace streaming {
 
-class stream_session;
-
 /**
- * StreamTask is an abstraction of the streaming task performed over specific ColumnFamily.
+ * Current snapshot of streaming progress.
  */
-class stream_task {
-protected:
+class stream_state {
+public:
     using UUID = utils::UUID;
-    /** StreamSession that this task belongs */
-    stream_session& session;
+    UUID plan_id;
+    sstring description;
+    std::set<session_info> sessions;
 
-    UUID cf_id;
-
-    stream_task(stream_session& _session, UUID _cf_id)
-        : session(_session)
-        , cf_id(std::move(_cf_id)) {
+    stream_state(UUID plan_id_, sstring description_, std::set<session_info> sessions_)
+        : plan_id(std::move(plan_id_))
+        , description(std::move(description_))
+        , sessions(std::move(sessions_)) {
     }
 
-public:
-    /**
-     * @return total number of files this task receives/streams.
-     */
-    virtual int get_total_number_of_files() = 0;
-
-    /**
-     * @return total bytes expected to receive
-     */
-    virtual long get_total_size() = 0;
-
-    /**
-     * Abort the task.
-     * Subclass should implement cleaning up resources.
-     */
-    virtual void abort() = 0;
-
-    /**
-     * @return StreamSummary that describes this task
-     */
-    virtual stream_summary get_summary() {
-        return stream_summary(this->cf_id, this->get_total_number_of_files(), this->get_total_size());
+    bool has_failed_session() {
+        for (auto& x : sessions) {
+            if (x.is_failed()) {
+                return true;
+            }
+        }
+        return false;
     }
 };
 

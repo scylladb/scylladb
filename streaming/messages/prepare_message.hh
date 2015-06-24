@@ -71,12 +71,11 @@ public:
      */
     std::vector<stream_summary> summaries;
 
-#if 0
-    public PrepareMessage()
-    {
-        super(Type.PREPARE);
+
+    prepare_message() : stream_message(stream_message::Type::PREPARE) {
     }
 
+#if 0
     @Override
     public String toString()
     {

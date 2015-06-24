@@ -22,22 +22,24 @@
 #pragma once
 
 #include "utils/UUID.hh"
-#include "streaming/stream_session.hh"
 #include "streaming/stream_task.hh"
 #include "streaming/messages/outgoing_file_message.hh"
+#include "sstables/sstables.hh"
 #include <map>
 
 namespace streaming {
+
+class stream_session;
 
 /**
  * StreamTransferTask sends sections of SSTable files in certain ColumnFamily.
  */
 class stream_transfer_task : public stream_task {
 private:
-    //final AtomicInteger sequenceNumber = new AtomicInteger(0);
+    int32_t sequence_number = 0;
     bool aborted = false;
 
-    std::map<int, messages::outgoing_file_message> files;
+    std::map<int32_t, messages::outgoing_file_message> files;
     //final Map<Integer, ScheduledFuture> timeoutTasks = new HashMap<>();
 
     long total_size;
@@ -47,14 +49,8 @@ public:
         : stream_task(session, cf_id) {
     }
 
+    void add_transfer_file(sstables::sstable& sstable, int64_t estimated_keys, std::map<int64_t, int64_t> sections, int64_t repaired_at);
 #if 0
-    public synchronized void addTransferFile(SSTableReader sstable, long estimatedKeys, List<Pair<Long, Long>> sections, long repairedAt)
-    {
-        assert sstable != null && cfId.equals(sstable.metadata.cfId);
-        OutgoingFileMessage message = new OutgoingFileMessage(sstable, sequenceNumber.getAndIncrement(), estimatedKeys, sections, repairedAt, session.keepSSTableLevel());
-        files.put(message.header.sequenceNumber, message);
-        totalSize += message.header.size();
-    }
 
     /**
      * Received ACK for file at {@code sequenceNumber}.
@@ -81,9 +77,10 @@ public:
         if (signalComplete)
             session.taskCompleted(this);
     }
-
-    public synchronized void abort()
-    {
+#endif
+public:
+    virtual void abort() override {
+#if 0
         if (aborted)
             return;
         aborted = true;
@@ -94,18 +91,18 @@ public:
 
         for (OutgoingFileMessage file : files.values())
             file.sstable.releaseReference();
+#endif
     }
 
-    public synchronized int getTotalNumberOfFiles()
-    {
+    virtual int get_total_number_of_files() override {
         return files.size();
     }
 
-    public long getTotalSize()
-    {
-        return totalSize;
+    virtual long get_total_size() override {
+        return total_size;
     }
 
+#if 0
     public synchronized Collection<OutgoingFileMessage> getFileMessages()
     {
         // We may race between queuing all those messages and the completion of the completion of
