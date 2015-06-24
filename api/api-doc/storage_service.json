@@ -19,6 +19,7 @@
                   "application/json"
                ],
                "parameters":[
+
                ]
             }
          ]
@@ -38,8 +39,6 @@
                   "application/json"
                ],
                "parameters":[
-                  {
-                  }
                ]
             }
          ]
@@ -83,8 +82,7 @@
                   "application/json"
                ],
                "parameters":[
-                  {
-                  }
+
                ]
             }
          ]
@@ -104,27 +102,1823 @@
                   "application/json"
                ],
                "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/nodes/leaving",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Retrieve the list of nodes currently leaving the ring",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_leaving_nodes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/nodes/moving",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Retrieve the list of nodes currently moving in the ring",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_moving_nodes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/nodes/joining",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Retrieve the list of nodes currently bootstrapping into the ring",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_joining_nodes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/release_version",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Fetch a string representation of the Cassandra version.",
+               "type":"string",
+               "nickname":"get_release_version",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/schema_version",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Fetch a string representation of the current Schema version.",
+               "type":"string",
+               "nickname":"get_schema_version",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/data_file/locations",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the list of all data file locations from conf",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_all_data_file_locations",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/saved_caches/location",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get location of the saved caches dir",
+               "type":"string",
+               "nickname":"get_saved_caches_location",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/range_to_endpoint_map/{keyspace}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Retrieve a map of range to end points that describe the ring topology of a Cassandra cluster.",
+               "type":"array",
+               "items":{
+                  "type":"maplist_mapper"
+               },
+               "nickname":"get_range_to_endpoint_map",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
                   {
+                     "name":"keyspace",
+                     "description":"The keyspace to query about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"rpc",
+                     "description":"When set to true, return the rpc address",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/pending_range/{keyspace}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Retrieve a map of pending ranges to endpoints that describe the ring topology",
+               "type":"array",
+               "items":{
+                  "type":"maplist_mapper"
+               },
+               "nickname":"get_pending_range_to_endpoint_map",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to query about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/describe_ring/{keyspace}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"The TokenRange for a given keyspace",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"describe_ring_jmx",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to fetch information about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/host_id",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Retrieve the mapping of endpoint to host ID",
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "nickname":"get_host_id_map",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/load",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get load value",
+               "type":"double",
+               "nickname":"get_load",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/load_map",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"load value. Keys are IP addresses",
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "nickname":"get_load_map",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/generation_number",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Return the generation value for this node.",
+               "type":"int",
+               "nickname":"get_current_generation_number",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/natural_endpoints/{keyspace}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"This method returns the N endpoints that are responsible for storing the specified key i.e for replication. the endpoint responsible for this key",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_natural_endpoints",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to query about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Column family name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"key",
+                     "description":"key for which we need to find the endpoint return value - the endpoint responsible for this key",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/snapshots",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the details of all the snapshot",
+               "type":"array",
+               "items":{
+                  "type":"snapshots"
+               },
+               "nickname":"get_snapshot_details",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Takes the snapshot for the given keyspaces. A snapshot name must be specified.",
+               "type":"void",
+               "nickname":"take_snapshot",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"tag",
+                     "description":"the tag given to the snapshot",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"kn",
+                     "description":"Comma seperated keyspaces name to snapshot",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"the column family to snapshot",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Remove the snapshot with the given name from the given keyspaces. If no tag is specified all snapshots will be removed",
+               "type":"void",
+               "nickname":"del_snapshot",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"tag",
+                     "description":"the tag given to the snapshot",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"kn",
+                     "description":"Comma seperated keyspaces name to snapshot",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/snapshots/size/true",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the true size taken by all snapshots across all keyspaces.",
+               "type":"long",
+               "nickname":"true_snapshots_size",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/keyspace_compaction/{keyspace}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Forces major compaction of a single keyspace",
+               "type":"void",
+               "nickname":"force_keyspace_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to query about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Comma seperated column family names",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/keyspace_cleanup/{keyspace}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Trigger a cleanup of keys on a single keyspace",
+               "type":"int",
+               "nickname":"force_keyspace_cleanup",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to query about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Comma seperated column family names",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/keyspace_scrub/{keyspace}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Scrub (deserialize + reserialize at the latest version, skipping bad rows if any) the given keyspace. If columnFamilies array is empty, all CFs are scrubbed. Scrubbed CFs will be snapshotted first, if disableSnapshot is false",
+               "type":"int",
+               "nickname":"scrub",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"disable_snapshot",
+                     "description":"When set to true, disable snapshot",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"skip_corrupted",
+                     "description":"When set to true, skip corrupted",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to query about",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Comma seperated column family names",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/keyspace_upgrade_sstables/{keyspace}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Rewrite all sstables to the latest version. Unlike scrub, it doesn't skip bad rows and do not snapshot sstables first.",
+               "type":"int",
+               "nickname":"upgrade_sstables",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"exclude_current_version",
+                     "description":"When set to true exclude current version",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Comma seperated column family names",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/keyspace_flush/{keyspace}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Flush all memtables for the given column families, or all columnfamilies for the given keyspace if none are explicitly listed.",
+               "type":"void",
+               "nickname":"force_keyspace_flush",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to flush",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Comma seperated column family names",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/repair_async/{keyspace}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Invoke repair asynchronously. You can track repair progress by supplying id",
+               "type":"int",
+               "nickname":"repair_async",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to flush",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"options",
+                     "description":"Options for the repair",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"id",
+                     "description":"Check for the status of the repair",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"int",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/force_terminate",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Force terminate all repair sessions",
+               "type":"void",
+               "nickname":"force_terminate_all_repair_sessions",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/decommission",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"transfer this node's data to other machines and remove it from service.",
+               "type":"void",
+               "nickname":"decommission",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/move",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"This node will unload its data onto its neighbors, and bootstrap to the new token.",
+               "type":"void",
+               "nickname":"move",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"new_token",
+                     "description":"token to move this node to",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/remove_node",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Removes token (and all data associated with enpoint that had it) from the ring",
+               "type":"void",
+               "nickname":"remove_node",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"token",
+                     "description":"The token to remove",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/removal_status",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the status of a token removal.",
+               "type":"string",
+               "nickname":"get_removal_status",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/force_remove_completion",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Force a remove operation to finish.",
+               "type":"void",
+               "nickname":"force_remove_completion",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/logging_level",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"set the logging level at runtime<br> <br> If both classQualifer and level are empty/null, it will reload the configuration to reset.<br> If classQualifer is not empty but level is empty/null, it will set the level to null for the defined classQualifer<br> If level cannot be parsed, then the level will be defaulted to DEBUG<br> <br> The logback configuration should have < jmxConfigurator /> set",
+               "type":"void",
+               "nickname":"set_logging_level",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"class_qualifier",
+                     "description":"The logger's classQualifer",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"level",
+                     "description":"The log level",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"get the runtime logging levels",
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "nickname":"get_logging_levels",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/operation_mode",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the operational mode (leaving, joining, normal, decommissioned, client)",
+               "type":"string",
+               "nickname":"get_operation_mode",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/is_starting",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns whether the storage service is starting or not",
+               "type":"boolean",
+               "nickname":"is_starting",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/drain",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the progress of a drain operation",
+               "type":"string",
+               "nickname":"get_drain_progress",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"makes node unavailable for writes, flushes memtables and replays commitlog",
+               "type":"void",
+               "nickname":"drain",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/truncate/{keyspace}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Truncates (deletes) the given columnFamily from the provided keyspace. Calling truncate results in actual deletion of all data in the cluster under the given columnFamily and it will fail unless all hosts are up. All data in the given column family will be deleted, but its definition will not be affected.",
+               "type":"void",
+               "nickname":"truncate",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Column family name",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/keyspaces",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the keyspaces",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_keyspaces",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"non_system",
+                     "description":"When set to true limit to non system",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/update_snitch",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Change endpointsnitch class and dynamic-ness (and dynamic attributes) at runtime",
+               "type":"void",
+               "nickname":"update_snitch",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"ep_snitch_class_name",
+                     "description":"The canonical path name for a class implementing IEndpointSnitch",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"dynamic",
+                     "description":"When true dynamicsnitch is used",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"dynamic_update_interval",
+                     "description":"integer, in ms (default 100)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"integer",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"dynamic_reset_interval",
+                     "description":"integer, in ms (default 600,000)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"integer",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"dynamic_badness_threshold",
+                     "description":"Dynamic badness threshold, (default 0.0)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"double",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/gossiping",
+         "operations":[
+            {
+               "method":"DELETE",
+               "summary":"allows a user to forcibly 'kill' a sick node",
+               "type":"void",
+               "nickname":"stop_gossiping",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"allows a user to recover a forcibly 'killed' node",
+               "type":"void",
+               "nickname":"start_gossiping",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"allows a user to see whether gossip is running or not",
+               "type":"boolean",
+               "nickname":"is_gossip_running",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/stop_daemon",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"allows a user to forcibly completely stop cassandra",
+               "type":"void",
+               "nickname":"stop_daemon",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/is_initialized",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Determine if gossip is enable",
+               "type":"boolean",
+               "nickname":"is_initialized",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/rpc_server",
+         "operations":[
+            {
+               "method":"DELETE",
+               "summary":"Allows a user to disable thrift",
+               "type":"void",
+               "nickname":"stop_rpc_server",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"allows a user to reenable thrift",
+               "type":"void",
+               "nickname":"start_rpc_server",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Determine if thrift is running",
+               "type":"boolean",
+               "nickname":"is_rpc_server_running",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/native_transport",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Start native transport",
+               "type":"void",
+               "nickname":"start_native_transport",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Stop native transport",
+               "type":"void",
+               "nickname":"stop_native_transport",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Is native transport running",
+               "type":"boolean",
+               "nickname":"is_native_transport_running",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/join_ring",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Allows a node that have been started without joining the ring to join it",
+               "type":"void",
+               "nickname":"join_ring",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"",
+               "type":"boolean",
+               "nickname":"is_joined",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/stream_throughput",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"set stream throughput mb per sec",
+               "type":"void",
+               "nickname":"set_stream_throughput_mb_per_sec",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"value",
+                     "description":"Stream throughput",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"int",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Get stream throughput mb per sec",
+               "type":"int",
+               "nickname":"get_stream_throughput_mb_per_sec",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/compaction_throughput",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get compaction throughput mb per sec",
+               "type":"int",
+               "nickname":"get_compaction_throughput_mb_per_sec",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Set compaction throughput mb per sec",
+               "type":"void",
+               "nickname":"set_compaction_throughput_mb_per_sec",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"value",
+                     "description":"compaction throughput",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"int",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/incremental_backups",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Check if incremental backup is enabled",
+               "type":"boolean",
+               "nickname":"is_incremental_backups_enabled",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"",
+               "type":"void",
+               "nickname":"set_incremental_backups_enabled",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"value",
+                     "description":"Set to true for incremental backup enabled",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/rebuild",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Initiate a process of streaming data for which we are responsible from other nodes. It is similar to bootstrap except meant to be used on a node which is already in the cluster (typically containing no data) as an alternative to running repair.",
+               "type":"void",
+               "nickname":"rebuild",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"source_dc",
+                     "description":"Name of DC from which to select sources for streaming or none to pick any node",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/bulk_load/{path}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Starts a bulk load and blocks until it completes",
+               "type":"void",
+               "nickname":"bulk_load",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"path",
+                     "description":"Path to directory to load from",
+                     "required":true,
+                     "allowMultiple":true,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/bulk_load_async/{path}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Starts a bulk load asynchronously and returns the String representation of the planID for the new streaming session.",
+               "type":"string",
+               "nickname":"bulk_load_async",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"path",
+                     "description":"Path to directory to load from",
+                     "required":true,
+                     "allowMultiple":true,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/reschedule_failed_deletions",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Reschedule failed deletions",
+               "type":"void",
+               "nickname":"reschedule_failed_deletions",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/sstables/{keyspace}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Load new SSTables to the given keyspace/columnFamily",
+               "type":"void",
+               "nickname":"load_new_ss_tables",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Column family name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/sample_key_range",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Return a List of Tokens representing a sample of keys across all ColumnFamilyStores.",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"sample_key_range",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/relocal_schema",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Reset local schema",
+               "type":"void",
+               "nickname":"reset_local_schema",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/trace_probability",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Enables/Disables tracing for the whole system. Only thrift requests can start tracing currently",
+               "type":"void",
+               "nickname":"set_trace_probability",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"probability",
+                     "description":"[0,1] will enable tracing on a partial number of requests with the provided probability. 0 will disable tracing and 1 will enable tracing for all requests (which mich severely cripple the system)",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"double",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Returns the configured tracing probability.",
+               "type":"double",
+               "nickname":"get_trace_probability",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/auto_compaction/{keyspace}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Enable auto compaction",
+               "type":"void",
+               "nickname":"enable_auto_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Comma seperated column family names",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Disable auto compaction",
+               "type":"void",
+               "nickname":"disable_auto_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Comma seperated column family names",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/deliver_hints",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"",
+               "type":"void",
+               "nickname":"deliver_hints",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"host",
+                     "description":"The host name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/cluster_name",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns the name of the cluster",
+               "type":"string",
+               "nickname":"get_cluster_name",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/partitioner_name",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns the cluster partitioner",
+               "type":"string",
+               "nickname":"get_partitioner_name",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/tombstone_warn_threshold",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns the threshold for warning of queries with many tombstones",
+               "type":"int",
+               "nickname":"get_tombstone_warn_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Sets the threshold for warning queries with many tombstones",
+               "type":"void",
+               "nickname":"set_tombstone_warn_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"debug_threshold",
+                     "description":"tombstone debug threshold",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"int",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/tombstone_failure_threshold",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"",
+               "type":"int",
+               "nickname":"get_tombstone_failure_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"",
+               "type":"void",
+               "nickname":"set_tombstone_failure_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"tombstone_debug_threshold",
+                     "description":"tombstone debug threshold",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"int",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/batch_size_failure_threshold",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns the threshold for rejecting queries due to a large batch size",
+               "type":"int",
+               "nickname":"get_batch_size_failure_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Sets the threshold for rejecting queries due to a large batch size",
+               "type":"void",
+               "nickname":"set_batch_size_failure_threshold",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"threshold",
+                     "description":"batch size debug threshold",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"int",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/hinted_handoff",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Sets the hinted handoff throttle in kb per second, per delivery thread",
+               "type":"void",
+               "nickname":"set_hinted_handoff_throttle_in_kb",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"throttle",
+                     "description":"throttle in kb",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"int",
+                     "paramType":"query"
                   }
                ]
             }
          ]
       }
    ],
-    "models" : {
-        "mapper": {
-           "id": "mapper",
-           "description": "A key value mapping",
-               "properties": {
-                "key": {
-                    "type": "string",
-                    "description": "The key"
-                },
-                "value": {
-                    "type": "string",
-                    "description": "The value"
-                }
+   "models":{
+      "mapper":{
+         "id":"mapper",
+         "description":"A key value mapping",
+         "properties":{
+            "key":{
+               "type":"string",
+               "description":"The key"
+            },
+            "value":{
+               "type":"string",
+               "description":"The value"
             }
-        }
-    }
+         }
+      },
+      "maplist_mapper":{
+         "id":"maplist_mapper",
+         "description":"A key value mapping, where key and value are list",
+         "properties":{
+            "key":{
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "description":"The key"
+            },
+            "value":{
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "description":"The value"
+            }
+         }
+      },
+      "snapshot":{
+         "id":"snapshot",
+         "description":"Snapshot detail",
+         "properties":{
+            "key":{
+               "type":"string",
+               "description":"The key snapshot key"
+            },
+            "cf":{
+               "type":"string",
+               "description":"The column family"
+            },
+            "total":{
+               "type":"int",
+               "description":"The total snapshot size"
+            },
+            "live":{
+               "type":"int",
+               "description":"The live snapshot size"
+            }
+         }
+      },
+      "snapshots":{
+         "id":"snapshots",
+         "description":"List of Snapshot detail",
+         "properties":{
+            "key":{
+               "type":"string",
+               "description":"The keyspace"
+            },
+            "value":{
+               "type":"array",
+               "items":{
+                  "type":"snapshot"
+               },
+               "description":"The column family"
+            }
+         }
+      }
+   }
 }
