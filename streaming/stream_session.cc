@@ -167,6 +167,10 @@ void stream_session::complete() {
     }
 }
 
+void stream_session::session_failed() {
+    //closeSession(stream_session_state::FAILED);
+}
+
 bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();
     if (completed) {

@@ -537,15 +537,12 @@ public:
      */
     void complete();
 
-#if 0
     /**
      * Call back on receiving {@code StreamMessage.Type.SESSION_FAILED} message.
      */
-    public synchronized void sessionFailed()
-    {
-        closeSession(State.FAILED);
-    }
+    void session_failed();
 
+#if 0
     public void doRetry(FileMessageHeader header, Throwable e)
     {
         logger.warn("[Stream #{}] Retrying for following error", planId(), e);
