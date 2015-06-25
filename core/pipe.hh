@@ -83,7 +83,9 @@ public:
     }
     bool close_read() {
         // If a writer blocking (on a full queue), need to stop it.
-        _buf.abort(std::make_exception_ptr(broken_pipe_exception()));
+        if (_buf.full()) {
+            _buf.abort(std::make_exception_ptr(broken_pipe_exception()));
+        }
         _read_open = false;
         return !_write_open;
     }
