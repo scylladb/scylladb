@@ -56,7 +56,7 @@ shift_right(bool carry, bytes b) {
 }
 
 token
-midpoint(const token& t1, const token& t2) {
+midpoint_unsigned_tokens(const token& t1, const token& t2) {
     // calculate the average of the two tokens.
     // before_all_keys is implicit 0, after_all_keys is implicit 1.
     bool c1 = t1._kind == token::kind::after_all_keys;

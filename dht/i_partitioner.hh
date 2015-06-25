@@ -71,7 +71,7 @@ public:
     }
 };
 
-token midpoint(const token& t1, const token& t2);
+token midpoint_unsigned(const token& t1, const token& t2);
 token minimum_token();
 token maximum_token();
 bool operator==(const token& t1, const token& t2);
@@ -139,7 +139,8 @@ public:
      * @return The approximate midpoint between left and right.
      */
     token midpoint(const token& left, const token& right) {
-        return dht::midpoint(left, right);
+        // FIXME: make it virtual
+        return dht::midpoint_unsigned(left, right);
     }
 
     /**
