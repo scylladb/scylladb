@@ -109,16 +109,19 @@ public:
         // the first ones. So copy tthe values to avoid a ConcurrentModificationException
         return new ArrayList<>(files.values());
     }
+#endif
 
-    public synchronized OutgoingFileMessage createMessageForRetry(int sequenceNumber)
-    {
+    messages::outgoing_file_message create_message_for_retry(int sequence_number) {
+#if 0
         // remove previous time out task to be rescheduled later
         ScheduledFuture future = timeoutTasks.remove(sequenceNumber);
         if (future != null)
             future.cancel(false);
-        return files.get(sequenceNumber);
+#endif
+        return files[sequence_number];
     }
 
+#if 0
     /**
      * Schedule timeout task to release reference for file sent.
      * When not receiving ACK after sending to receiver in given time,

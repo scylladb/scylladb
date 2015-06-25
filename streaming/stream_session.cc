@@ -147,6 +147,14 @@ void stream_session::received(UUID cf_id, int sequence_number) {
     }
 }
 
+void stream_session::retry(UUID cf_id, int sequence_number) {
+    auto it = _transfers.find(cf_id);
+    if (it != _transfers.end()) {
+        //outgoing_file_message message = it->second.create_message_for_retry(sequence_number);
+        //handler.sendMessage(message);
+    }
+}
+
 bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();
     if (completed) {

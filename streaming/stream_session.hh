@@ -523,19 +523,15 @@ public:
     void progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total);
 
     void received(UUID cf_id, int sequence_number);
-#if 0
+
     /**
      * Call back on receiving {@code StreamMessage.Type.RETRY} message.
      *
      * @param cfId ColumnFamily ID
      * @param sequenceNumber Sequence number to indicate which file to stream again
      */
-    public void retry(UUID cfId, int sequenceNumber)
-    {
-        OutgoingFileMessage message = transfers.get(cfId).createMessageForRetry(sequenceNumber);
-        handler.sendMessage(message);
-    }
-
+    void retry(UUID cf_id, int sequence_number);
+#if 0
     /**
      * Check if session is completed on receiving {@code StreamMessage.Type.COMPLETE} message.
      */
