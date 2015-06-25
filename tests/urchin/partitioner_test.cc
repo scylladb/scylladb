@@ -43,3 +43,19 @@ BOOST_AUTO_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
     BOOST_REQUIRE_EQUAL(dk._token, token_from_long(4958784316840156970));
     BOOST_REQUIRE(dk._key.equal(s, key));
 }
+
+BOOST_AUTO_TEST_CASE(test_token_wraparound_1) {
+    auto t1 = token_from_long(0x7000'0000'0000'0000);
+    auto t2 = token_from_long(0xa000'0000'0000'0000);
+    dht::murmur3_partitioner partitioner;
+    BOOST_REQUIRE(t1 > t2);
+    BOOST_REQUIRE_EQUAL(partitioner.midpoint(t1, t2), token_from_long(0x0800'0000'0000'0000));
+}
+
+BOOST_AUTO_TEST_CASE(test_token_wraparound_2) {
+    auto t1 = token_from_long(0x6000'0000'0000'0000);
+    auto t2 = token_from_long(0x9000'0000'0000'0000);
+    dht::murmur3_partitioner partitioner;
+    BOOST_REQUIRE(t1 > t2);
+    BOOST_REQUIRE_EQUAL(partitioner.midpoint(t1, t2), token_from_long(0xf800'0000'0000'0000));
+}
