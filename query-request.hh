@@ -241,6 +241,8 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const partition_slice& ps);
 };
 
+constexpr auto max_rows = std::numeric_limits<uint32_t>::max();
+
 // Full specification of a query to the database.
 // Intended for passing across replicas.
 // Can be accessed across cores.
@@ -250,7 +252,7 @@ public:
     partition_slice slice;
     uint32_t row_limit;
 public:
-    read_command(const utils::UUID& cf_id, partition_slice slice, uint32_t row_limit)
+    read_command(const utils::UUID& cf_id, partition_slice slice, uint32_t row_limit = max_rows)
         : cf_id(cf_id)
         , slice(std::move(slice))
         , row_limit(row_limit)
