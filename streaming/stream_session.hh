@@ -31,8 +31,10 @@
 #include "streaming/stream_receive_task.hh"
 #include "streaming/stream_request.hh"
 #include "sstables/sstables.hh"
+#include "query-request.hh"
+#include "dht/i_partitioner.hh"
 #include <map>
-#include <set>
+#include <vector>
 
 namespace streaming {
 
@@ -110,6 +112,7 @@ private:
     using application_state = gms::application_state;
     using versioned_value = gms::versioned_value;
     using UUID = utils::UUID;
+    using token = dht::token;
     net::messaging_service& ms() {
         return net::get_local_messaging_service();
     }
@@ -138,7 +141,7 @@ private:
     //private StreamResultFuture streamResult;
 
     // stream requests to send to the peer
-    std::set<stream_request> _requests;
+    std::vector<stream_request> _requests;
     // streaming tasks are created and managed per ColumnFamily ID
     std::map<UUID, stream_transfer_task> _transfers;
     // data receivers, filled after receiving prepare message
@@ -232,6 +235,7 @@ public:
         assert factory != null;
         return factory.createConnection(connecting);
     }
+#endif
 
     /**
      * Request data fetch task to this session.
@@ -240,11 +244,11 @@ public:
      * @param ranges Ranges to retrieve data
      * @param columnFamilies ColumnFamily names. Can be empty if requesting all CF under the keyspace.
      */
-    public void addStreamRequest(String keyspace, Collection<Range<Token>> ranges, Collection<String> columnFamilies, long repairedAt)
-    {
-        requests.add(new StreamRequest(keyspace, ranges, columnFamilies, repairedAt));
+    void add_stream_request(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, long repaired_at) {
+        _requests.emplace_back(std::move(keyspace), std::move(ranges), std::move(column_families), repaired_at);
     }
 
+#if 0
     /**
      * Set up transfer for specific keyspace/ranges/CFs
      *
