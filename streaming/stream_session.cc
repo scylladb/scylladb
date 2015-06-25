@@ -183,6 +183,15 @@ session_info stream_session::get_session_info() {
     return session_info(peer, _index, connecting, std::move(receiving_summaries), std::move(transfer_summaries), _state);
 }
 
+void stream_session::task_completed(stream_receive_task& completed_task) {
+    _receivers.erase(completed_task.cf_id);
+    maybe_completed();
+}
+
+void stream_session::task_completed(stream_transfer_task& completed_task) {
+    _transfers.erase(completed_task.cf_id);
+    maybe_completed();
+}
 
 bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();

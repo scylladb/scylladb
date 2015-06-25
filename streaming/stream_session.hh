@@ -560,19 +560,9 @@ public:
      */
     session_info get_session_info();
 
-#if 0
-    public synchronized void taskCompleted(StreamReceiveTask completedTask)
-    {
-        receivers.remove(completedTask.cfId);
-        maybe_completed();
-    }
+    void task_completed(stream_receive_task& completed_task);
 
-    public synchronized void taskCompleted(StreamTransferTask completedTask)
-    {
-        transfers.remove(completedTask.cfId);
-        maybe_completed();
-    }
-#endif
+    void task_completed(stream_transfer_task& completed_task);
 
 public:
     virtual void on_join(inet_address endpoint, endpoint_state ep_state) override {}
