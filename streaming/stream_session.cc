@@ -121,6 +121,21 @@ void stream_session::prepare(std::vector<stream_request> requests, std::vector<s
     }
 }
 
+void stream_session::receive(messages::incoming_file_message message) {
+#if 0
+    auto header_size = message.header.size();
+    StreamingMetrics.totalIncomingBytes.inc(headerSize);
+    metrics.incomingBytes.inc(headerSize);
+#endif
+    // send back file received message
+    // handler.sendMessage(new ReceivedMessage(message.header.cfId, message.header.sequenceNumber));
+    auto cf_id = message.header.cf_id;
+    auto it = _receivers.find(cf_id);
+    assert(it != _receivers.end());
+    it->second.received(message.sstable);
+}
+
+
 bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();
     if (completed) {

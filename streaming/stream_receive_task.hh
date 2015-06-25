@@ -51,14 +51,13 @@ public:
         , total_size(_total_size) {
     }
 
-#if 0
     /**
      * Process received file.
      *
      * @param sstable SSTable file received.
      */
-    public synchronized void received(SSTableWriter sstable)
-    {
+    void received(sstables::sstable* sstable) {
+#if 0
         if (done)
             return;
 
@@ -70,9 +69,9 @@ public:
             done = true;
             executor.submit(new OnCompletionRunnable(this));
         }
-    }
 #endif
-public:
+    }
+
     virtual int get_total_number_of_files() override {
         return total_files;
     }

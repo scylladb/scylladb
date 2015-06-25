@@ -30,6 +30,7 @@
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_receive_task.hh"
 #include "streaming/stream_request.hh"
+#include "streaming/messages/incoming_file_message.hh"
 #include "sstables/sstables.hh"
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"
@@ -510,21 +511,15 @@ public:
             task.scheduleTimeout(header.sequenceNumber, 12, TimeUnit.HOURS);
         }
     }
+#endif
 
     /**
      * Call back after receiving FileMessageHeader.
      *
      * @param message received file
      */
-    public void receive(IncomingFileMessage message)
-    {
-        long headerSize = message.header.size();
-        StreamingMetrics.totalIncomingBytes.inc(headerSize);
-        metrics.incomingBytes.inc(headerSize);
-        // send back file received message
-        handler.sendMessage(new ReceivedMessage(message.header.cfId, message.header.sequenceNumber));
-        receivers.get(message.header.cfId).received(message.sstable);
-    }
+    void receive(messages::incoming_file_message message);
+#if 0
 
     public void progress(Descriptor desc, ProgressInfo.Direction direction, long bytes, long total)
     {
