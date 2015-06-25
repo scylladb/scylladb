@@ -553,21 +553,14 @@ public:
         else
             handler.sendMessage(new RetryMessage(header.cfId, header.sequenceNumber));
     }
+#endif
 
     /**
      * @return Current snapshot of this session info.
      */
-    public SessionInfo getSessionInfo()
-    {
-        List<StreamSummary> receivingSummaries = Lists.newArrayList();
-        for (StreamTask receiver : receivers.values())
-            receivingSummaries.add(receiver.getSummary());
-        List<StreamSummary> transferSummaries = Lists.newArrayList();
-        for (StreamTask transfer : transfers.values())
-            transferSummaries.add(transfer.getSummary());
-        return new SessionInfo(peer, index, connecting, receivingSummaries, transferSummaries, state);
-    }
+    session_info get_session_info();
 
+#if 0
     public synchronized void taskCompleted(StreamReceiveTask completedTask)
     {
         receivers.remove(completedTask.cfId);

@@ -171,6 +171,19 @@ void stream_session::session_failed() {
     //closeSession(stream_session_state::FAILED);
 }
 
+session_info stream_session::get_session_info() {
+    std::vector<stream_summary> receiving_summaries;
+    for (auto& receiver : _receivers) {
+        receiving_summaries.emplace_back(receiver.second.get_summary());
+    }
+    std::vector<stream_summary> transfer_summaries;
+    for (auto& transfer : _transfers) {
+        transfer_summaries.emplace_back(transfer.second.get_summary());
+    }
+    return session_info(peer, _index, connecting, std::move(receiving_summaries), std::move(transfer_summaries), _state);
+}
+
+
 bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();
     if (completed) {
