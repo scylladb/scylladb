@@ -10,6 +10,8 @@
 
 constexpr int32_t schema::NAME_LENGTH;
 
+const std::experimental::optional<sstring> schema::DEFAULT_COMPRESSOR = sstring("LZ4Compressor");
+
 template<typename Sequence>
 std::vector<data_type>
 get_column_types(const Sequence& column_definitions) {
