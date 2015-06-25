@@ -127,6 +127,20 @@ private:
     void init_messaging_service_handler();
     future<> start();
 public:
+    struct ss_table_streaming_sections {
+        sstables::sstable& sstable;
+        std::map<int64_t, int64_t> sections;
+        int64_t estimated_keys;
+        int64_t repaired_at;
+        ss_table_streaming_sections(sstables::sstable& sstable_, std::map<int64_t, int64_t> sections_,
+                                    long estimated_keys_, long repaired_at_)
+            : sstable(sstable_)
+            , sections(std::move(sections_))
+            , estimated_keys(estimated_keys_)
+            , repaired_at(repaired_at_) {
+        }
+    };
+public:
     /**
      * Streaming endpoint.
      *
@@ -158,6 +172,7 @@ private:
     stream_session_state _state = stream_session_state::INITIALIZED;
     bool _complete_sent = false;
 public:
+    stream_session() : conn_handler(*this) { }
     /**
      * Create new streaming session with the peer.
      *
@@ -330,9 +345,10 @@ public:
             throw t;
         }
     }
+#endif
 
-    public void addTransferFiles(Collection<SSTableStreamingSections> sstableDetails)
-    {
+    void add_transfer_files(std::vector<ss_table_streaming_sections> sstable_details) {
+#if 0
         Iterator<SSTableStreamingSections> iter = sstableDetails.iterator();
         while (iter.hasNext())
         {
@@ -355,23 +371,8 @@ public:
             task.addTransferFile(details.sstable, details.estimatedKeys, details.sections, details.repairedAt);
             iter.remove();
         }
-    }
 #endif
-
-public:
-    struct ss_table_streaming_sections {
-        sstables::sstable& sstable;
-        std::map<int64_t, int64_t> sections;
-        int64_t estimated_keys;
-        int64_t repaired_at;
-        ss_table_streaming_sections(sstables::sstable& sstable_, std::map<int64_t, int64_t> sections_,
-                                    long estimated_keys_, long repaired_at_)
-            : sstable(sstable_)
-            , sections(std::move(sections_))
-            , estimated_keys(estimated_keys_)
-            , repaired_at(repaired_at_) {
-        }
-    };
+    }
 
 private:
     void close_session(stream_session_state final_state);

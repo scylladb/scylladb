@@ -127,7 +127,6 @@ public:
      */
     stream_plan& transfer_ranges(inet_address to, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::initializer_list<sstring> column_families);
 
-#if 0
     /**
      * Add transfer task to send given SSTable files.
      *
@@ -136,12 +135,8 @@ public:
      *                       this collection will be modified to remove those files that are successfully handed off
      * @return this object for chaining
      */
-    public StreamPlan transferFiles(InetAddress to, Collection<StreamSession.SSTableStreamingSections> sstableDetails)
-    {
-        coordinator.transferFiles(to, sstableDetails);
-        return this;
-
-    }
+    stream_plan& transfer_files(inet_address to, std::vector<stream_session::ss_table_streaming_sections> sstable_details);
+#if 0
 
     public StreamPlan listeners(StreamEventHandler handler, StreamEventHandler... handlers)
     {
