@@ -895,3 +895,27 @@ SEASTAR_TEST_CASE(test_validate_table) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_table_compression) {
+    return do_with_cql_env([] (cql_test_env& e) {
+        return make_ready_future<>().then([&e] {
+            return e.execute_cql("create table tb1 (foo text PRIMARY KEY, bar text) with compression = { };");
+        }).then_wrapped([&e] (auto f) {
+            assert(!f.failed());
+            e.require_table_exists("ks", "tb1");
+            return e.execute_cql("create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LossyCompressor' };");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : -1 };");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : 3 };");
+        }).then_wrapped([&e] (auto f) {
+            assert_that_failed(f);
+            return e.execute_cql("create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : 2 };");
+        }).then_wrapped([&e] (auto f) {
+            assert(!f.failed());
+            e.require_table_exists("ks", "tb2");
+        });
+    });
+}

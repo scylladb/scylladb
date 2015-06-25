@@ -43,21 +43,12 @@ create_table_statement::create_table_statement(::shared_ptr<cf_name> name,
     , _properties{properties}
     , _if_not_exists{if_not_exists}
 {
-#if 0
-    try
-    {
-        if (!this.properties.hasProperty(CFPropDefs.KW_COMPRESSION) && CFMetaData.DEFAULT_COMPRESSOR != null)
-            this.properties.addProperty(CFPropDefs.KW_COMPRESSION,
-                                        new HashMap<String, String>()
-                                        {{
-                                            put(CompressionParameters.SSTABLE_COMPRESSION, CFMetaData.DEFAULT_COMPRESSOR);
-                                        }});
+    if (!properties->has_property(cf_prop_defs::KW_COMPRESSION) && schema::DEFAULT_COMPRESSOR) {
+        std::map<sstring, sstring> compression = {
+            { sstring(compression_parameters::SSTABLE_COMPRESSION), schema::DEFAULT_COMPRESSOR.value() },
+        };
+        properties->add_property(cf_prop_defs::KW_COMPRESSION, compression);
     }
-    catch (SyntaxException e)
-    {
-        throw new AssertionError(e);
-    }
-#endif
 }
 
 void create_table_statement::check_access(const service::client_state& state) {

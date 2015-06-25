@@ -144,7 +144,7 @@ private:
         gc_clock::duration _default_time_to_live = gc_clock::duration::zero();
         data_type _regular_column_name_type;
         double _bloom_filter_fp_chance = 0.01;
-        compressor _compressor = compressor::none;
+        compression_parameters _compressor;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -170,6 +170,8 @@ public:
     typedef boost::iterator_range<const_iterator> const_iterator_range_type;
 
     static constexpr int32_t NAME_LENGTH = 48;
+
+    static const std::experimental::optional<sstring> DEFAULT_COMPRESSOR;
 
     struct column {
         bytes name;
@@ -199,10 +201,10 @@ public:
         return *this;
     }
 
-    void set_compressor(compressor c) {
+    void set_compressor(compression_parameters c) {
         _raw._compressor = c;
     }
-    const compressor get_compressor() const {
+    const compression_parameters& get_compressor() const {
         return _raw._compressor;
     }
 
