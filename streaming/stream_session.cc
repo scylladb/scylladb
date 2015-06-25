@@ -201,7 +201,7 @@ bool stream_session::maybe_completed() {
                 //handler.sendMessage(new CompleteMessage());
                 _complete_sent = true;
             }
-            //closeSession(State.COMPLETE);
+            close_session(stream_session_state::COMPLETE);
         } else {
             // notify peer that this session is completed
             //handler.sendMessage(new CompleteMessage());
@@ -233,6 +233,28 @@ void stream_session::start_streaming_files() {
             taskCompleted(task); // there is no file to send
     }
 #endif
+}
+
+void stream_session::close_session(stream_session_state final_state) {
+    if (!_is_aborted) {
+        _is_aborted = true;
+        set_state(final_state);
+
+        if (final_state == stream_session_state::FAILED) {
+            for (auto& x : _transfers) {
+                x.second.abort();
+            }
+            for (auto& x : _receivers) {
+                x.second.abort();
+            }
+        }
+
+        // Note that we shouldn't block on this close because this method is called on the handler
+        // incoming thread (so we would deadlock).
+        //handler.close();
+
+        //streamResult.handleSessionComplete(this);
+    }
 }
 
 } // namespace streaming

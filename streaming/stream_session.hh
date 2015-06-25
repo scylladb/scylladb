@@ -212,7 +212,7 @@ public:
         if (requests.isEmpty() && transfers.isEmpty())
         {
             logger.info("[Stream #{}] Session does not have any tasks.", planId());
-            closeSession(State.COMPLETE);
+            close_session(stream_session_state::COMPLETE);
             return;
         }
 
@@ -373,27 +373,9 @@ public:
         }
     };
 
-#if 0
-    private synchronized void closeSession(State finalState)
-    {
-        if (isAborted.compareAndSet(false, true))
-        {
-            state(finalState);
+private:
+    void close_session(stream_session_state final_state);
 
-            if (finalState == State.FAILED)
-            {
-                for (StreamTask task : Iterables.concat(receivers.values(), transfers.values()))
-                    task.abort();
-            }
-
-            // Note that we shouldn't block on this close because this method is called on the handler
-            // incoming thread (so we would deadlock).
-            handler.close();
-
-            streamResult.handleSessionComplete(this);
-        }
-    }
-#endif
 public:
     /**
      * Set current state to {@code newState}.
@@ -484,7 +466,7 @@ public:
         if (handler.isOutgoingConnected())
             handler.sendMessage(new SessionFailedMessage());
         // fail session
-        closeSession(State.FAILED);
+        close_session(stream_session_state::FAILED);
     }
 #endif
 
@@ -570,12 +552,8 @@ public:
     virtual void on_change(inet_address endpoint, application_state state, versioned_value value) override {}
     virtual void on_alive(inet_address endpoint, endpoint_state state) override {}
     virtual void on_dead(inet_address endpoint, endpoint_state state) override {}
-    virtual void on_remove(inet_address endpoint) override {
-        //closeSession(State.FAILED);
-    }
-    virtual void on_restart(inet_address endpoint, endpoint_state ep_state) override {
-        //closeSession(State.FAILED);
-    }
+    virtual void on_remove(inet_address endpoint) override { close_session(stream_session_state::FAILED); }
+    virtual void on_restart(inet_address endpoint, endpoint_state ep_state) override { close_session(stream_session_state::FAILED); }
 
 private:
     bool maybe_completed();
