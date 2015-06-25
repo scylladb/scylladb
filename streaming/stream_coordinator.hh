@@ -91,12 +91,11 @@ public:
         return get_or_create_host_data(peer).get_or_create_next_session(peer, connecting);
     }
 
-#if 0
-    public synchronized StreamSession getOrCreateSessionById(InetAddress peer, int id, InetAddress connecting)
-    {
-        return get_or_create_host_data(peer).getOrCreateSessionById(peer, id, connecting);
+    stream_session& get_or_create_session_by_id(inet_address peer, int id, inet_address connecting) {
+        return get_or_create_host_data(peer).get_or_create_session_by_id(peer, id, connecting);
     }
 
+#if 0
     public synchronized void updateProgress(ProgressInfo info)
     {
         getHostData(info.peer).updateProgress(info);
@@ -249,18 +248,15 @@ private:
         {
             return Collections.unmodifiableCollection(streamSessions.values());
         }
-
-        public StreamSession getOrCreateSessionById(InetAddress peer, int id, InetAddress connecting)
-        {
-            StreamSession session = streamSessions.get(id);
-            if (session == null)
-            {
-                session = new StreamSession(peer, connecting, factory, id, keepSSTableLevel);
-                streamSessions.put(id, session);
+#endif
+        stream_session& get_or_create_session_by_id(inet_address peer, int id, inet_address connecting) {
+            auto it = _stream_sessions.find(id);
+            if (it == _stream_sessions.end()) {
+                it = _stream_sessions.emplace(id, stream_session(peer, connecting, id, _keep_ss_table_level)).first;
             }
-            return session;
+            return it->second;
         }
-
+#if 0
         public void updateProgress(ProgressInfo info)
         {
             sessionInfos.get(info.sessionIndex).updateProgress(info);
