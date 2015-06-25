@@ -14,7 +14,7 @@
 #include "messaging_service.hh"
 #include "storage_proxy.hh"
 #include "cache_service.hh"
-
+#include "collectd.hh"
 namespace api {
 
 future<> set_server(http_context& ctx) {
@@ -52,7 +52,9 @@ future<> set_server(http_context& ctx) {
         rb->register_function(r, "cache_service",
                                                 "The cache service API");
         set_cache_service(ctx,r);
-
+        rb->register_function(r, "collectd",
+                "The collectd API");
+        set_collectd(ctx, r);
     });
 }
 
