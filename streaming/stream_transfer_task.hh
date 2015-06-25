@@ -50,15 +50,14 @@ public:
     }
 
     void add_transfer_file(sstables::sstable& sstable, int64_t estimated_keys, std::map<int64_t, int64_t> sections, int64_t repaired_at);
-#if 0
 
     /**
      * Received ACK for file at {@code sequenceNumber}.
      *
      * @param sequenceNumber sequence number of file
      */
-    public void complete(int sequenceNumber)
-    {
+    void complete(int sequence_number) {
+#if 0
         boolean signalComplete;
         synchronized (this)
         {
@@ -76,8 +75,9 @@ public:
         // all file sent, notify session this task is complete.
         if (signalComplete)
             session.taskCompleted(this);
-    }
 #endif
+    }
+
 public:
     virtual void abort() override {
 #if 0

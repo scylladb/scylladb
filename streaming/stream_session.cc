@@ -140,6 +140,13 @@ void stream_session::progress(/* Descriptor desc */ progress_info::direction dir
     // streamResult.handleProgress(progress);
 }
 
+void stream_session::received(UUID cf_id, int sequence_number) {
+    auto it = _transfers.find(cf_id);
+    if (it != _transfers.end()) {
+        it->second.complete(sequence_number);
+    }
+}
+
 bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();
     if (completed) {

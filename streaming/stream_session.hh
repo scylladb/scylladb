@@ -521,12 +521,9 @@ public:
     void receive(messages::incoming_file_message message);
 
     void progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total);
-#if 0
-    public void received(UUID cfId, int sequenceNumber)
-    {
-        transfers.get(cfId).complete(sequenceNumber);
-    }
 
+    void received(UUID cf_id, int sequence_number);
+#if 0
     /**
      * Call back on receiving {@code StreamMessage.Type.RETRY} message.
      *
