@@ -3,6 +3,8 @@
  */
 
 #include "api.hh"
+#include "http/file_handler.hh"
+#include "http/transformers.hh"
 #include "http/api_docs.hh"
 #include "storage_service.hh"
 #include "commitlog.hh"
@@ -19,6 +21,12 @@ future<> set_server(http_context& ctx) {
     auto rb = std::make_shared < api_registry_builder > ("api/api-doc/");
 
     return ctx.http_server.set_routes([rb, &ctx](routes& r) {
+        httpd::directory_handler* dir = new httpd::directory_handler(ctx.api_dir,
+                new content_replace("html"));
+        r.put(GET, "/ui", new httpd::file_handler(ctx.api_dir + "/index.html",
+                new content_replace("html")));
+        r.add(GET, url("/ui").remainder("path"), dir);
+
         rb->set_api_doc(r);
         rb->register_function(r, "storage_service",
                                 "The storage service API");

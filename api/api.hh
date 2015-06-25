@@ -11,6 +11,7 @@
 namespace api {
 
 struct http_context {
+    sstring api_dir;
     http_server_control http_server;
     distributed<database>& db;
     http_context(distributed<database>& _db) : db(_db) {}

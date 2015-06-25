@@ -34,6 +34,8 @@ int main(int ac, char** av) {
     auto cfg = make_lw_shared<db::config>();
     cfg->add_options(opt_add)
         ("api-port", bpo::value<uint16_t>()->default_value(10000), "Http Rest API port")
+        ("api-dir", bpo::value<sstring>()->default_value("swagger-ui/dist/"),
+                "The directory location of the API GUI")
         // TODO : default, always read?
         ("options-file", bpo::value<sstring>(), "cassandra.yaml file to read options from")
         ;
@@ -50,6 +52,7 @@ int main(int ac, char** av) {
             uint16_t thrift_port = cfg->rpc_port();
             uint16_t cql_port = cfg->native_transport_port();
             uint16_t api_port = opts["api-port"].as<uint16_t>();
+            ctx.api_dir = opts["api-dir"].as<sstring>();
             sstring listen_address = cfg->listen_address();
             sstring rpc_address = cfg->rpc_address();
             auto seed_provider= cfg->seed_provider();
