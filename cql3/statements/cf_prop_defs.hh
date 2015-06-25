@@ -199,7 +199,7 @@ public:
         cfm.bloomFilterFpChance(getDouble(KW_BF_FP_CHANCE, cfm.getBloomFilterFpChance()));
 #endif
         if (!get_compression_options().empty()) {
-            s->set_compressor(compression_parameters(get_compression_options()));
+            s->set_compressor_params(compression_parameters(get_compression_options()));
         }
 #if 0
         CachingOptions cachingOptions = getCachingOptions();

@@ -144,7 +144,7 @@ private:
         gc_clock::duration _default_time_to_live = gc_clock::duration::zero();
         data_type _regular_column_name_type;
         double _bloom_filter_fp_chance = 0.01;
-        compression_parameters _compressor;
+        compression_parameters _compressor_params;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -201,11 +201,11 @@ public:
         return *this;
     }
 
-    void set_compressor(compression_parameters c) {
-        _raw._compressor = c;
+    void set_compressor_params(compression_parameters c) {
+        _raw._compressor_params = c;
     }
-    const compression_parameters& get_compressor() const {
-        return _raw._compressor;
+    const compression_parameters& get_compressor_params() const {
+        return _raw._compressor_params;
     }
 
     thrift_schema& thrift() {

@@ -885,7 +885,7 @@ static future<> sstable_compression_test(compressor c, unsigned generation) {
         auto& cs = *complex_schema();
         auto s = make_lw_shared(schema(cs));
         // NOTE: set a given compressor algorithm to schema.
-        s->set_compressor(c);
+        s->set_compressor_params(c);
 
         auto mtp = make_lw_shared<memtable>(s);
 
