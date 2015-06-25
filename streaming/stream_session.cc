@@ -155,6 +155,18 @@ void stream_session::retry(UUID cf_id, int sequence_number) {
     }
 }
 
+void stream_session::complete() {
+    if (_state == stream_session_state::WAIT_COMPLETE) {
+        if (!_complete_sent) {
+            //handler.sendMessage(new CompleteMessage());
+            _complete_sent = true;
+        }
+        //closeSession(stream_session_state::COMPLETE);
+    } else {
+        set_state(stream_session_state::WAIT_COMPLETE);
+    }
+}
+
 bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();
     if (completed) {

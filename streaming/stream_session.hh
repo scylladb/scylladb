@@ -531,27 +531,13 @@ public:
      * @param sequenceNumber Sequence number to indicate which file to stream again
      */
     void retry(UUID cf_id, int sequence_number);
-#if 0
+
     /**
      * Check if session is completed on receiving {@code StreamMessage.Type.COMPLETE} message.
      */
-    public synchronized void complete()
-    {
-        if (state == State.WAIT_COMPLETE)
-        {
-            if (!completeSent)
-            {
-                handler.sendMessage(new CompleteMessage());
-                completeSent = true;
-            }
-            closeSession(State.COMPLETE);
-        }
-        else
-        {
-            state(State.WAIT_COMPLETE);
-        }
-    }
+    void complete();
 
+#if 0
     /**
      * Call back on receiving {@code StreamMessage.Type.SESSION_FAILED} message.
      */
