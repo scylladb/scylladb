@@ -112,4 +112,5 @@ future<file> open_directory(sstring name);
 future<> make_directory(sstring name);
 future<> touch_directory(sstring name);
 future<> remove_file(sstring pathname);
+future<> rename_file(sstring old_pathname, sstring new_pathname);
 

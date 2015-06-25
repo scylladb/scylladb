@@ -531,6 +531,16 @@ reactor::remove_file(sstring pathname) {
     });
 }
 
+future<>
+reactor::rename_file(sstring old_pathname, sstring new_pathname) {
+    return engine()._thread_pool.submit<syscall_result<int>>([this, old_pathname, new_pathname] {
+        return wrap_syscall<int>(::rename(old_pathname.c_str(), new_pathname.c_str()));
+    }).then([] (syscall_result<int> sr) {
+        sr.throw_if_error();
+        return make_ready_future<>();
+    });
+}
+
 directory_entry_type stat_to_entry_type(__mode_t type) {
     if (S_ISDIR(type)) {
         return directory_entry_type::directory;
@@ -1949,6 +1959,10 @@ future<> touch_directory(sstring name) {
 
 future<> remove_file(sstring pathname) {
     return engine().remove_file(std::move(pathname));
+}
+
+future<> rename_file(sstring old_pathname, sstring new_pathname) {
+    return engine().rename_file(std::move(old_pathname), std::move(new_pathname));
 }
 
 server_socket listen(socket_address sa) {
