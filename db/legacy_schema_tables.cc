@@ -579,7 +579,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                 return do_for_each(created, [&db] (auto&& val) {
                     auto ksm = create_keyspace_from_schema_partition(val);
                     return db.create_keyspace(std::move(ksm));
-                }).then([altered = std::move(altered), &db] () mutable {
+                }).then([&altered, &db] () mutable {
                     for (auto&& name : altered) {
                         db.update_keyspace(name);
                     }
