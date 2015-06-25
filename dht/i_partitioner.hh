@@ -28,7 +28,7 @@
 #include "keys.hh"
 #include <memory>
 #include <random>
-
+#include <utility>
 
 namespace sstables {
 
@@ -71,11 +71,15 @@ public:
     }
 };
 
-token midpoint(const token& t1, const token& t2);
+token midpoint_unsigned(const token& t1, const token& t2);
 token minimum_token();
 token maximum_token();
 bool operator==(const token& t1, const token& t2);
 bool operator<(const token& t1, const token& t2);
+inline bool operator!=(const token& t1, const token& t2) { return std::rel_ops::operator!=(t1, t2); }
+inline bool operator>(const token& t1, const token& t2) { return std::rel_ops::operator>(t1, t2); }
+inline bool operator<=(const token& t1, const token& t2) { return std::rel_ops::operator<=(t1, t2); }
+inline bool operator>=(const token& t1, const token& t2) { return std::rel_ops::operator>=(t1, t2); }
 std::ostream& operator<<(std::ostream& out, const token& t);
 
 template <typename T>
@@ -138,9 +142,7 @@ public:
      *
      * @return The approximate midpoint between left and right.
      */
-    token midpoint(const token& left, const token& right) {
-        return dht::midpoint(left, right);
-    }
+    virtual token midpoint(const token& left, const token& right) const = 0;
 
     /**
      * @return A token smaller than all others in the range that is being partitioned.

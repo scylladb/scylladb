@@ -20,6 +20,7 @@ public:
     virtual data_type get_token_validator() override;
     virtual bool is_equal(const token& t1, const token& t2) override;
     virtual bool is_less(const token& t1, const token& t2) override;
+    virtual token midpoint(const token& t1, const token& t2) const override;
 private:
     static int64_t normalize(int64_t in);
     token get_token(bytes_view key);

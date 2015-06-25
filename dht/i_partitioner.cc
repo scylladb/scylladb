@@ -56,7 +56,7 @@ shift_right(bool carry, bytes b) {
 }
 
 token
-midpoint(const token& t1, const token& t2) {
+midpoint_unsigned_tokens(const token& t1, const token& t2) {
     // calculate the average of the two tokens.
     // before_all_keys is implicit 0, after_all_keys is implicit 1.
     bool c1 = t1._kind == token::kind::after_all_keys;
@@ -72,6 +72,14 @@ midpoint(const token& t1, const token& t2) {
     // and got a carry:
     bool carry = sum_carry.second || c1 || c2;
     auto avg = shift_right(carry, std::move(sum));
+    if (t1 > t2) {
+        // wrap around the ring.  We really want (t1 + (t2 + 1.0)) / 2, so add 0.5.
+        // example: midpoint(0.9, 0.2) == midpoint(0.9, 1.2) == 1.05 == 0.05
+        //                             == (0.9 + 0.2) / 2 + 0.5 (mod 1)
+        if (avg.size() > 0) {
+            avg[0] ^= 0x80;
+        }
+    }
     return token{token::kind::key, std::move(avg)};
 }
 
