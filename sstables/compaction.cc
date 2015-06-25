@@ -20,7 +20,7 @@ namespace sstables {
 future<> compact_sstables(std::vector<shared_sstable> sstables,
         schema_ptr schema, std::function<shared_sstable()> creator) {
     std::vector<::mutation_reader> readers;
-    uint64_t estimated_parititions = 0;
+    uint64_t estimated_partitions = 0;
 
     for (auto sst : sstables) {
         // We also capture the sstable, so we keep it alive while the read isn't done
@@ -28,7 +28,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
         // FIXME: If the sstables have cardinality estimation bitmaps, use that
         // for a better estimate for the number of partitions in the merged
         // sstable than just adding up the lengths of individual sstables.
-        estimated_parititions += sst->get_estimated_key_count();
+        estimated_partitions += sst->get_estimated_key_count();
     }
     auto combined_reader = make_combined_reader(std::move(readers));
 
@@ -62,7 +62,7 @@ future<> compact_sstables(std::vector<shared_sstable> sstables,
     };
     auto newtab = creator();
     future<> write_done = newtab->write_components(
-            std::move(mutation_queue_reader), estimated_parititions, schema).then([newtab] {
+            std::move(mutation_queue_reader), estimated_partitions, schema).then([newtab] {
         return newtab->load().then([newtab] {});
     });
 
