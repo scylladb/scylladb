@@ -138,10 +138,7 @@ public:
      *
      * @return The approximate midpoint between left and right.
      */
-    token midpoint(const token& left, const token& right) {
-        // FIXME: make it virtual
-        return dht::midpoint_unsigned(left, right);
-    }
+    virtual token midpoint(const token& left, const token& right) const = 0;
 
     /**
      * @return A token smaller than all others in the range that is being partitioned.

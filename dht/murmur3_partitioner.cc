@@ -82,6 +82,20 @@ bool murmur3_partitioner::is_less(const token& t1, const token& t2) {
     return l1 < l2;
 }
 
+token murmur3_partitioner::midpoint(const token& t1, const token& t2) const {
+    auto l1 = long_token(t1);
+    auto l2 = long_token(t2);
+    // long_token is defined as signed, but the arithmetic works out the same
+    // without invoking undefined behavior with a signed type.
+    auto delta = (uint64_t(l2) - uint64_t(l1)) / 2;
+    if (l1 > l2) {
+        // wraparound
+        delta += 0x8000'0000'0000'0000;
+    }
+    auto mid = uint64_t(l1) + delta;
+    return get_token(mid);
+}
+
 std::map<token, float>
 murmur3_partitioner::describe_ownership(const std::vector<token>& sorted_tokens) {
     abort();
