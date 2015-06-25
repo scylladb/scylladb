@@ -1121,10 +1121,11 @@ static void seal_summary(summary& s,
 }
 
 static void prepare_compression(compression& c, const schema& schema) {
-    c.set_compressor(schema.get_compressor());
-    // FIXME: chunk length can be configured by the user.
-    c.chunk_len = DEFAULT_CHUNK_SIZE;
+    const auto& cp = schema.get_compressor();
+    c.set_compressor(cp.get_compressor());
+    c.chunk_len = cp.chunk_length();
     c.data_len = 0;
+    // FIXME: crc_check_chance can be configured by the user.
     // probability to verify the checksum of a compressed chunk we read.
     // defaults to 1.0.
     c.options.elements.push_back({"crc_check_chance", "1.0"});
@@ -1287,7 +1288,7 @@ void sstable::do_write_components(::mutation_reader mr,
 
 void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema) {
     // CRC component must only be present when compression isn't enabled.
-    bool checksum_file = schema->get_compressor() == compressor::none;
+    bool checksum_file = schema->get_compressor().get_compressor() == compressor::none;
 
     if (checksum_file) {
         auto w = make_shared<checksummed_file_writer>(_data_file, sstable_buffer_size, checksum_file);

@@ -104,18 +104,8 @@ public:
             if (sstable_compression_class == compression_options.end()) {
                 throw exceptions::configuration_exception(sstring("Missing sub-option '") + compression_parameters::SSTABLE_COMPRESSION + "' for the '" + KW_COMPRESSION + "' option.");
             }
-            #if 0
-            Integer chunkLength = CompressionParameters.DEFAULT_CHUNK_LENGTH;
-            if (compressionOptions.containsKey(CompressionParameters.CHUNK_LENGTH_KB))
-                chunkLength = CompressionParameters.parseChunkLength(compressionOptions.get(CompressionParameters.CHUNK_LENGTH_KB));
-
-            Map<String, String> remainingOptions = new HashMap<>(compressionOptions);
-            remainingOptions.remove(CompressionParameters.SSTABLE_COMPRESSION);
-            remainingOptions.remove(CompressionParameters.CHUNK_LENGTH_KB);
-            CompressionParameters cp = new CompressionParameters(sstableCompressionClass, chunkLength, remainingOptions);
+            compression_parameters cp(compression_options);
             cp.validate();
-            #endif
-
         }
 
         validate_minimum_int(KW_DEFAULT_TIME_TO_LIVE, 0, DEFAULT_DEFAULT_TIME_TO_LIVE);
@@ -207,9 +197,11 @@ public:
         }
 
         cfm.bloomFilterFpChance(getDouble(KW_BF_FP_CHANCE, cfm.getBloomFilterFpChance()));
-
-        if (!getCompressionOptions().isEmpty())
-            cfm.compressionParameters(CompressionParameters.create(getCompressionOptions()));
+#endif
+        if (!get_compression_options().empty()) {
+            s->set_compressor(compression_parameters(get_compression_options()));
+        }
+#if 0
         CachingOptions cachingOptions = getCachingOptions();
         if (cachingOptions != null)
             cfm.caching(cachingOptions);
