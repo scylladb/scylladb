@@ -135,6 +135,10 @@ void stream_session::receive(messages::incoming_file_message message) {
     it->second.received(message.sstable);
 }
 
+void stream_session::progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total) {
+    // auto progress = progress_info(peer, _index, /* desc.filenameFor(Component.DATA),*/ dir, bytes, total);
+    // streamResult.handleProgress(progress);
+}
 
 bool stream_session::maybe_completed() {
     bool completed = _receivers.empty() && _transfers.empty();

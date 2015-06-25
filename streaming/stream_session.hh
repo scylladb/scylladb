@@ -519,14 +519,9 @@ public:
      * @param message received file
      */
     void receive(messages::incoming_file_message message);
+
+    void progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total);
 #if 0
-
-    public void progress(Descriptor desc, ProgressInfo.Direction direction, long bytes, long total)
-    {
-        ProgressInfo progress = new ProgressInfo(peer, index, desc.filenameFor(Component.DATA), direction, bytes, total);
-        streamResult.handleProgress(progress);
-    }
-
     public void received(UUID cfId, int sequenceNumber)
     {
         transfers.get(cfId).complete(sequenceNumber);
