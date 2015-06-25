@@ -29,7 +29,6 @@
 #include "dht/i_partitioner.hh"
 #include "streaming/stream_coordinator.hh"
 #include <vector>
-#include <initializer_list>
 
 namespace streaming {
 
@@ -95,14 +94,14 @@ public:
      * @param columnFamilies specific column families
      * @return this object for chaining
      */
-    stream_plan& request_ranges(inet_address from, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::initializer_list<sstring> column_families);
+    stream_plan& request_ranges(inet_address from, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families);
 
     /**
      * Add transfer task to send data of specific {@code columnFamilies} under {@code keyspace} and {@code ranges}.
      *
      * @see #transferRanges(java.net.InetAddress, java.net.InetAddress, String, java.util.Collection, String...)
      */
-    stream_plan& transfer_ranges(inet_address to, sstring keyspace, std::vector<query::range<token>> ranges, std::initializer_list<sstring> column_families);
+    stream_plan& transfer_ranges(inet_address to, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families);
 
     /**
      * Add transfer task to send data of specific keyspace and ranges.
@@ -125,7 +124,7 @@ public:
      * @param columnFamilies specific column families
      * @return this object for chaining
      */
-    stream_plan& transfer_ranges(inet_address to, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::initializer_list<sstring> column_families);
+    stream_plan& transfer_ranges(inet_address to, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families);
 
     /**
      * Add transfer task to send given SSTable files.

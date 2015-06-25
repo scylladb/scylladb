@@ -27,13 +27,13 @@ stream_plan& stream_plan::request_ranges(inet_address from, inet_address connect
     return request_ranges(from, connecting, keyspace, ranges, {});
 }
 
-stream_plan& stream_plan::request_ranges(inet_address from, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::initializer_list<sstring> column_families) {
-    // StreamSession session = coordinator.getOrCreateNextSession(from, connecting);
-    // session.addStreamRequest(keyspace, ranges, Arrays.asList(columnFamilies), repairedAt);
+stream_plan& stream_plan::request_ranges(inet_address from, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
+    auto& session = _coordinator.get_or_create_next_session(from, connecting);
+    session.add_stream_request(keyspace, ranges, std::move(column_families), _repaired_at);
     return *this;
 }
 
-stream_plan& stream_plan::transfer_ranges(inet_address to, sstring keyspace, std::vector<query::range<token>> ranges, std::initializer_list<sstring> column_families) {
+stream_plan& stream_plan::transfer_ranges(inet_address to, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
     return transfer_ranges(to, to, keyspace, ranges, column_families);
 }
 
@@ -41,9 +41,9 @@ stream_plan& stream_plan::transfer_ranges(inet_address to, inet_address connecti
     return transfer_ranges(to, connecting, keyspace, ranges, {});
 }
 
-stream_plan& stream_plan::transfer_ranges(inet_address to, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::initializer_list<sstring> column_families) {
-    // StreamSession session = coordinator.getOrCreateNextSession(to, connecting);
-    // session.addTransferRanges(keyspace, ranges, Arrays.asList(columnFamilies), flushBeforeTransfer, repairedAt);
+stream_plan& stream_plan::transfer_ranges(inet_address to, inet_address connecting, sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families) {
+    auto& session = _coordinator.get_or_create_next_session(to, connecting);
+    session.add_transfer_ranges(keyspace, std::move(ranges), std::move(column_families), _flush_before_transfer, _repaired_at);
     return *this;
 }
 
