@@ -47,6 +47,10 @@
 
 class frozen_mutation;
 
+namespace service {
+class storage_proxy;
+}
+
 namespace sstables {
 
 class sstable;
@@ -318,6 +322,7 @@ private:
     friend void db::system_keyspace::make(database& db, bool durable);
 
 public:
+    future<> parse_system_tables(distributed<service::storage_proxy>&);
     database();
     database(const db::config&);
     database(database&&) = default;
@@ -327,7 +332,7 @@ public:
         return _commitlog.get();
     }
 
-    future<> init_from_data_directory();
+    future<> init_from_data_directory(distributed<service::storage_proxy>& p);
 
     void add_column_family(schema_ptr schema, column_family::config cfg);
 
