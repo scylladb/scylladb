@@ -28,7 +28,7 @@
 #include "keys.hh"
 #include <memory>
 #include <random>
-
+#include <utility>
 
 namespace sstables {
 
@@ -76,6 +76,10 @@ token minimum_token();
 token maximum_token();
 bool operator==(const token& t1, const token& t2);
 bool operator<(const token& t1, const token& t2);
+inline bool operator!=(const token& t1, const token& t2) { return std::rel_ops::operator!=(t1, t2); }
+inline bool operator>(const token& t1, const token& t2) { return std::rel_ops::operator>(t1, t2); }
+inline bool operator<=(const token& t1, const token& t2) { return std::rel_ops::operator<=(t1, t2); }
+inline bool operator>=(const token& t1, const token& t2) { return std::rel_ops::operator>=(t1, t2); }
 std::ostream& operator<<(std::ostream& out, const token& t);
 
 template <typename T>
