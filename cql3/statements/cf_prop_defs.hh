@@ -59,9 +59,6 @@ public:
     static constexpr int32_t DEFAULT_DEFAULT_TIME_TO_LIVE = 0;
     static constexpr int32_t DEFAULT_MIN_INDEX_INTERVAL = 128;
     static constexpr int32_t DEFAULT_MAX_INDEX_INTERVAL = 2048;
-
-    // FIXME: In origin the following consts are in CompressionParameters.
-    static constexpr auto SSTABLE_COMPRESSION = "sstable_compression";
 private:
     std::experimental::optional<sstring> _compaction_strategy_class;
 public:
@@ -103,9 +100,9 @@ public:
 
         auto compression_options = get_compression_options();
         if (!compression_options.empty()) {
-            auto sstable_compression_class = compression_options.find(sstring(SSTABLE_COMPRESSION));
+            auto sstable_compression_class = compression_options.find(sstring(compression_parameters::SSTABLE_COMPRESSION));
             if (sstable_compression_class == compression_options.end()) {
-                throw exceptions::configuration_exception(sstring("Missing sub-option '") + SSTABLE_COMPRESSION + "' for the '" + KW_COMPRESSION + "' option.");
+                throw exceptions::configuration_exception(sstring("Missing sub-option '") + compression_parameters::SSTABLE_COMPRESSION + "' for the '" + KW_COMPRESSION + "' option.");
             }
             #if 0
             Integer chunkLength = CompressionParameters.DEFAULT_CHUNK_LENGTH;
