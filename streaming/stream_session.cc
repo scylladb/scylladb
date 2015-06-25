@@ -94,4 +94,73 @@ future<> stream_session::start() {
     });
 }
 
+void stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
+    // prepare tasks
+    set_state(stream_session_state::PREPARING);
+    for (auto& request : requests) {
+        // always flush on stream request
+        add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true, request.repaired_at);
+    }
+    for (auto& summary : summaries) {
+        prepare_receiving(summary);
+    }
+
+    // send back prepare message if prepare message contains stream request
+    if (!requests.empty()) {
+        messages::prepare_message prepare;
+        for (auto& x: _transfers) {
+            auto& task = x.second;
+            prepare.summaries.emplace_back(task.get_summary());
+        }
+        //handler.send_message(std::move(prepare));
+    }
+
+    // if there are files to stream
+    if (!maybe_completed()) {
+        start_streaming_files();
+    }
+}
+
+bool stream_session::maybe_completed() {
+    bool completed = _receivers.empty() && _transfers.empty();
+    if (completed) {
+        if (_state == stream_session_state::WAIT_COMPLETE) {
+            if (!_complete_sent) {
+                //handler.sendMessage(new CompleteMessage());
+                _complete_sent = true;
+            }
+            //closeSession(State.COMPLETE);
+        } else {
+            // notify peer that this session is completed
+            //handler.sendMessage(new CompleteMessage());
+            _complete_sent = true;
+            set_state(stream_session_state::WAIT_COMPLETE);
+        }
+    }
+    return completed;
+}
+
+void stream_session::prepare_receiving(stream_summary& summary) {
+    if (summary.files > 0) {
+        // FIXME: handle when cf_id already exists
+        _receivers.emplace(summary.cf_id, stream_receive_task(*this, summary.cf_id, summary.files, summary.total_size));
+    }
+}
+
+void stream_session::start_streaming_files() {
+#if 0
+    streamResult.handleSessionPrepared(this);
+
+    state(State.STREAMING);
+    for (StreamTransferTask task : transfers.values())
+    {
+        Collection<OutgoingFileMessage> messages = task.getFileMessages();
+        if (messages.size() > 0)
+            handler.sendMessages(messages);
+        else
+            taskCompleted(task); // there is no file to send
+    }
+#endif
+}
+
 } // namespace streaming

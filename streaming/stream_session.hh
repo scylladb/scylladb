@@ -248,7 +248,6 @@ public:
         _requests.emplace_back(std::move(keyspace), std::move(ranges), std::move(column_families), repaired_at);
     }
 
-#if 0
     /**
      * Set up transfer for specific keyspace/ranges/CFs
      *
@@ -260,8 +259,8 @@ public:
      * @param flushTables flush tables?
      * @param repairedAt the time the repair started.
      */
-    public void addTransferRanges(String keyspace, Collection<Range<Token>> ranges, Collection<String> columnFamilies, boolean flushTables, long repairedAt)
-    {
+    void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables, long repaired_at) {
+#if 0
         Collection<ColumnFamilyStore> stores = getColumnFamilyStores(keyspace, columnFamilies);
         if (flushTables)
             flushSSTables(stores);
@@ -277,8 +276,10 @@ public:
             for (SSTableStreamingSections release : sections)
                 release.sstable.releaseReference();
         }
+#endif
     }
 
+#if 0
     private Collection<ColumnFamilyStore> getColumnFamilyStores(String keyspace, Collection<String> columnFamilies)
     {
         Collection<ColumnFamilyStore> stores = new HashSet<>();
@@ -484,33 +485,14 @@ public:
         // fail session
         closeSession(State.FAILED);
     }
+#endif
 
     /**
      * Prepare this session for sending/receiving files.
      */
-    public void prepare(Collection<StreamRequest> requests, Collection<StreamSummary> summaries)
-    {
-        // prepare tasks
-        state(State.PREPARING);
-        for (StreamRequest request : requests)
-            addTransferRanges(request.keyspace, request.ranges, request.columnFamilies, true, request.repairedAt); // always flush on stream request
-        for (StreamSummary summary : summaries)
-            prepareReceiving(summary);
+    void prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries);
 
-        // send back prepare message if prepare message contains stream request
-        if (!requests.isEmpty())
-        {
-            PrepareMessage prepare = new PrepareMessage();
-            for (StreamTransferTask task : transfers.values())
-                prepare.summaries.add(task.getSummary());
-            handler.sendMessage(prepare);
-        }
-
-        // if there are files to stream
-        if (!maybeCompleted())
-            startStreamingFiles();
-    }
-
+#if 0
     /**
      * Call back after sending FileMessageHeader.
      *
@@ -623,13 +605,13 @@ public:
     public synchronized void taskCompleted(StreamReceiveTask completedTask)
     {
         receivers.remove(completedTask.cfId);
-        maybeCompleted();
+        maybe_completed();
     }
 
     public synchronized void taskCompleted(StreamTransferTask completedTask)
     {
         transfers.remove(completedTask.cfId);
-        maybeCompleted();
+        maybe_completed();
     }
 #endif
 
@@ -646,31 +628,9 @@ public:
         //closeSession(State.FAILED);
     }
 
+private:
+    bool maybe_completed();
 #if 0
-    private boolean maybeCompleted()
-    {
-        boolean completed = receivers.isEmpty() && transfers.isEmpty();
-        if (completed)
-        {
-            if (state == State.WAIT_COMPLETE)
-            {
-                if (!completeSent)
-                {
-                    handler.sendMessage(new CompleteMessage());
-                    completeSent = true;
-                }
-                closeSession(State.COMPLETE);
-            }
-            else
-            {
-                // notify peer that this session is completed
-                handler.sendMessage(new CompleteMessage());
-                completeSent = true;
-                state(State.WAIT_COMPLETE);
-            }
-        }
-        return completed;
-    }
 
     /**
      * Flushes matching column families from the given keyspace, or all columnFamilies
@@ -683,28 +643,9 @@ public:
             flushes.add(cfs.forceFlush());
         FBUtilities.waitOnFutures(flushes);
     }
-
-    private void prepareReceiving(StreamSummary summary)
-    {
-        if (summary.files > 0)
-            receivers.put(summary.cfId, new StreamReceiveTask(this, summary.cfId, summary.files, summary.totalSize));
-    }
-
-    private void startStreamingFiles()
-    {
-        streamResult.handleSessionPrepared(this);
-
-        state(State.STREAMING);
-        for (StreamTransferTask task : transfers.values())
-        {
-            Collection<OutgoingFileMessage> messages = task.getFileMessages();
-            if (messages.size() > 0)
-                handler.sendMessages(messages);
-            else
-                taskCompleted(task); // there is no file to send
-        }
-    }
 #endif
+    void prepare_receiving(stream_summary& summary);
+    void start_streaming_files();
 };
 
 } // namespace streaming
