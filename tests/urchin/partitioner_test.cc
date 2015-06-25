@@ -11,6 +11,7 @@
 #include "dht/murmur3_partitioner.hh"
 #include "schema.hh"
 #include "types.hh"
+#include "schema_builder.hh"
 
 static dht::token token_from_long(uint64_t value) {
     auto t = net::hton(value);
@@ -20,28 +21,19 @@ static dht::token token_from_long(uint64_t value) {
 }
 
 BOOST_AUTO_TEST_CASE(test_decorated_key_is_compatible_with_origin) {
-    schema s({}, "", "",
-        // partition key
-        {{"c1", int32_type}, {"c2", int32_type}},
-        // clustering key
-        {},
-        // regular columns
-        {
-            {"v", int32_type},
-        },
-        // static columns
-        {},
-        // regular column name type
-        utf8_type
-    );
+    auto s = schema_builder("ks", "cf")
+        .with_column("c1", int32_type, column_kind::partition_key)
+        .with_column("c2", int32_type, column_kind::partition_key)
+        .with_column("v", int32_type)
+        .build();
 
     dht::murmur3_partitioner partitioner;
-    auto key = partition_key::from_deeply_exploded(s, {143, 234});
-    auto dk = partitioner.decorate_key(s, key);
+    auto key = partition_key::from_deeply_exploded(*s, {143, 234});
+    auto dk = partitioner.decorate_key(*s, key);
 
     // Expected value was taken from Origin
     BOOST_REQUIRE_EQUAL(dk._token, token_from_long(4958784316840156970));
-    BOOST_REQUIRE(dk._key.equal(s, key));
+    BOOST_REQUIRE(dk._key.equal(*s, key));
 }
 
 BOOST_AUTO_TEST_CASE(test_token_wraparound_1) {
