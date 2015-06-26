@@ -60,17 +60,17 @@ public:
      * @return true if any stream session is active
      */
     bool has_active_sessions();
-#if 0
-    public synchronized Collection<StreamSession> getAllStreamSessions()
-    {
-        Collection<StreamSession> results = new ArrayList<>();
-        for (HostStreamingData data : peerSessions.values())
-        {
-            results.addAll(data.getAllStreamSessions());
+
+    std::vector<stream_session> get_all_stream_sessions() {
+        std::vector<stream_session> results;
+        for (auto& x : _peer_sessions) {
+            auto s = x.second.get_all_stream_sessions();
+            std::move(s.begin(), s.end(), std::back_inserter(results));
         }
         return results;
     }
 
+#if 0
     public boolean isReceiving()
     {
         return connectionsPerHost == 0;
@@ -238,12 +238,16 @@ private:
                 streamExecutor.execute(new StreamSessionConnector(session));
             }
         }
-
-        public Collection<StreamSession> getAllStreamSessions()
-        {
-            return Collections.unmodifiableCollection(streamSessions.values());
-        }
 #endif
+
+        std::vector<stream_session> get_all_stream_sessions() {
+            std::vector<stream_session> sessions;
+            for (auto& x : _stream_sessions) {
+                sessions.push_back(x.second);
+            }
+            return sessions;
+        }
+
         stream_session& get_or_create_session_by_id(inet_address peer, int id, inet_address connecting) {
             auto it = _stream_sessions.find(id);
             if (it == _stream_sessions.end()) {
