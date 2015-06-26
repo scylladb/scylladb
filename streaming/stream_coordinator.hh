@@ -25,6 +25,7 @@
 #include "streaming/stream_session.hh"
 #include "streaming/session_info.hh"
 #include <map>
+#include <algorithm>
 
 namespace streaming {
 
@@ -99,23 +100,20 @@ public:
         get_host_data(info.peer).update_progress(info);
     }
 
-#if 0
-    public synchronized void addSessionInfo(SessionInfo session)
-    {
-        HostStreamingData data = get_or_create_host_data(session.peer);
-        data.addSessionInfo(session);
+    void add_session_info(session_info session) {
+        auto& data = get_or_create_host_data(session.peer);
+        data.add_session_info(std::move(session));
     }
 
-    public synchronized Set<SessionInfo> getAllSessionInfo()
-    {
-        Set<SessionInfo> result = new HashSet<>();
-        for (HostStreamingData data : peerSessions.values())
-        {
-            result.addAll(data.getAllSessionInfo());
+    std::vector<session_info> get_all_session_info() {
+        std::vector<session_info> result;
+        for (auto& x : _peer_sessions) {
+            auto s = x.second.get_all_session_info();
+            std::move(s.begin(), s.end(), std::back_inserter(result));
         }
         return result;
     }
-#endif
+
 public:
     void transfer_files(inet_address to, std::vector<stream_session::ss_table_streaming_sections> sstable_details) {
         host_streaming_data& session_list = get_or_create_host_data(to);
@@ -233,7 +231,6 @@ private:
             }
         }
 #if 0
-
         public void connectAllStreamSessions()
         {
             for (StreamSession session : streamSessions.values())
@@ -262,17 +259,17 @@ private:
             }
         }
 
-#if 0
-        public void addSessionInfo(SessionInfo info)
-        {
-            sessionInfos.put(info.sessionIndex, info);
+        void add_session_info(session_info info) {
+            _session_infos[info.session_index] = std::move(info);
         }
 
-        public Collection<SessionInfo> getAllSessionInfo()
-        {
-            return sessionInfos.values();
+        std::vector<session_info> get_all_session_info() {
+            std::vector<session_info> sessions;
+            for (auto& x : _session_infos) {
+                sessions.push_back(x.second);
+            }
+            return sessions;
         }
-#endif
     };
 };
 
