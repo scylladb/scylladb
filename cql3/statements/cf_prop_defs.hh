@@ -161,19 +161,10 @@ public:
     }
 #endif
 
-    // Keep this in sync with apply_to_schema().
     void apply_to_builder(schema_builder& builder) {
         if (has_property(KW_COMMENT)) {
             builder.set_comment(get_string(KW_COMMENT, ""));
         }
-    }
-
-    // Keep this in sync with apply_to_builder().
-    void apply_to_schema(schema* s) {
-        if (has_property(KW_COMMENT)) {
-            s->set_comment(get_string(KW_COMMENT, ""));
-        }
-
 #if 0
         cfm.readRepairChance(getDouble(KW_READREPAIRCHANCE, cfm.getReadRepairChance()));
         cfm.dcLocalReadRepairChance(getDouble(KW_DCLOCALREADREPAIRCHANCE, cfm.getDcLocalReadRepairChance()));
@@ -199,7 +190,7 @@ public:
         cfm.bloomFilterFpChance(getDouble(KW_BF_FP_CHANCE, cfm.getBloomFilterFpChance()));
 #endif
         if (!get_compression_options().empty()) {
-            s->set_compressor_params(compression_parameters(get_compression_options()));
+            builder.set_compressor_params(compression_parameters(get_compression_options()));
         }
 #if 0
         CachingOptions cachingOptions = getCachingOptions();
