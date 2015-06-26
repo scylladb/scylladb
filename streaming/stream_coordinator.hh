@@ -70,12 +70,11 @@ public:
         return results;
     }
 
-#if 0
-    public boolean isReceiving()
-    {
-        return connectionsPerHost == 0;
+    bool is_receiving() {
+        return _connections_per_host == 0;
     }
 
+#if 0
     public void connectAllStreamSessions()
     {
         for (HostStreamingData data : peerSessions.values())
