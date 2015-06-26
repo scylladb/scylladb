@@ -95,12 +95,11 @@ public:
         return get_or_create_host_data(peer).get_or_create_session_by_id(peer, id, connecting);
     }
 
-#if 0
-    public synchronized void updateProgress(ProgressInfo info)
-    {
-        getHostData(info.peer).updateProgress(info);
+    void update_progress(progress_info info) {
+        get_host_data(info.peer).update_progress(info);
     }
 
+#if 0
     public synchronized void addSessionInfo(SessionInfo session)
     {
         HostStreamingData data = get_or_create_host_data(session.peer);
@@ -137,8 +136,8 @@ public:
         }
     }
 
+private:
 #if 0
-
     private List<List<StreamSession.SSTableStreamingSections>> sliceSSTableDetails(Collection<StreamSession.SSTableStreamingSections> sstableDetails)
     {
         // There's no point in divvying things up into more buckets than we have sstableDetails
@@ -166,16 +165,15 @@ public:
         return result;
     }
 
-    private HostStreamingData getHostData(InetAddress peer)
-    {
-        HostStreamingData data = peerSessions.get(peer);
-        if (data == null)
-            throw new IllegalArgumentException("Unknown peer requested: " + peer);
-        return data;
-    }
 #endif
+    host_streaming_data& get_host_data(inet_address peer) {
+        auto it = _peer_sessions.find(peer);
+        if (it == _peer_sessions.end()) {
+            throw std::runtime_error(sprint("Unknown peer requested: %s", peer));
+        }
+        return it->second;
+    }
 
-private:
     host_streaming_data& get_or_create_host_data(inet_address peer) {
         _peer_sessions[peer] = host_streaming_data(_connections_per_host, _keep_ss_table_level);
         return _peer_sessions[peer];
@@ -256,12 +254,15 @@ private:
             }
             return it->second;
         }
-#if 0
-        public void updateProgress(ProgressInfo info)
-        {
-            sessionInfos.get(info.sessionIndex).updateProgress(info);
+
+        void update_progress(progress_info info) {
+            auto it = _session_infos.find(info.session_index);
+            if (it != _session_infos.end()) {
+                it->second.update_progress(std::move(info));
+            }
         }
 
+#if 0
         public void addSessionInfo(SessionInfo info)
         {
             sessionInfos.put(info.sessionIndex, info);
