@@ -237,7 +237,7 @@ public:
                                                                    peer,
                                                                    peer.equals(connecting) ? "" : " through " + connecting);
             handler.initiate();
-            onInitializationComplete();
+            on_initialization_complete();
         }
         catch (Exception e)
         {
@@ -411,25 +411,13 @@ public:
                 break;
         }
     }
-
+#endif
     /**
      * Call back when connection initialization is complete to start the prepare phase.
      */
-    public void onInitializationComplete()
-    {
-        // send prepare message
-        state(State.PREPARING);
-        PrepareMessage prepare = new PrepareMessage();
-        prepare.requests.addAll(requests);
-        for (StreamTransferTask task : transfers.values())
-            prepare.summaries.add(task.getSummary());
-        handler.sendMessage(prepare);
+    void on_initialization_complete();
 
-        // if we don't need to prepare for receiving stream, start sending files immediately
-        if (requests.isEmpty())
-            startStreamingFiles();
-    }
-
+#if 0
     /**l
      * Call back for handling exception during streaming.
      *

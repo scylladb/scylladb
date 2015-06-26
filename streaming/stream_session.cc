@@ -96,6 +96,22 @@ future<> stream_session::start() {
     });
 }
 
+void stream_session::on_initialization_complete() {
+    // send prepare message
+    set_state(stream_session_state::PREPARING);
+    auto prepare = messages::prepare_message();
+    std::copy(_requests.begin(), _requests.end(), std::back_inserter(prepare.requests));
+    for (auto& x : _transfers) {
+        prepare.summaries.emplace_back(x.second.get_summary());
+    }
+    // handler.sendMessage(prepare);
+
+    // if we don't need to prepare for receiving stream, start sending files immediately
+    if (_requests.empty()) {
+        start_streaming_files();
+    }
+}
+
 void stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
     // prepare tasks
     set_state(stream_session_state::PREPARING);
