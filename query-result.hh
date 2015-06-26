@@ -33,7 +33,7 @@ public:
 };
 
 //
-// The query results are stored in a serialized from. This is in order to
+// The query results are stored in a serialized form. This is in order to
 // address the following problems, which a structured format has:
 //
 //   - high level of indirection (vector of vectors of vectors of blobs), which
@@ -62,7 +62,7 @@ public:
 // pass the data using zero-copy to the client, prepending a header.
 //
 // Users which need more complex structure of query results, should
-// trasnform it to such using appropriate visitors.
+// transform it to such using appropriate visitors.
 // TODO: insert reference to such visitors here.
 //
 // Query results have dynamic format. In some queries (maybe even in typical
