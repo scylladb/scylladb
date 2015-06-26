@@ -78,6 +78,21 @@ public:
             throw exceptions::configuration_exception(sstring(CRC_CHECK_CHANCE) + " must be between 0.0 and 1.0.");
         }
     }
+
+    std::map<sstring, sstring> get_options() const {
+        if (_compressor == compressor::none) {
+            return std::map<sstring, sstring>();
+        }
+        std::map<sstring, sstring> opts;
+        opts.emplace(sstring(SSTABLE_COMPRESSION), compressor_name());
+        if (_chunk_length) {
+            opts.emplace(sstring(CHUNK_LENGTH_KB), std::to_string(_chunk_length.value() / 1024));
+        }
+        if (_crc_check_chance) {
+            opts.emplace(sstring(CRC_CHECK_CHANCE), std::to_string(_crc_check_chance.value()));
+        }
+        return opts;
+    }
 private:
     void validate_options(const std::map<sstring, sstring>& options) {
         // currently, there are no options specific to a particular compressor
@@ -95,5 +110,17 @@ private:
     bool is_compressor_class(const sstring& value, const sstring& class_name) {
         static const sstring namespace_prefix = "org.apache.cassandra.io.compress.";
         return value == class_name || value == namespace_prefix + class_name;
+    }
+    sstring compressor_name() const {
+        switch (_compressor) {
+        case compressor::lz4:
+             return "org.apache.cassandra.io.compress.LZ4Compressor";
+        case compressor::snappy:
+            return "org.apache.cassandra.io.compress.SnappyCompressor";
+        case compressor::deflate:
+            return "org.apache.cassandra.io.compress.DeflateCompressor";
+        default:
+            abort();
+        }
     }
 };
