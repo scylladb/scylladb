@@ -31,7 +31,11 @@ public:
     compression_parameters(const std::map<sstring, sstring>& options) {
         validate_options(options);
 
-        const auto& compressor_class = options.at(SSTABLE_COMPRESSION);
+        auto it = options.find(SSTABLE_COMPRESSION);
+        if (it == options.end()) {
+            return;
+        }
+        const auto& compressor_class = it->second;
         if (is_compressor_class(compressor_class, "LZ4Compressor")) {
             _compressor = compressor::lz4;
         } else if (is_compressor_class(compressor_class, "SnappyCompressor")) {
