@@ -79,6 +79,7 @@ inline bool operator!=(const result_set_row& x, const result_set_row& y) {
 class result_set {
     std::vector<result_set_row> _rows;
 public:
+    static result_set from_raw_result(schema_ptr, const partition_slice&, const result&);
     result_set(const std::vector<result_set_row>& rows)
         : _rows{std::move(rows)}
     { }

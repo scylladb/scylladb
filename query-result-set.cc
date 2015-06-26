@@ -119,4 +119,22 @@ result_set_builder::deserialize(const result_row_view& row, bool is_static)
     return cells;
 }
 
+result_set
+result_set::from_raw_result(schema_ptr s, const partition_slice& slice, const result& r) {
+    auto make = [&slice, s = std::move(s)] (bytes_view v) mutable {
+        result_set_builder builder{std::move(s)};
+        result_view view(v);
+        view.consume(slice, builder);
+        return builder.build();
+    };
+
+    if (r.buf().is_linearized()) {
+        return make(r.buf().view());
+    } else {
+        // FIXME: make result_view::consume() work on fragments to avoid linearization.
+        bytes_ostream w(r.buf());
+        return make(w.linearize());
+    }
+}
+
 }

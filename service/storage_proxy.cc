@@ -1620,11 +1620,7 @@ storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const
             });
         });
     }).then([this, schema, slice] (auto&& result) {
-        query::result_set_builder builder{schema};
-        bytes_ostream w(result->buf());
-        query::result_view view(w.linearize());
-        view.consume(slice, builder);
-        return make_lw_shared(builder.build());
+        return make_lw_shared(query::result_set::from_raw_result(schema, slice, *result));
     });
 }
 
