@@ -37,7 +37,7 @@ public:
         } else if (compressor_class == "SnappyCompressor") {
             _compressor = compressor::snappy;
         } else if (compressor_class == "DeflateCompressor") {
-            _compressor = compressor::none;
+            _compressor = compressor::deflate;
         } else {
             throw exceptions::configuration_exception(sstring("Unsupported compression class '") + compressor_class + "'.");
         }
