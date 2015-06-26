@@ -1624,7 +1624,7 @@ storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const
         bytes_ostream w(result->buf());
         query::result_view view(w.linearize());
         view.consume(slice, builder);
-        return builder.build();
+        return make_lw_shared(builder.build());
     });
 }
 

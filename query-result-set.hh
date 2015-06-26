@@ -111,7 +111,7 @@ class result_set_builder {
     std::unordered_map<sstring, data_value> _pkey_cells;
 public:
     result_set_builder(schema_ptr schema);
-    lw_shared_ptr<result_set> build() const;
+    result_set build() const;
     void accept_new_partition(const partition_key& key, uint32_t row_count);
     void accept_new_partition(uint32_t row_count);
     void accept_new_row(const clustering_key& key, const result_row_view& static_row, const result_row_view& row);

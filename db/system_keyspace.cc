@@ -1081,7 +1081,7 @@ query(service::storage_proxy& proxy, const sstring& cf_name) {
         bytes_ostream w(result->buf());
         query::result_view view(w.linearize());
         view.consume(cmd->slice, builder);
-        return builder.build();
+        return make_lw_shared(builder.build());
     });
 }
 

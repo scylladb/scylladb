@@ -26,8 +26,8 @@ result_set_builder::result_set_builder(schema_ptr schema)
     : _schema{schema}
 { }
 
-lw_shared_ptr<result_set> result_set_builder::build() const {
-    return make_lw_shared<result_set>(_rows);
+result_set result_set_builder::build() const {
+    return { _rows };
 }
 
 void result_set_builder::accept_new_partition(const partition_key& key, uint32_t row_count)
