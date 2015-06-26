@@ -41,6 +41,8 @@ public:
     const utils::UUID& column_family_id() const { return _schema->id(); }
     bool operator==(const mutation&) const;
     bool operator!=(const mutation&) const;
+public:
+    query::result query(const query::partition_slice&, uint32_t row_limit = query::max_rows) const;
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };
