@@ -47,6 +47,9 @@ public:
     gc_clock::duration default_time_to_live() const {
         return _raw._default_time_to_live;
     }
+    void set_compressor_params(const compression_parameters& cp) {
+        _raw._compressor_params = cp;
+    }
 
     column_definition& find_column(const cql3::column_identifier&);
     schema_builder& with_column(const column_definition& c);
