@@ -237,6 +237,24 @@ void stream_session::start_streaming_files() {
 #endif
 }
 
+void stream_session::add_transfer_files(std::vector<ss_table_streaming_sections> sstable_details) {
+    for (auto& details : sstable_details) {
+        if (details.sections.empty()) {
+            // A reference was acquired on the sstable and we won't stream it
+            // FIXME
+            // details.sstable.releaseReference();
+            continue;
+        }
+        // FIXME
+        UUID cf_id; // details.sstable.metadata.cfId;
+        auto it = _transfers.find(cf_id);
+        if (it == _transfers.end()) {
+            it = _transfers.emplace(cf_id, stream_transfer_task(*this, cf_id)).first;
+        }
+        it->second.add_transfer_file(details.sstable, details.estimated_keys, std::move(details.sections), details.repaired_at);
+    }
+}
+
 void stream_session::close_session(stream_session_state final_state) {
     if (!_is_aborted) {
         _is_aborted = true;

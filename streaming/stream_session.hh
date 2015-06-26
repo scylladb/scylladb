@@ -347,32 +347,7 @@ public:
     }
 #endif
 
-    void add_transfer_files(std::vector<ss_table_streaming_sections> sstable_details) {
-#if 0
-        Iterator<SSTableStreamingSections> iter = sstableDetails.iterator();
-        while (iter.hasNext())
-        {
-            SSTableStreamingSections details = iter.next();
-            if (details.sections.isEmpty())
-            {
-                // A reference was acquired on the sstable and we won't stream it
-                details.sstable.releaseReference();
-                iter.remove();
-                continue;
-            }
-
-            UUID cfId = details.sstable.metadata.cfId;
-            StreamTransferTask task = transfers.get(cfId);
-            if (task == null)
-            {
-                task = new StreamTransferTask(this, cfId);
-                transfers.put(cfId, task);
-            }
-            task.addTransferFile(details.sstable, details.estimatedKeys, details.sections, details.repairedAt);
-            iter.remove();
-        }
-#endif
-    }
+    void add_transfer_files(std::vector<ss_table_streaming_sections> sstable_details);
 
 private:
     void close_session(stream_session_state final_state);
