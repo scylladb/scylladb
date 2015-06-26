@@ -417,22 +417,12 @@ public:
      */
     void on_initialization_complete();
 
-#if 0
     /**l
      * Call back for handling exception during streaming.
      *
      * @param e thrown exception
      */
-    public void onError(Throwable e)
-    {
-        logger.error("[Stream #{}] Streaming error occurred", planId(), e);
-        // send session failure message
-        if (handler.isOutgoingConnected())
-            handler.sendMessage(new SessionFailedMessage());
-        // fail session
-        close_session(stream_session_state::FAILED);
-    }
-#endif
+    void on_error();
 
     /**
      * Prepare this session for sending/receiving files.

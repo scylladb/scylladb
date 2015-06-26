@@ -112,6 +112,18 @@ void stream_session::on_initialization_complete() {
     }
 }
 
+void stream_session::on_error() {
+#if 0
+    //logger.error("[Stream #{}] Streaming error occurred", planId(), e);
+    // send session failure message
+    if (handler.is_outgoing_connected()) {
+       handler.sendMessage(session_failed_message());
+    }
+#endif
+    // fail session
+    close_session(stream_session_state::FAILED);
+}
+
 void stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
     // prepare tasks
     set_state(stream_session_state::PREPARING);
