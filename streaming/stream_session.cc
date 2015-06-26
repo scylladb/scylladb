@@ -86,6 +86,8 @@ void stream_session::init_messaging_service_handler() {
     });
 }
 
+distributed<stream_session::handler> stream_session::_handlers;
+
 future<> stream_session::start() {
     return _handlers.start().then([this] {
         return _handlers.invoke_on_all([this] (handler& h) {

@@ -123,7 +123,7 @@ private:
             return make_ready_future<>();
         }
     };
-    distributed<handler> _handlers;
+    static distributed<handler> _handlers;
     void init_messaging_service_handler();
     future<> start();
 public:
