@@ -163,14 +163,14 @@ void stream_session::complete() {
             //handler.sendMessage(new CompleteMessage());
             _complete_sent = true;
         }
-        //closeSession(stream_session_state::COMPLETE);
+       close_session(stream_session_state::COMPLETE);
     } else {
         set_state(stream_session_state::WAIT_COMPLETE);
     }
 }
 
 void stream_session::session_failed() {
-    //closeSession(stream_session_state::FAILED);
+    close_session(stream_session_state::FAILED);
 }
 
 session_info stream_session::get_session_info() {
