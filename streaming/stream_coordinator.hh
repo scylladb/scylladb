@@ -80,12 +80,16 @@ public:
         for (HostStreamingData data : peerSessions.values())
             data.connectAllStreamSessions();
     }
-
-    public synchronized Set<InetAddress> getPeers()
-    {
-        return new HashSet<>(peerSessions.keySet());
-    }
 #endif
+
+    std::set<inet_address> get_peers() {
+        std::set<inet_address> r;
+        for (auto& x : _peer_sessions) {
+            r.insert(x.first);
+        }
+        return r;
+    }
+
 public:
     stream_session& get_or_create_next_session(inet_address peer, inet_address connecting) {
         return get_or_create_host_data(peer).get_or_create_next_session(peer, connecting);
