@@ -429,25 +429,12 @@ public:
      */
     void prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries);
 
-#if 0
     /**
      * Call back after sending FileMessageHeader.
      *
      * @param header sent header
      */
-    public void fileSent(FileMessageHeader header)
-    {
-        long headerSize = header.size();
-        StreamingMetrics.totalOutgoingBytes.inc(headerSize);
-        metrics.outgoingBytes.inc(headerSize);
-        // schedule timeout for receiving ACK
-        StreamTransferTask task = transfers.get(header.cfId);
-        if (task != null)
-        {
-            task.scheduleTimeout(header.sequenceNumber, 12, TimeUnit.HOURS);
-        }
-    }
-#endif
+    void file_sent(const messages::file_message_header& header);
 
     /**
      * Call back after receiving FileMessageHeader.

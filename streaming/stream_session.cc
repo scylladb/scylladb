@@ -151,6 +151,19 @@ void stream_session::prepare(std::vector<stream_request> requests, std::vector<s
     }
 }
 
+void stream_session::file_sent(const messages::file_message_header& header) {
+#if 0
+    auto header_size = header.size();
+    StreamingMetrics.totalOutgoingBytes.inc(headerSize);
+    metrics.outgoingBytes.inc(headerSize);
+#endif
+    // schedule timeout for receiving ACK
+    auto it = _transfers.find(header.cf_id);
+    if (it != _transfers.end()) {
+        //task.scheduleTimeout(header.sequenceNumber, 12, TimeUnit.HOURS);
+    }
+}
+
 void stream_session::receive(messages::incoming_file_message message) {
 #if 0
     auto header_size = message.header.size();
