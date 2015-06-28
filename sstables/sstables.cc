@@ -822,12 +822,6 @@ future<> sstable::write_simple(T& component) {
                 return w->close().then([w] {}); // the underlying file is synced here.
             });
         });
-    }).then_wrapped([this, file_path] (future<> f) {
-        try {
-            f.get();
-        } catch (std::system_error& e) {
-            // TODO: handle exception.
-        }
     });
 }
 template future<> sstable::read_simple<sstable::component_type::Filter>(sstables::filter& f);
