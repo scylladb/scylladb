@@ -92,6 +92,10 @@ public:
         return temporary_buffer<char>::aligned(file::dma_alignment, size);
     }
     virtual future<> put(temporary_buffer<char> buf) override {
+        // put() must usually be of chunks multiple of file::dma_alignment.
+        // Only the last part can have an unaligned length. If put() was
+        // called again with an unaligned pos, we have a bug in the caller.
+        assert(!(_pos & (file::dma_alignment - 1)));
         bool truncate = false;
         auto pos = _pos;
         _pos += buf.size();
