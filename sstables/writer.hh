@@ -21,6 +21,9 @@ public:
     file_writer(output_stream<char>&& out)
         : _out(std::move(out)) {}
 
+    virtual ~file_writer() = default;
+    file_writer(file_writer&&) = default;
+
     virtual future<> write(const char* buf, size_t n) {
         _offset += n;
         return _out.write(buf, n);
