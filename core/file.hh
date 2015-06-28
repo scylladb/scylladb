@@ -16,7 +16,7 @@
  * under the License.
  */
 /*
- * Copyright 2014 Cloudius Systems
+ * Copyright 2015 Cloudius Systems
  */
 
 #ifndef FILE_HH_
@@ -35,6 +35,12 @@
 #include <sys/uio.h>
 #include <unistd.h>
 
+/// \addtogroup fileio-module
+/// @{
+
+/// Enumeration describing the type of a directory entry being listed.
+///
+/// \see file::list_directory()
 enum class directory_entry_type {
     block_device,
     char_device,
@@ -45,11 +51,15 @@ enum class directory_entry_type {
     socket,
 };
 
+/// A directory entry being listed.
 struct directory_entry {
+    /// Name of the file in a directory entry.  Will never be "." or "..".  Only the last component is included.
     sstring name;
+    /// Type of the directory entry, if known.
     std::experimental::optional<directory_entry_type> type;
 };
 
+/// \cond internal
 class file_impl {
 public:
     virtual ~file_impl() {}
@@ -109,13 +119,26 @@ make_file_impl(int fd) {
     }
 }
 
+/// \endcond
+
+/// A data file on persistent storage.
+///
+/// File objects represent uncached, unbuffered files.  As such great care
+/// must be taken to cache data at the application layer; neither seastar
+/// nor the OS will cache these file.
+///
+/// Data is transferred using direct memory access (DMA).  This imposes
+/// restrictions on file offsets and data pointers.  The former must be aligned
+/// on a 4096 byte boundary, while a 512 byte boundary suffices for the latter.
 class file {
     std::unique_ptr<file_impl> _file_impl;
 private:
     explicit file(int fd) : _file_impl(make_file_impl(fd)) {}
 
 public:
+    /// Moves a file object.
     file(file&& x) : _file_impl(std::move(x._file_impl)) {}
+    /// Moves assigns a file object.
     file& operator=(file&& x) noexcept = default;
 
     // O_DIRECT reading requires that buffer, offset, and read length, are
@@ -125,6 +148,8 @@ public:
     // In addition, if we start reading in things outside page boundaries,
     // we will end up with various pages around, some of them with
     // overlapping ranges. Those would be very challenging to cache.
+
+    /// Alignment requirement for file offsets
     static constexpr uint64_t dma_alignment = 4096;
 
     // Make sure alignment is a power of 2
@@ -177,6 +202,8 @@ public:
         });
     }
 
+    /// Error thrown when attempting to read past end-of-file
+    /// with \ref dma_read_exactly().
     class eof_error : public std::exception {};
 
     /**
@@ -202,27 +229,55 @@ public:
         });
     }
 
+    /// Performs a DMA read into the specified iovec.
+    ///
+    /// \param pos offset to read from.  Must be aligned to \ref dma_alignment.
+    /// \param iov vector of address/size pairs to read into.  Addresses must be
+    ///            aligned.
+    /// \return a future representing the number of bytes actually read.  A short
+    ///         read may happen due to end-of-file or an I/O error.
     future<size_t> dma_read(uint64_t pos, std::vector<iovec> iov) {
         return _file_impl->read_dma(pos, std::move(iov));
     }
 
+    /// Performs a DMA write from the specified buffer.
+    ///
+    /// \param pos offset to write into.  Must be aligned to \ref dma_alignment.
+    /// \param buffer aligned address of buffer to read from.  Buffer must exists
+    ///               until the future is made ready.
+    /// \param len number of bytes to write.  Must be aligned.
+    /// \return a future representing the number of bytes actually written.  A short
+    ///         write may happen due to an I/O error.
     template <typename CharType>
     future<size_t> dma_write(uint64_t pos, const CharType* buffer, size_t len) {
         return _file_impl->write_dma(pos, buffer, len);
     }
 
+    /// Performs a DMA write to the specified iovec.
+    ///
+    /// \param pos offset to write into.  Must be aligned to \ref dma_alignment.
+    /// \param iov vector of address/size pairs to write from.  Addresses must be
+    ///            aligned.
+    /// \return a future representing the number of bytes actually written.  A short
+    ///         write may happen due to an I/O error.
     future<size_t> dma_write(uint64_t pos, std::vector<iovec> iov) {
         return _file_impl->write_dma(pos, std::move(iov));
     }
 
+    /// Causes any previously written data to be made stable on persistent storage.
+    ///
+    /// Prior to a flush, written data may or may not survive a power failure.  After
+    /// a flush, data is guaranteed to be on disk.
     future<> flush() {
         return _file_impl->flush();
     }
 
+    /// Returns \c stat information about the file.
     future<struct stat> stat() {
         return _file_impl->stat();
     }
 
+    /// Truncates the file to a specified length.
     future<> truncate(uint64_t length) {
         return _file_impl->truncate(length);
     }
@@ -243,10 +298,15 @@ public:
         return _file_impl->allocate(position, length);
     }
 
+    /// Discard unneeded data from the file.
+    ///
+    /// The discard operation tells the file system that a range of offsets
+    /// (which be aligned) is no longer needed and can be reused.
     future<> discard(uint64_t offset, uint64_t length) {
         return _file_impl->discard(offset, length);
     }
 
+    /// Gets the file size.
     future<size_t> size() {
         return _file_impl->size();
     }
@@ -263,6 +323,7 @@ public:
         return _file_impl->close();
     }
 
+    /// Returns a directory listing, given that this file object is a directory.
     subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) {
         return _file_impl->list_directory(std::move(next));
     }
@@ -312,6 +373,8 @@ private:
 
     friend class reactor;
 };
+
+/// \cond internal
 
 template <typename CharType>
 struct file::read_state {
@@ -474,5 +537,9 @@ file::read_maybe_eof(uint64_t pos, size_t len) {
         }
     });
 }
+
+/// \endcond
+
+/// @}
 
 #endif /* FILE_HH_ */
