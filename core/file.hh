@@ -76,6 +76,11 @@ public:
     posix_file_impl(int fd) : _fd(fd) {}
     ~posix_file_impl() {
         if (_fd != -1) {
+            if (std::uncaught_exception()) {
+                std::cerr << "WARNING: closing file in reactor thread during exception recovery\n";
+            } else {
+                std::cerr << "WARNING: closing file in reactor thread\n";
+            }
             ::close(_fd);
         }
     }
