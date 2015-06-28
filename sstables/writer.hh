@@ -178,7 +178,7 @@ static inline output_stream<char> make_compressed_file_output_stream(lw_shared_p
     // buffer of output stream is set to chunk length, because flush must
     // happen every time a chunk was filled up.
     options.buffer_size = cm->uncompressed_chunk_length();
-    return output_stream<char>(compressed_file_data_sink(std::move(f), cm, options), options.buffer_size);
+    return output_stream<char>(compressed_file_data_sink(std::move(f), cm, options), options.buffer_size, true);
 }
 
 }
