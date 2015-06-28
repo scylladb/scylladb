@@ -509,7 +509,7 @@ deps = {
     'apps/httpd/httpd': ['apps/httpd/demo.json', 'apps/httpd/main.cc'] + http + libnet + core,
     'apps/memcached/memcached': ['apps/memcached/memcache.cc'] + memcache_base,
     'tests/memcached/test_ascii_parser': ['tests/memcached/test_ascii_parser.cc'] + memcache_base + boost_test_lib,
-    'tests/fileiotest': ['tests/fileiotest.cc'] + core,
+    'tests/fileiotest': ['tests/fileiotest.cc'] + core + boost_test_lib,
     'tests/directory_test': ['tests/directory_test.cc'] + core,
     'tests/linecount': ['tests/linecount.cc'] + core,
     'tests/echotest': ['tests/echotest.cc'] + core + libnet,

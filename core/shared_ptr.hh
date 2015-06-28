@@ -432,6 +432,13 @@ public:
     T* get() const noexcept {
         return _p;
     }
+    long use_count() const noexcept {
+        if (_b) {
+            return _b->count;
+        } else {
+            return 0;
+        }
+    }
 
     template <bool esft>
     struct make_helper;

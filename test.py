@@ -34,6 +34,7 @@ boost_tests = [
     'foreign_ptr_test',
     'semaphore_test',
     'shared_ptr_test',
+    'fileiotest',
     'urchin/bytes_ostream_test',
     'urchin/types_test',
     'urchin/keys_test',
