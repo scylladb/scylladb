@@ -128,7 +128,11 @@ public:
             });
         });
     }
-    future<> close() { return _file->flush(); }
+    future<> close() {
+        return _file->flush().then([this] {
+            return _file->close();
+        });
+    }
 };
 
 class file_data_sink : public data_sink {

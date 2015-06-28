@@ -64,6 +64,7 @@ public:
     virtual future<> discard(uint64_t offset, uint64_t length) = 0;
     virtual future<> allocate(uint64_t position, uint64_t length) = 0;
     virtual future<size_t> size(void) = 0;
+    virtual future<> close() = 0;
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) = 0;
 
     friend class reactor;
@@ -73,12 +74,7 @@ class posix_file_impl : public file_impl {
 public:
     int _fd;
     posix_file_impl(int fd) : _fd(fd) {}
-    ~posix_file_impl() {
-        if (_fd != -1) {
-            ::close(_fd);
-        }
-    }
-
+    virtual ~posix_file_impl() override;
     future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len);
     future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov);
     future<size_t> read_dma(uint64_t pos, void* buffer, size_t len);
@@ -89,6 +85,7 @@ public:
     future<> discard(uint64_t offset, uint64_t length);
     virtual future<> allocate(uint64_t position, uint64_t length) override;
     future<size_t> size(void);
+    virtual future<> close() override;
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override;
 };
 
@@ -252,6 +249,18 @@ public:
 
     future<size_t> size() {
         return _file_impl->size();
+    }
+
+    /// Closes the file.
+    ///
+    /// Flushes any pending operations and release any resources associated with
+    /// the file (except for stable storage).
+    ///
+    /// \note
+    /// to ensure file data reaches stable storage, you must call \ref flush()
+    /// before calling \c close().
+    future<> close() {
+        return _file_impl->close();
     }
 
     subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) {

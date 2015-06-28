@@ -471,6 +471,17 @@ bool reactor::process_io()
     return n;
 }
 
+posix_file_impl::~posix_file_impl() {
+    if (_fd != -1) {
+        if (std::uncaught_exception()) {
+            std::cerr << "WARNING: closing file in reactor thread during exception recovery\n";
+        } else {
+            std::cerr << "WARNING: closing file in reactor thread\n";
+        }
+        ::close(_fd);
+    }
+}
+
 future<size_t>
 posix_file_impl::write_dma(uint64_t pos, const void* buffer, size_t len) {
     return engine().submit_io_write([this, pos, buffer, len] (iocb& io) {
@@ -693,6 +704,16 @@ future<size_t>
 posix_file_impl::size(void) {
     return posix_file_impl::stat().then([] (struct stat&& st) {
         return make_ready_future<size_t>(st.st_size);
+    });
+}
+
+future<>
+posix_file_impl::close() {
+    return engine()._thread_pool.submit<syscall_result<int>>([fd = _fd] {
+        return wrap_syscall<int>(::close(fd));
+    }).then([this] (syscall_result<int> sr) {
+        _fd = -1;
+        sr.throw_if_error();
     });
 }
 
