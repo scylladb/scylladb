@@ -23,7 +23,8 @@ using token = dht::token;
 class abstract_replication_strategy {
 protected:
     sstring _ks_name;
-    keyspace* _keyspace = nullptr;
+    // TODO: Do we need this member at all?
+    //keyspace* _keyspace = nullptr;
     std::map<sstring, sstring> _config_options;
     token_metadata& _token_metadata;
     snitch_ptr& _snitch;
