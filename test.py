@@ -34,6 +34,7 @@ boost_tests = [
     'foreign_ptr_test',
     'semaphore_test',
     'shared_ptr_test',
+    'fileiotest',
 ]
 
 other_tests = [
