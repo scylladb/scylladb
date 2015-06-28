@@ -64,6 +64,7 @@ public:
     virtual future<> discard(uint64_t offset, uint64_t length) = 0;
     virtual future<> allocate(uint64_t position, uint64_t length) = 0;
     virtual future<size_t> size(void) = 0;
+    virtual future<> close() = 0;
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) = 0;
 
     friend class reactor;
@@ -89,6 +90,7 @@ public:
     future<> discard(uint64_t offset, uint64_t length);
     virtual future<> allocate(uint64_t position, uint64_t length) override;
     future<size_t> size(void);
+    virtual future<> close() override;
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override;
 };
 
@@ -252,6 +254,18 @@ public:
 
     future<size_t> size() {
         return _file_impl->size();
+    }
+
+    /// Closes the file.
+    ///
+    /// Flushes any pending operations and release any resources associated with
+    /// the file (except for stable storage).
+    ///
+    /// \note
+    /// to ensure file data reaches stable storage, you must call \ref flush()
+    /// before calling \c close().
+    future<> close() {
+        return _file_impl->close();
     }
 
     subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) {

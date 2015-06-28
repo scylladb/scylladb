@@ -696,6 +696,16 @@ posix_file_impl::size(void) {
     });
 }
 
+future<>
+posix_file_impl::close() {
+    return engine()._thread_pool.submit<syscall_result<int>>([fd = _fd] {
+        return wrap_syscall<int>(::close(fd));
+    }).then([this] (syscall_result<int> sr) {
+        _fd = -1;
+        sr.throw_if_error();
+    });
+}
+
 future<size_t>
 blockdev_file_impl::size(void) {
     return engine()._thread_pool.submit<syscall_result_extra<size_t>>([this] {
