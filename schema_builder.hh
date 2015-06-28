@@ -5,6 +5,7 @@
 #pragma once
 
 #include "schema.hh"
+#include "database_fwd.hh"
 
 struct schema_builder {
     schema::raw_schema _raw;

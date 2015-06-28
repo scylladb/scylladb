@@ -49,6 +49,7 @@ namespace dht {
 
 class decorated_key;
 class token;
+class ring_position;
 
 class token {
 public:
@@ -102,13 +103,17 @@ public:
         schema_ptr s;
         less_comparator(schema_ptr s);
         bool operator()(const decorated_key& k1, const decorated_key& k2) const;
+        bool operator()(const decorated_key& k1, const ring_position& k2) const;
+        bool operator()(const ring_position& k1, const decorated_key& k2) const;
     };
 
     bool equal(const schema& s, const decorated_key& other) const;
 
     bool less_compare(const schema& s, const decorated_key& other) const;
+    bool less_compare(const schema& s, const ring_position& other) const;
 
     int tri_compare(const schema& s, const decorated_key& other) const;
+    int tri_compare(const schema& s, const ring_position& other) const;
 };
 
 class i_partitioner {
@@ -202,6 +207,56 @@ protected:
     friend bool operator==(const token& t1, const token& t2);
     friend bool operator<(const token& t1, const token& t2);
 };
+
+//
+// Represents position in the ring of partitons, where partitions are ordered
+// according to decorated_key ordering (first by token, then by key value).
+//
+// The 'key' part is optional. When it's absent, this object selects all
+// partitions which share given token. When 'key' is present, position is
+// further narrowed down to a partition with given key value among all
+// partitions which share given token.
+//
+// Maps to org.apache.cassandra.db.RowPosition and its derivatives in Origin.
+// Range bound intricacies are handled separately, by wrapping range<>. This
+// allows us to devirtualize this.
+//
+class ring_position {
+    dht::token _token;
+    std::experimental::optional<partition_key> _key;
+public:
+    ring_position(dht::token token) : _token(std::move(token)) {}
+
+    ring_position(dht::token token, partition_key key)
+        : _token(std::move(token))
+        , _key(std::experimental::make_optional(std::move(key)))
+    { }
+
+    ring_position(const dht::decorated_key& dk)
+        : _token(dk._token)
+        , _key(std::experimental::make_optional(dk._key))
+    { }
+
+    const dht::token& token() const {
+        return _token;
+    }
+
+    const std::experimental::optional<partition_key>& key() const {
+        return _key;
+    }
+
+    bool has_key() const {
+        return bool(_key);
+    }
+
+    // Call only when has_key()
+    dht::decorated_key as_decorated_key() const {
+        return { _token, *_key };
+    }
+
+    friend std::ostream& operator<<(std::ostream&, const ring_position&);
+};
+
 
 std::ostream& operator<<(std::ostream& out, const token& t);
 
