@@ -104,9 +104,8 @@ public:
 inline
 std::unique_ptr<file_impl>
 make_file_impl(int fd) {
-    struct stat st;
-    ::fstat(fd, &st);
-    if (S_ISBLK(st.st_mode)) {
+    auto r = ::ioctl(fd, BLKGETSIZE);
+    if (r != -1) {
         return std::unique_ptr<file_impl>(new blockdev_file_impl(fd));
     } else {
         return std::unique_ptr<file_impl>(new posix_file_impl(fd));
