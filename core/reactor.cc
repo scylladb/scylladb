@@ -471,6 +471,17 @@ bool reactor::process_io()
     return n;
 }
 
+posix_file_impl::~posix_file_impl() {
+    if (_fd != -1) {
+        if (std::uncaught_exception()) {
+            std::cerr << "WARNING: closing file in reactor thread during exception recovery\n";
+        } else {
+            std::cerr << "WARNING: closing file in reactor thread\n";
+        }
+        ::close(_fd);
+    }
+}
+
 future<size_t>
 posix_file_impl::write_dma(uint64_t pos, const void* buffer, size_t len) {
     return engine().submit_io_write([this, pos, buffer, len] (iocb& io) {

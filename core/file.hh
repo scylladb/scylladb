@@ -74,17 +74,7 @@ class posix_file_impl : public file_impl {
 public:
     int _fd;
     posix_file_impl(int fd) : _fd(fd) {}
-    ~posix_file_impl() {
-        if (_fd != -1) {
-            if (std::uncaught_exception()) {
-                std::cerr << "WARNING: closing file in reactor thread during exception recovery\n";
-            } else {
-                std::cerr << "WARNING: closing file in reactor thread\n";
-            }
-            ::close(_fd);
-        }
-    }
-
+    virtual ~posix_file_impl() override;
     future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len);
     future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov);
     future<size_t> read_dma(uint64_t pos, void* buffer, size_t len);
