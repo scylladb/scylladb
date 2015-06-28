@@ -16,12 +16,14 @@
  * under the License.
  */
 /*
- * Copyright (C) 2014 Cloudius Systems, Ltd.
+ * Copyright (C) 2014-2015 Cloudius Systems, Ltd.
  */
 
-#include <algorithm>
+#include "tests/test-utils.hh"
+
+#include "core/semaphore.hh"
+#include "core/file.hh"
 #include "core/reactor.hh"
-#include "core/app-template.hh"
 
 struct file_test {
     file_test(file&& f) : f(std::move(f)) {}
@@ -30,41 +32,36 @@ struct file_test {
     semaphore par = { 1000 };
 };
 
-int main(int ac, char** av) {
-    app_template app;
-
-    return app.run(ac, av, [&app] {
-        static constexpr auto max = 10000;
-        engine().open_file_dma("testfile.tmp", open_flags::rw | open_flags::create).then([] (file f) {
-            auto ft = new file_test{std::move(f)};
-            for (size_t i = 0; i < max; ++i) {
-                ft->par.wait().then([ft, i] {
-                    auto wbuf = allocate_aligned_buffer<unsigned char>(4096, 4096);
-                    std::fill(wbuf.get(), wbuf.get() + 4096, i);
-                    auto wb = wbuf.get();
-                    ft->f.dma_write(i * 4096, wb, 4096).then(
-                            [ft, i, wbuf = std::move(wbuf)] (size_t ret) mutable {
-                        assert(ret == 4096);
-                        auto rbuf = allocate_aligned_buffer<unsigned char>(4096, 4096);
-                        auto rb = rbuf.get();
-                        ft->f.dma_read(i * 4096, rb, 4096).then(
-                                [ft, i, rbuf = std::move(rbuf), wbuf = std::move(wbuf)] (size_t ret) mutable {
-                            assert(ret == 4096);
-                            bool eq = std::equal(rbuf.get(), rbuf.get() + 4096, wbuf.get());
-                            assert(eq);
-                            ft->sem.signal(1);
-                            ft->par.signal();
-                        });
+SEASTAR_TEST_CASE(test1) {
+    // Note: this tests generates a file "testfile.tmp" with size 4096 * max (= 40 MB).
+    static constexpr auto max = 10000;
+    return open_file_dma("testfile.tmp", open_flags::rw | open_flags::create).then([] (file f) {
+        auto ft = new file_test{std::move(f)};
+        for (size_t i = 0; i < max; ++i) {
+            ft->par.wait().then([ft, i] {
+                auto wbuf = allocate_aligned_buffer<unsigned char>(4096, 4096);
+                std::fill(wbuf.get(), wbuf.get() + 4096, i);
+                auto wb = wbuf.get();
+                ft->f.dma_write(i * 4096, wb, 4096).then(
+                        [ft, i, wbuf = std::move(wbuf)] (size_t ret) mutable {
+                    BOOST_REQUIRE(ret == 4096);
+                    auto rbuf = allocate_aligned_buffer<unsigned char>(4096, 4096);
+                    auto rb = rbuf.get();
+                    ft->f.dma_read(i * 4096, rb, 4096).then(
+                            [ft, i, rbuf = std::move(rbuf), wbuf = std::move(wbuf)] (size_t ret) mutable {
+                        BOOST_REQUIRE(ret == 4096);
+                        BOOST_REQUIRE(std::equal(rbuf.get(), rbuf.get() + 4096, wbuf.get()));
+                        ft->sem.signal(1);
+                        ft->par.signal();
                     });
                 });
-            }
-            ft->sem.wait(max).then([ft] () mutable {
-                return ft->f.flush();
-            }).then([ft] () mutable {
-                std::cout << "done\n";
-                delete ft;
-                engine().exit(0);
             });
+        }
+        return ft->sem.wait(max).then([ft] () mutable {
+            return ft->f.flush();
+        }).then([ft] () mutable {
+            std::cout << "done\n";
+            delete ft;
         });
     });
 }
