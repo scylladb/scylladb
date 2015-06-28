@@ -801,6 +801,7 @@ public:
     future<> make_directory(sstring name);
     future<std::experimental::optional<directory_entry_type>>  file_type(sstring name);
     future<> remove_file(sstring pathname);
+    future<> rename_file(sstring old_pathname, sstring new_pathname);
 
     template <typename Func>
     future<io_event> submit_io(Func prepare_io);
