@@ -2,9 +2,9 @@
  * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
-#include "abstract_replication_strategy.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "utils/class_registrator.hh"
-#include "locator/snitch_base.hh"
+#include "exceptions/exceptions.hh"
 
 namespace locator {
 
@@ -28,4 +28,16 @@ std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(c
     return calculate_natural_endpoints(key_token);
 }
 
+void abstract_replication_strategy::validate_replication_factor(sstring rf)
+{
+    try {
+        if (std::stol(rf) < 0) {
+            throw exceptions::configuration_exception(
+               sstring("Replication factor must be non-negative; found ") + rf);
+        }
+    } catch (...) {
+        throw exceptions::configuration_exception(
+            sstring("Replication factor must be numeric; found ") + rf);
+    }
 }
+} // namespace locator

@@ -28,7 +28,10 @@ protected:
     std::map<sstring, sstring> _config_options;
     token_metadata& _token_metadata;
     snitch_ptr& _snitch;
+    void validate_replication_factor(sstring rf);
+
     virtual std::vector<inet_address> calculate_natural_endpoints(const token& search_token) = 0;
+
 public:
     abstract_replication_strategy(const sstring& keyspace_name, token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring, sstring>& config_options);
     virtual ~abstract_replication_strategy() {}
