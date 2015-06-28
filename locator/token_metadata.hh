@@ -28,6 +28,7 @@
 #include "dht/i_partitioner.hh"
 #include "utils/UUID.hh"
 #include <experimental/optional>
+#include <boost/range/iterator_range.hpp>
 
 // forward declaration since database.hh includes this file
 class keyspace;
@@ -115,6 +116,58 @@ private:
 
     std::vector<token> sort_tokens();
 
+    class tokens_iterator :
+            public std::iterator<std::input_iterator_tag, token> {
+    private:
+        tokens_iterator(std::vector<token>::const_iterator it, size_t pos)
+        : _cur_it(it), _ring_pos(pos) {}
+
+    public:
+        tokens_iterator(const token& start, token_metadata* token_metadata)
+        : _token_metadata(token_metadata) {
+            _cur_it = _token_metadata->sorted_tokens().begin() +
+                      _token_metadata->first_token_index(start);
+        }
+
+        bool operator==(const tokens_iterator& it) const {
+            return _cur_it == it._cur_it;
+        }
+
+        bool operator!=(const tokens_iterator& it) const {
+            return _cur_it != it._cur_it;
+        }
+
+        const token& operator*() {
+            return *_cur_it;
+        }
+
+        tokens_iterator& operator++() {
+            if (_ring_pos >= _token_metadata->sorted_tokens().size()) {
+                _cur_it = _token_metadata->sorted_tokens().end();
+            } else {
+                ++_cur_it;
+                ++_ring_pos;
+
+                if (_cur_it == _token_metadata->sorted_tokens().end()) {
+                    _cur_it = _token_metadata->sorted_tokens().begin();
+                }
+            }
+
+            return *this;
+        }
+
+    private:
+        std::vector<token>::const_iterator _cur_it;
+        //
+        // position on the token ring starting from token corresponding to
+        // "start"
+        //
+        size_t _ring_pos = 0;
+        token_metadata* _token_metadata = nullptr;
+
+        friend class token_metadata;
+    };
+
     token_metadata(std::map<token, inet_address> token_to_endpoint_map, std::unordered_map<inet_address, utils::UUID> endpoints_map, topology topology);
 public:
     token_metadata() {};
@@ -128,6 +181,24 @@ public:
     std::vector<token> get_tokens(const inet_address& addr) const;
     const std::map<token, inet_address>& get_token_to_endpoint() const {
         return _token_to_endpoint_map;
+    }
+
+    tokens_iterator tokens_end() {
+        return tokens_iterator(sorted_tokens().end(), sorted_tokens().size());
+    }
+
+    /**
+     * Creates an iterable range of the sorted tokens starting at the token next
+     * after the given one.
+     *
+     * @param start A token that will define the beginning of the range
+     *
+     * @return The requested range (see the description above)
+     */
+    auto ring_range(const token& start) {
+        auto begin = tokens_iterator(start, this);
+        auto end = tokens_end();
+        return boost::make_iterator_range(begin, end);
     }
 
     topology& get_topology() {
