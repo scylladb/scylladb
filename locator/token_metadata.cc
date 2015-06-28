@@ -80,9 +80,9 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
             }
         }
 
+        _topology.add_endpoint(endpoint);
 #if 0
         bootstrapTokens.removeValue(endpoint);
-        topology.addEndpoint(endpoint);
         leavingEndpoints.remove(endpoint);
         removeFromMoving(endpoint); // also removing this endpoint from moving
 #endif
