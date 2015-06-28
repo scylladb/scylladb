@@ -141,6 +141,6 @@ output_stream<char> make_file_output_stream(lw_shared_ptr<file> f, size_t buffer
 }
 
 output_stream<char> make_file_output_stream(lw_shared_ptr<file> f, file_output_stream_options options) {
-    return output_stream<char>(file_data_sink(std::move(f), options), options.buffer_size);
+    return output_stream<char>(file_data_sink(std::move(f), options), options.buffer_size, true);
 }
 
