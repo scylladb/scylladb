@@ -25,6 +25,7 @@
 #include "streaming/stream_session.hh"
 #include "streaming/session_info.hh"
 #include <map>
+#include <algorithm>
 
 namespace streaming {
 
@@ -36,9 +37,11 @@ namespace streaming {
  * inbound StreamResultFuture context.
  */
 class stream_coordinator {
-    class host_streaming_data;
-private:
+public:
     using inet_address = gms::inet_address;
+
+private:
+    class host_streaming_data;
     std::map<inet_address, host_streaming_data> _peer_sessions;
     int _connections_per_host;
     bool _keep_ss_table_level;
@@ -59,85 +62,42 @@ public:
      * @return true if any stream session is active
      */
     bool has_active_sessions();
+
+    std::vector<stream_session> get_all_stream_sessions();
+
+    bool is_receiving();
 #if 0
-    public synchronized Collection<StreamSession> getAllStreamSessions()
-    {
-        Collection<StreamSession> results = new ArrayList<>();
-        for (HostStreamingData data : peerSessions.values())
-        {
-            results.addAll(data.getAllStreamSessions());
-        }
-        return results;
-    }
-
-    public boolean isReceiving()
-    {
-        return connectionsPerHost == 0;
-    }
-
     public void connectAllStreamSessions()
     {
         for (HostStreamingData data : peerSessions.values())
             data.connectAllStreamSessions();
     }
+#endif
 
-    public synchronized Set<InetAddress> getPeers()
-    {
-        return new HashSet<>(peerSessions.keySet());
+    std::set<inet_address> get_peers();
+
+public:
+    stream_session& get_or_create_next_session(inet_address peer, inet_address connecting) {
+        return get_or_create_host_data(peer).get_or_create_next_session(peer, connecting);
     }
 
-    public synchronized StreamSession getOrCreateNextSession(InetAddress peer, InetAddress connecting)
-    {
-        return getOrCreateHostData(peer).getOrCreateNextSession(peer, connecting);
+    stream_session& get_or_create_session_by_id(inet_address peer, int id, inet_address connecting) {
+        return get_or_create_host_data(peer).get_or_create_session_by_id(peer, id, connecting);
     }
 
-    public synchronized StreamSession getOrCreateSessionById(InetAddress peer, int id, InetAddress connecting)
-    {
-        return getOrCreateHostData(peer).getOrCreateSessionById(peer, id, connecting);
+    void update_progress(progress_info info) {
+        get_host_data(info.peer).update_progress(info);
     }
 
-    public synchronized void updateProgress(ProgressInfo info)
-    {
-        getHostData(info.peer).updateProgress(info);
-    }
+    void add_session_info(session_info session);
 
-    public synchronized void addSessionInfo(SessionInfo session)
-    {
-        HostStreamingData data = getOrCreateHostData(session.peer);
-        data.addSessionInfo(session);
-    }
+    std::vector<session_info> get_all_session_info();
 
-    public synchronized Set<SessionInfo> getAllSessionInfo()
-    {
-        Set<SessionInfo> result = new HashSet<>();
-        for (HostStreamingData data : peerSessions.values())
-        {
-            result.addAll(data.getAllSessionInfo());
-        }
-        return result;
-    }
+public:
+    void transfer_files(inet_address to, std::vector<stream_session::ss_table_streaming_sections> sstable_details);
 
-    public synchronized void transferFiles(InetAddress to, Collection<StreamSession.SSTableStreamingSections> sstableDetails)
-    {
-        HostStreamingData sessionList = getOrCreateHostData(to);
-
-        if (connectionsPerHost > 1)
-        {
-            List<List<StreamSession.SSTableStreamingSections>> buckets = sliceSSTableDetails(sstableDetails);
-
-            for (List<StreamSession.SSTableStreamingSections> subList : buckets)
-            {
-                StreamSession session = sessionList.getOrCreateNextSession(to, to);
-                session.addTransferFiles(subList);
-            }
-        }
-        else
-        {
-            StreamSession session = sessionList.getOrCreateNextSession(to, to);
-            session.addTransferFiles(sstableDetails);
-        }
-    }
-
+private:
+#if 0
     private List<List<StreamSession.SSTableStreamingSections>> sliceSSTableDetails(Collection<StreamSession.SSTableStreamingSections> sstableDetails)
     {
         // There's no point in divvying things up into more buckets than we have sstableDetails
@@ -165,25 +125,11 @@ public:
         return result;
     }
 
-    private HostStreamingData getHostData(InetAddress peer)
-    {
-        HostStreamingData data = peerSessions.get(peer);
-        if (data == null)
-            throw new IllegalArgumentException("Unknown peer requested: " + peer);
-        return data;
-    }
+#endif
+    host_streaming_data& get_host_data(inet_address peer);
 
-    private HostStreamingData getOrCreateHostData(InetAddress peer)
-    {
-        HostStreamingData data = peerSessions.get(peer);
-        if (data == null)
-        {
-            data = new HostStreamingData();
-            peerSessions.put(peer, data);
-        }
-        return data;
-    }
-
+    host_streaming_data& get_or_create_host_data(inet_address peer);
+#if 0
     private static class StreamSessionConnector implements Runnable
     {
         private final StreamSession session;
@@ -200,35 +146,28 @@ public:
         }
     }
 #endif
-
 private:
     class host_streaming_data {
+        using inet_address = gms::inet_address;
     private:
         std::map<int, stream_session> _stream_sessions;
         std::map<int, session_info> _session_infos;
-        int last_returned = -1;
-    public:
-        bool has_active_sessions();
-#if 0
-        public StreamSession getOrCreateNextSession(InetAddress peer, InetAddress connecting)
-        {
-            // create
-            if (streamSessions.size() < connectionsPerHost)
-            {
-                StreamSession session = new StreamSession(peer, connecting, factory, streamSessions.size(), keepSSTableLevel);
-                streamSessions.put(++lastReturned, session);
-                return session;
-            }
-            // get
-            else
-            {
-                if (lastReturned >= streamSessions.size() - 1)
-                    lastReturned = 0;
+        int _last_returned = -1;
+        int _connections_per_host;
+        bool _keep_ss_table_level;
 
-                return streamSessions.get(lastReturned++);
-            }
+    public:
+        host_streaming_data() = default;
+
+        host_streaming_data(int connections_per_host, bool keep_ss_table_level)
+            : _connections_per_host(connections_per_host)
+            , _keep_ss_table_level(keep_ss_table_level) {
         }
 
+        bool has_active_sessions();
+
+        stream_session& get_or_create_next_session(inet_address peer, inet_address connecting);
+#if 0
         public void connectAllStreamSessions()
         {
             for (StreamSession session : streamSessions.values())
@@ -236,38 +175,16 @@ private:
                 streamExecutor.execute(new StreamSessionConnector(session));
             }
         }
-
-        public Collection<StreamSession> getAllStreamSessions()
-        {
-            return Collections.unmodifiableCollection(streamSessions.values());
-        }
-
-        public StreamSession getOrCreateSessionById(InetAddress peer, int id, InetAddress connecting)
-        {
-            StreamSession session = streamSessions.get(id);
-            if (session == null)
-            {
-                session = new StreamSession(peer, connecting, factory, id, keepSSTableLevel);
-                streamSessions.put(id, session);
-            }
-            return session;
-        }
-
-        public void updateProgress(ProgressInfo info)
-        {
-            sessionInfos.get(info.sessionIndex).updateProgress(info);
-        }
-
-        public void addSessionInfo(SessionInfo info)
-        {
-            sessionInfos.put(info.sessionIndex, info);
-        }
-
-        public Collection<SessionInfo> getAllSessionInfo()
-        {
-            return sessionInfos.values();
-        }
 #endif
+        std::vector<stream_session> get_all_stream_sessions();
+
+        stream_session& get_or_create_session_by_id(inet_address peer, int id, inet_address connecting);
+
+        void update_progress(progress_info info);
+
+        void add_session_info(session_info info);
+
+        std::vector<session_info> get_all_session_info();
     };
 };
 

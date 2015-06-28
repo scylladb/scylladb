@@ -49,6 +49,7 @@ public:
     std::map<sstring, progress_info> receiving_files;
     std::map<sstring, progress_info> sending_files;
 
+    session_info() = default;
     session_info(inet_address peer_, int session_index_, inet_address connecting_,
                  std::vector<stream_summary> receiving_summaries_,
                  std::vector<stream_summary> sending_summaries_,

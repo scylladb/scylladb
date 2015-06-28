@@ -30,9 +30,12 @@
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_receive_task.hh"
 #include "streaming/stream_request.hh"
+#include "streaming/messages/incoming_file_message.hh"
 #include "sstables/sstables.hh"
+#include "query-request.hh"
+#include "dht/i_partitioner.hh"
 #include <map>
-#include <set>
+#include <vector>
 
 namespace streaming {
 
@@ -110,6 +113,7 @@ private:
     using application_state = gms::application_state;
     using versioned_value = gms::versioned_value;
     using UUID = utils::UUID;
+    using token = dht::token;
     net::messaging_service& ms() {
         return net::get_local_messaging_service();
     }
@@ -119,9 +123,23 @@ private:
             return make_ready_future<>();
         }
     };
-    distributed<handler> _handlers;
+    static distributed<handler> _handlers;
     void init_messaging_service_handler();
     future<> start();
+public:
+    struct ss_table_streaming_sections {
+        sstables::sstable& sstable;
+        std::map<int64_t, int64_t> sections;
+        int64_t estimated_keys;
+        int64_t repaired_at;
+        ss_table_streaming_sections(sstables::sstable& sstable_, std::map<int64_t, int64_t> sections_,
+                                    long estimated_keys_, long repaired_at_)
+            : sstable(sstable_)
+            , sections(std::move(sections_))
+            , estimated_keys(estimated_keys_)
+            , repaired_at(repaired_at_) {
+        }
+    };
 public:
     /**
      * Streaming endpoint.
@@ -138,7 +156,7 @@ private:
     //private StreamResultFuture streamResult;
 
     // stream requests to send to the peer
-    std::set<stream_request> _requests;
+    std::vector<stream_request> _requests;
     // streaming tasks are created and managed per ColumnFamily ID
     std::map<UUID, stream_transfer_task> _transfers;
     // data receivers, filled after receiving prepare message
@@ -154,6 +172,7 @@ private:
     stream_session_state _state = stream_session_state::INITIALIZED;
     bool _complete_sent = false;
 public:
+    stream_session() : conn_handler(*this) { }
     /**
      * Create new streaming session with the peer.
      *
@@ -208,7 +227,7 @@ public:
         if (requests.isEmpty() && transfers.isEmpty())
         {
             logger.info("[Stream #{}] Session does not have any tasks.", planId());
-            closeSession(State.COMPLETE);
+            close_session(stream_session_state::COMPLETE);
             return;
         }
 
@@ -218,7 +237,7 @@ public:
                                                                    peer,
                                                                    peer.equals(connecting) ? "" : " through " + connecting);
             handler.initiate();
-            onInitializationComplete();
+            on_initialization_complete();
         }
         catch (Exception e)
         {
@@ -232,6 +251,7 @@ public:
         assert factory != null;
         return factory.createConnection(connecting);
     }
+#endif
 
     /**
      * Request data fetch task to this session.
@@ -240,9 +260,8 @@ public:
      * @param ranges Ranges to retrieve data
      * @param columnFamilies ColumnFamily names. Can be empty if requesting all CF under the keyspace.
      */
-    public void addStreamRequest(String keyspace, Collection<Range<Token>> ranges, Collection<String> columnFamilies, long repairedAt)
-    {
-        requests.add(new StreamRequest(keyspace, ranges, columnFamilies, repairedAt));
+    void add_stream_request(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, long repaired_at) {
+        _requests.emplace_back(std::move(keyspace), std::move(ranges), std::move(column_families), repaired_at);
     }
 
     /**
@@ -256,8 +275,8 @@ public:
      * @param flushTables flush tables?
      * @param repairedAt the time the repair started.
      */
-    public void addTransferRanges(String keyspace, Collection<Range<Token>> ranges, Collection<String> columnFamilies, boolean flushTables, long repairedAt)
-    {
+    void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables, long repaired_at) {
+#if 0
         Collection<ColumnFamilyStore> stores = getColumnFamilyStores(keyspace, columnFamilies);
         if (flushTables)
             flushSSTables(stores);
@@ -273,8 +292,10 @@ public:
             for (SSTableStreamingSections release : sections)
                 release.sstable.releaseReference();
         }
+#endif
     }
 
+#if 0
     private Collection<ColumnFamilyStore> getColumnFamilyStores(String keyspace, Collection<String> columnFamilies)
     {
         Collection<ColumnFamilyStore> stores = new HashSet<>();
@@ -324,70 +345,13 @@ public:
             throw t;
         }
     }
-
-    public void addTransferFiles(Collection<SSTableStreamingSections> sstableDetails)
-    {
-        Iterator<SSTableStreamingSections> iter = sstableDetails.iterator();
-        while (iter.hasNext())
-        {
-            SSTableStreamingSections details = iter.next();
-            if (details.sections.isEmpty())
-            {
-                // A reference was acquired on the sstable and we won't stream it
-                details.sstable.releaseReference();
-                iter.remove();
-                continue;
-            }
-
-            UUID cfId = details.sstable.metadata.cfId;
-            StreamTransferTask task = transfers.get(cfId);
-            if (task == null)
-            {
-                task = new StreamTransferTask(this, cfId);
-                transfers.put(cfId, task);
-            }
-            task.addTransferFile(details.sstable, details.estimatedKeys, details.sections, details.repairedAt);
-            iter.remove();
-        }
-    }
 #endif
 
-public:
-    struct ss_table_streaming_sections {
-        sstables::sstable& sstable;
-        std::map<int64_t, int64_t> sections;
-        int64_t estimated_keys;
-        int64_t repaired_at;
-        ss_table_streaming_sections(sstables::sstable& sstable_, std::map<int64_t, int64_t> sections_,
-                                    long estimated_keys_, long repaired_at_)
-            : sstable(sstable_)
-            , sections(std::move(sections_))
-            , estimated_keys(estimated_keys_)
-            , repaired_at(repaired_at_) {
-        }
-    };
+    void add_transfer_files(std::vector<ss_table_streaming_sections> sstable_details);
 
-#if 0
-    private synchronized void closeSession(State finalState)
-    {
-        if (isAborted.compareAndSet(false, true))
-        {
-            state(finalState);
+private:
+    void close_session(stream_session_state final_state);
 
-            if (finalState == State.FAILED)
-            {
-                for (StreamTask task : Iterables.concat(receivers.values(), transfers.values()))
-                    task.abort();
-            }
-
-            // Note that we shouldn't block on this close because this method is called on the handler
-            // incoming thread (so we would deadlock).
-            handler.close();
-
-            streamResult.handleSessionComplete(this);
-        }
-    }
-#endif
 public:
     /**
      * Set current state to {@code newState}.
@@ -447,109 +411,41 @@ public:
                 break;
         }
     }
-
+#endif
     /**
      * Call back when connection initialization is complete to start the prepare phase.
      */
-    public void onInitializationComplete()
-    {
-        // send prepare message
-        state(State.PREPARING);
-        PrepareMessage prepare = new PrepareMessage();
-        prepare.requests.addAll(requests);
-        for (StreamTransferTask task : transfers.values())
-            prepare.summaries.add(task.getSummary());
-        handler.sendMessage(prepare);
-
-        // if we don't need to prepare for receiving stream, start sending files immediately
-        if (requests.isEmpty())
-            startStreamingFiles();
-    }
+    void on_initialization_complete();
 
     /**l
      * Call back for handling exception during streaming.
      *
      * @param e thrown exception
      */
-    public void onError(Throwable e)
-    {
-        logger.error("[Stream #{}] Streaming error occurred", planId(), e);
-        // send session failure message
-        if (handler.isOutgoingConnected())
-            handler.sendMessage(new SessionFailedMessage());
-        // fail session
-        closeSession(State.FAILED);
-    }
+    void on_error();
 
     /**
      * Prepare this session for sending/receiving files.
      */
-    public void prepare(Collection<StreamRequest> requests, Collection<StreamSummary> summaries)
-    {
-        // prepare tasks
-        state(State.PREPARING);
-        for (StreamRequest request : requests)
-            addTransferRanges(request.keyspace, request.ranges, request.columnFamilies, true, request.repairedAt); // always flush on stream request
-        for (StreamSummary summary : summaries)
-            prepareReceiving(summary);
-
-        // send back prepare message if prepare message contains stream request
-        if (!requests.isEmpty())
-        {
-            PrepareMessage prepare = new PrepareMessage();
-            for (StreamTransferTask task : transfers.values())
-                prepare.summaries.add(task.getSummary());
-            handler.sendMessage(prepare);
-        }
-
-        // if there are files to stream
-        if (!maybeCompleted())
-            startStreamingFiles();
-    }
+    void prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries);
 
     /**
      * Call back after sending FileMessageHeader.
      *
      * @param header sent header
      */
-    public void fileSent(FileMessageHeader header)
-    {
-        long headerSize = header.size();
-        StreamingMetrics.totalOutgoingBytes.inc(headerSize);
-        metrics.outgoingBytes.inc(headerSize);
-        // schedule timeout for receiving ACK
-        StreamTransferTask task = transfers.get(header.cfId);
-        if (task != null)
-        {
-            task.scheduleTimeout(header.sequenceNumber, 12, TimeUnit.HOURS);
-        }
-    }
+    void file_sent(const messages::file_message_header& header);
 
     /**
      * Call back after receiving FileMessageHeader.
      *
      * @param message received file
      */
-    public void receive(IncomingFileMessage message)
-    {
-        long headerSize = message.header.size();
-        StreamingMetrics.totalIncomingBytes.inc(headerSize);
-        metrics.incomingBytes.inc(headerSize);
-        // send back file received message
-        handler.sendMessage(new ReceivedMessage(message.header.cfId, message.header.sequenceNumber));
-        receivers.get(message.header.cfId).received(message.sstable);
-    }
+    void receive(messages::incoming_file_message message);
 
-    public void progress(Descriptor desc, ProgressInfo.Direction direction, long bytes, long total)
-    {
-        ProgressInfo progress = new ProgressInfo(peer, index, desc.filenameFor(Component.DATA), direction, bytes, total);
-        streamResult.handleProgress(progress);
-    }
+    void progress(/* Descriptor desc */ progress_info::direction dir, long bytes, long total);
 
-    public void received(UUID cfId, int sequenceNumber)
-    {
-        transfers.get(cfId).complete(sequenceNumber);
-    }
+    void received(UUID cf_id, int sequence_number);
 
     /**
      * Call back on receiving {@code StreamMessage.Type.RETRY} message.
@@ -557,40 +453,19 @@ public:
      * @param cfId ColumnFamily ID
      * @param sequenceNumber Sequence number to indicate which file to stream again
      */
-    public void retry(UUID cfId, int sequenceNumber)
-    {
-        OutgoingFileMessage message = transfers.get(cfId).createMessageForRetry(sequenceNumber);
-        handler.sendMessage(message);
-    }
+    void retry(UUID cf_id, int sequence_number);
 
     /**
      * Check if session is completed on receiving {@code StreamMessage.Type.COMPLETE} message.
      */
-    public synchronized void complete()
-    {
-        if (state == State.WAIT_COMPLETE)
-        {
-            if (!completeSent)
-            {
-                handler.sendMessage(new CompleteMessage());
-                completeSent = true;
-            }
-            closeSession(State.COMPLETE);
-        }
-        else
-        {
-            state(State.WAIT_COMPLETE);
-        }
-    }
+    void complete();
 
     /**
      * Call back on receiving {@code StreamMessage.Type.SESSION_FAILED} message.
      */
-    public synchronized void sessionFailed()
-    {
-        closeSession(State.FAILED);
-    }
+    void session_failed();
 
+#if 0
     public void doRetry(FileMessageHeader header, Throwable e)
     {
         logger.warn("[Stream #{}] Retrying for following error", planId(), e);
@@ -601,33 +476,16 @@ public:
         else
             handler.sendMessage(new RetryMessage(header.cfId, header.sequenceNumber));
     }
+#endif
 
     /**
      * @return Current snapshot of this session info.
      */
-    public SessionInfo getSessionInfo()
-    {
-        List<StreamSummary> receivingSummaries = Lists.newArrayList();
-        for (StreamTask receiver : receivers.values())
-            receivingSummaries.add(receiver.getSummary());
-        List<StreamSummary> transferSummaries = Lists.newArrayList();
-        for (StreamTask transfer : transfers.values())
-            transferSummaries.add(transfer.getSummary());
-        return new SessionInfo(peer, index, connecting, receivingSummaries, transferSummaries, state);
-    }
+    session_info get_session_info();
 
-    public synchronized void taskCompleted(StreamReceiveTask completedTask)
-    {
-        receivers.remove(completedTask.cfId);
-        maybeCompleted();
-    }
+    void task_completed(stream_receive_task& completed_task);
 
-    public synchronized void taskCompleted(StreamTransferTask completedTask)
-    {
-        transfers.remove(completedTask.cfId);
-        maybeCompleted();
-    }
-#endif
+    void task_completed(stream_transfer_task& completed_task);
 
 public:
     virtual void on_join(inet_address endpoint, endpoint_state ep_state) override {}
@@ -635,38 +493,12 @@ public:
     virtual void on_change(inet_address endpoint, application_state state, versioned_value value) override {}
     virtual void on_alive(inet_address endpoint, endpoint_state state) override {}
     virtual void on_dead(inet_address endpoint, endpoint_state state) override {}
-    virtual void on_remove(inet_address endpoint) override {
-        //closeSession(State.FAILED);
-    }
-    virtual void on_restart(inet_address endpoint, endpoint_state ep_state) override {
-        //closeSession(State.FAILED);
-    }
+    virtual void on_remove(inet_address endpoint) override { close_session(stream_session_state::FAILED); }
+    virtual void on_restart(inet_address endpoint, endpoint_state ep_state) override { close_session(stream_session_state::FAILED); }
 
+private:
+    bool maybe_completed();
 #if 0
-    private boolean maybeCompleted()
-    {
-        boolean completed = receivers.isEmpty() && transfers.isEmpty();
-        if (completed)
-        {
-            if (state == State.WAIT_COMPLETE)
-            {
-                if (!completeSent)
-                {
-                    handler.sendMessage(new CompleteMessage());
-                    completeSent = true;
-                }
-                closeSession(State.COMPLETE);
-            }
-            else
-            {
-                // notify peer that this session is completed
-                handler.sendMessage(new CompleteMessage());
-                completeSent = true;
-                state(State.WAIT_COMPLETE);
-            }
-        }
-        return completed;
-    }
 
     /**
      * Flushes matching column families from the given keyspace, or all columnFamilies
@@ -679,28 +511,9 @@ public:
             flushes.add(cfs.forceFlush());
         FBUtilities.waitOnFutures(flushes);
     }
-
-    private void prepareReceiving(StreamSummary summary)
-    {
-        if (summary.files > 0)
-            receivers.put(summary.cfId, new StreamReceiveTask(this, summary.cfId, summary.files, summary.totalSize));
-    }
-
-    private void startStreamingFiles()
-    {
-        streamResult.handleSessionPrepared(this);
-
-        state(State.STREAMING);
-        for (StreamTransferTask task : transfers.values())
-        {
-            Collection<OutgoingFileMessage> messages = task.getFileMessages();
-            if (messages.size() > 0)
-                handler.sendMessages(messages);
-            else
-                taskCompleted(task); // there is no file to send
-        }
-    }
 #endif
+    void prepare_receiving(stream_summary& summary);
+    void start_streaming_files();
 };
 
 } // namespace streaming

@@ -32,7 +32,7 @@ class stream_session;
  * StreamTask is an abstraction of the streaming task performed over specific ColumnFamily.
  */
 class stream_task {
-protected:
+public:
     using UUID = utils::UUID;
     /** StreamSession that this task belongs */
     stream_session& session;
