@@ -49,7 +49,7 @@ result_set_builder::result_set_builder(schema_ptr schema)
 { }
 
 result_set result_set_builder::build() const {
-    return { _rows };
+    return { _schema, _rows };
 }
 
 void result_set_builder::accept_new_partition(const partition_key& key, uint32_t row_count)

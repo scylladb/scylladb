@@ -79,11 +79,12 @@ inline bool operator!=(const result_set_row& x, const result_set_row& y) {
 // deserialized format. To obtain a result set, use the result_set_builder
 // class as a visitor to query_result::consume() function.
 class result_set {
+    schema_ptr _schema;
     std::vector<result_set_row> _rows;
 public:
     static result_set from_raw_result(schema_ptr, const partition_slice&, const result&);
-    result_set(const std::vector<result_set_row>& rows)
-        : _rows{std::move(rows)}
+    result_set(schema_ptr s, const std::vector<result_set_row>& rows)
+        : _schema(std::move(s)), _rows{std::move(rows)}
     { }
     bool empty() const {
         return _rows.empty();
@@ -96,6 +97,9 @@ public:
     }
     const std::vector<result_set_row>& rows() const {
         return _rows;
+    }
+    const schema_ptr& schema() const {
+        return _schema;
     }
     friend inline bool operator==(const result_set& x, const result_set& y);
     friend std::ostream& operator<<(std::ostream& out, const result_set& rs);
