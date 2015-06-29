@@ -5,6 +5,7 @@
 #include "utils/UUID.hh"
 #include "token_metadata.hh"
 #include <experimental/optional>
+#include "locator/snitch_base.hh"
 
 namespace locator {
 
@@ -79,9 +80,9 @@ void token_metadata::update_normal_tokens(std::unordered_map<inet_address, std::
             }
         }
 
+        _topology.add_endpoint(endpoint);
 #if 0
         bootstrapTokens.removeValue(endpoint);
-        topology.addEndpoint(endpoint);
         leavingEndpoints.remove(endpoint);
         removeFromMoving(endpoint); // also removing this endpoint from moving
 #endif
@@ -237,4 +238,51 @@ bool token_metadata::is_leaving(inet_address endpoint) {
     return _leaving_endpoints.count(endpoint);
 }
 
+/////////////////// class topology /////////////////////////////////////////////
+inline void topology::clear() {
+    _dc_endpoints.clear();
+    _dc_racks.clear();
+    _current_locations.clear();
+}
+
+topology::topology(const topology& other) {
+    _dc_endpoints = other._dc_endpoints;
+    _dc_racks = other._dc_racks;
+    _current_locations = other._current_locations;
+}
+
+void topology::add_endpoint(const inet_address& ep)
+{
+    auto& snitch = i_endpoint_snitch::get_local_snitch_ptr();
+    sstring dc = snitch->get_datacenter(ep);
+    sstring rack = snitch->get_rack(ep);
+    auto current = _current_locations.find(ep);
+
+    if (current != _current_locations.end()) {
+        if (current->second.dc == dc && current->second.rack == rack) {
+            return;
+        }
+
+        _dc_racks[current->second.dc][current->second.rack].erase(ep);
+        _dc_endpoints[current->second.dc].erase(ep);
+    }
+
+    _dc_endpoints[dc].insert(ep);
+    _dc_racks[dc][rack].insert(ep);
+    _current_locations[ep] = {dc, rack};
+}
+
+void topology::remove_endpoint(inet_address ep)
+{
+    auto cur_dc_rack = _current_locations.find(ep);
+
+    if (cur_dc_rack == _current_locations.end()) {
+        return;
+    }
+
+    _dc_endpoints[cur_dc_rack->second.dc].erase(ep);
+    _dc_racks[cur_dc_rack->second.dc][cur_dc_rack->second.rack].erase(ep);
+    _current_locations.erase(cur_dc_rack);
+}
+/////////////////// class topology end /////////////////////////////////////////
 } // namespace locator

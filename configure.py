@@ -191,6 +191,7 @@ urchin_tests = [
     'tests/urchin/compound_test',
     'tests/urchin/config_test',
     'tests/urchin/gossiping_property_file_snitch_test',
+    'tests/urchin/network_topology_strategy_test',
 ]
 
 tests = [
@@ -474,6 +475,7 @@ urchin_core = (['database.cc',
                  'locator/abstract_replication_strategy.cc',
                  'locator/simple_strategy.cc',
                  'locator/local_strategy.cc',
+                 'locator/network_topology_strategy.cc',
                  'locator/token_metadata.cc',
                  'locator/locator.cc',
                  'locator/snitch_base.cc',
@@ -542,6 +544,7 @@ deps = {
     'tests/distributed_test': ['tests/distributed_test.cc'] + core,
     'tests/rpc': ['tests/rpc.cc'] + core + libnet,
     'tests/urchin/gossiping_property_file_snitch_test': ['tests/urchin/gossiping_property_file_snitch_test.cc'] + urchin_core,
+    'tests/urchin/network_topology_strategy_test': ['tests/urchin/network_topology_strategy_test.cc'] + urchin_core,
 }
 
 for t in urchin_tests:
@@ -558,6 +561,7 @@ deps['tests/urchin/hash_test'] += boost_test_lib
 deps['tests/urchin/serializer_test'] += boost_test_lib
 deps['tests/urchin/gossip_test'] += boost_test_lib
 deps['tests/urchin/gossiping_property_file_snitch_test'] += boost_test_lib
+deps['tests/urchin/network_topology_strategy_test'] += boost_test_lib
 deps['tests/urchin/row_cache_test'] += boost_test_lib
 
 deps['tests/urchin/bytes_ostream_test'] = ['tests/urchin/bytes_ostream_test.cc']

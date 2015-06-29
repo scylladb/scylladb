@@ -28,6 +28,7 @@
 #include "gms/endpoint_state.hh"
 #include "gms/gossiper.hh"
 #include "utils/fb_utilities.hh"
+#include "locator/token_metadata.hh"
 #include "db/system_keyspace.hh"
 #include "core/sstring.hh"
 #include "snitch_base.hh"
@@ -37,7 +38,7 @@ namespace locator {
 class production_snitch_base : public snitch_base {
 public:
     // map of inet address to (datacenter, rack) pair
-    typedef std::unordered_map<inet_address, db::system_keyspace::endpoint_dc_rack> addr2dc_rack_map;
+    typedef std::unordered_map<inet_address, endpoint_dc_rack> addr2dc_rack_map;
 
     static constexpr const char* default_dc   = "UNKNOWN_DC";
     static constexpr const char* default_rack = "UNKNOWN_RACK";

@@ -30,6 +30,7 @@
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
 #include "query-result-set.hh"
+#include "locator/token_metadata.hh"
 
 namespace service {
 
@@ -65,16 +66,11 @@ void make(database& db, bool durable);
 // Intended to be used by code which is not performance critical.
 future<lw_shared_ptr<query::result_set>> query(service::storage_proxy& proxy, const sstring& cf_name);
 
-
-// Endpoint Data Center and Rack names
-struct endpoint_dc_rack {
-    sstring dc;
-    sstring rack;
-};
 /**
  * Return a map of IP addresses containing a map of dc and rack info
  */
-std::unordered_map<gms::inet_address, endpoint_dc_rack> load_dc_rack_info();
+std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
+load_dc_rack_info();
 
 #if 0
 
