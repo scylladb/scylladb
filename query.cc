@@ -26,4 +26,67 @@ std::ostream& operator<<(std::ostream& out, const read_command& r) {
         << ", limit=" << r.row_limit << "}";
 }
 
+size_t read_command::serialized_size() const {
+    size_t row_range_size = serialize_int32_size;
+    for (auto&& i : slice.row_ranges) {
+        row_range_size += i.serialized_size();
+    }
+    return 2 * serialize_int64_size // cf_id
+            + serialize_int32_size // row_limit
+            + serialize_int64_size // slice.options
+            + (slice.static_columns.size() + 1) * serialize_int32_size
+            + (slice.regular_columns.size() + 1) * serialize_int32_size
+            + row_range_size;
+}
+
+void read_command::serialize(bytes::iterator& out) const {
+    serialize_int64(out, cf_id.get_most_significant_bits());
+    serialize_int64(out, cf_id.get_least_significant_bits());
+    serialize_int32(out, row_limit);
+    serialize_int64(out, slice.options.mask());
+    serialize_int32(out, slice.static_columns.size());
+    for(auto i : slice.static_columns) {
+        serialize_int32(out, i);
+    }
+    serialize_int32(out, slice.regular_columns.size());
+    for(auto i : slice.regular_columns) {
+        serialize_int32(out, i);
+    }
+    serialize_int32(out, slice.row_ranges.size());
+    for (auto&& i : slice.row_ranges) {
+        i.serialize(out);
+    }
+}
+
+read_command read_command::deserialize(bytes_view& v) {
+    auto msb = read_simple<int64_t>(v);
+    auto lsb = read_simple<int64_t>(v);
+    utils::UUID uuid(msb, lsb);
+    uint32_t row_limit = read_simple<int32_t>(v);
+    partition_slice::option_set options = partition_slice::option_set::from_mask(read_simple<int64_t>(v));
+
+    uint32_t size = read_simple<uint32_t>(v);
+    std::vector<column_id> static_columns;
+    static_columns.reserve(size);
+    while(size--) {
+        static_columns.push_back(read_simple<uint32_t>(v));
+    };
+
+    size = read_simple<uint32_t>(v);
+    std::vector<column_id> regular_columns;
+    regular_columns.reserve(size);
+    while(size--) {
+        regular_columns.push_back(read_simple<uint32_t>(v));
+    };
+
+    size = read_simple<uint32_t>(v);
+    std::vector<clustering_range> row_ranges;
+    row_ranges.reserve(size);
+    while(size--) {
+        row_ranges.emplace_back(clustering_range::deserialize(v));
+    };
+
+    return read_command(std::move(uuid), partition_slice(std::move(row_ranges), std::move(static_columns), std::move(regular_columns), options), row_limit);
+}
+
 }

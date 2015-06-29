@@ -98,6 +98,83 @@ public:
         return range<U>(t(std::move(_start)), t(std::move(_end)), _singular);
     }
 
+private:
+    template<typename U>
+    auto serialized_size(U& t) -> decltype(t.serialized_size()) {
+        return t.serialized_size();
+    }
+    template<typename U>
+    auto serialized_size(U& t) -> decltype(t.representation().size()) {
+        return t.representation().size() + serialize_int32_size;
+    }
+    template<typename U>
+    auto serialize(bytes::iterator& out, const U& t) const -> decltype(t.serialize(out)) {
+        return t.serialize(out);
+    }
+    template<typename U>
+    auto serialize(bytes::iterator& out, const U& t) const -> decltype(t.representation(), void()) {
+        auto v = t.representation();
+        serialize_int32(out, v.size());
+        out = std::copy(v.begin(), v.end(), out);
+    }
+    template<typename U>
+    static auto deserialize_type(bytes_view& in) -> decltype(U::deserialize(in)) {
+        return U::deserialize(in);
+    }
+    template<typename U>
+    static auto deserialize_type(bytes_view& in) -> decltype(U::from_bytes(bytes())) {
+        bytes v;
+        uint32_t size = read_simple<uint32_t>(in);
+        return U::from_bytes(to_bytes(read_simple_bytes(in, size)));
+    }
+public:
+    size_t serialized_size() const {
+        auto bound_size = [this] (const optional<bound>& b) {
+            size_t size = serialize_bool_size; // if optional is armed
+            if (b) {
+                size += serialized_size(b.value().value());
+                size += serialize_bool_size; // _inclusive
+            }
+            return size;
+        };
+        return serialize_bool_size // singular
+                + bound_size(_start) + bound_size(_end);
+    }
+
+    void serialize(bytes::iterator& out) const {
+        auto serialize_bound = [this] (bytes::iterator& out, const optional<bound>& b) {
+            if (b) {
+                serialize_bool(out, true);
+                serialize(out, b.value().value());
+                serialize_bool(out, b.value().is_inclusive());
+            } else {
+                serialize_bool(out, false);
+            }
+        };
+        serialize_bound(out, _start);
+        serialize_bound(out, _end);
+        serialize_bool(out, is_singular());
+    }
+
+    static range deserialize(bytes_view& in) {
+        auto deserialize_bound = [](bytes_view& in) {
+            optional<bound> b;
+            bool armed = read_simple<bool>(in);
+            if (!armed) {
+                return b;
+            } else {
+                T t = deserialize_type<T>(in);
+                bool inc = read_simple<bool>(in);
+                b.emplace(std::move(t), inc);
+            }
+            return b;
+        };
+        auto s = deserialize_bound(in);
+        auto e = deserialize_bound(in);
+        bool singular = read_simple<bool>(in);
+        return range(std::move(s), std::move(e), singular);
+    }
+
     template<typename U>
     friend std::ostream& operator<<(std::ostream& out, const range<U>& r);
 };
@@ -178,6 +255,11 @@ public:
         , slice(std::move(slice))
         , row_limit(row_limit)
     { }
+
+    size_t serialized_size() const;
+    void serialize(bytes::iterator& out) const;
+    static read_command deserialize(bytes_view& v);
+
     friend std::ostream& operator<<(std::ostream& out, const read_command& r);
 };
 

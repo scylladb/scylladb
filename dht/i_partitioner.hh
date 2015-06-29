@@ -254,6 +254,10 @@ public:
         return { _token, *_key };
     }
 
+    size_t serialized_size() const;
+    void serialize(bytes::iterator& out) const;
+    static ring_position deserialize(bytes_view& in);
+
     friend std::ostream& operator<<(std::ostream&, const ring_position&);
 };
 

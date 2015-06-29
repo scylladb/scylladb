@@ -15,6 +15,15 @@ class result_digest {
 public:
     result_digest(bytes&& digest) : _digest(std::move(digest)) {}
     const bytes& get() { return _digest; }
+    size_t serialized_size() const { return _digest.size(); }
+    void serialize(bytes::iterator& out) const {
+        out = std::copy(_digest.begin(), _digest.end(), out);
+    }
+    static result_digest deserialize(bytes_view& in) {
+        auto result = result_digest(bytes(in.begin(), in.end()));
+        in.remove_prefix(in.size());
+        return result;
+    }
 };
 
 //
@@ -104,6 +113,17 @@ public:
         bytes_view v = _w.linearize();
         hash.CalculateDigest(reinterpret_cast<unsigned char*>(b.begin()), reinterpret_cast<const unsigned char*>(v.begin()), v.size());
         return result_digest(std::move(b));
+    }
+    size_t serialized_size() const { return _w.size(); }
+    void serialize(bytes::iterator& out) {
+        auto v = _w.linearize();
+        out = std::copy(v.begin(), v.end(), out);
+    }
+    static result deserialize(bytes_view& in) {
+        bytes_ostream w;
+        w.write(in);
+        in.remove_prefix(in.size());
+        return result(std::move(w));
     }
 };
 
