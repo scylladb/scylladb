@@ -32,11 +32,11 @@ public:
         validate_options(options);
 
         const auto& compressor_class = options.at(SSTABLE_COMPRESSION);
-        if (compressor_class == "LZ4Compressor") {
+        if (is_compressor_class(compressor_class, "LZ4Compressor")) {
             _compressor = compressor::lz4;
-        } else if (compressor_class == "SnappyCompressor") {
+        } else if (is_compressor_class(compressor_class, "SnappyCompressor")) {
             _compressor = compressor::snappy;
-        } else if (compressor_class == "DeflateCompressor") {
+        } else if (is_compressor_class(compressor_class, "DeflateCompressor")) {
             _compressor = compressor::deflate;
         } else {
             throw exceptions::configuration_exception(sstring("Unsupported compression class '") + compressor_class + "'.");
@@ -88,5 +88,9 @@ private:
                 throw exceptions::configuration_exception(sprint("Unknown compression option '%s'.", opt.first));
             }
         }
+    }
+    bool is_compressor_class(const sstring& value, const sstring& class_name) {
+        static const sstring namespace_prefix = "org.apache.cassandra.io.compress.";
+        return value == class_name || value == namespace_prefix + class_name;
     }
 };
