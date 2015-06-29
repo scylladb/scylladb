@@ -49,7 +49,7 @@ struct collectd_value {
 };
 
 std::vector<collectd_value> get_collectd_value(
-        shared_ptr<scollectd::type_instance_id> id);
+        const scollectd::type_instance_id& id);
 
 std::vector<scollectd::type_instance_id> get_collectd_ids();
 

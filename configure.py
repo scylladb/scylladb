@@ -335,6 +335,8 @@ api = ['api/api.cc',
        'api/storage_proxy.cc',
        'api/api-doc/cache_service.json',
        'api/cache_service.cc',
+       'api/api-doc/collectd.json',
+       'api/collectd.cc',
        ]
 
 boost_test_lib = [

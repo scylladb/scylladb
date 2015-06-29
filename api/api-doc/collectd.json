@@ -1,0 +1,118 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/collectd",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/collectd/{pluginid}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get a collectd value",
+               "type":"array",
+               "items":{
+                  "type":"collectd_value"
+               },
+               "nickname":"get_collectd",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"pluginid",
+                     "description":"The plugin ID",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"instance",
+                     "description":"The plugin instance",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"type",
+                     "description":"The plugin type",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"type_instance",
+                     "description":"The plugin type instance",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/collectd/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get a collectd value",
+               "type":"array",
+               "items":{
+                  "type":"type_instance_id"
+               },
+               "nickname":"get_collectd_items",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      }
+   ],
+   "models":{
+      "type_instance_id":{
+         "id":"type_instance_id",
+         "description":"A type instance ID",
+         "properties":{
+            "plugin":{
+               "type":"string",
+               "description":"The plugin ID"
+            },
+            "plugin_instance":{
+               "type":"string",
+               "description":"The plugin instance"
+            },
+            "type":{
+               "type":"string",
+               "description":"The plugin type"
+            },
+            "type_instance":{
+               "type":"string",
+               "description":"The plugin type instance"
+            }
+         }
+      },
+      "collectd_value":{
+         "id":"collectd_value",
+         "description":"Holds a collectd value",
+         "properties":{
+            "values":{
+               "description":"An array of values",
+               "type":"array",
+               "items":{
+                  "type":"double"
+               }
+            }
+         }
+      }
+   }
+}

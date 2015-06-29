@@ -488,9 +488,9 @@ boost::program_options::options_description get_options_description() {
 }
 
 std::vector<collectd_value> get_collectd_value(
-        shared_ptr<scollectd::type_instance_id> id) {
+        const scollectd::type_instance_id& id) {
     std::vector<collectd_value> res_values;
-    auto raw_types = get_impl().get_values(*id);
+    auto raw_types = get_impl().get_values(id);
     if (raw_types == nullptr) {
         return res_values;
     }
