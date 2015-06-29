@@ -4,9 +4,11 @@
 
 #pragma once
 
-#include "query-result-reader.hh"
 
 #include "core/shared_ptr.hh"
+#include "query-request.hh"
+#include "query-result.hh"
+#include "schema.hh"
 
 #include <experimental/optional>
 #include <stdexcept>
@@ -102,26 +104,5 @@ public:
 inline bool operator==(const result_set& x, const result_set& y) {
     return x._rows == y._rows;
 }
-
-// Result set builder is passed as a visitor to query_result::consume()
-// function. You can call the build() method to obtain a result set that
-// contains cells from the visited results.
-class result_set_builder {
-    schema_ptr _schema;
-    std::vector<result_set_row> _rows;
-    std::unordered_map<sstring, data_value> _pkey_cells;
-public:
-    result_set_builder(schema_ptr schema);
-    result_set build() const;
-    void accept_new_partition(const partition_key& key, uint32_t row_count);
-    void accept_new_partition(uint32_t row_count);
-    void accept_new_row(const clustering_key& key, const result_row_view& static_row, const result_row_view& row);
-    void accept_new_row(const result_row_view &static_row, const result_row_view &row);
-    void accept_partition_end(const result_row_view& static_row);
-private:
-    std::unordered_map<sstring, data_value> deserialize(const partition_key& key);
-    std::unordered_map<sstring, data_value> deserialize(const clustering_key& key);
-    std::unordered_map<sstring, data_value> deserialize(const result_row_view& row, bool is_static);
-};
 
 }
