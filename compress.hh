@@ -23,8 +23,8 @@ public:
     static constexpr auto CRC_CHECK_CHANCE = "crc_check_chance";
 private:
     compressor _compressor = compressor::none;
-    int _chunk_length = DEFAULT_CHUNK_LENGTH;
-    double _crc_check_chance = DEFAULT_CRC_CHECK_CHANCE;
+    std::experimental::optional<int> _chunk_length;
+    std::experimental::optional<double> _crc_check_chance;
 public:
     compression_parameters() = default;
     compression_parameters(compressor c) : _compressor(c) { }
@@ -60,18 +60,21 @@ public:
     }
 
     compressor get_compressor() const { return _compressor; }
-    int32_t chunk_length() const { return _chunk_length; }
-    double crc_check_chance() const { return _crc_check_chance; }
+    int32_t chunk_length() const { return _chunk_length.value_or(int(DEFAULT_CHUNK_LENGTH)); }
+    double crc_check_chance() const { return _crc_check_chance.value_or(double(DEFAULT_CRC_CHECK_CHANCE)); }
 
     void validate() {
-        if (_chunk_length <= 0) {
-            throw exceptions::configuration_exception(sstring("Invalid negative or null ") + CHUNK_LENGTH_KB);
+        if (_chunk_length) {
+            auto chunk_length = _chunk_length.value();
+            if (chunk_length <= 0) {
+                throw exceptions::configuration_exception(sstring("Invalid negative or null ") + CHUNK_LENGTH_KB);
+            }
+            // _chunk_length must be a power of two
+            if (chunk_length & (chunk_length - 1)) {
+                throw exceptions::configuration_exception(sstring(CHUNK_LENGTH_KB) + " must be a power of 2.");
+            }
         }
-        // _chunk_length must be a power of two
-        if (_chunk_length & (_chunk_length - 1)) {
-            throw exceptions::configuration_exception(sstring(CHUNK_LENGTH_KB) + " must be a power of 2.");
-        }
-        if (_crc_check_chance < 0.0 || _crc_check_chance > 1.0) {
+        if (_crc_check_chance && (_crc_check_chance.value() < 0.0 || _crc_check_chance.value() > 1.0)) {
             throw exceptions::configuration_exception(sstring(CRC_CHECK_CHANCE) + " must be between 0.0 and 1.0.");
         }
     }
