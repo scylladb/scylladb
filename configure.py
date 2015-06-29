@@ -192,6 +192,7 @@ urchin_tests = [
     'tests/urchin/config_test',
     'tests/urchin/gossiping_property_file_snitch_test',
     'tests/urchin/network_topology_strategy_test',
+    'tests/urchin/query_processor_test',
 ]
 
 tests = [
@@ -577,6 +578,7 @@ deps['tests/urchin/gossip_test'] += boost_test_lib
 deps['tests/urchin/gossiping_property_file_snitch_test'] += boost_test_lib
 deps['tests/urchin/network_topology_strategy_test'] += boost_test_lib
 deps['tests/urchin/row_cache_test'] += boost_test_lib
+deps['tests/urchin/query_processor_test'] += boost_test_lib
 
 deps['tests/urchin/bytes_ostream_test'] = ['tests/urchin/bytes_ostream_test.cc']
 deps['tests/urchin/UUID_test'] = ['utils/UUID_gen.cc', 'tests/urchin/UUID_test.cc']
