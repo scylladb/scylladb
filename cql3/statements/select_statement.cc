@@ -28,6 +28,7 @@
 #include "cql3/selection/selection.hh"
 #include "core/shared_ptr.hh"
 #include "query-result-reader.hh"
+#include "query_result_merger.hh"
 
 namespace cql3 {
 
@@ -202,6 +203,19 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, lw_shared_
         .then([this, &options, now, cmd] (auto result) {
             return this->process_results(std::move(result), cmd, options, now);
         });
+}
+
+
+future<::shared_ptr<transport::messages::result_message>>
+select_statement::execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
+    int32_t limit = get_limit(options);
+    auto now = db_clock::now();
+    auto command = ::make_lw_shared<query::read_command>(_schema->id(), make_partition_slice(options), limit);
+    auto partition_ranges = _restrictions->get_partition_key_ranges(options);
+
+    return proxy.local().query_local(command, std::move(partition_ranges)).then([command, this, &options, now](auto result) {
+        return this->process_results(std::move(result), command, options, now);
+    }).finally([command] {});
 }
 
 // Implements ResultVisitor concept from query.hh

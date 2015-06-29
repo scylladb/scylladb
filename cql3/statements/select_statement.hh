@@ -120,10 +120,8 @@ public:
     virtual future<::shared_ptr<transport::messages::result_message>> execute(distributed<service::storage_proxy>& proxy,
         service::query_state& state, const query_options& options) override;
 
-    virtual future<::shared_ptr<transport::messages::result_message>> execute_internal(database& db,
-            service::query_state& state, const query_options& options) {
-        throw std::runtime_error("not implemented");
-    }
+    virtual future<::shared_ptr<transport::messages::result_message>> execute_internal(distributed<service::storage_proxy>& proxy,
+            service::query_state& state, const query_options& options) override;
 
     future<::shared_ptr<transport::messages::result_message>> execute(distributed<service::storage_proxy>& proxy,
         lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, service::query_state& state,
