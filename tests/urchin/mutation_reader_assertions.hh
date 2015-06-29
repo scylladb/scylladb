@@ -33,6 +33,7 @@ public:
     }
 };
 
-static reader_assertions assert_that(mutation_reader r) {
+inline
+reader_assertions assert_that(mutation_reader r) {
     return { std::move(r) };
 }
