@@ -18,6 +18,10 @@
 
 class database;
 
+namespace cql3 {
+    class query_processor;
+}
+
 class cql_test_env {
 public:
     virtual ~cql_test_env() {};
@@ -48,6 +52,8 @@ public:
     virtual future<> stop() = 0;
 
     virtual database& local_db() = 0;
+
+    virtual cql3::query_processor& local_qp() = 0;
 };
 
 future<::shared_ptr<cql_test_env>> make_env_for_test();
