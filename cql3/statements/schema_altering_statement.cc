@@ -51,7 +51,7 @@ schema_altering_statement::execute(distributed<service::storage_proxy>& proxy, s
 }
 
 future<::shared_ptr<messages::result_message>>
-schema_altering_statement::execute_internal(database& db, service::query_state& state, const query_options& options) {
+schema_altering_statement::execute_internal(distributed<service::storage_proxy>&, service::query_state& state, const query_options& options) {
     throw std::runtime_error("unsupported operation");
 #if 0
     try

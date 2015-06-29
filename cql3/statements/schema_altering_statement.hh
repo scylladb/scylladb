@@ -99,7 +99,7 @@ protected:
     execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
 
     virtual future<::shared_ptr<messages::result_message>>
-    execute_internal(database& db, service::query_state& state, const query_options& options) override;
+    execute_internal(distributed<service::storage_proxy>&, service::query_state& state, const query_options& options) override;
 };
 
 }

@@ -38,7 +38,7 @@ use_statement::execute(distributed<service::storage_proxy>& proxy, service::quer
 }
 
 future<::shared_ptr<transport::messages::result_message>>
-use_statement::execute_internal(database& db, service::query_state& state, const query_options& options) {
+use_statement::execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) {
     // Internal queries are exclusively on the system keyspace and 'use' is thus useless
     throw std::runtime_error("unsupported operation");
 }

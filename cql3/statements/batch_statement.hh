@@ -299,7 +299,7 @@ private:
 
 public:
     virtual future<shared_ptr<transport::messages::result_message>> execute_internal(
-            database& db,
+            distributed<service::storage_proxy>& proxy,
             service::query_state& query_state, const query_options& options) override {
         throw "not implemented";
 #if 0

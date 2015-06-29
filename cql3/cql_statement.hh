@@ -78,7 +78,7 @@ public:
      * @param state the current query state
      */
     virtual future<::shared_ptr<transport::messages::result_message>>
-        execute_internal(database& db, service::query_state& state, const query_options& options) = 0;
+        execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) = 0;
 
     virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
 };

@@ -72,7 +72,7 @@ public:
     execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
 
     virtual future<::shared_ptr<transport::messages::result_message>>
-    execute_internal(database& db, service::query_state& state, const query_options& options) override;
+    execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
 
 #if 0
     virtual future<::shared_ptr<transport::messages::result_message>>
@@ -83,7 +83,7 @@ public:
     }
 
     virtual future<::shared_ptr<transport::messages::result_message>>
-    execute_internal(database& db, service::query_state& state, const query_options& options) override {
+    execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override {
         // Internal queries are exclusively on the system keyspace and 'use' is thus useless
         throw std::runtime_error("unsupported operation");
     }
