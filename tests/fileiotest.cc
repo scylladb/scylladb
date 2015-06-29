@@ -59,6 +59,8 @@ SEASTAR_TEST_CASE(test1) {
         }
         return ft->sem.wait(max).then([ft] () mutable {
             return ft->f.flush();
+        }).then([ft] {
+            return ft->f.close();
         }).then([ft] () mutable {
             std::cout << "done\n";
             delete ft;

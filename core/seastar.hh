@@ -33,6 +33,7 @@
 ///   - \ref future-util Utililty functions for working with futures
 ///   - \ref memory-module Memory management
 ///   - \ref networking-module TCP/IP networking
+///   - \ref fileio-module File Input/Output
 ///   - \ref smp-module Multicore support
 ///   - \ref fiber-module Utilities for managing loosely coupled chains of
 ///          continuations, also known as fibers
@@ -106,11 +107,85 @@ future<connected_socket> connect(socket_address sa);
 
 /// @}
 
-// File API
-future<file> open_file_dma(sstring name, open_flags flags);
-future<file> open_directory(sstring name);
-future<> make_directory(sstring name);
-future<> touch_directory(sstring name);
-future<> remove_file(sstring pathname);
-future<> rename_file(sstring old_pathname, sstring new_pathname);
+/// \defgroup fileio-module File Input/Output
+///
+/// Seastar provides a file API to deal with persistent storage.
+/// Unlike most file APIs, seastar offers unbuffered file I/O
+/// (similar to, and based on, \c O_DIRECT).  Unbuffered I/O means
+/// that the application is required to do its own caching, but
+/// delivers better performance if this caching is done correctly.
+///
+/// For random I/O or sequential unbuffered I/O, the \ref file
+/// class provides a set of methods for reading, writing, discarding,
+/// or otherwise manipulating a file.  For buffered sequential I/O,
+/// see \ref make_file_input_stream() and \ref make_file_output_stream().
 
+/// \addtogroup fileio-module
+/// @{
+
+/// Opens or creates a file.  The "dma" in the name refers to the fact
+/// that data transfers are unbuffered and uncached.
+///
+/// \param name  the name of the file to open or create
+/// \param flags various flags controlling the open process
+/// \return a \ref file object, as a future
+///
+/// \note
+/// The file name is not guaranteed to be stable on disk, unless the
+/// containing directory is sync'ed.
+///
+/// \relates file
+future<file> open_file_dma(sstring name, open_flags flags);
+
+/// Opens a directory.
+///
+/// \param name name of the directory to open
+///
+/// \return a \ref file object representing a directory.  The only
+///    legal operations are \ref file::list_directory(),
+///    \ref file::fsync(), and \ref file::close().
+///
+/// \relates file
+future<file> open_directory(sstring name);
+
+/// Creates a new directory.
+///
+/// \param name name of the directory to create
+///
+/// \note
+/// The directory is not guaranteed to be stable on disk, unless the
+/// containing directory is sync'ed.
+future<> make_directory(sstring name);
+
+/// Ensures a directory exists
+///
+/// Checks whether a directory exists, and if not, creates it.  Only
+/// the last component of the directory name is created.
+///
+/// \param name name of the directory to potentially create
+///
+/// \note
+/// The directory is not guaranteed to be stable on disk, unless the
+/// containing directory is sync'ed.
+future<> touch_directory(sstring name);
+
+/// Removes (unlinks) a file.
+///
+/// \param name name of the file to remove
+///
+/// \note
+/// The removal is not guaranteed to be stable on disk, unless the
+/// containing directory is sync'ed.
+future<> remove_file(sstring name);
+
+/// Renames (moves) a file.
+///
+/// \param old_name existing file name
+/// \param new_name new file name
+///
+/// \note
+/// The rename is not guaranteed to be stable on disk, unless the
+/// both containing directories are sync'ed.
+future<> rename_file(sstring old_name, sstring new_name);
+
+/// @}
