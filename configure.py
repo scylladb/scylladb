@@ -509,6 +509,7 @@ urchin_core = (['database.cc',
 urchin_tests_dependencies = urchin_core + http + api + [
     'tests/urchin/cql_test_env.cc',
     'tests/urchin/cql_assertions.cc',
+    'tests/urchin/result_set_assertions.cc',
 ]
 
 deps = {
