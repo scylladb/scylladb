@@ -4,9 +4,18 @@
 
 #pragma once
 
+#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
+#include <cryptopp/md5.h>
 #include "bytes_ostream.hh"
 
 namespace query {
+
+class result_digest {
+    bytes _digest;
+public:
+    result_digest(bytes&& digest) : _digest(std::move(digest)) {}
+    const bytes& get() { return _digest; }
+};
 
 //
 // The query results are stored in a serialized from. This is in order to
@@ -87,6 +96,14 @@ public:
 
     const bytes_ostream& buf() const {
         return _w;
+    }
+
+    result_digest digest() {
+        CryptoPP::Weak::MD5 hash;
+        bytes b(bytes::initialized_later(), CryptoPP::Weak::MD5::DIGESTSIZE);
+        bytes_view v = _w.linearize();
+        hash.CalculateDigest(reinterpret_cast<unsigned char*>(b.begin()), reinterpret_cast<const unsigned char*>(v.begin()), v.size());
+        return result_digest(std::move(b));
     }
 };
 
