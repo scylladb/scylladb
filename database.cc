@@ -874,7 +874,11 @@ const column_family& database::find_column_family(const schema_ptr& schema) cons
 }
 
 schema_ptr database::find_schema(const sstring& ks_name, const sstring& cf_name) const throw (no_such_column_family) {
-    return find_schema(find_uuid(ks_name, cf_name));
+    try {
+        return find_schema(find_uuid(ks_name, cf_name));
+    } catch (std::out_of_range&) {
+        std::throw_with_nested(no_such_column_family(ks_name + ":" + cf_name));
+    }
 }
 
 schema_ptr database::find_schema(const utils::UUID& uuid) const throw (no_such_column_family) {
