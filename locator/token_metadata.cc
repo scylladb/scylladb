@@ -180,7 +180,7 @@ gms::inet_address token_metadata::get_endpoint_for_host_id(UUID host_id) {
     return (*it).first;
 }
 
-const auto& token_metadata::get_endpoint_to_host_id_map_for_reading() {
+const std::unordered_map<inet_address, utils::UUID>& token_metadata::get_endpoint_to_host_id_map_for_reading() const{
     return _endpoint_to_host_id_map;
 }
 
