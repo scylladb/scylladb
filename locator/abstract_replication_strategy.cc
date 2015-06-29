@@ -35,6 +35,7 @@ std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(c
         return std::move(endpoints);
     }
 
+    ++_cache_hits_count;
     return res->second;
 }
 
