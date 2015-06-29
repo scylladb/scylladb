@@ -25,7 +25,17 @@ std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::cr
 
 std::vector<inet_address> abstract_replication_strategy::get_natural_endpoints(const token& search_token) {
     const token& key_token = _token_metadata.first_token(search_token);
-    return calculate_natural_endpoints(key_token);
+    auto& cached_endpoints = get_cached_endpoints();
+    auto res = cached_endpoints.find(key_token);
+
+    if (res == cached_endpoints.end()) {
+        auto endpoints = calculate_natural_endpoints(search_token);
+        cached_endpoints.emplace(key_token, endpoints);
+
+        return std::move(endpoints);
+    }
+
+    return res->second;
 }
 
 void abstract_replication_strategy::validate_replication_factor(sstring rf)
@@ -40,4 +50,15 @@ void abstract_replication_strategy::validate_replication_factor(sstring rf)
             sstring("Replication factor must be numeric; found ") + rf);
     }
 }
+
+inline std::unordered_map<token, std::vector<inet_address>>&
+abstract_replication_strategy::get_cached_endpoints() {
+    if (_last_invalidated_ring_version != _token_metadata.get_ring_version()) {
+        _cached_endpoints.clear();
+        _last_invalidated_ring_version = _token_metadata.get_ring_version();
+    }
+
+    return _cached_endpoints;
+}
+
 } // namespace locator

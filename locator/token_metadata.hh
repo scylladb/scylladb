@@ -114,6 +114,8 @@ private:
 
     topology _topology;
 
+    long _ring_version = 0;
+
     std::vector<token> sort_tokens();
 
     class tokens_iterator :
@@ -1204,9 +1206,12 @@ public:
         }
     }
 #endif
+    long get_ring_version() const {
+        return _ring_version;
+    }
+
     void invalidate_cached_rings() {
-        // TODO:
-        //ringVersion++;
+        ++_ring_version;
         //cachedTokenMap.set(null);
     }
 };

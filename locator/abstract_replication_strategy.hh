@@ -22,12 +22,17 @@ using token = dht::token;
 
 class abstract_replication_strategy {
 private:
+    long _last_invalidated_ring_version = 0;
+    std::unordered_map<token, std::vector<inet_address>> _cached_endpoints;
+
     static logging::logger& logger() {
         static thread_local logging::logger lgr("replication_strategy_logger");
 
         return lgr;
     }
 
+    std::unordered_map<token, std::vector<inet_address>>&
+    get_cached_endpoints();
 protected:
     sstring _ks_name;
     // TODO: Do we need this member at all?
