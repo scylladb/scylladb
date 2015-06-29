@@ -23,21 +23,25 @@ public:
     static constexpr auto CRC_CHECK_CHANCE = "crc_check_chance";
 private:
     compressor _compressor = compressor::none;
-    int _chunk_length = DEFAULT_CHUNK_LENGTH;
-    double _crc_check_chance = DEFAULT_CRC_CHECK_CHANCE;
+    std::experimental::optional<int> _chunk_length;
+    std::experimental::optional<double> _crc_check_chance;
 public:
     compression_parameters() = default;
     compression_parameters(compressor c) : _compressor(c) { }
     compression_parameters(const std::map<sstring, sstring>& options) {
         validate_options(options);
 
-        const auto& compressor_class = options.at(SSTABLE_COMPRESSION);
-        if (compressor_class == "LZ4Compressor") {
+        auto it = options.find(SSTABLE_COMPRESSION);
+        if (it == options.end()) {
+            return;
+        }
+        const auto& compressor_class = it->second;
+        if (is_compressor_class(compressor_class, "LZ4Compressor")) {
             _compressor = compressor::lz4;
-        } else if (compressor_class == "SnappyCompressor") {
+        } else if (is_compressor_class(compressor_class, "SnappyCompressor")) {
             _compressor = compressor::snappy;
-        } else if (compressor_class == "DeflateCompressor") {
-            _compressor = compressor::none;
+        } else if (is_compressor_class(compressor_class, "DeflateCompressor")) {
+            _compressor = compressor::deflate;
         } else {
             throw exceptions::configuration_exception(sstring("Unsupported compression class '") + compressor_class + "'.");
         }
@@ -60,20 +64,38 @@ public:
     }
 
     compressor get_compressor() const { return _compressor; }
-    int32_t chunk_length() const { return _chunk_length; }
-    double crc_check_chance() const { return _crc_check_chance; }
+    int32_t chunk_length() const { return _chunk_length.value_or(int(DEFAULT_CHUNK_LENGTH)); }
+    double crc_check_chance() const { return _crc_check_chance.value_or(double(DEFAULT_CRC_CHECK_CHANCE)); }
 
     void validate() {
-        if (_chunk_length <= 0) {
-            throw exceptions::configuration_exception(sstring("Invalid negative or null ") + CHUNK_LENGTH_KB);
+        if (_chunk_length) {
+            auto chunk_length = _chunk_length.value();
+            if (chunk_length <= 0) {
+                throw exceptions::configuration_exception(sstring("Invalid negative or null ") + CHUNK_LENGTH_KB);
+            }
+            // _chunk_length must be a power of two
+            if (chunk_length & (chunk_length - 1)) {
+                throw exceptions::configuration_exception(sstring(CHUNK_LENGTH_KB) + " must be a power of 2.");
+            }
         }
-        // _chunk_length must be a power of two
-        if (_chunk_length & (_chunk_length - 1)) {
-            throw exceptions::configuration_exception(sstring(CHUNK_LENGTH_KB) + " must be a power of 2.");
-        }
-        if (_crc_check_chance < 0.0 || _crc_check_chance > 1.0) {
+        if (_crc_check_chance && (_crc_check_chance.value() < 0.0 || _crc_check_chance.value() > 1.0)) {
             throw exceptions::configuration_exception(sstring(CRC_CHECK_CHANCE) + " must be between 0.0 and 1.0.");
         }
+    }
+
+    std::map<sstring, sstring> get_options() const {
+        if (_compressor == compressor::none) {
+            return std::map<sstring, sstring>();
+        }
+        std::map<sstring, sstring> opts;
+        opts.emplace(sstring(SSTABLE_COMPRESSION), compressor_name());
+        if (_chunk_length) {
+            opts.emplace(sstring(CHUNK_LENGTH_KB), std::to_string(_chunk_length.value() / 1024));
+        }
+        if (_crc_check_chance) {
+            opts.emplace(sstring(CRC_CHECK_CHANCE), std::to_string(_crc_check_chance.value()));
+        }
+        return opts;
     }
 private:
     void validate_options(const std::map<sstring, sstring>& options) {
@@ -87,6 +109,22 @@ private:
             if (!keywords.count(opt.first)) {
                 throw exceptions::configuration_exception(sprint("Unknown compression option '%s'.", opt.first));
             }
+        }
+    }
+    bool is_compressor_class(const sstring& value, const sstring& class_name) {
+        static const sstring namespace_prefix = "org.apache.cassandra.io.compress.";
+        return value == class_name || value == namespace_prefix + class_name;
+    }
+    sstring compressor_name() const {
+        switch (_compressor) {
+        case compressor::lz4:
+             return "org.apache.cassandra.io.compress.LZ4Compressor";
+        case compressor::snappy:
+            return "org.apache.cassandra.io.compress.SnappyCompressor";
+        case compressor::deflate:
+            return "org.apache.cassandra.io.compress.DeflateCompressor";
+        default:
+            abort();
         }
     }
 };

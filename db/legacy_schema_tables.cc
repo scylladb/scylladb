@@ -1023,8 +1023,9 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 #if 0
         adder.add("compaction_strategy_class", table.compactionStrategyClass.getName());
         adder.add("compaction_strategy_options", json(table.compactionStrategyOptions));
-        adder.add("compression_parameters", json(table.compressionParameters.asThriftOptions()));
 #endif
+        const auto& compression_options = table->get_compressor_params();
+        m.set_clustered_cell(ckey, "compression_parameters", json::to_json(compression_options.get_options()), timestamp);
         m.set_clustered_cell(ckey, "default_time_to_live", table->default_time_to_live().count(), timestamp);
 #if 0
         adder.add("default_validator", table.getDefaultValidator().toString());
@@ -1259,7 +1260,11 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         if (result.has("speculative_retry"))
             cfm.speculativeRetry(CFMetaData.SpeculativeRetry.fromString(result.getString("speculative_retry")));
         cfm.compactionStrategyClass(CFMetaData.createCompactionStrategy(result.getString("compaction_strategy_class")));
-        cfm.compressionParameters(CompressionParameters.create(fromJsonMap(result.getString("compression_parameters"))));
+#endif
+        auto comp_param = table_row.get_nonnull<sstring>("compression_parameters");
+        compression_parameters cp(json::to_map(comp_param));
+        builder.set_compressor_params(cp);
+#if 0
         cfm.compactionStrategyOptions(fromJsonMap(result.getString("compaction_strategy_options")));
 
         if (result.has("min_index_interval"))
