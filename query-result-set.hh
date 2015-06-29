@@ -41,14 +41,19 @@ public:
         return _cells.count(column_name) > 0;
     }
     // Look up a deserialized row cell value by column name.
-    template<typename T>
-    std::experimental::optional<T>
-    get(const sstring& column_name) const throw (no_such_column) {
+    const data_value&
+    get_data_value(const sstring& column_name) const throw (no_such_column) {
         auto it = _cells.find(column_name);
         if (it == _cells.end()) {
             throw no_such_column(column_name);
         }
-        auto&& value = it->second.value();
+        return it->second;
+    }
+    // Look up a deserialized row cell value by column name.
+    template<typename T>
+    std::experimental::optional<T>
+    get(const sstring& column_name) const throw (no_such_column) {
+        auto&& value = get_data_value(column_name).value();
         if (value.empty()) {
             return std::experimental::nullopt;
         }
