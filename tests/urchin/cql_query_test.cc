@@ -903,6 +903,7 @@ SEASTAR_TEST_CASE(test_table_compression) {
         }).then_wrapped([&e] (auto f) {
             assert(!f.failed());
             e.require_table_exists("ks", "tb1");
+            BOOST_REQUIRE(e.local_db().find_schema("ks", "tb1")->get_compressor_params().get_compressor() == compressor::none);
             return e.execute_cql("create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LossyCompressor' };");
         }).then_wrapped([&e] (auto f) {
             assert_that_failed(f);
@@ -916,6 +917,18 @@ SEASTAR_TEST_CASE(test_table_compression) {
         }).then_wrapped([&e] (auto f) {
             assert(!f.failed());
             e.require_table_exists("ks", "tb2");
+            BOOST_REQUIRE(e.local_db().find_schema("ks", "tb2")->get_compressor_params().get_compressor() == compressor::lz4);
+            BOOST_REQUIRE(e.local_db().find_schema("ks", "tb2")->get_compressor_params().chunk_length() == 2 * 1024);
+            return e.execute_cql("create table tb3 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'DeflateCompressor' };");
+        }).then_wrapped([&e] (auto f) {
+            assert(!f.failed());
+            e.require_table_exists("ks", "tb3");
+            BOOST_REQUIRE(e.local_db().find_schema("ks", "tb3")->get_compressor_params().get_compressor() == compressor::deflate);
+            return e.execute_cql("create table tb4 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'org.apache.cassandra.io.compress.DeflateCompressor' };");
+        }).then_wrapped([&e] (auto f) {
+            assert(!f.failed());
+            e.require_table_exists("ks", "tb4");
+            BOOST_REQUIRE(e.local_db().find_schema("ks", "tb4")->get_compressor_params().get_compressor() == compressor::deflate);
         });
     });
 }
