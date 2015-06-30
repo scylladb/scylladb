@@ -127,6 +127,8 @@ public:
     sstable(const sstable&) = delete;
     sstable(sstable&&) = default;
 
+    ~sstable();
+
     // Read one or few rows at the given byte range from the data file,
     // feeding them into the consumer. This function reads the entire given
     // byte range at once into memory, so it should not be used for iterating
@@ -206,6 +208,12 @@ public:
         return ((uint64_t)_summary.header.size_at_full_sampling + 1) *
                 _summary.header.min_index_interval;
     }
+
+    // mark_for_deletion() specifies that the on-disk files for this sstable
+    // should be deleted as soon as the in-memory object is destructed.
+    void mark_for_deletion() {
+        _marked_for_deletion = true;
+    }
 private:
     void do_write_components(::mutation_reader mr,
             uint64_t estimated_partitions, schema_ptr schema, file_writer& out);
@@ -232,6 +240,8 @@ private:
     format_types _format;
 
     lw_shared_ptr<distributed<filter_tracker>> _filter_tracker;
+
+    bool _marked_for_deletion = false;
 
     const bool has_component(component_type f);
 

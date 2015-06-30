@@ -535,13 +535,14 @@ column_family::compact_all_sstables() {
             }
         }
 
-        // FIXME: We need to make sure that destructing an sstable object
-        // deletes it from disk - otherwise old sstables will not be deleted
-        // after compaction.
         for (const auto& newtab : *new_tables) {
             // FIXME: rename the new sstable(s). Verify a rename doesn't cause
             // problems for the sstable object.
             _sstables->emplace(newtab.first, newtab.second);
+        }
+
+        for (const auto& oldtab : *sstables_to_compact) {
+            oldtab->mark_for_deletion();
         }
     });
 }

@@ -1392,4 +1392,26 @@ future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len) {
     });
 }
 
+sstable::~sstable() {
+    if (_marked_for_deletion) {
+        // We need to delete the on-disk files for this table. Since this is a
+        // destructor, we can't wait for this to finish, or return any errors,
+        // but just need to do our best. If a deletion fails for some reason we
+        // log and ignore this failure, because on startup we'll again try to
+        // clean up unused sstables, and because we'll never reuse the same
+        // generation number anyway.
+        try {
+            for (auto component : _components) {
+                remove_file(filename(component)).handle_exception(
+                        [] (std::exception_ptr eptr) {
+                            sstlog.warn("Exception when deleting sstable file: {}", eptr);
+                        });
+            }
+        } catch (...) {
+            sstlog.warn("Exception when deleting sstable file: {}", std::current_exception());
+        }
+
+    }
+}
+
 }
