@@ -1189,7 +1189,6 @@ void sstable::do_write_components(::mutation_reader mr,
 
     prepare_summary(_summary, estimated_partitions);
 
-    auto collector = make_lw_shared<metadata_collector>();
     // FIXME: it's likely that we need to set both sstable_level and repaired_at stats at this point.
 
     // Remember first and last keys, which we need for the summary file.
@@ -1205,7 +1204,7 @@ void sstable::do_write_components(::mutation_reader mr,
 
         maybe_add_summary_entry(_summary, bytes_view(partition_key), index->offset());
         _filter->add(bytes_view(partition_key));
-        collector->add_key(bytes_view(partition_key));
+        _collector.add_key(bytes_view(partition_key));
 
         auto p_key = disk_string_view<uint16_t>();
         p_key.value = bytes_view(partition_key);
@@ -1253,7 +1252,7 @@ void sstable::do_write_components(::mutation_reader mr,
         // compute size of the current row.
         _c_stats.row_size = out.offset() - _c_stats.start_offset;
         // update is about merging column_stats with the data being stored by collector.
-        collector->update(std::move(_c_stats));
+        _collector.update(std::move(_c_stats));
         _c_stats.reset();
 
         if (!first_key) {
@@ -1275,12 +1274,12 @@ void sstable::do_write_components(::mutation_reader mr,
     _components.insert(component_type::Data);
 
     if (has_component(sstable::component_type::CompressionInfo)) {
-        collector->add_compression_ratio(_compression.compressed_file_length(), _compression.uncompressed_file_length());
+        _collector.add_compression_ratio(_compression.compressed_file_length(), _compression.uncompressed_file_length());
     }
 
     // NOTE: Cassandra gets partition name by calling getClass().getCanonicalName() on
     // partition class.
-    seal_statistics(_statistics, *collector, dht::global_partitioner().name(), filter_fp_chance);
+    seal_statistics(_statistics, _collector, dht::global_partitioner().name(), filter_fp_chance);
 }
 
 void sstable::prepare_write_components(::mutation_reader mr, uint64_t estimated_partitions, schema_ptr schema) {

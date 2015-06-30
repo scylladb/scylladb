@@ -214,6 +214,10 @@ public:
     void mark_for_deletion() {
         _marked_for_deletion = true;
     }
+
+    void add_ancestor(int generation) {
+        _collector.add_ancestor(generation);
+    }
 private:
     void do_write_components(::mutation_reader mr,
             uint64_t estimated_partitions, schema_ptr schema, file_writer& out);
@@ -229,6 +233,7 @@ private:
     utils::filter_ptr _filter;
     summary _summary;
     statistics _statistics;
+    metadata_collector _collector;
     column_stats _c_stats;
     lw_shared_ptr<file> _index_file;
     lw_shared_ptr<file> _data_file;
