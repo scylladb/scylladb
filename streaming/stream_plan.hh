@@ -136,16 +136,8 @@ public:
      * @return this object for chaining
      */
     stream_plan& transfer_files(inet_address to, std::vector<stream_session::ss_table_streaming_sections> sstable_details);
+    stream_plan& listeners(std::vector<stream_event_handler*> handlers);
 #if 0
-
-    public StreamPlan listeners(StreamEventHandler handler, StreamEventHandler... handlers)
-    {
-        this.handlers.add(handler);
-        if (handlers != null)
-            Collections.addAll(this.handlers, handlers);
-        return this;
-    }
-
     /**
      * Set custom StreamConnectionFactory to be used for establishing connection
      *

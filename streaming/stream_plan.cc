@@ -62,4 +62,9 @@ stream_plan& stream_plan::flush_before_transfer(bool flush_before_transfer_) {
     return *this;
 }
 
+stream_plan& stream_plan::listeners(std::vector<stream_event_handler*> handlers) {
+    std::copy(handlers.begin(), handlers.end(), std::back_inserter(_handlers));
+    return *this;
+}
+
 }
