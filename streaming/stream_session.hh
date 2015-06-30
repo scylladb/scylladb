@@ -191,11 +191,7 @@ public:
         //this.metrics = StreamingMetrics.get(connecting);
     }
 
-    UUID plan_id() {
-        // return streamResult == null ? null : streamResult.planId;
-        // FIXME:
-        return UUID();
-    }
+    UUID plan_id();
 
     int session_index() {
         return _index;
