@@ -39,6 +39,8 @@
 
 namespace streaming {
 
+class stream_result_future;
+
 /**
  * Handles the streaming a one or more section of one of more sstables to and from a specific
  * remote node.
@@ -153,7 +155,7 @@ public:
 private:
     int _index;
     // should not be null when session is started
-    //private StreamResultFuture streamResult;
+    shared_ptr<stream_result_future> _stream_result;
 
     // stream requests to send to the peer
     std::vector<stream_request> _requests;
@@ -210,18 +212,13 @@ public:
     bool keep_ss_table_level() {
         return _keep_ss_table_level;
     }
-#if 0
     /**
      * Bind this session to report to specific {@link StreamResultFuture} and
      * perform pre-streaming initialization.
      *
      * @param streamResult result to report to
      */
-    public void init(StreamResultFuture streamResult)
-    {
-        this.streamResult = streamResult;
-    }
-#endif
+    void init(shared_ptr<stream_result_future> stream_result_);
 
     void start();
 #if 0

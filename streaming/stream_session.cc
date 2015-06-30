@@ -28,6 +28,7 @@
 #include "streaming/messages/retry_message.hh"
 #include "streaming/messages/complete_message.hh"
 #include "streaming/messages/session_failed_message.hh"
+#include "streaming/stream_result_future.hh"
 
 namespace streaming {
 
@@ -333,6 +334,10 @@ void stream_session::start() {
     } catch (...) {
         on_error();
     }
+}
+
+void stream_session::init(shared_ptr<stream_result_future> stream_result_) {
+    _stream_result = stream_result_;
 }
 
 } // namespace streaming

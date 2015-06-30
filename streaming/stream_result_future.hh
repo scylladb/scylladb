@@ -21,9 +21,11 @@
 #pragma once
 
 #include "core/sstring.hh"
+#include "core/shared_ptr.hh"
 #include "utils/UUID.hh"
 #include "streaming/connection_handler.hh"
 #include "streaming/stream_coordinator.hh"
+#include "streaming/stream_event_handler.hh"
 #include <vector>
 
 namespace streaming {
@@ -47,7 +49,8 @@ public:
     sstring description;
 private:
     stream_coordinator& _coordinator;
-    std::vector<stream_event_handler> _event_listeners;
+    std::vector<stream_event_handler*> _event_listeners;
+public:
     /**
      * Create new StreamResult of given {@code planId} and type.
      *
@@ -70,28 +73,25 @@ private:
     stream_resslt_future(UUID plan_id_, sstring description_, bool keep_ss_table_levels_)
         : stream_resslt_future(planId, description,  StreamCoordinator(0, keepSSTableLevels, new DefaultConnectionFactory()));
     }
+#endif
 
-    static StreamResultFuture init(UUID planId, String description, Collection<StreamEventHandler> listeners, StreamCoordinator coordinator)
-    {
-        StreamResultFuture future = createAndRegister(planId, description, coordinator);
-        if (listeners != null)
-        {
-            for (StreamEventHandler listener : listeners)
-                future.addEventListener(listener);
+public:
+    static void init(UUID plan_id_, sstring description_, std::vector<stream_event_handler*> listeners_, stream_coordinator& coordinator_) {
+        auto future = create_and_register(plan_id_, description_, coordinator_);
+        for (auto& listener : listeners_) {
+            future->add_event_listener(listener);
         }
 
-        logger.info("[Stream #{}] Executing streaming plan for {}", planId,  description);
+        //logger.info("[Stream #{}] Executing streaming plan for {}", plan_id,  description);
 
         // Initialize and start all sessions
-        for (final StreamSession session : coordinator.getAllStreamSessions())
-        {
+        for (auto& session : coordinator_.get_all_stream_sessions()) {
             session.init(future);
         }
-        coordinator.connectAllStreamSessions();
-
-        return future;
+        coordinator_.connect_all_stream_sessions();
     }
 
+#if 0
     public static synchronized StreamResultFuture initReceivingSide(int sessionIndex,
                                                                     UUID planId,
                                                                     String description,
@@ -114,27 +114,29 @@ private:
         logger.info("[Stream #{}, ID#{}] Received streaming plan for {}", planId, sessionIndex, description);
         return future;
     }
-
-    private static StreamResultFuture createAndRegister(UUID planId, String description, StreamCoordinator coordinator)
-    {
-        StreamResultFuture future = new StreamResultFuture(planId, description, coordinator);
-        StreamManager.instance.register(future);
+#endif
+private:
+    static shared_ptr<stream_result_future> create_and_register(UUID plan_id_, sstring description_, stream_coordinator& coordinator_) {
+        auto future = make_shared<stream_result_future>(plan_id_, description_, coordinator_);
+        // FIXME: StreamManager.instance.register(future);
         return future;
     }
 
+#if 0
     private void attachSocket(InetAddress from, int sessionIndex, Socket socket, boolean isForOutgoing, int version) throws IOException
     {
         StreamSession session = coordinator.getOrCreateSessionById(from, sessionIndex, socket.getInetAddress());
         session.init(this);
         session.handler.initiateOnReceivingSide(socket, isForOutgoing, version);
     }
-
-    public void addEventListener(StreamEventHandler listener)
-    {
-        Futures.addCallback(this, listener);
-        eventListeners.add(listener);
+#endif
+public:
+    void add_event_listener(stream_event_handler* listener) {
+        // FIXME: Futures.addCallback(this, listener);
+        _event_listeners.push_back(listener);
     }
 
+#if 0
     /**
      * @return Current snapshot of streaming progress.
      */
