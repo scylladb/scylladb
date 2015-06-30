@@ -48,7 +48,6 @@ public:
 private:
     stream_coordinator& _coordinator;
     std::vector<stream_event_handler> _event_listeners;
-#if 0
     /**
      * Create new StreamResult of given {@code planId} and type.
      *
@@ -57,20 +56,19 @@ private:
      * @param planId Stream plan ID
      * @param description Stream description
      */
-    private StreamResultFuture(UUID planId, String description, StreamCoordinator coordinator)
-    {
-        this.planId = planId;
-        this.description = description;
-        this.coordinator = coordinator;
-
+    stream_result_future(UUID plan_id_, sstring description_, stream_coordinator& coordinator_)
+        : plan_id(std::move(plan_id_))
+        , description(std::move(description_))
+        , _coordinator(coordinator_) {
         // if there is no session to listen to, we immediately set result for returning
-        if (!coordinator.isReceiving() && !coordinator.hasActiveSessions())
-            set(getCurrentState());
+        if (!_coordinator.is_receiving() && !_coordinator.has_active_sessions()) {
+            // set(getCurrentState());
+        }
     }
 
-    private StreamResultFuture(UUID planId, String description, boolean keepSSTableLevels)
-    {
-        this(planId, description, new StreamCoordinator(0, keepSSTableLevels, new DefaultConnectionFactory()));
+#if 0
+    stream_resslt_future(UUID plan_id_, sstring description_, bool keep_ss_table_levels_)
+        : stream_resslt_future(planId, description,  StreamCoordinator(0, keepSSTableLevels, new DefaultConnectionFactory()));
     }
 
     static StreamResultFuture init(UUID planId, String description, Collection<StreamEventHandler> listeners, StreamCoordinator coordinator)
