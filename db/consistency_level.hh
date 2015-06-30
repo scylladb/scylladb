@@ -31,6 +31,8 @@
 #include "database.hh"
 #include "unimplemented.hh"
 #include "db/read_repair_decision.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "locator/network_topology_strategy.hh"
 
 namespace db {
 
@@ -131,13 +133,18 @@ inline size_t quorum_for(keyspace& ks)
 
 inline size_t local_quorum_for(keyspace& ks, const sstring& dc)
 {
-    fail(unimplemented::cause::CONSISTENCY);
-    return 0;
-#if 0
-    return (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
-            ? (((NetworkTopologyStrategy) keyspace.getReplicationStrategy()).getReplicationFactor(dc) / 2) + 1
-                    : quorum_for(ks);
-#endif
+    using namespace locator;
+
+    auto& rs = ks.get_replication_strategy();
+
+    if (rs.get_type() == replication_strategy_type::network_topology) {
+        network_topology_strategy* nrs =
+            static_cast<network_topology_strategy*>(&rs);
+
+        return (nrs->get_replication_factor(dc) / 2) + 1;
+    }
+
+    return quorum_for(ks);
 }
 
 inline size_t block_for(keyspace& ks, consistency_level cl)
