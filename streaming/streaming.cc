@@ -22,3 +22,4 @@
 #include "streaming/connection_handler.hh"
 #include "streaming/compress/compression_info.hh"
 #include "streaming/stream_state.hh"
+#include "streaming/stream_result_future.hh"

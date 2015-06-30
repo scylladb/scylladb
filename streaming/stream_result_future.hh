@@ -14,20 +14,19 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ * Modified by Cloudius Systems.
+ * Copyright 2015 Cloudius Systems.
  */
-package org.apache.cassandra.streaming;
 
-import java.io.IOException;
-import java.net.InetAddress;
-import java.net.Socket;
-import java.util.*;
-import java.util.concurrent.ConcurrentLinkedQueue;
+#pragma once
 
-import com.google.common.util.concurrent.AbstractFuture;
-import com.google.common.util.concurrent.Futures;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+#include "core/sstring.hh"
+#include "utils/UUID.hh"
+#include "streaming/connection_handler.hh"
+#include "streaming/stream_coordinator.hh"
+#include <vector>
 
+namespace streaming {
 /**
  * A future on the result ({@link StreamState}) of a streaming plan.
  *
@@ -41,15 +40,15 @@ import org.slf4j.LoggerFactory;
  * You can attach {@link StreamEventHandler} to this object to listen on {@link StreamEvent}s to
  * track progress of the streaming.
  */
-public final class StreamResultFuture extends AbstractFuture<StreamState>
-{
-    private static final Logger logger = LoggerFactory.getLogger(StreamResultFuture.class);
-
-    public final UUID planId;
-    public final String description;
-    private final StreamCoordinator coordinator;
-    private final Collection<StreamEventHandler> eventListeners = new ConcurrentLinkedQueue<>();
-
+class stream_result_future {
+public:
+    using UUID = utils::UUID;
+    UUID plan_id;
+    sstring description;
+private:
+    stream_coordinator& _coordinator;
+    std::vector<stream_event_handler> _event_listeners;
+#if 0
     /**
      * Create new StreamResult of given {@code planId} and type.
      *
@@ -215,4 +214,7 @@ public final class StreamResultFuture extends AbstractFuture<StreamState>
             }
         }
     }
-}
+#endif
+};
+
+} // namespace streaming
