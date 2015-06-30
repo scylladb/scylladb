@@ -1048,9 +1048,10 @@ future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type r
     std::unordered_map<sstring, std::vector<gms::inet_address>> dc_groups;
     std::vector<std::pair<const sstring, std::vector<gms::inet_address>>> local;
     local.reserve(3);
+    auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
     for(auto dest: get_write_response_handler(response_id).get_targets()) {
-        sstring dc = "localDC";//getEndpointSnitch().getDatacenter(dest);
+        sstring dc = snitch_ptr->get_datacenter(dest);
         if (dc == local_dc) {
             local.emplace_back("", std::vector<gms::inet_address>({dest}));
         } else {
