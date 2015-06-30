@@ -72,33 +72,11 @@ public:
         return sb.toString();
     }
 
-    public static class StreamSummarySerializer implements IVersionedSerializer<StreamSummary>
-    {
-        // arbitrary version is fine for UUIDSerializer for now...
-        public void serialize(StreamSummary summary, DataOutputPlus out, int version) throws IOException
-        {
-            UUIDSerializer.serializer.serialize(summary.cfId, out, MessagingService.current_version);
-            out.writeInt(summary.files);
-            out.writeLong(summary.totalSize);
-        }
-
-        public StreamSummary deserialize(DataInput in, int version) throws IOException
-        {
-            UUID cfId = UUIDSerializer.serializer.deserialize(in, MessagingService.current_version);
-            int files = in.readInt();
-            long totalSize = in.readLong();
-            return new StreamSummary(cfId, files, totalSize);
-        }
-
-        public long serializedSize(StreamSummary summary, int version)
-        {
-            long size = UUIDSerializer.serializer.serializedSize(summary.cfId, MessagingService.current_version);
-            size += TypeSizes.NATIVE.sizeof(summary.files);
-            size += TypeSizes.NATIVE.sizeof(summary.totalSize);
-            return size;
-        }
-    }
 #endif
+public:
+    void serialize(bytes::iterator& out) const;
+    static stream_summary deserialize(bytes_view& v);
+    size_t serialized_size() const;
 };
 
 } // namespace streaming
