@@ -344,5 +344,8 @@ utils::UUID stream_session::plan_id() {
     return _stream_result ? _stream_result->plan_id : UUID();
 }
 
+sstring stream_session::description() {
+    return _stream_result  ? _stream_result->description : "";
+}
 
 } // namespace streaming

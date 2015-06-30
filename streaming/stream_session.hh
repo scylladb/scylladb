@@ -197,13 +197,8 @@ public:
         return _index;
     }
 
-#if 0
+    sstring description();
 
-    public String description()
-    {
-        return streamResult == null ? null : streamResult.description;
-    }
-#endif
 public:
     bool keep_ss_table_level() {
         return _keep_ss_table_level;
