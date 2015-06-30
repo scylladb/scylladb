@@ -136,9 +136,6 @@ public:
     bool is_live_and_has_ttl() const {
         return atomic_cell_type::is_live_and_has_ttl(_data);
     }
-    bool is_dead() const {
-        return atomic_cell_type::is_dead(_data);
-    }
     bool is_dead(gc_clock::time_point now) const {
         return atomic_cell_type::is_dead(_data) || has_expired(now);
     }
