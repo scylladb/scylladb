@@ -39,6 +39,7 @@ public:
     int files;
     long total_size;
 
+    stream_summary() = default;
     stream_summary(UUID _cf_id, int _files, long _total_size)
         : cf_id (_cf_id)
         , files(_files)

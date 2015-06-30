@@ -29,37 +29,6 @@ namespace streaming {
 namespace messages {
 
 class prepare_message : public stream_message {
-#if 0
-    public static Serializer<PrepareMessage> serializer = new Serializer<PrepareMessage>()
-    {
-        public PrepareMessage deserialize(ReadableByteChannel in, int version, StreamSession session) throws IOException
-        {
-            DataInput input = new DataInputStream(Channels.newInputStream(in));
-            PrepareMessage message = new PrepareMessage();
-            // requests
-            int numRequests = input.readInt();
-            for (int i = 0; i < numRequests; i++)
-                message.requests.add(StreamRequest.serializer.deserialize(input, version));
-            // summaries
-            int numSummaries = input.readInt();
-            for (int i = 0; i < numSummaries; i++)
-                message.summaries.add(StreamSummary.serializer.deserialize(input, version));
-            return message;
-        }
-
-        public void serialize(PrepareMessage message, DataOutputStreamAndChannel out, int version, StreamSession session) throws IOException
-        {
-            // requests
-            out.writeInt(message.requests.size());
-            for (StreamRequest request : message.requests)
-                StreamRequest.serializer.serialize(request, out, version);
-            // summaries
-            out.writeInt(message.summaries.size());
-            for (StreamSummary summary : message.summaries)
-                StreamSummary.serializer.serialize(summary, out, version);
-        }
-    };
-#endif
 public:
     /**
      * Streaming requests
@@ -71,8 +40,11 @@ public:
      */
     std::vector<stream_summary> summaries;
 
-
-    prepare_message() : stream_message(stream_message::Type::PREPARE) {
+    prepare_message() = default;
+    prepare_message(std::vector<stream_request> reqs, std::vector<stream_summary> sums)
+        : stream_message(stream_message::Type::PREPARE)
+        , requests(std::move(reqs))
+        , summaries(std::move(sums)) {
     }
 
 #if 0
@@ -90,14 +62,9 @@ public:
     }
 #endif
 public:
-    void serialize(bytes::iterator& out) const {
-    }
-    static prepare_message deserialize(bytes_view& v) {
-        return prepare_message();
-    }
-    size_t serialized_size() const {
-        return 0;
-    }
+    void serialize(bytes::iterator& out) const;
+    static prepare_message deserialize(bytes_view& v);
+    size_t serialized_size() const;
 };
 
 } // namespace messages
