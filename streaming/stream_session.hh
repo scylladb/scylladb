@@ -125,7 +125,7 @@ private:
     };
     static distributed<handler> _handlers;
     void init_messaging_service_handler();
-    future<> start();
+    future<> init_streaming_service();
 public:
     struct ss_table_streaming_sections {
         sstables::sstable& sstable;
