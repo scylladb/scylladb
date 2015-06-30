@@ -11,7 +11,7 @@
 namespace locator {
 
 local_strategy::local_strategy(const sstring& keyspace_name, token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring, sstring>& config_options) :
-        abstract_replication_strategy(keyspace_name, token_metadata, snitch, config_options) {}
+        abstract_replication_strategy(keyspace_name, token_metadata, snitch, config_options, replication_strategy_type::local) {}
 
 std::vector<inet_address> local_strategy::calculate_natural_endpoints(const token& t) {
     std::vector<inet_address> endpoints;

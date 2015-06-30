@@ -8,8 +8,17 @@
 
 namespace locator {
 
-abstract_replication_strategy::abstract_replication_strategy(const sstring& ks_name, token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring, sstring>& config_options) :
-       _ks_name(ks_name),  _config_options(config_options), _token_metadata(token_metadata), _snitch(snitch)  {}
+abstract_replication_strategy::abstract_replication_strategy(
+    const sstring& ks_name,
+    token_metadata& token_metadata,
+    snitch_ptr& snitch,
+    const std::map<sstring, sstring>& config_options,
+    replication_strategy_type my_type)
+        : _ks_name(ks_name)
+        , _config_options(config_options)
+        , _token_metadata(token_metadata)
+        , _snitch(snitch)
+        , _my_type(my_type) {}
 
 std::unique_ptr<abstract_replication_strategy> abstract_replication_strategy::create_replication_strategy(const sstring& ks_name, const sstring& strategy_name, token_metadata& tk_metadata, const std::map<sstring, sstring>& config_options) {
     assert(locator::i_endpoint_snitch::get_local_snitch_ptr());
