@@ -98,51 +98,11 @@ public:
         buffer.flip();
         return buffer;
     }
-
-    private static class StreamInitMessageSerializer implements IVersionedSerializer<StreamInitMessage>
-    {
-        public void serialize(StreamInitMessage message, DataOutputPlus out, int version) throws IOException
-        {
-            CompactEndpointSerializationHelper.serialize(message.from, out);
-            out.writeInt(message.sessionIndex);
-            UUIDSerializer.serializer.serialize(message.planId, out, MessagingService.current_version);
-            out.writeUTF(message.description);
-            out.writeBoolean(message.isForOutgoing);
-            out.writeBoolean(message.keepSSTableLevel);
-        }
-
-        public StreamInitMessage deserialize(DataInput in, int version) throws IOException
-        {
-            InetAddress from = CompactEndpointSerializationHelper.deserialize(in);
-            int sessionIndex = in.readInt();
-            UUID planId = UUIDSerializer.serializer.deserialize(in, MessagingService.current_version);
-            String description = in.readUTF();
-            boolean sentByInitiator = in.readBoolean();
-            boolean keepSSTableLevel = in.readBoolean();
-            return new StreamInitMessage(from, sessionIndex, planId, description, sentByInitiator, keepSSTableLevel);
-        }
-
-        public long serializedSize(StreamInitMessage message, int version)
-        {
-            long size = CompactEndpointSerializationHelper.serializedSize(message.from);
-            size += TypeSizes.NATIVE.sizeof(message.sessionIndex);
-            size += UUIDSerializer.serializer.serializedSize(message.planId, MessagingService.current_version);
-            size += TypeSizes.NATIVE.sizeof(message.description);
-            size += TypeSizes.NATIVE.sizeof(message.isForOutgoing);
-            size += TypeSizes.NATIVE.sizeof(message.keepSSTableLevel);
-            return size;
-        }
-    }
 #endif
 public:
-    void serialize(bytes::iterator& out) const {
-    }
-    static stream_init_message deserialize(bytes_view& v) {
-        return stream_init_message();
-    }
-    size_t serialized_size() const {
-        return 0;
-    }
+    void serialize(bytes::iterator& out) const;
+    static stream_init_message deserialize(bytes_view& v);
+    size_t serialized_size() const;
 };
 
 } // namespace messages
