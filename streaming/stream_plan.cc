@@ -52,4 +52,9 @@ stream_plan& stream_plan::transfer_files(inet_address to, std::vector<stream_ses
     return *this;
 }
 
+stream_plan& stream_plan::flush_before_transfer(bool flush_before_transfer_) {
+    _flush_before_transfer = flush_before_transfer_;
+    return *this;
+}
+
 }

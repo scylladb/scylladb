@@ -175,6 +175,7 @@ public:
     {
         return StreamResultFuture.init(planId, description, handlers, coordinator);
     }
+#endif
 
     /**
      * Set flushBeforeTransfer option.
@@ -183,12 +184,7 @@ public:
      * @param flushBeforeTransfer set to true when the node should flush before transfer
      * @return this object for chaining
      */
-    public StreamPlan flushBeforeTransfer(boolean flushBeforeTransfer)
-    {
-        this.flushBeforeTransfer = flushBeforeTransfer;
-        return this;
-    }
-#endif
+    stream_plan& flush_before_transfer(bool flush_before_transfer_);
 };
 
 } // namespace streaming
