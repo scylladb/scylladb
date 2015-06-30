@@ -218,7 +218,7 @@ mutation_partition::range(const schema& schema, const query::range<clustering_ke
 
 template <typename ColumnDefResolver>
 static void get_row_slice(const row& cells, const std::vector<column_id>& columns, tombstone tomb,
-        ColumnDefResolver&& id_to_def, query::result::row_writer& writer) {
+        ColumnDefResolver&& id_to_def, gc_clock::time_point now, query::result::row_writer& writer) {
     for (auto id : columns) {
         const atomic_cell_or_collection* cell = cells.find_cell(id);
         if (!cell) {
@@ -227,7 +227,7 @@ static void get_row_slice(const row& cells, const std::vector<column_id>& column
             auto&& def = id_to_def(id);
             if (def.is_atomic()) {
                 auto c = cell->as_atomic_cell();
-                if (!c.is_live(tomb)) {
+                if (!c.is_live(tomb, now)) {
                     writer.add_empty();
                 } else {
                     writer.add(cell->as_atomic_cell());
@@ -237,7 +237,7 @@ static void get_row_slice(const row& cells, const std::vector<column_id>& column
                 auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
                 auto m_view = ctype->deserialize_mutation_form(mut);
                 m_view.tomb.apply(tomb);
-                auto m_ser = ctype->serialize_mutation_form_only_live(m_view);
+                auto m_ser = ctype->serialize_mutation_form_only_live(m_view, now);
                 if (ctype->is_empty(m_ser)) {
                     writer.add_empty();
                 } else {
@@ -249,19 +249,19 @@ static void get_row_slice(const row& cells, const std::vector<column_id>& column
 }
 
 template <typename ColumnDefResolver>
-bool has_any_live_data(const row& cells, tombstone tomb, ColumnDefResolver&& id_to_def) {
+bool has_any_live_data(const row& cells, tombstone tomb, ColumnDefResolver&& id_to_def, gc_clock::time_point now) {
     for (auto&& e : cells) {
         auto&& cell_or_collection = e.second;
         const column_definition& def = id_to_def(e.first);
         if (def.is_atomic()) {
             auto&& c = cell_or_collection.as_atomic_cell();
-            if (c.is_live(tomb)) {
+            if (c.is_live(tomb, now)) {
                 return true;
             }
         } else {
             auto&& cell = cell_or_collection.as_collection_mutation();
             auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
-            if (ctype->is_any_live(cell, tomb)) {
+            if (ctype->is_any_live(cell, tomb, now)) {
                 return true;
             }
         }
@@ -273,6 +273,7 @@ void
 mutation_partition::query(query::result::partition_writer& pw,
     const schema& s,
     const query::partition_slice& slice,
+    gc_clock::time_point now,
     uint32_t limit) const
 {
     auto regular_column_resolver = [&s] (column_id id) -> const column_definition& {
@@ -289,7 +290,7 @@ mutation_partition::query(query::result::partition_writer& pw,
         };
         auto row_builder = pw.add_static_row();
         get_row_slice(static_row(), slice.static_columns, partition_tombstone(),
-            static_column_resolver, row_builder);
+            static_column_resolver, now, row_builder);
         row_builder.finish();
     }
 
@@ -315,9 +316,9 @@ mutation_partition::query(query::result::partition_writer& pw,
             // we've got no live cell in the results we still have to check if
             // any of the row's cell is live and we should return the row in
             // such case.
-            if (row_is_live || has_any_live_data(cells, row_tombstone, regular_column_resolver)) {
+            if (row_is_live || has_any_live_data(cells, row_tombstone, regular_column_resolver, now)) {
                 auto row_builder = pw.add_row(e.key());
-                get_row_slice(cells, slice.regular_columns, row_tombstone, regular_column_resolver, row_builder);
+                get_row_slice(cells, slice.regular_columns, row_tombstone, regular_column_resolver, now, row_builder);
                 row_builder.finish();
                 if (--limit == 0) {
                     break;

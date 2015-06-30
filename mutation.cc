@@ -100,10 +100,10 @@ bool mutation::operator!=(const mutation& m) const {
 }
 
 query::result
-mutation::query(const query::partition_slice& slice, uint32_t row_limit) const {
+mutation::query(const query::partition_slice& slice, gc_clock::time_point now, uint32_t row_limit) const {
     query::result::builder builder(slice);
     auto pb = builder.add_partition(key());
-    _p.query(pb, *_schema, slice, row_limit);
+    _p.query(pb, *_schema, slice, now, row_limit);
     pb.finish();
     return builder.build();
 }

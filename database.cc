@@ -1019,7 +1019,7 @@ column_family::query(const query::read_command& cmd, const std::vector<query::pa
                 return qs.reader().then([this, &qs](mutation_opt mo) {
                     if (mo) {
                         auto p_builder = qs.builder.add_partition(mo->key());
-                        mo->partition().query(p_builder, *_schema, qs.cmd.slice, qs.limit);
+                        mo->partition().query(p_builder, *_schema, qs.cmd.slice, qs.cmd.timestamp, qs.limit);
                         p_builder.finish();
                         qs.limit -= p_builder.row_count();
                     } else {
