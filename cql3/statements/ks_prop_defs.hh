@@ -55,8 +55,6 @@ public:
         auto replication_options = get_replication_options();
         if (replication_options.count(REPLICATION_STRATEGY_CLASS_KEY)) {
             _strategy_class = replication_options[REPLICATION_STRATEGY_CLASS_KEY];
-            // FIXME
-            //replication_options.remove(REPLICATION_STRATEGY_CLASS_KEY);
         }
     }
 
@@ -73,7 +71,9 @@ public:
     }
 
     lw_shared_ptr<keyspace_metadata> as_ks_metadata(sstring ks_name) {
-        return keyspace_metadata::new_keyspace(ks_name, get_replication_strategy_class().value(), get_replication_options(), get_boolean(KW_DURABLE_WRITES, true));
+        auto options = get_replication_options();
+        options.erase(REPLICATION_STRATEGY_CLASS_KEY);
+        return keyspace_metadata::new_keyspace(ks_name, get_replication_strategy_class().value(), options, get_boolean(KW_DURABLE_WRITES, true));
     }
 
 #if 0
