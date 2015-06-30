@@ -19,39 +19,27 @@
  * Copyright 2015 Cloudius Systems.
  */
 
-#pragma once
-
-#include "utils/UUID.hh"
-#include "streaming/messages/stream_message.hh"
+#include "streaming/messages/retry_message.hh"
+#include "types.hh"
+#include "util/serialization.hh"
 
 namespace streaming {
 namespace messages {
 
-class retry_message : public stream_message {
-public:
-    using UUID = utils::UUID;
-    UUID cf_id;
-    int sequence_number;
-    retry_message() = default;
-    retry_message(UUID cf_id_, int sequence_number_)
-        : stream_message(stream_message::Type::RECEIVED)
-        , cf_id (cf_id_)
-        , sequence_number(sequence_number_) {
-    }
-#if 0
-    @Override
-    public String toString()
-    {
-        final StringBuilder sb = new StringBuilder("Retry (");
-        sb.append(cfId).append(", #").append(sequenceNumber).append(')');
-        return sb.toString();
-    }
-#endif
-public:
-    void serialize(bytes::iterator& out) const;
-    static retry_message deserialize(bytes_view& v);
-    size_t serialized_size() const;
-};
+void retry_message::serialize(bytes::iterator& out) const {
+    cf_id.serialize(out);
+    serialize_int32(out, sequence_number);
+}
+
+retry_message retry_message::deserialize(bytes_view& v) {
+    auto cf_id_ = UUID::deserialize(v);
+    auto sequence_number_ = read_simple<int32_t>(v);
+    return retry_message(std::move(cf_id_), sequence_number_);
+}
+
+size_t retry_message::serialized_size() const {
+    return cf_id.serialized_size() + serialize_int32_size;
+}
 
 } // namespace messages
 } // namespace streaming
