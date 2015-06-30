@@ -130,11 +130,17 @@ public:
     bool is_live(tombstone t) const {
         return is_live() && timestamp() > t.timestamp;
     }
+    bool is_live(tombstone t, gc_clock::time_point now) const {
+        return is_live() && timestamp() > t.timestamp && !has_expired(now);
+    }
     bool is_live_and_has_ttl() const {
         return atomic_cell_type::is_live_and_has_ttl(_data);
     }
     bool is_dead() const {
         return atomic_cell_type::is_dead(_data);
+    }
+    bool is_dead(gc_clock::time_point now) const {
+        return atomic_cell_type::is_dead(_data) || has_expired(now);
     }
     // Can be called on live and dead cells
     api::timestamp_type timestamp() const {
@@ -144,9 +150,9 @@ public:
     bytes_view value() const {
         return atomic_cell_type::value(_data);
     }
-    // Can be called only when is_dead()
+    // Can be called only when is_dead(gc_clock::time_point)
     gc_clock::time_point deletion_time() const {
-        return atomic_cell_type::deletion_time(_data);
+        return !is_live() ? atomic_cell_type::deletion_time(_data) : expiry() - ttl();
     }
     // Can be called only when is_live_and_has_ttl()
     gc_clock::time_point expiry() const {
@@ -155,6 +161,10 @@ public:
     // Can be called only when is_live_and_has_ttl()
     gc_clock::duration ttl() const {
         return atomic_cell_type::ttl(_data);
+    }
+    // Can be called on live and dead cells
+    bool has_expired(gc_clock::time_point now) const {
+        return is_live_and_has_ttl() && expiry() < now;
     }
     bytes_view serialize() const {
         return _data;
