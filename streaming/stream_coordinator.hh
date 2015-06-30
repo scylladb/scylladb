@@ -66,13 +66,12 @@ public:
     std::vector<stream_session> get_all_stream_sessions();
 
     bool is_receiving();
-#if 0
-    public void connectAllStreamSessions()
-    {
-        for (HostStreamingData data : peerSessions.values())
-            data.connectAllStreamSessions();
+
+    void connect_all_stream_sessions() {
+        for (auto& data : _peer_sessions) {
+            data.second.connect_all_stream_sessions();
+        }
     }
-#endif
 
     std::set<inet_address> get_peers();
 
@@ -127,25 +126,8 @@ private:
 
 #endif
     host_streaming_data& get_host_data(inet_address peer);
-
     host_streaming_data& get_or_create_host_data(inet_address peer);
-#if 0
-    private static class StreamSessionConnector implements Runnable
-    {
-        private final StreamSession session;
-        public StreamSessionConnector(StreamSession session)
-        {
-            this.session = session;
-        }
 
-        @Override
-        public void run()
-        {
-            session.start();
-            logger.info("[Stream #{}, ID#{}] Beginning stream session with {}", session.planId(), session.sessionIndex(), session.peer);
-        }
-    }
-#endif
 private:
     class host_streaming_data {
         using inet_address = gms::inet_address;
@@ -167,15 +149,15 @@ private:
         bool has_active_sessions();
 
         stream_session& get_or_create_next_session(inet_address peer, inet_address connecting);
-#if 0
-        public void connectAllStreamSessions()
-        {
-            for (StreamSession session : streamSessions.values())
-            {
-                streamExecutor.execute(new StreamSessionConnector(session));
+
+        void connect_all_stream_sessions() {
+            for (auto& x : _stream_sessions) {
+                auto& session = x.second;
+                session.start();
+                // logger.info("[Stream #{}, ID#{}] Beginning stream session with {}", session.plan_id(), session.session_index(), session.peer);
             }
         }
-#endif
+
         std::vector<stream_session> get_all_stream_sessions();
 
         stream_session& get_or_create_session_by_id(inet_address peer, int id, inet_address connecting);

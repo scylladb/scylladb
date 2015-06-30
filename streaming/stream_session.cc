@@ -318,4 +318,21 @@ void stream_session::close_session(stream_session_state final_state) {
     }
 }
 
+void stream_session::start() {
+    if (_requests.empty() && _transfers.empty()) {
+        //logger.info("[Stream #{}] Session does not have any tasks.", planId());
+        close_session(stream_session_state::COMPLETE);
+        return;
+    }
+
+    try {
+        // logger.info("[Stream #{}] Starting streaming to {}{}", plan_id(),
+        //                                                        peer, peer == connecting ? "" : " through " + connecting);
+        conn_handler.initiate();
+        on_initialization_complete();
+    } catch (...) {
+        on_error();
+    }
+}
+
 } // namespace streaming

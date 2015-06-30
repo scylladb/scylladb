@@ -221,31 +221,10 @@ public:
     {
         this.streamResult = streamResult;
     }
+#endif
 
-    public void start()
-    {
-        if (requests.isEmpty() && transfers.isEmpty())
-        {
-            logger.info("[Stream #{}] Session does not have any tasks.", planId());
-            close_session(stream_session_state::COMPLETE);
-            return;
-        }
-
-        try
-        {
-            logger.info("[Stream #{}] Starting streaming to {}{}", planId(),
-                                                                   peer,
-                                                                   peer.equals(connecting) ? "" : " through " + connecting);
-            handler.initiate();
-            on_initialization_complete();
-        }
-        catch (Exception e)
-        {
-            JVMStabilityInspector.inspectThrowable(e);
-            onError(e);
-        }
-    }
-
+    void start();
+#if 0
     public Socket createConnection() throws IOException
     {
         assert factory != null;
