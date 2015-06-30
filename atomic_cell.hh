@@ -111,16 +111,19 @@ private:
         std::copy_n(value.begin(), value.size(), b.begin() + value_offset);
         return b;
     }
-    friend class atomic_cell_view;
+    template<typename ByteContainer>
+    friend class atomic_cell_base;
     friend class atomic_cell;
 };
 
-class atomic_cell_view final {
-    bytes_view _data;
-private:
-    atomic_cell_view(bytes_view data) : _data(data) {}
+template<typename ByteContainer>
+class atomic_cell_base {
+protected:
+    ByteContainer _data;
+protected:
+    atomic_cell_base(ByteContainer&& data) : _data(std::forward<ByteContainer>(data)) { }
+    atomic_cell_base(const ByteContainer& data) : _data(data) { }
 public:
-    static atomic_cell_view from_bytes(bytes_view data) { return atomic_cell_view(data); }
     bool is_live() const {
         return atomic_cell_type::is_live(_data);
     }
@@ -156,14 +159,19 @@ public:
     bytes_view serialize() const {
         return _data;
     }
+};
+
+class atomic_cell_view final : public atomic_cell_base<bytes_view> {
+    atomic_cell_view(bytes_view data) : atomic_cell_base(data) {}
+public:
+    static atomic_cell_view from_bytes(bytes_view data) { return atomic_cell_view(data); }
+
     friend class atomic_cell;
     friend std::ostream& operator<<(std::ostream& os, const atomic_cell_view& acv);
 };
 
-class atomic_cell final {
-    bytes _data;
-private:
-    atomic_cell(bytes b) : _data(std::move(b)) {}
+class atomic_cell final : public atomic_cell_base<bytes> {
+    atomic_cell(bytes b) : atomic_cell_base(std::move(b)) {}
 public:
     atomic_cell(const atomic_cell&) = default;
     atomic_cell(atomic_cell&&) = default;
@@ -172,39 +180,7 @@ public:
     static atomic_cell from_bytes(bytes b) {
         return atomic_cell(std::move(b));
     }
-    atomic_cell(atomic_cell_view other) : _data(other._data.begin(), other._data.end()) {}
-    bool is_live() const {
-        return atomic_cell_type::is_live(_data);
-    }
-    bool is_live_and_has_ttl() const {
-        return atomic_cell_type::is_live_and_has_ttl(_data);
-    }
-    bool is_dead() const {
-        return atomic_cell_type::is_dead(_data);
-    }
-    // Can be called on live and dead cells
-    api::timestamp_type timestamp() const {
-        return atomic_cell_type::timestamp(_data);
-    }
-    // Can be called on live cells only
-    bytes_view value() const {
-        return atomic_cell_type::value(_data);
-    }
-    // Can be called only when is_dead()
-    gc_clock::time_point deletion_time() const {
-        return atomic_cell_type::deletion_time(_data);
-    }
-    // Can be called only when is_live_and_has_ttl()
-    gc_clock::time_point expiry() const {
-        return atomic_cell_type::expiry(_data);
-    }
-    // Can be called only when is_live_and_has_ttl()
-    gc_clock::duration ttl() const {
-        return atomic_cell_type::ttl(_data);
-    }
-    bytes_view serialize() const {
-        return _data;
-    }
+    atomic_cell(atomic_cell_view other) : atomic_cell_base(bytes { other._data.begin(), other._data.end() }) {}
     operator atomic_cell_view() const {
         return atomic_cell_view(_data);
     }
