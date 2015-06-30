@@ -26,6 +26,7 @@
 #include <iostream>
 #include <iomanip>
 #include <chrono>
+#include "core/sstring.hh"
 
 inline void
 apply_format(boost::format& fmt) {
@@ -70,6 +71,12 @@ sprint(const char* fmt, A&&... a) {
     boost::format bfmt(fmt);
     apply_format(bfmt, std::forward<A>(a)...);
     return bfmt.str();
+}
+
+template <typename... A>
+std::string
+sprint(const sstring& fmt, A&&... a) {
+    return sprint(fmt.c_str(), std::forward<A>(a)...);
 }
 
 template <typename Iterator>
