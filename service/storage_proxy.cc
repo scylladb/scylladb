@@ -701,6 +701,9 @@ storage_proxy::mutate_locally(std::vector<mutation> mutations) {
 future<>
 storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl) {
     auto have_cl = make_lw_shared<semaphore>(0);
+    auto local_addr = utils::fb_utilities::get_broadcast_address();
+    auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+    sstring local_dc = snitch_ptr->get_datacenter(local_addr);
 
     for (auto& m : mutations) {
         try {
@@ -708,7 +711,6 @@ storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl)
             auto& rs = ks.get_replication_strategy();
             std::vector<gms::inet_address> natural_endpoints = rs.get_natural_endpoints(m.token());
             std::vector<gms::inet_address> pending_endpoints = get_local_storage_service().get_token_metadata().pending_endpoints_for(m.token(), ks);
-            sstring local_dc = "localDC";
 
             auto all = boost::range::join(natural_endpoints, pending_endpoints);
 
