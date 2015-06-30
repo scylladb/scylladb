@@ -133,19 +133,29 @@ public:
 };
 
 class datacenter_sync_write_response_handler : public abstract_write_response_handler {
-    std::unordered_map<sstring, int> _responses;
+    std::unordered_map<sstring, size_t> _dc_responses;
     void signal(gms::inet_address from) override {
-//        sstring data_center = is_local_response(from) ? DatabaseDescriptor.getLocalDataCenter() : snitch.getDatacenter(message.from);
-        sstring data_center = "DCname";
+        auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+        sstring data_center = snitch_ptr->get_datacenter(from);
+        auto dc_resp = _dc_responses.find(data_center);
 
-        if (--_responses[data_center] > 0) {
+        if (dc_resp->second > 0) {
+            --dc_resp->second;
             abstract_write_response_handler::signal();
         }
     }
 public:
     datacenter_sync_write_response_handler(keyspace& ks, db::consistency_level cl, lw_shared_ptr<const frozen_mutation> mutation, std::unordered_set<gms::inet_address> targets, size_t pending_endpoints) :
         abstract_write_response_handler(ks, cl, std::move(mutation), targets, pending_endpoints) {
-        warn(unimplemented::cause::CONSISTENCY);
+        auto& snitch_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
+
+        for (auto& target : targets) {
+            auto dc = snitch_ptr->get_datacenter(target);
+
+            if (_dc_responses.find(dc) == _dc_responses.end()) {
+                _dc_responses.emplace(dc, db::local_quorum_for(ks, dc));
+            }
+        }
     }
 };
 
@@ -204,7 +214,7 @@ abstract_write_response_handler& storage_proxy::get_write_response_handler(stora
 storage_proxy::response_id_type storage_proxy::create_write_response_handler(keyspace& ks, db::consistency_level cl, frozen_mutation&& mutation, std::unordered_set<gms::inet_address> targets, std::vector<gms::inet_address>& pending_endpoints)
 {
     std::unique_ptr<abstract_write_response_handler> h;
-    //auto& rs = ks.get_replication_strategy();
+    auto& rs = ks.get_replication_strategy();
     size_t pending_count = pending_endpoints.size();
 
     auto m = make_lw_shared<const frozen_mutation>(std::move(mutation));
@@ -213,7 +223,8 @@ storage_proxy::response_id_type storage_proxy::create_write_response_handler(key
     if (db::is_datacenter_local(cl)) {
         pending_count = std::count_if(pending_endpoints.begin(), pending_endpoints.end(), db::is_local);
         h = std::make_unique<datacenter_write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count);
-    } else if (0 && cl == db::consistency_level::EACH_QUORUM /*&& rs == NetworkTopologyStrategy*/){
+    } else if (cl == db::consistency_level::EACH_QUORUM &&
+               rs.get_type() == locator::replication_strategy_type::network_topology){
         h = std::make_unique<datacenter_sync_write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count);
     } else {
         h = std::make_unique<write_response_handler>(ks, cl, std::move(m), std::move(targets), pending_count);
