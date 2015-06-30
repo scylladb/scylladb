@@ -41,61 +41,10 @@ public:
         , column_families(std::move(_column_families))
         , repaired_at(_repaired_at) {
     }
-
-#if 0
-    public static class StreamRequestSerializer implements IVersionedSerializer<StreamRequest>
-    {
-        public void serialize(StreamRequest request, DataOutputPlus out, int version) throws IOException
-        {
-            out.writeUTF(request.keyspace);
-            out.writeLong(request.repairedAt);
-            out.writeInt(request.ranges.size());
-            for (Range<Token> range : request.ranges)
-            {
-                Token.serializer.serialize(range.left, out);
-                Token.serializer.serialize(range.right, out);
-            }
-            out.writeInt(request.columnFamilies.size());
-            for (sstring cf : request.columnFamilies)
-                out.writeUTF(cf);
-        }
-
-        public StreamRequest deserialize(DataInput in, int version) throws IOException
-        {
-            sstring keyspace = in.readUTF();
-            long repairedAt = in.readLong();
-            int rangeCount = in.readInt();
-            List<Range<Token>> ranges = new ArrayList<>(rangeCount);
-            for (int i = 0; i < rangeCount; i++)
-            {
-                Token left = Token.serializer.deserialize(in);
-                Token right = Token.serializer.deserialize(in);
-                ranges.add(new Range<>(left, right));
-            }
-            int cfCount = in.readInt();
-            List<sstring> columnFamilies = new ArrayList<>(cfCount);
-            for (int i = 0; i < cfCount; i++)
-                columnFamilies.add(in.readUTF());
-            return new StreamRequest(keyspace, ranges, columnFamilies, repairedAt);
-        }
-
-        public long serializedSize(StreamRequest request, int version)
-        {
-            int size = TypeSizes.NATIVE.sizeof(request.keyspace);
-            size += TypeSizes.NATIVE.sizeof(request.repairedAt);
-            size += TypeSizes.NATIVE.sizeof(request.ranges.size());
-            for (Range<Token> range : request.ranges)
-            {
-                size += Token.serializer.serializedSize(range.left, TypeSizes.NATIVE);
-                size += Token.serializer.serializedSize(range.right, TypeSizes.NATIVE);
-            }
-            size += TypeSizes.NATIVE.sizeof(request.columnFamilies.size());
-            for (sstring cf : request.columnFamilies)
-                size += TypeSizes.NATIVE.sizeof(cf);
-            return size;
-        }
-    }
-#endif
+public:
+    void serialize(bytes::iterator& out) const;
+    static stream_request deserialize(bytes_view& v);
+    size_t serialized_size() const;
 };
 
 } // namespace streaming
