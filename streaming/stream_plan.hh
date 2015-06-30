@@ -28,6 +28,7 @@
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"
 #include "streaming/stream_coordinator.hh"
+#include "streaming/stream_event_handler.hh"
 #include <vector>
 
 namespace streaming {
@@ -44,7 +45,7 @@ private:
     using token = dht::token;
     UUID _plan_id;
     sstring _description;
-    //List<StreamEventHandler> handlers = new ArrayList<>();
+    std::vector<stream_event_handler*> _handlers;
     long _repaired_at;
     stream_coordinator _coordinator;
 
@@ -164,18 +165,13 @@ public:
     bool is_empty() {
         return !_coordinator.has_active_sessions();
     }
-#if 0
 
     /**
      * Execute this {@link StreamPlan} asynchronously.
      *
      * @return Future {@link StreamState} that you can use to listen on progress of streaming.
      */
-    public StreamResultFuture execute()
-    {
-        return StreamResultFuture.init(planId, description, handlers, coordinator);
-    }
-#endif
+    void execute();
 
     /**
      * Set flushBeforeTransfer option.
