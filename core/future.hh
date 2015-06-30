@@ -822,9 +822,27 @@ public:
     /// \brief Discards the value carried by this future.
     ///
     /// Converts the future into a no-value \c future<>, by
-    /// ignorting any result.  Exceptions are propagated unchanged.
+    /// ignoring any result.  Exceptions are propagated unchanged.
     future<> discard_result() noexcept {
         return then([] (T&&...) {});
+    }
+
+    /// \brief Handle the exception carried by this future.
+    ///
+    /// When the future resolves, if it resolves with an exception, run the
+    /// given function with the exception passed as an std::exception_ptr.
+    /// After handling the exception, it is discarded. Accordingly, we must
+    /// also discard the value of the future, because we cannot propagate a
+    /// value which would not exist in the case of an exception.
+    template <typename Func>
+    future<> handle_exception(Func&& func) noexcept {
+        return then_wrapped([func = std::forward<Func>(func)] (auto&& fut) {
+            try {
+                fut.get();
+            } catch (...) {
+                func(std::current_exception());
+            }
+        });
     }
 
     /// \cond internal
