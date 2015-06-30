@@ -42,6 +42,10 @@ public:
         return (dc_factor == _dc_rep_factor.end()) ? 0 : dc_factor->second;
     }
 
+    const std::vector<sstring>& get_datacenters() const {
+        return _datacenteres;
+    }
+
 protected:
     /**
      * calculate endpoints in one pass through the tokens by tracking our
@@ -63,10 +67,6 @@ private:
                            std::unordered_set<inet_address>>& dc_replicas,
         std::unordered_map<sstring,
                            std::unordered_set<inet_address>>& all_endpoints);
-
-    const std::vector<sstring>& get_datacenters() const {
-        return _datacenteres;
-    }
 
     void validate_options() {
         for (auto& c : _config_options)
