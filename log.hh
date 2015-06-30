@@ -7,6 +7,7 @@
 
 #include "core/sstring.hh"
 #include <unordered_map>
+#include <exception>
 
 namespace logging {
 
@@ -120,5 +121,8 @@ logger::do_log(log_level level, const char* fmt, Args&&... args) {
 }
 
 }
+
+// Pretty-printer for exceptions to be logged, e.g., std::current_exception().
+std::ostream& operator<<(std::ostream&, std::exception_ptr);
 
 #endif /* LOG_HH_ */

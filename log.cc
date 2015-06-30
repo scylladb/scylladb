@@ -4,6 +4,7 @@
 
 #include "log.hh"
 #include <cxxabi.h>
+#include <system_error>
 
 namespace logging {
 
@@ -62,4 +63,31 @@ sstring pretty_type_name(const std::type_info& ti) {
 
 thread_local registry g_registry;
 
+}
+
+std::ostream& operator<<(std::ostream&out, std::exception_ptr eptr) {
+    if (!eptr) {
+        out << "<no exception>";
+        return out;
+    }
+    try {
+        std::rethrow_exception(eptr);
+    } catch(...) {
+        auto tp = abi::__cxa_current_exception_type();
+        if (tp) {
+            out << logging::pretty_type_name(*tp);
+        } else {
+            // This case shouldn't happen...
+            out << "<unknown exception>";
+        }
+        // Print more information on some familiar exception types
+        try {
+            throw;
+        } catch(const std::system_error &e) {
+            out << " (error " << e.code() << ", " << e.code().message() << ")";
+        } catch(const std::exception& e) {
+            out << " (" << e.what() << ")";
+        }
+    }
+    return out;
 }
