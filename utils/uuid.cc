@@ -40,8 +40,8 @@ std::ostream& operator<<(std::ostream& out, const UUID& uuid) {
     return out << uuid.to_sstring();
 }
 
-UUID::UUID(const sstring& uuid) {
-    auto uuid_string = uuid;
+UUID::UUID(sstring_view uuid) {
+    sstring uuid_string(uuid.begin(), uuid.end());
     boost::erase_all(uuid_string, "-");
     auto size = uuid_string.size() / 2;
     assert(size == 16);
