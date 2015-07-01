@@ -489,9 +489,9 @@ column_family::seal_active_memtable(database* db) {
             } catch (...) {
                 dblog.error("failed to write sstable: unknown error");
             }
-
-            _in_flight_seals.leave();
         });
+    }).finally([this] {
+        _in_flight_seals.leave();
     });
     // FIXME: release commit log
     // FIXME: provide back-pressure to upper layers
