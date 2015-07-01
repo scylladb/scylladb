@@ -9,6 +9,24 @@
 #include "service/storage_service.hh"
 
 namespace net {
+
+future<> ser_messaging_verb(output_stream<char>& out, messaging_verb& v) {
+    bytes b(bytes::initialized_later(), sizeof(v));
+    auto _out = b.begin();
+    serialize_int32(_out, int32_t(v));
+    return out.write(reinterpret_cast<const char*>(b.c_str()), sizeof(v));
+}
+
+future<> des_messaging_verb(input_stream<char>& in, messaging_verb& v) {
+    return in.read_exactly(sizeof(v)).then([&v] (temporary_buffer<char> buf) mutable {
+        if (buf.size() != sizeof(v)) {
+            throw rpc::closed_error();
+        }
+        bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), sizeof(v));
+        v = messaging_verb(read_simple<int32_t>(bv));
+    });
+}
+
 distributed<messaging_service> _the_messaging_service;
 
 future<> deinit_messaging_service() {
@@ -53,4 +71,4 @@ future<> init_messaging_service(sstring listen_address, db::config::seed_provide
     });
 }
 
-}
+} // namespace net
