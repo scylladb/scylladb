@@ -28,6 +28,7 @@
 #include "streaming/messages/retry_message.hh"
 #include "streaming/messages/complete_message.hh"
 #include "streaming/messages/session_failed_message.hh"
+#include "streaming/stream_result_future.hh"
 
 namespace streaming {
 
@@ -88,7 +89,7 @@ void stream_session::init_messaging_service_handler() {
 
 distributed<stream_session::handler> stream_session::_handlers;
 
-future<> stream_session::start() {
+future<> stream_session::init_streaming_service() {
     return _handlers.start().then([this] {
         return _handlers.invoke_on_all([this] (handler& h) {
             this->init_messaging_service_handler();
@@ -316,6 +317,35 @@ void stream_session::close_session(stream_session_state final_state) {
 
         //streamResult.handleSessionComplete(this);
     }
+}
+
+void stream_session::start() {
+    if (_requests.empty() && _transfers.empty()) {
+        //logger.info("[Stream #{}] Session does not have any tasks.", planId());
+        close_session(stream_session_state::COMPLETE);
+        return;
+    }
+
+    try {
+        // logger.info("[Stream #{}] Starting streaming to {}{}", plan_id(),
+        //                                                        peer, peer == connecting ? "" : " through " + connecting);
+        conn_handler.initiate();
+        on_initialization_complete();
+    } catch (...) {
+        on_error();
+    }
+}
+
+void stream_session::init(shared_ptr<stream_result_future> stream_result_) {
+    _stream_result = stream_result_;
+}
+
+utils::UUID stream_session::plan_id() {
+    return _stream_result ? _stream_result->plan_id : UUID();
+}
+
+sstring stream_session::description() {
+    return _stream_result  ? _stream_result->description : "";
 }
 
 } // namespace streaming

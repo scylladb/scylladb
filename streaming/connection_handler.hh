@@ -46,7 +46,6 @@ public:
         , _outgoing(session) {
     }
 
-#if 0
     /**
      * Set up incoming message handler and initiate streaming.
      *
@@ -54,8 +53,8 @@ public:
      *
      * @throws IOException
      */
-    public void initiate() throws IOException
-    {
+    void initiate() {
+#if 0
         logger.debug("[Stream #{}] Sending stream init for incoming stream", session.planId());
         Socket incomingSocket = session.createConnection();
         incoming.start(incomingSocket, StreamMessage.CURRENT_VERSION);
@@ -65,7 +64,10 @@ public:
         Socket outgoingSocket = session.createConnection();
         outgoing.start(outgoingSocket, StreamMessage.CURRENT_VERSION);
         outgoing.sendInitMessage(outgoingSocket, false);
+#endif
     }
+
+#if 0
 
     /**
      * Set up outgoing message handler on receiving side.

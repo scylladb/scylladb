@@ -39,6 +39,8 @@
 
 namespace streaming {
 
+class stream_result_future;
+
 /**
  * Handles the streaming a one or more section of one of more sstables to and from a specific
  * remote node.
@@ -125,7 +127,7 @@ private:
     };
     static distributed<handler> _handlers;
     void init_messaging_service_handler();
-    future<> start();
+    future<> init_streaming_service();
 public:
     struct ss_table_streaming_sections {
         sstables::sstable& sstable;
@@ -153,7 +155,7 @@ public:
 private:
     int _index;
     // should not be null when session is started
-    //private StreamResultFuture streamResult;
+    shared_ptr<stream_result_future> _stream_result;
 
     // stream requests to send to the peer
     std::vector<stream_request> _requests;
@@ -189,63 +191,28 @@ public:
         //this.metrics = StreamingMetrics.get(connecting);
     }
 
-    UUID plan_id() {
-        // return streamResult == null ? null : streamResult.planId;
-        // FIXME:
-        return UUID();
-    }
+    UUID plan_id();
 
     int session_index() {
         return _index;
     }
 
-#if 0
+    sstring description();
 
-    public String description()
-    {
-        return streamResult == null ? null : streamResult.description;
-    }
-#endif
 public:
     bool keep_ss_table_level() {
         return _keep_ss_table_level;
     }
-#if 0
     /**
      * Bind this session to report to specific {@link StreamResultFuture} and
      * perform pre-streaming initialization.
      *
      * @param streamResult result to report to
      */
-    public void init(StreamResultFuture streamResult)
-    {
-        this.streamResult = streamResult;
-    }
+    void init(shared_ptr<stream_result_future> stream_result_);
 
-    public void start()
-    {
-        if (requests.isEmpty() && transfers.isEmpty())
-        {
-            logger.info("[Stream #{}] Session does not have any tasks.", planId());
-            close_session(stream_session_state::COMPLETE);
-            return;
-        }
-
-        try
-        {
-            logger.info("[Stream #{}] Starting streaming to {}{}", planId(),
-                                                                   peer,
-                                                                   peer.equals(connecting) ? "" : " through " + connecting);
-            handler.initiate();
-            on_initialization_complete();
-        }
-        catch (Exception e)
-        {
-            JVMStabilityInspector.inspectThrowable(e);
-            onError(e);
-        }
-    }
-
+    void start();
+#if 0
     public Socket createConnection() throws IOException
     {
         assert factory != null;

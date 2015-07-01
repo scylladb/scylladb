@@ -20,6 +20,7 @@
  */
 
 #include "streaming/stream_plan.hh"
+#include "streaming/stream_result_future.hh"
 
 namespace streaming {
 
@@ -49,6 +50,20 @@ stream_plan& stream_plan::transfer_ranges(inet_address to, inet_address connecti
 
 stream_plan& stream_plan::transfer_files(inet_address to, std::vector<stream_session::ss_table_streaming_sections> sstable_details) {
     _coordinator.transfer_files(to, std::move(sstable_details));
+    return *this;
+}
+
+void stream_plan::execute() {
+    return stream_result_future::init(_plan_id, _description, _handlers, _coordinator);
+}
+
+stream_plan& stream_plan::flush_before_transfer(bool flush_before_transfer_) {
+    _flush_before_transfer = flush_before_transfer_;
+    return *this;
+}
+
+stream_plan& stream_plan::listeners(std::vector<stream_event_handler*> handlers) {
+    std::copy(handlers.begin(), handlers.end(), std::back_inserter(_handlers));
     return *this;
 }
 

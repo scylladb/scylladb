@@ -28,6 +28,7 @@
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"
 #include "streaming/stream_coordinator.hh"
+#include "streaming/stream_event_handler.hh"
 #include <vector>
 
 namespace streaming {
@@ -44,7 +45,7 @@ private:
     using token = dht::token;
     UUID _plan_id;
     sstring _description;
-    //List<StreamEventHandler> handlers = new ArrayList<>();
+    std::vector<stream_event_handler*> _handlers;
     long _repaired_at;
     stream_coordinator _coordinator;
 
@@ -135,16 +136,8 @@ public:
      * @return this object for chaining
      */
     stream_plan& transfer_files(inet_address to, std::vector<stream_session::ss_table_streaming_sections> sstable_details);
+    stream_plan& listeners(std::vector<stream_event_handler*> handlers);
 #if 0
-
-    public StreamPlan listeners(StreamEventHandler handler, StreamEventHandler... handlers)
-    {
-        this.handlers.add(handler);
-        if (handlers != null)
-            Collections.addAll(this.handlers, handlers);
-        return this;
-    }
-
     /**
      * Set custom StreamConnectionFactory to be used for establishing connection
      *
@@ -164,17 +157,13 @@ public:
     bool is_empty() {
         return !_coordinator.has_active_sessions();
     }
-#if 0
 
     /**
      * Execute this {@link StreamPlan} asynchronously.
      *
      * @return Future {@link StreamState} that you can use to listen on progress of streaming.
      */
-    public StreamResultFuture execute()
-    {
-        return StreamResultFuture.init(planId, description, handlers, coordinator);
-    }
+    void execute();
 
     /**
      * Set flushBeforeTransfer option.
@@ -183,12 +172,7 @@ public:
      * @param flushBeforeTransfer set to true when the node should flush before transfer
      * @return this object for chaining
      */
-    public StreamPlan flushBeforeTransfer(boolean flushBeforeTransfer)
-    {
-        this.flushBeforeTransfer = flushBeforeTransfer;
-        return this;
-    }
-#endif
+    stream_plan& flush_before_transfer(bool flush_before_transfer_);
 };
 
 } // namespace streaming
