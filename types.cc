@@ -13,6 +13,7 @@
 #include "combine.hh"
 #include <cmath>
 #include <sstream>
+#include <regex>
 #include <boost/iterator/transform_iterator.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/numeric.hpp>
@@ -337,10 +338,25 @@ struct timeuuid_type_impl : public abstract_type {
         return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) const override {
-        throw std::runtime_error("not implemented");
+        if (s.empty()) {
+            return bytes();
+        }
+        static const std::regex re("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$");
+        if (!std::regex_match(s.data(), re)) {
+            throw marshal_exception();
+        }
+        utils::UUID v(s);
+        if (v.version() != 1) {
+            throw marshal_exception();
+        }
+        return v.to_bytes();
     }
     virtual sstring to_string(const bytes& b) const override {
-        throw std::runtime_error("not implemented");
+        auto v = deserialize(b);
+        if (v.empty()) {
+            return "";
+        }
+        return boost::any_cast<const utils::UUID&>(v).to_sstring();
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::timeuuid;
