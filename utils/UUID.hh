@@ -17,7 +17,6 @@
 #include "bytes.hh"
 #include "util/serialization.hh"
 
-
 namespace utils {
 
 class UUID {
@@ -87,6 +86,9 @@ public:
         return b;
     }
 
+    void serialize(bytes::iterator& out) const;
+    static UUID deserialize(bytes_view& v);
+    size_t serialized_size() const;
 };
 
 UUID make_random_uuid();

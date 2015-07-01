@@ -30,22 +30,6 @@ namespace messages {
 class received_message : public stream_message {
 public:
     using UUID = utils::UUID;
-#if 0
-    public static Serializer<ReceivedMessage> serializer = new Serializer<ReceivedMessage>()
-    {
-        public ReceivedMessage deserialize(ReadableByteChannel in, int version, StreamSession session) throws IOException
-        {
-            DataInput input = new DataInputStream(Channels.newInputStream(in));
-            return new ReceivedMessage(UUIDSerializer.serializer.deserialize(input, MessagingService.current_version), input.readInt());
-        }
-
-        public void serialize(ReceivedMessage message, DataOutputStreamAndChannel out, int version, StreamSession session) throws IOException
-        {
-            UUIDSerializer.serializer.serialize(message.cfId, out, MessagingService.current_version);
-            out.writeInt(message.sequenceNumber);
-        }
-    };
-#endif
     UUID cf_id;
     int sequence_number;
 
@@ -65,14 +49,9 @@ public:
     }
 #endif
 public:
-    void serialize(bytes::iterator& out) const {
-    }
-    static received_message deserialize(bytes_view& v) {
-        return received_message();
-    }
-    size_t serialized_size() const {
-        return 0;
-    }
+    void serialize(bytes::iterator& out) const;
+    static received_message deserialize(bytes_view& v);
+    size_t serialized_size() const;
 };
 
 } // namespace messages

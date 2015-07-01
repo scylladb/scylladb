@@ -113,87 +113,11 @@ public:
         result = 31 * result + sequence_number;
         return result;
     }
-
-    static class FileMessageHeaderSerializer implements IVersionedSerializer<FileMessageHeader>
-    {
-        public void serialize(FileMessageHeader header, DataOutputPlus out, int version) throws IOException
-        {
-            UUIDSerializer.serializer.serialize(header.cf_id, out, version);
-            out.writeInt(header.sequence_number);
-            out.writeUTF(header.version);
-
-            //We can't stream to a node that doesn't understand a new sstable format
-            if (version < StreamMessage.VERSION_30 && header.format != SSTableFormat.Type.LEGACY && header.format != SSTableFormat.Type.BIG)
-                throw new UnsupportedOperationException("Can't stream non-legacy sstables to nodes < 3.0");
-
-            if (version >= StreamMessage.VERSION_30)
-                out.writeUTF(header.format.name);
-
-            out.writeLong(header.estimated_keys);
-            out.writeInt(header.sections.size());
-            for (Pair<Long, Long> section : header.sections)
-            {
-                out.writeLong(section.left);
-                out.writeLong(section.right);
-            }
-            CompressionInfo.serializer.serialize(header.comp_info, out, version);
-            out.writeLong(header.repaired_at);
-            out.writeInt(header.sstable_level);
-        }
-
-        public FileMessageHeader deserialize(DataInput in, int version) throws IOException
-        {
-            UUID cf_id = UUIDSerializer.serializer.deserialize(in, MessagingService.current_version);
-            int sequence_number = in.readInt();
-            sstring sstableVersion = in.readUTF();
-
-            SSTableFormat.Type format = SSTableFormat.Type.LEGACY;
-            if (version >= StreamMessage.VERSION_30)
-                format = SSTableFormat.Type.validate(in.readUTF());
-
-            long estimated_keys = in.readLong();
-            int count = in.readInt();
-            List<Pair<Long, Long>> sections = new ArrayList<>(count);
-            for (int k = 0; k < count; k++)
-                sections.add(Pair.create(in.readLong(), in.readLong()));
-            CompressionInfo comp_info = CompressionInfo.serializer.deserialize(in, MessagingService.current_version);
-            long repaired_at = in.readLong();
-            int sstable_level = in.readInt();
-            return new FileMessageHeader(cf_id, sequence_number, sstableVersion, format, estimated_keys, sections, comp_info, repaired_at, sstable_level);
-        }
-
-        public long serializedSize(FileMessageHeader header, int version)
-        {
-            long size = UUIDSerializer.serializer.serializedSize(header.cf_id, version);
-            size += TypeSizes.NATIVE.sizeof(header.sequence_number);
-            size += TypeSizes.NATIVE.sizeof(header.version);
-
-            if (version >= StreamMessage.VERSION_30)
-                size += TypeSizes.NATIVE.sizeof(header.format.name);
-
-            size += TypeSizes.NATIVE.sizeof(header.estimated_keys);
-
-            size += TypeSizes.NATIVE.sizeof(header.sections.size());
-            for (Pair<Long, Long> section : header.sections)
-            {
-                size += TypeSizes.NATIVE.sizeof(section.left);
-                size += TypeSizes.NATIVE.sizeof(section.right);
-            }
-            size += CompressionInfo.serializer.serializedSize(header.comp_info, version);
-            size += TypeSizes.NATIVE.sizeof(header.sstable_level);
-            return size;
-        }
-    }
 #endif
 public:
-    void serialize(bytes::iterator& out) const {
-    }
-    static file_message_header deserialize(bytes_view& v) {
-        return file_message_header();
-    }
-    size_t serialized_size() const {
-        return 0;
-    }
+    void serialize(bytes::iterator& out) const;
+    static file_message_header deserialize(bytes_view& v);
+    size_t serialized_size() const;
 };
 
 } // namespace messages

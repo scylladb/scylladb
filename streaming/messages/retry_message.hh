@@ -30,23 +30,6 @@ namespace messages {
 class retry_message : public stream_message {
 public:
     using UUID = utils::UUID;
-#if 0
-    public static Serializer<RetryMessage> serializer = new Serializer<RetryMessage>()
-    {
-        public RetryMessage deserialize(ReadableByteChannel in, int version, StreamSession session) throws IOException
-        {
-            DataInput input = new DataInputStream(Channels.newInputStream(in));
-            return new RetryMessage(UUIDSerializer.serializer.deserialize(input, MessagingService.current_version), input.readInt());
-        }
-
-        public void serialize(RetryMessage message, DataOutputStreamAndChannel out, int version, StreamSession session) throws IOException
-        {
-            UUIDSerializer.serializer.serialize(message.cfId, out, MessagingService.current_version);
-            out.writeInt(message.sequenceNumber);
-        }
-    };
-#endif
-
     UUID cf_id;
     int sequence_number;
     retry_message() = default;
@@ -55,7 +38,6 @@ public:
         , cf_id (cf_id_)
         , sequence_number(sequence_number_) {
     }
-
 #if 0
     @Override
     public String toString()
@@ -66,14 +48,9 @@ public:
     }
 #endif
 public:
-    void serialize(bytes::iterator& out) const {
-    }
-    static retry_message deserialize(bytes_view& v) {
-        return retry_message();
-    }
-    size_t serialized_size() const {
-        return 0;
-    }
+    void serialize(bytes::iterator& out) const;
+    static retry_message deserialize(bytes_view& v);
+    size_t serialized_size() const;
 };
 
 } // namespace messages

@@ -10,6 +10,8 @@
 #include <boost/algorithm/string.hpp>
 #include <string>
 #include "core/sstring.hh"
+#include "util/serialization.hh"
+#include "types.hh"
 
 namespace utils {
 
@@ -48,6 +50,21 @@ UUID::UUID(const sstring& uuid) {
     int base = 16;
     this->most_sig_bits = std::stoull(most, nullptr, base);
     this->least_sig_bits = std::stoull(least, nullptr, base);
+}
+
+void UUID::serialize(bytes::iterator& out) const {
+   serialize_int64(out, most_sig_bits);
+   serialize_int64(out, least_sig_bits);
+}
+
+UUID UUID::deserialize(bytes_view& v) {
+    auto most = read_simple<int64_t>(v);
+    auto least = read_simple<int64_t>(v);
+    return UUID(most, least);
+}
+
+size_t UUID::serialized_size() const {
+    return serialize_int64_size + serialize_int64_size;
 }
 
 }

@@ -19,27 +19,27 @@
  * Copyright 2015 Cloudius Systems.
  */
 
-#include "streaming/stream_summary.hh"
+#include "streaming/messages/retry_message.hh"
 #include "types.hh"
 #include "util/serialization.hh"
 
 namespace streaming {
+namespace messages {
 
-void stream_summary::serialize(bytes::iterator& out) const {
+void retry_message::serialize(bytes::iterator& out) const {
     cf_id.serialize(out);
-    serialize_int32(out, files);
-    serialize_int64(out, total_size);
+    serialize_int32(out, sequence_number);
 }
 
-stream_summary stream_summary::deserialize(bytes_view& v) {
+retry_message retry_message::deserialize(bytes_view& v) {
     auto cf_id_ = UUID::deserialize(v);
-    auto files_ = read_simple<int32_t>(v);
-    auto total_size_ = read_simple<int64_t>(v);
-    return stream_summary(std::move(cf_id_), files_, total_size_);
+    auto sequence_number_ = read_simple<int32_t>(v);
+    return retry_message(std::move(cf_id_), sequence_number_);
 }
 
-size_t stream_summary::serialized_size() const {
-    return cf_id.serialized_size() + serialize_int32_size + serialize_int64_size;
+size_t retry_message::serialized_size() const {
+    return cf_id.serialized_size() + serialize_int32_size;
 }
 
+} // namespace messages
 } // namespace streaming
