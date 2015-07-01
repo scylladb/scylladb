@@ -573,10 +573,26 @@ struct floating_type_impl : public simple_type_impl<T> {
         return boost::any(x.d);
     }
     virtual bytes from_string(sstring_view s) const override {
-        throw std::runtime_error("not implemented");
+        if (s.empty()) {
+            return bytes();
+        }
+        try {
+            auto d = boost::lexical_cast<T>(s.begin(), s.size());
+            bytes b(bytes::initialized_later(), sizeof(T));
+            auto out = b.begin();
+            serialize(boost::any(d), out);
+            return b;
+        }
+        catch(const boost::bad_lexical_cast& e) {
+            throw marshal_exception(sprint("Invalid number format '%s'", s));
+        }
     }
     virtual sstring to_string(const bytes& b) const override {
-        throw std::runtime_error("not implemented");
+        auto v = deserialize(b);
+        if (v.empty()) {
+            return "";
+        }
+        return to_sstring(boost::any_cast<T>(v));
     }
 };
 
