@@ -27,6 +27,34 @@ future<> des_messaging_verb(input_stream<char>& in, messaging_verb& v) {
     });
 }
 
+future<> ser_sstring(output_stream<char>& out, sstring& v) {
+    auto serialize_string_size = serialize_int16_size + v.size();
+    auto sz = serialize_int16_size + serialize_string_size;
+    bytes b(bytes::initialized_later(), sz);
+    auto _out = b.begin();
+    serialize_int16(_out, serialize_string_size);
+    serialize_string(_out, v);
+    return out.write(reinterpret_cast<const char*>(b.c_str()), sz);
+}
+
+future<> des_sstring(input_stream<char>& in, sstring& v) {
+    return in.read_exactly(serialize_int16_size).then([&in, &v] (temporary_buffer<char> buf) mutable {
+        if (buf.size() != serialize_int16_size) {
+            throw rpc::closed_error();
+        }
+        size_t serialize_string_size = net::ntoh(*reinterpret_cast<const net::packed<int16_t>*>(buf.get()));
+        return in.read_exactly(serialize_string_size).then([serialize_string_size, &v]
+            (temporary_buffer<char> buf) mutable {
+            if (buf.size() != serialize_string_size) {
+                throw rpc::closed_error();
+            }
+            bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), serialize_string_size);
+            new (&v) sstring(read_simple_short_string(bv));
+            return make_ready_future<>();
+        });
+    });
+}
+
 distributed<messaging_service> _the_messaging_service;
 
 future<> deinit_messaging_service() {

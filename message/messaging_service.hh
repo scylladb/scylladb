@@ -93,6 +93,8 @@ namespace net {
 
 future<> ser_messaging_verb(output_stream<char>& out, messaging_verb& v);
 future<> des_messaging_verb(input_stream<char>& in, messaging_verb& v);
+future<> ser_sstring(output_stream<char>& out, sstring& v);
+future<> des_sstring(input_stream<char>& in, sstring& v);
 
 // NOTE: operator(input_stream<char>&, T&) takes a reference to uninitialized
 //       T object and should use placement new in case T is non POD
@@ -158,30 +160,10 @@ struct serializer {
 
     // For sstring
     inline auto operator()(output_stream<char>& out, sstring& v) {
-        auto serialize_string_size = serialize_int16_size + v.size();
-        auto sz = serialize_int16_size + serialize_string_size;
-        bytes b(bytes::initialized_later(), sz);
-        auto _out = b.begin();
-        serialize_int16(_out, serialize_string_size);
-        serialize_string(_out, v);
-        return out.write(reinterpret_cast<const char*>(b.c_str()), sz);
+        return ser_sstring(out, v);
     }
     inline auto operator()(input_stream<char>& in, sstring& v) {
-        return in.read_exactly(serialize_int16_size).then([&in, &v] (temporary_buffer<char> buf) mutable {
-            if (buf.size() != serialize_int16_size) {
-                throw rpc::closed_error();
-            }
-            size_t serialize_string_size = net::ntoh(*reinterpret_cast<const net::packed<int16_t>*>(buf.get()));
-            return in.read_exactly(serialize_string_size).then([serialize_string_size, &v]
-                (temporary_buffer<char> buf) mutable {
-                if (buf.size() != serialize_string_size) {
-                    throw rpc::closed_error();
-                }
-                bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), serialize_string_size);
-                new (&v) sstring(read_simple_short_string(bv));
-                return make_ready_future<>();
-            });
-        });
+        return des_sstring(in, v);
     }
 
     // For frozen_mutation
