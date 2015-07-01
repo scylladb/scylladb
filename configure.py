@@ -353,7 +353,7 @@ boost_test_lib = [
 ]
 
 defines = []
-libs = '-laio -lboost_program_options -lboost_system -lboost_filesystem -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt -lyaml-cpp'
+libs = '-laio -lboost_program_options -lboost_system -lboost_filesystem -lstdc++ -lm -lboost_unit_test_framework -lboost_thread -lcryptopp -lrt -lyaml-cpp -lboost_date_time'
 hwloc_libs = '-lhwloc -lnuma -lpciaccess -lxml2 -lz'
 urchin_libs = '-llz4 -lsnappy -lz'
 
