@@ -525,10 +525,28 @@ struct inet_addr_type_impl : abstract_type {
         return std::hash<bytes_view>()(v);
     }
     virtual bytes from_string(sstring_view s) const override {
-        throw std::runtime_error("not implemented");
+        // FIXME: support host names
+        if (s.empty()) {
+            return bytes();
+        }
+        net::ipv4_address ipv4;
+        try {
+            ipv4 = net::ipv4_address(s.data());
+        } catch (...) {
+            throw marshal_exception();
+        }
+        bytes b(bytes::initialized_later(), sizeof(uint32_t));
+        auto out = b.begin();
+        serialize(boost::any(ipv4), out);
+        return b;
     }
     virtual sstring to_string(const bytes& b) const override {
-        throw std::runtime_error("not implemented");
+        auto v = deserialize(b);
+        if (v.empty()) {
+            return  "";
+        }
+        boost::asio::ip::address_v4 ipv4(boost::any_cast<const net::ipv4_address&>(v).ip);
+        return ipv4.to_string();
     }
     virtual ::shared_ptr<cql3::cql3_type> as_cql3_type() const override {
         return cql3::cql3_type::inet;
