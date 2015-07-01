@@ -1327,9 +1327,7 @@ native_type returns [shared_ptr<cql3_type> t]
 #endif
     | K_DOUBLE    { $t = cql3_type::double_; }
     | K_FLOAT     { $t = cql3_type::float_; }
-#if 0
-    | K_INET      { $t = CQL3Type.Native.INET;}
-#endif
+    | K_INET      { $t = cql3_type::inet; }
     | K_INT       { $t = cql3_type::int_; }
     | K_TEXT      { $t = cql3_type::text; }
     | K_TIMESTAMP { $t = cql3_type::timestamp; }
