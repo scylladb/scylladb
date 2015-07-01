@@ -36,11 +36,15 @@
 #include "db/serializer.hh"
 #include "storage_service.hh"
 #include "core/future-util.hh"
+#include "db/read_repair_decision.hh"
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/iterator/counting_iterator.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/algorithm/count_if.hpp>
+#include <boost/range/algorithm/find.hpp>
+#include <boost/range/algorithm/find_if.hpp>
+#include <boost/range/algorithm/remove_if.hpp>
 
 namespace service {
 
@@ -1332,31 +1336,224 @@ bool storage_proxy::submit_hint(lw_shared_ptr<const frozen_mutation> m, gms::ine
     }
 #endif
 
-future<foreign_ptr<lw_shared_ptr<query::result>>>
-storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl) {
-    query::result_merger merger;
-    std::unordered_map<unsigned, std::vector<query::partition_range>> dst_map;
+class digest_mismatch_exception : public std::runtime_error {
+public:
+    digest_mismatch_exception() : std::runtime_error("Digest mismatch") {}
+};
 
-    std::for_each(partition_ranges.begin(), partition_ranges.end(), [this, &dst_map, &cmd] (auto&& range) {
-        if (!range.is_singular()) {
-            throw std::runtime_error("mixed singular and non singular range are not supported");
+class abstract_read_executor : public enable_shared_from_this<abstract_read_executor> {
+    using targets_iterator = std::vector<gms::inet_address>::iterator;
+
+    storage_proxy& _proxy;
+    keyspace& _ks;
+    lw_shared_ptr<query::read_command> _cmd;
+    query::partition_range _partition_range;
+    db::consistency_level _cl;
+    std::vector<gms::inet_address> _targets;
+    promise<foreign_ptr<lw_shared_ptr<query::result>>> _result_promise;
+    bool _done = false; // becomes true when promise above is fulfilled (operation may still continue)
+    std::vector<foreign_ptr<lw_shared_ptr<query::result>>> _data_results;
+    std::vector<query::result_digest> _digest_results;
+    size_t _responses = 0;
+    bool digests_match() {
+        assert(_digest_results.size());
+        auto& first = *_digest_results.begin();
+        return std::find_if(_digest_results.begin() + 1, _digest_results.end(), [&first] (query::result_digest digest) { return digest != first; }) == _digest_results.end();
+    }
+protected:
+    bool waiting_for(gms::inet_address ep) {
+        return db::is_datacenter_local(_cl) ?
+            true : //DatabaseDescriptor.getLocalDataCenter().equals(DatabaseDescriptor.getEndpointSnitch().getDatacenter(message.from)) :
+            true;
+    }
+    void got_response(gms::inet_address ep) {
+        if (!_done) {
+            if (waiting_for(ep)) {
+                _responses++;
+            }
+            if (_responses >= db::block_for(_ks, _cl) && _data_results.size()) {
+                if (!digests_match()) {
+                    throw digest_mismatch_exception();
+                } else {
+                    _result_promise.set_value(std::move(*_data_results.begin()));
+                }
+                _done = true;
+            }
+        } else if (_digest_results.size() == _targets.size()) {
+            if (!digests_match()) {
+                throw digest_mismatch_exception();
+            }
         }
-        unsigned shard = _db.local().shard_of(range.start_value().token());
-        dst_map[shard].emplace_back(std::move(range));
-    });
+    }
+public:
+    abstract_read_executor(storage_proxy& proxy, keyspace& ks, lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets) :
+                           _proxy(proxy), _ks(ks), _cmd(std::move(cmd)), _partition_range(std::move(pr)), _cl(cl), _targets(std::move(targets)) {}
+    virtual ~abstract_read_executor() {};
 
-    merger.reserve(dst_map.size());
-
-    auto f = map_reduce(dst_map.begin(), dst_map.end(), [this, cmd] (auto& dst) mutable {
-        return _db.invoke_on(dst.first, [pr = std::move(dst.second), cmd] (database& db) {
-            return db.query(*cmd, pr).then([](auto&& f) {
-                return make_foreign(std::move(f));
+    future<foreign_ptr<lw_shared_ptr<query::result>>> make_data_request(gms::inet_address ep) {
+        if (is_me(ep)) {
+            return _proxy.query_singular_local(_cmd, _partition_range);
+        } else {
+            auto& ms = net::get_local_messaging_service();
+            return ms.send_message<query::result>(net::messaging_verb::READ_DATA, net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range).then([this](query::result&& result) {
+                    return make_foreign(::make_lw_shared<query::result>(std::move(result)));
+            });
+        }
+    }
+    future<query::result_digest> make_digest_request(gms::inet_address ep) {
+        if (is_me(ep)) {
+            return _proxy.query_singular_local_digest(_cmd, _partition_range);
+        } else {
+            auto& ms = net::get_local_messaging_service();
+            return ms.send_message<query::result_digest>(net::messaging_verb::READ_DIGEST, net::messaging_service::shard_id{ep, 0}, *_cmd, _partition_range);
+        }
+    }
+    future<> make_data_requests(targets_iterator begin, targets_iterator end) {
+        return parallel_for_each(begin, end, [this] (gms::inet_address ep) {
+            return make_data_request(ep).then([exec = shared_from_this(), ep] (foreign_ptr<lw_shared_ptr<query::result>> result) {
+                exec->_digest_results.emplace_back(std::move(result->digest()));
+                exec->_data_results.emplace_back(std::move(result));
+                exec->got_response(ep);
             });
         });
+    }
+    future<> make_digest_requests(targets_iterator begin, targets_iterator end) {
+        return parallel_for_each(begin, end, [this] (gms::inet_address ep) {
+            return make_digest_request(ep).then([exec = shared_from_this(), ep] (query::result_digest&& digest) {
+                exec->_digest_results.emplace_back(std::move(digest));
+                exec->got_response(ep);
+            });
+        });
+    }
+    virtual future<foreign_ptr<lw_shared_ptr<query::result>>> execute() {
+        when_all(make_data_requests(_targets.begin(), _targets.begin() + 1),
+                _targets.size() > 1 ? make_digest_requests(_targets.begin() + 1, _targets.end()) : make_ready_future()).discard_result().then_wrapped([this](future<>&& f) {
+            try {
+                f.get();
+            } catch(...) {
+                if (!_done) {
+                    _result_promise.set_exception(std::current_exception());
+                }
+            }
+        });
+        return _result_promise.get_future();
+    }
+};
+
+class never_speculating_read_executor : public abstract_read_executor {
+public:
+    never_speculating_read_executor(storage_proxy& proxy, keyspace& ks, lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets) :
+                                    abstract_read_executor(proxy, ks, std::move(cmd), std::move(pr), cl, std::move(targets)) {}
+};
+
+class always_speculating_read_executor : public abstract_read_executor {
+public:
+    always_speculating_read_executor(storage_proxy& proxy, keyspace& ks, lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets) :
+                                    abstract_read_executor(proxy, ks, std::move(cmd), std::move(pr), cl, std::move(targets)) {}
+};
+
+class speculating_read_executor : public abstract_read_executor {
+public:
+    speculating_read_executor(storage_proxy& proxy, keyspace& ks, lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl, std::vector<gms::inet_address> targets) :
+                              abstract_read_executor(proxy, ks, std::move(cmd), std::move(pr), cl, std::move(targets)) {}
+};
+
+enum class speculative_retry_type {
+    NONE, CUSTOM, PERCENTILE, ALWAYS
+};
+
+::shared_ptr<abstract_read_executor> storage_proxy::get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl) {
+    const dht::token& token = pr.start_value().token();
+    schema_ptr schema = _db.local().find_schema(cmd->cf_id);
+    keyspace& ks = _db.local().find_keyspace(schema->ks_name());
+
+    std::vector<gms::inet_address> all_replicas = get_live_sorted_endpoints(ks, token);
+    db::read_repair_decision repair_decision = db::read_repair_decision::NONE;//Schema.instance.getCFMetaData(command.ksName, command.cfName).newReadRepairDecision();
+    std::vector<gms::inet_address> target_replicas = db::filter_for_query(cl, ks, all_replicas, repair_decision);
+
+    // Throw UAE early if we don't have enough replicas.
+    db::assure_sufficient_live_nodes(cl, ks, target_replicas);
+
+#if 0
+    if (repair_decision != read_repair_decision::NONE)
+        ReadRepairMetrics.attempted.mark();
+#endif
+
+#if 0
+    ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(command.cfName);
+#endif
+    speculative_retry_type retry_type = speculative_retry_type::NONE;//cfs.metadata.getSpeculativeRetry().type;
+
+    // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
+    if (retry_type == speculative_retry_type::NONE || block_for(ks, cl) == all_replicas.size()) {
+        return ::make_shared<never_speculating_read_executor>(*this, ks, cmd, std::move(pr), cl, std::move(target_replicas));
+    }
+
+    if (target_replicas.size() == all_replicas.size()) {
+        // CL.ALL, RRD.GLOBAL or RRD.DC_LOCAL and a single-DC.
+        // We are going to contact every node anyway, so ask for 2 full data requests instead of 1, for redundancy
+        // (same amount of requests in total, but we turn 1 digest request into a full blown data request).
+        return ::make_shared<always_speculating_read_executor>(/*cfs, */*this, ks, cmd, std::move(pr), cl, std::move(target_replicas));
+    }
+
+    // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
+    gms::inet_address extra_replica = all_replicas[target_replicas.size()];
+    // With repair decision DC_LOCAL all replicas/target replicas may be in different order, so
+    // we might have to find a replacement that's not already in targetReplicas.
+    if (repair_decision == db::read_repair_decision::DC_LOCAL && boost::range::find(target_replicas, extra_replica) != target_replicas.end()) {
+        auto it = boost::range::find_if(all_replicas, [&target_replicas] (gms::inet_address& a){
+            return boost::range::find(target_replicas, a) == target_replicas.end();
+        });
+        extra_replica = *it;
+    }
+    target_replicas.push_back(extra_replica);
+
+    if (retry_type == speculative_retry_type::ALWAYS) {
+        return ::make_shared<always_speculating_read_executor>(/*cfs,*/ *this, ks, cmd, std::move(pr), cl, std::move(target_replicas));
+    } else {// PERCENTILE or CUSTOM.
+        return ::make_shared<speculating_read_executor>(/*cfs,*/ *this, ks, cmd, std::move(pr), cl, std::move(target_replicas));
+    }
+}
+
+future<query::result_digest>
+storage_proxy::query_singular_local_digest(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr) {
+    return query_singular_local(cmd, pr).then([] (foreign_ptr<lw_shared_ptr<query::result>> result) {
+        return result->digest();
+    });
+}
+
+future<foreign_ptr<lw_shared_ptr<query::result>>>
+storage_proxy::query_singular_local(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr) {
+    unsigned shard = _db.local().shard_of(pr.start_value().token());
+    return _db.invoke_on(shard, [prv = std::vector<query::partition_range>({pr}) /* FIXME: pr is copied */, cmd] (database& db) {
+        return db.query(*cmd, prv).then([](auto&& f) {
+            return make_foreign(std::move(f));
+        });
+    });
+}
+
+future<foreign_ptr<lw_shared_ptr<query::result>>>
+storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges, db::consistency_level cl) {
+    std::vector<::shared_ptr<abstract_read_executor>> exec;
+    exec.reserve(partition_ranges.size());
+
+    for (auto&& pr: partition_ranges) {
+        if (!pr.is_singular()) {
+            throw std::runtime_error("mixed singular and non singular range are not supported");
+        }
+        exec.push_back(get_read_executor(cmd, std::move(pr), cl));
+    }
+
+    query::result_merger merger;
+    merger.reserve(exec.size());
+
+    auto f = ::map_reduce(exec.begin(), exec.end(), [this, cmd] (::shared_ptr<abstract_read_executor>& rex) {
+        return rex->execute();
     }, std::move(merger));
 
-    // keep dst_map around till the end, hope move do not invalidates iterators
-    return f.finally([dst_map = std::move(dst_map)] {});
+    return f.finally([exec = std::move(exec)] {
+        // hold onto exec until read is complete
+    });
 }
 
 future<foreign_ptr<lw_shared_ptr<query::result>>>
@@ -1779,19 +1976,17 @@ storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const
             handler.response(result);
         }
     }
+#endif
 
-    public static List<InetAddress> getLiveSortedEndpoints(Keyspace keyspace, ByteBuffer key)
-    {
-        return getLiveSortedEndpoints(keyspace, StorageService.getPartitioner().decorateKey(key));
-    }
+std::vector<gms::inet_address> storage_proxy::get_live_sorted_endpoints(keyspace& ks, const dht::token& token) {
+    auto& rs = ks.get_replication_strategy();
+    std::vector<gms::inet_address> eps = rs.get_natural_endpoints(token);
+    boost::range::remove_if(eps, std::not1(std::bind1st(std::mem_fn(&gms::failure_detector::is_alive), &gms::get_local_failure_detector())));
+//    DatabaseDescriptor.getEndpointSnitch().sortByProximity(FBUtilities.getBroadcastAddress(), liveEndpoints);
+    return eps;
+}
 
-    private static List<InetAddress> getLiveSortedEndpoints(Keyspace keyspace, RingPosition pos)
-    {
-        List<InetAddress> liveEndpoints = StorageService.instance.getLiveNaturalEndpoints(keyspace, pos);
-        DatabaseDescriptor.getEndpointSnitch().sortByProximity(FBUtilities.getBroadcastAddress(), liveEndpoints);
-        return liveEndpoints;
-    }
-
+#if 0
     private static List<InetAddress> intersection(List<InetAddress> l1, List<InetAddress> l2)
     {
         // Note: we don't use Guava Sets.intersection() for 3 reasons:
@@ -2610,6 +2805,18 @@ void storage_proxy::init_messaging_service() {
             got_response(response_id, from);
         });
         return net::messaging_service::no_wait();
+    });
+    ms.register_handler(net::messaging_verb::READ_DATA, [this] (query::read_command cmd, query::partition_range pr) {
+        return do_with(std::move(pr), [this, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr) {
+            return query_singular_local(cmd, pr).then([] (foreign_ptr<lw_shared_ptr<query::result>> result) {
+                return result.make_local_and_release();
+            });
+        });
+    });
+    ms.register_handler(net::messaging_verb::READ_DIGEST, [this] (query::read_command cmd, query::partition_range pr) {
+        return do_with(std::move(pr), [this, cmd = make_lw_shared<query::read_command>(std::move(cmd))] (const query::partition_range& pr) {
+            return query_singular_local_digest(cmd, pr);
+        });
     });
 }
 

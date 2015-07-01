@@ -33,23 +33,6 @@ class UTFDataFormatException { };
 class EOFException { };
 
 inline
-void serialize_bool(std::ostream& out, bool b) {
-    out.put(b ? (char)1 : (char)0);
-}
-
-static constexpr size_t serialize_bool_size = 1;
-
-inline
-bool deserialize_bool(std::istream& in) {
-    char ret;
-    if (in.get(ret)) {
-        return ret;
-    } else {
-        throw EOFException();
-    }
-}
-
-inline
 void serialize_int8(std::ostream& out, uint8_t val) {
     out.put(val);
 }
@@ -81,6 +64,29 @@ int8_t deserialize_int8(std::istream& in) {
         throw EOFException();
     }
 }
+
+inline
+void serialize_bool(std::ostream& out, bool b) {
+    out.put(b ? (char)1 : (char)0);
+}
+
+static constexpr size_t serialize_bool_size = 1;
+
+inline
+void serialize_bool(bytes::iterator& out, bool val) {
+    serialize_int8(out, val ? 1 : 0);
+}
+
+inline
+bool deserialize_bool(std::istream& in) {
+    char ret;
+    if (in.get(ret)) {
+        return ret;
+    } else {
+        throw EOFException();
+    }
+}
+
 
 inline
 void serialize_int16(std::ostream& out, uint16_t val) {
@@ -191,7 +197,6 @@ int64_t deserialize_int64(std::istream& in) {
             ((int64_t)(uint8_t)a7 <<  8) |
             ((int64_t)(uint8_t)a8 <<  0);
 }
-
 
 // The following serializer is compatible with Java's writeUTF().
 // In our C++ implementation, we assume the string is already UTF-8

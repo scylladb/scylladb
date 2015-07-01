@@ -4,9 +4,33 @@
 
 #pragma once
 
+#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
+#include <cryptopp/md5.h>
 #include "bytes_ostream.hh"
 
 namespace query {
+
+class result_digest {
+    bytes _digest;
+public:
+    result_digest(bytes&& digest) : _digest(std::move(digest)) {}
+    const bytes& get() { return _digest; }
+    bool operator==(const result_digest& rh) {
+        return _digest == rh._digest;
+    }
+    bool operator!=(const result_digest& rh) {
+        return _digest != rh._digest;
+    }
+    size_t serialized_size() const { return _digest.size(); }
+    void serialize(bytes::iterator& out) const {
+        out = std::copy(_digest.begin(), _digest.end(), out);
+    }
+    static result_digest deserialize(bytes_view& in) {
+        auto result = result_digest(bytes(in.begin(), in.end()));
+        in.remove_prefix(in.size());
+        return result;
+    }
+};
 
 //
 // The query results are stored in a serialized from. This is in order to
@@ -87,6 +111,25 @@ public:
 
     const bytes_ostream& buf() const {
         return _w;
+    }
+
+    result_digest digest() {
+        CryptoPP::Weak::MD5 hash;
+        bytes b(bytes::initialized_later(), CryptoPP::Weak::MD5::DIGESTSIZE);
+        bytes_view v = _w.linearize();
+        hash.CalculateDigest(reinterpret_cast<unsigned char*>(b.begin()), reinterpret_cast<const unsigned char*>(v.begin()), v.size());
+        return result_digest(std::move(b));
+    }
+    size_t serialized_size() const { return _w.size(); }
+    void serialize(bytes::iterator& out) {
+        auto v = _w.linearize();
+        out = std::copy(v.begin(), v.end(), out);
+    }
+    static result deserialize(bytes_view& in) {
+        bytes_ostream w;
+        w.write(in);
+        in.remove_prefix(in.size());
+        return result(std::move(w));
     }
 };
 

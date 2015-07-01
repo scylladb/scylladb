@@ -34,6 +34,7 @@
 namespace service {
 
 class abstract_write_response_handler;
+class abstract_read_executor;
 
 class storage_proxy /*implements StorageProxyMBean*/ {
     struct rh_entry {
@@ -41,6 +42,7 @@ class storage_proxy /*implements StorageProxyMBean*/ {
         timer<> expire_timer;
         rh_entry(std::unique_ptr<abstract_write_response_handler>&& h, std::function<void()>&& cb);
     };
+
 public:
     using response_id_type = uint64_t;
 private:
@@ -66,6 +68,11 @@ private:
     size_t get_hints_in_progress_for(gms::inet_address target);
     bool should_hint(gms::inet_address ep);
     bool submit_hint(lw_shared_ptr<const frozen_mutation> m, gms::inet_address target);
+    std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
+    ::shared_ptr<abstract_read_executor> get_read_executor(lw_shared_ptr<query::read_command> cmd, query::partition_range pr, db::consistency_level cl);
+    future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular_local(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr);
+    future<query::result_digest> query_singular_local_digest(lw_shared_ptr<query::read_command> cmd, const query::partition_range& pr);
+
 public:
     storage_proxy(distributed<database>& db);
     ~storage_proxy();
@@ -109,6 +116,8 @@ public:
                 const std::vector<query::clustering_range>& row_ranges = {query::clustering_range::make_open_ended_both_sides()});
 
     future<> stop() { return make_ready_future<>(); }
+
+    friend class abstract_read_executor;
 };
 
 }

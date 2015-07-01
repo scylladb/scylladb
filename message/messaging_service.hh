@@ -27,6 +27,8 @@ enum class messaging_verb : int32_t {
     BINARY, // Deprecated
     READ_REPAIR,
     READ,
+    READ_DATA,
+    READ_DIGEST,
     REQUEST_RESPONSE, // client-initiated reads and writes
     STREAM_INITIATE, // Deprecated
     STREAM_INITIATE_DONE, // Deprecated
@@ -238,6 +240,7 @@ struct serializer {
                 }
                 bytes_view bv(reinterpret_cast<const int8_t*>(buf.get()), sz);
                 new (&v) T(T::deserialize(bv));
+                assert(bv.size() == 0);
                 return make_ready_future<>();
             });
         });
