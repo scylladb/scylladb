@@ -428,7 +428,7 @@ modification_statement::process_where_clause(database& db, std::vector<relation_
 
         if (def->is_primary_key()) {
             if (rel->is_EQ() || (def->is_partition_key() && rel->is_IN())) {
-                add_key_values(*def, rel->to_restriction(db, s, std::move(names)));
+                add_key_values(*def, rel->to_restriction(db, s, names));
             } else {
                 throw exceptions::invalid_request_exception(sprint("Invalid operator %s for PRIMARY KEY part %s", rel->get_operator(), def->name_as_text()));
             }
