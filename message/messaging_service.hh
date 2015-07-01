@@ -95,6 +95,8 @@ future<> ser_messaging_verb(output_stream<char>& out, messaging_verb& v);
 future<> des_messaging_verb(input_stream<char>& in, messaging_verb& v);
 future<> ser_sstring(output_stream<char>& out, sstring& v);
 future<> des_sstring(input_stream<char>& in, sstring& v);
+future<> ser_frozen_mutation(output_stream<char>& out, const frozen_mutation& v);
+future<> des_frozen_mutation(input_stream<char>& in, frozen_mutation& v);
 
 // NOTE: operator(input_stream<char>&, T&) takes a reference to uninitialized
 //       T object and should use placement new in case T is non POD
@@ -168,33 +170,13 @@ struct serializer {
 
     // For frozen_mutation
     inline auto operator()(output_stream<char>& out, const frozen_mutation& v) {
-        db::frozen_mutation_serializer s(v);
-        uint32_t sz = s.size() + data_output::serialized_size(sz);
-        bytes b(bytes::initialized_later(), sz);
-        data_output o(b);
-        o.write<uint32_t>(sz - data_output::serialized_size(sz));
-        db::frozen_mutation_serializer::write(o, v);
-        return out.write(reinterpret_cast<const char*>(b.c_str()), sz);
+        return ser_frozen_mutation(out, v);
     }
     inline auto operator()(output_stream<char>& out, frozen_mutation& v) {
         return operator()(out, const_cast<const frozen_mutation&>(v));
     }
     inline auto operator()(input_stream<char>& in, frozen_mutation& v) {
-        static auto sz = data_output::serialized_size<uint32_t>();
-        return in.read_exactly(sz).then([&v, &in] (temporary_buffer<char> buf) mutable {
-            if (buf.size() != sz) {
-                throw rpc::closed_error();
-            }
-            data_input i(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), sz));
-            size_t msz = i.read<int32_t>();
-            return in.read_exactly(msz).then([&v, msz] (temporary_buffer<char> buf) {
-                if (buf.size() != msz) {
-                    throw rpc::closed_error();
-                }
-                data_input i(bytes_view(reinterpret_cast<const int8_t*>(buf.get()), msz));
-                new (&v) frozen_mutation(db::frozen_mutation_serializer::read(i));
-            });
-        });
+        return des_frozen_mutation(in, v);
     }
 
     // For complex types which have serialize()/deserialize(),  e.g. gms::gossip_digest_syn, gms::gossip_digest_ack2
