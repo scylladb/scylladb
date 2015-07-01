@@ -12,11 +12,9 @@ namespace json {
 
 template<typename Map>
 inline sstring to_json(const Map& map) {
-    Json::Value root(Json::arrayValue);
+    Json::Value root;
     for (auto&& kv : map) {
-        Json::Value obj_value(Json::objectValue);
-        obj_value[kv.first] = Json::Value(kv.second);
-        root.append(obj_value);
+        root[kv.first] = Json::Value(kv.second);
     }
     Json::FastWriter writer;
     return writer.write(root);
@@ -27,11 +25,8 @@ inline std::map<sstring, sstring> to_map(const sstring& raw) {
     Json::Reader reader;
     reader.parse(std::string{raw}, root);
     std::map<sstring, sstring> map;
-    for (Json::ArrayIndex idx = 0; idx < root.size(); idx++) {
-        auto item = root[idx];
-        for (auto&& member : item.getMemberNames()) {
-            map.emplace(member, item[member].asString());
-        }
+    for (auto&& member : root.getMemberNames()) {
+        map.emplace(member, root[member].asString());
     }
     return map;
 }
