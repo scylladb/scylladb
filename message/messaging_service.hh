@@ -134,9 +134,11 @@ struct serializer {
                 ~U(){}
                 T v;
             };
-            return do_until([c] () mutable {return !c--;}, [&v, &in, u = U(), this] () mutable {
-                return operator()(in, u.v).then([&u, &v] {
-                    v.emplace_back(std::move(u.v));
+            return do_with(U(), [c, &v, &in, this] (U& u) {
+                return do_until([c = c] () mutable {return !c--;}, [&v, &in, &u, this] () mutable {
+                    return operator()(in, u.v).then([&u, &v] {
+                        v.emplace_back(std::move(u.v));
+                    });
                 });
             });
         });
