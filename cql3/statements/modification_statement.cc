@@ -174,8 +174,6 @@ modification_statement::read_required_rows(
             query::partition_slice::option_set::of<
                 query::partition_slice::option::send_partition_key,
                 query::partition_slice::option::send_clustering_key>());
-    // FIXME: our read_command doesn't take a time parameter, origin's does?
-    // auto now = db_clock::now();
     std::vector<query::partition_range> pr;
     for (auto&& pk : *keys) {
         pr.emplace_back(dht::global_partitioner().decorate_key(*s, pk));
