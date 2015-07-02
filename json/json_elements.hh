@@ -222,6 +222,19 @@ struct json_base : public jsonable {
 };
 
 /**
+ * There are cases where a json request needs to return a successful
+ * empty reply.
+ * The json_void class will be used to mark that the reply should be empty.
+ *
+ */
+struct json_void : public jsonable{
+    virtual std::string to_json() const {
+        return "";
+    }
+};
+
+
+/**
  * The json return type, is a helper class to return a json
  * formatted string.
  * It uses autoboxing in its constructor so when a function return
