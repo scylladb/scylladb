@@ -35,6 +35,28 @@ void set_compaction_manager(http_context& ctx, routes& r) {
         return make_ready_future<json::json_return_type>("");
     });
 
+    cm::get_pending_tasks.set(r, [] (std::unique_ptr<request> req) {
+        //TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cm::get_completed_tasks.set(r, [] (std::unique_ptr<request> req) {
+        //TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cm::get_total_compactions_completed.set(r, [] (std::unique_ptr<request> req) {
+        //TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cm::get_bytes_compacted.set(r, [] (std::unique_ptr<request> req) {
+        //TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+
+
 }
 
 }
