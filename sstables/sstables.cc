@@ -55,27 +55,6 @@ public:
     }
 };
 
-// FIXME: We don't use this API, and it can be removed. The compressed reader
-// is only needed for the data file, and for that we have the nicer
-// data_stream_at() API below.
-class compressed_file_random_access_reader : public random_access_reader {
-    lw_shared_ptr<file> _file;
-    sstables::compression* _cm;
-public:
-    explicit compressed_file_random_access_reader(
-                lw_shared_ptr<file> f, sstables::compression* cm)
-        : _file(std::move(f))
-        , _cm(cm)
-    {
-        seek(0);
-    }
-    compressed_file_random_access_reader(compressed_file_random_access_reader&&) = default;
-    virtual input_stream<char> open_at(uint64_t pos) override {
-        return make_compressed_file_input_stream(_file, _cm, pos);
-    }
-
-};
-
 thread_local logging::logger sstlog("sstable");
 
 std::unordered_map<sstable::version_types, sstring, enum_hash<sstable::version_types>> sstable::_version_string = {
