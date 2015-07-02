@@ -1076,7 +1076,7 @@ future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type r
     auto all = boost::range::join(local, dc_groups);
 
     // OK, now send and/or apply locally
-    return parallel_for_each(all.begin(), all.end(), [response_id, &m, this] (typename decltype(dc_groups)::value_type& dc_targets) mutable {
+    return parallel_for_each(all.begin(), all.end(), [response_id, &m, this] (typename decltype(dc_groups)::value_type& dc_targets) {
         auto my_address = utils::fb_utilities::get_broadcast_address();
         auto& forward = dc_targets.second;
 
@@ -1089,9 +1089,10 @@ future<> storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type r
                 got_response(response_id, my_address);
             });
         } else {
+            auto response_id_ = response_id; // make local copy since capture is reused
             auto& ms = net::get_local_messaging_service();
             return ms.send_message_oneway(net::messaging_verb::MUTATION, net::messaging_service::shard_id{coordinator, 0}, m, std::move(forward), std::move(my_address),
-                    engine().cpu_id(), std::move(response_id));
+                    engine().cpu_id(), std::move(response_id_));
         }
     }).finally([mptr] {
         // make mutation alive until it is sent or processed locally, otherwise it
