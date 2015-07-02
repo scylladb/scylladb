@@ -46,13 +46,6 @@ public:
     { }
 };
 
-class marshal_exception : public std::logic_error {
-public:
-    marshal_exception(std::string cause)
-        : logic_error(cause)
-    { }
-};
-
 enum class exception_code : int32_t {
     SERVER_ERROR    = 0x0000,
     PROTOCOL_ERROR  = 0x000A,
