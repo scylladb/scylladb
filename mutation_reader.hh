@@ -29,6 +29,36 @@ mutation_reader make_reader_returning(mutation);
 mutation_reader make_reader_returning_many(std::initializer_list<mutation>);
 mutation_reader make_empty_reader();
 
+
+// Creates a mutation_reader wrapper which creates a new stream of mutations
+// with some mutations removed from the original stream.
+// MutationFilter is a callable which decides which mutations are dropped. It
+// accepts mutation const& and returns a bool. The mutation stays in the
+// stream if and only if the filter returns true.
+template <typename MutationFilter>
+mutation_reader make_filtering_reader(mutation_reader rd, MutationFilter&& filter) {
+    static_assert(std::is_same<bool, std::result_of_t<MutationFilter(const mutation&)>>::value, "bad MutationFilter signature");
+
+    return [rd = std::move(rd), filter = std::forward<MutationFilter>(filter), current = mutation_opt()] () mutable {
+        return repeat([&rd, &filter, &current] () mutable {
+            return rd().then([&filter, &current] (mutation_opt&& mo) mutable {
+                if (!mo) {
+                    current = std::move(mo);
+                    return stop_iteration::yes;
+                } else {
+                    if (filter(*mo)) {
+                        current = std::move(mo);
+                        return stop_iteration::yes;
+                    }
+                    return stop_iteration::no;
+                }
+            });
+        }).then([&current] {
+            return make_ready_future<mutation_opt>(std::move(current));
+        });
+    };
+}
+
 // Calls the consumer for each element of the reader's stream until end of stream
 // is reached or the consumer requests iteration to stop by returning stop_iteration::yes.
 // The consumer should accept mutation as the argument and return stop_iteration.
