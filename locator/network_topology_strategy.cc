@@ -34,7 +34,8 @@ network_topology_strategy::network_topology_strategy(
         abstract_replication_strategy(keyspace_name,
                                       token_metadata,
                                       snitch,
-                                      config_options) {
+                                      config_options,
+                                      replication_strategy_type::network_topology) {
     for (auto& config_pair : config_options) {
         auto& key = config_pair.first;
         auto& val = config_pair.second;

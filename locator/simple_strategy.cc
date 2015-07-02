@@ -11,7 +11,7 @@
 namespace locator {
 
 simple_strategy::simple_strategy(const sstring& keyspace_name, token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring, sstring>& config_options) :
-        abstract_replication_strategy(keyspace_name, token_metadata, snitch, config_options) {
+        abstract_replication_strategy(keyspace_name, token_metadata, snitch, config_options, replication_strategy_type::simple) {
     for (auto& config_pair : config_options) {
         auto& key = config_pair.first;
         auto& val = config_pair.second;
