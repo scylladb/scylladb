@@ -33,6 +33,7 @@
 #include "db/read_repair_decision.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/network_topology_strategy.hh"
+#include "utils/fb_utilities.hh"
 
 namespace db {
 
@@ -126,13 +127,12 @@ struct unavailable_exception : std::exception {
     }
 
 #endif
-inline size_t quorum_for(keyspace& ks)
-{
+
+inline size_t quorum_for(keyspace& ks) {
     return (ks.get_replication_strategy().get_replication_factor() / 2) + 1;
 }
 
-inline size_t local_quorum_for(keyspace& ks, const sstring& dc)
-{
+inline size_t local_quorum_for(keyspace& ks, const sstring& dc) {
     using namespace locator;
 
     auto& rs = ks.get_replication_strategy();
@@ -147,10 +147,43 @@ inline size_t local_quorum_for(keyspace& ks, const sstring& dc)
     return quorum_for(ks);
 }
 
-inline size_t block_for(keyspace& ks, consistency_level cl)
-{
-    switch (cl)
-    {
+inline size_t block_for_local_serial(keyspace& ks) {
+    using namespace locator;
+
+    //
+    // TODO: Consider caching the final result in order to avoid all these
+    //       useless dereferencing. Note however that this will introduce quite
+    //       a lot of complications since both snitch output for a local host
+    //       and the snitch itself (and thus its output) may change dynamically.
+    //
+    auto& snitch_ptr = i_endpoint_snitch::get_local_snitch_ptr();
+    auto local_addr = utils::fb_utilities::get_broadcast_address();
+
+    return local_quorum_for(ks, snitch_ptr->get_datacenter(local_addr));
+}
+
+inline size_t block_for_each_quorum(keyspace& ks) {
+    using namespace locator;
+
+    auto& rs = ks.get_replication_strategy();
+
+    if (rs.get_type() == replication_strategy_type::network_topology) {
+        network_topology_strategy* nrs =
+            static_cast<network_topology_strategy*>(&rs);
+        size_t n = 0;
+
+        for (auto& dc : nrs->get_datacenters()) {
+            n += local_quorum_for(ks, dc);
+        }
+
+        return n;
+    } else {
+        return quorum_for(ks);
+    }
+}
+
+inline size_t block_for(keyspace& ks, consistency_level cl) {
+    switch (cl) {
     case consistency_level::ONE:
     case consistency_level::LOCAL_ONE:
         return 1;
@@ -167,24 +200,9 @@ inline size_t block_for(keyspace& ks, consistency_level cl)
         return ks.get_replication_strategy().get_replication_factor();
     case consistency_level::LOCAL_QUORUM:
     case consistency_level::LOCAL_SERIAL:
-        return local_quorum_for(ks, "localDC"/*DatabaseDescriptor.getLocalDataCenter()*/);
+        return block_for_local_serial(ks);
     case consistency_level::EACH_QUORUM:
-        assert(false);
-        return 0;
-#if 0
-        if (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
-        {
-            NetworkTopologyStrategy strategy = (NetworkTopologyStrategy) keyspace.getReplicationStrategy();
-            int n = 0;
-            for (String dc : strategy.getDatacenters())
-                n += localQuorumFor(keyspace, dc);
-            return n;
-        }
-        else
-        {
-            return quorum_for(ks);
-        }
-#endif
+        return block_for_each_quorum(ks);
     default:
         abort();
     }
