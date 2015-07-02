@@ -25,6 +25,7 @@
 #include "streaming/messages/stream_message.hh"
 #include "streaming/messages/file_message_header.hh"
 #include "streaming/compress/compression_info.hh"
+#include "streaming/stream_detail.hh"
 #include "sstables/sstables.hh"
 
 namespace streaming {
@@ -63,13 +64,11 @@ class outgoing_file_message : public stream_message {
 public:
 
     file_message_header header;
-    sstables::sstable* sstable;
+    stream_detail detail;
 
     outgoing_file_message() = default;
-    outgoing_file_message(sstables::sstable& sstable_, int32_t sequence_number, int64_t estimated_keys,
-                          std::map<int64_t, int64_t> sections, int64_t repaired_at, bool keep_ss_table_level)
-        : stream_message(stream_message::Type::FILE)
-        , sstable(&sstable_) {
+    outgoing_file_message(int32_t sequence_number, stream_detail d, bool keep_ss_table_level)
+        : stream_message(stream_message::Type::FILE) {
 #if 0
         CompressionInfo compressionInfo = null;
         if (sstable.compression)
@@ -79,13 +78,13 @@ public:
         }
 #endif
         // FIXME:
-        UUID cf_id; // sstable.metadata.cfId
         sstring version; // sstable.descriptor.version.toString()
         format_types format = format_types::big; // sstable.descriptor.formatType
         int32_t level = 0; // keepSSTableLevel ? sstable.getSSTableLevel() : 0
         compression_info comp_info;
-        header = file_message_header(cf_id, sequence_number, version, format, estimated_keys,
-                                     std::move(sections), comp_info, repaired_at, level);
+        header = file_message_header(d.cf_id, sequence_number, version, format, d.estimated_keys,
+                                     {}, comp_info, d.repaired_at, level);
+        detail = std::move(d);
     }
 
 #if 0

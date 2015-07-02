@@ -35,6 +35,7 @@ struct stream_detail {
     mutation_reader mr;
     int64_t estimated_keys;
     int64_t repaired_at;
+    stream_detail() = default;
     stream_detail(UUID cf_id_, std::vector<shared_ptr<query::range<dht::ring_position>>> prs_,
                   mutation_reader mr_, long estimated_keys_, long repaired_at_)
         : cf_id(std::move(cf_id_))

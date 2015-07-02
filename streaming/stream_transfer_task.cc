@@ -19,20 +19,20 @@
  * Copyright 2015 Cloudius Systems.
  */
 
+#include "streaming/stream_detail.hh"
 #include "streaming/stream_transfer_task.hh"
 #include "streaming/stream_session.hh"
+#include "streaming/messages/outgoing_file_message.hh"
 
 namespace streaming {
+
 void stream_transfer_task::add_transfer_file(stream_detail detail) {
-    // FIXME: cook outgoing_file_message later
-#if 0
-    //assert sstable != null && cfId.equals(sstable.metadata.cfId);
-    auto message = messages::outgoing_file_message(std::move(detail), session.keep_ss_table_level());
+    assert(cf_id == detail.cf_id);
+    auto message = messages::outgoing_file_message(sequence_number++, std::move(detail), session.keep_ss_table_level());
     auto size = message.header.size();
     auto seq = message.header.sequence_number;
     files.emplace(seq, std::move(message));
     total_size += size;
-#endif
 }
 
 } // namespace streaming
