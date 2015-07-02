@@ -31,6 +31,7 @@
 #include "streaming/stream_receive_task.hh"
 #include "streaming/stream_request.hh"
 #include "streaming/messages/incoming_file_message.hh"
+#include "streaming/stream_detail.hh"
 #include "sstables/sstables.hh"
 #include "query-request.hh"
 #include "dht/i_partitioner.hh"
@@ -116,6 +117,7 @@ private:
     using versioned_value = gms::versioned_value;
     using UUID = utils::UUID;
     using token = dht::token;
+    using ring_position = dht::ring_position;
     class handler {
     public:
         future<> stop() {
@@ -131,20 +133,6 @@ private:
     static database& get_local_db() { return _db->local(); }
 public:
     static future<> init_streaming_service(distributed<database>& db);
-public:
-    struct ss_table_streaming_sections {
-        sstables::sstable& sstable;
-        std::map<int64_t, int64_t> sections;
-        int64_t estimated_keys;
-        int64_t repaired_at;
-        ss_table_streaming_sections(sstables::sstable& sstable_, std::map<int64_t, int64_t> sections_,
-                                    long estimated_keys_, long repaired_at_)
-            : sstable(sstable_)
-            , sections(std::move(sections_))
-            , estimated_keys(estimated_keys_)
-            , repaired_at(repaired_at_) {
-        }
-    };
 public:
     /**
      * Streaming endpoint.
@@ -245,79 +233,11 @@ public:
      * @param flushTables flush tables?
      * @param repairedAt the time the repair started.
      */
-    void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables, long repaired_at) {
-#if 0
-        Collection<ColumnFamilyStore> stores = getColumnFamilyStores(keyspace, columnFamilies);
-        if (flushTables)
-            flushSSTables(stores);
+    void add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables, long repaired_at);
 
-        List<Range<Token>> normalizedRanges = Range.normalize(ranges);
-        List<SSTableStreamingSections> sections = getSSTableSectionsForRanges(normalizedRanges, stores, repairedAt);
-        try
-        {
-            addTransferFiles(sections);
-        }
-        finally
-        {
-            for (SSTableStreamingSections release : sections)
-                release.sstable.releaseReference();
-        }
-#endif
-    }
+    std::vector<column_family*> get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families);
 
-#if 0
-    private Collection<ColumnFamilyStore> getColumnFamilyStores(String keyspace, Collection<String> columnFamilies)
-    {
-        Collection<ColumnFamilyStore> stores = new HashSet<>();
-        // if columnfamilies are not specified, we add all cf under the keyspace
-        if (columnFamilies.isEmpty())
-        {
-            stores.addAll(Keyspace.open(keyspace).getColumnFamilyStores());
-        }
-        else
-        {
-            for (String cf : columnFamilies)
-                stores.add(Keyspace.open(keyspace).getColumnFamilyStore(cf));
-        }
-        return stores;
-    }
-
-    private List<SSTableStreamingSections> getSSTableSectionsForRanges(Collection<Range<Token>> ranges, Collection<ColumnFamilyStore> stores, long overriddenRepairedAt)
-    {
-        List<SSTableReader> sstables = new ArrayList<>();
-        try
-        {
-            for (ColumnFamilyStore cfStore : stores)
-            {
-                List<AbstractBounds<RowPosition>> rowBoundsList = new ArrayList<>(ranges.size());
-                for (Range<Token> range : ranges)
-                    rowBoundsList.add(range.toRowBounds());
-                ColumnFamilyStore.ViewFragment view = cfStore.selectAndReference(cfStore.viewFilter(rowBoundsList));
-                sstables.addAll(view.sstables);
-            }
-
-            List<SSTableStreamingSections> sections = new ArrayList<>(sstables.size());
-            for (SSTableReader sstable : sstables)
-            {
-                long repairedAt = overriddenRepairedAt;
-                if (overriddenRepairedAt == ActiveRepairService.UNREPAIRED_SSTABLE)
-                    repairedAt = sstable.getSSTableMetadata().repairedAt;
-                sections.add(new SSTableStreamingSections(sstable,
-                                                          sstable.getPositionsForRanges(ranges),
-                                                          sstable.estimatedKeysForRanges(ranges),
-                                                          repairedAt));
-            }
-            return sections;
-        }
-        catch (Throwable t)
-        {
-            SSTableReader.releaseReferences(sstables);
-            throw t;
-        }
-    }
-#endif
-
-    void add_transfer_files(std::vector<ss_table_streaming_sections> sstable_details);
+    void add_transfer_files(std::vector<stream_detail> sstable_details);
 
 private:
     void close_session(stream_session_state final_state);

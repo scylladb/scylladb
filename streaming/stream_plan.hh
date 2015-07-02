@@ -29,6 +29,7 @@
 #include "dht/i_partitioner.hh"
 #include "streaming/stream_coordinator.hh"
 #include "streaming/stream_event_handler.hh"
+#include "streaming/stream_detail.hh"
 #include <vector>
 
 namespace streaming {
@@ -135,7 +136,7 @@ public:
      *                       this collection will be modified to remove those files that are successfully handed off
      * @return this object for chaining
      */
-    stream_plan& transfer_files(inet_address to, std::vector<stream_session::ss_table_streaming_sections> sstable_details);
+    stream_plan& transfer_files(inet_address to, std::vector<stream_detail> sstable_details);
     stream_plan& listeners(std::vector<stream_event_handler*> handlers);
 #if 0
     /**

@@ -19,6 +19,7 @@
  * Copyright 2015 Cloudius Systems.
  */
 
+#include "streaming/stream_detail.hh"
 #include "streaming/stream_session_state.hh"
 #include "streaming/stream_coordinator.hh"
 
@@ -71,7 +72,7 @@ std::vector<session_info> stream_coordinator::get_all_session_info() {
     return result;
 }
 
-void stream_coordinator::transfer_files(inet_address to, std::vector<stream_session::ss_table_streaming_sections> sstable_details) {
+void stream_coordinator::transfer_files(inet_address to, std::vector<stream_detail> sstable_details) {
     host_streaming_data& session_list = get_or_create_host_data(to);
     if (_connections_per_host > 1) {
         abort();

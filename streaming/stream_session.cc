@@ -29,6 +29,9 @@
 #include "streaming/messages/complete_message.hh"
 #include "streaming/messages/session_failed_message.hh"
 #include "streaming/stream_result_future.hh"
+#include "mutation_reader.hh"
+#include "dht/i_partitioner.hh"
+#include "database.hh"
 
 namespace streaming {
 
@@ -281,21 +284,67 @@ void stream_session::start_streaming_files() {
 #endif
 }
 
-void stream_session::add_transfer_files(std::vector<ss_table_streaming_sections> sstable_details) {
-    for (auto& details : sstable_details) {
+std::vector<column_family*> stream_session::get_column_family_stores(const sstring& keyspace, const std::vector<sstring>& column_families) {
+    // if columnfamilies are not specified, we add all cf under the keyspace
+    std::vector<column_family*> stores;
+    auto& db = get_local_db();
+    if (column_families.empty()) {
+        abort();
+        // FIXME: stores.addAll(Keyspace.open(keyspace).getColumnFamilyStores());
+    } else {
+        // TODO: We can move this to database class and use lw_shared_ptr<column_family> instead
+        for (auto& cf_name : column_families) {
+            auto& x = db.find_column_family(keyspace, cf_name);
+            stores.push_back(&x);
+        }
+    }
+    return stores;
+}
+
+void stream_session::add_transfer_ranges(sstring keyspace, std::vector<query::range<token>> ranges, std::vector<sstring> column_families, bool flush_tables, long repaired_at) {
+    std::vector<stream_detail> sstable_details;
+    auto cfs = get_column_family_stores(keyspace, column_families);
+    if (flush_tables) {
+        // FIXME: flushSSTables(stores);
+    }
+    for (auto& cf : cfs) {
+        std::vector<mutation_reader> readers;
+        std::vector<shared_ptr<query::range<ring_position>>> prs;
+        auto cf_id = cf->schema()->id();
+        for (auto& range : ranges) {
+            auto pr = make_shared<query::range<ring_position>>(std::move(range).transform<ring_position>(
+                [this] (token&& t) -> ring_position {
+                    return { std::move(t) };
+                }));
+            prs.push_back(pr);
+            auto mr = cf->make_reader(*pr);
+            readers.push_back(std::move(mr));
+        }
+        // Store this mutation_reader so we can send mutaions later
+        mutation_reader mr = make_combined_reader(std::move(readers));
+        // FIXME: sstable.estimatedKeysForRanges(ranges)
+        long estimated_keys = 0;
+        sstable_details.emplace_back(std::move(cf_id), std::move(prs), std::move(mr), estimated_keys, repaired_at);
+    }
+    add_transfer_files(std::move(sstable_details));
+}
+
+void stream_session::add_transfer_files(std::vector<stream_detail> sstable_details) {
+    for (auto& detail : sstable_details) {
+#if 0
         if (details.sections.empty()) {
             // A reference was acquired on the sstable and we won't stream it
             // FIXME
             // details.sstable.releaseReference();
             continue;
         }
-        // FIXME
-        UUID cf_id; // details.sstable.metadata.cfId;
+#endif
+        UUID cf_id = detail.cf_id;
         auto it = _transfers.find(cf_id);
         if (it == _transfers.end()) {
             it = _transfers.emplace(cf_id, stream_transfer_task(*this, cf_id)).first;
         }
-        it->second.add_transfer_file(details.sstable, details.estimated_keys, std::move(details.sections), details.repaired_at);
+        it->second.add_transfer_file(std::move(detail));
     }
 }
 
