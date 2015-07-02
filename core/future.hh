@@ -738,8 +738,8 @@ public:
     ///               unless it has failed.
     /// \return a \c future representing the return value of \c func, applied
     ///         to the eventual value of this future.
-    template <typename Func>
-    futurize_t<std::result_of_t<Func(T&&...)>> then(Func&& func) noexcept {
+    template <typename Func, typename Result = futurize_t<std::result_of_t<Func(T&&...)>>>
+    Result then(Func&& func) noexcept {
         return then<std::result_of_t<Func(T&&...)>>(std::forward<Func>(func), [] (future_state<T...>&& state) { return state.get(); });
     }
 
@@ -758,8 +758,8 @@ public:
     /// \param func - function to be called when the future becomes available,
     /// \return a \c future representing the return value of \c func, applied
     ///         to the eventual value of this future.
-    template <typename Func>
-    futurize_t<std::result_of_t<Func(future<T...>)>>
+    template <typename Func, typename Result = futurize_t<std::result_of_t<Func(future<T...>)>>>
+    Result
     then_wrapped(Func&& func) noexcept {
         return then<std::result_of_t<Func(future<T...>)>>(std::forward<Func>(func), [] (future_state<T...>&& state) { return future(std::move(state)); });
     }

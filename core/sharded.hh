@@ -189,39 +189,13 @@ public:
     /// \param func a method of `Service`
     /// \param args arguments to be passed to `func`
     /// \return result of calling `func(args)` on the designated instance
-    template <typename Ret, typename... FuncArgs, typename... Args>
-    std::enable_if_t<is_future<Ret>::value, Ret>
+    template <typename Ret, typename... FuncArgs, typename... Args, typename FutureRet = futurize_t<Ret>>
+    FutureRet
     invoke_on(unsigned id, Ret (Service::*func)(FuncArgs...), Args&&... args) {
+        using futurator = futurize<Ret>;
         auto inst = _instances[id];
-        return smp::submit_to(id, [inst, func, args = std::make_tuple(std::forward<Args>(args)...)] () mutable {
-            return apply([inst, func] (Args&&... args) mutable {
-                return (inst->*func)(std::forward<Args>(args)...);
-            }, std::move(args));
-        });
-    }
-
-    /// Invoke a method on a specific instance of `Service`.
-    ///
-    /// \param id shard id to call
-    /// \param func a method of `Service`
-    /// \param args arguments to be passed to `func`
-    /// \return result of calling `func(args)` on the designated instance
-    template <typename Ret, typename... FuncArgs, typename... Args>
-    std::enable_if_t<!is_future<Ret>::value && !std::is_same<Ret, void>::value, future<Ret>>
-    invoke_on(unsigned id, Ret (Service::*func)(FuncArgs...), Args&&... args) {
-        auto inst = _instances[id];
-        return smp::submit_to(id, [inst, func, args = std::make_tuple(std::forward<Args>(args)...)] () mutable {
-                return apply([inst, func] (Args&&... args) mutable {
-                    return make_ready_future<Ret>((inst->*func)(std::forward<Args>(args)...));
-                }, std::move(args));
-            });
-    }
-
-    template <typename... FuncArgs, typename... Args>
-    void invoke_on(unsigned id, void (Service::*func)(FuncArgs...), Args&&... args) {
-        auto inst = _instances[id];
-        smp::submit_to(id, [inst, func, args...] () mutable {
-            (inst->*func)(std::forward<Args>(args)...);
+        return smp::submit_to(id, [func, args = std::make_tuple(inst, std::forward<Args>(args)...)] () mutable {
+            return futurator::apply(std::mem_fn(func), std::move(args));
         });
     }
 
@@ -231,8 +205,8 @@ public:
     /// \param func a callable with signature `Value (Service&)` or
     ///        `future<Value> (Service&)` (for some `Value` type)
     /// \return result of calling `func(instance)` on the designated instance
-    template <typename Func>
-    futurize_t<std::result_of_t<Func(Service&)>>
+    template <typename Func, typename Ret = futurize_t<std::result_of_t<Func(Service&)>>>
+    Ret
     invoke_on(unsigned id, Func&& func) {
         auto inst = _instances[id];
         return smp::submit_to(id, [inst, func = std::forward<Func>(func)] () mutable {
