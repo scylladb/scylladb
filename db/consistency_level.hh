@@ -223,29 +223,9 @@ inline bool is_local(gms::inet_address endpoint) {
 }
 
 template<typename Range>
-inline
-size_t count_local_endpoints(Range& live_endpoints)
-{
+inline size_t count_local_endpoints(Range& live_endpoints) {
     return std::count_if(live_endpoints.begin(), live_endpoints.end(), is_local);
 }
-
- #if 0
-    private Map<String, Integer> countPerDCEndpoints(Keyspace keyspace, Iterable<InetAddress> liveEndpoints)
-    {
-        NetworkTopologyStrategy strategy = (NetworkTopologyStrategy) keyspace.getReplicationStrategy();
-
-        Map<String, Integer> dcEndpoints = new HashMap<String, Integer>();
-        for (String dc: strategy.getDatacenters())
-            dcEndpoints.put(dc, 0);
-
-        for (InetAddress endpoint : liveEndpoints)
-        {
-            String dc = DatabaseDescriptor.getEndpointSnitch().getDatacenter(endpoint);
-            dcEndpoints.put(dc, dcEndpoints.get(dc) + 1);
-        }
-        return dcEndpoints;
-    }
-#endif
 
 inline
 std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address> live_endpoints, read_repair_decision read_repair) {
@@ -324,14 +304,68 @@ std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& 
     }
 #endif
 
+template <typename Range>
+inline std::unordered_map<sstring, size_t> count_per_dc_endpoints(
+        keyspace& ks,
+        Range& live_endpoints) {
+    using namespace locator;
+
+    auto& rs = ks.get_replication_strategy();
+    auto& snitch_ptr = i_endpoint_snitch::get_local_snitch_ptr();
+
+    network_topology_strategy* nrs =
+            static_cast<network_topology_strategy*>(&rs);
+
+    std::unordered_map<sstring, size_t> dc_endpoints;
+    for (auto& dc : nrs->get_datacenters()) {
+        dc_endpoints.emplace(dc, 0);
+    }
+
+    //
+    // Since live_endpoints are a subset of a get_natural_endpoints() output we
+    // will never get any endpoints outside the dataceters from
+    // nrs->get_datacenters().
+    //
+    for (auto& endpoint : live_endpoints) {
+        ++(dc_endpoints[snitch_ptr->get_datacenter(endpoint)]);
+    }
+
+    return dc_endpoints;
+}
+
 template<typename Range>
-static inline
-void assure_sufficient_live_nodes(consistency_level cl, keyspace& ks, Range& live_endpoints)
-{
+inline bool assure_sufficient_live_nodes_each_quorum(
+        consistency_level cl,
+        keyspace& ks,
+        Range& live_endpoints) {
+    using namespace locator;
+
+    auto& rs = ks.get_replication_strategy();
+
+    if (rs.get_type() == replication_strategy_type::network_topology) {
+        for (auto& entry : count_per_dc_endpoints(ks, live_endpoints)) {
+            auto dc_block_for = local_quorum_for(ks, entry.first);
+            auto dc_live = entry.second;
+
+            if (dc_live < dc_block_for) {
+                throw unavailable_exception(cl, dc_block_for, dc_live);
+            }
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+template<typename Range>
+inline void assure_sufficient_live_nodes(
+        consistency_level cl,
+        keyspace& ks,
+        Range& live_endpoints) {
     size_t need = block_for(ks, cl);
 
-    switch (cl)
-    {
+    switch (cl) {
     case consistency_level::ANY:
         // local hint is acceptable, and local node is always live
         break;
@@ -361,20 +395,9 @@ void assure_sufficient_live_nodes(consistency_level cl, keyspace& ks, Range& liv
         break;
     }
     case consistency_level::EACH_QUORUM:
-        warn(unimplemented::cause::CONSISTENCY);
-#if 0
-        if (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
-        {
-            for (Map.Entry<String, Integer> entry : countPerDCEndpoints(keyspace, liveEndpoints).entrySet())
-            {
-                int dcBlockFor = localQuorumFor(keyspace, entry.getKey());
-                int dcLive = entry.getValue();
-                if (dcLive < dcBlockFor)
-                    throw new UnavailableException(this, dcBlockFor, dcLive);
-            }
+        if (assure_sufficient_live_nodes_each_quorum(cl, ks, live_endpoints)) {
             break;
         }
-#endif
 // Fallthough on purpose for SimpleStrategy
     default:
         size_t live = live_endpoints.size();
