@@ -27,6 +27,7 @@
 #include <type_traits>
 #include <functional>
 #include <iostream>
+#include "util/is_smart_ptr.hh"
 
 // This header defines two shared pointer facilities, lw_shared_ptr<> and
 // shared_ptr<>, both modeled after std::shared_ptr<>.
@@ -718,5 +719,11 @@ struct hash<::shared_ptr<T>> : private hash<T*> {
 };
 
 }
+
+template<typename T>
+struct is_smart_ptr<::shared_ptr<T>> : std::true_type {};
+
+template<typename T>
+struct is_smart_ptr<::lw_shared_ptr<T>> : std::true_type {};
 
 #endif /* SHARED_PTR_HH_ */

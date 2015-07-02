@@ -23,6 +23,7 @@
 
 #include "reactor.hh"
 #include "future-util.hh"
+#include "util/is_smart_ptr.hh"
 
 namespace seastar {
 
@@ -414,6 +415,9 @@ template <typename T>
 foreign_ptr<T> make_foreign(T ptr) {
     return foreign_ptr<T>(std::move(ptr));
 }
+
+template<typename T>
+struct is_smart_ptr<::foreign_ptr<T>> : std::true_type {};
 
 /// @}
 
