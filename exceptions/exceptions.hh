@@ -32,20 +32,6 @@
 
 namespace exceptions {
 
-class invalid_request_exception : public std::logic_error {
-public:
-    invalid_request_exception(std::string cause)
-        : logic_error(cause)
-    { }
-};
-
-class keyspace_not_defined_exception : public invalid_request_exception {
-public:
-    keyspace_not_defined_exception(std::string cause)
-        : invalid_request_exception(cause)
-    { }
-};
-
 enum class exception_code : int32_t {
     SERVER_ERROR    = 0x0000,
     PROTOCOL_ERROR  = 0x000A,
@@ -92,6 +78,20 @@ public:
 class request_validation_exception : public cassandra_exception {
 public:
     using cassandra_exception::cassandra_exception;
+};
+
+class invalid_request_exception : public request_validation_exception {
+public:
+    invalid_request_exception(sstring cause)
+        : request_validation_exception(exception_code::INVALID, cause)
+    { }
+};
+
+class keyspace_not_defined_exception : public invalid_request_exception {
+public:
+    keyspace_not_defined_exception(std::string cause)
+        : invalid_request_exception(cause)
+    { }
 };
 
 class prepared_query_not_found_exception : public request_validation_exception {
