@@ -339,6 +339,7 @@ api = ['api/api.cc',
        'api/api-doc/collectd.json',
        'api/collectd.cc',
        'api/api-doc/compaction_manager.json',
+       'api/compaction_manager.cc',
        ]
 
 boost_test_lib = [
