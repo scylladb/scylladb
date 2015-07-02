@@ -98,3 +98,12 @@ bool mutation::operator==(const mutation& m) const {
 bool mutation::operator!=(const mutation& m) const {
     return !(*this == m);
 }
+
+query::result
+mutation::query(const query::partition_slice& slice, uint32_t row_limit) const {
+    query::result::builder builder(slice);
+    auto pb = builder.add_partition(key());
+    _p.query(pb, *_schema, slice, row_limit);
+    pb.finish();
+    return builder.build();
+}

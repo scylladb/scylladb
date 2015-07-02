@@ -3,8 +3,30 @@
  */
 
 #include "query-result-set.hh"
+#include "query-result-reader.hh"
 
 namespace query {
+
+// Result set builder is passed as a visitor to query_result::consume()
+// function. You can call the build() method to obtain a result set that
+// contains cells from the visited results.
+class result_set_builder {
+    schema_ptr _schema;
+    std::vector<result_set_row> _rows;
+    std::unordered_map<sstring, data_value> _pkey_cells;
+public:
+    result_set_builder(schema_ptr schema);
+    result_set build() const;
+    void accept_new_partition(const partition_key& key, uint32_t row_count);
+    void accept_new_partition(uint32_t row_count);
+    void accept_new_row(const clustering_key& key, const result_row_view& static_row, const result_row_view& row);
+    void accept_new_row(const result_row_view &static_row, const result_row_view &row);
+    void accept_partition_end(const result_row_view& static_row);
+private:
+    std::unordered_map<sstring, data_value> deserialize(const partition_key& key);
+    std::unordered_map<sstring, data_value> deserialize(const clustering_key& key);
+    std::unordered_map<sstring, data_value> deserialize(const result_row_view& row, bool is_static);
+};
 
 std::ostream& operator<<(std::ostream& out, const result_set_row& row) {
     for (auto&& cell : row._cells) {
@@ -26,8 +48,8 @@ result_set_builder::result_set_builder(schema_ptr schema)
     : _schema{schema}
 { }
 
-lw_shared_ptr<result_set> result_set_builder::build() const {
-    return make_lw_shared<result_set>(_rows);
+result_set result_set_builder::build() const {
+    return { _schema, _rows };
 }
 
 void result_set_builder::accept_new_partition(const partition_key& key, uint32_t row_count)
@@ -117,6 +139,24 @@ result_set_builder::deserialize(const result_row_view& row, bool is_static)
         }
     }
     return cells;
+}
+
+result_set
+result_set::from_raw_result(schema_ptr s, const partition_slice& slice, const result& r) {
+    auto make = [&slice, s = std::move(s)] (bytes_view v) mutable {
+        result_set_builder builder{std::move(s)};
+        result_view view(v);
+        view.consume(slice, builder);
+        return builder.build();
+    };
+
+    if (r.buf().is_linearized()) {
+        return make(r.buf().view());
+    } else {
+        // FIXME: make result_view::consume() work on fragments to avoid linearization.
+        bytes_ostream w(r.buf());
+        return make(w.linearize());
+    }
 }
 
 }

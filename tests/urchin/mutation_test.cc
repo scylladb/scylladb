@@ -4,12 +4,26 @@
 
 #define BOOST_TEST_DYN_LINK
 
-#include "tests/test-utils.hh"
+#include <random>
+#include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/algorithm/copy.hpp>
+#include <boost/range/algorithm_ext/push_back.hpp>
+
 #include "core/sstring.hh"
+#include "core/do_with.hh"
+#include "core/thread.hh"
+
 #include "database.hh"
 #include "utils/UUID_gen.hh"
-#include "core/do_with.hh"
-#include <random>
+#include "mutation_reader.hh"
+#include "schema_builder.hh"
+#include "query-result-set.hh"
+#include "query-result-reader.hh"
+
+#include "tests/test-utils.hh"
+#include "tests/urchin/mutation_assertions.hh"
+#include "tests/urchin/mutation_reader_assertions.hh"
+#include "tests/urchin/result_set_assertions.hh"
 
 static sstring some_keyspace("ks");
 static sstring some_column_family("cf");
@@ -382,4 +396,55 @@ SEASTAR_TEST_CASE(test_cell_ordering) {
         atomic_cell::make_dead(1, expiry_1),
         atomic_cell::make_dead(1, expiry_2));
     return make_ready_future<>();
+}
+
+static query::partition_slice make_full_slice(const schema& s) {
+    query::partition_slice::option_set options;
+    options.set<query::partition_slice::option::send_partition_key>();
+    options.set<query::partition_slice::option::send_clustering_key>();
+    options.set<query::partition_slice::option::send_timestamp_and_expiry>();
+
+    std::vector<query::clustering_range> ranges;
+    ranges.emplace_back(query::clustering_range::make_open_ended_both_sides());
+
+    std::vector<column_id> static_columns;
+    boost::range::push_back(static_columns,
+        s.static_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
+
+    std::vector<column_id> regular_columns;
+    boost::range::push_back(regular_columns,
+        s.regular_columns() | boost::adaptors::transformed(std::mem_fn(&column_definition::id)));
+
+    return {
+        std::move(ranges),
+        std::move(static_columns),
+        std::move(regular_columns),
+        std::move(options)
+    };
+}
+
+SEASTAR_TEST_CASE(test_querying_of_mutation) {
+    return seastar::async([] {
+        auto s = schema_builder("ks", "cf")
+            .with_column("pk", bytes_type, column_kind::partition_key)
+            .with_column("v", bytes_type, column_kind::regular_column)
+            .build();
+
+        auto resultify = [s] (const mutation& m) -> query::result_set {
+            auto slice = make_full_slice(*s);
+            return query::result_set::from_raw_result(s, slice, m.query(slice));
+        };
+
+        mutation m(partition_key::from_single_value(*s, "key1"), s);
+        m.set_clustered_cell(clustering_key::make_empty(*s), "v", bytes("v1"), 1);
+
+        assert_that(resultify(m))
+            .has_only(a_row()
+                .with_column("pk", bytes("key1"))
+                .with_column("v", bytes("v1")));
+
+        m.partition().apply(tombstone(2, gc_clock::now()));
+
+        assert_that(resultify(m)).is_empty();
+    });
 }
