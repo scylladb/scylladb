@@ -208,17 +208,18 @@ inline size_t block_for(keyspace& ks, consistency_level cl) {
     }
 }
 
-static inline
-bool is_datacenter_local(consistency_level l)
-{
+inline bool is_datacenter_local(consistency_level l) {
     return l == consistency_level::LOCAL_ONE || l == consistency_level::LOCAL_QUORUM;
 }
 
-inline
-bool is_local(gms::inet_address endpoint)
-{
-    return true;
- //       return DatabaseDescriptor.getLocalDataCenter().equals(DatabaseDescriptor.getEndpointSnitch().getDatacenter(endpoint));
+inline bool is_local(gms::inet_address endpoint) {
+    using namespace locator;
+
+    auto& snitch_ptr = i_endpoint_snitch::get_local_snitch_ptr();
+    auto local_addr = utils::fb_utilities::get_broadcast_address();
+
+    return snitch_ptr->get_datacenter(local_addr) ==
+           snitch_ptr->get_datacenter(endpoint);
 }
 
 template<typename Range>
