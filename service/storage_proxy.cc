@@ -2791,9 +2791,15 @@ void storage_proxy::init_messaging_service() {
                 ms.send_message_oneway(net::messaging_verb::MUTATION_DONE, net::messaging_service::shard_id{reply_to, shard}, std::move(shard), std::move(response_id));
                 // return void, no need to wait for send to complete
             }),
-            parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) mutable {
+            parallel_for_each(forward.begin(), forward.end(), [reply_to, shard, response_id, &m] (gms::inet_address forward) {
                 auto& ms = net::get_local_messaging_service();
-                return ms.send_message_oneway(net::messaging_verb::MUTATION, net::messaging_service::shard_id{forward, 0}, m, std::vector<gms::inet_address>(), reply_to, std::move(shard), std::move(response_id));
+                // we need to get copy of all captured element since lambda is used more than one, so we cannot move from it
+                // we cannot pass references to send_message either since lambda may be destroyed before send completes
+                auto reply_to_ = reply_to;
+                auto shard_ = shard;
+                auto response_id_ = response_id;
+                return ms.send_message_oneway(net::messaging_verb::MUTATION, net::messaging_service::shard_id{forward, 0}, m, std::vector<gms::inet_address>(),
+                        std::move(reply_to_), std::move(shard_), std::move(response_id_));
             })
             );
         }).discard_result();
