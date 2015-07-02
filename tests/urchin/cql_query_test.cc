@@ -14,7 +14,10 @@
 #include "tests/urchin/cql_assertions.hh"
 
 #include "core/future-util.hh"
+#include "core/sleep.hh"
 #include "transport/messages/result_message.hh"
+
+using namespace std::literals::chrono_literals;
 
 SEASTAR_TEST_CASE(test_create_keyspace_statement) {
     return do_with_cql_env([] (auto& e) {
@@ -932,3 +935,66 @@ SEASTAR_TEST_CASE(test_table_compression) {
         });
     });
 }
+
+SEASTAR_TEST_CASE(test_ttl) {
+    return do_with_cql_env([] (cql_test_env& e) {
+        return e.create_table([] (auto ks_name) {
+            auto my_list_type = list_type_impl::get_instance(utf8_type, true);
+            return schema({}, ks_name, "cf",
+                {{"p1", utf8_type}}, {}, {{"r1", utf8_type}, {"r2", utf8_type}, {"r3", my_list_type}}, {}, utf8_type);
+        }).then([&e] {
+            return e.execute_cql(
+                "insert into cf (p1, r1, r3) values ('key1', 'value1_1', ['a', 'b', 'c']) using ttl 1000;").discard_result();
+        }).then([&e] {
+            return e.execute_cql(
+                "insert into cf (p1, r1, r3) values ('key3', 'value1_3', ['a', 'b', 'c']) using ttl 1;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("update cf using ttl 1 set r3[1] = 'b' where p1 = 'key1';").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into cf (p1, r1) values ('key2', 'value1_2') using ttl 1;").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into cf (p1, r2) values ('key2', 'value2_2');").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select r1 from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_size(3)
+                    .with_row({utf8_type->decompose(sstring("value1_1"))})
+                    .with_row({utf8_type->decompose(sstring("value1_2"))})
+                    .with_row({utf8_type->decompose(sstring("value1_3"))});
+            });
+        }).then([&e] {
+            return e.execute_cql("select r3 from cf where p1 = 'key1';").then([] (auto msg) {
+                auto my_list_type = list_type_impl::get_instance(utf8_type, true);
+                assert_that(msg).is_rows().with_rows({
+                    {my_list_type->decompose(list_type_impl::native_type{{sstring("a"), sstring("b"), sstring("c")}})}
+                });
+            });
+        }).then([&e] {
+            forward_jump_clocks(2s);
+            return e.execute_cql("select r1, r2 from cf;").then([](auto msg) {
+                assert_that(msg).is_rows().with_size(2)
+                    .with_row({{}, utf8_type->decompose(sstring("value2_2"))})
+                    .with_row({utf8_type->decompose(sstring("value1_1")), {}});
+            });
+        }).then([&e] {
+            return e.execute_cql("select r2 from cf;").then([] (auto msg) {
+                assert_that(msg).is_rows().with_size(2)
+                    .with_row({ utf8_type->decompose(sstring("value2_2")) })
+                    .with_row({ {} });
+            });
+        }).then([&e] {
+            return e.execute_cql("select r1 from cf;").then([] (auto msg) {
+                assert_that(msg).is_rows().with_size(2)
+                    .with_row({ {} })
+                    .with_row({ utf8_type->decompose(sstring("value1_1")) });
+            });
+        }).then([&e] {
+            return e.execute_cql("select r3 from cf where p1 = 'key1';").then([] (auto msg) {
+                auto my_list_type = list_type_impl::get_instance(utf8_type, true);
+                assert_that(msg).is_rows().with_rows({
+                    {my_list_type->decompose(list_type_impl::native_type{{sstring("a"), sstring("c")}})}
+                });
+            });
+        });
+    });
+}
+

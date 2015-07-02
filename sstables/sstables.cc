@@ -924,16 +924,7 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell) {
 
     update_cell_stats(_c_stats, timestamp);
 
-    if (cell.is_live_and_has_ttl()) {
-        // expiring cell
-
-        column_mask mask = column_mask::expiration;
-        uint32_t ttl = cell.ttl().count();
-        uint32_t expiration = cell.expiry().time_since_epoch().count();
-        disk_string_view<uint32_t> cell_value { cell.value() };
-
-        write(out, mask, ttl, expiration, timestamp, cell_value);
-    } else if (cell.is_dead()) {
+    if (cell.is_dead(_now)) {
         // tombstone cell
 
         column_mask mask = column_mask::deletion;
@@ -943,6 +934,15 @@ void sstable::write_cell(file_writer& out, atomic_cell_view cell) {
         _c_stats.tombstone_histogram.update(deletion_time);
 
         write(out, mask, timestamp, deletion_time_size, deletion_time);
+    } else if (cell.is_live_and_has_ttl()) {
+        // expiring cell
+
+        column_mask mask = column_mask::expiration;
+        uint32_t ttl = cell.ttl().count();
+        uint32_t expiration = cell.expiry().time_since_epoch().count();
+        disk_string_view<uint32_t> cell_value { cell.value() };
+
+        write(out, mask, ttl, expiration, timestamp, cell_value);
     } else {
         // regular cell
 

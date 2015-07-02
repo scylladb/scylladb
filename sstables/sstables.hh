@@ -116,12 +116,13 @@ public:
     enum class version_types { la };
     enum class format_types { big };
 public:
-    sstable(sstring dir, unsigned long generation, version_types v, format_types f)
+    sstable(sstring dir, unsigned long generation, version_types v, format_types f, gc_clock::time_point now = gc_clock::now())
         : _dir(dir)
         , _generation(generation)
         , _version(v)
         , _format(f)
         , _filter_tracker(make_lw_shared<distributed<filter_tracker>>())
+        , _now(now)
     { }
     sstable& operator=(const sstable&) = delete;
     sstable(const sstable&) = delete;
@@ -247,6 +248,8 @@ private:
     lw_shared_ptr<distributed<filter_tracker>> _filter_tracker;
 
     bool _marked_for_deletion = false;
+    
+    gc_clock::time_point _now;
 
     const bool has_component(component_type f);
 

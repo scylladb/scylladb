@@ -389,7 +389,8 @@ SEASTAR_TEST_CASE(datafile_generation_05) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(1), 3600, 3600));
         mt->apply(std::move(m));
 
-        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 5, la, big);
+        auto now = to_gc_clock(db_clock::from_time_t(0));
+        auto sst = make_lw_shared<sstable>("tests/urchin/sstables/tests-temporary", 5, la, big, now);
 
         return sst->write_components(*mt).then([mt, sst, s] {
             auto fname = sstable::filename("tests/urchin/sstables/tests-temporary", la, 5, big, sstable::component_type::Data);

@@ -416,13 +416,13 @@ public:
     static bytes pack(BytesViewIterator start, BytesViewIterator finish, int elements, serialization_format sf);
     mutation_view deserialize_mutation_form(collection_mutation::view in) const;
     bool is_empty(collection_mutation::view in) const;
-    bool is_any_live(collection_mutation::view in, tombstone tomb) const;
+    bool is_any_live(collection_mutation::view in, tombstone tomb, gc_clock::time_point now) const;
     virtual bytes to_value(mutation_view mut, serialization_format sf) const = 0;
     bytes to_value(collection_mutation::view mut, serialization_format sf) const;
     // FIXME: use iterators?
     collection_mutation::one serialize_mutation_form(const mutation& mut) const;
     collection_mutation::one serialize_mutation_form(mutation_view mut) const;
-    collection_mutation::one serialize_mutation_form_only_live(mutation_view mut) const;
+    collection_mutation::one serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const;
     collection_mutation::one merge(collection_mutation::view a, collection_mutation::view b) const;
     virtual void serialize(const boost::any& value, bytes::iterator& out, serialization_format sf) const = 0;
     virtual boost::any deserialize(bytes_view v, serialization_format sf) const = 0;

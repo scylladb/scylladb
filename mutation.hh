@@ -42,7 +42,7 @@ public:
     bool operator==(const mutation&) const;
     bool operator!=(const mutation&) const;
 public:
-    query::result query(const query::partition_slice&, uint32_t row_limit = query::max_rows) const;
+    query::result query(const query::partition_slice&, gc_clock::time_point now = gc_clock::now(), uint32_t row_limit = query::max_rows) const;
 private:
     friend std::ostream& operator<<(std::ostream& os, const mutation& m);
 };

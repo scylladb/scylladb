@@ -151,7 +151,7 @@ select_statement::execute(distributed<service::storage_proxy>& proxy, service::q
     int32_t limit = get_limit(options);
     auto now = db_clock::now();
 
-    auto command = ::make_lw_shared<query::read_command>(_schema->id(), make_partition_slice(options), limit);
+    auto command = ::make_lw_shared<query::read_command>(_schema->id(), make_partition_slice(options), limit, to_gc_clock(now));
 
     int32_t page_size = options.get_page_size();
 

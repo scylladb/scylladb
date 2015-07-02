@@ -991,7 +991,7 @@ bool collection_type_impl::is_empty(collection_mutation::view cm) const {
     return read_simple<uint32_t>(in) == 0;
 }
 
-bool collection_type_impl::is_any_live(collection_mutation::view cm, tombstone tomb) const {
+bool collection_type_impl::is_any_live(collection_mutation::view cm, tombstone tomb, gc_clock::time_point now) const {
     auto&& in = cm.data;
     auto has_tomb = read_simple<bool>(in);
     if (has_tomb) {
@@ -1005,7 +1005,7 @@ bool collection_type_impl::is_any_live(collection_mutation::view cm, tombstone t
         in.remove_prefix(ksize);
         auto vsize = read_simple<uint32_t>(in);
         auto value = atomic_cell_view::from_bytes(read_simple_bytes(in, vsize));
-        if (value.is_live(tomb)) {
+        if (value.is_live(tomb, now)) {
             return true;
         }
     }
@@ -1058,9 +1058,9 @@ collection_type_impl::serialize_mutation_form(mutation_view mut) const {
 }
 
 collection_mutation::one
-collection_type_impl::serialize_mutation_form_only_live(mutation_view mut) const {
-    return do_serialize_mutation_form(mut.tomb, mut.cells | boost::adaptors::filtered([t = mut.tomb] (auto&& e) {
-        return e.second.is_live(t);
+collection_type_impl::serialize_mutation_form_only_live(mutation_view mut, gc_clock::time_point now) const {
+    return do_serialize_mutation_form(mut.tomb, mut.cells | boost::adaptors::filtered([t = mut.tomb, now] (auto&& e) {
+        return e.second.is_live(t, now);
     }));
 }
 
