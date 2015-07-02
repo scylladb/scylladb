@@ -998,3 +998,67 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
+SEASTAR_TEST_CASE(test_types) {
+    return do_with_cql_env([] (cql_test_env& e) {
+        return make_ready_future<>().then([&e] {
+            return e.execute_cql(
+                "CREATE TABLE all_types ("
+                    "    a ascii PRIMARY KEY,"
+                    "    b bigint,"
+                    "    c blob,"
+                    "    d boolean,"
+                    "    e double,"
+                    "    f float,"
+                    "    g inet,"
+                    "    h int,"
+                    "    i text,"
+                    "    j timestamp,"
+                    "    k timeuuid,"
+                    "    l uuid,"
+                    "    m varchar,"
+                    ");").discard_result();
+        }).then([&e] {
+            e.require_table_exists("ks", "all_types");
+            return e.execute_cql(
+                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m) VALUES ("
+                    "    'ascii',"
+                    "    123456789,"
+                    "    0xdeadbeef,"
+                    "    true,"
+                    "    3.14,"
+                    "    3.14,"
+                    "    '127.0.0.1',"
+                    "    3,"
+                    "    'zażółć gęślą jaźń',"
+                    "    '2001-10-18 14:15:55.134+0000',"
+                    "    d2177dd0-eaa2-11de-a572-001b779c76e3,"
+                    "    d2177dd0-eaa2-11de-a572-001b779c76e3,"
+                    "    'varchar'"
+                    ");").discard_result();
+        }).then([&e] {
+            return e.execute_cql("SELECT * FROM all_types WHERE a = 'ascii'");
+        }).then([&e] (auto msg) {
+            struct tm t = { 0 };
+            t.tm_year = 2001 - 1900;
+            t.tm_mon = 10 - 1;
+            t.tm_mday = 18;
+            t.tm_hour = 14;
+            t.tm_min = 15;
+            t.tm_sec = 55;
+            auto tp = db_clock::from_time_t(timegm(&t)) + std::chrono::milliseconds(134);
+            assert_that(msg).is_rows().with_rows({
+                {
+                    ascii_type->decompose(sstring("ascii")), long_type->decompose(123456789l),
+                    from_hex("deadbeef"), boolean_type->decompose(true),
+                    double_type->decompose(3.14), float_type->decompose(3.14f),
+                    inet_addr_type->decompose(net::ipv4_address("127.0.0.1")),
+                    int32_type->decompose(3), utf8_type->decompose(sstring("zażółć gęślą jaźń")),
+                    timestamp_type->decompose(tp),
+                    timeuuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
+                    uuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
+                    utf8_type->decompose(sstring("varchar"))
+                }
+            });
+        });
+    });
+}
