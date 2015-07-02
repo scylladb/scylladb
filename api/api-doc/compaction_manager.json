@@ -92,7 +92,67 @@
                ]
             }
          ]
-      }
+      },
+      {
+      "path": "/compaction_manager/metrics/pending_tasks",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get pending tasks",
+          "type": "int",
+          "nickname": "get_pending_tasks",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/compaction_manager/metrics/completed_tasks",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get completed tasks",
+          "type": "long",
+          "nickname": "get_completed_tasks",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/compaction_manager/metrics/total_compactions_completed",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get total compactions completed",
+          "type": "long",
+          "nickname": "get_total_compactions_completed",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/compaction_manager/metrics/bytes_compacted",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get bytes compacted",
+          "type": "int",
+          "nickname": "get_bytes_compacted",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    }
    ],
    "models":{
       "mapper":{
