@@ -25,8 +25,29 @@
 #include "core/shared_ptr.hh"
 #include "core/sstring.hh"
 #include "core/future-util.hh"
+#include "util/is_smart_ptr.hh"
 
 namespace rpc {
+
+template <bool IsSmartPtr>
+struct serialize_helper;
+
+template <>
+struct serialize_helper<false> {
+    template <typename Serializer, typename T>
+    static inline future<> serialize(Serializer& serialize, output_stream<char>& out, T&& t) {
+        return serialize(out, std::forward<T>(t));
+
+    }
+};
+
+template <>
+struct serialize_helper<true> {
+    template <typename Serializer, typename T>
+    static inline future<> serialize(Serializer& serialize, output_stream<char>& out, T&& t) {
+        return serialize(out, *t);
+    }
+};
 
 template<std::size_t N, typename Serializer, typename... T>
 inline std::enable_if_t<N == sizeof...(T), future<>> marshall(Serializer&, output_stream<char>& out, std::tuple<T...>&&) {
@@ -36,7 +57,9 @@ inline std::enable_if_t<N == sizeof...(T), future<>> marshall(Serializer&, outpu
 template<std::size_t N = 0, typename Serializer, typename... T>
 inline std::enable_if_t<N != sizeof...(T), future<>> marshall(Serializer& serialize, output_stream<char>& out, std::tuple<T...>&& args) {
     using tuple_type = std::tuple<T...>;
-    return serialize(out, std::forward<typename std::tuple_element<N, tuple_type>::type>(std::get<N>(args))).then([&serialize, &out, args = std::move(args)] () mutable {
+    using t_type = typename std::tuple_element<N, tuple_type>::type;
+    using serialize_helper_type = serialize_helper<is_smart_ptr<typename std::remove_reference<t_type>::type>::value>;
+    return serialize_helper_type::serialize(serialize, out, std::forward<t_type>(std::get<N>(args))).then([&serialize, &out, args = std::move(args)] () mutable {
         return marshall<N + 1>(serialize, out, std::move(args));
     });
 }
@@ -466,63 +489,95 @@ auto make_copyable_function(Func&& func, std::enable_if_t<std::is_copy_construct
 }
 
 template<typename Ret, typename... Args>
-struct client_type_helper {
+struct handler_type_helper {
     using type = Ret(Args...);
     static constexpr bool info = false;
 };
 
 template<typename Ret, typename First, typename... Args>
-struct client_type_helper<Ret, First, Args...> {
+struct handler_type_helper<Ret, First, Args...> {
     using type = Ret(First, Args...);
     static constexpr bool info = false;
     static_assert(!std::is_same<client_info&, First>::value, "reference to client_info has to be const");
 };
 
 template<typename Ret, typename... Args>
-struct client_type_helper<Ret, const client_info&, Args...> {
+struct handler_type_helper<Ret, const client_info&, Args...> {
     using type = Ret(Args...);
     static constexpr bool info = true;
 };
 
 template<typename Ret, typename... Args>
-struct client_type_helper<Ret, client_info, Args...> {
+struct handler_type_helper<Ret, client_info, Args...> {
     using type = Ret(Args...);
     static constexpr bool info = true;
 };
 
-template<typename F, typename I>
-struct client_type_impl;
+template<typename Ret, typename F, typename I>
+struct handler_type_impl;
 
-template<typename F, std::size_t... I>
-struct client_type_impl<F, std::integer_sequence<std::size_t, I...>> {
-    using type = client_type_helper<typename F::return_type, typename F::template arg<I>::type...>;
+template<typename Ret, typename F, std::size_t... I>
+struct handler_type_impl<Ret, F, std::integer_sequence<std::size_t, I...>> {
+    using type = handler_type_helper<Ret, typename F::template arg<I>::type...>;
+};
+
+// this class is used to calculate client side rpc function signature
+// if rpc callback receives client_info as a first parameter it is dropped
+// from an argument list and if return type is a smart pointer it is converted to be
+// a type it points to, otherwise signature is identical to what was passed to
+// make_client().
+//
+// Examples:
+// std::unique_ptr<int>(client_info, int, long) -> int(int, long)
+// double(client_info, float) -> double(float)
+template<typename Func>
+class client_function_type {
+    template<typename T, bool IsSmartPtr>
+    struct drop_smart_ptr_impl;
+    template<typename T>
+    struct drop_smart_ptr_impl<T, true> {
+        using type = typename T::element_type;
+    };
+    template<typename T>
+    struct drop_smart_ptr_impl<T, false> {
+        using type = T;
+    };
+    template<typename T>
+    using drop_smart_ptr = drop_smart_ptr_impl<T, is_smart_ptr<T>::value>;
+
+    using trait = function_traits<Func>;
+    // if return type is smart ptr take a type it points to instead
+    using return_type = typename drop_smart_ptr<typename trait::return_type>::type;
+public:
+    using type = typename handler_type_impl<return_type, trait, std::make_index_sequence<trait::arity>>::type::type;
 };
 
 // this class is used to calculate client side rpc function signature
 // if rpc callback receives client_info as a first parameter it is dropped
 // from an argument list, otherwise signature is identical to what was passed to
-// make_client()
+// make_client().
 template<typename Func>
-class client_type {
+class server_function_type {
     using trait = function_traits<Func>;
-    using ctype = typename client_type_impl<trait, std::make_index_sequence<trait::arity>>::type;
+    using return_type = typename trait::return_type;
+    using stype = typename handler_type_impl<return_type, trait, std::make_index_sequence<trait::arity>>::type;
 public:
-    using type = typename ctype::type; // client function signature
-    static constexpr bool info = ctype::info; // true if client_info is a first parameter of rpc handler
+    using type = typename stype::type; // server function signature
+    static constexpr bool info = stype::info; // true if client_info is a first parameter of rpc handler
 };
 
 template<typename Serializer, typename MsgType>
 template<typename Func>
 auto protocol<Serializer, MsgType>::make_client(MsgType t) {
-    using trait = function_traits<typename client_type<Func>::type>;
+    using trait = function_traits<typename client_function_type<Func>::type>;
     return send_helper<trait, Serializer>(t, std::make_index_sequence<trait::arity>());
 }
 
 template<typename Serializer, typename MsgType>
 template<typename Func>
 auto protocol<Serializer, MsgType>::register_handler(MsgType t, Func&& func) {
-    constexpr auto info = client_type<Func>::info;
-    using trait = function_traits<typename client_type<Func>::type>;
+    constexpr auto info = server_function_type<Func>::info;
+    using trait = function_traits<typename server_function_type<Func>::type>;
     auto recv = recv_helper<trait, Serializer, MsgType, info>(std::make_index_sequence<trait::arity>(), std::forward<Func>(func));
     register_receiver(t, make_copyable_function(std::move(recv)));
     return make_client<Func>(t);

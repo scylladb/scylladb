@@ -92,7 +92,7 @@ int main(int ac, char** av) {
         uint16_t port = config["port"].as<uint16_t>();
         auto test1 = myrpc.register_handler(1, [x = 0](int i) mutable { print("test1 count %d got %d\n", ++x, i); });
         auto test2 = myrpc.register_handler(2, [](int a, int b){ print("test2 got %d %d\n", a, b); return make_ready_future<int>(a+b); });
-        auto test3 = myrpc.register_handler(3, [](double x){ print("test3 got %f\n", x); return sin(x); });
+        auto test3 = myrpc.register_handler(3, [](double x){ print("test3 got %f\n", x); return std::make_unique<double>(sin(x)); });
         auto test4 = myrpc.register_handler(4, [](){ print("test4 throw!\n"); throw std::runtime_error("exception!"); });
         auto test5 = myrpc.register_handler(5, [](){ print("test5 no wait\n"); return rpc::no_wait; });
         auto test6 = myrpc.register_handler(6, [](const rpc::client_info& info, int x){ print("test6 client %s, %d\n", inet_ntoa(info.addr.as_posix_sockaddr_in().sin_addr), x); });
