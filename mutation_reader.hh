@@ -36,15 +36,16 @@ mutation_reader make_empty_reader();
 template <typename Consumer>
 inline
 future<> consume(mutation_reader& reader, Consumer consumer) {
-    static_assert(std::is_same<stop_iteration, std::result_of_t<Consumer(mutation&&)>>::value, "bad Consumer signature");
+    static_assert(std::is_same<future<stop_iteration>, futurize_t<std::result_of_t<Consumer(mutation&&)>>>::value, "bad Consumer signature");
+    using futurator = futurize<std::result_of_t<Consumer(mutation&&)>>;
 
     return do_with(std::move(consumer), [&reader] (Consumer& c) -> future<> {
         return repeat([&reader, &c] () {
-            return reader().then([&c] (mutation_opt&& mo) {
+            return reader().then([&c] (mutation_opt&& mo) -> future<stop_iteration> {
                 if (!mo) {
-                    return stop_iteration::yes;
+                    return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
-                return c(std::move(*mo));
+                return futurator::apply(c, std::move(*mo));
             });
         });
     });
