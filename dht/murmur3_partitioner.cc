@@ -66,6 +66,10 @@ inline long long_token(const token& t) {
     return net::ntoh(*lp);
 }
 
+sstring murmur3_partitioner::to_sstring(const token& t) const {
+    return ::to_sstring(long_token(t));
+}
+
 bool murmur3_partitioner::is_equal(const token& t1, const token& t2) {
 
     auto l1 = long_token(t1);

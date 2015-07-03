@@ -24,6 +24,7 @@
 #pragma once
 
 #include "core/shared_ptr.hh"
+#include "core/sstring.hh"
 #include "types.hh"
 #include "keys.hh"
 #include <memory>
@@ -164,6 +165,12 @@ public:
      */
     virtual token get_token(const schema& s, partition_key_view key) = 0;
     virtual token get_token(const sstables::key_view& key) = 0;
+
+
+    /**
+     * @return a partitioner-specific string representation of this token
+     */
+    virtual sstring to_sstring(const dht::token& t) const = 0;
 
     /**
      * @return a randomly generated token
