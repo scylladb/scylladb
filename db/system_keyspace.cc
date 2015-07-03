@@ -393,6 +393,7 @@ static future<> setup_version() {
 }
 
 future<> check_health();
+future<> force_blocking_flush(sstring cfname);
 
 future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp) {
     auto new_ctx = std::make_unique<query_context>(db, qp);
@@ -682,12 +683,18 @@ future<> update_schema_version(utils::UUID version) {
         updateTokens(tokens);
         return tokens;
     }
+#endif
 
-    public static void forceBlockingFlush(String cfname)
-    {
-        if (!Boolean.getBoolean("cassandra.unsafesystem"))
-            FBUtilities.waitOnFuture(Keyspace.open(NAME).getColumnFamilyStore(cfname).forceFlush());
+future<> force_blocking_flush(sstring cfname) {
+    if (!qctx) {
+        return make_ready_future<>();
     }
+    // if (!Boolean.getBoolean("cassandra.unsafesystem"))
+    column_family& cf = qctx->db().find_column_family(NAME, cfname);
+    return cf.flush(&qctx->db());
+}
+
+#if 0
 
     /**
      * Return a map of stored tokens to IP addresses
