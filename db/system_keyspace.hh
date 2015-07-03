@@ -38,6 +38,10 @@ class storage_proxy;
 
 }
 
+namespace cql3 {
+class query_processor;
+}
+
 namespace db {
 namespace system_keyspace {
 
@@ -58,6 +62,8 @@ static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
 extern schema_ptr hints();
 extern schema_ptr batchlog();
 extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
+
+future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp);
 
 std::vector<schema_ptr> all_tables();
 void make(database& db, bool durable);
