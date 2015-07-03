@@ -116,18 +116,21 @@ private:
     using versioned_value = gms::versioned_value;
     using UUID = utils::UUID;
     using token = dht::token;
-    net::messaging_service& ms() {
-        return net::get_local_messaging_service();
-    }
     class handler {
     public:
         future<> stop() {
             return make_ready_future<>();
         }
     };
+    static net::messaging_service& ms() {
+        return net::get_local_messaging_service();
+    }
     static distributed<handler> _handlers;
-    void init_messaging_service_handler();
-    future<> init_streaming_service();
+    static void init_messaging_service_handler();
+    static distributed<database>* _db;
+    static database& get_local_db() { return _db->local(); }
+public:
+    static future<> init_streaming_service(distributed<database>& db);
 public:
     struct ss_table_streaming_sections {
         sstables::sstable& sstable;
