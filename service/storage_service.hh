@@ -172,7 +172,7 @@ public:
     }
 
     /** This method updates the local token on disk  */
-    void set_tokens(std::unordered_set<token> tokens);
+    future<> set_tokens(std::unordered_set<token> tokens);
 #if 0
 
     public void registerDaemon(CassandraDaemon daemon)
