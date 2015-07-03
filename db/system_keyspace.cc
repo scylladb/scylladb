@@ -861,13 +861,18 @@ future<> check_health() {
     {
         return getBootstrapState() == BootstrapState.IN_PROGRESS;
     }
+#endif
 
-    public static void setBootstrapState(BootstrapState state)
-    {
-        String req = "INSERT INTO system.%s (key, bootstrapped) VALUES ('%s', ?)";
-        executeInternal(String.format(req, LOCAL, LOCAL), state.name());
-        forceBlockingFlush(LOCAL);
-    }
+#if 0
+future<> set_bootstrap_state(bootstrap_state state) {
+    sstring req = "INSERT INTO system.%s (key, bootstrapped) VALUES ('%s', '%s')";
+    return execute_cql(req, LOCAL, LOCAL, state.name()).discard_result().then([] {
+        return force_blocking_flush(LOCAL);
+    });
+}
+#endif
+
+#if 0
 
     public static boolean isIndexBuilt(String keyspaceName, String indexName)
     {
