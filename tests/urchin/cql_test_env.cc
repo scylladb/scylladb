@@ -211,9 +211,12 @@ future<::shared_ptr<cql_test_env>> make_env_for_test() {
                 auto qp = ::make_shared<distributed<cql3::query_processor>>();
                 return proxy->start(std::ref(*db)).then([qp, db, proxy] {
                     return qp->start(std::ref(*proxy), std::ref(*db)).then([db, proxy, qp] {
-                        auto env = ::make_shared<in_memory_cql_env>(db, qp, proxy);
-                        return env->start().then([env] () -> ::shared_ptr<cql_test_env> {
-                            return env;
+                        auto& ss = service::get_local_storage_service();
+                        return ss.init_server().then([db, proxy, qp] {
+                            auto env = ::make_shared<in_memory_cql_env>(db, qp, proxy);
+                            return env->start().then([env] () -> ::shared_ptr<cql_test_env> {
+                                return env;
+                            });
                         });
                     });
                 });

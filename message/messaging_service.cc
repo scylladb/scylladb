@@ -48,8 +48,6 @@ future<> init_messaging_service(sstring listen_address, db::config::seed_provide
             return gms::get_gossiper().start().then([seeds] {
                 auto& gossiper = gms::get_local_gossiper();
                 gossiper.set_seeds(seeds);
-                auto& ss = service::get_local_storage_service();
-                return ss.init_server();
             });
         });
     });

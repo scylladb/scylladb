@@ -82,6 +82,9 @@ int main(int ac, char** av) {
                 return db.invoke_on_all([&proxy] (database& db) {
                     return db.init_from_data_directory(proxy);
                 });
+            }).then([] {
+                auto& ss = service::get_local_storage_service();
+                return ss.init_server();
             }).then([rpc_address] {
                 return dns::gethostbyname(rpc_address);
             }).then([&db, &proxy, &qp, cql_port, thrift_port] (dns::hostent e) {
