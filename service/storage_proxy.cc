@@ -1627,20 +1627,9 @@ storage_proxy::query_local(const sstring& ks_name, const sstring& cf_name, const
         query::partition_slice::option::send_partition_key,
         query::partition_slice::option::send_clustering_key>();
     query::partition_slice slice{row_ranges, static_cols, regular_cols, opts};
-    auto shard = db.shard_of(key._token);
-    return _db.invoke_on(shard, [id = schema->id(), key, slice] (database& db) {
-        std::vector<query::partition_range> pr;
-        pr.emplace_back(query::partition_range::make_singular(key));
-        auto cmd = make_lw_shared<query::read_command>(id, slice, std::numeric_limits<uint32_t>::max());
-        return do_with(std::move(pr), [&db, cmd] (auto& pr){
-            return db.query(*cmd, pr).then([] (lw_shared_ptr<query::result>&& result) {
-                return make_foreign(std::move(result));
-            }).finally([cmd] {
-                // keep cmd alive while db.query() executes above
-            });
-        });
-    }).then([this, schema, slice] (auto&& result) {
-        return make_lw_shared(query::result_set::from_raw_result(schema, slice, *result));
+    auto cmd = make_lw_shared<query::read_command>(schema->id(), std::move(slice), query::max_rows);
+    return query(cmd, {query::partition_range::make_singular(key)}, db::consistency_level::ONE).then([schema, cmd] (auto&& result) {
+        return make_lw_shared(query::result_set::from_raw_result(schema, cmd->slice, *result));
     });
 }
 
