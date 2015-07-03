@@ -612,12 +612,12 @@ load_dc_rack_info();
      * Read the host ID from the system keyspace, creating (and storing) one if
      * none exists.
      */
-    utils::UUID get_local_host_id();
+    future<utils::UUID> get_local_host_id();
 
     /**
      * Sets the local host ID explicitly.  Should only be called outside of SystemTable when replacing a node.
      */
-    utils::UUID set_local_host_id(const utils::UUID& host_id);
+    future<utils::UUID> set_local_host_id(const utils::UUID& host_id);
 
 #if 0
 

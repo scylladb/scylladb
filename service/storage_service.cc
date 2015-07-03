@@ -22,7 +22,6 @@ bool storage_service::should_bootstrap() {
 
 future<> storage_service::prepare_to_join() {
     if (!_joined) {
-        std::map<gms::application_state, gms::versioned_value> app_states;
 #if 0
         if (DatabaseDescriptor.isReplacing() && !(Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true"))))
             throw new ConfigurationException("Cannot set both join_ring=false and attempt to replace a node");
@@ -48,28 +47,31 @@ future<> storage_service::prepare_to_join() {
         // for bootstrap to get the load info it needs.
         // (we won't be part of the storage ring though until we add a counterId to our state, below.)
         // Seed the host ID-to-endpoint map with our own ID.
-        auto local_host_id = db::system_keyspace::get_local_host_id();
-        _token_metadata.update_host_id(local_host_id, get_broadcast_address());
-        // FIXME: DatabaseDescriptor.getBroadcastRpcAddress()
-        gms::inet_address broadcast_rpc_address;
-        app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
-        app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
-        app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
-        app_states.emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
-        //logger.info("Starting up server gossip");
+        return db::system_keyspace::get_local_host_id().then([this] (auto local_host_id) {
+            std::map<gms::application_state, gms::versioned_value> app_states;
 
-        auto& gossiper = gms::get_local_gossiper();
-        gossiper.register_(this);
-        using namespace std::chrono;
-        auto now = high_resolution_clock::now().time_since_epoch();
-        int generation_number = duration_cast<seconds>(now).count();
-        // FIXME: SystemKeyspace.incrementAndGetGeneration()
-        return gossiper.start(generation_number, app_states).then([this] {
-            print("Start gossiper service ...\n");
+            _token_metadata.update_host_id(local_host_id, this->get_broadcast_address());
+            // FIXME: DatabaseDescriptor.getBroadcastRpcAddress()
+            gms::inet_address broadcast_rpc_address;
+            app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
+            app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
+            app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
+            app_states.emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
+            //logger.info("Starting up server gossip");
+
+            auto& gossiper = gms::get_local_gossiper();
+            gossiper.register_(this);
+            using namespace std::chrono;
+            auto now = high_resolution_clock::now().time_since_epoch();
+            int generation_number = duration_cast<seconds>(now).count();
+            // FIXME: SystemKeyspace.incrementAndGetGeneration()
+            return gossiper.start(generation_number, app_states).then([this] {
+                print("Start gossiper service ...\n");
 #if SS_DEBUG
-            gms::get_local_gossiper().debug_show();
-            _token_metadata.debug_show();
+                gms::get_local_gossiper().debug_show();
+                _token_metadata.debug_show();
 #endif
+            });
         }).then([this] {
             // gossip snitch infos (local DC and rack)
             gossip_snitch_info();

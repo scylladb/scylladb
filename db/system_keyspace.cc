@@ -1064,7 +1064,7 @@ void make(database& db, bool durable) {
     }
 }
 
-utils::UUID get_local_host_id() {
+future<utils::UUID> get_local_host_id() {
 #if 0
     String req = "SELECT host_id FROM system.%s WHERE key='%s'";
     UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
@@ -1080,10 +1080,10 @@ utils::UUID get_local_host_id() {
     return set_local_host_id(host_id);
 }
 
-utils::UUID set_local_host_id(const utils::UUID& host_id) {
+future<utils::UUID> set_local_host_id(const utils::UUID& host_id) {
     // String req = "INSERT INTO system.%s (key, host_id) VALUES ('%s', ?)";
     // executeInternal(String.format(req, LOCAL, LOCAL), hostId);
-    return host_id;
+    return make_ready_future<utils::UUID>(host_id);
 }
 std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
 load_dc_rack_info()
