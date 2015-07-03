@@ -55,6 +55,45 @@ public:
             merge_column(resolver(id), i->second, std::move(cell));
         }
     }
+
+    // Expires cells based on query_time. Removes cells covered by tomb.
+    // Returns true iff there are any live cells left.
+    template <typename ColumnDefinitionResolver>
+    bool compact_and_expire(tombstone tomb, gc_clock::time_point query_time, ColumnDefinitionResolver&& resolver) {
+        bool any_live = false;
+        for (auto it = _cells.begin(); it != _cells.end(); ) {
+            auto& entry = *it;
+            bool erase = false;
+            const column_definition& def = resolver(entry.first);
+            if (def.is_atomic()) {
+                atomic_cell_view cell = entry.second.as_atomic_cell();
+                if (cell.is_covered_by(tomb)) {
+                    erase = true;
+                } else if (cell.has_expired(query_time)) {
+                    entry.second = atomic_cell::make_dead(cell.timestamp(), cell.deletion_time());
+                } else {
+                    any_live |= cell.is_live();
+                }
+            } else {
+                auto&& cell = entry.second.as_collection_mutation();
+                auto&& ctype = static_pointer_cast<const collection_type_impl>(def.type);
+                auto m_view = ctype->deserialize_mutation_form(cell);
+                collection_type_impl::mutation m = m_view.materialize();
+                any_live |= m.compact_and_expire(tomb, query_time);
+                if (m.cells.empty() && m.tomb <= tomb) {
+                    erase = true;
+                } else {
+                    entry.second = ctype->serialize_mutation_form(m);
+                }
+            }
+            if (erase) {
+                it = _cells.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        return any_live;
+    }
 };
 
 std::ostream& operator<<(std::ostream& os, const row::value_type& rv);
@@ -255,6 +294,27 @@ public:
     void apply_row_tombstone(const schema& schema, clustering_key_prefix prefix, tombstone t);
     void apply(const schema& schema, const mutation_partition& p);
     void apply(const schema& schema, mutation_partition_view);
+public:
+    // Performs the following:
+    //   - throws out data which doesn't belong to row_ranges
+    //   - expires cells based on query_time
+    //   - drops cells covered by higher-level tombstones (compaction)
+    //   - leaves at most row_limit live rows
+    //
+    // FIXME: Should also perform tombstone GC.
+    //
+    // Note: a partition with a static row which has any cell live but no
+    // clustered rows still counts as one row, according to the CQL row
+    // counting rules.
+    //
+    // Returns the count of CQL rows which remained. If the returned number is
+    // smaller than the row_limit it means that there was no more data
+    // satisfying the query left.
+    //
+    // The row_limit parameter must be > 0.
+    //
+    uint32_t compact_for_query(const schema& s, gc_clock::time_point query_time,
+        const std::vector<query::clustering_range>& row_ranges, uint32_t row_limit);
 public:
     deletable_row& clustered_row(const clustering_key& key);
     deletable_row& clustered_row(clustering_key&& key);

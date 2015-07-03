@@ -458,3 +458,62 @@ row::find_cell(column_id id) const {
     }
     return &i->second;
 }
+
+uint32_t
+mutation_partition::compact_for_query(
+    const schema& s,
+    gc_clock::time_point query_time,
+    const std::vector<query::clustering_range>& row_ranges,
+    uint32_t row_limit)
+{
+    assert(row_limit > 0);
+
+    // FIXME: drop GC'able tombstones
+
+    bool static_row_live = _static_row.compact_and_expire(
+        _tombstone, query_time, std::bind1st(std::mem_fn(&schema::static_column_at), &s));
+
+    uint32_t row_count = 0;
+
+    auto last = _rows.begin();
+    for (auto&& row_range : row_ranges) {
+        if (row_count == row_limit) {
+            break;
+        }
+
+        auto it_range = range(s, row_range);
+        last = _rows.erase_and_dispose(last, it_range.begin(), std::default_delete<rows_entry>());
+
+        while (last != it_range.end()) {
+            rows_entry& e = *last;
+            deletable_row& row = e.row();
+
+            // FIXME: row expiry
+            tombstone tomb = tombstone_for_row(s, e);
+
+            bool is_live = row.cells().compact_and_expire(
+                tomb, query_time, std::bind1st(std::mem_fn(&schema::regular_column_at), &s));
+
+            is_live |= row.created_at() > tomb.timestamp;
+
+            ++last;
+
+            if (is_live) {
+                ++row_count;
+                if (row_count == row_limit) {
+                    break;
+                }
+            }
+        }
+    }
+
+    if (row_count == 0 && static_row_live) {
+        ++row_count;
+    }
+
+    _rows.erase_and_dispose(last, _rows.end(), std::default_delete<rows_entry>());
+
+    // FIXME: purge unneeded prefix tombstones based on row_ranges
+
+    return row_count;
+}
