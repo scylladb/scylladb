@@ -127,3 +127,16 @@ mutation_partition_serializer::write(bytes_ostream& out) const {
     data_output data_out((char*)buf, _size);
     write_without_framing(data_out);
 }
+
+mutation_partition_view
+mutation_partition_serializer::read_as_view(data_input& in) {
+    auto size = in.read<size_type>();
+    return mutation_partition_view::from_bytes(in.read_view(size));
+}
+
+mutation_partition
+mutation_partition_serializer::read(data_input& in, schema_ptr s) {
+    mutation_partition p(s);
+    p.apply(*s, read_as_view(in));
+    return p;
+}

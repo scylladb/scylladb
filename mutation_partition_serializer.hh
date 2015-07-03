@@ -27,4 +27,7 @@ public:
     void write(data_output&) const;
     void write_without_framing(data_output&) const;
     void write(bytes_ostream&) const;
+public:
+    static mutation_partition_view read_as_view(data_input&);
+    static mutation_partition read(data_input&, schema_ptr);
 };
