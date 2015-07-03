@@ -150,6 +150,12 @@ public:
         seal_active_memtable(db);
         return _in_flight_seals.close();
     }
+
+    future<> flush(database* db) {
+        // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
+        // anything about previous writes.
+        return seal_active_memtable(db);
+    }
     // FIXME: this is just an example, should be changed to something more
     // general. compact_all_sstables() starts a compaction of all sstables.
     // It doesn't flush the current memtable first. It's just a ad-hoc method,
