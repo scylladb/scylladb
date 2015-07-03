@@ -115,6 +115,10 @@ public:
         _w.set(_count_ph, _row_count);
         _finished = true;
     }
+
+    const partition_slice& slice() const {
+        return _slice;
+    }
 };
 
 class result::builder {
@@ -136,6 +140,10 @@ public:
     result build() {
         return result(std::move(_w));
     };
+
+    const partition_slice& slice() const {
+        return _slice;
+    }
 };
 
 }

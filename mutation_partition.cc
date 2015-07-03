@@ -272,10 +272,11 @@ bool has_any_live_data(const row& cells, tombstone tomb, ColumnDefResolver&& id_
 void
 mutation_partition::query(query::result::partition_writer& pw,
     const schema& s,
-    const query::partition_slice& slice,
     gc_clock::time_point now,
     uint32_t limit) const
 {
+    const query::partition_slice& slice = pw.slice();
+
     auto regular_column_resolver = [&s] (column_id id) -> const column_definition& {
         return s.regular_column_at(id);
     };
