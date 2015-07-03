@@ -5,6 +5,7 @@
 #include "storage_service.hh"
 #include "core/distributed.hh"
 #include "locator/snitch_base.hh"
+#include "db/system_keyspace.hh"
 
 namespace service {
 
@@ -326,9 +327,8 @@ void storage_service::join_ring() {
 future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
     _is_bootstrap_mode = true;
     // DON'T use set_token, that makes us part of the ring locally which is incorrect until we are done bootstrapping
-    // SystemKeyspace.updateTokens(tokens); // DON'T use setToken, that makes us part of the ring locally which is incorrect until we are done bootstrapping
-    // FIXME: DatabaseDescriptor.isReplacing()
-    return make_ready_future<>().then([this, tokens = std::move(tokens)] {
+    auto f = db::system_keyspace::update_tokens(tokens);
+    return f.then([this, tokens = std::move(tokens)] {
         // FIXME: DatabaseDescriptor.isReplacing()
         auto is_replacing = false;
         auto sleep_time = std::chrono::milliseconds(1);
@@ -779,8 +779,8 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
 future<> storage_service::set_tokens(std::unordered_set<token> tokens) {
     // if (logger.isDebugEnabled())
     //     logger.debug("Setting tokens to {}", tokens);
-    // SystemKeyspace.updateTokens(tokens);
-    return make_ready_future<>().then([this, tokens = std::move(tokens)] {
+    auto f = db::system_keyspace::update_tokens(tokens);
+    return f.then([this, tokens = std::move(tokens)] {
         for (auto t : tokens) {
             _token_metadata.update_normal_token(t, get_broadcast_address());
         }
