@@ -1072,26 +1072,31 @@ void make(database& db, bool durable) {
 }
 
 future<utils::UUID> get_local_host_id() {
-#if 0
-    String req = "SELECT host_id FROM system.%s WHERE key='%s'";
-    UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
+    using namespace transport::messages;
+    sstring req = "SELECT host_id FROM system.%s WHERE key=?";
+    return execute_cql(req, LOCAL, sstring(LOCAL)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+        auto new_id = [] {
+            auto host_id = utils::make_random_uuid();
+            return make_ready_future<utils::UUID>(host_id);
+        };
+        if (msg->empty() || !msg->one().has("host_id")) {
+            return new_id();
+        }
 
-    // Look up the Host UUID (return it if found)
-    if (!result.isEmpty() && result.one().has("host_id"))
-        return result.one().getUUID("host_id");
-#endif
-
-    // ID not found, generate a new one, persist, and then return it.
-    auto host_id = utils::make_random_uuid();
-    //logger.warn("No host ID found, created {} (Note: This should happen exactly once per node).", hostId);
-    return set_local_host_id(host_id);
+        auto host_id = msg->one().get_as<utils::UUID>("host_id");
+        return make_ready_future<utils::UUID>(host_id);
+    });
 }
 
 future<utils::UUID> set_local_host_id(const utils::UUID& host_id) {
-    // String req = "INSERT INTO system.%s (key, host_id) VALUES ('%s', ?)";
-    // executeInternal(String.format(req, LOCAL, LOCAL), hostId);
-    return make_ready_future<utils::UUID>(host_id);
+    sstring req = "INSERT INTO system.%s (key, host_id) VALUES (?, ?)";
+    return execute_cql(req, LOCAL, sstring(LOCAL), host_id).then([] (auto msg) {
+        return force_blocking_flush(LOCAL);
+    }).then([host_id] {
+        return host_id;
+    });
 }
+
 std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
 load_dc_rack_info()
 {
