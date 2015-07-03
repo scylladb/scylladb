@@ -98,14 +98,20 @@ query_processor::process_statement(::shared_ptr<cql_statement> statement, servic
     statement->check_access(client_state);
     statement->validate(_proxy, client_state);
 
-    return statement->execute(_proxy, query_state, options)
-        .then([statement] (auto msg) {
-            if (msg) {
-                return make_ready_future<::shared_ptr<result_message>>(std::move(msg));
-            }
-            return make_ready_future<::shared_ptr<result_message>>(
-                ::make_shared<result_message::void_message>());
-        });
+    future<::shared_ptr<transport::messages::result_message>> fut = make_ready_future<::shared_ptr<transport::messages::result_message>>();
+    if (query_state.get_client_state()._is_internal) {
+        fut = statement->execute_internal(_proxy, query_state, options);
+    } else  {
+        fut = statement->execute(_proxy, query_state, options);
+    }
+
+    return fut.then([statement] (auto msg) {
+        if (msg) {
+            return make_ready_future<::shared_ptr<result_message>>(std::move(msg));
+        }
+        return make_ready_future<::shared_ptr<result_message>>(
+            ::make_shared<result_message::void_message>());
+    });
 }
 
 future<::shared_ptr<transport::messages::result_message::prepared>>
