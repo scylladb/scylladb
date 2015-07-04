@@ -24,7 +24,7 @@ private:
         service::client_state client_state;
 
         core_local_state()
-            : client_state(service::client_state::for_internal_calls()) {
+            : client_state(service::client_state::for_external_calls()) {
             client_state.set_keyspace(ks_name);
         }
 
