@@ -17,6 +17,7 @@
 #include "collectd.hh"
 #include "endpoint_snitch.hh"
 #include "compaction_manager.hh"
+#include "hinted_handoff.hh"
 namespace api {
 
 future<> set_server(http_context& ctx) {
@@ -63,6 +64,9 @@ future<> set_server(http_context& ctx) {
         rb->register_function(r, "compaction_manager",
                         "The Compaction manager API");
         set_compaction_manager(ctx, r);
+        rb->register_function(r, "hinted_handoff",
+                        "The hinted handoff API");
+        set_hinted_handoff(ctx, r);
     });
 }
 

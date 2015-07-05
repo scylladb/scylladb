@@ -342,6 +342,8 @@ api = ['api/api.cc',
        'api/endpoint_snitch.cc',
        'api/api-doc/compaction_manager.json',
        'api/compaction_manager.cc',
+       'api/api-doc/hinted_handoff.json',
+       'api/hinted_handoff.cc',
        ]
 
 boost_test_lib = [

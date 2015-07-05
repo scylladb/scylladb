@@ -1,0 +1,145 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/hinted_hand_off_manager",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/hinted_handoff/hints",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"List all the endpoints that this node has hints for.",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"list_endpoints_pending_hints",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Truncate all the hints",
+               "type":"void",
+               "nickname":"truncate_all_hints",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"host",
+                     "description":"Optional String rep. of endpoint address to delete hints for",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/hinted_handoff/schedule",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"force hint delivery to an endpoint",
+               "type":"void",
+               "nickname":"schedule_hint_delivery",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"host",
+                     "description":" String rep. of endpoint address",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/hinted_handoff/pause",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"pause hints delivery",
+               "type":"void",
+               "nickname":"pause_hints_delivery",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"pause",
+                     "description":"pause status",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+      "path": "/hinted_handoff/metrics/create_hint/{addr}",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get create hint count",
+          "type": "int",
+          "nickname": "get_create_hint_count",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": [
+            {
+              "name": "addr",
+              "description": "The peer address",
+              "required": true,
+              "allowMultiple": false,
+              "type": "string",
+              "paramType": "path"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "/hinted_handoff/metrics/not_stored_hints/{addr}",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get not stored hints count",
+          "type": "int",
+          "nickname": "get_not_stored_hints_count",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": [
+            {
+              "name": "addr",
+              "description": "The peer address",
+              "required": true,
+              "allowMultiple": false,
+              "type": "string",
+              "paramType": "path"
+            }
+          ]
+        }
+      ]
+    }
+   ]
+}
