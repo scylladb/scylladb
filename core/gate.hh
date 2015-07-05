@@ -83,6 +83,21 @@ public:
     }
 };
 
+/// Executes the function \c func making sure the gate \c g is properly entered
+/// and later on, properly left.
+///
+/// \param func function to be executed
+/// \param g the gate. Caller must make sure that it outlives this function.
+/// \returns whatever \c func returns
+///
+/// \relates gate
+template <typename Func>
+inline
+auto
+with_gate(gate& g, Func&& func) {
+    g.enter();
+    return func().finally([&g] { g.leave(); });
+}
 /// @}
 
 }
