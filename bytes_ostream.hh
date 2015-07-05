@@ -130,6 +130,10 @@ public:
         return place_holder<T>{alloc(sizeof(T))};
     }
 
+    value_type* write_place_holder(size_type size) {
+        return alloc(size);
+    }
+
     // Writes given sequence of bytes
     inline void write(bytes_view v) {
         if (v.empty()) {

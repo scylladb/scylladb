@@ -30,24 +30,25 @@ frozen_mutation::key(const schema& s) const {
     return partition_key_view_serializer::read(in);
 }
 
-static size_t
-serialized_size(const mutation& m) {
-    return uuid_serializer(m.schema()->id()).size()
-           + partition_key_view_serializer(m.key()).size()
-           + mutation_partition_serializer::size(*m.schema(), m.partition());
-}
-
 frozen_mutation::frozen_mutation(bytes&& b)
     : _bytes(std::move(b))
 { }
 
-frozen_mutation::frozen_mutation(const mutation& m)
-    : _bytes(bytes::initialized_later(), serialized_size(m))
-{
-    data_output out(_bytes);
-    uuid_serializer::write(out, m.schema()->id());
-    partition_key_view_serializer::write(out, m.key());
-    mutation_partition_serializer::write(out, *m.schema(), m.partition());
+frozen_mutation::frozen_mutation(const mutation& m) {
+    auto&& id = m.schema()->id();
+    partition_key_view key_view = m.key();
+
+    uuid_serializer id_ser(id);
+    partition_key_view_serializer key_ser(key_view);
+    mutation_partition_serializer part_ser(*m.schema(), m.partition());
+
+    bytes buf(bytes::initialized_later(), id_ser.size() + key_ser.size() + part_ser.size_without_framing());
+    data_output out(buf);
+    id_ser.write(out);
+    key_ser.write(out);
+    part_ser.write_without_framing(out);
+
+    _bytes = std::move(buf);
 }
 
 mutation

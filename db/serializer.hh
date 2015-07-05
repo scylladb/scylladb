@@ -7,6 +7,7 @@
 
 #include "utils/data_input.hh"
 #include "utils/data_output.hh"
+#include "bytes_ostream.hh"
 #include "bytes.hh"
 #include "mutation.hh"
 #include "keys.hh"
@@ -46,6 +47,16 @@ public:
 
     size_t size() const {
         return _size;
+    }
+
+    void write(bytes_ostream& out) const {
+        auto buf = out.write_place_holder(_size);
+        data_output data_out((char*)buf, _size);
+        write(data_out, _item);
+    }
+
+    void write(data_output& out) const {
+        write(out, _item);
     }
 private:
     const T& _item;

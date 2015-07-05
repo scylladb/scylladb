@@ -29,6 +29,9 @@
 
 using namespace db;
 
+mutation_partition_serializer::mutation_partition_serializer(const schema& schema, const mutation_partition& p)
+    : _schema(schema), _p(p), _size(size(schema, p))
+{ }
 
 size_t
 mutation_partition_serializer::size(const schema& schema, const mutation_partition& p) {
@@ -70,38 +73,44 @@ mutation_partition_serializer::size(const schema& schema, const mutation_partiti
 }
 
 void
-mutation_partition_serializer::write(data_output& out, const schema& schema, const mutation_partition& p) {
-    tombstone_serializer::write(out, p.partition_tombstone());
+mutation_partition_serializer::write(data_output& out) const {
+    out.write<size_type>(_size);
+    write_without_framing(out);
+}
+
+void
+mutation_partition_serializer::write_without_framing(data_output& out) const {
+    tombstone_serializer::write(out, _p.partition_tombstone());
 
     // static row
-    auto n_static_columns = p.static_row().size();
+    auto n_static_columns = _p.static_row().size();
     assert(n_static_columns == (count_type)n_static_columns);
     out.write<count_type>(n_static_columns);
 
-    for (auto&& e : p.static_row()) {
+    for (auto&& e : _p.static_row()) {
         out.write(e.first);
         bytes_view_serializer::write(out, e.second.serialize());
     }
 
     // row tombstones
-    auto n_tombstones = p.row_tombstones().size();
+    auto n_tombstones = _p.row_tombstones().size();
     assert(n_tombstones == (count_type)n_tombstones);
     out.write<count_type>(n_tombstones);
 
-    for (const row_tombstones_entry& e : p.row_tombstones()) {
+    for (const row_tombstones_entry& e : _p.row_tombstones()) {
         clustering_key_prefix_view_serializer::write(out, e.prefix());
         tombstone_serializer::write(out, e.t());
     }
 
     // rows
-    for (const rows_entry& e : p.clustered_rows()) {
+    for (const rows_entry& e : _p.clustered_rows()) {
         clustering_key_view_serializer::write(out, e.key());
         out.write(e.row().created_at());
         tombstone_serializer::write(out, e.row().deleted_at());
         out.write<count_type>(e.row().cells().size());
         for (auto&& cell_entry : e.row().cells()) {
             out.write(cell_entry.first);
-            const column_definition& def = schema.regular_column_at(cell_entry.first);
+            const column_definition& def = _schema.regular_column_at(cell_entry.first);
             if (def.is_atomic()) {
                 atomic_cell_view_serializer::write(out, cell_entry.second.as_atomic_cell());
             } else {
@@ -109,4 +118,25 @@ mutation_partition_serializer::write(data_output& out, const schema& schema, con
             }
         }
     }
+}
+
+void
+mutation_partition_serializer::write(bytes_ostream& out) const {
+    out.write<size_type>(_size);
+    auto buf = out.write_place_holder(_size);
+    data_output data_out((char*)buf, _size);
+    write_without_framing(data_out);
+}
+
+mutation_partition_view
+mutation_partition_serializer::read_as_view(data_input& in) {
+    auto size = in.read<size_type>();
+    return mutation_partition_view::from_bytes(in.read_view(size));
+}
+
+mutation_partition
+mutation_partition_serializer::read(data_input& in, schema_ptr s) {
+    mutation_partition p(s);
+    p.apply(*s, read_as_view(in));
+    return p;
 }
