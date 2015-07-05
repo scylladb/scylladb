@@ -338,6 +338,7 @@ api = ['api/api.cc',
        'api/cache_service.cc',
        'api/api-doc/collectd.json',
        'api/collectd.cc',
+       'api/api-doc/hinted_handoff.json',
        ]
 
 boost_test_lib = [
