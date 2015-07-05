@@ -108,6 +108,96 @@ void set_cache_service(http_context& ctx, routes& r) {
         // TBD
         return make_ready_future<json::json_return_type>("");
     });
+
+    cs::get_key_capacity.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_key_hits.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_key_requests.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_key_hit_rate.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_key_size.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_key_entries.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_row_capacity.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_row_hits.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_row_requests.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_row_hit_rate.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_row_size.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_row_entries.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_counter_capacity.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_counter_hits.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_counter_requests.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_counter_hit_rate.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_counter_size.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    cs::get_counter_entries.set(r, [] (std::unique_ptr<request> req) {
+        // TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
 }
 
 }
