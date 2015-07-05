@@ -34,6 +34,18 @@ void set_hinted_handoff(http_context& ctx, routes& r) {
         sstring pause = req->get_query_param("pause");
         return make_ready_future<json::json_return_type>("");
     });
+
+    hh::get_create_hint_count.set(r, [] (std::unique_ptr<request> req) {
+        //TBD
+        sstring host = req->get_query_param("host");
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    hh::get_not_stored_hints_count.set(r, [] (std::unique_ptr<request> req) {
+        //TBD
+        sstring host = req->get_query_param("host");
+        return make_ready_future<json::json_return_type>(0);
+    });
 }
 
 }
