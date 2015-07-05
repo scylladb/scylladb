@@ -227,22 +227,29 @@ inline size_t count_local_endpoints(Range& live_endpoints) {
     return std::count_if(live_endpoints.begin(), live_endpoints.end(), is_local);
 }
 
-inline
-std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address> live_endpoints, read_repair_decision read_repair) {
+inline std::vector<gms::inet_address>
+filter_for_query(consistency_level cl,
+                 keyspace& ks,
+                 std::vector<gms::inet_address> live_endpoints,
+                 read_repair_decision read_repair) {
     /*
-     * Endpoints are expected to be restricted to live replicas, sorted by snitch preference.
-     * For LOCAL_QUORUM, move local-DC replicas in front first as we need them there whether
-     * we do read repair (since the first replica gets the data read) or not (since we'll take
-     * the blockFor first ones).
+     * Endpoints are expected to be restricted to live replicas, sorted by
+     * snitch preference. For LOCAL_QUORUM, move local-DC replicas in front
+     * first as we need them there whether we do read repair (since the first
+     * replica gets the data read) or not (since we'll take the block_for first
+     * ones).
      */
     if (is_datacenter_local(cl)) {
         boost::range::sort(live_endpoints, [] (gms::inet_address&, gms::inet_address&) { return 0; }/*, DatabaseDescriptor.getLocalComparator()*/);
     }
 
-    switch (read_repair)
-    {
+    switch (read_repair) {
     case read_repair_decision::NONE:
-        live_endpoints.erase(live_endpoints.begin() + std::min(live_endpoints.size(), block_for(ks, cl)), live_endpoints.end());
+    {
+        size_t start_pos = std::min(live_endpoints.size(), block_for(ks, cl));
+
+        live_endpoints.erase(live_endpoints.begin() + start_pos, live_endpoints.end());
+    }
         // fall through
     case read_repair_decision::GLOBAL:
         return std::move(live_endpoints);
