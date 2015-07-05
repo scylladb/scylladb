@@ -92,6 +92,54 @@
                ]
             }
          ]
-      }
+      },
+      {
+      "path": "/hinted_handoff/metrics/create_hint/{addr}",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get create hint count",
+          "type": "int",
+          "nickname": "get_create_hint_count",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": [
+            {
+              "name": "addr",
+              "description": "The peer address",
+              "required": true,
+              "allowMultiple": false,
+              "type": "string",
+              "paramType": "path"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "/hinted_handoff/metrics/not_stored_hints/{addr}",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get not stored hints count",
+          "type": "int",
+          "nickname": "get_not_stored_hints_count",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": [
+            {
+              "name": "addr",
+              "description": "The peer address",
+              "required": true,
+              "allowMultiple": false,
+              "type": "string",
+              "paramType": "path"
+            }
+          ]
+        }
+      ]
+    }
    ]
 }
