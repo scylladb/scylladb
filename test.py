@@ -140,6 +140,8 @@ if __name__ == "__main__":
                 print_status('FAILED: %s\n' % (path))
                 if proc.returncode == -1:
                     print_status('TIMED OUT\n')
+                else:
+                    print_status('  with error code {code}\n'.format(code=proc.returncode))
                 print('=== stdout START ===')
                 with open('tmp.out') as outf:
                    for line in outf:
