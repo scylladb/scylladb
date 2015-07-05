@@ -271,7 +271,7 @@ public:
         _address = ipv4_addr(fd.get_address());
         _fd = std::make_unique<pollable_fd>(std::move(fd));
     }
-    virtual ~posix_udp_channel() {};
+    virtual ~posix_udp_channel() { if (!_closed) close(); };
     virtual future<udp_datagram> receive() override;
     virtual future<> send(ipv4_addr dst, const char *msg);
     virtual future<> send(ipv4_addr dst, packet p);

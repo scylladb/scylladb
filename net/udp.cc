@@ -80,6 +80,12 @@ public:
     {
     }
 
+    ~native_channel()
+    {
+        if (!_closed)
+            close();
+    }
+
     virtual future<udp_datagram> receive() override {
         return _state->_queue.pop_eventually();
     }
