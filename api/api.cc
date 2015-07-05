@@ -15,6 +15,7 @@
 #include "storage_proxy.hh"
 #include "cache_service.hh"
 #include "collectd.hh"
+#include "endpoint_snitch.hh"
 #include "compaction_manager.hh"
 namespace api {
 
@@ -56,6 +57,9 @@ future<> set_server(http_context& ctx) {
         rb->register_function(r, "collectd",
                 "The collectd API");
         set_collectd(ctx, r);
+        rb->register_function(r, "endpoint_snitch_info",
+                        "The endpoint snitch info API");
+        set_endpoint_snitch(ctx, r);
         rb->register_function(r, "compaction_manager",
                         "The Compaction manager API");
         set_compaction_manager(ctx, r);
