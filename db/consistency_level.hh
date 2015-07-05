@@ -24,7 +24,7 @@
 
 #pragma once
 
-#include <boost/range/algorithm/sort.hpp>
+#include <boost/range/algorithm/partition.hpp>
 #include "exceptions/exceptions.hh"
 #include "core/sstring.hh"
 #include "schema.hh"
@@ -227,43 +227,62 @@ inline size_t count_local_endpoints(Range& live_endpoints) {
     return std::count_if(live_endpoints.begin(), live_endpoints.end(), is_local);
 }
 
-inline
-std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address> live_endpoints, read_repair_decision read_repair) {
-    /*
-     * Endpoints are expected to be restricted to live replicas, sorted by snitch preference.
-     * For LOCAL_QUORUM, move local-DC replicas in front first as we need them there whether
-     * we do read repair (since the first replica gets the data read) or not (since we'll take
-     * the blockFor first ones).
-     */
-    if (is_datacenter_local(cl)) {
-        boost::range::sort(live_endpoints, [] (gms::inet_address&, gms::inet_address&) { return 0; }/*, DatabaseDescriptor.getLocalComparator()*/);
+inline std::vector<gms::inet_address>
+filter_for_query_dc_local(consistency_level cl,
+                          keyspace& ks,
+                          const std::vector<gms::inet_address>& live_endpoints) {
+    using namespace gms;
+
+    std::vector<inet_address> local;
+    std::vector<inet_address> other;
+    local.reserve(live_endpoints.size());
+    other.reserve(live_endpoints.size());
+
+    std::partition_copy(live_endpoints.begin(), live_endpoints.end(),
+                        std::back_inserter(local), std::back_inserter(other),
+                        is_local);
+
+    // check if blockfor more than we have localep's
+    size_t bf = block_for(ks, cl);
+    if (local.size() < bf) {
+        size_t other_items_count = std::min(bf - local.size(), other.size());
+        local.reserve(local.size() + other_items_count);
+
+        std::move(other.begin(), other.begin() + other_items_count,
+                  std::back_inserter(local));
     }
 
-    switch (read_repair)
-    {
+    return local;
+}
+
+inline std::vector<gms::inet_address>
+filter_for_query(consistency_level cl,
+                 keyspace& ks,
+                 std::vector<gms::inet_address> live_endpoints,
+                 read_repair_decision read_repair) {
+    /*
+     * Endpoints are expected to be restricted to live replicas, sorted by
+     * snitch preference. For LOCAL_QUORUM, move local-DC replicas in front
+     * first as we need them there whether we do read repair (since the first
+     * replica gets the data read) or not (since we'll take the block_for first
+     * ones).
+     */
+    if (is_datacenter_local(cl)) {
+        boost::range::partition(live_endpoints, is_local);
+    }
+
+    switch (read_repair) {
     case read_repair_decision::NONE:
-        live_endpoints.erase(live_endpoints.begin() + std::min(live_endpoints.size(), block_for(ks, cl)), live_endpoints.end());
+    {
+        size_t start_pos = std::min(live_endpoints.size(), block_for(ks, cl));
+
+        live_endpoints.erase(live_endpoints.begin() + start_pos, live_endpoints.end());
+    }
         // fall through
     case read_repair_decision::GLOBAL:
         return std::move(live_endpoints);
     case read_repair_decision::DC_LOCAL:
-        throw std::runtime_error("DC local read repair is not implemented yet");
-#if 0
-        List<InetAddress> local = new ArrayList<InetAddress>();
-        List<InetAddress> other = new ArrayList<InetAddress>();
-        for (InetAddress add : liveEndpoints)
-        {
-            if (isLocal(add))
-                local.add(add);
-            else
-                other.add(add);
-        }
-        // check if blockfor more than we have localep's
-        int blockFor = blockFor(keyspace);
-        if (local.size() < blockFor)
-            local.addAll(other.subList(0, Math.min(blockFor - local.size(), other.size())));
-        return local;
-#endif
+        return filter_for_query_dc_local(cl, ks, live_endpoints);
     default:
         throw std::runtime_error("Unknown read repair type");
     }
@@ -273,36 +292,6 @@ inline
 std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& ks, std::vector<gms::inet_address>& live_endpoints) {
     return filter_for_query(cl, ks, live_endpoints, read_repair_decision::NONE);
 }
-
-
-#if 0
-    public boolean isSufficientLiveNodes(Keyspace keyspace, Iterable<InetAddress> liveEndpoints)
-    {
-        switch (this)
-        {
-            case ANY:
-                // local hint is acceptable, and local node is always live
-                return true;
-            case LOCAL_ONE:
-                return countLocalEndpoints(liveEndpoints) >= 1;
-            case LOCAL_QUORUM:
-                return countLocalEndpoints(liveEndpoints) >= blockFor(keyspace);
-            case EACH_QUORUM:
-                if (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
-                {
-                    for (Map.Entry<String, Integer> entry : countPerDCEndpoints(keyspace, liveEndpoints).entrySet())
-                    {
-                        if (entry.getValue() < localQuorumFor(keyspace, entry.getKey()))
-                            return false;
-                    }
-                    return true;
-                }
-                // Fallthough on purpose for SimpleStrategy
-            default:
-                return Iterables.size(liveEndpoints) >= blockFor(keyspace);
-        }
-    }
-#endif
 
 template <typename Range>
 inline std::unordered_map<sstring, size_t> count_per_dc_endpoints(
@@ -331,6 +320,40 @@ inline std::unordered_map<sstring, size_t> count_per_dc_endpoints(
     }
 
     return dc_endpoints;
+}
+
+inline bool
+is_sufficient_live_nodes(consistency_level cl,
+                         keyspace& ks,
+                         const std::vector<gms::inet_address>& live_endpoints) {
+    using namespace locator;
+
+    switch (cl) {
+    case consistency_level::ANY:
+        // local hint is acceptable, and local node is always live
+        return true;
+    case consistency_level::LOCAL_ONE:
+        return count_local_endpoints(live_endpoints) >= 1;
+    case consistency_level::LOCAL_QUORUM:
+        return count_local_endpoints(live_endpoints) >= block_for(ks, cl);
+    case consistency_level::EACH_QUORUM:
+    {
+        auto& rs = ks.get_replication_strategy();
+
+        if (rs.get_type() == replication_strategy_type::network_topology) {
+            for (auto& entry : count_per_dc_endpoints(ks, live_endpoints)) {
+                if (entry.second < local_quorum_for(ks, entry.first)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+        // Fallthough on purpose for SimpleStrategy
+    default:
+        return live_endpoints.size() >= block_for(ks, cl);
+    }
 }
 
 template<typename Range>
