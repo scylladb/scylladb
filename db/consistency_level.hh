@@ -293,36 +293,6 @@ std::vector<gms::inet_address> filter_for_query(consistency_level cl, keyspace& 
     return filter_for_query(cl, ks, live_endpoints, read_repair_decision::NONE);
 }
 
-
-#if 0
-    public boolean isSufficientLiveNodes(Keyspace keyspace, Iterable<InetAddress> liveEndpoints)
-    {
-        switch (this)
-        {
-            case ANY:
-                // local hint is acceptable, and local node is always live
-                return true;
-            case LOCAL_ONE:
-                return countLocalEndpoints(liveEndpoints) >= 1;
-            case LOCAL_QUORUM:
-                return countLocalEndpoints(liveEndpoints) >= blockFor(keyspace);
-            case EACH_QUORUM:
-                if (keyspace.getReplicationStrategy() instanceof NetworkTopologyStrategy)
-                {
-                    for (Map.Entry<String, Integer> entry : countPerDCEndpoints(keyspace, liveEndpoints).entrySet())
-                    {
-                        if (entry.getValue() < localQuorumFor(keyspace, entry.getKey()))
-                            return false;
-                    }
-                    return true;
-                }
-                // Fallthough on purpose for SimpleStrategy
-            default:
-                return Iterables.size(liveEndpoints) >= blockFor(keyspace);
-        }
-    }
-#endif
-
 template <typename Range>
 inline std::unordered_map<sstring, size_t> count_per_dc_endpoints(
         keyspace& ks,
@@ -350,6 +320,40 @@ inline std::unordered_map<sstring, size_t> count_per_dc_endpoints(
     }
 
     return dc_endpoints;
+}
+
+inline bool
+is_sufficient_live_nodes(consistency_level cl,
+                         keyspace& ks,
+                         const std::vector<gms::inet_address>& live_endpoints) {
+    using namespace locator;
+
+    switch (cl) {
+    case consistency_level::ANY:
+        // local hint is acceptable, and local node is always live
+        return true;
+    case consistency_level::LOCAL_ONE:
+        return count_local_endpoints(live_endpoints) >= 1;
+    case consistency_level::LOCAL_QUORUM:
+        return count_local_endpoints(live_endpoints) >= block_for(ks, cl);
+    case consistency_level::EACH_QUORUM:
+    {
+        auto& rs = ks.get_replication_strategy();
+
+        if (rs.get_type() == replication_strategy_type::network_topology) {
+            for (auto& entry : count_per_dc_endpoints(ks, live_endpoints)) {
+                if (entry.second < local_quorum_for(ks, entry.first)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+        // Fallthough on purpose for SimpleStrategy
+    default:
+        return live_endpoints.size() >= block_for(ks, cl);
+    }
 }
 
 template<typename Range>
