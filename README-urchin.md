@@ -4,6 +4,13 @@
 
 In addition to required packages by Seastar, the following packages are required by Urchin.
 
+### Submodules
+Urchin uses submodules, so make sure you pull the submodules first by doing:
+```
+git submodule init
+git submodule update
+```
+
 ### Building urchin on Fedora
 Installing required packages:
 
