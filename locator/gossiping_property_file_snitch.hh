@@ -127,6 +127,10 @@ private:
      */
     void set_stopped();
 
+    virtual sstring get_name() const {
+        return "org.apache.cassandra.locator.GossipingPropertyFileSnitch";
+    }
+
 private:
     sstring _fname;
     timer<> _file_reader;

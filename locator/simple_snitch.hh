@@ -76,6 +76,10 @@ struct simple_snitch : public snitch_base {
         _state = snitch_state::stopped;
         return make_ready_future<>();
     }
+
+    virtual sstring get_name() const {
+        return "org.apache.cassandra.locator.SimpleSnitch";
+    }
 };
 
 }

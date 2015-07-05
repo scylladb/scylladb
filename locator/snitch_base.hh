@@ -114,6 +114,8 @@ struct i_endpoint_snitch {
         _snitch_is_ready.set_value();
     }
 
+    virtual sstring get_name() const = 0;
+
 protected:
     static unsigned& io_cpu_id() {
         static unsigned id = 0;
