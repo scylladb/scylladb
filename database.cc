@@ -454,44 +454,43 @@ column_family::seal_active_memtable(database* db) {
         return make_ready_future<>();
     }
 
-    sstables::sstable newtab = sstables::sstable(_config.datadir, gen,
-        sstables::sstable::version_types::la,
-        sstables::sstable::format_types::big);
+    return seastar::with_gate(_in_flight_seals, [gen, old, name, this, db] {
+        sstables::sstable newtab = sstables::sstable(_config.datadir, gen,
+            sstables::sstable::version_types::la,
+            sstables::sstable::format_types::big);
 
-    _in_flight_seals.enter();
-    return do_with(std::move(newtab), [old, name, this, db] (sstables::sstable& newtab) {
-        // FIXME: write all components
-        return newtab.write_components(*old).then([name, this, &newtab, old] {
-            return newtab.load();
-        }).then([this, old] {
-            return update_cache(*old);
-        }).then_wrapped([name, this, &newtab, old, db] (future<> ret) {
-            try {
-                ret.get();
-                add_sstable(std::move(newtab));
+        return do_with(std::move(newtab), [old, name, this, db] (sstables::sstable& newtab) {
+            // FIXME: write all components
+            return newtab.write_components(*old).then([name, this, &newtab, old] {
+                return newtab.load();
+            }).then([this, old] {
+                return update_cache(*old);
+            }).then_wrapped([name, this, &newtab, old, db] (future<> ret) {
+                try {
+                    ret.get();
+                    add_sstable(std::move(newtab));
 
-                // FIXME: until the surrounding function returns a future and
-                // caller ensures ordering (i.e. finish flushing one or more sequential tables before
-                // doing the discard), this below is _not_ correct, since the use of replay_position
-                // depends on us reporting the factual highest position we've actually flushed,
-                // _and_ all positions (for a given UUID) below having been dealt with.
-                //
-                // Note that the whole scheme is also dependent on memtables being "allocated" in order,
-                // i.e. we may not flush a younger memtable before and older, and we need to use the
-                // highest rp.
-                auto cl = db ? db->commitlog() : nullptr;
-                if (cl != nullptr) {
-                    cl->discard_completed_segments(_schema->id(), old->replay_position());
+                    // FIXME: until the surrounding function returns a future and
+                    // caller ensures ordering (i.e. finish flushing one or more sequential tables before
+                    // doing the discard), this below is _not_ correct, since the use of replay_position
+                    // depends on us reporting the factual highest position we've actually flushed,
+                    // _and_ all positions (for a given UUID) below having been dealt with.
+                    //
+                    // Note that the whole scheme is also dependent on memtables being "allocated" in order,
+                    // i.e. we may not flush a younger memtable before and older, and we need to use the
+                    // highest rp.
+                    auto cl = db ? db->commitlog() : nullptr;
+                    if (cl != nullptr) {
+                        cl->discard_completed_segments(_schema->id(), old->replay_position());
+                    }
+                    _memtables->erase(boost::range::find(*_memtables, old));
+                } catch (std::exception& e) {
+                    dblog.error("failed to write sstable: {}", e.what());
+                } catch (...) {
+                    dblog.error("failed to write sstable: unknown error");
                 }
-                _memtables->erase(boost::range::find(*_memtables, old));
-            } catch (std::exception& e) {
-                dblog.error("failed to write sstable: {}", e.what());
-            } catch (...) {
-                dblog.error("failed to write sstable: unknown error");
-            }
+            });
         });
-    }).finally([this] {
-        _in_flight_seals.leave();
     });
     // FIXME: release commit log
     // FIXME: provide back-pressure to upper layers
