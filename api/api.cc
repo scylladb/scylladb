@@ -15,6 +15,7 @@
 #include "storage_proxy.hh"
 #include "cache_service.hh"
 #include "collectd.hh"
+#include "hinted_handoff.hh"
 namespace api {
 
 future<> set_server(http_context& ctx) {
@@ -55,6 +56,9 @@ future<> set_server(http_context& ctx) {
         rb->register_function(r, "collectd",
                 "The collectd API");
         set_collectd(ctx, r);
+        rb->register_function(r, "hinted_handoff",
+                        "The hinted handoff API");
+        set_hinted_handoff(ctx, r);
     });
 }
 
