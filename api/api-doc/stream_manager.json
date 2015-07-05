@@ -25,6 +25,102 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/stream_manager/metrics/outbound",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get number of active outbound streams",
+               "type":"int",
+               "nickname":"get_all_active_streams_outbound",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/stream_manager/metrics/incoming/{peer}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get total incoming bytes",
+               "type":"int",
+               "nickname":"get_total_incoming_bytes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"peer",
+                     "description":"The stream peer",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/stream_manager/metrics/incoming",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all total incoming bytes",
+               "type":"int",
+               "nickname":"get_all_total_incoming_bytes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/stream_manager/metrics/outgoing/{peer}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get total outgoing bytes",
+               "type":"int",
+               "nickname":"get_total_outgoing_bytes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"peer",
+                     "description":"The stream peer",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/stream_manager/metrics/outgoing",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all total outgoing bytes",
+               "type":"int",
+               "nickname":"get_all_total_outgoing_bytes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
       }
    ],
    "models":{
