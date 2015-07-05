@@ -1,0 +1,186 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/compaction_manager",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/compaction_manager/compactions",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get List of running compactions",
+               "type":"array",
+               "items":{
+                  "type":"jsonmap"
+               },
+               "nickname":"get_compactions",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/compaction_manager/compaction_summary",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get compaction summary",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_compaction_summary",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/compaction_manager/force_user_defined_compaction",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Triggers the compaction of user specified sstables. You can specify files from various keyspaces and columnfamilies. If you do so, user defined compaction is performed several times to the groups of files in the same keyspace/columnfamily. must contain keyspace and columnfamily name in path(for 2.1+) or file name itself.",
+               "type":"void",
+               "nickname":"force_user_defined_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"data_files",
+                     "description":"a comma separated list of sstable file to compact. must contain keyspace and columnfamily name in path(for 2.1+) or file name itself",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/compaction_manager/stop_compaction",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Stop all running compaction-like tasks having the provided type",
+               "type":"void",
+               "nickname":"stop_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"type",
+                     "description":"the type of compaction to stop. Can be one of: - COMPACTION - VALIDATION - CLEANUP - SCRUB - INDEX_BUILD",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"string"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+      "path": "/compaction_manager/metrics/pending_tasks",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get pending tasks",
+          "type": "int",
+          "nickname": "get_pending_tasks",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/compaction_manager/metrics/completed_tasks",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get completed tasks",
+          "type": "long",
+          "nickname": "get_completed_tasks",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/compaction_manager/metrics/total_compactions_completed",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get total compactions completed",
+          "type": "long",
+          "nickname": "get_total_compactions_completed",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/compaction_manager/metrics/bytes_compacted",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get bytes compacted",
+          "type": "int",
+          "nickname": "get_bytes_compacted",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    }
+   ],
+   "models":{
+      "mapper":{
+         "id":"mapper",
+         "description":"A key value mapping",
+         "properties":{
+            "key":{
+               "type":"string",
+               "description":"The key"
+            },
+            "value":{
+               "type":"string",
+               "description":"The value"
+            }
+         }
+      },
+      "jsonmap":{
+         "id":"jsonmap",
+         "description":"A json representation of a map as a list of key value",
+         "properties":{
+            "value":{
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "description":"A list of key, value mapping"
+            }
+         }
+      }
+   }
+}
