@@ -30,6 +30,21 @@ void set_commitlog(http_context& ctx, routes& r) {
         std::vector<sstring> res;
         return res;
     });
+
+    httpd::commitlog_json::get_completed_tasks.set(r, [](std::unique_ptr<request> req) {
+        //TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    httpd::commitlog_json::get_pending_tasks.set(r, [](std::unique_ptr<request> req) {
+        //TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
+
+    httpd::commitlog_json::get_total_commit_log_size.set(r, [](std::unique_ptr<request> req) {
+        //TBD
+        return make_ready_future<json::json_return_type>(0);
+    });
 }
 
 }
