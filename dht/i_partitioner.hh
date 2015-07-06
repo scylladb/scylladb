@@ -193,7 +193,7 @@ public:
     /**
      * @return name of partitioner.
      */
-    virtual const bytes name() = 0;
+    virtual const sstring name() = 0;
 protected:
     /**
      * @return true if t1's _data array is equal t2's. _kind comparison should be done separately.
