@@ -18,8 +18,7 @@ void set_endpoint_snitch(http_context& ctx, routes& r) {
     });
 
     httpd::endpoint_snitch_info_json::get_snitch_name.set(r, [] (const_req req) {
-        //TBD
-        return "";
+        return locator::i_endpoint_snitch::get_local_snitch_ptr()->get_name();
     });
 }
 
