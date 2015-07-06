@@ -13,10 +13,12 @@ namespace locator {
 local_strategy::local_strategy(const sstring& keyspace_name, token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring, sstring>& config_options) :
         abstract_replication_strategy(keyspace_name, token_metadata, snitch, config_options, replication_strategy_type::local) {}
 
+std::vector<inet_address> local_strategy::get_natural_endpoints(const token& t) {
+    return calculate_natural_endpoints(t);
+}
+
 std::vector<inet_address> local_strategy::calculate_natural_endpoints(const token& t) {
-    std::vector<inet_address> endpoints;
-    endpoints.push_back(utils::fb_utilities::get_broadcast_address());
-    return endpoints;
+    return std::vector<inet_address>({utils::fb_utilities::get_broadcast_address()});
 }
 
 size_t local_strategy::get_replication_factor() const {

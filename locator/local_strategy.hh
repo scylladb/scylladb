@@ -21,6 +21,12 @@ public:
     local_strategy(const sstring& keyspace_name, token_metadata& token_metadata, snitch_ptr& snitch, const std::map<sstring, sstring>& config_options);
     virtual ~local_strategy() {};
     virtual size_t get_replication_factor() const;
+    /**
+     * We need to override this even if we override calculateNaturalEndpoints,
+     * because the default implementation depends on token calculations but
+     * LocalStrategy may be used before tokens are set up.
+     */
+    std::vector<inet_address> get_natural_endpoints(const token& search_token) override;
 };
 
 }
