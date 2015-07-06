@@ -22,6 +22,8 @@
  * Modified by Cloudius Systems
  */
 
+#pragma once
+
 #include "core/shared_ptr.hh"
 #include "cql3/column_identifier.hh"
 #include "db/index/secondary_index.hh"
