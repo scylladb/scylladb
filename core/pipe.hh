@@ -44,7 +44,16 @@
 /// produces data that a second fiber consumes, and we wish to ensure that
 /// both fibers get a chance to run, and that if one stops prematurely,
 /// the other doesn't hang forever.
-
+///
+/// Consult the following table to see which APIs are useful for fiber tasks:
+///
+/// Task                                       | APIs
+/// -------------------------------------------|-------------------
+/// Repeat a blocking task indefinitely        | \ref keep_doing()
+/// Repeat a blocking task, then exit          | \ref repeat(), \ref do_until()
+/// Provide mutual exclusion between two tasks | \ref semaphore
+/// Pass a stream of data between two fibers   | \ref seastar::pipe
+/// Safely shut down a resource                | \ref seastar::gate, \link seastar::with_gate()
 
 /// Seastar API namespace
 namespace seastar {
