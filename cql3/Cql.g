@@ -35,6 +35,7 @@ options {
 #include "cql3/statements/create_index_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/property_definitions.hh"
+#include "cql3/statements/truncate_statement.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/update_statement.hh"
 #include "cql3/statements/delete_statement.hh"
@@ -256,9 +257,7 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
     | st4= batchStatement              { $stmt = st4; }
     | st5= deleteStatement             { $stmt = st5; }
     | st6= useStatement                { $stmt = st6; }
-#if 0
     | st7= truncateStatement           { $stmt = st7; }
-#endif
     | st8= createKeyspaceStatement     { $stmt = st8; }
     | st9= createTableStatement        { $stmt = st9; }
     | st10=createIndexStatement        { $stmt = st10; }
@@ -844,14 +843,16 @@ dropIndexStatement returns [DropIndexStatement expr]
     : K_DROP K_INDEX (K_IF K_EXISTS { ifExists = true; } )? index=indexName
       { $expr = new DropIndexStatement(index, ifExists); }
     ;
+#endif
 
 /**
   * TRUNCATE <CF>;
   */
-truncateStatement returns [TruncateStatement stmt]
-    : K_TRUNCATE cf=columnFamilyName { $stmt = new TruncateStatement(cf); }
+truncateStatement returns [::shared_ptr<truncate_statement> stmt]
+    : K_TRUNCATE cf=columnFamilyName { $stmt = ::make_shared<truncate_statement>(cf); }
     ;
 
+#if 0
 /**
  * GRANT <permission> ON <resource> TO <username>
  */

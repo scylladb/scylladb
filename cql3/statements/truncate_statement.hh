@@ -33,9 +33,9 @@ namespace cql3 {
 
 namespace statements {
 
-class truncate_statement : public cf_statement, public virtual cql_statement, public ::enable_shared_from_this<truncate_statement> {
+class truncate_statement : public cf_statement, public cql_statement, public ::enable_shared_from_this<truncate_statement> {
 public:
-    truncate_statement(::shared_ptr<cf_name>&& name)
+    truncate_statement(::shared_ptr<cf_name> name)
         : cf_statement{std::move(name)}
     { }
 
@@ -45,6 +45,10 @@ public:
 
     virtual ::shared_ptr<prepared> prepare(database& db) override {
         return ::make_shared<parsed_statement::prepared>(this->shared_from_this());
+    }
+
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
+        return parsed_statement::uses_function(ks_name, function_name);
     }
 
     virtual void check_access(const service::client_state& state) override {
