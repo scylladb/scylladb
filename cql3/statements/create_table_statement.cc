@@ -114,7 +114,6 @@ void create_table_statement::apply_properties_to(schema_builder& builder) {
     }
 #if 0
     cfmd.defaultValidator(defaultValidator)
-        .keyValidator(keyValidator)
         .addAllColumnDefinitions(getColumns(cfmd))
         .isDense(isDense);
 #endif

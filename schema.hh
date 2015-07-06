@@ -200,7 +200,7 @@ public:
         _raw._bloom_filter_fp_chance = fp;
         return *this;
     }
-
+    sstring thrift_key_validator() const;
     void set_compressor_params(compression_parameters c) {
         _raw._compressor_params = c;
     }

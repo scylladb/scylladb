@@ -7,6 +7,7 @@
 #include "schema.hh"
 #include "schema_builder.hh"
 #include <boost/algorithm/cxx11/any_of.hpp>
+#include <boost/range/adaptor/transformed.hpp>
 
 constexpr int32_t schema::NAME_LENGTH;
 
@@ -153,6 +154,17 @@ schema::schema(const schema& o)
     , _regular_columns_by_name(serialized_compare(_raw._regular_column_name_type))
 {
     rebuild();
+}
+
+sstring schema::thrift_key_validator() const {
+    if (partition_key_size() == 1) {
+        return partition_key_columns().begin()->type->name();
+    } else {
+        sstring type_params = ::join(", ", partition_key_columns()
+                            | boost::adaptors::transformed(std::mem_fn(&column_definition::type))
+                            | boost::adaptors::transformed(std::mem_fn(&abstract_type::name)));
+        return "org.apache.cassandra.db.marshal.CompositeType(" + type_params + ")";
+    }
 }
 
 bool

@@ -1030,7 +1030,9 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 #if 0
         adder.add("default_validator", table.getDefaultValidator().toString());
         adder.add("gc_grace_seconds", table.getGcGraceSeconds());
-        adder.add("key_validator", table.getKeyValidator().toString());
+#endif
+        m.set_clustered_cell(ckey, "key_validator", table->thrift_key_validator(), timestamp);
+#if 0
         adder.add("local_read_repair_chance", table.getDcLocalReadRepairChance());
         adder.add("max_compaction_threshold", table.getMaxCompactionThreshold());
         adder.add("max_index_interval", table.getMaxIndexInterval());
@@ -1247,7 +1249,6 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
         cfm.dcLocalReadRepairChance(result.getDouble("local_read_repair_chance"));
         cfm.gcGraceSeconds(result.getInt("gc_grace_seconds"));
         cfm.defaultValidator(TypeParser.parse(result.getString("default_validator")));
-        cfm.keyValidator(TypeParser.parse(result.getString("key_validator")));
         cfm.minCompactionThreshold(result.getInt("min_compaction_threshold"));
         cfm.maxCompactionThreshold(result.getInt("max_compaction_threshold"));
         if (result.has("comment"))
