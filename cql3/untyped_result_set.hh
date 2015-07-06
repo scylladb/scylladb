@@ -27,6 +27,8 @@
 #include "types.hh"
 #include "transport/messages/result_message_base.hh"
 
+#pragma once
+
 namespace cql3 {
 
 class untyped_result_set {
