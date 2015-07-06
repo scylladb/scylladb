@@ -32,13 +32,16 @@ options {
 @parser::includes {
 #include "cql3/selection/writetime_or_ttl.hh"
 #include "cql3/statements/create_keyspace_statement.hh"
+#include "cql3/statements/create_index_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/update_statement.hh"
 #include "cql3/statements/delete_statement.hh"
+#include "cql3/statements/index_prop_defs.hh"
 #include "cql3/statements/use_statement.hh"
 #include "cql3/statements/batch_statement.hh"
+#include "cql3/statements/index_target.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/selection/selectable_with_field_selection.hh"
@@ -258,8 +261,8 @@ cqlStatement returns [shared_ptr<parsed_statement> stmt]
 #endif
     | st8= createKeyspaceStatement     { $stmt = st8; }
     | st9= createTableStatement        { $stmt = st9; }
-#if 0
     | st10=createIndexStatement        { $stmt = st10; }
+#if 0
     | st11=dropKeyspaceStatement       { $stmt = st11; }
     | st12=dropTableStatement          { $stmt = st12; }
     | st13=dropIndexStatement          { $stmt = st13; }
@@ -704,32 +707,34 @@ createTypeStatement returns [CreateTypeStatement expr]
 typeColumns[CreateTypeStatement expr]
     : k=ident v=comparatorType { $expr.addDefinition(k, v); }
     ;
+#endif
 
 
 /**
  * CREATE INDEX [IF NOT EXISTS] [indexName] ON <columnFamily> (<columnName>);
  * CREATE CUSTOM INDEX [IF NOT EXISTS] [indexName] ON <columnFamily> (<columnName>) USING <indexClass>;
  */
-createIndexStatement returns [CreateIndexStatement expr]
+createIndexStatement returns [::shared_ptr<create_index_statement> expr]
     @init {
-        IndexPropDefs props = new IndexPropDefs();
-        boolean ifNotExists = false;
+        auto props = make_shared<index_prop_defs>();
+        bool if_not_exists = false;
     }
-    : K_CREATE (K_CUSTOM { props.isCustom = true; })? K_INDEX (K_IF K_NOT K_EXISTS { ifNotExists = true; } )?
+    : K_CREATE (K_CUSTOM { props->is_custom = true; })? K_INDEX (K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
         (idxName=IDENT)? K_ON cf=columnFamilyName '(' id=indexIdent ')'
-        (K_USING cls=STRING_LITERAL { props.customClass = $cls.text; })?
+        (K_USING cls=STRING_LITERAL { props->custom_class = sstring{$cls.text}; })?
         (K_WITH properties[props])?
-      { $expr = new CreateIndexStatement(cf, $idxName.text, id, props, ifNotExists); }
+      { $expr = ::make_shared<create_index_statement>(cf, $idxName.text, id, props, if_not_exists); }
     ;
 
-indexIdent returns [IndexTarget.Raw id]
-    : c=cident                   { $id = IndexTarget.Raw.valuesOf(c); }
-    | K_KEYS '(' c=cident ')'    { $id = IndexTarget.Raw.keysOf(c); }
-    | K_ENTRIES '(' c=cident ')' { $id = IndexTarget.Raw.keysAndValuesOf(c); }
-    | K_FULL '(' c=cident ')'    { $id = IndexTarget.Raw.fullCollection(c); }
+indexIdent returns [::shared_ptr<index_target::raw> id]
+    : c=cident                   { $id = index_target::raw::values_of(c); }
+    | K_KEYS '(' c=cident ')'    { $id = index_target::raw::keys_of(c); }
+    | K_ENTRIES '(' c=cident ')' { $id = index_target::raw::keys_and_values_of(c); }
+    | K_FULL '(' c=cident ')'    { $id = index_target::raw::full_collection(c); }
     ;
 
 
+#if 0
 /**
  * CREATE TRIGGER triggerName ON columnFamily USING 'triggerClass';
  */
