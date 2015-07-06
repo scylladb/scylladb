@@ -101,6 +101,11 @@ public:
     }
 private:
     rows_type _rows;
+    untyped_result_set() = default;
+public:
+    static untyped_result_set make_empty() {
+        return untyped_result_set();
+    }
 };
 
 }
