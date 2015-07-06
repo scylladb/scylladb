@@ -47,13 +47,15 @@
 ///
 /// Consult the following table to see which APIs are useful for fiber tasks:
 ///
-/// Task                                       | APIs
-/// -------------------------------------------|-------------------
-/// Repeat a blocking task indefinitely        | \ref keep_doing()
-/// Repeat a blocking task, then exit          | \ref repeat(), \ref do_until()
-/// Provide mutual exclusion between two tasks | \ref semaphore
-/// Pass a stream of data between two fibers   | \ref seastar::pipe
-/// Safely shut down a resource                | \ref seastar::gate, \link seastar::with_gate()
+/// Task                                           | APIs
+/// -----------------------------------------------|-------------------
+/// Repeat a blocking task indefinitely            | \ref keep_doing()
+/// Repeat a blocking task, then exit              | \ref repeat(), \ref do_until()
+/// Provide mutual exclusion between two tasks     | \ref semaphore, \ref shared_mutex
+/// Pass a stream of data between two fibers       | \ref seastar::pipe
+/// Safely shut down a resource                    | \ref seastar::gate, \ref seastar::with_gate()
+/// Hold on to an object while a fiber is running  | \ref do_with()
+///
 
 /// Seastar API namespace
 namespace seastar {
