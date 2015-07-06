@@ -1643,13 +1643,22 @@ void smp::pin(unsigned cpu_id) {
 #endif
 
 void smp::allocate_reactor() {
-    static thread_local std::unique_ptr<reactor> reactor_holder;
+    struct reactor_deleter {
+        void operator()(reactor* p) {
+            p->~reactor();
+            free(p);
+        }
+    };
+    static thread_local std::unique_ptr<reactor, reactor_deleter>
+        reactor_holder;
 
     assert(!reactor_holder);
 
     // we cannot just write "local_engin = new reactor" since reactor's constructor
     // uses local_engine
-    auto buf = new (with_alignment(64)) char[sizeof(reactor)];
+    void *buf;
+    int r = posix_memalign(&buf, 64, sizeof(reactor));
+    assert(r == 0);
     local_engine = reinterpret_cast<reactor*>(buf);
     new (buf) reactor;
     reactor_holder.reset(local_engine);
