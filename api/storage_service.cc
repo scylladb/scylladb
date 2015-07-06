@@ -11,6 +11,7 @@
 #include <db/system_keyspace.hh>
 #include "http/exception.hh"
 #include "repair/repair.hh"
+#include "locator/snitch_base.hh"
 
 namespace api {
 
@@ -332,13 +333,10 @@ void set_storage_service(http_context& ctx, routes& r) {
     });
 
     ss::update_snitch.set(r, [](std::unique_ptr<request> req) {
-        //TBD
         auto ep_snitch_class_name = req->get_query_param("ep_snitch_class_name");
-        auto dynamic = req->get_query_param("dynamic");
-        auto dynamic_update_interval = req->get_query_param("dynamic_update_interval");
-        auto dynamic_reset_interval = req->get_query_param("dynamic_reset_interval");
-        auto dynamic_badness_threshold = req->get_query_param("dynamic_badness_threshold");
-        return make_ready_future<json::json_return_type>(json_void());
+        return locator::i_endpoint_snitch::reset_snitch(ep_snitch_class_name).then([] {
+            return make_ready_future<json::json_return_type>(json_void());
+        });
     });
 
     ss::stop_gossiping.set(r, [](std::unique_ptr<request> req) {
