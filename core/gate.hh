@@ -35,6 +35,7 @@ namespace stdx = std::experimental;
 /// Exception thrown when a \ref gate object has been closed
 /// by the \ref gate::close() method.
 class gate_closed_exception : public std::exception {
+public:
     virtual const char* what() const noexcept override {
         return "gate closed";
     }
