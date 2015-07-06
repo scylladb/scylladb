@@ -256,9 +256,7 @@ public:
     execute(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) override;
 
     virtual future<::shared_ptr<transport::messages::result_message>>
-    execute_internal(database& db, service::query_state& qs, const query_options& options) override {
-        throw std::runtime_error("not implemented");
-    }
+    execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) override;
 
 private:
     future<>

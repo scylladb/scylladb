@@ -1593,6 +1593,11 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, std::vector<query::
         throw std::runtime_error("more than one non singular range not supported yet");
     }
 
+    return query_local(std::move(cmd), std::move(partition_ranges));
+}
+
+future<foreign_ptr<lw_shared_ptr<query::result>>>
+storage_proxy::query_local(lw_shared_ptr<query::read_command> cmd, std::vector<query::partition_range>&& partition_ranges) {
     // FIXME: Respect cmd->row_limit to avoid unnecessary transfer
     query::result_merger merger;
     merger.reserve(smp::count);
@@ -1602,6 +1607,7 @@ storage_proxy::query(lw_shared_ptr<query::read_command> cmd, std::vector<query::
         });
     }).finally([cmd] {});
 }
+
 
 // The query_local() method returns a result set value object (which is
 // copyable) that is accessible on the local CPU without having to use

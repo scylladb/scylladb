@@ -656,6 +656,23 @@ shared_ptr<const abstract_type> data_type_for<sstring>() {
     return utf8_type;
 }
 
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<bytes>() {
+    return bytes_type;
+}
+
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<utils::UUID>() {
+    return uuid_type;
+}
+
+template <>
+inline
+shared_ptr<const abstract_type> data_type_for<db_clock::time_point>() {
+    return date_type;
+}
 
 namespace std {
 

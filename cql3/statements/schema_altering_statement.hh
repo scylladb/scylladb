@@ -56,6 +56,8 @@ class schema_altering_statement : public cf_statement, public cql_statement, pub
 private:
     const bool _is_column_family_level;
 
+    future<::shared_ptr<messages::result_message>>
+    execute0(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options, bool);
 protected:
     schema_altering_statement()
         : cf_statement{::shared_ptr<cf_name>{}}
@@ -99,7 +101,7 @@ protected:
     execute(distributed<service::storage_proxy>& proxy, service::query_state& state, const query_options& options) override;
 
     virtual future<::shared_ptr<messages::result_message>>
-    execute_internal(database& db, service::query_state& state, const query_options& options) override;
+    execute_internal(distributed<service::storage_proxy>&, service::query_state& state, const query_options& options) override;
 };
 
 }

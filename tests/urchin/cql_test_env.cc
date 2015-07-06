@@ -161,6 +161,10 @@ public:
         return _db->local();
     }
 
+    cql3::query_processor& local_qp() override {
+        return _qp->local();
+    }
+
     future<> start() {
         return _core_local.start().then([this] () {
             auto query = sprint("create keyspace %s with replication = { 'class' : 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor' : 1 };", sstring{ks_name});

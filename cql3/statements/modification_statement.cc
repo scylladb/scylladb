@@ -391,6 +391,21 @@ modification_statement::execute_with_condition(distributed<service::storage_prox
 #endif
 }
 
+future<::shared_ptr<transport::messages::result_message>>
+modification_statement::execute_internal(distributed<service::storage_proxy>& proxy, service::query_state& qs, const query_options& options) {
+    if (has_conditions()) {
+        throw exceptions::unsupported_operation_exception();
+    }
+    return get_mutations(proxy, options, true, options.get_timestamp(qs)).then(
+            [&proxy] (auto mutations) {
+                return proxy.local().mutate_locally(mutations);
+            }).then(
+            [] {
+                return make_ready_future<::shared_ptr<transport::messages::result_message>>(
+                        ::shared_ptr<transport::messages::result_message> {});
+            });
+}
+
 void
 modification_statement::add_key_values(const column_definition& def, ::shared_ptr<restrictions::restriction> values) {
     if (def.is_clustering_key()) {

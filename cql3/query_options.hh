@@ -74,6 +74,8 @@ public:
     // It can't be const because of prepare()
     static thread_local query_options DEFAULT;
 
+    // forInternalUse
+    explicit query_options(std::vector<bytes_opt> values);
 #if 0
     public static final CBCodec<QueryOptions> codec = new Codec();
 
