@@ -39,7 +39,8 @@ void stream_session::init_messaging_service_handler() {
     ms().register_handler(messaging_verb::STREAM_INIT_MESSAGE, [] (messages::stream_init_message msg) {
         auto cpu_id = 0;
         return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
-            // TODO
+            stream_result_future::init_receiving_side(msg.session_index, msg.plan_id,
+                msg.description, msg.from, msg.keep_ss_table_level);
             return make_ready_future<>();
         });
     });

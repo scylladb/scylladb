@@ -23,12 +23,15 @@
 #include "core/sstring.hh"
 #include "core/shared_ptr.hh"
 #include "utils/UUID.hh"
+#include "gms/inet_address.hh"
 #include "streaming/connection_handler.hh"
 #include "streaming/stream_coordinator.hh"
 #include "streaming/stream_event_handler.hh"
 #include <vector>
 
 namespace streaming {
+    using UUID = utils::UUID;
+    using inet_address = gms::inet_address;
 /**
  * A future on the result ({@link StreamState}) of a streaming plan.
  *
@@ -91,30 +94,22 @@ public:
         coordinator_.connect_all_stream_sessions();
     }
 
+    static void init_receiving_side(int session_index, UUID plan_id,
+        sstring description, inet_address from, bool keep_ss_table_level) {
 #if 0
-    public static synchronized StreamResultFuture initReceivingSide(int sessionIndex,
-                                                                    UUID planId,
-                                                                    String description,
-                                                                    InetAddress from,
-                                                                    Socket socket,
-                                                                    boolean isForOutgoing,
-                                                                    int version,
-                                                                    boolean keepSSTableLevel) throws IOException
-    {
         StreamResultFuture future = StreamManager.instance.getReceivingStream(planId);
-        if (future == null)
-        {
+        if (future == null) {
             logger.info("[Stream #{} ID#{}] Creating new streaming plan for {}", planId, sessionIndex, description);
 
             // The main reason we create a StreamResultFuture on the receiving side is for JMX exposure.
             future = new StreamResultFuture(planId, description, keepSSTableLevel);
             StreamManager.instance.registerReceiving(future);
         }
-        future.attachSocket(from, sessionIndex, socket, isForOutgoing, version);
-        logger.info("[Stream #{}, ID#{}] Received streaming plan for {}", planId, sessionIndex, description);
+        // logger.info("[Stream #{}, ID#{}] Received streaming plan for {}", planId, sessionIndex, description);
         return future;
-    }
 #endif
+    }
+
 private:
     static shared_ptr<stream_result_future> create_and_register(UUID plan_id_, sstring description_, stream_coordinator& coordinator_) {
         auto future = make_shared<stream_result_future>(plan_id_, description_, coordinator_);
