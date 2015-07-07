@@ -26,6 +26,10 @@
 
 #include "db/legacy_schema_tables.hh"
 
+#include "gms/inet_address.hh"
+
+#include <vector>
+
 namespace service {
 
 class migration_manager {
@@ -58,6 +62,8 @@ public:
     static future<> announce(distributed<service::storage_proxy>& proxy, mutation schema, bool announce_locally);
 
     static future<> announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> mutations, bool announce_locally);
+
+    static future<> push_schema_mutation(const gms::inet_address& endpoint, const std::vector<mutation>& schema);
 
     // Returns a future on the local application of the schema
     static future<> announce(distributed<service::storage_proxy>& proxy, std::vector<mutation> schema);

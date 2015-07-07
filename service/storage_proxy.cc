@@ -2799,6 +2799,17 @@ bool storage_proxy::should_hint(gms::inet_address ep) {
 
 void storage_proxy::init_messaging_service() {
     auto& ms = net::get_local_messaging_service();
+    ms.register_handler(net::messaging_verb::DEFINITIONS_UPDATE, [this] (std::vector<frozen_mutation> m) {
+        do_with(std::move(m), [this] (const std::vector<frozen_mutation>& mutations) mutable {
+            std::vector<mutation> schema;
+            for (auto& m : mutations) {
+                schema_ptr s = get_db().local().find_schema(m.column_family_id());
+                schema.emplace_back(m.unfreeze(s));
+            }
+            return db::legacy_schema_tables::merge_schema(*this, schema);
+        }).discard_result();
+        return net::messaging_service::no_wait();
+    });
     ms.register_handler(net::messaging_verb::MUTATION, [this] (frozen_mutation in, std::vector<gms::inet_address> forward, gms::inet_address reply_to, unsigned shard, storage_proxy::response_id_type response_id) {
         do_with(std::move(in), [this, forward = std::move(forward), reply_to, shard, response_id] (const frozen_mutation& m) mutable {
             return when_all(
