@@ -193,15 +193,14 @@ sets::delayed_value::bind(const query_options& options) {
 
 ::shared_ptr<terminal>
 sets::marker::bind(const query_options& options) {
-    throw std::runtime_error("");
+    auto value = options.get_values().at(_bind_index);
+    if (!value) {
+        return nullptr;
+    } else {
+        auto as_set_type = static_pointer_cast<const set_type_impl>(_receiver->type);
+        return make_shared(value::from_serialized(*value, as_set_type, options.get_serialization_format()));
+    }
 }
-#if 0
-public Value bind(QueryOptions options) throws InvalidRequestException
-{
-    ByteBuffer value = options.getValues().get(bindIndex);
-    return value == null ? null : Value.fromSerialized(value, (SetType)receiver.type, options.getProtocolVersion());
-}
-#endif
 
 void
 sets::setter::execute(mutation& m, const exploded_clustering_prefix& row_key, const update_parameters& params) {
