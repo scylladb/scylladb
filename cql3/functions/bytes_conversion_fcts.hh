@@ -27,6 +27,7 @@
 #include "native_scalar_function.hh"
 #include "exceptions/exceptions.hh"
 #include "core/print.hh"
+#include "cql3/cql3_type.hh"
 
 namespace cql3 {
 
@@ -38,8 +39,7 @@ namespace functions {
 inline
 shared_ptr<function>
 make_to_blob_function(data_type from_type) {
-    // FIXME: use cql3 type name
-    auto name = from_type->name() + "asblob";
+    auto name = from_type->as_cql3_type()->to_string() + "asblob";
     return make_native_scalar_function<true>(name, bytes_type, { from_type },
             [] (serialization_format sf, const std::vector<bytes_opt>& parameters) {
         return parameters[0];
@@ -49,8 +49,7 @@ make_to_blob_function(data_type from_type) {
 inline
 shared_ptr<function>
 make_from_blob_function(data_type to_type) {
-    // FIXME: use cql3 type name
-    sstring name = sstring("blobas") + to_type->name();
+    sstring name = sstring("blobas") + to_type->as_cql3_type()->to_string();
     return make_native_scalar_function<true>(name, to_type, { bytes_type },
             [name, to_type] (serialization_format sf, const std::vector<bytes_opt>& parameters) -> bytes_opt {
         auto&& val = parameters[0];
@@ -64,7 +63,7 @@ make_from_blob_function(data_type to_type) {
             using namespace exceptions;
             throw invalid_request_exception(sprint(
                     "In call to function %s, value 0x%s is not a valid binary representation for type %s",
-                    name, to_hex(val), /* FIXME: toType.asCQL3Type()*/ to_type->name()));
+                    name, to_hex(val), to_type->as_cql3_type()->to_string()));
         }
     });
 }

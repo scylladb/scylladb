@@ -1059,6 +1059,46 @@ SEASTAR_TEST_CASE(test_types) {
                     utf8_type->decompose(sstring("varchar"))
                 }
             });
+            return e.execute_cql(
+                "INSERT INTO all_types (a, b, c, d, e, f, g, h, i, j, k, l, m) VALUES ("
+                    "    blobAsAscii(asciiAsBlob('ascii2')),"
+                    "    blobAsBigint(bigintAsBlob(123456789)),"
+                    "    bigintAsBlob(12),"
+                    "    blobAsBoolean(booleanAsBlob(true)),"
+                    "    blobAsDouble(doubleAsBlob(3.14)),"
+                    "    blobAsFloat(floatAsBlob(3.14)),"
+                    "    blobAsInet(inetAsBlob('127.0.0.1')),"
+                    "    blobAsInt(intAsBlob(3)),"
+                    "    blobAsText(textAsBlob('zażółć gęślą jaźń')),"
+                    "    blobAsTimestamp(timestampAsBlob('2001-10-18 14:15:55.134+0000')),"
+                    "    blobAsTimeuuid(timeuuidAsBlob(d2177dd0-eaa2-11de-a572-001b779c76e3)),"
+                    "    blobAsUuid(uuidAsBlob(d2177dd0-eaa2-11de-a572-001b779c76e3)),"
+                    "    blobAsVarchar(varcharAsBlob('varchar'))"
+                    ");").discard_result();
+        }).then([&e] {
+             return e.execute_cql("SELECT * FROM all_types WHERE a = 'ascii2'");
+        }).then([&e] (auto msg) {
+            struct tm t = { 0 };
+            t.tm_year = 2001 - 1900;
+            t.tm_mon = 10 - 1;
+            t.tm_mday = 18;
+            t.tm_hour = 14;
+            t.tm_min = 15;
+            t.tm_sec = 55;
+            auto tp = db_clock::from_time_t(timegm(&t)) + std::chrono::milliseconds(134);
+            assert_that(msg).is_rows().with_rows({
+                {
+                    ascii_type->decompose(sstring("ascii2")), long_type->decompose(123456789l),
+                    from_hex("000000000000000c"), boolean_type->decompose(true),
+                    double_type->decompose(3.14), float_type->decompose(3.14f),
+                    inet_addr_type->decompose(net::ipv4_address("127.0.0.1")),
+                    int32_type->decompose(3), utf8_type->decompose(sstring("zażółć gęślą jaźń")),
+                    timestamp_type->decompose(tp),
+                    timeuuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
+                    uuid_type->decompose(utils::UUID(sstring("d2177dd0-eaa2-11de-a572-001b779c76e3"))),
+                    utf8_type->decompose(sstring("varchar"))
+                }
+            });
         });
     });
 }
