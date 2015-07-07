@@ -19,6 +19,7 @@
 #include <boost/range/numeric.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/date_time/c_local_time_adjustor.hpp>
+#include <boost/locale/encoding_utf.hpp>
 
 template<typename T>
 struct simple_type_traits {
@@ -92,6 +93,11 @@ struct integer_type_impl : simple_type_impl<T> {
         *reinterpret_cast<T*>(b.begin()) = (T)net::hton(v);
         return b;
     }
+    virtual void validate(bytes_view v) const override {
+        if (v.size() != 0 && v.size() != sizeof(T)) {
+            throw marshal_exception();
+        }
+    }
     T parse_int(sstring_view s) const {
         try {
             return boost::lexical_cast<T>(s.begin(), s.size());
@@ -157,6 +163,19 @@ struct string_type_impl : public abstract_type {
     }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
+    }
+    virtual void validate(bytes_view v) const override {
+        if (as_cql3_type() == cql3::cql3_type::ascii) {
+            if (std::any_of(v.begin(), v.end(), [] (int8_t b) { return b < 0; })) {
+                throw marshal_exception();
+            }
+        } else {
+            try {
+                boost::locale::conv::utf_to_utf<char>(v.data(), boost::locale::conv::stop);
+            } catch (const boost::locale::conv::conversion_error& ex) {
+                throw marshal_exception(ex.what());
+            }
+        }
     }
     virtual bytes from_string(sstring_view s) const override {
         return to_bytes(bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size()));
@@ -234,6 +253,11 @@ struct boolean_type_impl : public simple_type_impl<bool> {
             throw marshal_exception();
         }
         return boost::any(*v.begin() != 0);
+    }
+    virtual void validate(bytes_view v) const override {
+        if (v.size() != 0 && v.size() != 1) {
+            throw marshal_exception();
+        }
     }
     virtual bytes from_string(sstring_view s) const override {
         sstring s_lower(s.begin(), s.end());
@@ -339,6 +363,17 @@ struct timeuuid_type_impl : public abstract_type {
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
+    virtual void validate(bytes_view v) const override {
+        if (v.size() != 0 && v.size() != 16) {
+            throw marshal_exception();
+        }
+        auto msb = read_simple<uint64_t>(v);
+        auto lsb = read_simple<uint64_t>(v);
+        utils::UUID uuid(msb, lsb);
+        if (uuid.version() != 1) {
+            throw marshal_exception();
+        }
+    }
     virtual bytes from_string(sstring_view s) const override {
         if (s.empty()) {
             return bytes();
@@ -399,6 +434,11 @@ struct timestamp_type_impl : simple_type_impl<db_clock::time_point> {
         return boost::any(db_clock::time_point(db_clock::duration(v)));
     }
     // FIXME: isCompatibleWith(timestampuuid)
+    virtual void validate(bytes_view v) const override {
+        if (v.size() != 0 && v.size() != sizeof(uint64_t)) {
+            throw marshal_exception();
+        }
+    }
     boost::posix_time::ptime get_time(const std::string& s) const {
         // Apparently, the code below doesn't leak the input facet.
         // std::locale::facet has some internal, custom reference counting
@@ -546,6 +586,11 @@ struct uuid_type_impl : abstract_type {
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
     }
+    virtual void validate(bytes_view v) const override {
+        if (v.size() != 0 && v.size() != 16) {
+            throw marshal_exception();
+        }
+    }
     virtual bytes from_string(sstring_view s) const override {
         if (s.empty()) {
             return bytes();
@@ -607,6 +652,11 @@ struct inet_addr_type_impl : abstract_type {
     }
     virtual size_t hash(bytes_view v) const override {
         return std::hash<bytes_view>()(v);
+    }
+    virtual void validate(bytes_view v) const override {
+        if (v.size() != 0 && v.size() != sizeof(uint32_t)) {
+            throw marshal_exception();
+        }
     }
     virtual bytes from_string(sstring_view s) const override {
         // FIXME: support host names
@@ -701,6 +751,11 @@ struct floating_type_impl : public simple_type_impl<T> {
             throw marshal_exception();
         }
         return boost::any(x.d);
+    }
+    virtual void validate(bytes_view v) const override {
+        if (v.size() != 0 && v.size() != sizeof(T)) {
+            throw marshal_exception();
+        }
     }
     virtual bytes from_string(sstring_view s) const override {
         if (s.empty()) {
