@@ -31,6 +31,7 @@
 #include "streaming/stream_receive_task.hh"
 #include "streaming/stream_request.hh"
 #include "streaming/messages/incoming_file_message.hh"
+#include "streaming/messages/prepare_message.hh"
 #include "streaming/stream_detail.hh"
 #include "sstables/sstables.hh"
 #include "query-request.hh"
@@ -317,7 +318,7 @@ public:
     /**
      * Prepare this session for sending/receiving files.
      */
-    void prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries);
+    messages::prepare_message prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries);
 
     /**
      * Call back after sending FileMessageHeader.

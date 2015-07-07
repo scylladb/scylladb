@@ -47,8 +47,9 @@ void stream_session::init_messaging_service_handler() {
     ms().register_handler(messaging_verb::PREPARE_MESSAGE, [] (messages::prepare_message msg) {
         auto cpu_id = 0;
         return smp::submit_to(cpu_id, [msg = std::move(msg)] () mutable {
-            // TODO
-            messages::prepare_message msg_ret;
+            // TODO: find session
+            stream_session s;
+            auto msg_ret = s.prepare(std::move(msg.requests), std::move(msg.summaries));
             return make_ready_future<messages::prepare_message>(std::move(msg_ret));
         });
     });
@@ -133,7 +134,7 @@ void stream_session::on_error() {
     close_session(stream_session_state::FAILED);
 }
 
-void stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
+messages::prepare_message stream_session::prepare(std::vector<stream_request> requests, std::vector<stream_summary> summaries) {
     // prepare tasks
     set_state(stream_session_state::PREPARING);
     for (auto& request : requests) {
@@ -145,8 +146,8 @@ void stream_session::prepare(std::vector<stream_request> requests, std::vector<s
     }
 
     // send back prepare message if prepare message contains stream request
+    messages::prepare_message prepare;
     if (!requests.empty()) {
-        messages::prepare_message prepare;
         for (auto& x: _transfers) {
             auto& task = x.second;
             prepare.summaries.emplace_back(task.get_summary());
@@ -158,6 +159,8 @@ void stream_session::prepare(std::vector<stream_request> requests, std::vector<s
     if (!maybe_completed()) {
         start_streaming_files();
     }
+
+    return prepare;
 }
 
 void stream_session::file_sent(const messages::file_message_header& header) {
