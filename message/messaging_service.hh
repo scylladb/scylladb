@@ -16,7 +16,9 @@
 #include <unordered_map>
 #include "db/config.hh"
 #include "frozen_mutation.hh"
+#include "query-request.hh"
 #include "db/serializer.hh"
+#include "mutation_query.hh"
 
 namespace net {
 
@@ -28,6 +30,7 @@ enum class messaging_verb : int32_t {
     READ_REPAIR,
     READ,
     READ_DATA,
+    READ_MUTATION_DATA, // urchin-only
     READ_DIGEST,
     REQUEST_RESPONSE, // client-initiated reads and writes
     STREAM_INITIATE, // Deprecated
@@ -209,6 +212,17 @@ struct serializer {
         return write_serializable(out, v);
     }
     inline auto operator()(input_stream<char>& in, frozen_mutation& v) {
+        return read_serializable(in, v);
+    }
+
+    // For reconcilable_result
+    inline auto operator()(output_stream<char>& out, const reconcilable_result& v) {
+        return write_serializable(out, v);
+    }
+    inline auto operator()(output_stream<char>& out, reconcilable_result& v) {
+        return write_serializable(out, v);
+    }
+    inline auto operator()(input_stream<char>& in, reconcilable_result& v) {
         return read_serializable(in, v);
     }
 
