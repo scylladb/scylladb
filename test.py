@@ -56,6 +56,7 @@ boost_tests = [
     'urchin/gossiping_property_file_snitch_test',
     'urchin/row_cache_test',
     'urchin/network_topology_strategy_test',
+    'urchin/query_processor_test',
 ]
 
 other_tests = [
