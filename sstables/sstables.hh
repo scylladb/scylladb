@@ -219,6 +219,11 @@ public:
     void add_ancestor(int generation) {
         _collector.add_ancestor(generation);
     }
+
+    // Returns true iff this sstable contains data which belongs to many shards.
+    bool is_shared() {
+        return true; // FIXME: set to false for sstables created by compaction process
+    }
 private:
     void do_write_components(::mutation_reader mr,
             uint64_t estimated_partitions, schema_ptr schema, file_writer& out);

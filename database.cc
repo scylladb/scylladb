@@ -67,6 +67,11 @@ memtable::find_partition(const dht::decorated_key& key) const {
     return i == partitions.end() ? const_mutation_partition_ptr() : std::make_unique<const mutation_partition>(i->second);
 }
 
+static
+bool belongs_to_current_shard(const mutation& m) {
+    return dht::shard_of(m.token()) == engine().cpu_id();
+}
+
 class range_sstable_reader {
     dht::token _min_token;
     dht::token _max_token;
@@ -86,7 +91,11 @@ public:
         std::vector<mutation_reader> readers;
         for (const lw_shared_ptr<sstables::sstable>& sst : *_sstables | boost::adaptors::map_values) {
             // FIXME: make sstable::read_range_rows() return ::mutation_reader so that we can drop this wrapper.
-            readers.emplace_back([r = make_lw_shared(sst->read_range_rows(s, _min_token, _max_token))] () mutable { return r->read(); });
+            mutation_reader reader = [r = make_lw_shared(sst->read_range_rows(s, _min_token, _max_token))] () mutable { return r->read(); };
+            if (sst->is_shared()) {
+                reader = make_filtering_reader(std::move(reader), belongs_to_current_shard);
+            }
+            readers.emplace_back(std::move(reader));
         }
         _reader = make_combined_reader(std::move(readers));
     }
@@ -129,6 +138,9 @@ public:
 mutation_reader
 column_family::make_sstable_reader(const query::partition_range& pr) const {
     if (pr.is_singular() && pr.start_value().has_key()) {
+        if (dht::shard_of(pr.start_value().token()) != engine().cpu_id()) {
+            return make_empty_reader(); // range doesn't belong to this shard
+        }
         return single_key_sstable_reader(_schema, _sstables, *pr.start_value().key());
     } else {
         // range_sstable_reader is not movable so we need to wrap it
