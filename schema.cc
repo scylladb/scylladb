@@ -239,11 +239,6 @@ generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
     return utils::UUID_gen::get_name_UUID(ks_name + cf_name);
 }
 
-bool thrift_schema::is_dense() const {
-    warn(unimplemented::cause::COMPACT_TABLES);
-    return false;
-}
-
 bool thrift_schema::has_compound_comparator() const {
     // until we "map" compact storage, at which point it might not be "true".
     warn(unimplemented::cause::COMPACT_TABLES);

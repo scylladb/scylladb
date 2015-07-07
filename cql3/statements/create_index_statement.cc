@@ -130,7 +130,7 @@ cql3::statements::create_index_statement::validate(distributed<service::storage_
 
 
     // Origin TODO: we could lift that limitation
-    if ((schema->thrift().is_dense() || !schema->thrift().has_compound_comparator()) && cd->kind != column_kind::regular_column) {
+    if ((schema->is_dense() || !schema->thrift().has_compound_comparator()) && cd->kind != column_kind::regular_column) {
         throw exceptions::invalid_request_exception("Secondary indexes are not supported on PRIMARY KEY columns in COMPACT STORAGE tables");
     }
 

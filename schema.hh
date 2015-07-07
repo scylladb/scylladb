@@ -116,7 +116,6 @@ public:
  */
 class thrift_schema {
 public:
-    bool is_dense() const;
     bool has_compound_comparator() const;
 };
 
@@ -145,6 +144,7 @@ private:
         data_type _regular_column_name_type;
         double _bloom_filter_fp_chance = 0.01;
         compression_parameters _compressor_params;
+        bool _is_dense = false;
     };
     raw_schema _raw;
     thrift_schema _thrift;
@@ -207,7 +207,9 @@ public:
     const compression_parameters& get_compressor_params() const {
         return _raw._compressor_params;
     }
-
+    bool is_dense() const {
+        return _raw._is_dense;
+    }
     thrift_schema& thrift() {
         return _thrift;
     }

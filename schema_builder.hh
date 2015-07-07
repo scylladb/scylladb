@@ -56,7 +56,9 @@ public:
     void set_compressor_params(const compression_parameters& cp) {
         _raw._compressor_params = cp;
     }
-
+    void set_is_dense(bool is_dense) {
+        _raw._is_dense = is_dense;
+    }
     column_definition& find_column(const cql3::column_identifier&);
     schema_builder& with_column(const column_definition& c);
     schema_builder& with_column(bytes name, data_type type, column_kind kind = column_kind::regular_column);
