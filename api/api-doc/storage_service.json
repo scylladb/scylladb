@@ -1794,6 +1794,70 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/storage_service/metrics/load",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get load",
+               "type":"int",
+               "nickname":"get_metrics_load",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/metrics/exceptions",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get exceptions",
+               "type":"int",
+               "nickname":"get_exceptions",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/metrics/hints_in_progress",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get total hints in progress",
+               "type":"int",
+               "nickname":"get_total_hints_in_progress",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/storage_service/metrics/total_hints",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get total hints",
+               "type":"int",
+               "nickname":"get_total_hints",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
       }
    ],
    "models":{
