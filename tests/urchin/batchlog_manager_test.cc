@@ -1,0 +1,63 @@
+/*
+ * Copyright 2015 Cloudius Systems
+ */
+
+#define BOOST_TEST_DYN_LINK
+
+#include <boost/range/irange.hpp>
+#include <boost/range/adaptors.hpp>
+#include <boost/range/algorithm.hpp>
+#include <boost/test/unit_test.hpp>
+#include <stdint.h>
+
+#include "tests/test-utils.hh"
+#include "tests/urchin/cql_test_env.hh"
+#include "tests/urchin/cql_assertions.hh"
+
+#include "core/future-util.hh"
+#include "core/shared_ptr.hh"
+#include "transport/messages/result_message.hh"
+#include "cql3/query_processor.hh"
+#include "db/batchlog_manager.hh"
+
+static atomic_cell make_atomic_cell(bytes value) {
+    return atomic_cell::make_live(0, std::move(value));
+};
+
+SEASTAR_TEST_CASE(test_execute_batch) {
+    return do_with_cql_env([] (auto& e) {
+        auto& qp = e.local_qp();
+        auto bp = make_lw_shared<db::batchlog_manager>(qp);
+
+        return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&qp, &e, bp] {
+            auto& db = e.local_db();
+            auto s = db.find_schema("ks", "cf");
+
+            const column_definition& r1_col = *s->get_column_definition("r1");
+            auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+            auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(1)});
+
+            mutation m(key, s);
+            m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type->decompose(100)));
+
+            using namespace std::chrono_literals;
+
+            auto bm = bp->get_batch_log_mutation_for({ m }, s->id(), 9, db_clock::now() - db_clock::duration(3h));
+
+            return qp.proxy().local().mutate_locally(bm).then([bp] {
+                return bp->count_all_batches().then([](auto n) {
+                    BOOST_CHECK_EQUAL(n, 1);
+                }).then([bp] {
+                    return bp->do_batch_log_replay();
+                });
+            });
+        }).then([&qp, bp] {
+            return qp.execute_internal("select * from ks.cf where p1 = ? and c1 = ?;", { sstring("key1"), 1 }).then([](auto rs) {
+                BOOST_REQUIRE(!rs->empty());
+                auto i = rs->one().template get_as<int32_t>("r1");
+                BOOST_CHECK_EQUAL(i, int32_t(100));
+            });
+        });
+    });
+}
+

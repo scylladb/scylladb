@@ -57,6 +57,7 @@ boost_tests = [
     'urchin/row_cache_test',
     'urchin/network_topology_strategy_test',
     'urchin/query_processor_test',
+    'urchin/batchlog_manager_test',
 ]
 
 other_tests = [
