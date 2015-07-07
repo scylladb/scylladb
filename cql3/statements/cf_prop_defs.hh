@@ -186,9 +186,9 @@ public:
             cfm.compactionStrategyClass(compactionStrategyClass);
             cfm.compactionStrategyOptions(new HashMap<>(getCompactionOptions()));
         }
-
-        cfm.bloomFilterFpChance(getDouble(KW_BF_FP_CHANCE, cfm.getBloomFilterFpChance()));
 #endif
+
+        builder.set_bloom_filter_fp_chance(get_double(KW_BF_FP_CHANCE, builder.get_bloom_filter_fp_chance()));
         if (!get_compression_options().empty()) {
             builder.set_compressor_params(compression_parameters(get_compression_options()));
         }

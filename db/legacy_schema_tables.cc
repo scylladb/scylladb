@@ -1273,12 +1273,15 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 
         if (result.has("max_index_interval"))
             cfm.maxIndexInterval(result.getInt("max_index_interval"));
+#endif
 
-        if (result.has("bloom_filter_fp_chance"))
-            cfm.bloomFilterFpChance(result.getDouble("bloom_filter_fp_chance"));
-        else
-            cfm.bloomFilterFpChance(cfm.getBloomFilterFpChance());
+        if (table_row.has("bloom_filter_fp_chance")) {
+            builder.set_bloom_filter_fp_chance(table_row.get_nonnull<double>("bloom_filter_fp_chance"));
+        } else {
+            builder.set_bloom_filter_fp_chance(builder.get_bloom_filter_fp_chance());
+        }
 
+#if 0
         if (result.has("dropped_columns"))
             cfm.droppedColumns(convertDroppedColumns(result.getMap("dropped_columns", UTF8Type.instance, LongType.instance)));
 #endif

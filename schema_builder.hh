@@ -47,6 +47,12 @@ public:
     gc_clock::duration default_time_to_live() const {
         return _raw._default_time_to_live;
     }
+    void set_bloom_filter_fp_chance(double fp) {
+        _raw._bloom_filter_fp_chance = fp;
+    }
+    double get_bloom_filter_fp_chance() const {
+        return _raw._bloom_filter_fp_chance;
+    }
     void set_compressor_params(const compression_parameters& cp) {
         _raw._compressor_params = cp;
     }
