@@ -38,6 +38,10 @@ class storage_proxy;
 
 }
 
+namespace cql3 {
+class query_processor;
+}
+
 namespace db {
 namespace system_keyspace {
 
@@ -58,6 +62,9 @@ static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
 extern schema_ptr hints();
 extern schema_ptr batchlog();
 extern schema_ptr built_indexes(); // TODO (from Cassandra): make private
+
+future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp);
+future<> update_schema_version(utils::UUID version);
 
 std::vector<schema_ptr> all_tables();
 void make(database& db, bool durable);
@@ -606,12 +613,12 @@ load_dc_rack_info();
      * Read the host ID from the system keyspace, creating (and storing) one if
      * none exists.
      */
-    utils::UUID get_local_host_id();
+    future<utils::UUID> get_local_host_id();
 
     /**
      * Sets the local host ID explicitly.  Should only be called outside of SystemTable when replacing a node.
      */
-    utils::UUID set_local_host_id(const utils::UUID& host_id);
+    future<utils::UUID> set_local_host_id(const utils::UUID& host_id);
 
 #if 0
 

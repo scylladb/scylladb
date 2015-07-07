@@ -81,7 +81,7 @@ public:
 #endif
     }
 
-    client_state(internal_tag) : _is_internal(true) {}
+    client_state(internal_tag) : _keyspace("system"), _is_internal(true) {}
 
     virtual bool is_thrift() const {
         return false;

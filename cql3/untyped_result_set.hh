@@ -27,6 +27,8 @@
 #include "types.hh"
 #include "transport/messages/result_message_base.hh"
 
+#pragma once
+
 namespace cql3 {
 
 class untyped_result_set {
@@ -99,6 +101,11 @@ public:
     }
 private:
     rows_type _rows;
+    untyped_result_set() = default;
+public:
+    static untyped_result_set make_empty() {
+        return untyped_result_set();
+    }
 };
 
 }

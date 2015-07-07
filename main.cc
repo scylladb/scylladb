@@ -13,6 +13,7 @@
 #include "db/config.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_service.hh"
+#include "db/system_keyspace.hh"
 #include "dns.hh"
 #include <cstdio>
 
@@ -82,6 +83,11 @@ int main(int ac, char** av) {
                 return db.invoke_on_all([&proxy] (database& db) {
                     return db.init_from_data_directory(proxy);
                 });
+            }).then([&db, &qp] {
+                return db::system_keyspace::setup(db, qp);
+            }).then([] {
+                auto& ss = service::get_local_storage_service();
+                return ss.init_server();
             }).then([rpc_address] {
                 return dns::gethostbyname(rpc_address);
             }).then([&db, &proxy, &qp, cql_port, thrift_port] (dns::hostent e) {

@@ -502,9 +502,7 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                proxy.get_db().invoke_on_all([s, cfs = std::move(column_families)] (database& db) {
                    return parallel_for_each(cfs.begin(), cfs.end(), [&db] (auto& id) {
                        auto& cf = db.find_column_family(id);
-                       // FIXME: this will synchronously wait for this write to finish, but doesn't guarantee
-                       // anything about previous writes.
-                       return cf.seal_active_memtable(&db);
+                       return cf.flush(&db);
                    });
                }).get();
            }

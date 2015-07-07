@@ -28,6 +28,15 @@
 #include "types.hh"
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
+#include "service/client_state.hh"
+#include "service/query_state.hh"
+#include "cql3/query_options.hh"
+#include "cql3/query_processor.hh"
+#include "utils/fb_utilities.hh"
+#include "dht/i_partitioner.hh"
+#include "version.hh"
+#include "thrift/server.hh"
+#include "exceptions/exceptions.hh"
 
 namespace db {
 namespace system_keyspace {
@@ -302,6 +311,35 @@ schema_ptr built_indexes() {
     return sstable_activity;
 }
 
+struct query_context {
+    distributed<database>& _db;
+    distributed<cql3::query_processor>& _qp;
+    query_context(distributed<database>& db, distributed<cql3::query_processor>& qp) : _db(db), _qp(qp) {}
+
+    template <typename... Args>
+    future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring text, sstring cf, Args&&... args) {
+        // FIXME: Would be better not to use sprint here.
+        sstring req = sprint(text, cf);
+        return this->_qp.local().execute_internal(req, { boost::any(std::forward<Args>(args))... });
+    }
+    database& db() {
+        return _db.local();
+    }
+};
+
+// This does not have to be thread local, because all cores will share the same context.
+static std::unique_ptr<query_context> qctx = {};
+
+// Sometimes we are not concerned about system tables at all - for instance, when we are testing. In those cases, just pretend
+// we executed the query, and return an empty result
+template <typename... Args>
+static future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring text, Args&&... args) {
+    if (qctx) {
+        return qctx->execute_cql(text, std::forward<Args>(args)...);
+    }
+    return make_ready_future<shared_ptr<cql3::untyped_result_set>>(::make_shared<cql3::untyped_result_set>(cql3::untyped_result_set::make_empty()));
+}
+
 #if 0
 
     public static KSMetaData definition()
@@ -336,27 +374,39 @@ schema_ptr built_indexes() {
         return StorageService.getPartitioner().decorateKey(key);
     }
 
-    public static void finishStartup()
-    {
-        setupVersion();
-        LegacySchemaTables.saveSystemKeyspaceSchema();
-    }
+#endif
 
-    private static void setupVersion()
-    {
-        String req = "INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
-        IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
-        executeOnceInternal(String.format(req, LOCAL),
-                            LOCAL,
-                            FBUtilities.getReleaseVersionString(),
-                            QueryProcessor.CQL_VERSION.toString(),
-                            cassandraConstants.VERSION,
-                            String.valueOf(Server.CURRENT_VERSION),
-                            snitch.getDatacenter(FBUtilities.getBroadcastAddress()),
-                            snitch.getRack(FBUtilities.getBroadcastAddress()),
-                            DatabaseDescriptor.getPartitioner().getClass().getName());
-    }
+static future<> setup_version() {
+    sstring req = "INSERT INTO system.%s (key, release_version, cql_version, thrift_version, native_protocol_version, data_center, rack, partitioner) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+    auto& snitch = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
+    return execute_cql(req, db::system_keyspace::LOCAL,
+                             sstring(db::system_keyspace::LOCAL),
+                             version::release(),
+                             cql3::query_processor::CQL_VERSION,
+                             org::apache::cassandra::thrift_version,
+                             to_sstring(version::native_protocol()),
+                             snitch->get_datacenter(utils::fb_utilities::get_broadcast_address()),
+                             snitch->get_rack(utils::fb_utilities::get_broadcast_address()),
+                             sstring(dht::global_partitioner().name())
+    ).discard_result();
+}
+
+future<> check_health();
+future<> force_blocking_flush(sstring cfname);
+
+future<> setup(distributed<database>& db, distributed<cql3::query_processor>& qp) {
+    auto new_ctx = std::make_unique<query_context>(db, qp);
+    qctx.swap(new_ctx);
+    assert(!new_ctx);
+    return setup_version().then([] {
+        return update_schema_version(utils::make_random_uuid()); // FIXME: should not be random
+    }).then([] {
+        return check_health();
+    });
+}
+
+#if 0
     /**
      * Write compaction log, except columfamilies under system keyspace.
      *
@@ -571,12 +621,14 @@ schema_ptr built_indexes() {
         String req = "UPDATE system.%s USING TTL 2592000 SET hints_dropped[ ? ] = ? WHERE peer = ?";
         executeInternal(String.format(req, PEER_EVENTS), timePeriod, value, ep);
     }
+#endif
 
-    public static synchronized void updateSchemaVersion(UUID version)
-    {
-        String req = "INSERT INTO system.%s (key, schema_version) VALUES ('%s', ?)";
-        executeInternal(String.format(req, LOCAL, LOCAL), version);
-    }
+future<> update_schema_version(utils::UUID version) {
+    sstring req = "INSERT INTO system.%s (key, schema_version) VALUES (?, ?)";
+    return execute_cql(req, LOCAL, sstring(LOCAL), version).discard_result();
+}
+
+#if 0
 
     private static Set<String> tokensAsSet(Collection<Token> tokens)
     {
@@ -631,12 +683,18 @@ schema_ptr built_indexes() {
         updateTokens(tokens);
         return tokens;
     }
+#endif
 
-    public static void forceBlockingFlush(String cfname)
-    {
-        if (!Boolean.getBoolean("cassandra.unsafesystem"))
-            FBUtilities.waitOnFuture(Keyspace.open(NAME).getColumnFamilyStore(cfname).forceFlush());
+future<> force_blocking_flush(sstring cfname) {
+    if (!qctx) {
+        return make_ready_future<>();
     }
+    // if (!Boolean.getBoolean("cassandra.unsafesystem"))
+    column_family& cf = qctx->db().find_column_family(NAME, cfname);
+    return cf.flush(&qctx->db());
+}
+
+#if 0
 
     /**
      * Return a map of stored tokens to IP addresses
@@ -708,49 +766,35 @@ schema_ptr built_indexes() {
         return result;
     }
 
-    /**
-     * One of three things will happen if you try to read the system keyspace:
-     * 1. files are present and you can read them: great
-     * 2. no files are there: great (new node is assumed)
-     * 3. files are present but you can't read them: bad
-     * @throws ConfigurationException
-     */
-    public static void checkHealth() throws ConfigurationException
-    {
-        Keyspace keyspace;
-        try
-        {
-            keyspace = Keyspace.open(NAME);
-        }
-        catch (AssertionError err)
-        {
-            // this happens when a user switches from OPP to RP.
-            ConfigurationException ex = new ConfigurationException("Could not read system keyspace!");
-            ex.initCause(err);
-            throw ex;
-        }
-        ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(LOCAL);
-
-        String req = "SELECT cluster_name FROM system.%s WHERE key='%s'";
-        UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
-
-        if (result.isEmpty() || !result.one().has("cluster_name"))
-        {
+#endif
+/**
+ * One of three things will happen if you try to read the system keyspace:
+ * 1. files are present and you can read them: great
+ * 2. no files are there: great (new node is assumed)
+ * 3. files are present but you can't read them: bad
+ */
+future<> check_health() {
+    using namespace transport::messages;
+    sstring req = "SELECT cluster_name FROM system.%s WHERE key=?";
+    return execute_cql(req, LOCAL, sstring(LOCAL)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+        if (msg->empty() || !msg->one().has("cluster_name")) {
             // this is a brand new node
-            if (!cfs.getSSTables().isEmpty())
-                throw new ConfigurationException("Found system keyspace files, but they couldn't be loaded!");
+            sstring ins_req = "INSERT INTO system.%s (key, cluster_name) VALUES (?, ?)";
+            return execute_cql(ins_req, LOCAL, sstring(LOCAL), qctx->db().get_config().cluster_name()).discard_result();
+        } else {
+            auto saved_cluster_name = msg->one().get_as<sstring>("cluster_name");
+            auto cluster_name = qctx->db().get_config().cluster_name();
 
-            // no system files.  this is a new node.
-            req = "INSERT INTO system.%s (key, cluster_name) VALUES ('%s', ?)";
-            executeInternal(String.format(req, LOCAL, LOCAL), DatabaseDescriptor.getClusterName());
-            return;
+            if (cluster_name != saved_cluster_name) {
+                throw exceptions::configuration_exception("Saved cluster name " + saved_cluster_name + " != configured name " + cluster_name);
+            }
+
+            return make_ready_future<>();
         }
+    });
+}
 
-        String savedClusterName = result.one().getString("cluster_name");
-        if (!DatabaseDescriptor.getClusterName().equals(savedClusterName))
-            throw new ConfigurationException("Saved cluster name " + savedClusterName + " != configured name " + DatabaseDescriptor.getClusterName());
-    }
-
+#if 0
     public static Collection<Token> getSavedTokens()
     {
         String req = "SELECT tokens FROM system.%s WHERE key='%s'";
@@ -817,13 +861,18 @@ schema_ptr built_indexes() {
     {
         return getBootstrapState() == BootstrapState.IN_PROGRESS;
     }
+#endif
 
-    public static void setBootstrapState(BootstrapState state)
-    {
-        String req = "INSERT INTO system.%s (key, bootstrapped) VALUES ('%s', ?)";
-        executeInternal(String.format(req, LOCAL, LOCAL), state.name());
-        forceBlockingFlush(LOCAL);
-    }
+#if 0
+future<> set_bootstrap_state(bootstrap_state state) {
+    sstring req = "INSERT INTO system.%s (key, bootstrapped) VALUES ('%s', '%s')";
+    return execute_cql(req, LOCAL, LOCAL, state.name()).discard_result().then([] {
+        return force_blocking_flush(LOCAL);
+    });
+}
+#endif
+
+#if 0
 
     public static boolean isIndexBuilt(String keyspaceName, String indexName)
     {
@@ -1022,27 +1071,32 @@ void make(database& db, bool durable) {
     }
 }
 
-utils::UUID get_local_host_id() {
-#if 0
-    String req = "SELECT host_id FROM system.%s WHERE key='%s'";
-    UntypedResultSet result = executeInternal(String.format(req, LOCAL, LOCAL));
+future<utils::UUID> get_local_host_id() {
+    using namespace transport::messages;
+    sstring req = "SELECT host_id FROM system.%s WHERE key=?";
+    return execute_cql(req, LOCAL, sstring(LOCAL)).then([] (::shared_ptr<cql3::untyped_result_set> msg) {
+        auto new_id = [] {
+            auto host_id = utils::make_random_uuid();
+            return make_ready_future<utils::UUID>(host_id);
+        };
+        if (msg->empty() || !msg->one().has("host_id")) {
+            return new_id();
+        }
 
-    // Look up the Host UUID (return it if found)
-    if (!result.isEmpty() && result.one().has("host_id"))
-        return result.one().getUUID("host_id");
-#endif
-
-    // ID not found, generate a new one, persist, and then return it.
-    auto host_id = utils::make_random_uuid();
-    //logger.warn("No host ID found, created {} (Note: This should happen exactly once per node).", hostId);
-    return set_local_host_id(host_id);
+        auto host_id = msg->one().get_as<utils::UUID>("host_id");
+        return make_ready_future<utils::UUID>(host_id);
+    });
 }
 
-utils::UUID set_local_host_id(const utils::UUID& host_id) {
-    // String req = "INSERT INTO system.%s (key, host_id) VALUES ('%s', ?)";
-    // executeInternal(String.format(req, LOCAL, LOCAL), hostId);
-    return host_id;
+future<utils::UUID> set_local_host_id(const utils::UUID& host_id) {
+    sstring req = "INSERT INTO system.%s (key, host_id) VALUES (?, ?)";
+    return execute_cql(req, LOCAL, sstring(LOCAL), host_id).then([] (auto msg) {
+        return force_blocking_flush(LOCAL);
+    }).then([host_id] {
+        return host_id;
+    });
 }
+
 std::unordered_map<gms::inet_address, locator::endpoint_dc_rack>
 load_dc_rack_info()
 {

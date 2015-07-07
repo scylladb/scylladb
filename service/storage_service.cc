@@ -22,7 +22,6 @@ bool storage_service::should_bootstrap() {
 
 future<> storage_service::prepare_to_join() {
     if (!_joined) {
-        std::map<gms::application_state, gms::versioned_value> app_states;
 #if 0
         if (DatabaseDescriptor.isReplacing() && !(Boolean.parseBoolean(System.getProperty("cassandra.join_ring", "true"))))
             throw new ConfigurationException("Cannot set both join_ring=false and attempt to replace a node");
@@ -48,28 +47,31 @@ future<> storage_service::prepare_to_join() {
         // for bootstrap to get the load info it needs.
         // (we won't be part of the storage ring though until we add a counterId to our state, below.)
         // Seed the host ID-to-endpoint map with our own ID.
-        auto local_host_id = db::system_keyspace::get_local_host_id();
-        _token_metadata.update_host_id(local_host_id, get_broadcast_address());
-        // FIXME: DatabaseDescriptor.getBroadcastRpcAddress()
-        gms::inet_address broadcast_rpc_address;
-        app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
-        app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
-        app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
-        app_states.emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
-        //logger.info("Starting up server gossip");
+        return db::system_keyspace::get_local_host_id().then([this] (auto local_host_id) {
+            std::map<gms::application_state, gms::versioned_value> app_states;
 
-        auto& gossiper = gms::get_local_gossiper();
-        gossiper.register_(this);
-        using namespace std::chrono;
-        auto now = high_resolution_clock::now().time_since_epoch();
-        int generation_number = duration_cast<seconds>(now).count();
-        // FIXME: SystemKeyspace.incrementAndGetGeneration()
-        return gossiper.start(generation_number, app_states).then([this] {
-            print("Start gossiper service ...\n");
+            _token_metadata.update_host_id(local_host_id, this->get_broadcast_address());
+            // FIXME: DatabaseDescriptor.getBroadcastRpcAddress()
+            gms::inet_address broadcast_rpc_address;
+            app_states.emplace(gms::application_state::NET_VERSION, value_factory.network_version());
+            app_states.emplace(gms::application_state::HOST_ID, value_factory.host_id(local_host_id));
+            app_states.emplace(gms::application_state::RPC_ADDRESS, value_factory.rpcaddress(broadcast_rpc_address));
+            app_states.emplace(gms::application_state::RELEASE_VERSION, value_factory.release_version());
+            //logger.info("Starting up server gossip");
+
+            auto& gossiper = gms::get_local_gossiper();
+            gossiper.register_(this);
+            using namespace std::chrono;
+            auto now = high_resolution_clock::now().time_since_epoch();
+            int generation_number = duration_cast<seconds>(now).count();
+            // FIXME: SystemKeyspace.incrementAndGetGeneration()
+            return gossiper.start(generation_number, app_states).then([this] {
+                print("Start gossiper service ...\n");
 #if SS_DEBUG
-            gms::get_local_gossiper().debug_show();
-            _token_metadata.debug_show();
+                gms::get_local_gossiper().debug_show();
+                _token_metadata.debug_show();
 #endif
+            });
         }).then([this] {
             // gossip snitch infos (local DC and rack)
             gossip_snitch_info();
@@ -270,7 +272,7 @@ future<> storage_service::join_token_ring(int delay) {
     }
 
     return f.then([this] {
-        set_tokens(_bootstrap_tokens);
+        return set_tokens(_bootstrap_tokens);
 #if 0
     // if we don't have system_traces keyspace at this point, then create it manually
     if (Schema.instance.getKSMetaData(TraceKeyspace.NAME) == null)
@@ -323,33 +325,37 @@ void storage_service::join_ring() {
 
 future<> storage_service::bootstrap(std::unordered_set<token> tokens) {
     _is_bootstrap_mode = true;
+    // DON'T use set_token, that makes us part of the ring locally which is incorrect until we are done bootstrapping
     // SystemKeyspace.updateTokens(tokens); // DON'T use setToken, that makes us part of the ring locally which is incorrect until we are done bootstrapping
     // FIXME: DatabaseDescriptor.isReplacing()
-    auto is_replacing = false;
-    auto sleep_time = std::chrono::milliseconds(1);
-    if (!is_replacing) {
-        // if not an existing token then bootstrap
-        auto& gossiper = gms::get_local_gossiper();
-        gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens));
-        gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(tokens));
-        sleep_time = std::chrono::milliseconds(RING_DELAY);
-        // setMode(Mode.JOINING, "sleeping " + RING_DELAY + " ms for pending range setup", true);
-    } else {
-        // Dont set any state for the node which is bootstrapping the existing token...
-        for (auto t : tokens) {
-            _token_metadata.update_normal_token(t, get_broadcast_address());
+    return make_ready_future<>().then([this, tokens = std::move(tokens)] {
+        // FIXME: DatabaseDescriptor.isReplacing()
+        auto is_replacing = false;
+        auto sleep_time = std::chrono::milliseconds(1);
+        if (!is_replacing) {
+            // if not an existing token then bootstrap
+            auto& gossiper = gms::get_local_gossiper();
+            gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(tokens));
+            gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.bootstrapping(tokens));
+            sleep_time = std::chrono::milliseconds(RING_DELAY);
+            // setMode(Mode.JOINING, "sleeping " + RING_DELAY + " ms for pending range setup", true);
+        } else {
+            // Dont set any state for the node which is bootstrapping the existing token...
+            for (auto t : tokens) {
+                _token_metadata.update_normal_token(t, get_broadcast_address());
+            }
+            // SystemKeyspace.removeEndpoint(DatabaseDescriptor.getReplaceAddress());
         }
-        // SystemKeyspace.removeEndpoint(DatabaseDescriptor.getReplaceAddress());
-    }
-    return sleep(sleep_time).then([] {
-        auto& gossiper = gms::get_local_gossiper();
-        if (!gossiper.seen_any_seed()) {
-             throw std::runtime_error("Unable to contact any seeds!");
-        }
-        // setMode(Mode.JOINING, "Starting to bootstrap...", true);
-        // new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, _token_metadata).bootstrap(); // handles token update
-        // logger.info("Bootstrap completed! for the tokens {}", tokens);
-        return make_ready_future<>();
+        return sleep(sleep_time).then([] {
+            auto& gossiper = gms::get_local_gossiper();
+            if (!gossiper.seen_any_seed()) {
+                 throw std::runtime_error("Unable to contact any seeds!");
+            }
+            // setMode(Mode.JOINING, "Starting to bootstrap...", true);
+            // new BootStrapper(FBUtilities.getBroadcastAddress(), tokens, _token_metadata).bootstrap(); // handles token update
+            // logger.info("Bootstrap completed! for the tokens {}", tokens);
+            return make_ready_future<>();
+        });
     });
 }
 
@@ -770,20 +776,22 @@ std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address 
     return ret;
 }
 
-void storage_service::set_tokens(std::unordered_set<token> tokens) {
+future<> storage_service::set_tokens(std::unordered_set<token> tokens) {
     // if (logger.isDebugEnabled())
     //     logger.debug("Setting tokens to {}", tokens);
     // SystemKeyspace.updateTokens(tokens);
-    for (auto t : tokens) {
-        _token_metadata.update_normal_token(t, get_broadcast_address());
-    }
-    // Collection<Token> localTokens = getLocalTokens();
-    auto local_tokens = _bootstrap_tokens;
-    auto& gossiper = gms::get_local_gossiper();
-    gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
-    gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens));
-    //setMode(Mode.NORMAL, false);
-    replicate_to_all_cores();
+    return make_ready_future<>().then([this, tokens = std::move(tokens)] {
+        for (auto t : tokens) {
+            _token_metadata.update_normal_token(t, get_broadcast_address());
+        }
+        // Collection<Token> localTokens = getLocalTokens();
+        auto local_tokens = _bootstrap_tokens;
+        auto& gossiper = gms::get_local_gossiper();
+        gossiper.add_local_application_state(gms::application_state::TOKENS, value_factory.tokens(local_tokens));
+        gossiper.add_local_application_state(gms::application_state::STATUS, value_factory.normal(local_tokens));
+        //setMode(Mode.NORMAL, false);
+        replicate_to_all_cores();
+    });
 }
 
 future<> storage_service::init_server(int delay) {

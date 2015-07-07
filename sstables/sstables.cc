@@ -1118,7 +1118,7 @@ static void maybe_add_summary_entry(summary& s, bytes_view key, uint64_t offset)
 // In the beginning of the statistics file, there is a disk_hash used to
 // map each metadata type to its correspondent position in the file.
 static void seal_statistics(statistics& s, metadata_collector& collector,
-        const bytes partitioner, double bloom_filter_fp_chance) {
+        const sstring partitioner, double bloom_filter_fp_chance) {
     static constexpr int METADATA_TYPE_COUNT = 3;
 
     size_t old_offset, offset = 0;
@@ -1132,7 +1132,7 @@ static void seal_statistics(statistics& s, metadata_collector& collector,
     stats_metadata stats;
 
     old_offset = offset;
-    validation.partitioner.value = partitioner;
+    validation.partitioner.value = to_bytes(partitioner);
     validation.filter_chance = bloom_filter_fp_chance;
     offset += validation.serialized_size();
     s.contents[metadata_type::Validation] = std::make_unique<validation_metadata>(std::move(validation));
