@@ -33,7 +33,7 @@
 /// Seastar continuations are normally short, but often chained to one
 /// another, so that one continuation does a bit of work and then schedules
 /// another continuation for later. Such chains can be long, and often even
-/// involve loopings - see for example \ref do_with. We call such chains
+/// involve loopings - see for example \ref repeat. We call such chains
 /// "fibers" of execution.
 ///
 /// These fibers are not threads - each is just a string of continuations -
