@@ -124,14 +124,14 @@ private:
             return make_ready_future<>();
         }
     };
-    static net::messaging_service& ms() {
-        return net::get_local_messaging_service();
-    }
     static distributed<handler> _handlers;
     static void init_messaging_service_handler();
     static distributed<database>* _db;
-    static database& get_local_db() { return _db->local(); }
 public:
+    static net::messaging_service& ms() {
+        return net::get_local_messaging_service();
+    }
+    static database& get_local_db() { return _db->local(); }
     static future<> init_streaming_service(distributed<database>& db);
 public:
     /**
