@@ -59,7 +59,8 @@ inline std::enable_if_t<N != sizeof...(T), future<>> marshall(Serializer& serial
     using tuple_type = std::tuple<T...>;
     using t_type = typename std::tuple_element<N, tuple_type>::type;
     using serialize_helper_type = serialize_helper<is_smart_ptr<typename std::remove_reference<t_type>::type>::value>;
-    return serialize_helper_type::serialize(serialize, out, std::forward<t_type>(std::get<N>(args))).then([&serialize, &out, args = std::move(args)] () mutable {
+    t_type arg = std::get<N>(args);
+    return serialize_helper_type::serialize(serialize, out, std::forward<t_type>(arg)).then([&serialize, &out, args = std::move(args)] () mutable {
         return marshall<N + 1>(serialize, out, std::move(args));
     });
 }
