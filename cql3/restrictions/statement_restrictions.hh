@@ -30,8 +30,6 @@
 #include "cql3/restrictions/restrictions.hh"
 #include "cql3/restrictions/primary_key_restrictions.hh"
 #include "cql3/restrictions/single_column_restrictions.hh"
-#include "cql3/restrictions/single_column_primary_key_restrictions.hh"
-#include "cql3/restrictions/reverse_primary_key_restrictions.hh"
 #include "cql3/relation.hh"
 #include "cql3/variable_specifications.hh"
 
@@ -46,6 +44,12 @@ namespace restrictions {
 class statement_restrictions {
 private:
     schema_ptr _schema;
+
+    template<typename>
+    class initial_key_restrictions;
+
+    template<typename T>
+    static ::shared_ptr<primary_key_restrictions<T>> get_initial_key_restrictions();
 
     /**
      * Restrictions on partitioning columns
@@ -105,7 +109,7 @@ public:
      * otherwise.
      */
     bool key_is_in_relation() const {
-        return _partition_key_restrictions && _partition_key_restrictions->is_IN();
+        return _partition_key_restrictions->is_IN();
     }
 
     /**
@@ -282,7 +286,7 @@ public:
      * <code>false</code> otherwise.
      */
     bool has_no_clustering_columns_restriction() const {
-        return bool(_clustering_columns_restrictions);
+        return _clustering_columns_restrictions->empty();
     }
 
 #if 0
@@ -326,7 +330,7 @@ public:
      * <code>false</code> otherwise.
      */
     bool has_clustering_columns_restriction() {
-        return bool(_clustering_columns_restrictions);
+        return !_clustering_columns_restrictions->empty();
     }
 
     void reverse();

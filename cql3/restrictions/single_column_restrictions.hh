@@ -57,7 +57,9 @@ private:
     /**
      * The _restrictions per column.
      */
+public:
     using restrictions_map = std::map<const column_definition*, ::shared_ptr<restriction>, column_definition_comparator>;
+private:
     restrictions_map _restrictions;
     bool _is_all_eq = true;
 public:
@@ -75,7 +77,7 @@ public:
     }
 #endif
 
-    virtual std::vector<const column_definition*> get_column_defs() override {
+    virtual std::vector<const column_definition*> get_column_defs() const override {
         std::vector<const column_definition*> r;
         for (auto&& e : _restrictions) {
             r.push_back(e.first);
@@ -89,7 +91,7 @@ public:
      * @param column_def the column definition
      * @return the restriction associated to the specified column
      */
-    ::shared_ptr<restriction> get_restriction(const column_definition& column_def) {
+    ::shared_ptr<restriction> get_restriction(const column_definition& column_def) const {
         auto i = _restrictions.find(&column_def);
         if (i == _restrictions.end()) {
             return {};
@@ -97,7 +99,7 @@ public:
         return i->second;
     }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         for (auto&& e : _restrictions) {
             if (e.second->uses_function(ks_name, function_name)) {
                 return true;
@@ -106,11 +108,11 @@ public:
         return false;
     }
 
-    virtual bool empty() override {
+    virtual bool empty() const override {
         return _restrictions.empty();
     }
 
-    virtual uint32_t size() override {
+    virtual uint32_t size() const override {
         return _restrictions.size();
     }
 
@@ -132,7 +134,7 @@ public:
     }
 
 #if 0
-    virtual bool has_supporting_index(::shared_ptr<secondary_index_manager> index_manager) override {
+    virtual bool has_supporting_index(::shared_ptr<secondary_index_manager> index_manager) const override {
         for (auto&& e : _restrictions) {
             if (e.second->has_supporting_index(index_manager)) {
                 return true;
@@ -179,7 +181,7 @@ public:
      *
      * @return the last restriction.
      */
-    ::shared_ptr<restriction> last_restriction() {
+    ::shared_ptr<restriction> last_restriction() const {
         if (_restrictions.empty()) {
             return {};
         }
@@ -188,7 +190,7 @@ public:
         return i->second;
     }
 
-    auto const& restrictions() const {
+    const restrictions_map& restrictions() const {
         return _restrictions;
     }
 

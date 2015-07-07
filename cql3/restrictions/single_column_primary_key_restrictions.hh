@@ -41,6 +41,7 @@ template<typename ValueType>
 class single_column_primary_key_restrictions : public primary_key_restrictions<ValueType> {
     using range_type = query::range<ValueType>;
     using range_bound = typename range_type::bound;
+    using bounds_range_type = typename primary_key_restrictions<ValueType>::bounds_range_type;
 private:
     schema_ptr _schema;
     ::shared_ptr<single_column_restrictions> _restrictions;
@@ -56,27 +57,27 @@ public:
         , _in(false)
     { }
 
-    virtual bool is_on_token() override {
+    virtual bool is_on_token() const override {
         return false;
     }
 
-    virtual bool is_multi_column() override {
+    virtual bool is_multi_column() const override {
         return false;
     }
 
-    virtual bool is_slice() override {
+    virtual bool is_slice() const override {
         return _slice;
     }
 
-    virtual bool is_contains() override {
+    virtual bool is_contains() const override {
         return _contains;
     }
 
-    virtual bool is_IN() override {
+    virtual bool is_IN() const override {
         return _in;
     }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return _restrictions->uses_function(ks_name, function_name);
     }
 
@@ -111,18 +112,16 @@ public:
             throw exceptions::invalid_request_exception(
                 "Mixing single column relations and multi column relations on clustering columns is not allowed");
         }
-
         if (restriction->is_on_token()) {
-            fail(unimplemented::cause::TOKEN_RESTRICTION);
-#if 0
-            throw exceptions::invalid_request_exception("Columns \"%s\" cannot be restricted by both a normal relation and a token relation",
-                      ((TokenRestriction) restriction).getColumnNamesAsString());
-#endif
+            throw exceptions::invalid_request_exception(
+                    sprint(
+                            "Columns \"%s\" cannot be restricted by both a normal relation and a token relation",
+                            join(", ", get_column_defs())));
         }
         do_merge_with(::static_pointer_cast<single_column_restriction>(restriction));
     }
 
-    virtual std::vector<ValueType> values(const query_options& options) override {
+    virtual std::vector<ValueType> values_as_keys(const query_options& options) const override {
         std::vector<std::vector<bytes_opt>> value_vector;
         value_vector.reserve(_restrictions->size());
         for (auto&& e : _restrictions->restrictions()) {
@@ -150,7 +149,8 @@ public:
         return result;
     }
 
-    virtual std::vector<range_type> bounds(const query_options& options) override {
+private:
+    std::vector<range_type> compute_bounds(const query_options& options) const {
         std::vector<range_type> ranges;
 
         if (_restrictions->is_all_eq()) {
@@ -263,6 +263,23 @@ public:
         return std::move(ranges);
     }
 
+public:
+    std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override;
+
+    std::vector<bytes_opt> values(const query_options& options) const override {
+        auto src = values_as_keys(options);
+        std::vector<bytes_opt> res;
+        std::transform(src.begin(), src.end(), std::back_inserter(res), [this](const ValueType & r) {
+            auto view = r.representation();
+            return bytes(view.begin(), view.end());
+        });
+        return res;
+    }
+    std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const override {
+        // TODO: if this proved to be required.
+        fail(unimplemented::cause::LEGACY_COMPOSITE_KEYS); // not 100% correct...
+    }
+
 #if 0
     virtual bool hasSupportingIndex(SecondaryIndexManager indexManager) override {
         return restrictions.hasSupportingIndex(indexManager);
@@ -273,18 +290,48 @@ public:
     }
 #endif
 
-    virtual std::vector<const column_definition*> get_column_defs() override {
+    virtual std::vector<const column_definition*> get_column_defs() const override {
         return _restrictions->get_column_defs();
     }
 
-    virtual bool empty() override {
+    virtual bool empty() const override {
         return _restrictions->empty();
     }
 
-    virtual uint32_t size() override {
+    virtual uint32_t size() const override {
         return _restrictions->size();
+    }
+    sstring to_string() const override {
+        return sprint("Restrictions(%s)", join(", ", get_column_defs()));
     }
 };
 
+template<>
+std::vector<query::partition_range>
+single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query_options& options) const {
+    std::vector<query::partition_range> ranges;
+    ranges.reserve(size());
+    for (query::range<partition_key>& r : compute_bounds(options)) {
+        if (!r.is_singular()) {
+            throw exceptions::invalid_request_exception("Range queries on partition key values not supported.");
+        }
+        ranges.emplace_back(std::move(r).transform<query::ring_position>(
+            [this] (partition_key&& k) -> query::ring_position {
+                auto token = dht::global_partitioner().get_token(*_schema, k);
+                return { std::move(token), std::move(k) };
+            }));
+    }
+    return ranges;
+}
+
+template<>
+std::vector<query::clustering_range>
+single_column_primary_key_restrictions<clustering_key_prefix>::bounds_ranges(const query_options& options) const {
+    return compute_bounds(options);
+}
+
 }
 }
+
+
+

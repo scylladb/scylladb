@@ -42,31 +42,41 @@ namespace restrictions {
 /**
  * A set of restrictions on a primary key part (partition key or clustering key).
  *
- * XXX: In Origin this was also inheriting from "restriction", but I untangled it because it was complicating things.
- *
  * What was in AbstractPrimaryKeyRestrictions was moved here (In pre 1.8 Java interfaces could not have default
  * implementations of methods).
  */
+
 template<typename ValueType>
-class primary_key_restrictions : public restrictions {
+struct range_type_for;
+
+template<>
+struct range_type_for<partition_key> : public std::remove_reference<query::partition_range> {};
+template<>
+struct range_type_for<clustering_key_prefix> : public std::remove_reference<query::clustering_range> {};
+
+template<typename ValueType>
+class primary_key_restrictions: public abstract_restriction,
+        public restrictions,
+        public enable_shared_from_this<primary_key_restrictions<ValueType>> {
 public:
-    virtual void merge_with(::shared_ptr<restriction> restriction) = 0;
+    typedef typename range_type_for<ValueType>::type bounds_range_type;
 
-    virtual std::vector<ValueType> values(const query_options& options) = 0;
+    virtual ::shared_ptr<primary_key_restrictions<ValueType>> merge_to(schema_ptr, ::shared_ptr<restriction> restriction) {
+        merge_with(restriction);
+        return this->shared_from_this();
+    }
 
-    virtual std::vector<query::range<ValueType>> bounds(const query_options& options) = 0;
+    virtual std::vector<ValueType> values_as_keys(const query_options& options) const = 0;
+    virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const = 0;
 
-    virtual bool is_inclusive(statements::bound b) { return true; }
+    using restrictions::uses_function;
 
-    virtual bool is_on_token() { return false; }
-
-    virtual bool is_multi_column() { return false; }
-
-    virtual bool is_slice() { return false; }
-
-    virtual bool is_contains() { return false; }
-
-    virtual bool is_IN() { return false; }
+    bool empty() const override {
+        return get_column_defs().empty();
+    }
+    uint32_t size() const override {
+        return uint32_t(get_column_defs().size());
+    }
 };
 
 }

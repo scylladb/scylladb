@@ -48,9 +48,10 @@ public:
         : _column_def(column_def)
     { }
 
-    const column_definition& get_column_def() {
+    const column_definition& get_column_def() const {
         return _column_def;
     }
+
 #if 0
     @Override
     public void addIndexExpressionTo(List<IndexExpression> expressions,
@@ -98,25 +99,25 @@ public:
         , _value(std::move(value))
     { }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return abstract_restriction::uses_function(_value, ks_name, function_name);
     }
 
-    virtual bool is_EQ() override {
+    virtual bool is_EQ() const override {
         return true;
     }
 
-    virtual std::vector<bytes_opt> values(const query_options& options) override {
+    virtual std::vector<bytes_opt> values(const query_options& options) const override {
         std::vector<bytes_opt> v;
         v.push_back(_value->bind_and_get(options));
         return v;
     }
 
-    virtual bytes_opt value(const query_options& options) override {
+    virtual bytes_opt value(const query_options& options) const override {
         return _value->bind_and_get(options);
     }
 
-    virtual sstring to_string() override {
+    virtual sstring to_string() const override {
         return sprint("EQ(%s)", _value->to_string());
     }
 
@@ -140,7 +141,7 @@ public:
         : single_column_restriction(column_def)
     { }
 
-    virtual bool is_IN() override {
+    virtual bool is_IN() const override {
         return true;
     }
 
@@ -167,11 +168,11 @@ public:
         , _values(std::move(values))
     { }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return abstract_restriction::uses_function(_values, ks_name, function_name);
     }
 
-    virtual std::vector<bytes_opt> values(const query_options& options) override {
+    virtual std::vector<bytes_opt> values(const query_options& options) const override {
         std::vector<bytes_opt> ret;
         for (auto&& v : _values) {
             ret.emplace_back(v->bind_and_get(options));
@@ -179,7 +180,7 @@ public:
         return ret;
     }
 
-    virtual sstring to_string() override {
+    virtual sstring to_string() const override {
         return sprint("IN(%s)", ::to_string(_values));
     }
 };
@@ -192,11 +193,11 @@ public:
             : IN(column_def), _marker(std::move(marker)) {
     }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return false;
     }
 
-    virtual std::vector<bytes_opt> values(const query_options& options) override {
+    virtual std::vector<bytes_opt> values(const query_options& options) const override {
         auto&& lval = dynamic_pointer_cast<multi_item_terminal>(_marker->bind(options));
         if (!lval) {
             throw exceptions::invalid_request_exception("Invalid null value for IN restriction");
@@ -204,7 +205,7 @@ public:
         return lval->get_elements();
     }
 
-    virtual sstring to_string() override {
+    virtual sstring to_string() const override {
         return "IN ?";
     }
 };
@@ -218,28 +219,28 @@ public:
         , _slice(term_slice::new_instance(bound, inclusive, std::move(term)))
     { }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return (_slice.has_bound(statements::bound::START) && abstract_restriction::uses_function(_slice.bound(statements::bound::START), ks_name, function_name))
                 || (_slice.has_bound(statements::bound::END) && abstract_restriction::uses_function(_slice.bound(statements::bound::END), ks_name, function_name));
     }
 
-    virtual bool is_slice() override {
+    virtual bool is_slice() const override {
         return true;
     }
 
-    virtual std::vector<bytes_opt> values(const query_options& options) override {
+    virtual std::vector<bytes_opt> values(const query_options& options) const override {
         throw exceptions::unsupported_operation_exception();
     }
 
-    virtual bool has_bound(statements::bound b) override {
+    virtual bool has_bound(statements::bound b) const override {
         return _slice.has_bound(b);
     }
 
-    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) override {
+    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const override {
         return {_slice.bound(b)->bind_and_get(options)};
     }
 
-    virtual bool is_inclusive(statements::bound b) override {
+    virtual bool is_inclusive(statements::bound b) const override {
         return _slice.is_inclusive(b);
     }
 
@@ -289,7 +290,7 @@ public:
     }
 #endif
 
-    virtual sstring to_string() override {
+    virtual sstring to_string() const override {
         return sprint("SLICE%s", _slice);
     }
 };
@@ -317,11 +318,11 @@ public:
         _entry_values.emplace_back(std::move(map_value));
     }
 
-    virtual std::vector<bytes_opt> values(const query_options& options) override {
+    virtual std::vector<bytes_opt> values(const query_options& options) const override {
         return bind_and_get(_values, options);
     }
 
-    virtual bool is_contains() override {
+    virtual bool is_contains() const override {
         return true;
     }
 
@@ -372,39 +373,39 @@ public:
         }
 #endif
 
-    uint32_t number_of_values() {
+    uint32_t number_of_values() const {
         return _values.size();
     }
 
-    uint32_t number_of_keys() {
+    uint32_t number_of_keys() const {
         return _keys.size();
     }
 
-    uint32_t number_of_entries() {
+    uint32_t number_of_entries() const {
         return _entry_keys.size();
     }
 
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) override {
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const override {
         return abstract_restriction::uses_function(_values, ks_name, function_name)
             || abstract_restriction::uses_function(_keys, ks_name, function_name)
             || abstract_restriction::uses_function(_entry_keys, ks_name, function_name)
             || abstract_restriction::uses_function(_entry_values, ks_name, function_name);
     }
 
-    virtual sstring to_string() override {
+    virtual sstring to_string() const override {
         return sprint("CONTAINS(values=%s, keys=%s, entryKeys=%s, entryValues=%s)",
             ::to_string(_values), ::to_string(_keys), ::to_string(_entry_keys), ::to_string(_entry_values));
     }
 
-    virtual bool has_bound(statements::bound b) override {
+    virtual bool has_bound(statements::bound b) const override {
         throw exceptions::unsupported_operation_exception();
     }
 
-    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) override {
+    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const override {
         throw exceptions::unsupported_operation_exception();
     }
 
-    virtual bool is_inclusive(statements::bound b) override {
+    virtual bool is_inclusive(statements::bound b) const override {
         throw exceptions::unsupported_operation_exception();
     }
 

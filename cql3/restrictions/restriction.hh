@@ -41,16 +41,16 @@ namespace restrictions {
 class restriction {
 public:
     virtual ~restriction() {}
-    virtual bool is_on_token() = 0;
-    virtual bool is_slice() = 0;
-    virtual bool is_EQ() = 0;
-    virtual bool is_IN() = 0;
-    virtual bool is_contains() = 0;
-    virtual bool is_multi_column() = 0;
+    virtual bool is_on_token() const = 0;
+    virtual bool is_slice() const = 0;
+    virtual bool is_EQ() const = 0;
+    virtual bool is_IN() const = 0;
+    virtual bool is_contains() const = 0;
+    virtual bool is_multi_column() const = 0;
 
-    virtual std::vector<bytes_opt> values(const query_options& options) = 0;
+    virtual std::vector<bytes_opt> values(const query_options& options) const = 0;
 
-    virtual bytes_opt value(const query_options& options) {
+    virtual bytes_opt value(const query_options& options) const {
         auto vec = values(options);
         assert(vec.size() == 1);
         return std::move(vec[0]);
@@ -63,23 +63,23 @@ public:
      * @param function_name the function name
      * @return <code>true</code> if one of the restrictions use the specified function, <code>false</code> otherwise.
      */
-    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) = 0;
+    virtual bool uses_function(const sstring& ks_name, const sstring& function_name) const = 0;
 
     /**
      * Checks if the specified bound is set or not.
      * @param b the bound type
      * @return <code>true</code> if the specified bound is set, <code>false</code> otherwise
      */
-    virtual bool has_bound(statements::bound b) = 0;
+    virtual bool has_bound(statements::bound b) const = 0;
 
-    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) = 0;
+    virtual std::vector<bytes_opt> bounds(statements::bound b, const query_options& options) const = 0;
 
     /**
      * Checks if the specified bound is inclusive or not.
      * @param b the bound type
      * @return <code>true</code> if the specified bound is inclusive, <code>false</code> otherwise
      */
-    virtual bool is_inclusive(statements::bound b) = 0;
+    virtual bool is_inclusive(statements::bound b) const = 0;
 
     /**
      * Merges this restriction with the specified one.
@@ -112,7 +112,7 @@ public:
                                      throws InvalidRequestException;
 #endif
 
-    virtual sstring to_string() = 0;
+    virtual sstring to_string() const = 0;
 };
 
 }
