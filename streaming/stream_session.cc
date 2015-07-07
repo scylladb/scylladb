@@ -379,8 +379,9 @@ void stream_session::start() {
     try {
         // logger.info("[Stream #{}] Starting streaming to {}{}", plan_id(),
         //                                                        peer, peer == connecting ? "" : " through " + connecting);
-        conn_handler.initiate();
-        on_initialization_complete();
+        conn_handler.initiate().then([this] {
+            on_initialization_complete();
+        });
     } catch (...) {
         on_error();
     }
