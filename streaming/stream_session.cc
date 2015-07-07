@@ -105,12 +105,20 @@ void stream_session::on_initialization_complete() {
     for (auto& x : _transfers) {
         prepare.summaries.emplace_back(x.second.get_summary());
     }
-    // handler.sendMessage(prepare);
-
-    // if we don't need to prepare for receiving stream, start sending files immediately
-    if (_requests.empty()) {
-        start_streaming_files();
-    }
+    auto id = shard_id{this->peer, 0};
+    ms().send_message<messages::prepare_message>(net::messaging_verb::PREPARE_MESSAGE, std::move(id), std::move(prepare)).then([this] (messages::prepare_message msg) {
+        for (auto& request : msg.requests) {
+            // always flush on stream request
+            add_transfer_ranges(request.keyspace, request.ranges, request.column_families, true, request.repaired_at);
+        }
+        for (auto& summary : msg.summaries) {
+            prepare_receiving(summary);
+        }
+        // if we don't need to prepare for receiving stream, start sending files immediately
+        if (_requests.empty()) {
+            start_streaming_files();
+        }
+    });
 }
 
 void stream_session::on_error() {
