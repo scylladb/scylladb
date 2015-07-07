@@ -132,6 +132,7 @@ struct serializer {
             union U {
                 U(){}
                 ~U(){}
+                U(U&&) {}
                 T v;
             };
             return do_with(U(), [c, &v, &in, this] (U& u) {
