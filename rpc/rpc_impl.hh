@@ -156,7 +156,7 @@ template<typename Serializer, typename MsgType, typename T>
 struct rcv_reply : rcv_reply_base<T, T> {
     inline future<> get_reply(typename protocol<Serializer, MsgType>::client& dst) {
         return unmarshall(dst.serializer(), dst.in(), std::tie(this->u.v)).then([this] {
-            this->set_value(this->u.v);
+            this->set_value(std::move(this->u.v));
         });
     }
 };
@@ -165,7 +165,7 @@ template<typename Serializer, typename MsgType, typename... T>
 struct rcv_reply<Serializer, MsgType, future<T...>> : rcv_reply_base<std::tuple<T...>, T...> {
     inline future<> get_reply(typename protocol<Serializer, MsgType>::client& dst) {
         return unmarshall(dst.serializer(), dst.in(), ref_tuple(this->u.v)).then([this] {
-            this->set_value(this->u.v);
+            this->set_value(std::move(this->u.v));
         });
     }
 };
