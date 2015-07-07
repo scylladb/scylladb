@@ -1044,9 +1044,9 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
 
         for (Map.Entry<ColumnIdentifier, Long> entry : table.getDroppedColumns().entrySet())
             adder.addMapEntry("dropped_columns", entry.getKey().toString(), entry.getValue());
-
-        adder.add("is_dense", table.getIsDense());
 #endif
+
+        m.set_clustered_cell(ckey, "is_dense", table->is_dense(), timestamp);
 
         if (with_columns_and_triggers) {
             for (auto&& column : table->all_columns_in_select_order()) {
@@ -1230,11 +1230,16 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                                                                         fullRawComparator,
                                                                         cfType == ColumnFamilyType.Super*/);
 
-#if 0
-        boolean isDense = result.has("is_dense")
-                        ? result.getBoolean("is_dense")
-                        : CFMetaData.calculateIsDense(fullRawComparator, columnDefs);
+        bool is_dense;
+        if (table_row.has("is_dense")) {
+            is_dense = table_row.get_nonnull<bool>("is_dense");
+        } else {
+            // FIXME:
+            // is_dense = CFMetaData.calculateIsDense(fullRawComparator, columnDefs);
+            throw std::runtime_error("not implemented");
+        }
 
+#if 0
         CellNameType comparator = CellNames.fromAbstractType(fullRawComparator, isDense);
 
         // if we are upgrading, we use id generated from names initially
@@ -1243,8 +1248,10 @@ std::vector<const char*> ALL { KEYSPACES, COLUMNFAMILIES, COLUMNS, TRIGGERS, USE
                   : CFMetaData.generateLegacyCfId(ksName, cfName);
 
         CFMetaData cfm = new CFMetaData(ksName, cfName, cfType, comparator, cfId);
-        cfm.isDense(isDense);
+#endif
+        builder.set_is_dense(is_dense);
 
+#if 0
         cfm.readRepairChance(result.getDouble("read_repair_chance"));
         cfm.dcLocalReadRepairChance(result.getDouble("local_read_repair_chance"));
         cfm.gcGraceSeconds(result.getInt("gc_grace_seconds"));

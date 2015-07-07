@@ -54,9 +54,9 @@ class create_table_statement : public schema_altering_statement {
     std::vector<bytes> _column_aliases;
 #if 0
     private ByteBuffer valueAlias;
-
-    private boolean isDense;
 #endif
+    bool _is_dense;
+
     using column_map_type =
         std::unordered_map<::shared_ptr<column_identifier>,
                            data_type,
