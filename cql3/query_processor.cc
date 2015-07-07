@@ -286,9 +286,12 @@ future<::shared_ptr<untyped_result_set>> query_processor::execute_internal(
         const std::initializer_list<boost::any>& values) {
     auto p = prepare_internal(query_string);
     auto opts = make_internal_options(p, values);
-    return p->statement->execute_internal(_proxy, *_internal_state, opts).then(
-            [](::shared_ptr<transport::messages::result_message> msg) {
-                return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
+    return do_with(std::move(opts),
+            [this, p = std::move(p)](query_options & opts) {
+                return p->statement->execute_internal(_proxy, *_internal_state, opts).then(
+                        [](::shared_ptr<transport::messages::result_message> msg) {
+                            return make_ready_future<::shared_ptr<untyped_result_set>>(::make_shared<untyped_result_set>(msg));
+                        });
             });
 }
 
